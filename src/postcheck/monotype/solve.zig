@@ -11878,26 +11878,26 @@ test "opaque interface relation exchanges roles at a pair whose public side is t
     defer graph.destroy();
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x53))));
-    const type_name = try name_store.internTypeName("Iter");
+    const type_name = try name_store.internTypeName("Holder");
     const named_type: Type.NamedType = .{ .module = .{} };
     const Pair = struct { public: NodeId, private: NodeId };
-    const iterators = struct {
-        fn pair(g: *InstGraph, module: names.ModuleIdentityId, name: names.TypeNameId, ty: Type.NamedType, public_item: NodeId, private_item: NodeId) Allocator.Error!Pair {
+    const holders = struct {
+        fn pair(g: *InstGraph, module: names.ModuleIdentityId, name: names.TypeNameId, ty: Type.NamedType, public_arg: NodeId, private_arg: NodeId) Allocator.Error!Pair {
             return .{
                 .public = try g.newNode(try g.namedContent(.{
                     .named_type = ty,
                     .def = .{ .module = module, .type_name = name },
                     .kind = .@"opaque",
-                    .builtin_owner = .some(.iter),
-                    .args = try g.arena().dupe(NodeId, &.{public_item}),
+                    .builtin_owner = .none,
+                    .args = try g.arena().dupe(NodeId, &.{public_arg}),
                     .backing = .some(.{ .node = try g.newNode(.empty_record), .use = .runtime_layout_only }),
                 })),
                 .private = try g.newNode(try g.namedContent(.{
                     .named_type = ty,
                     .def = .{ .module = module, .type_name = name },
                     .kind = .@"opaque",
-                    .builtin_owner = .some(.iter),
-                    .args = try g.arena().dupe(NodeId, &.{private_item}),
+                    .builtin_owner = .none,
+                    .args = try g.arena().dupe(NodeId, &.{private_arg}),
                     .backing = .some(.{
                         .node = try g.newNode(.empty_record),
                         .use = .runtime_layout_only,
@@ -11908,10 +11908,10 @@ test "opaque interface relation exchanges roles at a pair whose public side is t
         }
     };
 
-    // An iterator whose item is itself a private iterator: the public view of
-    // the outer one holds private evidence too, so both sides of the outer
-    // pair do and only the roots tell them apart.
-    const inner = try iterators.pair(
+    // An opaque holder whose argument is itself a private holder: the public
+    // view of the outer one holds private evidence too, so both sides of the
+    // outer pair do and only the roots tell them apart.
+    const inner = try holders.pair(
         graph,
         module_identity,
         type_name,
@@ -11919,7 +11919,7 @@ test "opaque interface relation exchanges roles at a pair whose public side is t
         try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) }),
         try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) }),
     );
-    const outer = try iterators.pair(graph, module_identity, type_name, named_type, inner.private, inner.private);
+    const outer = try holders.pair(graph, module_identity, type_name, named_type, inner.private, inner.private);
     const left = try graph.newNode(.{ .list = outer.private });
     const right = try graph.newNode(.{ .list = outer.public });
 

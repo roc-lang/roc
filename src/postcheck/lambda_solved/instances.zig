@@ -138,9 +138,13 @@ pub const Table = struct {
     /// instances it has (zero when nothing instantiated it).
     group_first_env: []u32 = &.{},
     group_classes: []u32 = &.{},
-    /// Per instantiation row: its instance read in the global environment.
+    /// Per instantiation row: its instance read in the global environment,
+    /// `none_class` until its group is classified. A group's identity row
+    /// is its first instance, which for a group nothing instantiated is its
+    /// own types.
     row_class: []u32 = &.{},
-    /// Instances of occurrences read under a further instance.
+    /// Instances of occurrences read under a further instance, each added
+    /// when the occurrence's group is classified.
     pair_class: std.AutoHashMapUnmanaged(Occ, u32) = .empty,
     /// Per group: the row of its first instance, or `no_rep`.
     rep0: []u32 = &.{},
@@ -223,13 +227,20 @@ pub const Table = struct {
     }
 
     fn classEnv(self: *const Table, group: u32, class: u32) Env {
-        if (class == none_class or class == 0) return .global;
+        if (class == 0) return .global;
         return @fromBackingInt(self.group_first_env[group] + class - 1);
     }
 
+    /// The instance `occ` was assigned when its group was classified. Every
+    /// occurrence of a classified group has one: classification assigns
+    /// each of the group's rows and every occurrence further instances
+    /// added to it.
     fn classOf(self: *const Table, occ: Occ) u32 {
-        if (occ.env == .global) return self.row_class[@backingInt(occ.row)];
-        return self.pair_class.get(occ) orelse none_class;
+        if (occ.env != .global) return self.pair_class.get(occ) orelse
+            Common.invariant("an occurrence under a further instance was never assigned an instance");
+        const class = self.row_class[@backingInt(occ.row)];
+        if (class == none_class) Common.invariant("an instantiation row was never assigned an instance");
+        return class;
     }
 
     fn copiedTypes(self: *const Table, env: Env) ?*const collections.DenseMapUnmanaged(Type.TypeVarId, void) {
@@ -479,6 +490,9 @@ const Discovery = struct {
     /// Per binding group, every occurrence of an instantiation of it found
     /// so far.
     group_occs: []std.ArrayList(Occ) = &.{},
+    /// The groups whose occurrences have their instances: monomorphic groups
+    /// from the start, and a generalized group once it is visited.
+    classified: std.DynamicBitSetUnmanaged = .{},
 
     // Equality scratch.
     assumed: std.AutoHashMapUnmanaged([2]Ref, void) = .empty,
@@ -505,6 +519,7 @@ const Discovery = struct {
     fn deinit(self: *Discovery) void {
         for (self.group_occs) |*list| list.deinit(self.allocator);
         self.allocator.free(self.group_occs);
+        self.classified.deinit(self.allocator);
         self.assumed.deinit(self.allocator);
         self.assumed_occs.deinit(self.allocator);
         self.pending.deinit(self.allocator);
@@ -569,8 +584,11 @@ const Discovery = struct {
             if (row.images == null) continue;
             try self.group_occs[row.group].append(allocator, .{ .row = @fromBackingInt(@as(u32, @intCast(index))), .env = .global });
         }
+        self.classified = try std.DynamicBitSetUnmanaged.initEmpty(allocator, group_count);
         for (0..group_count) |group_index| {
-            if (!poly_.schemes.items[group_index].isGeneric()) t.row_class[group_index] = 0;
+            if (poly_.schemes.items[group_index].isGeneric()) continue;
+            t.row_class[group_index] = 0;
+            self.classified.set(group_index);
         }
 
         var group_index = group_count;
@@ -619,6 +637,10 @@ const Discovery = struct {
             try classes.append(self.allocator, @intCast(class));
         }
         for (self.group_occs[group].items, classes.items) |occ, class| try self.setClass(occ, class);
+        // The identity row reads the group's first instance, which for a
+        // group nothing instantiated is its own types.
+        t.row_class[@backingInt(Ast.Polymorphism.identity(group))] = 0;
+        self.classified.set(group);
         if (reps.items.len == 0) return;
         if (diagnostics.isSet(.lambda_solve_stats) and reps.items.len > 1) {
             self.relaxed = true;
@@ -656,7 +678,6 @@ const Discovery = struct {
         for (self.poly().schemeNodes(scheme), 0..) |node, position| {
             try t.scheme_pos.put(self.allocator, self.types().root(node), .{ .group = group, .position = @intCast(position) });
         }
-        t.row_class[@backingInt(Ast.Polymorphism.identity(group))] = 0;
         t.group_classes[group] = @intCast(reps.items.len);
     }
 
@@ -685,6 +706,9 @@ const Discovery = struct {
             const env = t.classEnv(group, @intCast(class));
             for (order) |inst| {
                 const row = self.poly().instantiations.items[@backingInt(inst)];
+                // Groups are visited callers first, so the named group is
+                // classified later, and this occurrence with it.
+                if (self.classified.isSet(row.group)) Common.invariant("a further instance named an instantiation of an already classified group");
                 try self.group_occs[row.group].append(self.allocator, .{ .row = inst, .env = env });
             }
         }
@@ -734,10 +758,12 @@ const Discovery = struct {
         const row_a = poly_.instantiations.items[@backingInt(a.row)];
         const row_b = poly_.instantiations.items[@backingInt(b.row)];
         if (row_a.group != row_b.group) return false;
-        const t = self.table();
-        const class_a = t.classOf(a);
-        const class_b = t.classOf(b);
-        if (class_a != none_class or class_b != none_class) return class_a == class_b;
+        // A classified group's occurrences compare by instance; until then
+        // they compare by their images.
+        if (self.classified.isSet(row_a.group)) {
+            const t = self.table();
+            return t.classOf(a) == t.classOf(b);
+        }
         if (row_a.images == null or row_b.images == null) return false;
         const entry = try self.assumed_occs.getOrPut(self.allocator, .{ a, b });
         if (entry.found_existing) return true;

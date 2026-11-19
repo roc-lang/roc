@@ -15203,23 +15203,15 @@ fn lambdaSolvedSetCensus(source: []const u8, inline_mode: lir.CheckedPipeline.In
     return lambdaSolvedSetCensusInOrder(source, inline_mode, .binding_groups, null, null);
 }
 
-/// `lambdaSolvedSetCensus`, solving bodies in `order`. With `classes`, also
-/// appends a description of how the solved lambda-set classes partition the
-/// callable slots that the function and local types reach: a walk of those
-/// types in a fixed order that numbers each class when it first meets it
-/// and writes that number (and, the first time, the class's members) at
-/// every meeting. Two solves with the same partition write the same words.
-fn lambdaSolvedSetCensusInOrder(
-    source: []const u8,
+/// The program Lambda Solved produces for `resources` when the lifted
+/// program reaching it went through the SpecConstr variant `inline_mode`
+/// selects, solving bodies in `order`.
+fn solveParsed(
+    resources: *const helpers.ParsedResources,
     inline_mode: lir.CheckedPipeline.InlineMode,
     order: postcheck.LambdaSolved.Solve.BodyOrder,
-    classes: ?*std.ArrayList(u32),
-    specialized: ?*postcheck.LambdaSolved.Instances.Census,
-) TestError!LambdaSetCensus {
+) TestError!postcheck.LambdaSolved.Ast.Program {
     const allocator = std.testing.allocator;
-    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
-    defer helpers.cleanupParseAndCanonical(allocator, resources);
-
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
     const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
     defer allocator.free(import_views);
@@ -15257,9 +15249,30 @@ fn lambdaSolvedSetCensusInOrder(
         procedure_usage.deinit();
     }
 
-    var solved = try postcheck.LambdaSolved.Solve.runInOrder(allocator, lifted, order);
+    const solved = try postcheck.LambdaSolved.Solve.runInOrder(allocator, lifted, order);
     lifted_owned = false;
     lifted = undefined;
+    return solved;
+}
+
+/// `lambdaSolvedSetCensus`, solving bodies in `order`. With `classes`, also
+/// appends a description of how the solved lambda-set classes partition the
+/// callable slots that the function and local types reach: a walk of those
+/// types in a fixed order that numbers each class when it first meets it
+/// and writes that number (and, the first time, the class's members) at
+/// every meeting. Two solves with the same partition write the same words.
+fn lambdaSolvedSetCensusInOrder(
+    source: []const u8,
+    inline_mode: lir.CheckedPipeline.InlineMode,
+    order: postcheck.LambdaSolved.Solve.BodyOrder,
+    classes: ?*std.ArrayList(u32),
+    specialized: ?*postcheck.LambdaSolved.Instances.Census,
+) TestError!LambdaSetCensus {
+    const allocator = std.testing.allocator;
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    var solved = try solveParsed(&resources, inline_mode, order);
     defer solved.deinit();
     if (specialized) |out| out.* = solved.instances.census;
 
@@ -15910,19 +15923,196 @@ test "lambda set generalization: a capturing local helper applied to two closure
 // group, and each instance of the outer helper instantiates the inner one
 // at the outer instance's callback.
 test "lambda set generalization: a capturing closure nested two levels deep" {
-    try expectPolymorphism(
+    try expectPolymorphism(nested_capturing_closures, "50", .{ .multi_member_sets = 0, .instance_fns = 4, .instances = 10 });
+}
+
+const nested_capturing_closures =
+    \\main : I64
+    \\main = {
+    \\    k = 3.I64
+    \\    outer = |g| {
+    \\        inner = |h| h(k) + g(k)
+    \\        inner(|v| v + 1) + inner(|v| v * 2)
+    \\    }
+    \\    total = outer(|v| v - 1) + outer(|v| v + 10)
+    \\    dbg total
+    \\    total
+    \\}
+;
+
+/// Solve `source` at inline mode `.none` and give the solved program to
+/// `inspect`.
+fn inspectSolved(
+    source: []const u8,
+    comptime Result: type,
+    comptime inspect: fn (*const postcheck.LambdaSolved.Ast.Program) TestError!Result,
+    inline_mode: lir.CheckedPipeline.InlineMode,
+) TestError!Result {
+    const allocator = std.testing.allocator;
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+    var solved = try solveParsed(&resources, inline_mode, .binding_groups);
+    defer solved.deinit();
+    return try inspect(&solved);
+}
+
+/// How the instances of a definer group classify the references its bodies
+/// make to one callee group (`Instances.referenceEnv`).
+const NamedInstances = struct {
+    /// References from the definer's bodies to the callee.
+    references: usize = 0,
+    /// The definer's instances, its first included.
+    definer_instances: usize = 0,
+    /// Distinct callee instances those references name, read under every
+    /// instance of the definer.
+    named: usize = 0,
+    /// Of those, the ones named under the definer's further instances.
+    named_under_further: usize = 0,
+    /// Of those, the ones that are the callee's first instance.
+    named_under_further_global: usize = 0,
+    /// The callee's instances, its first included.
+    callee_instances: usize = 0,
+};
+
+/// `NamedInstances` for the definer and callee group pair whose references
+/// name the most distinct callee instances.
+fn widestNamedInstances(solved: *const postcheck.LambdaSolved.Ast.Program) TestError!NamedInstances {
+    const allocator = std.testing.allocator;
+    const Instances = postcheck.LambdaSolved.Instances;
+    const table = &solved.instances;
+    const poly = &solved.poly;
+    var widest: NamedInstances = .{};
+    var named: std.AutoHashMapUnmanaged(Instances.Env, void) = .empty;
+    defer named.deinit(allocator);
+    var named_under_further: std.AutoHashMapUnmanaged(Instances.Env, void) = .empty;
+    defer named_under_further.deinit(allocator);
+    for (0..poly.schemes.items.len) |definer| {
+        if (table.group_classes[definer] < 2) continue;
+        for (0..poly.schemes.items.len) |callee| {
+            named.clearRetainingCapacity();
+            named_under_further.clearRetainingCapacity();
+            var pair: NamedInstances = .{
+                .definer_instances = table.group_classes[definer],
+                .callee_instances = table.group_classes[callee],
+            };
+            const callee_fn = solved.binding_groups.group(callee)[0];
+            for (0..solved.lifted.exprCount()) |expr_index| {
+                const expr: postcheck.MonotypeLifted.Ast.ExprId = @fromBackingInt(@as(u32, @intCast(expr_index)));
+                const inst = poly.expr_insts.get(expr) orelse continue;
+                const row = poly.instantiations.items[@backingInt(inst)];
+                if (row.group != callee or poly.fn_groups.items[@backingInt(row.context.?)] != definer) continue;
+                pair.references += 1;
+                try named.put(allocator, Instances.referenceEnv(solved, expr, callee_fn, .global), {});
+                for (1..table.instances.items.len) |env_index| {
+                    const env: Instances.Env = @fromBackingInt(@as(u32, @intCast(env_index)));
+                    if (table.envGroup(env) != definer) continue;
+                    const callee_env = Instances.referenceEnv(solved, expr, callee_fn, env);
+                    try named.put(allocator, callee_env, {});
+                    try named_under_further.put(allocator, callee_env, {});
+                }
+            }
+            pair.named = named.count();
+            pair.named_under_further = named_under_further.count();
+            pair.named_under_further_global = @intFromBool(named_under_further.contains(.global));
+            if (pair.named > widest.named) widest = pair;
+        }
+    }
+    return widest;
+}
+
+// Each instance of a definer reads the instantiations its body makes under
+// its own environment, so the occurrences a further instance adds to a
+// callee group are classified apart from the first instance's: the outer
+// helper's two instances name four distinct instances of the inner one.
+test "lambda set instances: a further instance names the callee instances its own occurrences were assigned" {
+    const observed = try inspectSolved(nested_capturing_closures, NamedInstances, widestNamedInstances, .none);
+    try std.testing.expectEqual(NamedInstances{
+        .references = 2,
+        .definer_instances = 2,
+        .named = 4,
+        .named_under_further = 2,
+        .named_under_further_global = 0,
+        .callee_instances = 4,
+    }, observed);
+}
+
+/// What members naming a generalized group's identity instantiation read as
+/// (`Instances.memberEnv`), over every generalized group.
+const IdentityReadings = struct {
+    generalized_groups: usize = 0,
+    /// Generalized groups nothing instantiated.
+    uninstantiated_groups: usize = 0,
+    /// Readings under a further instance of the member's own group.
+    own_further_readings: usize = 0,
+    /// Readings under a further instance of another group.
+    other_further_readings: usize = 0,
+};
+
+/// Reads a member naming each generalized group's identity instantiation
+/// under every environment, and checks each reading: under the global
+/// environment and under another group's further instance it names the
+/// group's first instance, which for a group nothing instantiated is its
+/// own types; under a further instance of its own group it names that
+/// instance.
+fn identityReadings(solved: *const postcheck.LambdaSolved.Ast.Program) TestError!IdentityReadings {
+    const Instances = postcheck.LambdaSolved.Instances;
+    const table = &solved.instances;
+    var readings: IdentityReadings = .{};
+    for (solved.poly.schemes.items, 0..) |scheme, group_index| {
+        if (!scheme.isGeneric()) continue;
+        const group: u32 = @intCast(group_index);
+        readings.generalized_groups += 1;
+        if (table.group_classes[group_index] == 0) readings.uninstantiated_groups += 1;
+        const member: postcheck.LambdaSolved.Type.FnMember = .{
+            .lambda = solved.lifted.getFn(solved.binding_groups.group(group_index)[0]).symbol,
+            .captures = .empty(),
+            .inst = postcheck.LambdaSolved.Ast.Polymorphism.identity(group),
+        };
+        try std.testing.expectEqual(Instances.Env.global, Instances.memberEnv(solved, member, .global));
+        for (1..table.instances.items.len) |env_index| {
+            const env: Instances.Env = @fromBackingInt(@as(u32, @intCast(env_index)));
+            if (table.envGroup(env) == group) {
+                readings.own_further_readings += 1;
+                try std.testing.expectEqual(env, Instances.memberEnv(solved, member, env));
+            } else {
+                readings.other_further_readings += 1;
+                try std.testing.expectEqual(Instances.Env.global, Instances.memberEnv(solved, member, env));
+            }
+        }
+    }
+    return readings;
+}
+
+// A member naming a group's identity instantiation is one of the group's own
+// lambdas in its own types: it names the instance those types are read under.
+test "lambda set instances: identity members read the instance of their own group" {
+    const observed = try inspectSolved(nested_capturing_closures, IdentityReadings, identityReadings, .none);
+    try std.testing.expectEqual(IdentityReadings{
+        .generalized_groups = 6,
+        .uninstantiated_groups = 0,
+        .own_further_readings = 4,
+        .other_further_readings = 20,
+    }, observed);
+}
+
+// Call-pattern cloning leaves every original function unreferenced: each
+// generalized group is instantiated nowhere, its identity row is its only
+// instance, and its members read its own types in the global environment.
+test "lambda set instances: a generalized group nothing instantiated reads its own types" {
+    const observed = try inspectSolved(poly_functions ++
         \\main : I64
         \\main = {
-        \\    k = 3.I64
-        \\    outer = |g| {
-        \\        inner = |h| h(k) + g(k)
-        \\        inner(|v| v + 1) + inner(|v| v * 2)
-        \\    }
-        \\    total = outer(|v| v - 1) + outer(|v| v + 10)
+        \\    total = apply(inc, 3) + apply(double, 4)
         \\    dbg total
         \\    total
         \\}
-    , "50", .{ .multi_member_sets = 0, .instance_fns = 4, .instances = 10 });
+    , IdentityReadings, identityReadings, .wrappers);
+    try std.testing.expectEqual(IdentityReadings{
+        .generalized_groups = 3,
+        .uninstantiated_groups = 3,
+        .own_further_readings = 0,
+        .other_further_readings = 0,
+    }, observed);
 }
 
 // A recursive capturing closure and a capturing closure inside it that calls
