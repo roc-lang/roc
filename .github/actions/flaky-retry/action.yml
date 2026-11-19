@@ -31,44 +31,89 @@ inputs:
   command:
     description: 'The command to run'
     required: true
+  heartbeat_seconds:
+    description: >-
+      Interval, in seconds, between reports of the still-running command's
+      Zig and Roc processes and their resident memory.
+    required: false
+    default: '300'
 runs:
   using: 'composite'
   steps:
+    # The command's output goes to a file, never to a pipe: Zig build children
+    # can inherit a pipe and hold it open after Zig itself has exited, so a
+    # reader waiting for the pipe to close would hang. This lane copies each
+    # newly written part of the file to the log while the command runs and
+    # keeps the whole file for the retry classification.
     - name: Run command with retry logic (Unix)
       if: runner.os != 'Windows'
       shell: bash
+      env:
+        FLAKY_COMMAND: ${{ inputs.command }}
+        FLAKY_RETRY_PATTERN: ${{ inputs.error_string_contains }}
+        FLAKY_RETRY_COUNT: ${{ inputs.retry_count }}
+        FLAKY_HEARTBEAT_SECONDS: ${{ inputs.heartbeat_seconds }}
       run: |
+        output_file="$(mktemp)"
+        trap 'rm -f "$output_file"' EXIT
+
+        streamed_bytes=0
+        stream_new_output() {
+          local size
+          size=$(wc -c < "$output_file" | tr -d '[:space:]')
+          if [ "$size" -gt "$streamed_bytes" ]; then
+            tail -c "+$((streamed_bytes + 1))" "$output_file" | head -c "$((size - streamed_bytes))"
+            streamed_bytes=$size
+          fi
+        }
+
+        # Every Zig compiler, build runner, test binary and Roc binary the
+        # command started: their executables are `zig` itself or live under
+        # `.zig-cache` or `zig-out`.
+        report_processes() {
+          if [ "$streamed_bytes" -gt 0 ] && [ -n "$(head -c "$streamed_bytes" "$output_file" | tail -c 1 | tr -d '\n')" ]; then
+            echo
+          fi
+          echo "[flaky-retry] command still running after ${SECONDS}s; Zig and Roc processes:"
+          ps -eo pid=,rss=,etime=,args= | awk '
+            $4 ~ /zig/ || $4 ~ /(^|\/)roc$/ {
+              args = $0
+              sub(/^ *[^ ]+ +[^ ]+ +[^ ]+ +/, "", args)
+              total += $2
+              printf "[flaky-retry]   pid %-7s rss %6d MiB  elapsed %-11s %s\n", $1, $2 / 1024, $3, substr(args, 1, 240)
+            }
+            END { printf "[flaky-retry]   total rss %d MiB\n", total / 1024 }'
+          if [ -r /proc/meminfo ]; then
+            awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree):/ { printf "[flaky-retry]   %s %d MiB\n", $1, $2 / 1024 }' /proc/meminfo
+          fi
+        }
+
         attempt=1
-        max_attempts=$((${{ inputs.retry_count }} + 1))
+        max_attempts=$((FLAKY_RETRY_COUNT + 1))
 
         while [ $attempt -le $max_attempts ]; do
           echo "Attempt $attempt of $max_attempts"
-          echo "Running command: ${{ inputs.command }}"
+          echo "Running command: $FLAKY_COMMAND"
 
-          # Run command and capture output and exit code
-          output_file=$(mktemp)
-          trap 'rm -f "$output_file"' EXIT
+          : > "$output_file"
+          streamed_bytes=0
 
           set +e
-          heartbeat() {
-            while true; do
-              sleep 300
-              echo "[flaky-retry] command still running after ${SECONDS}s..."
-            done
-          }
-          heartbeat &
-          heartbeat_pid=$!
-          # Avoid piping through tee here. Some Zig build children can inherit
-          # the pipe and keep it open after Zig has already exited successfully.
-          eval "${{ inputs.command }}" > "$output_file" 2>&1 &
+          eval "$FLAKY_COMMAND" > "$output_file" 2>&1 &
           command_pid=$!
+          next_report=$((SECONDS + FLAKY_HEARTBEAT_SECONDS))
+          while kill -0 "$command_pid" 2>/dev/null; do
+            sleep 1
+            stream_new_output
+            if [ "$SECONDS" -ge "$next_report" ]; then
+              report_processes
+              next_report=$((SECONDS + FLAKY_HEARTBEAT_SECONDS))
+            fi
+          done
           wait "$command_pid"
           exit_code=$?
-          kill "$heartbeat_pid" 2>/dev/null || true
-          wait "$heartbeat_pid" 2>/dev/null || true
-          cat "$output_file"
+          stream_new_output
           set -e
-
 
           # Check if command succeeded
           if [ $exit_code -eq 0 ]; then
@@ -83,8 +128,8 @@ runs:
           fi
 
           # Check if error matches retry condition
-          if grep -Eq "${{ inputs.error_string_contains }}" "$output_file"; then
-            echo "Command failed with exit code $exit_code and error output contains '${{ inputs.error_string_contains }}'"
+          if grep -Eq "$FLAKY_RETRY_PATTERN" "$output_file"; then
+            echo "Command failed with exit code $exit_code and error output contains '$FLAKY_RETRY_PATTERN'"
             echo "Retrying..."
             attempt=$((attempt + 1))
             sleep 2
@@ -97,41 +142,110 @@ runs:
     - name: Run command with retry logic (Windows)
       if: runner.os == 'Windows'
       shell: powershell
+      env:
+        FLAKY_COMMAND: ${{ inputs.command }}
+        FLAKY_RETRY_PATTERN: ${{ inputs.error_string_contains }}
+        FLAKY_RETRY_COUNT: ${{ inputs.retry_count }}
+        FLAKY_HEARTBEAT_SECONDS: ${{ inputs.heartbeat_seconds }}
       run: |
+        $ErrorActionPreference = 'Stop'
+        $command = $env:FLAKY_COMMAND
+        $pattern = $env:FLAKY_RETRY_PATTERN
+        $maxAttempts = [int]$env:FLAKY_RETRY_COUNT + 1
+        $heartbeat = [TimeSpan]::FromSeconds([int]$env:FLAKY_HEARTBEAT_SECONDS)
+        $outputFile = [System.IO.Path]::GetTempFileName()
+        $stdout = [Console]::OpenStandardOutput()
+        $lineStart = $true
+
+        # Everything goes to the raw stdout stream, the command's output and
+        # this script's own lines alike, so the two stay in order.
+        function Say([string]$text) {
+          if (-not $script:lineStart) { $text = "`n" + $text }
+          $bytes = [System.Text.Encoding]::UTF8.GetBytes($text + "`n")
+          $stdout.Write($bytes, 0, $bytes.Length)
+          $stdout.Flush()
+          $script:lineStart = $true
+        }
+
+        # Every Zig compiler, build runner, test binary and Roc binary the
+        # command started: their executables are `zig.exe` itself or live
+        # under `.zig-cache` or `zig-out`.
+        function Report-Processes([TimeSpan]$elapsed) {
+          Say ("[flaky-retry] command still running after {0:N0}s; Zig and Roc processes:" -f $elapsed.TotalSeconds)
+          $total = 0
+          foreach ($p in Get-Process) {
+            $path = $null
+            try { $path = $p.Path } catch { }
+            if (-not $path) { continue }
+            if (($path -notmatch 'zig') -and ($p.ProcessName -ne 'roc')) { continue }
+            $total += $p.WorkingSet64
+            Say ("[flaky-retry]   pid {0,-7} working set {1,6:N0} MiB  peak {2,6:N0} MiB  private {3,6:N0} MiB  {4}" -f $p.Id, ($p.WorkingSet64 / 1MB), ($p.PeakWorkingSet64 / 1MB), ($p.PrivateMemorySize64 / 1MB), $path)
+          }
+          Say ("[flaky-retry]   total working set {0:N0} MiB" -f ($total / 1MB))
+          $os = Get-CimInstance Win32_OperatingSystem
+          Say ("[flaky-retry]   free physical {0:N0} MiB, free commit {1:N0} MiB of {2:N0} MiB" -f ($os.FreePhysicalMemory / 1KB), ($os.FreeVirtualMemory / 1KB), ($os.TotalVirtualMemorySize / 1KB))
+        }
+
         $attempt = 1
-        $maxAttempts = [int]"${{ inputs.retry_count }}" + 1
-
         while ($attempt -le $maxAttempts) {
-          Write-Host "Attempt $attempt of $maxAttempts"
-          Write-Host "Running command: ${{ inputs.command }}"
+          Say "Attempt $attempt of $maxAttempts"
+          Say "Running command: $command"
 
-          # Run command and capture output
-          $ErrorActionPreference = 'Continue'
-          $output = & cmd /c "${{ inputs.command }} 2>&1"
-          $exitCode = $LASTEXITCODE
-          Write-Host $output
+          [System.IO.File]::WriteAllBytes($outputFile, [byte[]]@())
+          $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+          $startInfo.FileName = $env:ComSpec
+          # The parentheses redirect every command of a `&&` chain, not only
+          # the last one.
+          $startInfo.Arguments = '/d /s /c "(' + $command + ') > "' + $outputFile + '" 2>&1"'
+          $startInfo.UseShellExecute = $false
+          $startInfo.WorkingDirectory = (Get-Location).Path
+          $process = [System.Diagnostics.Process]::Start($startInfo)
+          $clock = [System.Diagnostics.Stopwatch]::StartNew()
+          $nextReport = $heartbeat
+
+          $reader = New-Object System.IO.FileStream($outputFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+          $buffer = New-Object byte[] 65536
+          $exited = $false
+          while ($true) {
+            $exited = $process.WaitForExit(1000)
+            while (($read = $reader.Read($buffer, 0, $buffer.Length)) -gt 0) {
+              $stdout.Write($buffer, 0, $read)
+              $lineStart = $buffer[$read - 1] -eq 10
+            }
+            $stdout.Flush()
+            if ($exited) { break }
+            if ($clock.Elapsed -ge $nextReport) {
+              Report-Processes $clock.Elapsed
+              $nextReport = $clock.Elapsed + $heartbeat
+            }
+          }
+          $process.WaitForExit()
+          $exitCode = $process.ExitCode
+          $reader.Dispose()
 
           # Check if command succeeded
           if ($exitCode -eq 0) {
-            Write-Host "Command succeeded"
+            Say "Command succeeded"
+            Remove-Item -LiteralPath $outputFile -ErrorAction SilentlyContinue
             exit 0
           }
 
           # Command failed - check if we should retry
           if ($attempt -ge $maxAttempts) {
-            Write-Host "Command failed after $maxAttempts attempts"
+            Say "Command failed after $maxAttempts attempts"
             exit $exitCode
           }
 
           # Check if error matches retry condition. `-cmatch` (not `-match`) so
           # this lane is case-sensitive like the bash lane's `grep -Eq`.
-          if ($output -cmatch "${{ inputs.error_string_contains }}") {
-            Write-Host "Command failed with exit code $exitCode and error output contains '${{ inputs.error_string_contains }}'"
-            Write-Host "Retrying..."
+          $output = [System.IO.File]::ReadAllText($outputFile)
+          if ($output -cmatch $pattern) {
+            Say "Command failed with exit code $exitCode and error output contains '$pattern'"
+            Say "Retrying..."
             $attempt++
             Start-Sleep -Seconds 2
           } else {
-            Write-Host "Command failed with exit code $exitCode."
+            Say "Command failed with exit code $exitCode."
             exit $exitCode
           }
         }
