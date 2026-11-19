@@ -1,7 +1,6 @@
-//! Generated test hosts belong to the build cache. Consumers that only read
-//! their fixture tree use the cached tree itself; runners that write into it
-//! get private mutable copies so their output files never alter source or
-//! cached inputs.
+//! Generated test hosts belong to the build cache. Fixture consumers read the
+//! cached tree itself and write only into a private scratch directory, so
+//! their output files never alter source or cached inputs.
 const std = @import("std");
 const Step = std.Build.Step;
 const LazyPath = std.Build.LazyPath;
@@ -12,7 +11,7 @@ const Output = struct {
     source: LazyPath,
 };
 
-/// Stage declared fixture producers and provide isolated writable runner trees.
+/// Stage declared fixture producers and provide the trees runners read.
 pub const Plan = struct {
     /// Fixture platforms that reuse another platform's host targets declare the
     /// reuse here, so prepared trees contain the copies without touching the checkout.
@@ -103,12 +102,11 @@ pub const Plan = struct {
         }
     }
 
-    /// A private writable copy of `cachedRoot(deps)`, removed when the build
-    /// finishes. Only for runners that write into their fixture tree.
-    pub fn mutableRoot(self: *Plan, deps: []const *Step) LazyPath {
+    /// An empty private directory, removed when the build finishes, for the
+    /// files a fixture consumer writes; the fixture tree itself is only read.
+    pub fn scratchDirectory(self: *Plan) LazyPath {
         const files = self.b.addWriteFiles();
         files.mode = .tmp;
-        _ = files.addCopyDirectory(self.cachedRoot(deps), ".", .{});
         return files.getDirectory();
     }
 

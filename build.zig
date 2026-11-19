@@ -743,7 +743,8 @@ const TestSuiteSpec = struct {
     env: []const TestSuiteEnv = &.{},
     /// Whether a bare `zig build` should also build this test binary.
     default_step: bool = false,
-    /// Run fixture consumers in a private prepared project directory.
+    /// Run in the prepared fixture tree, which the suite only reads, with
+    /// `--roc-scratch-root=<dir>` naming a private directory for its writes.
     fixture_root: bool = false,
     /// Run in an empty private directory, removed when the build finishes,
     /// for suites that write files into their working directory.
@@ -863,12 +864,11 @@ const TestSuiteRegistry = struct {
         run.addPassthruArgs();
         for (spec.env) |entry| run.setEnvironmentVariable(entry.key, entry.value);
         for (spec.deps) |dep| run.step.dependOn(dep);
-        if (spec.fixture_root) run.setCwd(test_fixtures.mutableRoot(spec.deps));
-        if (spec.scratch_cwd) {
-            const scratch = self.b.addWriteFiles();
-            scratch.mode = .tmp;
-            run.setCwd(scratch.getDirectory());
+        if (spec.fixture_root) {
+            run.setCwd(test_fixtures.cachedRoot(spec.deps));
+            run.addDirectoryArg2(test_fixtures.scratchDirectory(), .{ .prefix = "--roc-scratch-root=", .make_absolute = true });
         }
+        if (spec.scratch_cwd) run.setCwd(test_fixtures.scratchDirectory());
         return run;
     }
 };
@@ -3198,7 +3198,8 @@ pub fn build(b: *std.Build) void {
 
         const run_cli = b.addRunArtifact(parallel_cli_runner_exe);
         run_cli.addFileArg(fixture_roc);
-        run_cli.setCwd(test_fixtures.mutableRoot(&.{build_test_hosts_step}));
+        run_cli.setCwd(test_fixtures.cachedRoot(&.{build_test_hosts_step}));
+        run_cli.addDirectoryArg2(test_fixtures.scratchDirectory(), .{ .prefix = "--scratch-root=", .make_absolute = true });
         for (test_filters) |f| {
             run_cli.addArg("--filter");
             run_cli.addArg(f);
@@ -3213,7 +3214,8 @@ pub fn build(b: *std.Build) void {
         // every other CLI job selects case by case.
         const run_cli_platforms_boxy = b.addRunArtifact(parallel_cli_runner_exe);
         run_cli_platforms_boxy.addFileArg(fixture_roc);
-        run_cli_platforms_boxy.setCwd(test_fixtures.mutableRoot(&.{build_test_hosts_step}));
+        run_cli_platforms_boxy.setCwd(test_fixtures.cachedRoot(&.{build_test_hosts_step}));
+        run_cli_platforms_boxy.addDirectoryArg2(test_fixtures.scratchDirectory(), .{ .prefix = "--scratch-root=", .make_absolute = true });
         run_cli_platforms_boxy.addArgs(&.{ "--suite", "platforms", "--specialize=no" });
         for (test_filters) |f| {
             run_cli_platforms_boxy.addArg("--filter");

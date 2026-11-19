@@ -1,7 +1,9 @@
 //! Vendored Zig 0.17.1 test runner (MIT), with an explicit Roc summary output
 //! Roc's death-test child mode (`--roc-death-test=<test name>`, see
-//! `src/base/death_test.zig`), and Roc's suite selection
-//! (`--roc-test-suite=<namespace>`, for binaries that hold several suites).
+//! `src/base/death_test.zig`), Roc's suite selection
+//! (`--roc-test-suite=<namespace>`, for binaries that hold several suites),
+//! and Roc's scratch directory (`--roc-scratch-root=<dir>`, for tests that
+//! write files while reading their fixture tree from the working directory).
 //! Default test runner for unit tests.
 const builtin = @import("builtin");
 
@@ -28,6 +30,13 @@ var filters: std.ArrayList([]const u8) = .empty;
 /// Set by `--roc-test-suite=<namespace>`: only tests whose fully qualified
 /// name starts with the namespace are selected, and filters apply within them.
 var suite_namespace: ?[]const u8 = null;
+/// Set by `--roc-scratch-root=<dir>`.
+var scratch_root: ?[]const u8 = null;
+
+/// The absolute directory a test writes its scratch files under.
+pub fn scratchRoot() []const u8 {
+    return scratch_root orelse @panic("this test writes scratch files; run it with --roc-scratch-root=<dir>");
+}
 /// Set by `--roc-death-test=<test name>`: this process is a death-test child
 /// that runs exactly the named test.
 var death_test_name: ?[]const u8 = null;
@@ -124,6 +133,8 @@ pub fn main(init: std.process.Init.Minimal) void {
             filters.append(std.heap.page_allocator, args[arg_index]) catch @panic("test filter allocation failed");
         } else if (std.mem.startsWith(u8, arg, "--test-filter=")) {
             filters.append(std.heap.page_allocator, arg["--test-filter=".len..]) catch @panic("test filter allocation failed");
+        } else if (std.mem.startsWith(u8, arg, "--roc-scratch-root=")) {
+            scratch_root = arg["--roc-scratch-root=".len..];
         } else if (std.mem.startsWith(u8, arg, "--roc-test-suite=")) {
             if (suite_namespace != null) @panic("--roc-test-suite given more than once");
             suite_namespace = arg["--roc-test-suite=".len..];
