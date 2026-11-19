@@ -17,6 +17,7 @@ const can = @import("can");
 const canonical_names = @import("canonical_names.zig");
 const MethodNameId = canonical_names.MethodNameId;
 const canonical_type_keys = @import("canonical_type_keys.zig");
+const checked_reachability = @import("checked_reachability.zig");
 const copy_import = @import("copy_import.zig");
 const requirement_solution = @import("requirement_solution.zig");
 const unifier = @import("unify.zig");
@@ -16406,6 +16407,10 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     var stability = HoistedStabilityCache{};
     defer stability.deinit(self.gpa);
 
+    var concreteness_scan = NonConcreteHoistedTypeScan{ .check = self };
+    var concreteness = HoistedTypeConcreteness.init(self.gpa, &concreteness_scan);
+    defer concreteness.deinit();
+
     // For each kept root that only reads the binding of another kept root,
     // that root's index (`selectedRootBindingRead`).
     const binding_reads = try self.gpa.alloc(?u32, root_count);
@@ -16422,7 +16427,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         const intrinsic = !self.selectedHoistedRootNamesRetiredBinder(root.*) and
             (root.body == .pattern_error or root.body == .valueless_binding or !self.hoistExprInvalidated(root.expr)) and
             !reaches_rejected[i] and
-            try self.hoistedRootIsIntrinsicallyKept(root);
+            try self.hoistedRootIsIntrinsicallyKept(root, &concreteness);
         // Top-level extractions define names; they are not optional hoists.
         // Like ordinary top-level constants, their complete checked bodies
         // enter constant/callable publication even when runtime-body hoisting
@@ -16430,7 +16435,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         const deps = intrinsic and (self.selectedHoistedRootIsTopLevel(root.*) or
             root.body == .pattern_error or
             root.body == .valueless_binding or
-            try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle, &stability));
+            try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle, &stability, &concreteness));
         if (!intrinsic) continue;
         if (!deps) continue;
 
@@ -16531,7 +16536,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     std.debug.assert(kept == kept_count);
     self.selected_hoisted_roots.shrinkRetainingCapacity(kept);
     self.debugAssertHoistSelectionConsistent();
-    try self.debugVerifyKeptHoistedRootDependencies();
+    try self.debugVerifyKeptHoistedRootDependencies(&concreteness);
 }
 
 /// Whether a selected root's expression reaches code checking rejected: an
@@ -16655,6 +16660,7 @@ fn hoistedRootsReachingRejectedCode(self: *Self) Allocator.Error![]bool {
 fn hoistedRootIsIntrinsicallyKept(
     self: *Self,
     root: *hoist_roots.SelectedHoistedRoot,
+    concreteness: *HoistedTypeConcreteness,
 ) Allocator.Error!bool {
     if (root.body == .pattern_validation or root.body == .valueless_binding) {
         root.value_kind = .discarded;
@@ -16690,7 +16696,7 @@ fn hoistedRootIsIntrinsicallyKept(
                 }
                 return !has_error;
             }
-            return try self.varHasConcreteType(type_var);
+            return try self.hoistedRootTypeIsConcrete(concreteness, .callable_binding, type_var);
         }
     }
 
@@ -16701,10 +16707,10 @@ fn hoistedRootIsIntrinsicallyKept(
     root.value_kind = .data_constant;
     if (self.cir.store.getExpr(root.expr) == .e_runtime_error) return true;
     if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(root.expr))) return false;
-    return try self.varIsConcreteHoistedConstType(type_var);
+    return try self.hoistedRootTypeIsConcrete(concreteness, .data_constant, type_var);
 }
 
-fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
+fn debugVerifyKeptHoistedRootDependencies(self: *Self, concreteness: *HoistedTypeConcreteness) Allocator.Error!void {
     if (builtin.mode != .debug) return;
 
     const root_count = self.selected_hoisted_roots.items.len;
@@ -16730,19 +16736,38 @@ fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
         // the optional-hoist dependency predicate.
         if (self.selectedHoistedRootIsTopLevel(root)) continue;
         keep_oracle.current_root_index = i;
-        if (!try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle, &stability)) {
+        if (!try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle, &stability, concreteness)) {
             hoistSelectionInvariant("kept selected hoisted root has unavailable dependency");
         }
     }
 }
 
-fn varIsConcreteHoistedConstType(self: *Self, var_: Var) Allocator.Error!bool {
-    self.var_set.clearRetainingCapacity();
-    return try self.varIsConcreteHoistedConstTypeInternal(.data_constant, var_, &self.var_set);
+/// Whether a hoisted root's type is concrete for `purpose`, read from the
+/// answers `concreteness` shares across one pass over the selected hoisted
+/// roots.
+fn hoistedRootTypeIsConcrete(
+    self: *Self,
+    concreteness: *HoistedTypeConcreteness,
+    purpose: HoistedRootTypePurpose,
+    var_: Var,
+) Allocator.Error!bool {
+    const concrete = !try concreteness.visit(.{
+        .purpose = purpose,
+        .walk = .value_graph,
+        .var_ = self.types.resolveVarWord(var_).var_,
+    });
+    if (builtin.mode == .debug) {
+        self.var_set.clearRetainingCapacity();
+        if (concrete != try self.varIsConcreteHoistedConstTypeInternal(purpose, var_, &self.var_set)) {
+            hoistSelectionInvariant("a hoisted root type's shared concreteness answer differs from its own scan's");
+        }
+    }
+    return concrete;
 }
 
 /// Whether the complete value type is fixed, permitting callable components.
-/// Used both for callable hoisting and to close concrete recursive dispatch.
+/// Closes concrete recursive dispatch while solving is still changing types,
+/// so it scans the type as it stands at each call.
 fn varHasConcreteType(self: *Self, var_: Var) Allocator.Error!bool {
     self.var_set.clearRetainingCapacity();
     return try self.varIsConcreteHoistedConstTypeInternal(.callable_binding, var_, &self.var_set);
@@ -16812,102 +16837,277 @@ fn varIsConcreteHoistedConstTypeInternal(
     visited: *collections.DenseMap(Var, void),
 ) Allocator.Error!bool {
     var scan = HoistedConstTypeScan{ .check = self, .purpose = purpose, .visited = visited };
-    return HoistedConstTypeScan.Eval.run(self.gpa, &scan, .{ .ty = .{ .walk = .value_graph, .var_ = var_ } });
+    return HoistedConstTypeScan.Eval.run(self.gpa, &scan, .{ .walk = .value_graph, .var_ = var_ });
 }
 
-/// Whether a type is concrete enough to archive as a hoisted constant (or,
-/// for a callable binding, to carry an exact callable payload). A var
-/// reached again counts as concrete.
+/// One type's own part in whether a type is concrete enough to archive as a
+/// hoisted constant (or, for a callable binding, to carry an exact callable
+/// payload): the answer when `content` alone decides it, or null after
+/// listing in `components` (`components.add(walk, var)`) the types that must
+/// all be concrete for it to be.
+fn hoistedConstTypeComponents(
+    self: *Self,
+    purpose: HoistedRootTypePurpose,
+    walk: HoistedConstWalk,
+    content: Content,
+    components: anytype,
+) Allocator.Error!?bool {
+    switch (content) {
+        .err,
+        .flex,
+        .field_presence,
+        => return false,
+        .rigid => return walk == .decl_template,
+        .alias => |alias| {
+            for (self.types.sliceAliasArgs(alias)) |arg| try components.add(walk, arg);
+            try components.add(walk, self.types.getAliasBackingVar(alias));
+        },
+        .structure => |flat| switch (flat) {
+            .empty_record,
+            .empty_tag_union,
+            => return true,
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                if (purpose != .callable_binding) return false;
+                for (self.types.sliceVars(func.args)) |arg| try components.add(walk, arg);
+                try components.add(walk, func.ret);
+            },
+            .record => |record| {
+                const fields = self.types.getRecordFieldsSlice(record.fields);
+                for (fields.items(.presence)) |presence| try components.add(walk, presence.typeVar());
+                try components.add(walk, record.ext);
+            },
+            .tuple => |tuple| for (self.types.sliceVars(tuple.elems)) |elem| try components.add(walk, elem),
+            .tag_union => |tag_union| {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |tag_args| {
+                    for (self.types.sliceVars(tag_args)) |arg| try components.add(walk, arg);
+                }
+                try components.add(walk, tag_union.ext);
+            },
+            .nominal_type => |nominal| {
+                const needs_backing = if (self.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional())) |builtin_decl| switch (builtin_decl) {
+                    .list,
+                    .box,
+                    .dict,
+                    .set,
+                    .fields,
+                    .field,
+                    .num,
+                    => false,
+                    .try_type,
+                    .numeral,
+                    => true,
+                } else true;
+                // Non-builtin nominal: inspect the declaration's backing template.
+                // Formals in the template stand for the args listed here, so the
+                // template walk admits rigids. Opacity hides the backing from
+                // source, not from archiving, which copies it. A declaration
+                // with no template to inspect is not concrete.
+                const template: ?Var = if (needs_backing) (self.nominalDeclBackingTemplate(nominal) orelse return false) else null;
+                for (self.types.sliceNominalArgs(nominal)) |arg| try components.add(walk, arg);
+                if (template) |backing| try components.add(.decl_template, backing);
+            },
+        },
+    }
+    return null;
+}
+
+/// Whether one type, as solving has left it so far, is concrete enough for a
+/// hoisted root (`hoistedConstTypeComponents`). A var reached again counts
+/// as concrete.
 const HoistedConstTypeScan = struct {
     check: *Self,
     purpose: HoistedRootTypePurpose,
     visited: *collections.DenseMap(Var, void),
 
-    const Leaf = union(enum) {
-        ty: struct { walk: HoistedConstWalk, var_: Var },
-        decided: bool,
-    };
+    const Leaf = struct { walk: HoistedConstWalk, var_: Var };
     const Eval = collections.AnyAll.Evaluation(Leaf, HoistedConstTypeScan);
 
-    fn addVars(items: Eval.Items, walk: HoistedConstWalk, vars: []const Var) Allocator.Error!void {
-        for (vars) |var_| try items.add(.{ .ty = .{ .walk = walk, .var_ = var_ } });
-    }
+    const Components = struct {
+        items: Eval.Items,
+
+        fn add(components: Components, walk: HoistedConstWalk, var_: Var) Allocator.Error!void {
+            try components.items.add(.{ .walk = walk, .var_ = var_ });
+        }
+    };
 
     pub fn enter(scan: *HoistedConstTypeScan, items: Eval.Items, leaf: Leaf) Allocator.Error!Eval.Expansion {
         const self = scan.check;
-        const ty = switch (leaf) {
-            .decided => |value| return .{ .value = value },
-            .ty => |ty| ty,
-        };
-        const walk = ty.walk;
-        const resolved = self.types.resolveVar(ty.var_);
+        const resolved = self.types.resolveVar(leaf.var_);
         if (scan.visited.contains(resolved.var_)) return .{ .value = true };
         try scan.visited.put(resolved.var_, {});
-
-        switch (resolved.desc.content) {
-            .err,
-            .flex,
-            .field_presence,
-            => return .{ .value = false },
-            .rigid => return .{ .value = walk == .decl_template },
-            .alias => |alias| {
-                try addVars(items, walk, self.types.sliceAliasArgs(alias));
-                try items.add(.{ .ty = .{ .walk = walk, .var_ = self.types.getAliasBackingVar(alias) } });
-            },
-            .structure => |flat| switch (flat) {
-                .empty_record,
-                .empty_tag_union,
-                => return .{ .value = true },
-                .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    if (scan.purpose != .callable_binding) return .{ .value = false };
-                    try addVars(items, walk, self.types.sliceVars(func.args));
-                    try items.add(.{ .ty = .{ .walk = walk, .var_ = func.ret } });
-                },
-                .record => |record| {
-                    const fields = self.types.getRecordFieldsSlice(record.fields);
-                    for (fields.items(.presence)) |presence| try items.add(.{ .ty = .{ .walk = walk, .var_ = presence.typeVar() } });
-                    try items.add(.{ .ty = .{ .walk = walk, .var_ = record.ext } });
-                },
-                .tuple => |tuple| try addVars(items, walk, self.types.sliceVars(tuple.elems)),
-                .tag_union => |tag_union| {
-                    const tags = self.types.getTagsSlice(tag_union.tags);
-                    for (tags.items(.args)) |tag_args| try addVars(items, walk, self.types.sliceVars(tag_args));
-                    try items.add(.{ .ty = .{ .walk = walk, .var_ = tag_union.ext } });
-                },
-                .nominal_type => |nominal| {
-                    try addVars(items, walk, self.types.sliceNominalArgs(nominal));
-                    const needs_backing = if (self.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional())) |builtin_decl| switch (builtin_decl) {
-                        .list,
-                        .box,
-                        .dict,
-                        .set,
-                        .fields,
-                        .field,
-                        .num,
-                        => false,
-                        .try_type,
-                        .numeral,
-                        => true,
-                    } else true;
-                    if (needs_backing) {
-                        // Non-builtin nominal: inspect the declaration's backing template.
-                        // Formals in the template stand for the args checked above, so the
-                        // template walk admits rigids. Opacity hides the backing from
-                        // source, not from archiving, which copies it.
-                        if (self.nominalDeclBackingTemplate(nominal)) |template| {
-                            try items.add(.{ .ty = .{ .walk = .decl_template, .var_ = template } });
-                        } else {
-                            try items.add(.{ .decided = false });
-                        }
-                    }
-                },
-            },
-        }
-        return .{ .group = .all };
+        const decided = try self.hoistedConstTypeComponents(
+            scan.purpose,
+            leaf.walk,
+            resolved.desc.content,
+            Components{ .items = items },
+        ) orelse return .{ .group = .all };
+        return .{ .value = decided };
     }
 
     pub fn exit(_: *HoistedConstTypeScan, _: Leaf, _: ?bool) Allocator.Error!void {}
 };
+
+/// One type as a hoisted-root concreteness question asks about it. The
+/// purpose and the graph it is reached in both change what makes it
+/// concrete, so each combination is its own node. `var_` is the checked
+/// representative of its class.
+const HoistedTypeNode = struct {
+    purpose: HoistedRootTypePurpose,
+    walk: HoistedConstWalk,
+    var_: Var,
+};
+
+/// The concreteness answers one pass over the selected hoisted roots shares
+/// (`hoistedRootTypeIsConcrete`): whether a node reaches a type that is not
+/// concrete. Solving has finished and the pass writes no type, so an answer
+/// holds for the whole pass: each node is expanded once, and every root
+/// reaching it reads its answer. A node that reaches a non-concrete type
+/// has its answer as soon as that type is found. A node reaching none has
+/// its answer only once every node of its recursive component has been
+/// expanded, because a node reached again while its own expansion is open
+/// proves nothing about the rest of that component; the members of a
+/// completed component then take one answer together.
+const HoistedTypeConcreteness = checked_reachability.AnyReachable(HoistedTypeNode, NonConcreteHoistedTypeScan);
+
+/// Expands one `HoistedTypeNode` for `HoistedTypeConcreteness`.
+const NonConcreteHoistedTypeScan = struct {
+    check: *Self,
+
+    pub fn visit(scan: *NonConcreteHoistedTypeScan, children: anytype, node: HoistedTypeNode) Allocator.Error!?bool {
+        const self = scan.check;
+        const Components = struct {
+            types: *const types_mod.Store,
+            purpose: HoistedRootTypePurpose,
+            children: @TypeOf(children),
+
+            fn add(components: @This(), walk: HoistedConstWalk, var_: Var) Allocator.Error!void {
+                try components.children.add(.{
+                    .purpose = components.purpose,
+                    .walk = walk,
+                    .var_ = components.types.resolveVarWord(var_).var_,
+                });
+            }
+        };
+        const resolved = self.types.resolveVar(node.var_);
+        std.debug.assert(resolved.var_ == node.var_);
+        const concrete = try self.hoistedConstTypeComponents(
+            node.purpose,
+            node.walk,
+            resolved.desc.content,
+            Components{ .types = self.types, .purpose = node.purpose, .children = children },
+        ) orelse return null;
+        return !concrete;
+    }
+};
+
+test "hoisted root concreteness shares answers across roots and settles a recursive component together" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initOpen("Repro",
+        \\Rec := [Loop(Rec), Stop(I64 -> I64)]
+        \\Row := [Cons({ id : U64, names : List(Str) }, Row), End]
+        \\first : Row
+        \\first = Row.End
+        \\second : Row
+        \\second = Row.Cons({ id: 1, names: ["a"] }, Row.End)
+        \\pair : (Row, Row)
+        \\pair = (first, second)
+        \\rec : Rec
+        \\rec = Rec.Stop(|n| n)
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    const self = &test_env.checker;
+
+    const def_names = [_][]const u8{ "first", "second", "pair", "rec" };
+    var vars: [def_names.len]Var = undefined;
+    for (def_names, &vars) |name, *var_| var_.* = ModuleEnv.varFrom(try test_env.defExpr(name));
+    const rec_var = vars[3];
+
+    // Each root's own scan: the `Row` constants are concrete either way, and
+    // `Rec` holds a function, which only a callable binding may.
+    const purposes = [_]HoistedRootTypePurpose{ .data_constant, .callable_binding };
+    const expected = [purposes.len][def_names.len]bool{
+        .{ true, true, true, false },
+        .{ true, true, true, true },
+    };
+    for (purposes, expected) |purpose, answers| {
+        for (vars, answers) |var_, answer| {
+            self.var_set.clearRetainingCapacity();
+            try std.testing.expectEqual(answer, try self.varIsConcreteHoistedConstTypeInternal(purpose, var_, &self.var_set));
+        }
+    }
+
+    // One set of shared answers gives every root that answer in either
+    // query order, and expands a type the roots share once.
+    for ([_]bool{ false, true }) |reversed| {
+        var scan = NonConcreteHoistedTypeScan{ .check = self };
+        var concreteness = HoistedTypeConcreteness.init(std.testing.allocator, &scan);
+        defer concreteness.deinit();
+        for (purposes, expected) |purpose, answers| {
+            var first_expanded: usize = 0;
+            for (0..vars.len) |step| {
+                const index = if (reversed) vars.len - 1 - step else step;
+                const before = concreteness.nodes.items.len;
+                try std.testing.expectEqual(answers[index], try self.hoistedRootTypeIsConcrete(&concreteness, purpose, vars[index]));
+                const expanded = concreteness.nodes.items.len - before;
+                // `first` and `second` are both `Row`: whichever is asked
+                // second finds the declaration already answered.
+                if (!reversed and index == 0) first_expanded = expanded;
+                if (!reversed and index == 1) try std.testing.expect(expanded < first_expanded);
+            }
+        }
+        const expanded = concreteness.nodes.items.len;
+        for (purposes, expected) |purpose, answers| {
+            for (vars, answers) |var_, answer| try std.testing.expectEqual(answer, try self.hoistedRootTypeIsConcrete(&concreteness, purpose, var_));
+        }
+        try std.testing.expectEqual(expanded, concreteness.nodes.items.len);
+    }
+
+    // `Rec`'s backing reaches `Rec` again, in `Loop`, before it reaches the
+    // function in `Stop`. That inner application finishes its own expansion
+    // having seen only the open backing, so its answer is the component's,
+    // settled when the backing completes: not concrete as data.
+    const rec_nominal = switch (self.types.resolveVar(rec_var).desc.content) {
+        .structure => |flat| switch (flat) {
+            .nominal_type => |nominal| nominal,
+            .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
+        },
+        .flex, .rigid, .alias, .field_presence, .err => return error.TestUnexpectedResult,
+    };
+    const backing = self.nominalDeclBackingTemplate(rec_nominal) orelse return error.TestUnexpectedResult;
+    const backing_union = switch (self.types.resolveVar(backing).desc.content) {
+        .structure => |flat| switch (flat) {
+            .tag_union => |tag_union| tag_union,
+            .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .nominal_type, .empty_tag_union => return error.TestUnexpectedResult,
+        },
+        .flex, .rigid, .alias, .field_presence, .err => return error.TestUnexpectedResult,
+    };
+    const backing_tags = self.types.getTagsSlice(backing_union.tags);
+    try std.testing.expectEqual(@as(usize, 2), backing_tags.len);
+    try std.testing.expectEqualStrings("Loop", self.cir.getIdentStoreConst().getText(backing_tags.items(.name)[0]));
+    const loop_args = self.types.sliceVars(backing_tags.items(.args)[0]);
+    try std.testing.expectEqual(@as(usize, 1), loop_args.len);
+    const inner: HoistedTypeNode = .{
+        .purpose = .data_constant,
+        .walk = .decl_template,
+        .var_ = self.types.resolveVarWord(loop_args[0]).var_,
+    };
+
+    var scan = NonConcreteHoistedTypeScan{ .check = self };
+    var concreteness = HoistedTypeConcreteness.init(std.testing.allocator, &scan);
+    defer concreteness.deinit();
+    try std.testing.expect(!try self.hoistedRootTypeIsConcrete(&concreteness, .data_constant, rec_var));
+    const expanded = concreteness.nodes.items.len;
+    try std.testing.expect(try concreteness.visit(inner));
+    try std.testing.expectEqual(expanded, concreteness.nodes.items.len);
+
+    // Asked on its own first, the inner application has the same answer.
+    var alone_scan = NonConcreteHoistedTypeScan{ .check = self };
+    var alone = HoistedTypeConcreteness.init(std.testing.allocator, &alone_scan);
+    defer alone.deinit();
+    try std.testing.expect(try alone.visit(inner));
+}
 
 const HoistedDependencyBindingKind = enum {
     internal,
@@ -17064,6 +17264,7 @@ fn hoistedRootDependenciesAreKept(
     expr: CIR.Expr.Idx,
     keep_oracle: *const HoistedRootKeepOracle,
     stability: *HoistedStabilityCache,
+    concreteness: *HoistedTypeConcreteness,
 ) Allocator.Error!bool {
     var context = HoistedDependencyContext{};
     defer context.deinit(self.gpa);
@@ -17073,7 +17274,7 @@ fn hoistedRootDependenciesAreKept(
     while (pending.pop()) |step| {
         const start = pending.items.len;
         const kept = switch (step) {
-            .expr => |child| try self.hoistedRootExprStep(child, &context, keep_oracle, stability, &pending),
+            .expr => |child| try self.hoistedRootExprStep(child, &context, keep_oracle, stability, concreteness, &pending),
             .statement => |statement| try self.hoistedRootStatementStep(statement, &pending),
             // Binders introduced and consumed inside this root are transient
             // evaluation state. They need neither separate selected roots nor
@@ -17137,6 +17338,7 @@ fn hoistedRootExprStep(
     context: *HoistedDependencyContext,
     keep_oracle: *const HoistedRootKeepOracle,
     stability: *HoistedStabilityCache,
+    concreteness: *HoistedTypeConcreteness,
     pending: *std.ArrayListUnmanaged(HoistedKeptStep),
 ) Allocator.Error!bool {
     if (self.hoistExprInvalidated(expr)) return false;
@@ -17233,7 +17435,7 @@ fn hoistedRootExprStep(
         // calls before the settled hoistability walk can classify them.
         .e_method_call => false,
         .e_dispatch_call => |call| blk: {
-            if (!try self.staticDispatchAllowsHoistedRoot(ModuleEnv.varFrom(call.receiver), call.constraint_fn_var)) break :blk false;
+            if (!try self.staticDispatchAllowsHoistedRoot(concreteness, ModuleEnv.varFrom(call.receiver), call.constraint_fn_var)) break :blk false;
             try pending.append(gpa, .{ .expr = call.receiver });
             break :blk try self.pushHoistedKeptExprs(pending, call.args);
         },
@@ -17254,6 +17456,7 @@ fn hoistedRootExprStep(
             if (interpolation.constraint_fn_var) |fn_var| {
                 const dispatcher_var = interpolation.dispatcher_var orelse break :blk false;
                 if (!try self.staticDispatchAllowsHoistedRoot(
+                    concreteness,
                     dispatcher_var,
                     fn_var,
                 )) break :blk false;
@@ -17271,6 +17474,7 @@ fn hoistedRootExprStep(
         .e_structural_eq => |eq| try pushHoistedKeptExprPair(gpa, pending, eq.lhs, eq.rhs),
         .e_structural_hash => |h| try pushHoistedKeptExprPair(gpa, pending, h.value, h.hasher),
         .e_method_eq => |eq| (try self.staticDispatchAllowsHoistedRoot(
+            concreteness,
             ModuleEnv.varFrom(eq.lhs),
             eq.constraint_fn_var,
         )) and
@@ -17279,6 +17483,7 @@ fn hoistedRootExprStep(
         // dispatch plans and therefore cannot establish compile-time safety.
         .e_type_method_call => false,
         .e_type_dispatch_call => |call| (try self.staticDispatchAllowsHoistedRoot(
+            concreteness,
             static_dispatch.typeDispatchCallDispatcherVar(self.cir, call.owner),
             call.constraint_fn_var,
         )) and
@@ -20752,10 +20957,15 @@ fn recordCurrentFunctionEffectDependency(self: *Self, function_var: Var) Allocat
 /// A dispatch whose selected target is a method declared inside a function
 /// body calls a local procedure of that body; unless checking promoted that
 /// procedure, a caller-less root has no declaration context in which to call it.
-fn staticDispatchAllowsHoistedRoot(self: *Self, dispatcher_var: Var, callable_var: Var) Allocator.Error!bool {
+fn staticDispatchAllowsHoistedRoot(
+    self: *Self,
+    concreteness: *HoistedTypeConcreteness,
+    dispatcher_var: Var,
+    callable_var: Var,
+) Allocator.Error!bool {
     if (!self.varIsFunctionType(callable_var) or try self.varIsEffectfulFunction(callable_var)) return false;
     if (self.contextual_local_dispatch_fn_vars.contains(callable_var)) return false;
-    return try self.varIsConcreteHoistedConstType(dispatcher_var);
+    return try self.hoistedRootTypeIsConcrete(concreteness, .data_constant, dispatcher_var);
 }
 
 /// The binding pattern of the local procedure a method binding calls: the

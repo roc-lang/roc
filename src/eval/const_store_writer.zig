@@ -110,6 +110,9 @@ pub const Writer = struct {
     /// stores values only (`storeLiteral`).
     names: ?*check.CanonicalNames.CanonicalNameStore,
     program: *const LirProgram.Result,
+    /// The program's stored types and their names this writer has copied
+    /// into the store, each once (`storeType`).
+    type_translation: const_store.ConstTypeStore.Translation,
     stored_values: std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId),
     /// Set for a writer that stores value-form roots from their checked
     /// expressions.
@@ -158,6 +161,7 @@ pub const Writer = struct {
             .store = store,
             .names = names,
             .program = program,
+            .type_translation = .init(allocator),
             .stored_values = std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId).init(allocator),
             .erased_callable_resolver = .{},
             .product_plans = std.AutoHashMap(ProductPlanKey, ?lir.PackedData.Plan).init(allocator),
@@ -240,6 +244,7 @@ pub const Writer = struct {
         self.checked_text.deinit(self.allocator);
         self.checked_components.deinit(self.allocator);
         self.stored_values.deinit();
+        self.type_translation.deinit();
     }
 
     pub fn storeRoot(
@@ -324,12 +329,15 @@ pub const Writer = struct {
     }
 
     /// Preserve stored type `ty` of the writer's program in the module's
-    /// durable ConstStore type table.
+    /// durable ConstStore type table. The table holds one copy of each of
+    /// the program's types this writer stores, however many roots, captures
+    /// and other stored types refer to it.
     pub fn storeType(self: *Writer, ty: const_store.ConstTypeId) Error!const_store.ConstTypeId {
         return self.store.type_store.cloneTypeFromTranslated(
             &self.program.const_types,
             &self.program.const_type_names,
             self.typeNames(),
+            &self.type_translation,
             ty,
         );
     }
@@ -339,12 +347,7 @@ pub const Writer = struct {
         self: *Writer,
         root: LirProgram.LiteralRootPlan,
     ) Error!const_store.ConstTypeId {
-        return self.store.type_store.cloneTypeFromTranslated(
-            &self.program.const_types,
-            &self.program.const_type_names,
-            self.typeNames(),
-            root.ret_type,
-        );
+        return self.storeType(root.ret_type);
     }
 
     /// One value to store or scan.
@@ -447,7 +450,7 @@ pub const Writer = struct {
                 frame.index += 1;
                 const request = self.store_requests.items[frame.requests_start + index];
                 if (frame.slots.len > 0) {
-                    const ty = try self.cloneCaptureType(frame.slots[index].ty);
+                    const ty = try self.storeType(frame.slots[index].ty);
                     self.store_capture_types.items[frame.capture_types_start + index] = ty;
                 }
                 const node = try self.startStore(request);
@@ -671,7 +674,7 @@ pub const Writer = struct {
                     .fn_def = template.fn_def,
                     .source_fn_ty = template.source_fn_ty,
                     .source_fn_key = template.source_fn_key,
-                    .owner_fn_ty = if (template.owner_fn_ty.get()) |owner_fn_ty| try self.cloneCaptureType(owner_fn_ty) else null,
+                    .owner_fn_ty = if (template.owner_fn_ty.get()) |owner_fn_ty| try self.storeType(owner_fn_ty) else null,
                     .captures = captures,
                     .evidence = template.evidence,
                     .evidence_frames = template.evidence_frames,
@@ -1595,15 +1598,6 @@ pub const Writer = struct {
             .len = try checkedU32(roc_list.len()),
             .element = element,
         } }, .capacity = capacity } });
-    }
-
-    fn cloneCaptureType(self: *Writer, ty: const_store.ConstTypeId) Error!const_store.ConstTypeId {
-        return self.store.type_store.cloneTypeFromTranslated(
-            &self.program.const_types,
-            &self.program.const_type_names,
-            self.typeNames(),
-            ty,
-        );
     }
 
     fn selectFnVariant(
