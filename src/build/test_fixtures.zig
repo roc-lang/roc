@@ -1,5 +1,7 @@
-//! Generated test hosts belong to the build cache. Fixture runners get private
-//! mutable copies so their output files never alter source or cached inputs.
+//! Generated test hosts belong to the build cache. Consumers that only read
+//! their fixture tree use the cached tree itself; runners that write into it
+//! get private mutable copies so their output files never alter source or
+//! cached inputs.
 const std = @import("std");
 const Step = std.Build.Step;
 const LazyPath = std.Build.LazyPath;
@@ -23,15 +25,17 @@ pub const Plan = struct {
 
     b: *std.Build,
     outputs: std.ArrayList(Output) = .empty,
-    static_root: ?LazyPath = null,
     aliases: []const Alias = &.{},
 
+    /// Declare that prepared trees hold `source` at `path`. `files` is the
+    /// step callers depend on to have the file produced; prepared trees copy
+    /// `source` itself, so no intermediate copy is made.
     pub fn copy(self: *Plan, files: *Step.WriteFile, source: LazyPath, path: []const u8) void {
-        const generated = files.addCopyFile(source, path);
+        source.addStepDependencies(&files.step);
         self.outputs.append(self.b.allocator, .{
             .step = &files.step,
             .path = self.b.dupe(path),
-            .source = generated,
+            .source = source,
         }) catch @panic("OOM");
     }
 
@@ -45,12 +49,33 @@ pub const Plan = struct {
     /// Includes only generated files reachable from the caller's existing
     /// host dependencies. A small suite never inherits another suite's hosts.
     pub fn cachedRoot(self: *Plan, deps: []const *Step) LazyPath {
+        const files = self.b.addWriteFiles();
+        self.addStaticInputs(files);
+        self.addGenerated(files, deps, "");
+        return files.getDirectory();
+    }
+
+    /// A prepared tree holding only the checkout directory `dir` and the
+    /// generated files under it, at their usual paths, for consumers that
+    /// read nothing outside `dir`.
+    pub fn cachedDirectory(self: *Plan, dir: []const u8, deps: []const *Step) LazyPath {
+        const files = self.b.addWriteFiles();
+        _ = files.addCopyDirectory(self.b.path(dir), dir, .{ .exclude_extensions = &generated_extensions });
+        for (self.aliases) |alias| {
+            if (!alias.has_checked_in_inputs or !isUnder(alias.destination, dir)) continue;
+            _ = files.addCopyDirectory(self.b.path(alias.source), alias.destination, .{ .exclude_extensions = &generated_extensions });
+        }
+        self.addGenerated(files, deps, dir);
+        return files.getDirectory();
+    }
+
+    /// Copies the generated files reachable from `deps` whose paths lie under
+    /// `dir` (every one, when `dir` is empty), plus their alias copies.
+    fn addGenerated(self: *Plan, files: *Step.WriteFile, deps: []const *Step, dir: []const u8) void {
         const b = self.b;
         var visited: std.AutoHashMapUnmanaged(*Step, void) = .empty;
         for (deps) |dep| collectDependencies(b, dep, &visited);
 
-        const files = b.addWriteFiles();
-        _ = files.addCopyDirectory(self.staticRoot(), ".", .{});
         var paths: std.StringHashMapUnmanaged(LazyPath) = .empty;
         for (self.outputs.items) |item| {
             if (!visited.contains(item.step)) continue;
@@ -61,12 +86,13 @@ pub const Plan = struct {
                 std.debug.panic("duplicate test fixture producers: {s}", .{item.path});
             }
             entry.value_ptr.* = item.source;
-            _ = files.addCopyFile(item.source, item.path);
-            // Declared paths use the host separator, but aliases are written
-            // with '/', so compare in normalized form.
+            // Declared paths use the host separator, but aliases and `dir` are
+            // written with '/', so compare in normalized form.
             const normalized = b.allocator.dupe(u8, item.path) catch @panic("OOM");
             std.mem.replaceScalar(u8, normalized, '\\', '/');
+            if (isUnder(normalized, dir)) _ = files.addCopyFile(item.source, item.path);
             for (self.aliases) |alias| {
+                if (!isUnder(alias.destination, dir)) continue;
                 if (normalized.len > alias.source.len and
                     std.mem.startsWith(u8, normalized, alias.source) and
                     normalized[alias.source.len] == '/')
@@ -75,9 +101,10 @@ pub const Plan = struct {
                 }
             }
         }
-        return files.getDirectory();
     }
 
+    /// A private writable copy of `cachedRoot(deps)`, removed when the build
+    /// finishes. Only for runners that write into their fixture tree.
     pub fn mutableRoot(self: *Plan, deps: []const *Step) LazyPath {
         const files = self.b.addWriteFiles();
         files.mode = .tmp;
@@ -99,19 +126,11 @@ pub const Plan = struct {
         self.b.step("update-test-fixtures", "Copy generated test hosts into the checkout for manual use").dependOn(&publication.step);
     }
 
-    fn staticRoot(self: *Plan) LazyPath {
-        if (self.static_root) |root| return root;
-        const files = self.b.addWriteFiles();
-        _ = files.addCopyDirectory(self.b.path("test"), "test", .{
-            // These are generated host/stub names. Checked-in CRT objects and
-            // import libraries are fixture inputs and must remain included.
-            .exclude_extensions = &.{ "libhost.a", "host.lib", "host.wasm", "libc.so", "libc.so.6", "libc_stub.s" },
-        });
+    fn addStaticInputs(self: *Plan, files: *Step.WriteFile) void {
+        _ = files.addCopyDirectory(self.b.path("test"), "test", .{ .exclude_extensions = &generated_extensions });
         for (self.aliases) |alias| {
             if (!alias.has_checked_in_inputs) continue;
-            _ = files.addCopyDirectory(self.b.path(alias.source), alias.destination, .{
-                .exclude_extensions = &.{ "libhost.a", "host.lib", "host.wasm", "libc.so", "libc.so.6", "libc_stub.s" },
-            });
+            _ = files.addCopyDirectory(self.b.path(alias.source), alias.destination, .{ .exclude_extensions = &generated_extensions });
         }
         inline for (.{ "src", "vendor" }) |dir| {
             _ = files.addCopyDirectory(self.b.path(dir), dir, .{});
@@ -123,11 +142,17 @@ pub const Plan = struct {
         inline for (.{ "build.zig", "build.zig.zon", "design.md", "legal_details", "README.md", "CONTRIBUTING/profiling/bench_repeated_check_ORIGINAL.roc" }) |path| {
             _ = files.addCopyFile(self.b.path(path), path);
         }
-        const root = files.getDirectory();
-        self.static_root = root;
-        return root;
     }
 };
+
+/// Generated host and stub names. Checked-in CRT objects and import libraries
+/// are fixture inputs and stay included.
+const generated_extensions = [_][]const u8{ "libhost.a", "host.lib", "host.wasm", "libc.so", "libc.so.6", "libc_stub.s" };
+
+fn isUnder(path: []const u8, dir: []const u8) bool {
+    if (dir.len == 0) return true;
+    return path.len > dir.len and std.mem.startsWith(u8, path, dir) and path[dir.len] == '/';
+}
 
 fn collectDependencies(b: *std.Build, step: *Step, visited: *std.AutoHashMapUnmanaged(*Step, void)) void {
     const entry = visited.getOrPut(b.allocator, step) catch @panic("OOM");

@@ -676,13 +676,15 @@ const TestsSummaryStep = struct {
         self.serialize_runs = true;
     }
 
-    fn addRun(self: *TestsSummaryStep, run_step: *Step) void {
+    /// `name` labels the run's report: the test binary's name, or the suite's
+    /// name when the binary holds several suites.
+    fn addRun(self: *TestsSummaryStep, run_step: *Step, name: []const u8) void {
         const run: *Step.Run = @fieldParentPtr("step", run_step);
         const b = run.step.owner;
-        if (self.finished) std.debug.panic("test report producer registered after its summary finished: {s}", .{run.producer.?.name});
-        const entry = self.producers.getOrPut(b.allocator, run.producer.?.name) catch @panic("OOM");
-        if (entry.found_existing) std.debug.panic("duplicate test report producer: {s}", .{run.producer.?.name});
-        const basename = b.fmt("{s}.tsv", .{run.producer.?.name});
+        if (self.finished) std.debug.panic("test report producer registered after its summary finished: {s}", .{name});
+        const entry = self.producers.getOrPut(b.allocator, name) catch @panic("OOM");
+        if (entry.found_existing) std.debug.panic("duplicate test report producer: {s}", .{name});
+        const basename = b.fmt("{s}.tsv", .{name});
         // Test runs always execute because they accept dynamic passthrough.
         // Each summary owns a temporary destination so concurrent invocations
         // never mutate the same report. Retain an immutable copy only after
@@ -695,7 +697,7 @@ const TestsSummaryStep = struct {
         const retained_reports = b.addWriteFiles();
         const report = retained_reports.addCopyFile(self.mutable_reports.path(b, basename), basename);
         retained_reports.step.dependOn(run_step);
-        self.run.addArg(run.producer.?.name);
+        self.run.addArg(name);
         self.run.addFileArg(report);
         if (self.serialize_runs) {
             if (self.last_run) |last_run| run_step.dependOn(last_run);
@@ -743,6 +745,13 @@ const TestSuiteSpec = struct {
     default_step: bool = false,
     /// Run fixture consumers in a private prepared project directory.
     fixture_root: bool = false,
+    /// Run in an empty private directory, removed when the build finishes,
+    /// for suites that write files into their working directory.
+    scratch_cwd: bool = false,
+    /// For a suite whose `compile` also holds other suites' tests: the prefix
+    /// of the fully qualified names of this suite's tests. Both runs execute
+    /// only those tests.
+    namespace: ?[]const u8 = null,
     /// Which inventory lists this suite: a per-module suite comes from the
     /// module inventory in `src/build/modules.zig`; every other suite must be
     /// listed in `src/build/zig_test_suites.zig`, which says where CI runs it.
@@ -825,12 +834,15 @@ const TestSuiteRegistry = struct {
         self.build_test_zig_step.dependOn(&spec.compile.step);
         for (spec.deps) |dep| self.build_test_zig_step.dependOn(dep);
         if (spec.default_step) b.default_step.dependOn(&spec.compile.step);
-        if (self.wiring_run) |wiring| wiring.addArtifactArg(spec.compile);
+        // A compile shared by several suites is enumerated once.
+        if (self.wiring_run) |wiring| {
+            if (!runHasArtifactArg(wiring, spec.compile)) wiring.addArtifactArg(spec.compile);
+        }
 
         // Two runs over one compile. Only the summary's run joins the
         // serialization chain (currently enabled only on Windows); the public
         // step gets a run with no chain edges.
-        self.summary.addRun(&self.configuredRun(spec).step);
+        self.summary.addRun(&self.configuredRun(spec).step, if (spec.namespace != null) spec.step_suffix else spec.compile.name);
 
         const public_step = b.step(
             b.fmt("run-test-zig-{s}", .{spec.step_suffix}),
@@ -843,14 +855,28 @@ const TestSuiteRegistry = struct {
     /// never a second copy of the configuration to fall out of sync.
     fn configuredRun(self: TestSuiteRegistry, spec: TestSuiteSpec) *Step.Run {
         const run = self.b.addRunArtifact(spec.compile);
+        if (spec.namespace) |namespace| run.addArg(self.b.fmt("--roc-test-suite={s}", .{namespace}));
         if (self.run_args.len != 0) run.addArgs(self.run_args);
         run.addPassthruArgs();
         for (spec.env) |entry| run.setEnvironmentVariable(entry.key, entry.value);
         for (spec.deps) |dep| run.step.dependOn(dep);
         if (spec.fixture_root) run.setCwd(test_fixtures.mutableRoot(spec.deps));
+        if (spec.scratch_cwd) {
+            const scratch = self.b.addWriteFiles();
+            scratch.mode = .tmp;
+            run.setCwd(scratch.getDirectory());
+        }
         return run;
     }
 };
+
+fn runHasArtifactArg(run: *Step.Run, artifact: *Step.Compile) bool {
+    for (run.argv.items) |arg| switch (arg) {
+        .artifact => |decorated| if (decorated.artifact == artifact) return true,
+        else => {},
+    };
+    return false;
+}
 
 /// Build step that checks for forbidden patterns in the type checker code.
 ///
@@ -1795,7 +1821,9 @@ const RocAppBuild = struct {
 
 /// `roc build --opt=speed` of one prebuilt platform-test app for `target_dir`,
 /// with its own isolated roc cache under `cache_dir`, after the platform host
-/// in `host_step` is prepared.
+/// in `host_step` is prepared. The app and its platform read nothing outside
+/// the app's directory, so the build gets a prepared tree of only that
+/// directory.
 fn addPrebuiltRocApp(
     b: *std.Build,
     roc_exe: *Step.Compile,
@@ -1810,7 +1838,7 @@ fn addPrebuiltRocApp(
     run.addArgs(&.{ "build", "--opt=speed", b.fmt("--target={s}", .{target_dir}) });
     setRocBuildEnvironment(run, cache_dir);
     const output = run.addPrefixedOutputFileArg("--output=", exe_name);
-    run.addFileArg(test_fixtures.cachedRoot(&.{host_step}).path(b, app_path));
+    run.addFileArg(test_fixtures.cachedDirectory(std.fs.path.dirname(app_path).?, &.{host_step}).path(b, app_path));
     run.step.dependOn(host_step);
     run.step.dependOn(build_roc_step);
     return .{ .run = run, .output = output };
@@ -2860,25 +2888,25 @@ pub fn build(b: *std.Build) void {
 
     const run_simd_codegen_check = b.addSystemCommand(&.{ "bash", "ci/check_simd_codegen.sh" });
     run_simd_codegen_check.addFileArg(fixture_roc);
-    run_simd_codegen_check.setCwd(test_fixtures.mutableRoot(&.{build_test_hosts_step}));
+    run_simd_codegen_check.setCwd(test_fixtures.cachedRoot(&.{build_test_hosts_step}));
     run_simd_codegen_check.step.dependOn(build_test_hosts_step);
     run_check_simd_codegen_step.dependOn(&run_simd_codegen_check.step);
 
     const run_baseline_codegen_check = b.addSystemCommand(&.{ "bash", "ci/check_baseline_codegen.sh" });
     run_baseline_codegen_check.addFileArg(fixture_roc);
-    run_baseline_codegen_check.setCwd(test_fixtures.mutableRoot(&.{build_test_hosts_step}));
+    run_baseline_codegen_check.setCwd(test_fixtures.cachedRoot(&.{build_test_hosts_step}));
     run_baseline_codegen_check.step.dependOn(build_test_hosts_step);
     run_check_baseline_codegen_step.dependOn(&run_baseline_codegen_check.step);
 
     const run_match_extension_codegen_check = b.addSystemCommand(&.{ "bash", "ci/check_match_extension_codegen.sh" });
     run_match_extension_codegen_check.addFileArg(fixture_roc);
-    run_match_extension_codegen_check.setCwd(test_fixtures.mutableRoot(&.{build_test_hosts_step}));
+    run_match_extension_codegen_check.setCwd(test_fixtures.cachedRoot(&.{build_test_hosts_step}));
     run_match_extension_codegen_check.step.dependOn(build_test_hosts_step);
     run_check_match_extension_codegen_step.dependOn(&run_match_extension_codegen_check.step);
 
     const run_str_eq_same_allocation_check = b.addSystemCommand(&.{ "bash", "ci/check_str_eq_same_allocation.sh" });
     run_str_eq_same_allocation_check.addFileArg(fixture_roc);
-    run_str_eq_same_allocation_check.setCwd(test_fixtures.mutableRoot(&.{build_test_hosts_step}));
+    run_str_eq_same_allocation_check.setCwd(test_fixtures.cachedRoot(&.{build_test_hosts_step}));
     run_str_eq_same_allocation_check.step.dependOn(build_test_hosts_step);
     run_check_str_eq_same_allocation_step.dependOn(&run_str_eq_same_allocation_check.step);
 
@@ -3538,7 +3566,7 @@ pub fn build(b: *std.Build) void {
     // commands sequential: each corpus is intentionally large, and running
     // several compiler instances concurrently obscures failures and wastes RAM.
     const run_simd_runtime_dev = b.addRunArtifact(roc_exe);
-    run_simd_runtime_dev.setCwd(test_fixtures.mutableRoot(&.{build_test_hosts_step}));
+    run_simd_runtime_dev.setCwd(test_fixtures.cachedRoot(&.{build_test_hosts_step}));
     run_simd_runtime_dev.addArgs(&.{ "--opt=dev", "--no-cache", "test/simd/differential.roc" });
     run_simd_runtime_dev.step.dependOn(build_test_hosts_step);
 
@@ -3547,16 +3575,16 @@ pub fn build(b: *std.Build) void {
     // baseline through different sequences.
     const run_simd_runtime_v1_dev = b.addSystemCommand(&.{ "bash", "ci/run_simd_v1_differential.sh" });
     run_simd_runtime_v1_dev.addFileArg(fixture_roc);
-    run_simd_runtime_v1_dev.setCwd(test_fixtures.mutableRoot(&.{build_test_hosts_step}));
+    run_simd_runtime_v1_dev.setCwd(test_fixtures.cachedRoot(&.{build_test_hosts_step}));
     run_simd_runtime_v1_dev.step.dependOn(&run_simd_runtime_dev.step);
 
     const run_simd_runtime_speed = b.addRunArtifact(roc_exe);
-    run_simd_runtime_speed.setCwd(test_fixtures.mutableRoot(&.{build_test_hosts_step}));
+    run_simd_runtime_speed.setCwd(test_fixtures.cachedRoot(&.{build_test_hosts_step}));
     run_simd_runtime_speed.addArgs(&.{ "--opt=speed", "--no-cache", "test/simd/differential.roc" });
     run_simd_runtime_speed.step.dependOn(&run_simd_runtime_v1_dev.step);
 
     const run_simd_ctfe = b.addRunArtifact(roc_exe);
-    run_simd_ctfe.setCwd(test_fixtures.mutableRoot(&.{build_test_hosts_step}));
+    run_simd_ctfe.setCwd(test_fixtures.cachedRoot(&.{build_test_hosts_step}));
     run_simd_ctfe.addArgs(&.{ "test", "--opt=speed", "--no-cache", "test/simd/differential.roc" });
     run_simd_ctfe.step.dependOn(&run_simd_runtime_speed.step);
 
@@ -4726,10 +4754,37 @@ pub fn build(b: *std.Build) void {
         .compile = backend_llvm_test,
     });
 
-    // Add snapshot tool test
-    {
-        const snapshot_test = roc_test_binaries.add(.{ .name = "snapshot_tool_test", .root = "src/snapshot_tool/main.zig", .links_llvm = true });
+    const cli_io_writer_test_helper = b.addExecutable(.{
+        .name = "cli_io_writer_test_helper",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli/io_writer_test_helper.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    cli_io_writer_test_helper.root_module.addImport("reporting", roc_modules.reporting);
+    cli_io_writer_test_helper.root_module.addImport("ctx", roc_modules.ctx);
+    const install_cli_io_writer_test_helper = b.addInstallArtifact(cli_io_writer_test_helper, .{});
+    const cli_test_helpers = b.addOptions();
+    cli_test_helpers.addOptionPathUntracked("cli_io_writer_test_helper_path", cli_io_writer_test_helper.getEmittedBin());
 
+    // These suites each link the whole compiler, so they share one test binary
+    // instead of each linking a copy of it. Every suite's runs select the tests
+    // under its own namespace in `src/compiler_test_suites.zig`.
+    const compiler_suites_test = roc_test_binaries.add(.{ .name = "compiler_suites_test", .root = "src/compiler_test_suites.zig", .links_llvm = true });
+    // lir-inline and trmc-lir drive the interpreter thousands of frames deep;
+    // trmc-lir proves the Debug call-depth guard fires first, which needs the
+    // same native stack the other interpreter-driving binaries get, otherwise
+    // the stack runs out before the guard does and the fault replaces the
+    // deterministic crash under test.
+    compiler_suites_test.stack_size = stack_budget.roc_stack_size;
+    compiler_suites_test.root_module.addOptions("fixture_options", fixture_options);
+    compiler_suites_test.root_module.addImport("compiler_version", compiler_version_module);
+    compiler_suites_test.root_module.addOptions("cli_test_helpers", cli_test_helpers);
+    modules.linkWatchPlatformLibs(compiler_suites_test, target);
+
+    {
         // The install step is optional, so hoist the dep list into a local with
         // an explicit type: peer-type resolution on an inline
         // `if (c) &.{x} else &.{}` inside a struct literal field is fragile.
@@ -4741,42 +4796,35 @@ pub fn build(b: *std.Build) void {
         test_suites.register(.{
             .step_suffix = "snapshot-tool",
             .description = "Run snapshot tool Zig tests",
-            .compile = snapshot_test,
+            .compile = compiler_suites_test,
+            .namespace = "snapshot_tool.",
             .deps = snapshot_deps,
         });
     }
 
-    // Add Builtin.roc doc code-block tests. Verifies every ```roc block in
-    // src/build/roc/Builtin.roc passes the in-memory equivalent of
-    // `roc check`, and either runs as `roc test` (when the block is only
-    // top-level expects) or evaluates.
-    {
-        const builtin_doc_test = roc_test_binaries.add(.{ .name = "builtin_doc_test", .root = "src/eval/test/builtin_doc_tests.zig", .links_llvm = true });
-        builtin_doc_test.root_module.addOptions("fixture_options", fixture_options);
-
-        test_suites.register(.{
-            .step_suffix = "builtin-doc",
-            .description = "Run Builtin.roc doc code-block Zig tests",
-            .compile = builtin_doc_test,
-            .fixture_root = true,
-        });
-    }
-
-    const lir_inline_test = roc_test_binaries.add(.{ .name = "lir_inline_test", .root = "src/eval/test/lir_inline_test.zig", .links_llvm = true });
-    lir_inline_test.stack_size = stack_budget.roc_stack_size;
+    // Verifies every ```roc block in src/build/roc/Builtin.roc passes the
+    // in-memory equivalent of `roc check`, and either runs as `roc test` (when
+    // the block is only top-level expects) or evaluates.
+    test_suites.register(.{
+        .step_suffix = "builtin-doc",
+        .description = "Run Builtin.roc doc code-block Zig tests",
+        .compile = compiler_suites_test,
+        .namespace = "eval.test.builtin_doc_tests.",
+        .scratch_cwd = true,
+    });
 
     test_suites.register(.{
         .step_suffix = "lir-inline",
         .description = "Run LIR inline Zig tests",
-        .compile = lir_inline_test,
+        .compile = compiler_suites_test,
+        .namespace = "eval.test.lir_inline_test.",
     });
-
-    const rc_conformance_test = roc_test_binaries.add(.{ .name = "rc_conformance_test", .root = "src/eval/test/rc_conformance_tests.zig", .links_llvm = true });
 
     test_suites.register(.{
         .step_suffix = "rc-conformance",
         .description = "Run RcEffect conformance sweep Zig tests",
-        .compile = rc_conformance_test,
+        .compile = compiler_suites_test,
+        .namespace = "eval.test.rc_conformance_tests.",
     });
 
     // The builtins' concurrent-release tests under ThreadSanitizer, which
@@ -4813,48 +4861,20 @@ pub fn build(b: *std.Build) void {
         run_test_builtins_tsan_step.dependOn(&b.addFail("ThreadSanitizer needs a Linux (glibc) or macOS host on x86_64 or aarch64").step);
     }
 
-    const trmc_lir_test = roc_test_binaries.add(.{ .name = "trmc_lir_test", .root = "src/eval/test/trmc_lir_test.zig", .links_llvm = true });
-    // Drives the interpreter thousands of frames deep to prove the Debug
-    // call-depth guard fires first, which needs the same native stack the other
-    // interpreter-driving binaries get; otherwise the stack runs out before the
-    // guard does and the fault replaces the deterministic crash under test.
-    trmc_lir_test.stack_size = stack_budget.roc_stack_size;
-
     test_suites.register(.{
         .step_suffix = "trmc-lir",
         .description = "Run TRMC LIR Zig tests",
-        .compile = trmc_lir_test,
+        .compile = compiler_suites_test,
+        .namespace = "eval.test.trmc_lir_test.",
     });
 
-    const cli_io_writer_test_helper = b.addExecutable(.{
-        .name = "cli_io_writer_test_helper",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/cli/io_writer_test_helper.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        }),
+    test_suites.register(.{
+        .step_suffix = "cli-main",
+        .description = "Run roc CLI main Zig tests",
+        .compile = compiler_suites_test,
+        .namespace = "cli.",
+        .deps = &.{&install_cli_io_writer_test_helper.step},
     });
-    cli_io_writer_test_helper.root_module.addImport("reporting", roc_modules.reporting);
-    cli_io_writer_test_helper.root_module.addImport("ctx", roc_modules.ctx);
-    const install_cli_io_writer_test_helper = b.addInstallArtifact(cli_io_writer_test_helper, .{});
-    const cli_test_helpers = b.addOptions();
-    cli_test_helpers.addOptionPathUntracked("cli_io_writer_test_helper_path", cli_io_writer_test_helper.getEmittedBin());
-
-    // Add CLI test
-    {
-        const cli_test = roc_test_binaries.add(.{ .name = "cli_test", .root = "src/cli/main.zig", .links_llvm = true });
-        cli_test.root_module.addImport("compiler_version", compiler_version_module);
-        cli_test.root_module.addOptions("cli_test_helpers", cli_test_helpers);
-        modules.linkWatchPlatformLibs(cli_test, target);
-
-        test_suites.register(.{
-            .step_suffix = "cli-main",
-            .description = "Run roc CLI main Zig tests",
-            .compile = cli_test,
-            .deps = &.{&install_cli_io_writer_test_helper.step},
-        });
-    }
 
     // Add watch tests
     {
@@ -4909,12 +4929,12 @@ pub fn build(b: *std.Build) void {
         .step_suffix = "minici",
         .description = "MiniCI report isolation fixture",
         .compile = minici_compile,
-    }).step);
+    }).step, minici_compile.name);
     report_isolation_summary.addRun(&test_suites.configuredRun(.{
         .step_suffix = "build-helpers",
         .description = "Build helper report isolation fixture",
         .compile = build_helpers_test,
-    }).step);
+    }).step, build_helpers_test.name);
     b.step("run-check-zig-test-reports", "Check isolated declared reports from two Zig test producers")
         .dependOn(report_isolation_summary.step);
 
@@ -6898,7 +6918,7 @@ fn addMainExe(
     if (use_bundled_deps) {
         addStaticBinaryenOptionsToModule(exe.root_module);
     }
-    addStaticLlvmOptionsToModule(exe.root_module);
+    addStaticLlvmOptionsToModule(b, exe.root_module, llvm_paths_exe.include);
 
     add_tracy(b, roc_modules.build_options, exe, target, true, tracy);
 
@@ -7030,7 +7050,7 @@ const LlvmSupport = struct {
         }
         step.root_module.addLibraryPath(llvm_paths.lib);
         step.root_module.addIncludePath(llvm_paths.include);
-        addStaticLlvmOptionsToModule(step.root_module);
+        addStaticLlvmOptionsToModule(self.b, step.root_module, llvm_paths.include);
         step.root_module.addImport("llvm_codegen", self.llvm_codegen_module);
         step.root_module.linkLibrary(self.zstd.artifact("zstd"));
         step.root_module.addImport("llvm_compile", self.llvm_compile_module);
@@ -7194,12 +7214,42 @@ const supported_deps_triples = std.StaticStringMap([]const u8).initComptime(.{
 });
 
 // The following is adapted from the Zig compiler at https://codeberg.org/ziglang/zig and licensed under the MIT license. Thanks, Zig team!
-fn addStaticLlvmOptionsToModule(mod: *std.Build.Module) void {
+/// The `zig_llvm.cpp` bindings, compiled once per target and optimize mode and
+/// linked into every binary that links LLVM for that pair.
+const ZigLlvmLibrary = struct {
+    query: std.Target.Query,
+    optimize: OptimizeMode,
+    library: *Step.Compile,
+};
+var zig_llvm_libraries: std.ArrayList(ZigLlvmLibrary) = .empty;
+
+fn zigLlvmLibrary(b: *std.Build, mod: *std.Build.Module, llvm_include: std.Build.LazyPath) *Step.Compile {
+    const target = mod.resolved_target.?;
+    const optimize = mod.optimize.?;
+    for (zig_llvm_libraries.items) |entry| {
+        if (entry.optimize == optimize and entry.query.eql(target.query)) return entry.library;
+    }
     const cpp_cflags = exe_cflags ++ [_][]const u8{"-DNDEBUG=1"};
-    mod.addCSourceFiles(.{
+    const library = b.addLibrary(.{
+        .name = "zig_llvm",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .link_libcpp = if (target.result.os.tag != .windows or target.result.abi != .msvc) true else null,
+        }),
+    });
+    library.root_module.addIncludePath(llvm_include);
+    library.root_module.addCSourceFiles(.{
         .files = &cpp_sources,
         .flags = &cpp_cflags,
     });
+    zig_llvm_libraries.append(b.allocator, .{ .query = target.query, .optimize = optimize, .library = library }) catch @panic("OOM");
+    return library;
+}
+
+fn addStaticLlvmOptionsToModule(b: *std.Build, mod: *std.Build.Module, llvm_include: std.Build.LazyPath) void {
+    mod.linkLibrary(zigLlvmLibrary(b, mod, llvm_include));
 
     const link_static = std.Build.Module.LinkSystemLibraryOptions{
         .preferred_link_mode = .static,
