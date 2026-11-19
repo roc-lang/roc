@@ -2491,27 +2491,37 @@ fn missingBuildCiArg(command: []const u8) ?[]const u8 {
     return null;
 }
 
-/// Whether a `zig build` command line runs the `minici` step with options
-/// other than exactly `configurationArgs` with no build arguments, in that
-/// order. A shard's artifact carries that configuration and no other (see
-/// src/build/minici_pack.zig). `command` is the text after `zig build`.
+/// Whether a `zig build` command line runs the `minici` step from a shard
+/// artifact (`--minici-skip-build`) with options other than exactly
+/// `configurationArgs` with no build arguments, in that order. A shard's
+/// artifact carries that configuration and no other (see
+/// src/build/minici_pack.zig). A `minici` command without
+/// `--minici-skip-build` builds what it needs itself, so it restores no
+/// artifact. `command` is the text after `zig build`.
 fn runsMiniciWithOtherOptions(command: []const u8) bool {
     var options: [8][]const u8 = undefined;
     var count: usize = 0;
+    var too_many_options = false;
     var runs_minici = false;
+    var skips_build = false;
+    var after_separator = false;
     var tokens = std.mem.tokenizeAny(u8, command, " \t");
     while (tokens.next()) |token| {
-        if (std.mem.eql(u8, token, "--")) break;
-        if (std.mem.eql(u8, token, "minici")) {
+        if (after_separator) {
+            if (std.mem.eql(u8, token, "--minici-skip-build")) skips_build = true;
+        } else if (std.mem.eql(u8, token, "--")) {
+            after_separator = true;
+        } else if (std.mem.eql(u8, token, "minici")) {
             runs_minici = true;
         } else if (count < options.len) {
             options[count] = token;
             count += 1;
         } else {
-            return runs_minici;
+            too_many_options = true;
         }
     }
-    if (!runs_minici) return false;
+    if (!runs_minici or !skips_build) return false;
+    if (too_many_options) return true;
     const expected = [_][]const u8{ "--color", "off" } ++ minici_build_args;
     if (count != expected.len) return true;
     for (expected, options[0..count]) |want, got| {
@@ -2594,7 +2604,7 @@ fn workflowProblems(allocator: std.mem.Allocator, text: []const u8, runs: Workfl
             if (runs == .every_shard and runsMiniciWithOtherOptions(rest[0..command_end])) {
                 try problems.append(allocator, try std.fmt.allocPrint(
                     allocator,
-                    "runs `zig build minici` with options other than `{s}`, so it misses the configuration shard artifacts carry",
+                    "runs `zig build minici` with options other than `{s}`, so it misses the configuration its shard artifact carries",
                     .{try std.mem.join(allocator, " ", try configurationArgs(allocator, &.{}))},
                 ));
             }
@@ -2831,6 +2841,9 @@ test "CI runs `zig build minici` in the configuration shard artifacts carry" {
     try std.testing.expect(runsMiniciWithOtherOptions("minici -- --minici-skip-build"));
     try std.testing.expect(runsMiniciWithOtherOptions("minici -Dembed-builtin-unit=true --color off -- --minici-skip-build"));
     try std.testing.expect(!runsMiniciWithOtherOptions("build-ci -Dembed-builtin-unit=true"));
+    // These build what they need themselves and restore no shard artifact.
+    try std.testing.expect(!runsMiniciWithOtherOptions("minici -- --minici-shard source"));
+    try std.testing.expect(!runsMiniciWithOtherOptions("minici -- --minici-verify-workflows"));
 }
 
 test "configurationArgs puts the shared options before a job's own" {
