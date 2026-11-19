@@ -191,6 +191,13 @@ ground_polarized_instances: std.AutoHashMapUnmanaged(PolarizedInstanceKey, Var) 
 /// Ground subtrees of the latest instance of a type declaration at each
 /// position whose instance is not ground. See `instantiateVarPolarized`.
 polarized_instance_subtrees: std.AutoHashMapUnmanaged(PolarizedInstanceKey, std.ArrayListUnmanaged(Instantiator.SharedSubtree)) = .empty,
+/// The marker pre-walk outcome of a type declaration at each position it was
+/// instantiated at with a behavior that decides markers per occurrence. See
+/// `polarizedMarkerChoices`.
+polarized_marker_choices: std.AutoHashMapUnmanaged(PolarizedInstanceKey, PolarizedMarkerChoices) = .empty,
+/// The marker choices of every accepted `polarized_marker_choices` outcome,
+/// each a run.
+polarized_marker_choice_items: std.ArrayListUnmanaged(Instantiator.MarkerChoice) = .empty,
 /// Storage of the most recently finished ground walk, kept with its capacity
 /// for the next one. A walk that starts while another is in progress finds it
 /// empty and allocates its own.
@@ -1825,6 +1832,8 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .ground_expected_backups = .keyed,
     .ground_polarized_instances = .keyed,
     .polarized_instance_subtrees = .keyed,
+    .polarized_marker_choices = .keyed,
+    .polarized_marker_choice_items = .keyed,
     .ground_marks_scratch = .scratch,
     .shared_subtrees_scratch = .scratch,
     .snapshot_ground_copies = .keyed,
@@ -12323,7 +12332,10 @@ fn instantiateVarPolarized(
     instantiate_ctx.nominal_argument_position = .{ .context = self, .resolve = nominalArgumentPosition };
     instantiate_ctx.alias_argument_unused = .{ .context = self, .resolve = aliasArgumentUnused };
     instantiate_ctx.shared_subtrees = shared_subtrees.items;
+    var marker_choices_memo: Instantiator.MarkerChoicesMemo = .{ .sink = &self.polarized_marker_choice_items };
+    self.polarizedMarkerChoices(&instantiate_ctx, instance_key, &marker_choices_memo);
     const instantiated = try self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, evidence);
+    try self.recordPolarizedMarkerChoices(instance_key, &marker_choices_memo);
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
     if (evidence == .none) {
         if (opened_marker_exts.items.len == 0 and try self.varIsGround(instantiated)) {
@@ -12586,6 +12598,48 @@ fn groundSubtreeEntries(self: *Self, entries: []const Instantiator.SharedSubtree
         if (marks.isGround(self.types.resolveVar(entry.copy).var_)) try kept.append(self.gpa, entry);
     }
 }
+
+/// Hand an instantiation of a type declaration the marker pre-walk outcome
+/// recorded at the same position, or have it record one. The pre-walk reads
+/// the declaration's committed type graph and the declaration-position facts
+/// of the declarations it reaches, both fixed once the declaration is
+/// generated, and the position's behavior, polarity and reach, which are the
+/// key; so one walk decides every instantiation at that position. Only the
+/// behaviors that decide markers per occurrence walk at all.
+fn polarizedMarkerChoices(
+    self: *Self,
+    instantiator: *Instantiator,
+    key: PolarizedInstanceKey,
+    memo: *Instantiator.MarkerChoicesMemo,
+) void {
+    switch (key.polarity_behavior) {
+        .resolve_by_polarity, .preserve_one_sided, .defer_open => {},
+        .close, .preserve => return,
+    }
+    if (self.polarized_marker_choices.get(key)) |known| memo.known = switch (known) {
+        .rejected => .rejected,
+        .chosen => |run| .{ .chosen = self.polarized_marker_choice_items.items[run.start..][0..run.len] },
+    };
+    instantiator.marker_choices_memo = memo;
+}
+
+/// Keep the pre-walk outcome an instantiation recorded for its position
+/// (`polarizedMarkerChoices`).
+fn recordPolarizedMarkerChoices(self: *Self, key: PolarizedInstanceKey, recorded: *const Instantiator.MarkerChoicesMemo) Allocator.Error!void {
+    if (!recorded.walked) return;
+    const slot = try self.polarized_marker_choices.getOrPut(self.gpa, key);
+    // A nested instantiation of the same declaration at the same position
+    // recorded the same outcome first.
+    if (slot.found_existing) return;
+    slot.value_ptr.* = if (recorded.rejected) .rejected else .{ .chosen = .{ .start = recorded.start, .len = recorded.len } };
+}
+
+/// A recorded marker pre-walk outcome: rejected, or accepted with the run of
+/// `polarized_marker_choice_items` holding its marker choices.
+const PolarizedMarkerChoices = union(enum) {
+    rejected,
+    chosen: struct { start: u32, len: u32 },
+};
 
 const PolarizedInstanceKey = struct {
     declaration: Var,
@@ -13055,7 +13109,16 @@ fn instantiateVarWithSubsPolarizedFromScheme(
         try self.registerExpectedShapeVars(fresh_start, env);
         return copied;
     }
+    const instance_key: PolarizedInstanceKey = .{
+        .declaration = var_to_instantiate,
+        .polarity_behavior = polarity_behavior,
+        .polarity = polarity,
+        .reach = reach,
+    };
+    var marker_choices_memo: Instantiator.MarkerChoicesMemo = .{ .sink = &self.polarized_marker_choice_items };
+    self.polarizedMarkerChoices(&instantiate_ctx, instance_key, &marker_choices_memo);
     const instantiated = try self.instantiateVarHelpFromScheme(var_to_instantiate, scheme_source, &instantiate_ctx, env, region_behavior, false, .none);
+    try self.recordPolarizedMarkerChoices(instance_key, &marker_choices_memo);
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
     return instantiated;
 }

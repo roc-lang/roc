@@ -904,6 +904,13 @@ pub const Instantiator = struct {
     /// `instantiateVarHelp` for the whole copy, so it is null only between
     /// instantiations.
     marker_choices: ?*std.AutoHashMapUnmanaged(Var, bool) = null,
+    /// The marker pre-walk (`collectMarkerChoices`) outcome of the next root
+    /// this instantiator copies with a behavior that walks
+    /// (`.resolve_by_polarity`, `.preserve_one_sided`, `.defer_open`): read
+    /// from it when an earlier instantiation of the same root at the same
+    /// behavior, polarity and reach recorded one, written to it otherwise.
+    /// That root copy consumes it.
+    marker_choices_memo: ?*MarkerChoicesMemo = null,
     /// The polarity of the position currently being instantiated. Starts at
     /// the polarity of the instantiation root (callers using
     /// `.resolve_by_polarity` set it). Function argument positions flip it
@@ -924,6 +931,34 @@ pub const Instantiator = struct {
     pub const SharedSubtree = struct {
         source: Var,
         copy: Var,
+    };
+
+    /// One polarity marker's choice: true opens it (or, for
+    /// `.preserve_one_sided`, keeps it deferred).
+    pub const MarkerChoice = struct { marker: Var, chosen: bool };
+
+    /// What the marker pre-walk decided for one root: the copy is rejected
+    /// (a placement provider reported a rejected declaration), or it copies
+    /// with exactly these marker choices, keyed by resolved marker var.
+    pub const MarkerChoicesOutcome = union(enum) {
+        rejected,
+        chosen: []const MarkerChoice,
+    };
+
+    /// A root copy's pre-walk outcome, owned by the caller (see
+    /// `marker_choices_memo`).
+    pub const MarkerChoicesMemo = struct {
+        /// The outcome an earlier instantiation recorded; the copy reads it
+        /// instead of walking, before anything can append to `sink`.
+        known: ?MarkerChoicesOutcome = null,
+        /// Where a copy that walks appends its marker choices.
+        sink: *std.ArrayListUnmanaged(MarkerChoice),
+        /// Set when the copy walked: `rejected` is its verdict, and an
+        /// accepted copy's choices are `sink.items[start..][0..len]`.
+        walked: bool = false,
+        rejected: bool = false,
+        start: u32 = 0,
+        len: u32 = 0,
     };
 
     /// Re-exported so callers name one enum: `Instantiator.AdapterReach`.
@@ -1422,6 +1457,28 @@ pub const Instantiator = struct {
         }
     }
 
+    /// A recorded pre-walk outcome stands for a walk this instantiation does
+    /// not run, so it must be exactly what that walk would decide: checked
+    /// against the walk itself in builds with runtime safety. `known` is
+    /// null for a recorded rejection, and otherwise the recorded choices.
+    fn debugAssertKnownMarkerChoices(self: *Self, root: Var, known: ?*const std.AutoHashMapUnmanaged(Var, bool)) std.mem.Allocator.Error!void {
+        if (!std.debug.runtime_safety) return;
+        var walked: std.AutoHashMapUnmanaged(Var, bool) = .empty;
+        defer walked.deinit(self.store.gpa);
+        const accepted = try self.collectMarkerChoices(root, &walked);
+        const choices = known orelse {
+            if (accepted) base.invariant("a recorded marker pre-walk rejected a root whose walk accepts it", .{});
+            return;
+        };
+        if (!accepted) base.invariant("a recorded marker pre-walk accepted a root whose walk rejects it", .{});
+        if (walked.count() != choices.count()) base.invariant("a recorded marker pre-walk has {d} marker choices, the walk {d}", .{ choices.count(), walked.count() });
+        var entries = choices.iterator();
+        while (entries.next()) |entry| {
+            const chosen = walked.get(entry.key_ptr.*) orelse base.invariant("a recorded marker pre-walk names a marker the walk does not reach", .{});
+            if (chosen != entry.value_ptr.*) base.invariant("a recorded marker pre-walk chose differently from the walk", .{});
+        }
+    }
+
     fn instantiateVarHelp(
         self: *Self,
         initial_var: Var,
@@ -1434,7 +1491,42 @@ pub const Instantiator = struct {
         defer self.marker_choices = previous_choices;
         switch (self.polarity_var_behavior) {
             .resolve_by_polarity, .preserve_one_sided, .defer_open => {
-                if (!try self.collectMarkerChoices(initial_var, &marker_choices)) {
+                const memo = self.marker_choices_memo;
+                self.marker_choices_memo = null;
+                const known = if (memo) |entry| entry.known else null;
+                const accepted = if (known) |outcome| accepted: {
+                    switch (outcome) {
+                        .rejected => {
+                            try self.debugAssertKnownMarkerChoices(initial_var, null);
+                            break :accepted false;
+                        },
+                        .chosen => |choices| {
+                            // The recorded slice is read before the debug
+                            // walk, whose placement providers may record
+                            // other outcomes and move it.
+                            try marker_choices.ensureTotalCapacity(self.store.gpa, @intCast(choices.len));
+                            for (choices) |choice| marker_choices.putAssumeCapacityNoClobber(choice.marker, choice.chosen);
+                            try self.debugAssertKnownMarkerChoices(initial_var, &marker_choices);
+                            break :accepted true;
+                        },
+                    }
+                } else accepted: {
+                    const walked = try self.collectMarkerChoices(initial_var, &marker_choices);
+                    if (memo) |entry| {
+                        entry.walked = true;
+                        entry.rejected = !walked;
+                        if (walked) {
+                            const sink = entry.sink;
+                            try sink.ensureUnusedCapacity(self.store.gpa, marker_choices.count());
+                            entry.start = @intCast(sink.items.len);
+                            entry.len = marker_choices.count();
+                            var entries = marker_choices.iterator();
+                            while (entries.next()) |choice| sink.appendAssumeCapacity(.{ .marker = choice.key_ptr.*, .chosen = choice.value_ptr.* });
+                        }
+                    }
+                    break :accepted walked;
+                };
+                if (!accepted) {
                     const rejected = try self.store.freshFromContentWithRank(.err, self.current_rank);
                     try self.var_map.put(self.store.resolveVar(initial_var).var_, rejected);
                     return rejected;
