@@ -9,7 +9,8 @@ Policies (how the host schedules):
     input_order  always act on the task earliest in input order (C9, G3)
     random       random mixes of the above, completions before the hosted
                  function returns, root cancellation, and (ParallelTasks)
-                 other threads' resumes run from inside a hosted call
+                 other threads' resumes run from inside any hosted call, so
+                 a child's report can reach a parent that is running
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from dataclasses import dataclass, field
 
 from engines import NoneEngine, ProgramCrash, StackEngine, UnwindEngine
 from heap import Heap
-from runtime import CANCELLED, CRASHED, DONE, PENDING, Runtime, Violation
+from runtime import CANCELLED, CRASHED, DONE, PENDING, WAITS, Runtime, Violation
 
 
 def _read(heap, i):
@@ -37,6 +38,13 @@ HOSTED = {
     "send": (True, lambda heap, s: len(s[1])),  # takes a heap argument
     "log": (False, lambda heap, s: len(s[1])),
     "tick": (False, lambda heap, i: i + 1),
+    # A remote operation that takes a permit (an Out end) with its work: the
+    # host releases the permit only when the operation has finished.
+    "remote": (True, lambda heap, permit, i: i + 100),
+    "work": (True, lambda heap, i: i + 100),  # the same operation, without the permit
+    # The number of earlier calls with the same argument (tests only: lets a
+    # supervised task behave differently when it is restarted).
+    "nth": (False, None),
 }
 SUSPENDING = {k: v[0] for k, v in HOSTED.items()}
 
@@ -85,7 +93,8 @@ class InputOrderPolicy(Policy):
     build has one stack, so this schedule acts on the task earliest in input
     order, and
 
-    - while a task waits at a receive, lets only the tasks that started since
+    - while a task waits at a port (a receive, a take or an acquire), lets
+      only the tasks that started since
       run (in a None build, everything else is below the receive on the
       stack). The receiver that parked last is the top of the stack; it is
       "active" when every task that started since it parked has finished (a
@@ -124,7 +133,7 @@ class InputOrderPolicy(Policy):
         return host.active or (owner.waiting == "group" and owner.wait_group is t.entry[0])
 
     def choose(self, host):
-        waiters = [u for u in host.rt.tasks.values() if u.waiting == "chan"]
+        waiters = [u for u in host.rt.tasks.values() if u.waiting in WAITS]
         # A crash unwinds the one stack at once: finish propagating it first.
         crashing = [(t.path, i) for i, t in enumerate(host.queue) if host.rt.linked_crash(t) is not None]
         if crashing:
@@ -140,6 +149,33 @@ class InputOrderPolicy(Policy):
         if host.ops:
             return ("complete", 0)
         return None
+
+
+class CoroutinePolicy(Policy):
+    """Option (a) of concurrency-sessions.md, "Decisions left to prototypes":
+    a None build whose tasks are coroutines on its one stack. Hosted calls
+    finish in place, as in any None build. A task that would wait at a port
+    or a loop head pauses by unwinding into records, back to the build's own
+    scheduler, which resumes the ready task earliest in input order. So a
+    receiver that would block switches to the writer it waits for, once
+    nothing earlier in input order can run.
+
+    The build runs the unwinding lowering, so this is a policy for the Tasks
+    runtime with one thread and no host operations in flight."""
+
+    name = "coroutine"
+
+    def on_call(self, host, t, name):
+        return "ready"
+
+    def choose(self, host):
+        if not host.queue:
+            return None
+        # A crash unwinds the one stack at once: finish propagating it first.
+        crashing = [(t.path, i) for i, t in enumerate(host.queue) if host.rt.linked_crash(t) is not None]
+        if crashing:
+            return ("resume", min(crashing)[1])
+        return ("resume", min((t.path, i) for i, t in enumerate(host.queue))[1])
 
 
 class RandomPolicy(Policy):
@@ -172,6 +208,11 @@ class RandomPolicy(Policy):
 
 
 class Host:
+    # P5 lets a host keep an aborted operation's arguments until the
+    # operation finishes. A port among them (a permit passed to the call) is
+    # then released only when the platform is done with the operation.
+    keep_aborted_args = False
+
     def __init__(self, rt, heap, policy):
         self.top = None  # InputOrderPolicy: the receiver at the top of the one stack
         self.active = False  # InputOrderPolicy: whether it runs entries on demand now
@@ -184,6 +225,8 @@ class Host:
         self.root_status = PENDING
         self.root_cancelled = False
         self.result = None
+        self.calls = Counter()  # for "nth"
+        self.inflight = Counter()  # suspending operations started and not finished, aborted ones included
         rt.host = self
 
     # -- what the runtime calls --
@@ -200,8 +243,18 @@ class Host:
         self.effects.append((t.path, name, tuple(data)))
         susp, fn = HOSTED[name]
         d = self.policy.on_call(self, t, name) if susp else "ready"
+        if susp:
+            self.inflight[name] += 1
+            self.stats["most " + name + " at once"] = max(self.stats["most " + name + " at once"], self.inflight[name])
         if d == "ready":
-            v = fn(heap, *data)
+            self.policy.during_call(self)
+            if susp:
+                self.inflight[name] -= 1
+            if name == "nth":
+                v = self.calls[tuple(data)]
+                self.calls[tuple(data)] += 1
+            else:
+                v = fn(heap, *data)
             for a in args:
                 heap.drop(a)
             return ("ready", v)
@@ -221,19 +274,26 @@ class Host:
         for op in self.ops:
             if op.task is t and not op.aborted:
                 op.aborted = True
+                self.stats["aborted"] += 1
+                if self.keep_aborted_args:
+                    return  # released when the operation finishes
                 for a in op.args:  # P5: arguments released exactly once
                     self.heap.drop(a)
                 op.args = None
-                self.stats["aborted"] += 1
                 return
         raise Violation(f"P4: abort of task {t.id} with no pending operation")
 
     # -- host side --
     def complete(self, op):
         self.ops.remove(op)
+        self.inflight[op.name] -= 1
         heap = self.heap
         if op.aborted:
-            # The abandoned operation finished anyway: release its result.
+            # The abandoned operation finished anyway: release its result,
+            # and its arguments if they were kept.
+            for a in op.args or ():
+                heap.drop(a)
+            op.args = None
             return
         fn = HOSTED[op.name][1]
         outer, heap.task = heap.task, op.task.id  # the result belongs to the task it is for
@@ -299,7 +359,7 @@ def run_tasks(lowering, engine_kind, policy, concurrency="Tasks", max_steps=2000
         eng = UnwindEngine(prog, lowering, heap, rt)
     else:
         eng = StackEngine(prog, heap, rt)
-    rt.engine = eng
+    rt.attach(eng, prog)
     clo = heap.alloc("clo", prog.entry, [])
     host.root = rt.start_root(clo)
     host.queue.append(host.root)
@@ -325,12 +385,17 @@ class SyncHost:
     def __init__(self, heap):
         self.heap = heap
         self.effects = []
+        self.calls = Counter()
 
     def call_sync(self, path, name, args):
         heap = self.heap
         data = [heap.data(a) for a in args]
         self.effects.append((path, name, tuple(data)))
-        v = HOSTED[name][1](heap, *data)
+        if name == "nth":
+            v = self.calls[tuple(data)]
+            self.calls[tuple(data)] += 1
+        else:
+            v = HOSTED[name][1](heap, *data)
         for a in args:
             heap.drop(a)
         return v
@@ -348,5 +413,91 @@ def run_none(prog):
     result = ("done", heap.data(v))
     heap.drop(v)
     heap.verify([])
+    lost = eng.sessions.unreturned()
+    if lost:
+        raise Violation(f"S9: semaphore cells missing permits (id, free, permits): {lost}")
     return Run(result, host.effects, heap.stats, Counter({"steps": eng.steps}), Counter(), Counter(),
                extra={"on demand": eng.stats["entries run on demand"]})
+
+
+class ServiceHost(Host):
+    """A host that serves many roots (concurrency-sessions.md, "Services
+    across roots"): a long-lived service root, started with a mailbox's
+    Inbox, and request roots, each started with a copy of its Post. The host
+    keeps no Post itself, so the service's inbox closes once every request
+    root is done with it."""
+
+    def __init__(self, rt, heap, policy):
+        super().__init__(rt, heap, policy)
+        self.roots = []
+        self.results = {}
+
+    def step(self):
+        act = self.policy.choose(self)
+        if act is None:
+            return False
+        if act[0] == "complete":
+            self.complete(self.ops[act[1]])
+            return True
+        t = self.queue.pop(act[1])
+        status = self.rt.resume(t)
+        if t.parent is None and status != PENDING:
+            if status == DONE:
+                self.results[t.id] = ("done", self.heap.data(t.outcome[1]))
+            elif status == CRASHED:
+                self.results[t.id] = ("crashed", self.rt.crash_message(t))
+            else:
+                self.results[t.id] = ("cancelled",)
+            self.rt.free_root(t)
+        return True
+
+    def stalled_roots(self):
+        """Per-root deadlock detection: crash the last waiter of each stalled tree."""
+        found = False
+        for r in self.roots:
+            if self.rt.stalled(r, self.queue):
+                self.stats["roots stalled"] += 1
+                self.rt.break_deadlock(self.rt.tree(r))
+                found = True
+        return found
+
+
+def run_service(lowering, engine_kind, policy, service, requests, concurrency="Tasks", per_root=True,
+                max_steps=200000):
+    """Run a service root, `service(inbox)`, beside request roots, each
+    `name(post, *args)` for (name, args) in `requests`. Returns the results by
+    root, the service's first."""
+    prog = lowering.prog
+    heap = Heap()
+    rt = Runtime(heap, concurrency)
+    host = ServiceHost(rt, heap, policy)
+    rt.attach(UnwindEngine(prog, lowering, heap, rt) if engine_kind == "unwind" else StackEngine(prog, heap, rt), prog)
+    ses = rt.sessions
+    mb = ses.mailbox("host")
+    post, inbox = heap.obj(mb).fields
+    heap.dup(post)
+    heap.dup(inbox)
+    heap.drop(mb)
+    host.roots.append(rt.start_root(heap.alloc("clo", service, [inbox])))
+    for name, args in requests:
+        heap.dup(post)
+        host.roots.append(rt.start_root(heap.alloc("clo", name, [post] + list(args))))
+    heap.drop(post)
+    ses.leave("host")  # the host keeps nothing it started the roots with
+    host.root = host.roots[0]
+    host.queue = list(host.roots)
+    steps = 0
+    while len(host.results) < len(host.roots):
+        progressed = host.step()
+        if per_root:
+            progressed = host.stalled_roots() or progressed
+        if not progressed and not rt.break_deadlock():
+            raise Violation("R6: no task can run and some root has not finished")
+        steps += 1
+        if steps > max_steps:
+            raise Violation("R6: the run did not terminate")
+    while host.ops:
+        host.complete(host.ops[0])
+    rt.check_quiescent()
+    heap.verify(rt.leaked + ses.held())
+    return [host.results[r.id] for r in host.roots], rt.stats, host.stats

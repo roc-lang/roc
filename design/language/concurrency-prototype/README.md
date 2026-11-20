@@ -3,14 +3,21 @@
 An executable model of the
 [concurrency RFC](../concurrency-explicit-suspension.md): its combinators, its
 ownership ledger, the capture-by-unwinding lowering, the task runtime and the
-host ABI. It is run against a stackful oracle, under fuzzed programs and
-adversarial schedules. None of this is compiler code.
+host ABI. It also models the [sessions RFC](../concurrency-sessions.md):
+channels, mailboxes, the semaphore and pool libraries, and services that span
+many roots. And it models the [shared state RFC](../concurrency-shared-variables.md):
+`Shared(s)` handles updated atomically by pure functions (`update!`), waiting,
+cleanup that runs at cancellation and crashes (`finally!`, `on_failure!`), and
+poisoning, with the semaphore, pool and circuit breaker rewritten over it. It is run against a stackful oracle, under
+fuzzed programs and adversarial schedules. None of this is compiler code.
 
 **Completion criterion.** Every row of the RFC's invariant and obligation
-tables (G1–G8, C1–C10, R1–R7, P1–P10) has an entry in `coverage.py` naming
-how the prototype establishes it and the regression tests that pin it. The
-`Coverage` test fails if a row is missing or names a test that does not
-exist. `python3 coverage.py` prints the matrix.
+tables (G1–G9, C1–C11, R1–R8, P1–P10), of the sessions RFC's (S1–S10) and of
+the shared state RFC's (V1–V9) has an entry in `coverage.py` naming how the
+prototype establishes it and the regression tests that pin it. The `Coverage`
+test fails if a row is missing or names a test that does not exist.
+`python3 coverage.py` prints the matrix. Every row is established except V9,
+which needs types the prototype's IR does not have.
 
 The reference-count atomicity side has its own models in
 [rc-atomicity/](../rc-atomicity/README.md). `tests.py` runs both.
@@ -34,6 +41,10 @@ cd design/language/concurrency-prototype/bench && clang -O2 -o unwind unwind.c s
 ```
 
 ```bash
+cd design/language/concurrency-prototype/bench && zig cc -target wasm32-wasi -O2 -o unwind.wasm unwind.c && node run_wasi.mjs unwind.wasm
+```
+
+```bash
 cd design/language/concurrency-prototype/maude && maude -no-banner -batch wake.maude < /dev/null
 ```
 
@@ -46,6 +57,14 @@ cd design/language/concurrency-prototype && python3 conformance.py
 ```
 
 ```bash
+cd design/language/concurrency-prototype && python3 shared_model.py
+```
+
+```bash
+cd design/language/concurrency-prototype && python3 bench/shared_vs_actor.py
+```
+
+```bash
 cd design/language/concurrency-prototype/bench && clang -O1 -g -fsanitize=thread -DPROTOCOL=0 wake_tsan.c -o wake_tsan && ./wake_tsan
 ```
 
@@ -54,19 +73,27 @@ cd design/language/concurrency-prototype/bench && clang -O1 -g -fsanitize=thread
 | File | RFC section | Contents |
 |---|---|---|
 | `ir.py` | | An A-normal-form IR whose branches are terminators, so the code after a call is the rest of its block, plus its s-expression syntax. Frame-replacing calls go to a named procedure (`tail`) or through a closure (`tailc`) |
-| `combinators.py` | "The `Concurrent` module" | `all!`, `both!`, `all_ok!`, `race!` and `supervise!`, written in the IR over `spawn`, `await` and `cancel` |
+| `plans.py` | "Concurrent loops" | Plans as inert values (`Each`, `Cat`, `Limit`, `Shield`) and their flattening into entries in input order |
+| `combinators.py` | "The `Concurrent` module" | `all!`, `both!`, `all_ok!`, `race!` and `supervise!`, written in the IR over concurrent loops |
 | `arc.py` | "What ARC must publish" | Places `dup` and `drop` statements, and publishes the suspension ledger. `certify` checks both by an independent ownership simulation |
 | `lower.py` | "Suspendability", "Capture by unwinding", "Calls between suspendable procedures" | Computes suspendability once per procedure and site, under `.lss` (0-CFA lambda sets) and `.boxy` (every erased effectful call is a site), and certifies C2 and C3. Under `.boxy` it also publishes, as `tail_drive` would, which procedures may return with an erased call pending and which call sites hand it up or make it |
 | `engines.py` | | Three engines: `NoneEngine` (a `None` build), `StackEngine` (a stackful oracle built on generators) and `UnwindEngine` (the lowering). Under `.boxy`, `UnwindEngine` defers each `tailc` through a pending cell in task storage, and its waiters make the pending calls |
 | `runtime.py` | "Host ABI", "Crash mechanics" | The task tree, wake protocol, cancellation and crash propagation, with monitors for R1–R6 and the platform obligations |
-| `host.py` | "Host ABI" | Hosted functions, and the `ready`, `pause`, `input_order` and `random` scheduling policies. `random` can complete an operation before the hosted function returns, cancel the root, and, in `ParallelTasks` builds, run other tasks' resumes from inside a hosted call |
+| `host.py` | "Host ABI" | Hosted functions, and the `ready`, `pause`, `input_order` and `random` scheduling policies. `random` can complete an operation before the hosted function returns, cancel the root, and, in `ParallelTasks` builds, run other tasks' resumes from inside a hosted call. A host can keep an aborted operation's arguments until the operation finishes. `ServiceHost` runs a service root beside many request roots, with deadlock detection per root |
+| `sessions.py` | Sessions RFC | Channels, mailboxes and semaphore cells; ports (ends, `Post`s, `Inbox`es, permits) and what their release does; holder sets, and releasing a port no live task can use |
+| `library.py` | Sessions RFC and shared state RFC, "Library patterns" | The semaphore and the pool as server tasks, written in the IR as a library author would write them in Roc; the semaphore cell experiment; and the semaphore, pool and circuit breaker over `Shared` handles |
+| `shared.py` | Shared state RFC | `Shared` cells: atomic updates by a pure function's result (`Set`, `Keep` or `Wait`), waiters, cleanup (`finally!`, which always runs, and `on_failure!`, which runs only on cancellation or a crash), and poisoning. The IR spells these as `shared`, `step`, `defer`, `errdefer` and `undefer`; the RFC's "What the prototype shows" gives the mapping. A pure evaluator with exact ownership runs the update functions. `certify_defers` checks statically that shared operations appear only in effectful procedures, that steps call pure ones, and that every cleanup is matched on every path |
+| `shared_model.py` | Shared state RFC, "Runtime" | The `ParallelTasks` lock protocol for atomic updates, explored over every interleaving of locks, reads, writes, wakes and parks, with three broken protocols it must catch |
+| `pipeline.py` | | Builds a program through ARC and both lowerings, with every static check |
 | `gen.py`, `check.py` | "What to establish first" | A typed program generator built from small constructs, and the checks run on each generated program |
 | `conformance.py` | "Platform obligations" | One host per way of breaking an obligation, each run over scenarios that give it the chance. The runtime's monitors and the heap check must catch every one. Three conforming hosts must pass: a plain one, one whose allocator is confined to a thread, and one that reclaims a crashed root's memory as a region |
 | `coverage.py` | "Invariants" | The matrix from every invariant and obligation to the tests that pin it |
 | `maude/wake.maude` | "Host ABI" | The wake protocol and hosted completion against cancellation, under real thread interleavings |
-| `bench/unwind.c` | "Cost model" | C microbenchmarks of the lowering against plain calls and a stackful switch |
+| `bench/unwind.c` | "Cost model" | C microbenchmarks of the lowering against plain calls and a stackful switch; also builds for wasm, without the stackful switch |
+| `bench/run_wasi.mjs` | | Runs a WASI program under Node |
 | `bench/boxy_records.c` | "Decisions left to prototypes" | `.boxy` records holding dynamically sized values: inline after a header sized from descriptors, against a separate allocation per value |
 | `bench/wake_tsan.c` | "Runtime invariants" | The wake protocols on real threads under ThreadSanitizer: a parent awaiting children on a pool of workers |
+| `bench/shared_vs_actor.py` | Shared state RFC, "What the prototype shows" | Operation counts for the semaphore and the pool as server tasks, as a semaphore cell and as `Shared` handles, under three schedules |
 
 The unwinding engine follows the RFC's scheme:
 - Each suspension site has a status check after it.
@@ -86,13 +113,25 @@ The unwinding engine follows the RFC's scheme:
 | C4 | Records hold only values, and a record that would hold a pending cell outside task storage is an error |
 | C7 | Generated tail loops include cycles through closures, which `.boxy` defers. Pinned tests show the record chain stays constant over 200 paused iterations |
 | C1, C10 | The unwinding and stackful engines, under the same host and schedule, give identical results, effect traces and heap operations |
-| C8 | `.lss` and `.boxy` give identical results, traces and heap operations |
+| C8 | `.lss` and `.boxy` give identical results and traces, and identical heap operations in runs without a crash (Finding 16) |
 | C9, G3 | A `None` build equals a `Tasks` build under the input-order schedule, unless a supervised child crashes |
 | G4 | Programs without `race!`, `all_ok!` or crashes give one result, and the same per-task effects, under every schedule |
 | C5 (dynamic) | Cancelling the root at each suspension in turn leaves the heap exact |
 | R1–R6 | Monitored in every run, then checked when the run ends. Readiness happens only from parked; a task is never re-entered; no Roc code runs after cancellation or a crash; trees finish bottom-up; no run deadlocks |
 | R7 | Monitored at every `supervise!` call in every run: a child is restarted only after it crashed, at most `max_restarts` times, and `supervise!` either returns its last child's result or crashes with its last child's message after exactly `max_restarts` restarts |
 | R5 | After every run the heap is verified exactly. Every live object is held by a leaked native-frame value, and its count equals its references |
+| S1 | A second use of a port crashes the task, and the run goes on |
+| S2, S3 | The exact heap counts a message as owned only while its `In` end or `Inbox` exists, and every receive, take and acquire finishes |
+| S4 | A port in a crashed frame is released once its holder set is empty, so its peer finishes |
+| S6 | A run that would hang is an error; a stalled tree crashes the receiver that waited last |
+| S7 | Part of the C9 comparison above, deadlocks included |
+| S9 | Every semaphore cell has all its permits back when the run ends |
+| V1, V3 | Static: `Shared` operations only in effectful procedures, update and cleanup functions only pure, and every cleanup matched on every path |
+| V2 | An update runs its pure function on one snapshot of its cell and stores the whole result; an update that crashes stores nothing, and the exact heap accounts for its operands |
+| V5 | Cancelling the root at each suspension in turn runs every pending cleanup once, after the task's descendants have finished; a task that finishes with cleanup pending is an error |
+| V6 | A cleanup that crashes poisons its handle, and later updates of it crash |
+| V8 | A `None` build, in which a `Wait` runs loop entries on demand, equals a `Tasks` build under the input-order schedule |
+| Coroutines | The `None` build as coroutines on one stack, under both engines and both lowerings, which must agree; programs of G4 must give the `None` build's result; deadlocks it avoids or adds are counted |
 
 Six schedules are used per program:
 - `ready`
@@ -128,14 +167,21 @@ P2 needs real threads, and is tested under ThreadSanitizer below.
 ## Results
 
 **Fuzzing: `check.py 2000 1`.** Of 2,000 generated programs, none violated any check. The run covered:
-- 62,296 runs;
-- 14,296 runs that cancelled the root at a suspension;
-- 4,752 crashes;
-- 22,218 deferred erased calls;
-- 52,254 `supervise!` returns and 178 give-ups, each checked against R7;
-- 1,488 leaked objects, each traced to a crashed task's native frame.
+- 63,926 runs, 15,926 more that cancelled the root at a suspension, and 8,000 as coroutine `None` builds;
+- 33,512 crashes, 17,112 of them reaching a parent through a loop's link, and 24 reaching a running parent at its next suspension point;
+- 52,534 deferred erased calls;
+- 100,400 `supervise!` returns and 800 give-ups, each checked against R7;
+- 5,472 leaked objects, each traced to a crashed task's native frame;
+- 67,734 channels, 35,748 messages, 10,260 `Cancelled` and 7,858 deadlocks crashed;
+- 8,532 mailboxes, 25,146 posts and 2,716 `Closed`;
+- 8,864 semaphore cells and 23,964 permits, every one back by the end of its run;
+- 1,822 ports released after a crash, and 10,560 receives abandoned by cancellation or a crash;
+- 1,292 entries a `None` build ran on demand;
+- 78,518 `Shared` cells, 164,554 updates, 134,168 stores and 15,568 `Wait`s, after which 3,726 updates ran again;
+- 52,498 cleanups: 43,766 run, 6,208 of them while a cancelled or crashed task was dropped, and 8,732 `on_failure!` cleanups dropped unrun when their body returned;
+- 730 cleanups that crashed, poisoning 602 cells, and 258 cancellations turned into crashes by them.
 
-Each combinator, closure calls and frame-replacing calls through closures appeared in more than 1,000 programs. Tail cycles through a closure appeared in 529 and crashes in 305. The run takes about 80 seconds.
+C9 compared 1,964 programs; the other 36 crash inside `supervise!`, where a `None` build stops the whole program by design. Each combinator, closure calls and frame-replacing calls through closures appeared in more than 1,000 programs. Tail cycles through a closure appeared in 513, crashes in 667, channels in 823, mailboxes in 317, semaphore cells in 268 and `Shared` handles in 628. The run takes about 220 seconds.
 
 **Finding 1: the RFC's wake protocol is unsound.** The RFC describes the wake state as "running, parked, woken while running, or queued", where a wake that arrives during a run makes the next park continue instead. A wake is stale if its report has already been consumed, and the flag cannot tell. The task then continues, or is resumed, with nothing to deliver.
 - The fuzzer found this within its first 30 programs. A parent cancels a parked child, the child's report arrives at once, and the parent reads it synchronously.
@@ -175,6 +221,26 @@ A stackful runtime leaks every frame of the crashed task.
 
 Both flag protocols break R1 on real threads within a few dozen parks, as Maude predicts. P2 is therefore what orders a task's first resume after it is spawned, and the host's own data. The wake word orders every later resume.
 
+**Finding 6: one holder per port is not enough.** A crash leaks the ports in its running frames, so the runtime must release a port once no live task can use it. Recording one holder task per end is wrong once an end is shared between live tasks. `supervise!` shares its closure, and the ends it captured, with each attempt. When the first attempt crashed with an end in a running frame and the restart dropped it unused, the leaked reference kept it alive, and its receiver waited until deadlock detection crashed it. With a set of holders per port, which a task leaves when it finishes, the receiver gets `Cancelled` when the supervisor finishes.
+
+**Finding 7: an abandoned receive must close its channel.** A task cancelled or crashed while waiting at a receive never takes its message. If the channel stays open, a message sent there later, such as a semaphore's grant, is stranded with the permit inside it. The exact heap caught this as a lost permit. Closing the channel drops the message when it arrives, and the permit returns.
+
+**Finding 8: a port is released at its last use, not at the end of its scope.** ARC drops a value after its last use. A semaphore cell's `with_permit` that acquired a permit and never used it again released the permit at once, so `f` ran without it: three holders ran at once where one was allowed. Every library here uses its permit after `f` returns. This is evidence for a lint on a port never used after it is bound.
+
+**Finding 9: a permit passed to a hosted call limits remote work.** With a host that keeps an aborted operation's arguments until the operation finishes, and the caller cancelled while a remote operation runs, two remote operations ran at once under some schedules when the permit stayed in the caller's scope. Passing the permit to the hosted call kept it to one under every schedule.
+
+**Finding 10: a semaphore cell runs on one stack, for counting resources only.** A cell with a wait queue, whose permit returns when it is released, needs no turn-taking between tasks. It matches the input-order schedule, and every permit comes back under cancellation, crashes and fuzzing. It works because returning a permit is a fixed runtime action. A general cell's state change is Roc code, which a cancelled task cannot run (R4).
+
+**Finding 11: replies bound a mailbox without a bounded queue.** Three senders of four messages each to a slow reader queued at most 3 messages when each sender waited for a reply before sending again, and 12 when they did not.
+
+**Finding 12: deadlock detection per root must look at holders in other roots.** With a service root beside request roots, a request waiting on a port the service holds is not stalled. Detection that ignored holders outside the tree crashed requests that would have been served.
+
+**Finding 13: a linked crash can reach a running parent.** In a `ParallelTasks` build an entry can crash while its parent runs. The crash is then pending, and the parent takes it at its next suspension point of any kind, where it suspends without running the operation and drops the arguments it consumed.
+
+**Finding 14: coroutines on one stack run every turn-taking protocol.** A `None` build as coroutines (`CoroutinePolicy`) is the unwinding lowering with hosted calls that never suspend, and a scheduler that resumes the ready task earliest in input order. It runs the semaphore, the pool and the request-reply-release server, which deadlock on one stack, and a real cycle of receives still deadlocks. Over the 2,000 fuzzed programs, it finished 32 of the 250 that deadlock on one stack and added no deadlock. In programs that use ports, 12,738 of 22,088 procedures (58%) may suspend under it, against 16,491 (75%) in a `Tasks` build. The sessions RFC proposes this for `None` builds of programs that use ports.
+
+**Finding 15: supervise units of work, and a lifetime restart limit is enough.** A server supervised as a whole by `supervise!` with a limit of 3 died after four transient crashes far apart in 20 requests, running its handler 50 times. Supervising each request with the same limit served all 20 with 24 handler runs. So `supervise!` needs no time window, and no clock from the platform, in the first version.
+
 **Lowering costs: `bench.py 300`.** These are counts, not timings, over 300 generated programs with every suspending call paused:
 
 | Measure | `.lss` | `.boxy` |
@@ -207,6 +273,23 @@ Each pause and resume at depth D, with two live values per frame, in ns per cycl
 - Unwinding is cheaper than a stackful switch up to about 16 paused frames, and about equal at 16.
 - The stackful numbers do not include allocating each task's stack.
 
+**Timings: `bench/unwind.c` on wasm.** Built with `zig cc -target wasm32-wasi -O2` (zig 0.17.1) and run under Node v22.22.2 (V8) on the same machine. Wasm has no stack switching without the stack-switching proposal, so there is no stackful column; native numbers from the same session are given for comparison.
+
+| Measure | Wasm | Native, same session |
+|---|---|---|
+| Status check after each call that does not pause, in a kernel made only of calls | +40% to +58% | within noise |
+
+Each pause and resume at depth D, in ns per cycle:
+
+| D | No pause | Records from a per-task buffer | Records from `malloc` | Native buffer | Native `malloc` | Native stackful |
+|---|---|---|---|---|---|---|
+| 1 | 4.8–5.3 | 14 | 23 | 5.1 | 27.5 | 21.1 |
+| 4 | 10.2–10.4 | 32–35 | 54–55 | 12.6 | 60.4 | 25.2 |
+| 16 | 25 | 108–109 | 198–201 | 40.1 | 200 | 36.7 |
+| 64 | 319–322 | 612–616 | 932–937 | 420 | 1,022 | 330 |
+
+On wasm, records from a per-task buffer stay about twice as cheap as `malloc`, but the status check costs far more than natively. That check falls on every procedure that may suspend, so it is the main cost of running `None` builds as coroutines on one stack (Finding 14). Why V8 makes it costly was not investigated.
+
 **Timings: `bench/boxy_records.c`.** A `.boxy` procedure keeps its dynamic locals in a dynamic frame region on the native stack. A record may not point into that region (C4), so pausing copies each saved local's bytes out, and the resume entry copies them into its fresh region. In this benchmark, every procedure in a chain of depth D holds two dynamic locals of S bytes across its call. Measured on the same machine at `-O2`, with medians of 15 trials and three runs, in ns per pause and resume:
 
 | D | S | No pause | Inline, buffer | Separate, buffer | Inline, `malloc` | Separate, `malloc` |
@@ -223,3 +306,28 @@ Run-to-run variation is up to 1.5×, but in every row of every run the order is 
 - With `malloc`, a separate allocation per value roughly doubles the cost of an inline record.
 
 So `.boxy` records should hold dynamic values inline after a header sized from the descriptors, in the per-task buffer. An inline record's size varies, which suits a bump buffer; a free list would need size classes.
+
+**Finding 16: a crash leaks different frames under `.lss` and `.boxy`.** `.boxy` defers a frame-replacing call through a closure and lets a waiter make it, so the call runs under the waiter's native frame. `.lss` makes the same call directly, and the waiter stays a record. When the callee crashes, R5 leaks the native frame and drops the record, so the two lowerings leak different values. Both heaps verify exactly. The fuzzer found this once in 2,000 programs (seed 296), and C8 now compares heap operations only in runs without a crash, as C1 and C10 already did. The RFC states C8 over traces.
+
+**Finding 17: `Shared` handles replace server tasks at a fraction of the cost.** `bench/shared_vs_actor.py` counts operations for each client of a semaphore with one permit and a pool of two. Under the pause schedule, with 30 clients:
+
+| Written as | Spawns | Resumes | Allocations | Messages | Steps run again |
+|---|---|---|---|---|---|
+| Semaphore, server task | 93 | 276 | 721 | 90 | |
+| Semaphore cell | 30 | 120 | 187 | 0 | |
+| Semaphore, `Shared`, every waiter woken | 30 | 526 | 652 | 0 | 435 |
+| Semaphore, `Shared`, unchanged waiters skipped | 30 | 120 | 246 | 0 | 29 |
+| Pool, server task | 93 | 276 | 754 | 90 | |
+| Pool, `Shared`, every waiter woken | 30 | 497 | 775 | 0 | 406 |
+| Pool, `Shared`, unchanged waiters skipped | 30 | 119 | 397 | 0 | 28 |
+
+- A `Shared` handle needs no server task, no mailbox and no reply channel: one task per client and no messages.
+- Waking every waiter at each store costs about n² updates run again under contention. One client takes the permit, and every other client runs its update, finds none, and waits again.
+- An update function is pure, so a waiter whose cell holds the value it waited on would return `Wait` again. Skipping such waiters, at the store and again before resuming one, makes the cost linear. The semaphore then matches the semaphore cell. This rule is `Shared.skip_unchanged`, off by default; with it on, the `SharedVariables` tests and 1,000 fuzzed programs pass. A real runtime needs equality on the state type, or identity for boxed values, to apply it: the RFC's decision (d).
+- Under the input-order schedule, the server tasks deadlock, as they do in a `None` build (Finding 14). The `Shared` versions do not.
+
+**Finding 18: a `None` build runs loop entries on demand at a `Wait`.** In a `None` build, an update that returns `Wait` runs loop entries that have not started, earliest in input order, until a store changes its cell, as a receive does. With none left, it crashes as a deadlock. The `Shared` semaphore and pool therefore run on one stack, where the server-task versions deadlock. A `Wait` that crashed at once would make them fail there too.
+
+**Finding 19: a pool needs `on_failure!`, and the open belongs inside it.** A pool that takes back a resource with `finally!` lends it again in whatever state its user's crash or cancellation left it. With `on_failure!`, the pool counts the resource as lost, and the next borrower that finds none free opens a replacement. The pinned test shows the difference. The first version of the pool opened a replacement, a hosted call, before entering `on_failure!`: a borrower cancelled during the open lost the pool's slot for good. The open must be inside the body that `on_failure!` guards, right after the update that takes the slot.
+
+**Finding 20: the lock protocol is correct, and each of its rules is needed.** `shared_model.py` explores every interleaving of four scenarios: three threads sharing a permit, a taker waiting for a giver, two footprints of two variables named in opposite orders, and two waiters fed by a step over two variables. The correct protocol finishes every run in a state a serial order gives (729, 25, 369 and 307 states). Locking each footprint in the thread's own order deadlocks the two-cell footprints (V4); the RFC takes one handle per update, so this matters only if updates over several handles are added. Registering as a waiter after releasing the locks loses a wakeup in every scenario (V7). Steps without locks lose an update or a wakeup (V2, V7).

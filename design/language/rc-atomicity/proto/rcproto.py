@@ -12,6 +12,16 @@ procedure calls, recursion and a shape test:
     ('fork', [Child, ...])           parallel children, then join
     ('call', x, f, (y, ...))         x := f(y, ...)            (incs each y)
     ('ifnode', y, then, else)        branch on whether y has fields
+    ('send', c, y)                   send a reference to y on channel c   (inc y)
+    ('recv', x, c)                   x := the message on channel c
+
+Channels connect children of one fork (concurrency-sessions.md, S8): a
+sender keeps its own reference to what it sent, so after the send both
+children may update the message's counts at once. The race oracle uses
+happens-before (a send is ordered before its receive), which series-parallel
+structure alone cannot express. The analyses treat a send like a hosted
+argument: a seed, with its equality class, so everything the receiver
+reaches through the message is atomic.
 
 Every local holds one owned reference. The interpreter records every count
 event with the (procedure, local, path) its RC statement names, the
@@ -91,10 +101,19 @@ def proc_bodies(prog):
         yield p.name, p.body
 
 
+def sends_by_channel(body):
+    out = {}
+    for st in walk_stmts(body):
+        if st[0] == "send":
+            out.setdefault(st[1], []).append(st[2])
+    return out
+
+
 def local_edges(proc, body):
     """Intraprocedural flow edges (a, pa, b, pb): fact (a, pa s) gives (b, pb s)."""
     q = lambda x: (proc, x)
     edges = []
+    sends = sends_by_channel(body)
     for st in walk_stmts(body):
         k = st[0]
         if k == "mk":
@@ -113,6 +132,9 @@ def local_edges(proc, body):
                 for p, a in ch.binds:
                     edges.append((q(a), (), q(p), ()))
                 edges.append((q(ch.ret), (), q(ch.bindto), ()))
+        elif k == "recv":
+            for y in sends.get(st[2], ()):
+                edges.append((q(y), (), q(st[1]), ()))
     return edges
 
 
@@ -181,8 +203,16 @@ def alias_classes(prog):
     return uf
 
 
+SEND_SEEDS = True  # mutation switch: False leaves sent values unseeded (S8 broken)
+
+
 def host_args(prog):
-    return [(name, st[1]) for name, body in proc_bodies(prog) for st in walk_stmts(body) if st[0] == "host"]
+    """Values that escape to another party with no join to order them: hosted
+    arguments, and sent messages (S8)."""
+    out = [(name, st[1]) for name, body in proc_bodies(prog) for st in walk_stmts(body) if st[0] == "host"]
+    if SEND_SEEDS:
+        out += [(name, st[2]) for name, body in proc_bodies(prog) for st in walk_stmts(body) if st[0] == "send"]
+    return out
 
 
 def fork_seeds(prog, uf, proc, body):
@@ -313,11 +343,11 @@ class Unify(Analysis):
     def __init__(self, prog):
         uf = alias_classes(prog)
         seeded = set()
+        for x in host_args(prog):
+            seeded.add(uf.find(x))
         for name, body in proc_bodies(prog):
             for st in walk_stmts(body):
-                if st[0] == "host":
-                    seeded.add(uf.find((name, st[1])))
-                elif st[0] == "fork":
+                if st[0] == "fork":
                     for ch in st[1]:
                         for p, a in ch.binds:
                             seeded.add(uf.find((name, p)))
@@ -505,6 +535,7 @@ class PointsTo:
             for i, p in enumerate(self.prog.procs[name].params):
                 reach[p] = {("P", i)}
         get = lambda x: reach.get(x, set())
+        sends = sends_by_channel(body)
         changed = True
         while changed:
             changed = False
@@ -537,6 +568,8 @@ class PointsTo:
                         for p, a in ch.binds:
                             flow(p, get(a))
                         flow(ch.bindto, get(ch.ret))
+                elif k == "recv":
+                    flow(st[1], set().union(*[get(y) for y in sends.get(st[2], ())]))
         return reach
 
     def overlap(self, proc, s1, s2):
@@ -656,6 +689,7 @@ class Event:
     ctx: object
     atomic: bool  # the mode the run used (lean and edge runs only)
     host_visible: bool
+    hb: int = 0  # bit i set: event i happens before this one
 
 
 class Crash(Exception):
@@ -684,6 +718,9 @@ class Machine:
         self.reuse_lost = 0
         self.inplace = 0
         self.tests = 0
+        self.know = 0  # the events that happen before the current point
+        self.chans = {}  # channel -> [(object, know at the send)]
+        self.used_channels = False
 
     # -- heap --
     def alloc(self, fields):
@@ -741,7 +778,8 @@ class Machine:
                 atomic = m == "A"
         else:
             atomic = self.an.atomic(ctx, local, path)
-        self.events.append(Event(op, o, local, path, party, ctx, atomic, o in self.host_reach))
+        self.events.append(Event(op, o, local, path, party, ctx, atomic, o in self.host_reach, self.know))
+        self.know |= 1 << (len(self.events) - 1)
 
     def inc(self, o, local, path, party, ctx, bit=False):
         self.obj(o)
@@ -876,7 +914,9 @@ class Machine:
                     for p, a in ch.binds:
                         self.mark(env[a])
             results = []
+            k0, kids = self.know, 0
             for i, ch in enumerate(children):
+                self.know = k0
                 cenv = Env({p: env[a] for p, a in ch.binds})
                 for p, a in ch.binds:
                     cenv.bits[p] = hb(a)
@@ -889,9 +929,25 @@ class Machine:
                 if self.lean:
                     self.mark(r)
                 results.append((ch.bindto, r, rbit))
+                kids |= self.know
+            self.know = k0 | kids
             for b, r, rbit in results:
                 env[b] = r
                 env.bits[b] = rbit
+        elif k == "send":
+            _, c, y = st
+            o = env[y]
+            self.inc(o, q(y), (), party, ctx, hb(y))
+            self.chans.setdefault(c, []).append((o, hb(y), self.know))
+            if self.lean:
+                self.mark(o)
+            self.used_channels = True
+        elif k == "recv":
+            _, x, c = st
+            o, bit, k_send = self.chans[c].pop(0)
+            self.know |= k_send
+            env[x] = o
+            env.bits[x] = bit
         else:
             raise ValueError(st)
 
@@ -910,7 +966,13 @@ def parallel(p1, p2):
     return False
 
 
-def racy_events(events):
+def racy_events(events, hb=False):
+    """Events that can race: two parties touch one object unordered, and one
+    writes; or the host can see the object. With hb, ordering is by
+    happens-before (channels); otherwise by series-parallel structure alone,
+    which is exact when nothing is sent."""
+    if hb:
+        return racy_events_hb(events)
     by_obj = {}
     for i, e in enumerate(events):
         by_obj.setdefault(e.obj, []).append(i)
@@ -938,6 +1000,27 @@ def racy_events(events):
     return racy
 
 
+def racy_events_hb(events):
+    by_obj = {}
+    for i, e in enumerate(events):
+        if e.party != ("host",):
+            by_obj.setdefault(e.obj, []).append(i)
+    racy = set()
+    for idxs in by_obj.values():
+        for a in range(len(idxs)):
+            i = idxs[a]
+            for j in idxs[a + 1:]:
+                if (events[j].hb >> i) & 1 or events[i].party == events[j].party:
+                    continue
+                if events[i].op != "test" or events[j].op != "test":
+                    racy.add(i)
+                    racy.add(j)
+    for i, e in enumerate(events):
+        if e.host_visible and e.party != ("host",):
+            racy.add(i)
+    return racy
+
+
 @dataclass
 class Score:
     events: int = 0
@@ -959,7 +1042,7 @@ def score(prog, analysis_cls, lean=False, edge=False, borrow=None):
     an = None if lean else analysis_cls(prog)
     m = Machine(prog, an, lean=lean, edge=edge, borrow=borrow)
     m.run()
-    racy = racy_events(m.events)
+    racy = racy_events(m.events, m.used_channels)
     s = Score(events=len(m.events), walked=m.walked, reuse_lost=m.reuse_lost, inplace=m.inplace,
               tests=m.tests)
     for i, e in enumerate(m.events):

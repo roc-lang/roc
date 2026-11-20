@@ -14,8 +14,16 @@ combinators like any other closure; producers that end, drop their end or
 crash; consumers that stop early), requests that carry the end their reply
 goes to (a client sends a reply end, a server answers it with the Out end of
 a stream back to itself, and the client produces into it: the shape of a
-permit returned to its owner), branches, matches and crashes. Nothing is
-a handwritten scenario.
+permit returned to its owner), mailboxes (posters that post some numbers
+through a shared Post, end early or crash holding it; readers that take
+until Closed or stop early, dropping the inbox), semaphore cells (workers
+that acquire a permit, work, and release it, crash holding it, or drop it
+at once), shared variables (workers that capture one or two and run atomic
+steps on them: increments, peeks, takes that wait for a nonzero value, moves
+between two variables, reads; takes paired with a deferred or errdeferred
+give, with work, crashes and cancellation in between; deferred steps that
+crash and poison), branches, matches and crashes. Nothing is a handwritten
+scenario.
 
 Types:
     I  Int            S  Str           T  Try(Int, Str)
@@ -23,13 +31,29 @@ Types:
     TL Try(List(Int), Str)             C  () => Int      CT () => Try(Int, Str)
     SO Out(Stream)     SI In(Stream)   where Stream = [More(Int, In(Stream)), Done]
     QO Out(Req)        QI In(Req)      where Req = Out(Grant), Grant = Out(Stream)
+    PO Post(Int)       IB Inbox(Int)   SEM a semaphore cell
+    SV Shared(Int)
 """
 
 from __future__ import annotations
 
 import random
 
-from ir import Block, Proc
+from ir import Block, Proc, parse
+
+# The pure procedures of generated steps.
+STEP_PROCS = parse(r"""
+(proc gs_take (n) pure
+  (let z (eq n 0))
+  (if z (block (ret (tag Wait))) (block (ret (tag Set 0 (sub n 1))))))
+(proc gs_give (n) pure (ret (tag Set 0 (add n 1))))
+(proc gs_inc (n k) pure (ret (tag Set n (add n k))))
+(proc gs_peek (n) pure (ret (tag Keep n)))
+(proc gs_move (a b) pure
+  (let z (eq a 0))
+  (if z (block (ret (tag Wait))) (block (ret (tag Set a (sub a 1) (add b 1))))))
+(proc gs_bad (n) pure (crash "a deferred step crashed"))
+""")
 
 TYPES = ["I", "S", "T", "L", "P", "Q", "TL", "C", "CT"]
 
@@ -43,6 +67,7 @@ class Gen:
         self.funcs = []  # (name, param types, return type)
         self.features = set()
         self.sessions = rng.random() < 0.5  # half the programs use no channels, so G4 still sees many
+        self.shared = rng.random() < 0.4
 
     def fresh(self, base="v"):
         self.n += 1
@@ -154,11 +179,12 @@ class Gen:
     def statement(self, out, env, depth, me):
         rng = self.rng
         kinds = ["const", "prim", "tup", "field", "tag", "list", "len", "push", "host", "host", "log",
-                 "call", "callc", "all", "all_ok", "race", "both", "supervise", "loop", "session"]
-        weights = [2, 3, 1, 2, 1, 1, 1, 1, 4, 2, 1, 2, 1, 2, 1, 1, 1, 1, 3, 2 if self.sessions else 0]
+                 "call", "callc", "all", "all_ok", "race", "both", "supervise", "loop", "session", "shared"]
+        weights = [2, 3, 1, 2, 1, 1, 1, 1, 4, 2, 1, 2, 1, 2, 1, 1, 1, 1, 3, 2 if self.sessions else 0,
+                   2 if self.shared else 0]
         if depth >= 3:
             weights = [w if k not in ("all", "all_ok", "race", "both", "supervise", "callc", "call", "loop",
-                                      "session") else 0
+                                      "session", "shared") else 0
                        for k, w in zip(kinds, weights)]
         k = rng.choices(kinds, weights)[0]
         if k == "const":
@@ -228,6 +254,8 @@ class Gen:
             self.loop(out, env, depth)
         elif k == "session":
             self.session(out, env, depth)
+        elif k == "shared":
+            self.shared_var(out, env, depth)
         elif k == "supervise":
             f = self.need(out, env, "C", depth)
             m = self.let(out, env, "I", ("int", rng.randint(0, 2)))
@@ -269,7 +297,7 @@ class Gen:
         name = self.fresh("loop")
         exits = rng.random() < 0.4
         lg, lacc, lb, lsp = (self.fresh("g"), self.fresh("acc"), self.fresh("budget"), self.fresh("sp"))
-        a, v, m = self.fresh("a"), self.fresh("v"), self.fresh("m")
+        a, v = self.fresh("a"), self.fresh("v")
         again = lambda o, acc2, b: Block(o, ("tail", name, [lg, acc2, b, lsp]))
 
         state = {"spawn": False}
@@ -325,7 +353,6 @@ class Gen:
         u = self.fresh("u")
         head = Block([("let", a, ("next", lg))], ("match", a, [
             ("Arrived", [v], arrived),
-            ("Crashed", [m], Block([], ("crash", m))),
             ("Cancelled", [], Block([("let", u, ("str", "unreachable"))], ("crash", u))),
             ("Ended", [], ended),
         ]))
@@ -345,6 +372,11 @@ class Gen:
         for a later statement, or is dropped unused."""
         rng = self.rng
         self.features.add("session")
+        r = rng.random()
+        if r < 0.2:
+            return self.mailbox(out, env, depth)
+        if r < 0.35:
+            return self.cell(out, env, depth)
         sides = (("producer", "SO"), ("consumer", "SI"))
         if rng.random() < 0.4:
             sides = (("client", "QO"), ("server", "QI"))
@@ -386,6 +418,215 @@ class Gen:
                 self.features.add("race!")
             else:
                 self.loop(out, env, depth, made)
+
+    def run_closures(self, out, env, depth, made):
+        """Run closures side by side, in either order, or one after another."""
+        rng = self.rng
+        rng.shuffle(made)
+        r = rng.random()
+        if r < 0.35:
+            fs = self.let(out, env, "LC", ("list", made))
+            self.let(out, env, "L", ("call", "all!", [fs]))
+            self.features.add("all!")
+        elif r < 0.5:
+            fs = self.let(out, env, "LC", ("list", made[1:]))
+            self.let(out, env, "I", ("call", "race!", [made[0], fs]))
+            self.features.add("race!")
+        elif r < 0.85:
+            self.loop(out, env, depth, made)
+        else:
+            for c in made:
+                self.let(out, env, "I", ("callc", c, [], True))
+
+    def mailbox(self, out, env, depth):
+        """A mailbox, some posters sharing its Post, and a reader."""
+        rng = self.rng
+        self.features.add("mailbox")
+        mb = self.let(out, env, "MB", ("mailbox",))
+        p = self.let(out, env, "PO", ("field", mb, 0))
+        b = self.let(out, env, "IB", ("field", mb, 1))
+        made = []
+        for _ in range(rng.randint(1, 3)):
+            n = self.let(out, env, "I", ("int", rng.randint(0, 3)))
+            made.append(self.let(out, env, "C", ("clo", self.poster(depth), [p, n])))
+        z = self.let(out, env, "I", ("int", 0))
+        rd = self.reader(depth)
+        if rng.random() < 0.85:
+            made.append(self.let(out, env, "C", ("clo", rd, [b, z])))
+            self.features.add("mailbox reader closure")
+        else:
+            self.let(out, env, "I", ("call", rd, [b, z]))  # reads before any poster runs
+            self.features.add("mailbox reader call")
+        del env[p], env[b]
+        self.run_closures(out, env, depth, made)
+
+    def poster(self, depth):
+        """post(p, n): post n numbers, then end; or crash holding the Post."""
+        rng = self.rng
+        name = self.fresh("poster")
+        p, n = self.fresh("p"), self.fresh("n")
+        env = {n: "I"}
+        out = []
+        zero = self.let(out, env, "I", ("int", 0))
+        z = self.let(out, env, "I", ("prim", "eq", [n, zero]))
+        lo, lenv = [], dict(env)
+        last = Block(lo, ("ret", self.need(lo, lenv, "I", depth + 1)))
+        so, senv = [], dict(env)
+        for _ in range(rng.randint(0, 2)):
+            self.statement(so, senv, depth + 1, name)
+        a = self.need(so, senv, "I", depth + 1)
+        if rng.random() < self.crash_rate * 3:
+            self.crash_call(so, senv, depth)  # with the Post live in this frame
+        so.append(("let", self.fresh("u"), ("post", p, a)))
+        one = self.let(so, senv, "I", ("int", 1))
+        n2 = self.let(so, senv, "I", ("prim", "sub", [n, one]))
+        step = Block(so, ("tail", name, [p, n2]))
+        self.procs[name] = Proc(name, [p, n], Block(out, ("if", z, last, step)), True)
+        return name
+
+    def reader(self, depth):
+        """read(b, acc): take until Closed, adding up; perhaps stop early,
+        dropping the inbox."""
+        rng = self.rng
+        name = self.fresh("reader")
+        b, acc = self.fresh("b"), self.fresh("acc")
+        r, v, rest, acc2 = self.fresh("r"), self.fresh("x"), self.fresh("b"), self.fresh("acc")
+        mo = [("let", acc2, ("prim", "add", [acc, v]))]
+        menv = {acc2: "I"}
+        for _ in range(rng.randint(0, 2)):
+            self.statement(mo, menv, depth + 1, name)
+        again = ("tail", name, [rest, acc2])
+        if rng.random() < 0.3:
+            self.features.add("mailbox early exit")
+            k = self.let(mo, menv, "I", ("int", rng.randint(0, 12)))
+            c = self.let(mo, menv, "I", ("prim", "lt", [k, acc2]))
+            got = Block(mo, ("if", c, Block([], ("ret", acc2)), Block([], again)))
+        else:
+            got = Block(mo, again)
+        head = Block([("let", r, ("take", b))], ("match", r, [
+            ("Got", [v, rest], got),
+            ("Closed", [], Block([], ("ret", acc))),
+        ]))
+        self.procs[name] = Proc(name, [b, acc], head, True)
+        return name
+
+    def cell(self, out, env, depth):
+        """A semaphore cell and some workers sharing it."""
+        rng = self.rng
+        self.features.add("semaphore cell")
+        k = self.let(out, env, "I", ("int", rng.randint(1, 2)))
+        sm = self.let(out, env, "SEM", ("sem", k))
+        made = []
+        for _ in range(rng.randint(1, 3)):
+            made.append(self.let(out, env, "C", ("clo", self.worker(depth), [sm])))
+        del env[sm]
+        self.run_closures(out, env, depth, made)
+
+    def worker(self, depth):
+        """work(s): acquire a permit, work while holding it, release it. Or
+        crash holding it, or let it go at once (its last use is the acquire)."""
+        rng = self.rng
+        name = self.fresh("worker")
+        s = self.fresh("s")
+        env = {}
+        out = []
+        pm = self.let(out, env, "PM", ("acquire", s))
+        for _ in range(rng.randint(1, 3)):
+            self.statement(out, env, depth + 1, name)
+        r = rng.random()
+        if r < 0.85:
+            if r < self.crash_rate * 3:
+                self.crash_call(out, env, depth)  # with the permit live in this frame
+            out.append(("let", self.fresh("u"), ("call", "release_permit", [pm])))
+        else:
+            self.features.add("permit let go")
+        body = Block(out, ("ret", self.need(out, env, "I", depth + 1)))
+        del env[pm]
+        self.procs[name] = Proc(name, [s], body, True)
+        if "release_permit" not in self.procs:
+            x, z = self.fresh("pm"), self.fresh("z")
+            self.procs["release_permit"] = Proc("release_permit", [x], Block([("let", z, ("int", 0))], ("ret", z)), True)
+        return name
+
+    # ------------------------------------------------------------ shared variables
+    def shared_var(self, out, env, depth):
+        """A shared variable (or one made by an earlier statement), and some
+        workers capturing it, and maybe a second one, run side by side; then
+        maybe a read."""
+        rng = self.rng
+        self.features.add("shared")
+        for name, pr in STEP_PROCS.items():
+            self.procs.setdefault(name, pr)
+        c = self.pick(env, "SV")
+        if c is None or rng.random() < 0.5:
+            k = self.let(out, env, "I", ("int", rng.randint(0, 2)))
+            c = self.let(out, env, "SV", ("shared", k))
+        other = [v for v, t in env.items() if t == "SV" and v != c]
+        if not other and rng.random() < 0.3:
+            k = self.let(out, env, "I", ("int", rng.randint(0, 2)))
+            other = [self.let(out, env, "SV", ("shared", k))]
+        c2 = rng.choice(other) if other and rng.random() < 0.5 else None
+        made = []
+        for _ in range(rng.randint(1, 3)):
+            caps = [c] if c2 is None else [c, c2]
+            made.append(self.let(out, env, "C", ("clo", self.sv_worker(depth, len(caps)), caps)))
+        self.run_closures(out, env, depth, made)
+        if rng.random() < 0.5:
+            self.let(out, env, "I", ("read", c))
+            self.features.add("shared read")
+
+    def sv_worker(self, depth, ncells):
+        """worker(c[, c2]): one use of the shared variables, as a small Roc
+        function would make it."""
+        rng = self.rng
+        name = self.fresh("svw")
+        cs = [self.fresh("c") for _ in range(ncells)]
+        env = {}
+        out = []
+        r = rng.random()
+        if r < 0.45:
+            # A permit: take, defer the give, work (maybe crash), end the block.
+            self.features.add("shared permit")
+            out.append(("let", self.fresh("u"), ("step", "gs_take", [cs[0]], [])))
+            kind = "errdefer" if rng.random() < 0.2 else "defer"
+            give = "gs_bad" if rng.random() < self.crash_rate * 2 else "gs_give"
+            if give == "gs_bad":
+                self.features.add("shared deferred crash")
+            if kind == "errdefer":
+                self.features.add("shared errdefer")
+            out.append(("let", self.fresh("u"), (kind, give, [cs[0]], [])))
+            for _ in range(rng.randint(1, 3)):
+                self.statement(out, env, depth + 1, name)
+            if rng.random() < self.crash_rate * 3:
+                self.crash_call(out, env, depth)  # with the give pending
+            out.append(("let", self.fresh("u"), ("undefer",)))
+        elif r < 0.65:
+            k = self.let(out, env, "I", ("int", rng.randint(1, 3)))
+            self.let(out, env, "I", ("step", "gs_inc", [cs[0]], [k]))
+            self.features.add("shared increment")
+        elif r < 0.75:
+            self.let(out, env, "I", ("step", "gs_peek", [cs[0]], []))
+            self.features.add("shared peek")
+        elif r < 0.85 and ncells == 2:
+            self.let(out, env, "I", ("step", "gs_move", [cs[0], cs[1]], []))
+            self.features.add("shared move")
+        else:
+            self.let(out, env, "I", ("read", cs[0]))
+            self.features.add("shared read")
+        for _ in range(rng.randint(0, 2)):
+            self.statement(out, env, depth + 1, name)
+        body = Block(out, ("ret", self.need(out, env, "I", depth + 1)))
+        self.procs[name] = Proc(name, cs, body, True)
+        return name
+
+    def crash_call(self, out, env, depth):
+        """Crash inside a call, so the caller's live values are in a running frame."""
+        m = self.need(out, env, "S", depth + 1)
+        if "crash_now" not in self.procs:
+            x = self.fresh("m")
+            self.procs["crash_now"] = Proc("crash_now", [x], Block([], ("crash", x)), True)
+        self.let(out, env, "I", ("call", "crash_now", [m]))
+        self.features.add("crash")
 
     def producer(self, depth):
         """prod(o, n): send n numbers, each with the In end of the next step;

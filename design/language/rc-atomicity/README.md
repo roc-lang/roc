@@ -31,6 +31,10 @@ cd design/language/rc-atomicity/proto && python3 fuzz.py 3000 2
 ```
 
 ```bash
+cd design/language/rc-atomicity/proto && python3 fuzz.py 3000 2 --channels
+```
+
+```bash
 cd design/language/rc-atomicity/proto && python3 scenarios.py
 ```
 
@@ -92,8 +96,8 @@ which no other party can reach; the Maude model covers them.
 
 | File | Contents |
 |---|---|
-| `rcproto.py` | The language, an interpreter that records every count event with its series-parallel party, the race oracle (Feng–Leiserson criterion plus host visibility), and the analyses listed below |
-| `fuzz.py` | A typed random program generator that composes small constructs. It checks that every analysis except `none` is sound, and that `forward_edge ⊆ forward_pts ⊆ forward_ctx ⊆ forward ⊆ unify` on every event |
+| `rcproto.py` | The language, an interpreter that records every count event with its series-parallel party, the race oracles, and the analyses listed below. Without channels, the oracle is the Feng–Leiserson criterion plus host visibility. With them, it orders events by happens-before, where a send is ordered before its receive |
+| `fuzz.py` | A typed random program generator that composes small constructs. It checks that every analysis except `none` is sound, and that `forward_edge ⊆ forward_pts ⊆ forward_ctx ⊆ forward ⊆ unify` on every event. With `--channels`, some forks send a value from one child to a later one, and the sender keeps using what it holds |
 | `scenarios.py` | Programs that each isolate one effect the note claims |
 | `bridge.py` | Translates generated programs into Maude, then checks three things: that Python and Maude compute the same forward facts, that `forward` is race-free in every interleaving, and that the Python race oracle agrees with Maude's exhaustive search |
 
@@ -110,6 +114,11 @@ The analyses, each more precise than the one before:
 
 `Borrow` adds lending (note, 4.6): parameters and child captures are borrowed
 unless consumed, and the run that uses it has its own trace and race oracle.
+
+Every analysis treats a sent value as it treats a hosted argument: a seed,
+closed under its equality class. This is the sessions RFC's S8
+([concurrency-sessions.md](../concurrency-sessions.md), "Reference
+counting"). `SEND_SEEDS = False` in `rcproto.py` is its mutation.
 
 ## Results
 
@@ -182,3 +191,20 @@ What the scenario numbers show:
 | Python race oracle agrees with Maude's exhaustive search | 117/117 |
 
 The last row validates the oracle that the fuzzer's soundness numbers rely on.
+
+**Channels: `fuzz.py 3000 2 --channels`.** 261,651 count updates, 90,483 of
+which can race. With send seeds, no analysis left a racing update plain, and
+the precision order held on every event.
+
+| Analysis | Atomic | False atomic | Programs unsound without send seeds |
+|---|---|---|---|
+| `all_atomic` | 257,083 | 166,600 | |
+| `unify` | 230,407 | 139,924 | 127 |
+| `forward` | 212,716 | 122,233 | 484 |
+| `forward_ctx` | 211,634 | 121,151 | 487 |
+| `forward_pts` | 211,290 | 120,807 | 498 |
+| `forward_edge` | 211,288 | 120,805 | 498 |
+| `lean` (dynamic) | 157,657 | 66,975 | |
+
+The happens-before oracle is checked against the series-parallel one: on
+programs without channels, the two report the same racing updates.

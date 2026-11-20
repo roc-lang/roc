@@ -2,8 +2,8 @@
 
 This is the prototype's completion criterion: every row of the RFC's
 "Language guarantees", "Compiler invariants", "Runtime invariants" and
-"Platform obligations" tables, and of the companion sessions RFC's
-"Invariants" table, has an entry here, each entry names how the prototype
+"Platform obligations" tables, and of the companion sessions and shared
+variables RFCs' "Invariants" tables, has an entry here, each entry names how the prototype
 establishes it, and each names regression tests in tests.py that exist and
 pass. A row the prototype does not establish yet is in PENDING instead, and
 its row in the RFC says "Not yet prototyped". `tests.py` checks all of this
@@ -21,6 +21,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 RFC = os.path.join(HERE, "..", "concurrency-explicit-suspension.md")
 SESSIONS_RFC = os.path.join(HERE, "..", "concurrency-sessions.md")
+SHARED_RFC = os.path.join(HERE, "..", "concurrency-shared-variables.md")
 
 FUZZ = "Fuzz.test_generated_programs"
 
@@ -44,10 +45,11 @@ MATRIX = {
     "G6": ("Cancellation at every suspension leaves the heap exact; R4's monitor",
            ["Cancellation.test_cancel_at_every_suspension_releases_everything", FUZZ]),
     "G7": ("Crash propagation, supervision and containment checked by R5 and R7; an entry's crash reaches "
-           "its parent at once, wherever the parent waits",
+           "its parent at once, wherever the parent waits, or at its next suspension point if it is running",
            ["Crashes.test_crash_cancels_siblings_and_propagates_its_message", "Combinators.test_one_for_one",
             "Combinators.test_supervise_restarts_exactly_max_times",
-            "Loops.test_an_entrys_crash_reaches_a_parent_waiting_elsewhere_at_once"]),
+            "Loops.test_an_entrys_crash_reaches_a_parent_waiting_elsewhere_at_once",
+            "Loops.test_an_entrys_crash_reaching_a_running_parent_crashes_it_at_its_next_suspension"]),
     "G8": ("Paused tail loops, direct and through closures, hold a constant record chain",
            ["Lowering.test_tail_loop_that_pauses_keeps_constant_records",
             "Lowering.test_tail_cycle_through_a_closure_keeps_constant_records"]),
@@ -141,17 +143,25 @@ MATRIX = {
     "S1": ("A second use of either end crashes with USED_TWICE",
            ["Sessions.test_using_an_end_twice_crashes"]),
     "S2": ("Cancelled exactly when the Out end went away unused: dropped by code, by a cancelled task's "
-           "records, or closed by a crash; without Cancelled on drop the receiver deadlocks",
+           "records, or released after a crash; Closed exactly when every Post is gone and the queue is "
+           "empty; without Cancelled on drop the receiver deadlocks",
            ["Sessions.test_dropping_an_unused_out_end_delivers_cancelled",
             "Sessions.test_cancelling_a_producer_delivers_cancelled_at_its_current_end",
-            "Sessions.test_without_cancelled_on_drop_the_receiver_deadlocks", FUZZ]),
-    "S3": ("The exact heap counts a message as owned only while its In end exists; a grant sent to a "
-           "cancelled requester returns, and leaving the abandoned channel open is a heap error",
+            "Sessions.test_without_cancelled_on_drop_the_receiver_deadlocks",
+            "Mailboxes.test_many_posters_one_reader_closed_when_every_post_is_gone",
+            "Mailboxes.test_a_request_to_a_reader_that_was_cancelled_is_answered_with_cancelled", FUZZ]),
+    "S3": ("The exact heap counts a message as owned only while its In end or Inbox exists; a grant sent "
+           "to a cancelled requester returns, and leaving the abandoned channel open is a heap error",
            ["Sessions.test_a_permit_granted_to_a_cancelled_requester_returns_to_its_owner",
             "Sessions.test_race_drops_the_end_a_finished_loser_returned", FUZZ]),
-    "S4": ("A crash closes the ends its task held; without closing, the peer waits until the crash "
-           "reaches it",
-           ["Sessions.test_a_crash_closes_the_ends_its_task_held"]),
+    "S4": ("A port no live task can use is released, with holder sets that follow captures, sends, posts, "
+           "results and hosted calls; without release the peer waits until the crash reaches it, and with "
+           "one holder per end an end shared with a restarted child is never released",
+           ["Sessions.test_a_crash_closes_the_ends_its_task_held",
+            "HolderSets.test_an_end_shared_with_a_restarted_child_is_released_when_its_last_live_holder_leaves",
+            "Mailboxes.test_a_crash_releases_the_posts_its_task_held",
+            "Libraries.test_a_crash_returns_the_permit_its_running_frame_held",
+            "Roots.test_a_crashed_request_root_returns_its_permit", FUZZ]),
     "S5": ("An arrival does not ready a task waiting at a receive; one wake word per task breaks R1",
            ["Sessions.test_an_arrival_does_not_ready_a_task_waiting_at_a_receive"]),
     "S6": ("A cycle of receives crashes the receiver that waited last; every run ends with every task "
@@ -159,15 +169,72 @@ MATRIX = {
            ["Sessions.test_a_cycle_of_sessions_deadlocks_and_crashes_the_last_receiver",
             "Sessions.test_a_request_reply_release_server_deadlocks_on_one_stack", FUZZ]),
     "S7": ("A None build against the input-order schedule that models the one stack, on every generated "
-           "program, deadlocks included",
+           "program, deadlocks included; the coroutine None build as a Tasks policy whose engines and "
+           "lowerings agree on every generated program",
            ["Sessions.test_a_none_build_runs_a_later_entry_on_demand_and_matches_input_order",
+            "Libraries.test_coroutines_on_one_stack_run_turn_taking",
             "Sessions.test_a_stream_flows_by_continuation_passing",
             "Sessions.test_a_request_reply_release_server_deadlocks_on_one_stack", FUZZ]),
+    "S8": ("The atomicity prototype's fuzzer with channels, against a happens-before race oracle that "
+           "matches the series-parallel one without channels; without send seeds it finds unsound programs",
+           ["RcAtomicity.test_sent_values_are_seeds",
+            "RcAtomicity.test_happens_before_oracle_matches_series_parallel_without_channels"]),
+    "S9": ("The semaphore and pool libraries under every schedule, cancellation at every suspension and "
+           "crashes; a permit passed to a hosted call; the semaphore cell checked after every fuzzed run, "
+           "and a crash mutation caught",
+           ["Libraries.test_every_permit_comes_back_however_its_holder_ends",
+            "Libraries.test_a_permit_passed_to_a_hosted_call_counts_remote_operations",
+            "Libraries.test_a_pool_replaces_a_resource_whose_lease_was_cancelled",
+            "Libraries.test_a_semaphore_cell_runs_on_one_stack_and_returns_every_permit",
+            "Libraries.test_a_crash_returns_the_permit_its_running_frame_held", FUZZ]),
+    "S10": ("A service root beside request roots: each root deadlocks alone, and a root waiting on a port "
+            "another root holds is not stalled; ignoring other roots' holders is caught",
+            ["Roots.test_a_service_root_outlives_its_requests_and_each_root_deadlocks_alone",
+             "Roots.test_a_root_waiting_on_a_port_another_root_holds_is_not_stalled"]),
+    # ------------------------------------------------ shared state RFC
+    "V1": ("Shared operations only in effectful procedures, and updates only over pure procedures: "
+           "rejected statically otherwise",
+           ["SharedVariables.test_static_checks"]),
+    "V2": ("A step's pure procedure runs on one snapshot and its result is committed whole; a step that crashes "
+           "commits nothing; the lock protocol explored over every interleaving, where dropping the locks "
+           "loses updates",
+           ["SharedVariables.test_a_step_that_crashes_commits_nothing",
+            "SharedModel.test_every_interleaving_of_the_lock_protocol", FUZZ]),
+    "V3": ("Every step and deferred step calls a pure procedure, checked statically; pure procedures cannot "
+           "reach a suspension point (C2)",
+           ["SharedVariables.test_static_checks", FUZZ]),
+    "V4": ("An update holds its cell's lock only while pure code runs: no deadlock in any interleaving; "
+           "the model also locks two-cell steps in one global order, and locking them in each thread's own "
+           "order is caught",
+           ["SharedModel.test_every_interleaving_of_the_lock_protocol"]),
+    "V5": ("Every cleanup push matched by a pop on every path, checked statically; cleanups run at a crash, "
+           "at a cancellation and when their body returns (finally!), once each, and on_failure! cleanups "
+           "are dropped unrun on a return; a task returning with cleanups pending trips V5; cancellation at "
+           "every suspension of generated programs; skipping cleanups at drops is caught",
+           ["SharedVariables.test_static_checks", "SharedVariables.test_a_crash_while_holding_runs_the_deferred_step",
+            "SharedVariables.test_every_permit_comes_back_however_its_holder_ends",
+            "SharedVariables.test_a_cancelled_probe_reopens_the_breaker", FUZZ]),
+    "V6": ("A cleanup that crashes poisons its handle: later updates (and the tests' reads) and parked waiters crash; "
+           "a handle created inside the supervised function is new after a restart; poisoning nothing "
+           "is caught",
+           ["SharedVariables.test_a_deferred_step_that_crashes_poisons_its_variable",
+            "SharedVariables.test_a_waiter_on_a_poisoned_variable_crashes",
+            "SharedVariables.test_a_cancelled_task_whose_deferred_step_crashes_crashes"]),
+    "V7": ("Waiters register before the cell is released: no lost wakeup in any interleaving, and "
+           "registering late is caught; in the runtime, a commit readies its waiters, and readying none is "
+           "caught",
+           ["SharedModel.test_every_interleaving_of_the_lock_protocol",
+            "SharedVariables.test_a_wait_ends_when_another_task_commits"]),
+    "V8": ("A None build runs entries on demand while an update waits, against the input-order schedule on "
+           "every generated program; a wait nothing can end is the same deadlock in every build",
+           ["SharedVariables.test_a_wait_ends_when_another_task_commits",
+            "SharedVariables.test_a_wait_nothing_can_end_is_a_deadlock_in_every_build", FUZZ]),
 }
 
 # Rows the prototype does not establish yet.
 PENDING = {
-    "S8": "rc-atomicity does not model channels yet",
+    "V9": "The prototype's IR is untyped, so the no-cycles rule on state types needs a typed prototype "
+          "or the checker",
 }
 
 
@@ -180,8 +247,9 @@ def table(path, end_heading):
 def rows():
     """Every row of the two RFCs' invariant and obligation tables, by id."""
     found = {}
-    for path, end in ((RFC, "\n### What to establish first"), (SESSIONS_RFC, "\n## Library patterns")):
-        for k, line in re.findall(r"^\| ([GCRPS]\d+) \|(.*)$", table(path, end), re.M):
+    for path, end in ((RFC, "\n### What to establish first"), (SESSIONS_RFC, "\n## Library patterns"),
+                      (SHARED_RFC, "\n## Drawbacks")):
+        for k, line in re.findall(r"^\| ([GCRPSV]\d+) \|(.*)$", table(path, end), re.M):
             found[k] = line
     return found
 

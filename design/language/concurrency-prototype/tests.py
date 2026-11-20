@@ -23,8 +23,11 @@ sys.path.insert(0, HERE)
 sys.setrecursionlimit(100000)
 
 import engines  # noqa: E402
+import host as host_mod  # noqa: E402
+import library  # noqa: E402
 import runtime  # noqa: E402
 import sessions as sessions_mod  # noqa: E402
+import shared as shared_mod  # noqa: E402
 from arc import ArcError, certify  # noqa: E402
 from check import CancelAtPolicy, check_program  # noqa: E402
 from heap import HeapError  # noqa: E402
@@ -214,6 +217,47 @@ class Combinators(unittest.TestCase):
         # None builds run it once and stop the program.
         self.assertEqual(len(run_none(lows["lss"].prog).effects), 1)
 
+    SERVER = """
+    (proc handle (i flaky) eff
+      (let x (host slow i))
+      (let c (host nth i))
+      (let first (eq c 0))
+      (let bad (eq flaky 1))
+      (if bad
+        (block (if first (block (crash "transient")) (block (ret 1))))
+        (block (ret 1))))
+    (proc serve_all (reqs i n acc) eff
+      (let c (lt i n))
+      (if c
+        (block (let f (get reqs i)) (let v (call handle i f)) (tail serve_all reqs (add i 1) n (add acc v)))
+        (block (ret acc))))
+    (proc serve_each (reqs i n acc) eff
+      (let c (lt i n))
+      (if c
+        (block (let f (get reqs i)) (let v (call supervise! 3 (clo handle i f)))
+               (tail serve_each reqs (add i 1) n (add acc v)))
+        (block (ret acc))))
+    (proc whole (reqs) eff (let n (len reqs)) (let v (call serve_all reqs 0 n 0)) (ret v))
+    (proc reqs () pure (ret (list 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1)))
+    (proc main_whole () eff (let r (call reqs)) (let v (call supervise! 3 (clo whole r))) (ret v))
+    (proc main_each () eff (let r (call reqs)) (let n (len r)) (let v (call serve_each r 0 n 0)) (ret v))
+    """
+
+    def test_supervising_each_request_needs_no_time_window(self):
+        # The RFC's decision on a time window for supervise!'s restart limit.
+        # Four transient crashes, far apart, in twenty requests: a server
+        # supervised as a whole spends its lifetime limit on them, gives up
+        # and redoes earlier requests on every restart; supervising each
+        # request handles every one, with one restart per crash.
+        for entry, result, handled in (("main_whole", ("crashed", ("str", "transient")), 50),
+                                       ("main_each", ("done", 20), 24)):
+            _, lows = build(self.SERVER, entry)
+            for mk in (PausePolicy, InputOrderPolicy, lambda: RandomPolicy(3, parallel=True)):
+                pol = mk()
+                r = tasks(lows, pol, conc="ParallelTasks" if pol.parallel else "Tasks")
+                self.assertEqual(r.result, result)
+                self.assertEqual(sum(1 for e in r.effects if e[1] == "slow"), handled)
+
     def test_one_for_one(self):
         src = """
         (proc bad () eff (let x (host slow 1)) (crash "boom"))
@@ -238,14 +282,12 @@ class Loops(unittest.TestCase):
       (let a (next g))
       (match a
         (Arrived (v) (block (let acc2 (add acc v)) (tail sum_loop g acc2)))
-        (Crashed (m) (block (crash m)))
         (Cancelled () (block (crash "unreachable")))
         (Ended () (block (ret acc)))))
     (proc first_loop (g) eff
       (let a (next g))
       (match a
         (Arrived (v) (block (do (call close_loop g)) (ret v)))
-        (Crashed (m) (block (crash m)))
         (Cancelled () (block (crash "unreachable")))
         (Ended () (block (ret 0)))))
     """
@@ -330,7 +372,6 @@ class Loops(unittest.TestCase):
           (let a (next g))
           (match a
             (Arrived (v) (block (ret v)))
-            (Crashed (m) (block (crash m)))
             (Cancelled () (block (crash "unreachable")))
             (Ended () (block (ret 0)))))
         (proc main () eff
@@ -351,7 +392,6 @@ class Loops(unittest.TestCase):
               (if more
                 (block (do (spawn_in g (clo kid 1))) (tail grow g acc2 (sub budget 1)))
                 (block (tail grow g acc2 budget)))))
-            (Crashed (m) (block (crash m)))
             (Cancelled () (block (crash "unreachable")))
             (Ended () (block (ret acc)))))
         (proc main () eff
@@ -371,7 +411,6 @@ class Loops(unittest.TestCase):
           (let w (host slow v))
           (let acc2 (add acc w))
           (tail body_loop g acc2)))
-        (Crashed (m) (block (crash m)))
         (Cancelled () (block (crash "unreachable")))
         (Ended () (block (ret acc)))))
     (proc main () eff
@@ -393,6 +432,49 @@ class Loops(unittest.TestCase):
       (let g (group (call concurrently (list (clo kid 1) (clo bad)))))
       (tail body_loop g 0))
     """
+
+    RUNNING = """
+    (proc bad () eff (crash "boom"))
+    (proc body_log (g acc) eff
+      (let a (next g))
+      (match a
+        (Arrived (v) (block
+          (let l (host log "x"))
+          (tail body_log g (add acc v))))
+        (Cancelled () (block (crash "unreachable")))
+        (Ended () (block (ret acc)))))
+    (proc main () eff
+      (let g (group (call concurrently (list (clo fast) (clo bad)))))
+      (tail body_log g 0))
+    """
+
+    def test_an_entrys_crash_reaching_a_running_parent_crashes_it_at_its_next_suspension(self):
+        # ParallelTasks: the parent takes fast's arrival and runs its body;
+        # the bad entry crashes on another thread during the body's hosted
+        # call. The parent's next loop head must not take a result: it
+        # suspends, and the runtime crashes it there with an exact drop.
+        class RootFirst(PausePolicy):
+            parallel = True
+
+            def choose(self, host):
+                if host.root in host.queue:
+                    return ("resume", host.queue.index(host.root))
+                return super().choose(host)
+
+            def during_call(self, host):
+                while any(t is not host.root for t in host.queue):
+                    host.step()
+
+        _, lows = build(self.LIB + self.RUNNING)
+        for mode in ("lss", "boxy"):
+            for eng in ("unwind", "stack"):
+                r = tasks(lows, RootFirst(), mode, eng, "ParallelTasks")
+                self.assertEqual(r.result, ("crashed", ("str", "boom")))
+                self.assertEqual(r.runtime["linked crashes pending at a suspension"], 1)
+                self.assertEqual(r.leaked_live, 0)  # the parent crashed paused: nothing leaks
+        with self.assertRaisesRegex(Violation, "G7"):
+            with switches(rt={"crash_pending": lambda t, consumed: False}):
+                tasks(lows, RootFirst(), conc="ParallelTasks")
 
     def test_an_entrys_crash_reaches_a_parent_waiting_elsewhere_at_once(self):
         src = self.BODY_WAITS.split("(proc main")[0] + self.LINKED
@@ -493,7 +575,6 @@ class Sessions(unittest.TestCase):
       (let a (next g))
       (match a
         (Arrived (v) (block (do (call close_loop g)) (ret v)))
-        (Crashed (m) (block (crash m)))
         (Cancelled () (block (ret 0)))
         (Ended () (block (ret 0)))))
     """
@@ -644,8 +725,8 @@ class Sessions(unittest.TestCase):
         r = self.run_with(self.SUPERVISED, PausePolicy())
         self.assertEqual(r.result, ("crashed", ("str", sessions_mod.USED_TWICE)))
         self.assertIn(saw, r.effects)
-        self.assertEqual(r.runtime["ends closed by a crash"], 1)
-        r = self.run_with(self.SUPERVISED, PausePolicy(), sessions={"no_close_on_crash": True})
+        self.assertEqual(r.runtime["ports released after a crash"], 1)
+        r = self.run_with(self.SUPERVISED, PausePolicy(), sessions={"no_close_on_leave": True})
         self.assertNotIn(saw, r.effects)  # it waited until the crash reached it
 
     # A one-permit semaphore as a task, and its owner-of-a-resource variant.
@@ -700,7 +781,6 @@ class Sessions(unittest.TestCase):
       (let a (next g))
       (match a
         (Arrived (v) (block (do (call close_loop g)) (ret (tag R v w))))
-        (Crashed (m) (block (crash m)))
         (Cancelled () (block (ret 0)))
         (Ended () (block (ret 0)))))
     """
@@ -752,10 +832,8 @@ class Sessions(unittest.TestCase):
       (match a
         (Arrived (x) (block (match b
           (Arrived (y) (block (do (call close_loop g)) (ret (tag R x y))))
-          (Crashed (m) (block (crash m)))
           (Cancelled () (block (ret 0)))
           (Ended () (block (ret 0))))))
-        (Crashed (m) (block (crash m)))
         (Cancelled () (block (ret 0)))
         (Ended () (block (ret 0)))))
     """
@@ -767,6 +845,518 @@ class Sessions(unittest.TestCase):
         none, results, _ = self.everywhere(self.LOSER)
         self.assertEqual(none.result, ("done", ("tag", "R", (1, 2))))
         self.assertTrue(results <= {("done", ("tag", "R", (1, 2))), ("done", ("tag", "R", (2, 1)))}, results)
+
+
+class switches:
+    """Set mutation switches on every Runtime (and its Sessions and Shared) made inside."""
+
+    def __init__(self, rt=None, sessions=None, host=None, shared=None):
+        self.rt, self.sessions, self.host, self.shared = rt or {}, sessions or {}, host or {}, shared or {}
+
+    def __enter__(self):
+        self.orig = runtime.Runtime.__init__
+        self.orig_attach = runtime.Runtime.attach
+        orig, orig_attach, rt, ses, sh = self.orig, self.orig_attach, self.rt, self.sessions, self.shared
+
+        def init(r, *a, **k):
+            orig(r, *a, **k)
+            for name, v in rt.items():
+                setattr(r, name, v)
+            for name, v in ses.items():
+                setattr(r.sessions, name, v)
+
+        def attach(r, *a, **k):
+            orig_attach(r, *a, **k)
+            for name, v in sh.items():
+                setattr(r.shared, name, v)
+
+        runtime.Runtime.__init__ = init
+        runtime.Runtime.attach = attach
+        return self
+
+    def __exit__(self, *exc):
+        runtime.Runtime.__init__ = self.orig
+        runtime.Runtime.attach = self.orig_attach
+
+
+ALL_POLICIES = [lambda: InputOrderPolicy(), lambda: ReadyPolicy(), lambda: PausePolicy()] + \
+    [lambda s=s: RandomPolicy(s, parallel=s % 2 == 1) for s in range(24)]
+
+
+def all_results(lows, policies=None, host_cls=None):
+    """Every Tasks result, under every schedule and engine."""
+    out = set()
+    for mk in policies or ALL_POLICIES:
+        for eng in ("unwind", "stack"):
+            pol = mk()
+            out.add(run_tasks(lows["lss"], eng, pol, "ParallelTasks" if pol.parallel else "Tasks",
+                              host_cls=host_cls).result)
+    return out
+
+
+class HolderSets(unittest.TestCase):
+    """Holders are sets that follow captures, messages and results (concurrency-sessions.md, "Holders")."""
+
+    SHARED = Sessions.LIB + """
+    (proc check (n) eff
+      (let z (eq n 0))
+      (if z (block (crash "first try")) (block (ret 0))))
+    (proc keep (o) eff (ret 0))
+    (proc attempt (o) eff
+      (let n (host nth 0))
+      (let x (call check n))
+      (do (call keep o))
+      (ret x))
+    (proc supervised (o) eff
+      (let f (clo attempt o))
+      (let v (call supervise! 1 f))
+      (ret v))
+    (proc watch (i) eff (let s (call consume i 0)) (ret s))
+    (proc main () eff
+      (let pr (pair)) (let o (field pr 0)) (let i (field pr 1))
+      (let r (call both! (clo watch i) (clo supervised o)))
+      (ret r))
+    """
+
+    def test_an_end_shared_with_a_restarted_child_is_released_when_its_last_live_holder_leaves(self):
+        # The first attempt crashes with the Out end in a running frame, so
+        # one reference leaks. The second attempt drops its reference unused,
+        # and the supervisor drops the closure. The watcher must get
+        # Cancelled once no live task holds the end, not wait for the leaked
+        # reference. Holders follow the closure into each attempt, and the
+        # supervisor holds it too, so the end is released when the
+        # supervisor finishes.
+        _, lows = build(self.SHARED)
+        want = ("done", ("tup", None, (-1, 0)))
+        self.assertEqual(all_results(lows, ALL_POLICIES[1:]), {want})
+        r = tasks(lows, PausePolicy())
+        self.assertEqual(r.runtime["ports released after a crash"], 1)
+        # Holders that do not follow captures leave the end with the parent,
+        # which waits for the watcher: the run deadlocks.
+        with switches(sessions={"no_capture_holders": True}):
+            self.assertEqual(tasks(lows, PausePolicy()).result, ("crashed", ("str", sessions_mod.DEADLOCK)))
+
+
+class Mailboxes(unittest.TestCase):
+    """Mailboxes: many senders, one reader (concurrency-sessions.md, "Mailboxes")."""
+
+    LIB = """
+    (proc fast () eff (ret 1))
+    (proc poster (p k) eff
+      (do (post p k))
+      (do (post p (add k 10)))
+      (ret 0))
+    (proc posters (p) eff
+      (let r (call all! (list (clo poster p 1) (clo poster p 2) (clo poster p 3))))
+      (ret 0))
+    (proc reader (b acc) eff
+      (let r (take b))
+      (match r
+        (Got (v rest) (block (tail reader rest (add acc v))))
+        (Closed () (block (ret acc)))))
+    """
+
+    def everywhere(self, src):
+        _, lows = build(self.LIB + src)
+        return run_none(lows["lss"].prog), all_results(lows), lows
+
+    def test_many_posters_one_reader_closed_when_every_post_is_gone(self):
+        none, results, _ = self.everywhere("""
+        (proc main () eff
+          (let mb (mailbox)) (let p (field mb 0)) (let b (field mb 1))
+          (let r (call both! (clo reader b 0) (clo posters p)))
+          (ret r))
+        """)
+        want = ("done", ("tup", None, (1 + 11 + 2 + 12 + 3 + 13, 0)))
+        self.assertEqual(none.result, want)
+        self.assertEqual(results, {want})
+
+    def test_taking_from_an_inbox_twice_crashes(self):
+        none, results, _ = self.everywhere("""
+        (proc main () eff
+          (let mb (mailbox)) (let p (field mb 0)) (let b (field mb 1))
+          (do (post p 1))
+          (let r1 (take b))
+          (let r2 (take b))
+          (ret 0))
+        """)
+        want = ("crashed", ("str", sessions_mod.USED_TWICE))
+        self.assertEqual(none.result, want)
+        self.assertEqual(results, {want})
+
+    FLAKY = """
+    (proc check (n) eff
+      (let z (eq n 0))
+      (if z (block (crash "first try")) (block (ret 0))))
+    (proc flaky (p) eff
+      (let n (host nth 0))
+      (let x (call check n))
+      (do (post p 7))
+      (ret x))
+    (proc supervised (p) eff
+      (let v (call supervise! 1 (clo flaky p)))
+      (ret v))
+    (proc main () eff
+      (let mb (mailbox)) (let p (field mb 0)) (let b (field mb 1))
+      (let r (call both! (clo reader b 0) (clo supervised p)))
+      (ret r))
+    """
+
+    def test_a_crash_releases_the_posts_its_task_held(self):
+        # The first attempt crashes with a Post in a running frame. The inbox
+        # closes once no live task holds a Post, so the reader ends.
+        _, lows = build(self.LIB + self.FLAKY)
+        self.assertEqual(all_results(lows, ALL_POLICIES[1:]), {("done", ("tup", None, (7, 0)))})
+        with switches(sessions={"no_close_on_leave": True}):
+            self.assertEqual(tasks(lows, PausePolicy()).result, ("crashed", ("str", sessions_mod.DEADLOCK)))
+
+    ABANDONED = """
+    (proc server (b) eff
+      (let r (take b))
+      (match r
+        (Got (o rest) (block (do (send o 9)) (ret 0)))
+        (Closed () (block (ret 3)))))
+    (proc requester (p) eff
+      (let rp (pair)) (let o (field rp 0)) (let i (field rp 1))
+      (do (post p o))
+      (let r (recv i))
+      (match r
+        (Got (x) (block (ret 1)))
+        (Cancelled () (block (ret 2)))))
+    (proc main () eff
+      (let mb (mailbox)) (let p (field mb 0)) (let b (field mb 1))
+      (let w (call race! (clo fast) (list (clo server b))))
+      (let v (call requester p))
+      (ret (tag R w v)))
+    """
+
+    def test_a_request_to_a_reader_that_was_cancelled_is_answered_with_cancelled(self):
+        none, results, lows = self.everywhere(self.ABANDONED)
+        want = ("done", ("tag", "R", (1, 2)))
+        self.assertEqual(none.result, want)
+        self.assertEqual(results, {want})
+        r = tasks(lows, PausePolicy())
+        self.assertEqual(r.runtime["receives abandoned"], 1)  # the server was waiting at its take
+        with switches(sessions={"no_close_abandoned": True}):
+            with self.assertRaises((HeapError, AssertionError)):
+                r = tasks(lows, PausePolicy())
+                self.assertEqual(r.result, want)
+
+    def test_a_reply_credit_bounds_the_queue(self):
+        # Backpressure as a protocol: each sender waits for a reply before
+        # sending again, so at most one message per sender is queued. Without
+        # it the queue holds everything a slow reader has not taken yet.
+        src = """
+        (proc slow_reader (b acc) eff
+          (let r (take b))
+          (match r
+            (Got (m rest) (block
+              (let v (field m 0))
+              (let ack (field m 1))
+              (let w (host slow v))
+              (do (send ack 0))
+              (tail slow_reader rest (add acc v))))
+            (Closed () (block (ret acc)))))
+        (proc credit_poster (p k n) eff
+          (let z (eq n 0))
+          (if z
+            (block (ret 0))
+            (block
+              (let pr (pair)) (let ack (field pr 0)) (let back (field pr 1))
+              (do (post p (tup k ack)))
+              (let r (recv back))
+              (tail credit_poster p k (sub n 1)))))
+        (proc flood_poster (p k n) eff
+          (let z (eq n 0))
+          (if z
+            (block (ret 0))
+            (block
+              (let pr (pair)) (let ack (field pr 0)) (let back (field pr 1))
+              (do (post p (tup k ack)))
+              (tail flood_poster p k (sub n 1)))))
+        (proc run (p which) eff
+          (let n (int 4))
+          (if which
+            (block (let r (call all! (list (clo credit_poster p 1 n) (clo credit_poster p 2 n) (clo credit_poster p 3 n)))) (ret 0))
+            (block (let r (call all! (list (clo flood_poster p 1 n) (clo flood_poster p 2 n) (clo flood_poster p 3 n)))) (ret 0))))
+        (proc main () eff
+          (let a (call one 1))
+          (let b (call one 0))
+          (ret (tup a b)))
+        (proc one (which) eff
+          (let mb (mailbox)) (let p (field mb 0)) (let b (field mb 1))
+          (let r (call both! (clo slow_reader b 0) (clo run p which)))
+          (ret (field r 0)))
+        """
+        _, lows = build(self.LIB + src)
+        seen = []
+        orig = sessions_mod.Sessions.post
+
+        def post(ses, p, v):
+            orig(ses, p, v)
+            b = ses.boxes[max(ses.boxes)]
+            seen.append((b.bid, len(b.queue)))
+
+        sessions_mod.Sessions.post = post
+        try:
+            r = tasks(lows, PausePolicy())
+        finally:
+            sessions_mod.Sessions.post = orig
+        self.assertEqual(r.result, ("done", ("tup", None, (24, 24))))
+        most = {bid: max(n for b, n in seen if b == bid) for bid, _ in seen}
+        self.assertEqual(most, {1: 3, 2: 12})
+
+
+class Libraries(unittest.TestCase):
+    """The semaphore and pool libraries of concurrency-sessions.md, and the
+    semaphore cell experiment ("Decisions left to prototypes")."""
+
+    SEM = """
+    (proc job (k) eff (let a (host work k)) (ret a))
+    (proc quick () eff (let a (host slow 0)) (ret 0))
+    (proc client (requests k) eff (let v (call with_permit requests (clo job k))) (ret v))
+    (proc timed (requests k) eff
+      (let w (call race! (clo client requests k) (list (clo quick))))
+      (ret w))
+    (proc clients (requests) eff
+      (let r (call all! (list (clo client requests 1) (clo timed requests 2) (clo client requests 3))))
+      (ret r))
+    (proc main () eff
+      (let r (call sem_with 1 (clo clients)))
+      (ret (field r 1)))
+    """
+
+    def build(self, src):
+        return build(library.SOURCE + src)[1]
+
+    def test_every_permit_comes_back_however_its_holder_ends(self):
+        # The semaphore's free count is back to its permits at the end, under
+        # every schedule, when the timed client is cancelled at any point.
+        lows = self.build(self.SEM)
+        self.assertEqual(all_results(lows, ALL_POLICIES[1:]), {("done", 1)})
+        for k in range(1, 9):
+            for mode in ("lss", "boxy"):
+                r = tasks(lows, CancelAtPolicy(k), mode)
+                self.assertIn(r.result, {("done", 1), ("cancelled",)})
+
+    def test_turn_taking_deadlocks_on_one_stack(self):
+        lows = self.build(self.SEM)
+        dead = ("crashed", ("str", sessions_mod.DEADLOCK))
+        self.assertEqual(run_none(lows["lss"].prog).result, dead)
+        self.assertEqual(tasks(lows, InputOrderPolicy()).result, dead)
+
+    def coroutines(self, src):
+        """Option (a): the None build as coroutines on one stack. Hosted calls
+        never suspend; every engine and lowering gives one result."""
+        from check import NONE_HOSTED
+        from lower import Lowering
+        arc, _ = build(src)
+        out = set()
+        for mode in ("lss", "boxy"):
+            low = Lowering(arc, NONE_HOSTED, mode)
+            low.certify()
+            for eng in ("unwind", "stack"):
+                out.add(run_tasks(low, eng, host_mod.CoroutinePolicy()).result)
+        self.assertEqual(len(out), 1, out)
+        return out.pop()
+
+    def test_coroutines_on_one_stack_run_turn_taking(self):
+        # concurrency-sessions.md, "Decisions left to prototypes", option (a):
+        # a receive that would block switches to the writer, so the
+        # semaphore, the pool and the request-reply-release server, which
+        # deadlock on one stack, all finish.
+        self.assertEqual(self.coroutines(library.SOURCE + self.SEM), ("done", 1))
+        self.assertEqual(self.coroutines(library.SOURCE + self.POOL), ("done", 2))
+        self.assertEqual(self.coroutines(Sessions.LIB + Sessions.PERMIT), ("done", ("tag", "R", (1, 10))))
+        # A real cycle of receives still deadlocks.
+        self.assertEqual(self.coroutines(Sessions.LIB + Sessions.CYCLE),
+                         ("crashed", ("str", sessions_mod.DEADLOCK)))
+
+    REMOTE = """
+    (proc quick () eff (let a (host slow 0)) (ret 0))
+    (proc late (requests k) eff
+      (let w (host slow 3))
+      (let v (call {use} requests k))
+      (ret v))
+    (proc local (requests k) eff
+      (let v (call with_permit requests (clo job k)))
+      (ret v))
+    (proc job (k) eff (let a (host work k)) (ret a))
+    (proc timed (requests k) eff
+      (let w (call race! (clo {use} requests k) (list (clo quick))))
+      (ret w))
+    (proc clients (requests) eff
+      (let r (call all! (list (clo timed requests 1) (clo late requests 2))))
+      (ret r))
+    (proc main () eff
+      (let r (call sem_with 1 (clo clients)))
+      (ret (field r 1)))
+    """
+
+    def test_a_permit_passed_to_a_hosted_call_counts_remote_operations(self):
+        # The RFC's table: A takes the only permit and starts a remote
+        # operation, A times out locally, B starts. A permit kept in the
+        # caller's scope returns when A's scope ends, so B's operation runs
+        # while A's is still in progress. A permit passed to the hosted call
+        # returns only when the host releases A's arguments, after A's
+        # operation finishes (P5), so the two never overlap.
+        class Keep(host_mod.Host):
+            keep_aborted_args = True
+
+        most = {}
+        for use, op in (("local", "work"), ("with_permit_remote", "remote")):
+            lows = self.build(self.REMOTE.replace("{use}", use))
+            peak = 0
+            for mk in ALL_POLICIES[1:]:
+                pol = mk()
+                r = run_tasks(lows["lss"], "unwind", pol, "ParallelTasks" if pol.parallel else "Tasks", host_cls=Keep)
+                self.assertEqual(r.result, ("done", 1))
+                peak = max(peak, r.host["most " + op + " at once"])
+            most[use] = peak
+        self.assertEqual(most, {"local": 2, "with_permit_remote": 1})
+
+    POOL = """
+    (proc use_res (k res) eff (let a (host work res)) (ret (add a k)))
+    (proc quick () eff (let a (host slow 0)) (ret 0))
+    (proc borrower (requests k) eff (let v (call with_resource requests (clo use_res k))) (ret v))
+    (proc timed (requests k) eff
+      (let w (call race! (clo borrower requests k) (list (clo quick))))
+      (ret w))
+    (proc body (requests) eff
+      (let r (call all! (list (clo borrower requests 1) (clo timed requests 2) (clo borrower requests 3)
+                              (clo timed requests 4))))
+      (ret r))
+    (proc main () eff
+      (let r (call pool_with 2 (clo body)))
+      (let st (field r 1))
+      (ret (field st 0)))
+    """
+
+    def test_a_pool_replaces_a_resource_whose_lease_was_cancelled(self):
+        lows = self.build(self.POOL)
+        self.assertEqual(all_results(lows, ALL_POLICIES[1:]), {("done", 2)})
+        r = tasks(lows, PausePolicy())
+        self.assertGreaterEqual(r.runtime["Cancelled delivered"], 1)
+
+    CELL = """
+    (proc job (k) eff (let a (host work k)) (ret a))
+    (proc quick () eff (let a (host slow 0)) (ret 0))
+    (proc client (s k) eff (let v (call {with} s (clo job k))) (ret v))
+    (proc timed (s k) eff
+      (let w (call race! (clo client s k) (list (clo quick))))
+      (ret w))
+    (proc main () eff
+      (let s (sem 1))
+      (let r (call all! (list (clo client s 1) ({second} s 2) (clo client s 3))))
+      (let p (acquire s))
+      (do (call release p))
+      (ret r))
+    """
+
+    def test_a_semaphore_cell_runs_on_one_stack_and_returns_every_permit(self):
+        for second in ("clo client", "clo timed"):
+            lows = self.build(self.CELL.replace("{with}", "with_cell_permit").replace("{second}", second))
+            none = run_none(lows["lss"].prog)
+            self.assertEqual(none.result[0], "done")
+            io = tasks(lows, InputOrderPolicy())
+            self.assertEqual((none.result, none.effects), (io.result, io.effects))
+            results = all_results(lows, ALL_POLICIES[1:])
+            self.assertTrue(all(r[0] == "done" for r in results), results)
+            for k in range(1, 7):
+                self.assertIn(tasks(lows, CancelAtPolicy(k)).result[0], {"done", "cancelled"})
+
+    CELL_CRASH = """
+    (proc check (n) eff
+      (let z (eq n 0))
+      (if z (block (crash "first try")) (block (ret 0))))
+    (proc attempt (s) eff
+      (let permit (acquire s))
+      (let n (host nth 0))
+      (let x (call check n))
+      (do (call release permit))
+      (ret x))
+    (proc main () eff
+      (let s (sem 1))
+      (let v (call supervise! 1 (clo attempt s)))
+      (let p (acquire s))
+      (do (call release p))
+      (ret v))
+    """
+
+    def test_a_crash_returns_the_permit_its_running_frame_held(self):
+        # The first attempt crashes holding the only permit in a running
+        # frame. Its holder set empties, so the permit returns, and the
+        # restarted attempt can take it.
+        lows = self.build(self.CELL_CRASH)
+        self.assertEqual(all_results(lows, ALL_POLICIES[1:]), {("done", 0)})
+        # Without that, the restart deadlocks, and the permit is still out
+        # when every task has finished.
+        with switches(sessions={"no_close_on_leave": True}):
+            with self.assertRaisesRegex(Violation, "S9"):
+                tasks(lows, PausePolicy())
+
+    def test_a_permit_dropped_at_its_last_use_is_released_before_f_runs(self):
+        peak = {}
+        for w in ("with_cell_permit", "with_cell_permit_early"):
+            lows = self.build(self.CELL.replace("{with}", w).replace("{second}", "clo client"))
+            peak[w] = tasks(lows, PausePolicy()).host["most work at once"]
+        self.assertEqual(peak, {"with_cell_permit": 1, "with_cell_permit_early": 3})
+
+
+class Roots(unittest.TestCase):
+    """A service root beside request roots (concurrency-sessions.md, "Services across roots")."""
+
+    SRC = """
+    (proc job (k) eff (let a (host work k)) (ret a))
+    (proc boom () eff (crash "boom"))
+    (proc service (inbox) eff (let r (call sem_serve inbox 1)) (ret r))
+    (proc request (requests k) eff (let v (call with_permit requests (clo job k))) (ret v))
+    (proc request_crash (requests k) eff (let v (call with_permit requests (clo boom))) (ret v))
+    (proc waiter (i o) eff
+      (let r (recv i))
+      (do (send o 1))
+      (ret 0))
+    (proc request_cycle (requests k) eff
+      (let p1 (pair)) (let o1 (field p1 0)) (let i1 (field p1 1))
+      (let p2 (pair)) (let o2 (field p2 0)) (let i2 (field p2 1))
+      (let r (call both! (clo waiter i1 o2) (clo waiter i2 o1)))
+      (ret 0))
+    """
+
+    REQUESTS = [("request", (1,)), ("request_crash", (2,)), ("request_cycle", (3,)), ("request", (4,))]
+
+    def run_all(self, per_root=True, policies=None):
+        lows = build(library.SOURCE + self.SRC)[1]
+        out = set()
+        for mk in policies or ALL_POLICIES[1:]:
+            pol = mk()
+            res, rts, hs = host_mod.run_service(lows["lss"], "unwind", pol, "service", self.REQUESTS,
+                                                "ParallelTasks" if pol.parallel else "Tasks", per_root)
+            out.add(tuple(res))
+        return out
+
+    def test_a_service_root_outlives_its_requests_and_each_root_deadlocks_alone(self):
+        dead = ("crashed", ("str", sessions_mod.DEADLOCK))
+        want = (("done", 1), ("done", 101), ("crashed", ("str", "boom")), dead, ("done", 104))
+        self.assertEqual(self.run_all(), {want})
+        # Without per-root detection the cycle is found only once every other
+        # root has finished, with the same results.
+        self.assertEqual(self.run_all(per_root=False), {want})
+
+    def test_a_root_waiting_on_a_port_another_root_holds_is_not_stalled(self):
+        # A request waits for its grant, whose reply end the service root
+        # holds. Detection that ignores holders in other roots crashes every
+        # request that ever waits for one.
+        with switches(rt={"stall_ignores_other_roots": True}):
+            (r,) = self.run_all(policies=[lambda: PausePolicy()])
+        dead = ("crashed", ("str", sessions_mod.DEADLOCK))
+        self.assertEqual((r[1], r[4]), (dead, dead))
+
+    def test_a_crashed_request_root_returns_its_permit(self):
+        with switches(sessions={"no_close_on_leave": True}):
+            res = self.run_all(policies=[lambda: PausePolicy()])
+        (r,) = res
+        self.assertEqual(r[0], ("crashed", ("str", sessions_mod.DEADLOCK)))  # the service waited forever
 
 
 class Crashes(unittest.TestCase):
@@ -979,6 +1569,8 @@ class Fuzz(unittest.TestCase):
         self.assertEqual(stats["programs"], 60)
         self.assertGreater(stats["crashes"], 0)
         self.assertGreater(stats["cancel-at runs"], 0)
+        self.assertGreater(stats["shared: waits"], 0)
+        self.assertGreater(stats["shared: deferred steps run at drop"], 0)
 
 
 class RcAtomicity(unittest.TestCase):
@@ -1010,6 +1602,34 @@ class RcAtomicity(unittest.TestCase):
         totals, failures, order_fail, _ = run(300, 2)
         self.assertEqual(failures, [])
         self.assertEqual(order_fail, [0, 0, 0, 0])
+
+    def test_sent_values_are_seeds(self):
+        # S8: a message sent between two children of a fork is reached by
+        # both while the sender may still update its counts. Seeded like a
+        # hosted argument, every analysis stays sound; unseeded, all go
+        # unsound.
+        import rcproto
+        from fuzz import run
+        totals, failures, order_fail, _ = run(300, 3, channels=True)
+        self.assertEqual(failures, [])
+        self.assertEqual(order_fail, [0, 0, 0, 0])
+        rcproto.SEND_SEEDS = False
+        try:
+            _, failures, _, _ = run(300, 3, channels=True)
+        finally:
+            rcproto.SEND_SEEDS = True
+        self.assertEqual({n for _, n, _ in failures} >= {"unify", "forward", "forward_ctx", "forward_pts"}, True)
+
+    def test_happens_before_oracle_matches_series_parallel_without_channels(self):
+        import random
+        import rcproto
+        from fuzz import gen_program
+        rng = random.Random(5)
+        for _ in range(300):
+            prog = gen_program(rng)
+            m = rcproto.Machine(prog, rcproto.Forward(prog))
+            m.run()
+            self.assertEqual(rcproto.racy_events(m.events), rcproto.racy_events_hb(m.events))
 
 
 def maude_results(path):
@@ -1085,11 +1705,429 @@ class Lean(unittest.TestCase):
         self.assertNotIn("sorry", r.stdout + r.stderr)
 
 
+
+def everywhere(lows, policies=None):
+    """Every result: both lowerings and engines, under every schedule."""
+    out = set()
+    for mk in policies or ALL_POLICIES:
+        for mode in ("lss", "boxy"):
+            for eng in ("unwind", "stack"):
+                pol = mk()
+                out.add(run_tasks(lows[mode], eng, pol, "ParallelTasks" if pol.parallel else "Tasks").result)
+    return out
+
+
+class SharedVariables(unittest.TestCase):
+    """Shared state: Shared.new!, update! (`step`), waiting, finally! and
+    on_failure! (`defer` and `errdefer`) and poisoning
+    (concurrency-shared-variables.md), and the semaphore, pool and breaker
+    written with them (library.SHARED_SOURCE)."""
+
+    def build(self, src, entry="main"):
+        return build(library.SOURCE + library.SHARED_SOURCE + src, entry)[1]
+
+    SEM = """
+    (proc job (k) eff (let a (host work k)) (ret a))
+    (proc quick () eff (let a (host slow 0)) (ret 0))
+    (proc client (s k) eff (let v (call sv_with_permit s (clo job k))) (ret v))
+    (proc timed (s k) eff (let w (call race! (clo client s k) (list (clo quick)))) (ret w))
+    (proc main () eff
+      (let s (shared 1))
+      (let r (call all! (list (clo client s 1) (clo timed s 2) (clo client s 3))))
+      (let n (read s))
+      (ret n))
+    """
+
+    def test_every_permit_comes_back_however_its_holder_ends(self):
+        # The count is back to 1 at the end, under every schedule and when the
+        # root is cancelled at any suspension; at most one job runs at once.
+        lows = self.build(self.SEM)
+        self.assertEqual(everywhere(lows), {("done", 1)})
+        self.assertEqual(run_none(lows["lss"].prog).result, ("done", 1))
+        self.assertEqual(tasks(lows, PausePolicy()).host["most work at once"], 1)
+        for k in range(1, 9):
+            for mode in ("lss", "boxy"):
+                r = tasks(lows, CancelAtPolicy(k), mode)
+                self.assertIn(r.result, {("done", 1), ("cancelled",)})
+        r = tasks(lows, PausePolicy())
+        self.assertGreaterEqual(r.runtime["waits"], 1)
+        self.assertGreaterEqual(r.runtime["steps run again"], 1)
+
+    CRASH_HOLDING = """
+    (proc job (k) eff
+      (let a (host work k))
+      (let c (host nth k))
+      (let first (eq c 0))
+      (if first (block (crash "boom")) (block (ret a))))
+    (proc client (s k) eff (let v (call sv_with_permit s (clo job k))) (ret v))
+    (proc main () eff
+      (let s (shared 1))
+      (let v (call supervise! 1 (clo client s 7)))
+      (let n (read s))
+      (ret (tup v n)))
+    """
+
+    def test_a_crash_while_holding_runs_the_deferred_step(self):
+        # The first attempt crashes inside f, holding the only permit. Its
+        # deferred step runs once its task is gone, so the restart can take
+        # the permit.
+        lows = self.build(self.CRASH_HOLDING)
+        self.assertEqual(everywhere(lows), {("done", ("tup", None, (107, 1)))})
+        r = tasks(lows, PausePolicy())
+        self.assertEqual(r.runtime["deferred steps run at drop"], 1)
+        # Without running it, the restart waits for a permit nobody can give.
+        with switches(rt={"skip_deferred_on_drop": True}):
+            r = tasks(lows, PausePolicy())
+        self.assertEqual(r.result, ("crashed", ("str", shared_mod.WAIT_DEADLOCK)))
+
+    def test_a_cancelled_holder_returns_its_permit_and_a_cancelled_waiter_takes_none(self):
+        # race! cancels the client that loses, whether it holds the permit or
+        # still waits for it.
+        lows = self.build(self.SEM)
+        seen = Counter()
+        for mk in ALL_POLICIES:
+            pol = mk()
+            r = run_tasks(lows["lss"], "unwind", pol, "ParallelTasks" if pol.parallel else "Tasks")
+            seen["deferred at drop"] += r.runtime["deferred steps run at drop"]
+            seen["cancelled tasks"] += r.runtime["cancelled"]
+            self.assertEqual(r.result, ("done", 1))
+        self.assertGreater(seen["cancelled tasks"], 0)
+
+    POISON = """
+    (proc bad_give (n) pure (crash "give failed"))
+    (proc holder (s) eff
+      (do (step sv_take (s)))
+      (do (defer bad_give (s)))
+      (let a (host work 1))
+      (do (undefer))
+      (ret a))
+    (proc after (s) eff (let n (read s)) (ret n))
+    (proc attempt (s) eff
+      (let c (host nth 0))
+      (let first (eq c 0))
+      (if first (block (tail holder s)) (block (tail after s))))
+    (proc main () eff
+      (let s (shared 2))
+      (let r (call supervise! 1 (clo attempt s)))
+      (ret r))
+    (proc attempt_fresh () eff
+      (let s (shared 2))
+      (tail attempt s))
+    (proc main_fresh () eff
+      (let r (call supervise! 1 (clo attempt_fresh)))
+      (ret r))
+    """
+
+    def test_a_deferred_step_that_crashes_poisons_its_variable(self):
+        # The permit's release crashes, so the variable is poisoned: the
+        # restart's read crashes, and the restarts run out.
+        poisoned = ("crashed", ("str", shared_mod.POISONED))
+        lows = self.build(self.POISON)
+        self.assertEqual(everywhere(lows), {poisoned})
+        # Declared inside the supervised function, the restart gets a fresh one.
+        lows = self.build(self.POISON, "main_fresh")
+        self.assertEqual(everywhere(lows), {("done", 2)})
+        # Without poisoning, the restart silently sees one permit missing.
+        with switches(shared={"no_poison": True}):
+            r = tasks(self.build(self.POISON), PausePolicy())
+        self.assertEqual(r.result, ("done", 1))
+
+    WAITERS_POISONED = """
+    (proc bad_give (n) pure (crash "give failed"))
+    (proc holder (s) eff
+      (do (step sv_take (s)))
+      (do (defer bad_give (s)))
+      (let a (host work 1))
+      (do (undefer))
+      (ret a))
+    (proc attempt (s) eff
+      (let c (host nth 0))
+      (let first (eq c 0))
+      (if first (block (tail holder s)) (block (ret 0))))
+    (proc job () eff (let a (host work 2)) (ret a))
+    (proc waiter (s) eff (let v (call sv_with_permit s (clo job))) (ret v))
+    (proc main () eff
+      (let s (shared 1))
+      (let r (call all! (list (clo supervised s) (clo waiter s))))
+      (ret r))
+    (proc supervised (s) eff (let v (call supervise! 1 (clo attempt s))) (ret v))
+    """
+
+    def test_a_waiter_on_a_poisoned_variable_crashes(self):
+        # The holder runs under its own supervisor, which restarts it, so its
+        # crash does not cancel the waiter. If the waiter parked behind the
+        # holder, the poisoning readies it and it crashes, instead of waiting
+        # for a permit that will never come back. If it went first, it
+        # finished before the permit was lost.
+        poisoned = ("crashed", ("str", shared_mod.POISONED))
+        lows = self.build(self.WAITERS_POISONED)
+        self.assertEqual(everywhere(lows), {poisoned, ("done", ("list", None, (0, 102)))})
+
+    CANCEL_CRASH = """
+    (proc bad_give (n) pure (crash "give failed"))
+    (proc holder (s) eff
+      (do (step sv_take (s)))
+      (do (defer bad_give (s)))
+      (let a (host work 1))
+      (let b (host work 2))
+      (do (undefer))
+      (ret a))
+    (proc fail () eff (ret (tag Err "fail")))
+    (proc holder_t (s) eff (let a (call holder s)) (ret (tag Ok a)))
+    (proc main () eff
+      (let s (shared 1))
+      (let r (call all_ok! (list (clo holder_t s) (clo fail))))
+      (ret r))
+    """
+
+    def test_a_cancelled_task_whose_deferred_step_crashes_crashes(self):
+        # all_ok! cancels the holder at the first Err; its deferred step
+        # crashes at the drop, which turns the cancellation into a crash that
+        # reaches the loop's caller.
+        lows = self.build(self.CANCEL_CRASH)
+        r = tasks(lows, PausePolicy())
+        self.assertEqual(r.result, ("crashed", ("str", "give failed")))
+        self.assertEqual(r.runtime["cancellations turned into crashes"], 1)
+
+    HANDOFF = """
+    (proc giver (s) eff (let a (host slow 1)) (do (step sv_give (s))) (ret a))
+    (proc taker (s) eff (do (step sv_take (s))) (ret 5))
+    (proc main () eff
+      (let s (shared 0))
+      (let r (call all! (list (clo taker s) (clo giver s))))
+      (ret r))
+    (proc stuck () eff
+      (let s (shared 0))
+      (do (step sv_take (s)))
+      (ret 1))
+    """
+
+    def test_a_wait_ends_when_another_task_commits(self):
+        lows = self.build(self.HANDOFF)
+        want = ("done", ("list", None, (5, 8)))
+        self.assertEqual(everywhere(lows), {want})
+        # A None build runs the giver on demand, as for a receive, and
+        # matches the input-order schedule.
+        none = run_none(lows["lss"].prog)
+        self.assertEqual(none.result, want)
+        self.assertEqual(none.extra["on demand"], 1)
+        # A commit that readied no waiter would leave the taker stuck.
+        with switches(shared={"no_wake": True}):
+            r = tasks(lows, PausePolicy())
+        self.assertEqual(r.result, ("crashed", ("str", shared_mod.WAIT_DEADLOCK)))
+
+    def test_a_wait_nothing_can_end_is_a_deadlock_in_every_build(self):
+        lows = self.build(self.HANDOFF, "stuck")
+        dead = ("crashed", ("str", shared_mod.WAIT_DEADLOCK))
+        self.assertEqual(everywhere(lows), {dead})
+        self.assertEqual(run_none(lows["lss"].prog).result, dead)
+
+    POOL = """
+    (proc maybe_crash (res) eff
+      (let a (host work res))
+      (let c (host nth 99))
+      (let first (eq c 0))
+      (if first (block (crash "user crashed")) (block (ret a))))
+    (proc use (res) eff (let a (host work res)) (ret a))
+    (proc crashing_user (p) eff (let v (call {with} p (clo maybe_crash))) (ret v))
+    (proc user (p) eff (let v (call {with} p (clo use))) (ret v))
+    (proc sup_user (p) eff (let v (call supervise! 1 (clo crashing_user p))) (ret v))
+    (proc main () eff
+      (let p (shared (tup (list 1) 0)))
+      (let r (call all! (list (clo sup_user p) (clo user p) (clo user p))))
+      (let st (read p))
+      (ret st))
+    """
+
+    def test_a_pool_replaces_a_resource_whose_user_crashed_only_with_errdefer(self):
+        # Decision (b). With errdefer, a lease that ends by a crash loses its
+        # resource, and a later borrower opens a replacement (host slow 50).
+        # With a plain defer, the crashed user's resource goes back to the
+        # free list, in whatever state the crash left it.
+        opened = lambda r: sum(1 for e in r.effects if e[1] == "slow" and e[2] == (50,))
+        lows = self.build(self.POOL.replace("{with}", "sv_with_resource"))
+        for mk in ALL_POLICIES:
+            pol = mk()
+            r = run_tasks(lows["lss"], "unwind", pol, "ParallelTasks" if pol.parallel else "Tasks")
+            self.assertEqual(r.result, ("done", ("tup", None, (("list", None, (57,)), 0))))
+            self.assertEqual(opened(r), 1)
+        lows = self.build(self.POOL.replace("{with}", "sv_with_resource_plain"))
+        for mk in ALL_POLICIES:
+            pol = mk()
+            r = run_tasks(lows["lss"], "unwind", pol, "ParallelTasks" if pol.parallel else "Tasks")
+            self.assertEqual(r.result, ("done", ("tup", None, (("list", None, (1,)), 0))))
+            self.assertEqual(opened(r), 0)
+
+    POOL_OPEN = """
+    (proc use (res) eff (let a (host work res)) (ret a))
+    (proc quick () eff (let a (host slow 0)) (ret 0))
+    (proc user (p) eff (let v (call sv_with_resource p (clo use))) (ret v))
+    (proc main () eff
+      (let p (shared (tup (list) 1)))
+      (let w (call race! (clo user p) (list (clo quick))))
+      (let st (read p))
+      (let free (field st 0))
+      (let lost (field st 1))
+      (let n (len free))
+      (ret (add n lost)))
+    """
+
+    def test_a_lease_cancelled_while_opening_its_resource_loses_no_slot(self):
+        # The pool has no free resource and one lost, so the borrower opens a
+        # replacement (a suspension) and is raced against a quick call. However
+        # the race ends, the pool still accounts for one resource.
+        lows = self.build(self.POOL_OPEN)
+        self.assertEqual(everywhere(lows), {("done", 1)})
+
+    BREAKER = """
+    (proc flaky (i) eff
+      (let x (host slow i))
+      (let lo (lt 3 i))
+      (let hi (lt i 7))
+      (if lo
+        (block (if hi (block (ret (tag Err "down"))) (block (ret (tag Ok x)))))
+        (block (ret (tag Ok x)))))
+    (proc req (b i) eff (let r (call br_guarded b i (clo flaky i))) (ret r))
+    (proc run_reqs (b i n acc) eff
+      (let c (lt i n))
+      (if c
+        (block (let r (call req b i)) (let ok (call br_ok r)) (tail run_reqs b (add i 1) n (push acc ok)))
+        (block (ret acc))))
+    (proc main () eff
+      (let b (shared (tag Closed 0)))
+      (let r (call run_reqs b 0 14 (list)))
+      (ret r))
+    (proc fail () eff (ret (tag Err "fail")))
+    (proc probe (b) eff (let r (call req b 5)) (ret (tag Ok 0)))
+    (proc probe_main () eff
+      (let b (shared (tag Open 0)))
+      (let w (call all_ok! (list (clo probe b) (clo fail))))
+      (let st (read b))
+      (ret st))
+    """
+
+    def test_a_breaker_opens_rejects_probes_and_closes(self):
+        # Requests 4, 5 and 6 fail: the third failure opens it until 11.
+        # Requests 7 to 10 are rejected without calling through; 11 probes,
+        # succeeds and closes it.
+        lows = self.build(self.BREAKER)
+        want = ("done", ("list", None, (1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1)))
+        self.assertEqual(everywhere(lows), {want})
+        r = tasks(lows, PausePolicy())
+        self.assertEqual(sum(1 for e in r.effects if e[1] == "slow"), 10)
+
+    def test_a_cancelled_probe_reopens_the_breaker(self):
+        # all_ok! cancels the probe at the other entry's Err. The deferred
+        # step on the probing branch runs at the drop and reopens the breaker;
+        # without it, the breaker would stay Probing and reject forever.
+        lows = self.build(self.BREAKER, "probe_main")
+        r = tasks(lows, PausePolicy())
+        self.assertEqual(r.result, ("done", ("tag", "Open", (10,))))
+        self.assertEqual(r.runtime["deferred steps run at drop"], 1)
+        with switches(rt={"skip_deferred_on_drop": True}):
+            r = tasks(lows, PausePolicy())
+        self.assertEqual(r.result, ("done", ("tag", "Probing", ())))
+
+    STEP_CRASH = """
+    (proc halve (n) pure
+      (let big (lt 3 n))
+      (if big (block (crash "too big")) (block (ret (tag Set 0 (sub n 1))))))
+    (proc attempt (s) eff
+      (let c (host nth 0))
+      (let first (eq c 0))
+      (if first (block (do (step halve (s))) (ret 0)) (block (let n (read s)) (ret n))))
+    (proc main () eff
+      (let s (shared 5))
+      (let r (call supervise! 1 (clo attempt s)))
+      (ret r))
+    """
+
+    def test_a_step_that_crashes_commits_nothing(self):
+        # The first attempt's step crashes; the restart reads the value the
+        # variable had before it.
+        lows = self.build(self.STEP_CRASH)
+        self.assertEqual(everywhere(lows), {("done", 5)})
+        self.assertEqual(tasks(lows, PausePolicy()).runtime["steps crashed"], 1)
+
+    def test_static_checks(self):
+        cases = {
+            "(proc main () eff (let s (shared 1)) (do (defer sv_give (s))) (ret 0))": "ret with 1 deferred",
+            "(proc main () eff (let s (shared 1)) (do (defer sv_give (s))) (tail main))": "tail with 1 deferred",
+            "(proc main () eff (do (undefer)) (ret 0))": "no deferred step pending",
+            "(proc j (n) eff (ret (tag Keep 0))) (proc main () eff (let s (shared 1)) (do (step j (s))) (ret 0))":
+                "not a pure procedure",
+            "(proc p (x) pure (let s (shared x)) (ret 0)) (proc main () eff (ret 0))": "pure p uses a shared",
+        }
+        for src, msg in cases.items():
+            with self.assertRaisesRegex(shared_mod.SharedError, msg):
+                self.build(src)
+
+    def contended(self, n):
+        clients = " ".join(f"(clo client s {k})" for k in range(1, n + 1))
+        return f"""
+        (proc job (k) eff (let a (host work k)) (ret a))
+        (proc client (s k) eff (let v (call sv_with_permit s (clo job k))) (ret v))
+        (proc main () eff
+          (let s (shared 1))
+          (let r (call all! (list {clients})))
+          (let n (read s))
+          (ret n))
+        """
+
+    def test_a_waiter_whose_state_is_back_is_not_resumed(self):
+        # Decision (d). 20 clients contend for one permit. Each release readies
+        # every waiter; the first to run takes the permit, and the others find
+        # the count back at 0, which they waited on, and park again without
+        # resuming. Steps run again stay linear in the clients; readying and
+        # resuming every waiter makes them quadratic.
+        lows = self.build(self.contended(20))
+        self.assertEqual(everywhere(lows), {("done", 1)})
+        r = tasks(lows, PausePolicy())
+        self.assertLessEqual(r.runtime["steps run again"], 20)
+        self.assertGreater(r.runtime["resumes skipped"], 100)
+        with switches(shared={"skip_unchanged": False}):
+            w = tasks(lows, PausePolicy())
+            self.assertEqual(everywhere(lows), {("done", 1)})
+        self.assertEqual(w.result, ("done", 1))
+        self.assertGreater(w.runtime["steps run again"], 150)
+        self.assertGreater(w.runtime["resumes"], 2 * (r.runtime["resumes"] - r.runtime["resumes skipped"]))
+
+    def test_a_shared_semaphore_needs_no_server_task(self):
+        # The same three clients against the sessions RFC's semaphore task and
+        # against a shared variable, under the same schedule.
+        actor = build(library.SOURCE + Libraries.SEM)[1]
+        cell = self.build(self.SEM)
+        a, c = tasks(actor, PausePolicy()), tasks(cell, PausePolicy())
+        self.assertEqual((a.result, c.result), (("done", 1), ("done", 1)))
+        self.assertLess(c.runtime["spawns"], a.runtime["spawns"])
+        self.assertLess(c.runtime["resumes"], a.runtime["resumes"])
+        self.assertLess(c.heap["alloc"], a.heap["alloc"])
+
+
+class SharedModel(unittest.TestCase):
+    def test_every_interleaving_of_the_lock_protocol(self):
+        import shared_model
+        found = {}
+        for name, (init, progs, want) in shared_model.SCENARIOS.items():
+            for mutation in (None, "unordered", "late_register", "no_locks"):
+                found[(name, mutation)] = shared_model.explore(init, progs, want, mutation)[1]
+        # The protocol is correct in every scenario.
+        self.assertEqual({k: v for k, v in found.items() if k[1] is None and v}, {})
+        # Locking in each thread's own order deadlocks two-cell footprints (V4).
+        self.assertTrue(found[("transfer", "unordered")].startswith("V4"))
+        # Registering after unlocking loses a wakeup (V7).
+        for name in shared_model.SCENARIOS:
+            self.assertTrue(found[(name, "late_register")].startswith("V7"), name)
+        # Without locks, steps lose updates or wakeups (V2, V7).
+        self.assertTrue(found[("fan", "no_locks")].startswith("V2"))
+        self.assertTrue(all(found[(n, "no_locks")] for n in shared_model.SCENARIOS))
+
+
 class Coverage(unittest.TestCase):
     def test_every_rfc_invariant_and_obligation_is_pinned(self):
         import coverage
         rows = coverage.rows()
-        self.assertEqual(len(rows), 46)  # G1-G9, C1-C11, R1-R8, P1-P10; S1-S8
+        self.assertEqual(len(rows), 57)  # G1-G9, C1-C11, R1-R8, P1-P10; S1-S10; V1-V9
         self.assertEqual(set(rows), set(coverage.MATRIX) | set(coverage.PENDING),
                          "the RFCs' tables and the matrix differ")
         self.assertFalse(set(coverage.MATRIX) & set(coverage.PENDING))

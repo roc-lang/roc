@@ -28,9 +28,9 @@ from __future__ import annotations
 
 from ir import blocks, expr_vars
 
-SITE_KINDS = ("call", "callc", "host", "await", "next", "recv")
+SITE_KINDS = ("call", "callc", "host", "await", "next", "recv", "take", "acquire", "step")
 TASK_OPS = ("host", "await", "spawn", "cancel", "group", "next", "spawn_in", "cancel_group", "pair", "send",
-            "recv")
+            "recv", "mailbox", "post", "take", "sem", "acquire", "shared", "read", "step", "defer", "errdefer", "undefer")
 
 
 class LowerError(Exception):
@@ -104,13 +104,13 @@ class Lowering:
                                 for a, q in zip(e[2], ps[len(ps) - len(e[2]):]):
                                     changed |= flow((g, q), get(p.name, a))
                                 changed |= flow((p.name, x), ret[g])
-                        elif k in ("tup", "tag", "list", "set", "push", "send"):
+                        elif k in ("tup", "tag", "list", "set", "push", "send", "post"):
                             for a in expr_vars(e):
                                 n = get(p.name, a)
                                 if not n <= heap:
                                     heap |= n
                                     changed = True
-                        elif k in ("field", "get", "await", "next", "recv"):
+                        elif k in ("field", "get", "await", "next", "recv", "take"):
                             changed |= flow((p.name, x), heap)
                         elif k in ("group", "spawn_in"):
                             # The running set runs closures from the plan (in
@@ -222,7 +222,7 @@ class Lowering:
         k = e[0]
         if k == "host":
             return self.hosted[e[1]]
-        if k in ("await", "next", "recv"):
+        if k in ("await", "next", "recv", "take", "acquire", "step"):
             return True
         if k == "call":
             return may[e[1]]

@@ -10,13 +10,13 @@ is lowered to explicit operations, the way the compiler lowers it:
     loop:
       match next(g)                     the loop head, a suspension site
         Arrived(v)  => body             any exit of the body runs close_loop(g)
-        Crashed(m)  => crash m          the body never sees a crash
         Ended       => after the loop   every entry has arrived
 
+An entry's crash never arrives: it crashes the caller at once, wherever the
+caller waits (runtime.py, `linked_crash`), so the body never sees one.
 `close_loop` is the one exit sequence: cancel what may be cancelled, then wait
-at the loop head until every entry still running has finished. A crash among
-them crashes the caller. The body never sees `Cancelled`; only `close_loop`
-does.
+at the loop head until every entry still running has finished. The body never
+sees `Cancelled`; only `close_loop` does.
 
 `all!`, `both!`, `all_ok!` and `race!` are ordinary library functions written
 with loops. `supervise!` is the one place that reacts to a crash, so it stays
@@ -54,7 +54,6 @@ SOURCE = r"""
   (match a
     (Arrived (v) (block (tail close_wait g)))
     (Cancelled () (block (tail close_wait g)))
-    (Crashed (m) (block (crash m)))
     (Ended () (block (ret 0)))))
 
 ; ------------------------------------------------------------- helpers
@@ -101,7 +100,6 @@ SOURCE = r"""
       (let v (field iv 1))
       (let res2 (set res i v))
       (tail all_loop g res2)))
-    (Crashed (m) (block (crash m)))
     (Cancelled () (block (let u (str "unreachable: a loop body saw Cancelled")) (crash u)))
     (Ended () (block (ret res)))))
 
@@ -133,7 +131,6 @@ SOURCE = r"""
         (Err (e) (block
           (do (call close_loop g))
           (ret (tag Err e)))))))
-    (Crashed (m) (block (crash m)))
     (Cancelled () (block (let u (str "unreachable: a loop body saw Cancelled")) (crash u)))
     (Ended () (block (ret (tag Ok res))))))
 
@@ -148,7 +145,6 @@ SOURCE = r"""
     (Arrived (v) (block
       (do (call close_loop g))
       (ret v)))
-    (Crashed (m) (block (crash m)))
     (Cancelled () (block (let u (str "unreachable: a loop body saw Cancelled")) (crash u)))
     (Ended () (block (let u (str "unreachable: race! always has an entrant")) (crash u)))))
 

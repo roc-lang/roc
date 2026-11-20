@@ -10,6 +10,10 @@
 //
 // Build and run (optimized):
 //   clang -O2 -o unwind unwind.c switch_arm64.S && ./unwind
+//
+// On wasm (no stackful baseline: wasm has no stack switching without the
+// stack-switching proposal), with zig's clang and node's WASI:
+//   zig cc -target wasm32-wasi -O2 -o unwind.wasm unwind.c && node run_wasi.mjs unwind.wasm
 
 #include <stdint.h>
 #include <stdio.h>
@@ -132,6 +136,7 @@ NOINLINE long f_plain(Task *t, int d, long a) {
 }
 
 // ------------------------------------------- stackful baseline
+#ifndef __wasm__
 extern void ctx_switch(void **save, void *to);
 extern void ctx_trampoline(void);
 static void *main_sp, *co_sp;
@@ -160,11 +165,16 @@ static void *new_stack(size_t size, void (*fn)(void *), void *arg) {
     frame[11] = (uint64_t)ctx_trampoline; // x30
     return frame;
 }
+#endif
 
 // ---------------------------------------------------------------- timing
 static double now(void) {
     struct timespec ts;
+#ifdef __wasm__
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+#else
     clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+#endif
     return ts.tv_sec * 1e9 + ts.tv_nsec;
 }
 
@@ -222,6 +232,9 @@ int main(int argc, char **argv) {
             }
             res[1 + a] = median(v);
         }
+#ifdef __wasm__
+        res[4] = 0.0 / 0.0;
+#else
         co_depth = d;
         co_sp = new_stack(1 << 20, co_main, NULL);
         ctx_switch(&main_sp, co_sp);  // run to the first park
@@ -231,8 +244,13 @@ int main(int argc, char **argv) {
             v[k] = (now() - s) / iters;
         }
         res[4] = median(v);
+#endif
         printf("  %4d %9.1f %9.1f %9.1f %9.1f %9.1f\n", d, res[0], res[1], res[2], res[3], res[4]);
     }
+#ifdef __wasm__
+    printf("\n(sink %ld)\n", sink & 1);
+#else
     printf("\n(sink %ld %ld)\n", sink & 1, co_sink & 1);
+#endif
     return 0;
 }

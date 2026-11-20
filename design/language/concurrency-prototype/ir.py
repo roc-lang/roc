@@ -26,7 +26,8 @@ Expressions (arguments are variables)
                               of plan p (RFC, "Concurrent loops"); the
                               result names it and never escapes the loop
     ('next', g)               the loop head: wait for the next arrival;
-                              Arrived(v), Crashed(m), Cancelled or Ended
+                              Arrived(v), Cancelled or Ended (an entry's
+                              crash crashes the caller instead)
     ('spawn_in', g, c)        `spawn` in a loop body: add c to the running set
     ('cancel_group', g)       a loop exit: discard unstarted entries and cancel
                               running ones that are not shielded
@@ -34,6 +35,25 @@ Expressions (arguments are variables)
                               (concurrency-sessions.md)
     ('send', o, v)            send v on Out o; never waits
     ('recv', i)               wait for In i's message: Got(v) or Cancelled
+    ('mailbox',)              a mailbox: (Post, Inbox)
+    ('post', p, v)            append v to p's mailbox; never waits
+    ('take', b)               wait for Inbox b's next message: Got(v, b2),
+                              with the inbox to take from next, or Closed
+    ('sem', n)                a semaphore cell with n permits (an experiment:
+                              concurrency-sessions.md, "Decisions left to
+                              prototypes")
+    ('acquire', s)            wait for one of cell s's permits: a Permit,
+                              returned to the cell when it is released
+    ('shared', v)             Shared.new!(v): a cell holding v
+                              (concurrency-shared-variables.md; see shared.py)
+    ('read', c)               the current state of cell c (tests only)
+    ('step', f, [cs], [args]) update!: pure f over the values of cs, then
+                              args; may wait (a suspension site)
+    ('defer', f, [cs], [args])  push a cleanup: the entry of finally!
+    ('errdefer', f, [cs], [args])  push a cleanup that runs only on
+                              cancellation or a crash: on_failure!
+    ('undefer',)              pop the innermost cleanup, running it unless
+                              it is an errdefer
 
 Terminators
     ('ret', x)
@@ -195,9 +215,24 @@ class Parser:
         if op == "send":
             o, v = self.args(rest, pre)
             return ("send", o, v)
-        if op == "recv":
+        if op in ("recv", "take", "sem", "acquire"):
             (i,) = self.args(rest, pre)
-            return ("recv", i)
+            return (op, i)
+        if op == "mailbox":
+            return ("mailbox",)
+        if op == "shared":
+            (v,) = self.args(rest, pre)
+            return ("shared", v)
+        if op == "read":
+            (c,) = self.args(rest, pre)
+            return ("read", c)
+        if op in ("step", "defer", "errdefer"):
+            return (op, rest[0], self.args(rest[1], pre), self.args(rest[2:], pre))
+        if op == "undefer":
+            return ("undefer",)
+        if op == "post":
+            p, v = self.args(rest, pre)
+            return ("post", p, v)
         raise SyntaxError(f"unknown expression {op}")
 
     def block(self, forms):
@@ -273,17 +308,21 @@ def blocks(block):
 
 def expr_vars(e):
     k = e[0]
-    if k in ("int", "str", "pair"):
+    if k in ("int", "str", "pair", "mailbox", "undefer"):
         return []
+    if k in ("step", "defer", "errdefer"):
+        return list(e[2]) + list(e[3])
+    if k in ("shared", "read"):
+        return [e[1]]
     if k in ("prim", "tup", "list"):
         return list(e[-1])
     if k == "tag":
         return list(e[2])
     if k in ("field", "len", "spawn", "await", "cancel", "group", "next", "cancel_group"):
         return [e[1]]
-    if k in ("spawn_in", "send"):
+    if k in ("spawn_in", "send", "post"):
         return [e[1], e[2]]
-    if k == "recv":
+    if k in ("recv", "take", "sem", "acquire"):
         return [e[1]]
     if k == "get":
         return [e[1], e[2]]

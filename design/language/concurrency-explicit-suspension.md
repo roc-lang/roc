@@ -1181,8 +1181,10 @@ first group on models:
 - `bench/wake_tsan.c` runs the counted wake word on real threads under
   ThreadSanitizer: it is race-free and readies each park exactly once, and
   both flag protocols break R1 there too.
-- The same model runs the companion RFC's channels, and establishes its S1–S7
-  in the same way, with the same coverage matrix.
+- The same model runs the companion RFC's channels, mailboxes, semaphore
+  libraries and many-root services, and establishes its S1–S7, S9 and S10 in
+  the same way, with the same coverage matrix. Its S8, that sent values are
+  seeds, is established in the atomicity prototype.
 
 Fuzzing composes small typed effectful constructs (loops, matches, closures,
 recursion, plans, concurrent loops, combinators) with randomly placed
@@ -1283,21 +1285,23 @@ can pause, and code that does not pause runs as it does today.
 
 Syntax spellings (`suspending`, `concurrency: Tasks`, `ParallelTasks`,
 `concurrently`, `limit`, `shielded`, `spawn`) are placeholders and are not
-decided here. The remaining open points are left to experiment, prototype
-or judgement, as follows:
+decided here: names are a matter for review, which no prototype can settle.
 
-| Decision | Settled by |
+The prototype settles every other decision this RFC left open:
+
+| Decision | Result |
 |---|---|
-| Records from `roc_alloc`, or from per-task buffers and per-thread free lists | The prototype's microbenchmark favours buffers and free lists, about five times cheaper than `malloc`. Confirm on the reference host with an optimized compiler |
-| How precise the may-alias analysis behind spawn seeds must be | Prototyped: a points-to analysis that keeps call sites apart removes every false atomic the union-find causes in the prototype. Compare the two on real programs, by the share of count statements left plain (a developer diagnostic in `base.dev_diagnostics`) |
-| Whether edge modes are needed for path-copied shared data | Prototyped: they remove the path-copy residual. Run the roc-lang/roc#7718 benchmarks inside `all!` children that path-copy a shared input, in ReleaseFast `ParallelTasks` builds, against the all-atomic upper bound and a `Tasks` build. Add edge modes only if the residual atomics measurably cost |
-| How hosts map tasks onto WASI 0.3 and onto JavaScript promises | Building the browser and WASI reference hosts |
-| How `.boxy` records hold dynamically sized values: inline after a descriptor-sized header, or as separate allocations | The prototype's microbenchmark favours inline records in the per-task buffer: separate allocations cost 5% to 35% more from the same buffer, and about twice as much from `malloc`. Confirm when prototyping the `.boxy` pass |
-| How a deferred erased call whose target is suspendable hands its pending call up through a suspension | Prototyped: the two rules under "Calls between suspendable procedures". Confirm when building the pass alongside `tail_drive` |
-| Whether a loop exit should cancel its entries (this RFC) or wait for them (Swift) by default | Judgement after writing real programs against the API; shields give the other behavior per plan |
-| Whether `spawn` belongs in the first version, or only plans fixed when the loop starts | Judgement: the prototype implements both, and `spawn` is what crawlers and hedged requests need |
-| Whether `supervise!` needs a time window for its restart limit, which would require a clock from the platform | Judgement after building a supervised server |
-| Crash exits on targets that `src/sljmp` does not cover yet, such as 32-bit x86 | Porting, or accepting process-wide crashes there |
+| Records from `roc_alloc`, or from per-task buffers and per-thread free lists | Buffers and free lists. Natively they are about five times cheaper than `malloc`, and on wasm (V8, `-O2`) 1.5 to 1.8 times cheaper at every depth measured |
+| How `.boxy` records hold dynamically sized values: inline after a descriptor-sized header, or as separate allocations | Inline, in the per-task buffer: separate allocations cost 5% to 35% more from the same buffer, and about twice as much from `malloc` |
+| How a deferred erased call whose target is suspendable hands its pending call up through a suspension | The two rules under "Calls between suspendable procedures" |
+| How precise the may-alias analysis behind spawn seeds must be | A points-to analysis that keeps call sites apart: it removes every false atomic the union-find causes in the prototype |
+| Whether edge modes are needed for path-copied shared data | They remove the path-copy residual that the static analyses leave. Whether that residual costs enough to add them is measured at step 6 of the implementation plan |
+| Whether `spawn` belongs in the first version, or only plans fixed when the loop starts | `spawn` belongs. The companion RFC's semaphore and pool libraries (`library.py`) start a grant for each request as it arrives, which no plan fixed when the loop starts can express. Crawlers and hedged requests need it for the same reason |
+| Whether `supervise!` needs a time window for its restart limit, which would require a clock from the platform | No, not in the first version. In the prototype, a server supervised as a whole with a limit of 3 died after four transient crashes far apart in 20 requests, running its handler 50 times for 20 requests. Supervising each request with the same limit served all 20 with one restart per crash. A lifetime limit fits supervision of units of work, which the task tree makes the natural structure. OTP needs a window because its supervisors restart long-lived processes |
+| Whether a loop exit should cancel its entries (this RFC) or wait for them (Swift) by default | Cancel. Every loop the prototype's libraries leave early wants it: `race!` and `all_ok!` are written as loops whose exit cancels the rest, and a client that times out with `race!` must stop waiting for its permit or resource, which the semaphore and pool tests rely on. None of the library code needed a shield. Under waiting by default, each of these would have to opt into cancellation instead |
+
+Five open points are not prototype decisions: each needs the compiler or a
+platform, and is settled at its step of the implementation plan.
 
 ## Future possibilities
 
@@ -1333,13 +1337,24 @@ or judgement, as follows:
    entries, hosted result slots, the `frame_callables` rule and task-held
    pending cells.
 5. Add the task runtime with its wake protocol and crash exit, the host ABI,
-   glue, the conformance harness, and one native reference platform.
+   glue, the conformance harness, and one native reference platform. With an
+   optimized compiler, confirm that records from per-task buffers keep their
+   advantage over `roc_alloc` in compiled code. Port crash exits to targets
+   that `src/sljmp` does not cover yet, such as 32-bit x86, or accept
+   process-wide crashes there.
 6. Implement plans, concurrent loops and their lowering, then the `Concurrent`
    library over them, including `supervise!` and `None` behavior.
    In `ParallelTasks` builds, add spawn seeds with forward propagation and
-   mode specialization, then borrowed captures, measuring each.
+   mode specialization, then borrowed captures, measuring each. Compare
+   points-to with the union-find on real programs, by the share of count
+   statements left plain (a developer diagnostic in `base.dev_diagnostics`).
+   Run the roc-lang/roc#7718 benchmarks inside `all!` children that path-copy
+   a shared input, in ReleaseFast `ParallelTasks` builds, against the
+   all-atomic upper bound and a `Tasks` build, and add edge modes only if the
+   path-copy residual measurably costs.
 7. Extend the pass to `.boxy` and erased calls.
-8. Build browser and WASI 0.3 reference hosts.
+8. Build browser and WASI 0.3 reference hosts, which settles how hosts map
+   tasks onto WASI 0.3 and onto JavaScript promises.
 
 ## References
 

@@ -5,7 +5,7 @@
 | Status | Draft. Not adopted; nothing here is part of `design.md`. |
 | Scope | Channel types and operations, mailboxes, their runtime state, `None` semantics for receives, deadlock detection, library patterns for shared resources |
 | Companion | [Suspendable Effects and Platform-Scheduled Concurrency](concurrency-explicit-suspension.md): the task tree, plans, concurrent loops and crashes this RFC builds on |
-| Prototype | [concurrency-prototype/](concurrency-prototype/README.md): `sessions.py`, and the `Sessions` tests |
+| Prototype | [concurrency-prototype/](concurrency-prototype/README.md): `sessions.py`, the library patterns in `library.py`, the many-root host in `host.py`, and the `Sessions`, `HolderSets`, `Mailboxes`, `Libraries` and `Roots` tests. Sent values in the atomicity analyses: [rc-atomicity/](rc-atomicity/README.md) |
 
 ## Summary
 
@@ -21,8 +21,8 @@ system. It has four parts:
    message.
 2. **Cancellation is a message.** When an unused `Out` end goes away, its
    receiver gets `Cancelled`. That happens however it goes away: dropped by
-   code, dropped with a cancelled task's state, closed by a crash, or sent to a
-   receiver that has gone. A cancelled task runs no code of its own (R4), so
+   code, dropped with a cancelled task's state, released after a crash, or
+   sent to a receiver that has gone. A cancelled task runs no code of its own (R4), so
    the task on the other end of a session does the cleanup.
 3. **Shared resources are libraries.** A semaphore, a pool or a circuit breaker
    is a task that serves requests from a mailbox and hands out ends. Because an
@@ -141,7 +141,7 @@ A receive returns `Cancelled` when the matching `Out` end will never be used:
 - the code holding it dropped it without sending;
 - the task holding it was cancelled, which dropped the paused state that held
   it;
-- the task holding it crashed (see "Crashes close ends");
+- the task holding it crashed (see "Crashes release ends");
 - it was inside a message sent to a receiver that had gone.
 
 In the stream above, if the task running `produce!` is cancelled halfway, the
@@ -206,7 +206,8 @@ an `In` end. A receive returns `Closed` once every `Post` is gone and every
 message has been taken. Messages from one sender arrive in the order they were
 posted; the order across senders is unspecified.
 
-Mailboxes are proposed here and are not yet in the prototype.
+A crash releases the `Post`s its task held, as it releases ends (see "Crashes
+release ends"), so a crashed sender cannot keep an inbox open.
 
 ### Waiting on several channels
 
@@ -316,9 +317,16 @@ The permit comes back in every case:
 |---|---|
 | `f` returns | `Release` is sent |
 | The caller is cancelled while `f` runs | Its paused state drops the permit: `Cancelled` |
-| `f` crashes | The crash closes the permit (see "Crashes close ends"): `Cancelled` |
+| `f` crashes | The permit is released once no live task can use it (see "Crashes release ends"): `Cancelled` |
 | The caller is cancelled while waiting for the grant | Its receive is abandoned and the reply channel closes; the grant sent there is dropped, which drops the permit: `Cancelled` |
 | The caller is cancelled before its request is served | Same as the previous row, at the moment the semaphore grants |
+
+`with_permit!` sends `Release` after `f` returns, and that send is the
+permit's last use. It matters: a value is dropped after its last use, not at
+the end of its scope. A version that took the permit and never used it again
+would drop it at once, and `f` would run without it. The prototype keeps such
+a version of a semaphore cell to show this: three holders ran at once where
+one was allowed.
 
 When `body` returns, its closure and the `Post` inside it go away, the inbox
 reports `Closed`, and `serve!` ends once every permit has come back. The
@@ -347,19 +355,21 @@ Purchase.run!(order, {
 The callbacks return ordinary values. The library performs every send and
 receive, so no application code can use an end twice.
 
-### Crashes close ends
+### Crashes release ends
 
 A crash leaks what the crashed task's running frames held (companion RFC,
-"Crash mechanics"). If those frames held an end, the end would never be
-dropped, and its receiver would wait forever. So a crash closes every end its
-task held: an unused `Out` end as if dropped, so its receiver gets `Cancelled`,
-and an unused `In` end as if gone, so messages to it are dropped.
+"Crash mechanics"). If those frames held an end, its last reference would
+never be dropped, and its receiver would wait forever. So the runtime releases
+an end once no unfinished task can use it: an unused `Out` end as
+if dropped, so its receiver gets `Cancelled`, and an unused `In` end as if
+gone, so messages to it are dropped. A mailbox's `Post`s and `Inbox` are
+released the same way.
 
-Which task an end belongs to is defined by where it travels, not by which
-frame holds it. That is what makes this possible after a crash, when the frames
-cannot be inspected. An end belongs to the task that made it, until it is sent
-on a channel or arrives as part of a child's result, and then it belongs to
-the receiving task.
+The runtime cannot look inside a crashed task's frames. It keeps, for each
+end, the set of tasks that may hold it instead. The set follows the end as
+values travel between tasks, and a task leaves every set when it finishes. An
+end that is still alive when its set becomes empty is held only by crashed
+frames (see "Holders").
 
 ### Deadlocks
 
@@ -386,27 +396,33 @@ programs that never wait in a cycle never see it.
 ### On platforms that do not schedule tasks
 
 A `None` build runs one task at a time on one stack (companion RFC, "On
-platforms that do not schedule tasks"). A receive whose message has not been
-sent cannot wait for another task to run. Instead, it runs loop entries that
-have not started yet, earliest in input order first and each to completion,
-until its message arrives. If none is left, nothing can ever send the message,
-and the receive crashes with the deadlock message. A loop that later asks for
-its next result gets the entries those receives ran first, in the order they
-finished.
+platforms that do not schedule tasks"). This RFC proposes that a `None` build
+of a program that uses ports run its tasks as coroutines on that stack. A
+receive whose message has not been sent pauses its task by unwinding into
+records, as `Tasks` builds do, and the build's own scheduler resumes the
+ready task earliest in input order. If no task can run, nothing can ever send
+the message, and the receiver that waited last crashes with the deadlock
+message. Hosted calls still finish in place. A `None` build of a program with
+no port operation is unchanged.
 
 So the stream example runs the same way on every platform: the consumer's
-first receive runs the producer, which sends every item and finishes, and the
-consumer reads them.
+first receive switches to the producer, and the consumer reads what it sends.
 
-**What does not work on one stack.** A protocol in which two tasks take turns
-more than once cannot run there. In the semaphore, the caller asks for a
+**Without coroutines.** A `None` build could instead keep one plain stack: a
+receive whose message has not been sent runs loop entries that have not
+started yet, earliest in input order first and each to completion, until its
+message arrives. A loop that later asks for its next result gets the entries
+those receives ran first, in the order they finished. The stream example
+still works: the consumer's first receive runs the producer, which sends every
+item and finishes. A protocol in which two tasks take turns more than once
+cannot run there. In the semaphore, the caller asks for a
 permit, the semaphore grants it and then waits for the permit to come back,
 and the caller can use the permit only after the semaphore's wait returns. On
 one stack the caller is below the semaphore and cannot run, so the program
 deadlocks and crashes. The `Tasks` build under the input-order schedule that
 the companion RFC's C9 compares against deadlocks in the same way, so G3 still
-holds. Whether `None` builds should run such protocols, and how, is the main
-open question of this RFC (see "Decisions left to prototypes").
+holds. Coroutines remove this limit, at the cost of status checks (see
+"Decisions left to prototypes").
 
 ## Reference-level explanation
 
@@ -455,24 +471,44 @@ fuzzer finds the mistake in 17 of 300 generated programs.
 
 ### Holders
 
-Every end has a holder task, which the runtime records in the channel:
+`Out` ends, `In` ends, `Post`s and `Inbox`es are **ports**: values whose
+release the runtime acts on. Every port has a set of holder tasks, the tasks
+that may hold a reference to it, which the runtime records:
 
-- `pair()` makes both ends held by the current task.
-- `send(o, v)` makes every end reachable from `v` held by the holder of the
-  channel's `In` end.
-- When a child's result arrives at its parent, every end reachable from the
-  result becomes held by the parent.
+- `pair()` and `mailbox()` make ports held by the current task.
+- When a value crosses to another task, every port reachable from it gains
+  that task as a holder. A value crosses when:
+  - an entry starts, for the values its closure captured;
+  - a message is sent or posted, for the holders of the receiving `In` end or
+    `Inbox`;
+  - a child's result arrives at its parent;
+  - the host takes a hosted call's arguments, for the host.
+- If the value reaches the port only through objects whose count is one, the
+  value was the only way to reach it, and the receiving task becomes its only
+  holder. Otherwise the sender may keep a copy, and it stays a holder.
+- A message waiting in a channel or an inbox travels with its `In` end or
+  `Inbox`: the walk continues into it.
+- A task leaves every holder set when it finishes. When a port that is still
+  alive has no holders left, its remaining references are in crashed frames,
+  and the runtime releases it.
 
-Finding the ends reachable from a value is a walk the compiler generates from
+Finding the ports reachable from a value is a walk the compiler generates from
 the value's type, like the other per-type helpers it already generates. It
-visits nothing for a type that cannot contain an end, which is almost every
+visits nothing for a type that cannot contain a port, which is almost every
 type.
 
-When a task crashes, the runtime closes every channel end it holds that has not
-been used: the receiver of an `Out` end gets `Cancelled`, and an `In` end goes
-away. This happens after the crashed task's records are dropped (companion RFC,
-"Crash mechanics", step 1). The ends that its dropped records held are
-dropped exactly. Closing reaches only the ones its running frames leaked.
+The ports a crashed task's records held are dropped exactly, with the records
+(companion RFC, "Crash mechanics", step 1). Holder sets reach only the ones
+its running frames leaked. Their release can wait until the last task that
+held them finishes, even if that task dropped its own copy earlier.
+
+One holder per end is not enough. `supervise!` shares its closure, and the
+ends it captured, between the supervisor and each attempt. If the first
+attempt crashes with an end in a running frame, a restarted attempt may still
+use that end, so it cannot be released yet. If the restart then drops it
+unused, the leaked reference keeps it alive. In the prototype, with one holder
+per end, the receiver waited until deadlock detection crashed it. With holder
+sets, it gets `Cancelled` when the supervisor finishes.
 
 ### Cancellation
 
@@ -507,16 +543,28 @@ other tasks, through cancellation and propagation, so one detection is enough
 to make progress. If the cycle survives, as it can under a supervisor that
 restarts the task, it is detected again.
 
-The prototype detects a stall when its host has nothing to run, which is the
-same as a stalled tree when there is one root. A host that serves many roots
-needs detection per root, which the runtime can track with a count, per root,
-of tasks that are not waiting at a receive. A root whose receivers wait on a
-`Post` held by another root is never stalled, because that root may still
-post. See "Decisions left to prototypes".
+A host that serves many roots detects stalls per root. A root's tree is
+stalled when none of its tasks is queued, running or waiting on a hosted
+operation, at least one waits at a receive, and every holder of the `Out` end
+or `Post` that a receive waits for belongs to the tree. A port held by another
+root, or by the host, may still be used, so a tree waiting on one is not
+stalled. With one root, this is the same as the host having nothing to run.
+
+The prototype checks every root after each scheduling step. A runtime can keep
+the same information incrementally, as a count per root of tasks not waiting
+at a receive, checking holders only when it reaches zero.
 
 ### `None` builds
 
-`None` builds keep the companion RFC's operations and change two of them:
+A `None` build of a program that uses ports runs its tasks as coroutines. It
+is lowered as the companion RFC lowers a `Tasks` build, except that hosted
+calls are not suspension points, and it runs a scheduler of its own that
+resumes the ready task earliest by task-tree path. That is one schedule of a
+`Tasks` build with one thread, so G3 holds by construction, and S7 compares a
+`None` build against it.
+
+Without coroutines, `None` builds keep the companion RFC's operations and
+change two of them:
 
 - **`receive`**, when the message has not arrived, runs unstarted loop entries
   whose limits have room, choosing the earliest by task-tree path, until the
@@ -537,7 +585,9 @@ compares against now also models the one stack:
 
 The prototype's input-order policy implements this schedule. On every fuzzed
 program that C9 compares, it gives the same results and effects as the `None`
-engine, deadlocks included.
+engine, deadlocks included. Its coroutine policy implements the coroutine
+schedule, which the fuzzer runs on every program under both engines and both
+lowerings.
 
 ### Reference counting
 
@@ -547,21 +597,27 @@ therefore treat every sent value as a seed: an allocation that the receiving
 task can reach while the sender may still update counts on it uses atomic
 counts. Ends themselves are reached by two tasks, the holders of the two ends.
 The channel state they share is updated only through the runtime's channel
-operations, which are atomic. The prototype's atomicity analysis does not model
-channels yet.
+operations, which are atomic.
+
+The atomicity prototype models this with a message sent between two children
+of a fork, where the sender keeps a reference of its own. Its race oracle
+orders a send before its receive (happens-before), which series-parallel
+structure alone cannot express, and it agrees with the series-parallel oracle
+on every program without channels. Each analysis treats a send as a hosted
+argument: a seed, closed under its equality class. On 3,000 generated
+programs with channels, every analysis is then sound. Without send seeds,
+`unify` is unsound on 127 of them and the forward analyses on 484 to 498. That rule is coarser
+than "if the sender may still update counts on it"; a finer rule is
+precision work for later.
 
 ### Mailboxes
 
 A mailbox is a queue with any number of senders and one reader. A `Post` is
-counted like any value, and an inbox is `Closed` once its last `Post` reference
-is gone and its queue is empty. A post to an inbox that has gone drops the
-message, and any end inside it closes. So a request sent to a service that has
+counted like any value. An inbox is `Closed` once every `Post` has been
+released, whether dropped or held only by crashed frames (see "Holders"), and
+its queue is empty. A post to an inbox that has gone drops the message, and
+any end inside it is released. So a request sent to a service that has
 stopped is answered with `Cancelled` on its reply end.
-
-A crashed task may leak a reference to a `Post` in its running frames, and the
-inbox would then never close. Closing must therefore also cover `Post`s: the
-runtime records, for each task, the `Post`s it holds, by the same rules as for
-ends, and a crash releases them. This is designed but not yet prototyped.
 
 ### Services across roots
 
@@ -580,6 +636,12 @@ every request root as an argument.
 - Only operations that must be native, such as database transactions with
   their own concurrency control and recovery, need to be platform services
   written in the host language.
+
+The prototype runs a service root serving a one-permit semaphore beside four
+request roots. One request crashes while holding the permit, and one deadlocks
+on its own channels. Under every schedule, the permit comes back, only the
+deadlocked root is crashed while the others run, and the service ends once
+every request root has finished.
 
 ### Hosted operations that hold ends
 
@@ -604,39 +666,52 @@ whose remote services can lose track of an operation, as during a network
 partition, has to choose between holding the permit indefinitely and a lease,
 which is a policy that belongs to its API.
 
+The prototype runs the table's scenario under every schedule, with a host that
+keeps an aborted operation's arguments until the operation finishes. With the
+permit in the caller's scope, two remote operations ran at once under some
+schedules. With the permit passed to the hosted call, never more than one did.
+When the host releases the arguments, releasing the permit readies the
+semaphore's waiting task through that channel's wake word, as a send would. In
+a `Tasks` build the host does this between resumes, never inside one (P10).
+
 ## Invariants
 
 These extend the companion RFC's tables. Each is established in the prototype
-by the regression tests that `coverage.py` lists for it, unless the table says
-it is not yet prototyped.
+by the regression tests that `coverage.py` lists for it.
 
 | | Invariant | Kind | Established by |
 |---|---|---|---|
 | S1 | **Affinity.** Each end is used at most once. A second use crashes the task that tried, with "a session endpoint was used twice", and changes no channel. | Language guarantee | Run-time check; regression tests |
-| S2 | **One outcome per receive.** A receive returns `Got(v)` with the one message sent, or `Cancelled` exactly when the `Out` end can no longer be used: it went away unused, or a crash closed it. | Language guarantee | Model, with the fuzzer's producers that end, drop their end or crash |
-| S3 | **Message ownership.** A channel owns a sent message until a receive takes it. When the `In` end goes away, whether dropped unused, closed by a crash, or abandoned by a receive whose task was cancelled or crashed, the message is dropped exactly once, then or at its send. | Runtime invariant | Exact heap accounting after every run, which counts a message as owned only while its channel's `In` end exists |
-| S4 | **Crashes close ends.** After a crash, every unused end the crashed task held is closed, and the runtime's record of holders follows every end through sends and results. | Runtime invariant | Model; a mutation that skips closing is caught |
+| S2 | **One outcome per receive.** A receive returns `Got(v)` with the one message sent, or `Cancelled` exactly when the `Out` end can no longer be used: it went away unused, or it was released after a crash. A take returns `Closed` exactly when every `Post` has been released and the queue is empty. | Language guarantee | Model, with the fuzzer's producers, posters and workers that end, drop their ports or crash |
+| S3 | **Message ownership.** A channel owns a sent message until a receive takes it, and an inbox its queue until a take does. When the `In` end or `Inbox` goes away, whether dropped unused, released after a crash, or abandoned by a receive whose task was cancelled or crashed, each message is dropped exactly once, then or at its send. | Runtime invariant | Exact heap accounting after every run, which counts a message as owned only while its `In` end or `Inbox` exists |
+| S4 | **Crashes release ports.** A port that no live task can use any more is released: an unused `Out` or `In` end, a `Post`, an unused `Inbox`. Holder sets follow every port through captures, sends, posts, results and hosted calls. | Runtime invariant | Model; mutations that never release, or whose holders do not follow captures, are caught |
 | S5 | **Channels are wait sources.** A send readies only a task waiting at that channel's receive, exactly once, and a completion for any other source never readies it (R1 with channels as sources). | Runtime invariant | Model; a mutation to one wake word per task is caught |
 | S6 | **Deadlocks crash.** When a task tree stalls with some of its tasks waiting at receives, the receiver that waited last crashes with the deadlock message, and the crash propagates by G7. Every run of the prototype ends with every task finished. | Runtime invariant | Model; runs that would hang are errors |
-| S7 | **Sequential equivalence with receives.** A `None` build's results and effects equal a `Tasks` build's under the input-order schedule of "`None` builds", deadlocks included. | Compiler invariant (extends C9) | Differential, on every fuzzed program |
-| S8 | **Sent values are seeds.** In `ParallelTasks` builds, every allocation reachable from a sent message uses atomic counts if the sender may still update counts on it. | Compiler invariant (extends C6) | Certify. Not yet prototyped |
+| S7 | **Sequential equivalence with receives.** A `None` build's results and effects equal a `Tasks` build's under the schedule of "`None` builds" it implements, deadlocks included: the coroutine schedule, or, without coroutines, the input-order schedule. | Compiler invariant (extends C9) | Differential, on every fuzzed program, for the input-order schedule; for coroutines, a policy of the `Tasks` runtime whose engines and lowerings agree on every fuzzed program |
+| S8 | **Sent values are seeds.** In `ParallelTasks` builds, every allocation reachable from a sent message uses atomic counts if the sender may still update counts on it. | Compiler invariant (extends C6) | Certify; the atomicity prototype's fuzzer, with a happens-before race oracle, and a mutation without send seeds that it catches |
+| S9 | **Permits come back.** A semaphore's permit returns however its holder ends: by `Release`, by returning, by being cancelled or crashing, or, when the permit was passed to a hosted call, when the host releases the call's arguments. | Library guarantee | The semaphore and pool libraries under every schedule and cancellation at every suspension; for the cell experiment, a check after every fuzzed run |
+| S10 | **Deadlocks are detected per root.** With many roots, a root is crashed for a deadlock only when its own tree is stalled: no task in it can run, and every holder of a port it waits at belongs to it. | Runtime invariant | Model with a service root and request roots; a mutation that ignores holders in other roots is caught |
 
-The prototype adds channels to the companion RFC's fuzzer. Producers and
-consumers, clients and servers are called directly or packed into closures
-that flow into loops and combinators. Producers end, drop their end or crash,
-consumers stop early, and requests carry the end their reply goes to. On 600
-generated programs, every check of the companion RFC passes, and the `None`
-engine matches the input-order schedule on all 590 that C9 compares. The other
-10 crash inside `supervise!`, where a `None` build stops the whole program by
-design (companion RFC). Each mutation switch in `sessions.py` (no
-`Cancelled` on drop, no closing on crash, no closing of abandoned receives) is
-caught by a regression test.
+The prototype adds channels, mailboxes and semaphore cells to the companion
+RFC's fuzzer. Producers and consumers, clients and servers, posters and
+readers, and workers sharing a cell are called directly or packed into
+closures that flow into loops and combinators. They end, drop their ports,
+stop early, or crash with a port in a running frame, and requests carry the
+end their reply goes to. On 2,000 generated programs, every check of the
+companion RFC passes, and every semaphore cell has all its permits back at the
+end of every run. The `None` engine matches the input-order schedule on all
+1,975 that C9 compares; the other 25 crash inside `supervise!`, where a `None`
+build stops the whole program by design (companion RFC). Each mutation switch
+in `sessions.py` and `runtime.py` (no `Cancelled` on drop, no release after a
+crash, no closing of abandoned receives, holders that do not follow captures,
+stall detection that ignores other roots) is caught by a regression test.
 
 ## Library patterns
 
-These are written as libraries over channels and mailboxes. Only the
-semaphore's permit handling is exercised in the prototype so far, through a
-one-shot request channel instead of a mailbox.
+These are written as libraries over channels and mailboxes. The prototype has
+the semaphore and the pool, in its IR (`library.py`), tested under every
+schedule, cancellation at every suspension, crashes, and many roots. The
+breaker, transactions and sagas are not written yet.
 
 - **Semaphore.** As above. `with_permit!` holds a permit for the duration of
   its function.
@@ -681,8 +756,9 @@ decide it.
 - **Turn-taking protocols do not run in `None` builds.** A library like the
   semaphore works only on platforms that schedule tasks, until the open
   question below is settled.
-- **Holder tracking costs a walk** over each sent message and each child result
-  whose type can contain an end, and a scan of a crashed task's channels.
+- **Holder tracking costs a walk** over each value that crosses to another task
+  and whose type can contain a port, and a pass over a task's ports when it
+  finishes.
 - **Sends are unbounded.** A mailbox queue grows without limit if its reader is
   slower than its senders, as in Erlang. Backpressure must be a protocol: a
   reply that grants the right to send again.
@@ -700,6 +776,7 @@ decide it.
 | Erlang's selective receive | Scans the mailbox with a pattern, so cost depends on its contents. A loop over receives expresses the same waits |
 | Cleanup code in a cancelled task (`finally`, `defer`) | Contradicts R4: a cancelled task would run code after cancellation, and could suspend while doing so. The other end of a session does the cleanup instead |
 | Leaving an abandoned receive's channel open | Strands any message later sent there, which the prototype showed loses permits |
+| One holder task per end | Wrong once an end is shared between live tasks, as `supervise!` shares its closure with each attempt: the end is then released too early or never (see "Holders") |
 | Only platform-provided synchronizers | Every platform would reimplement every synchronizer, and the policy would be fixed by the platform. Platform services remain for what must be native |
 | Sessions only along the task tree (as in Wadler's CP, where the structure rules out deadlock) | Rules out a semaphore, whose channels connect tasks that are not parent and child. Detection keeps those programs and turns their mistakes into crashes |
 | Preventing deadlocks with a global lock order or channel priorities | Requires annotations on every channel; a library could not hide them |
@@ -724,20 +801,55 @@ decide it.
 
 ## Decisions left to prototypes
 
-| Decision | Settled by |
+Syntax spellings (`Session.pair!`, `Mailbox.new!`, `Out`, `In`, `Post`,
+`Inbox`, `Got`, `Cancelled`, `Closed`) are placeholders and are not decided
+here, as in the companion RFC: names are a matter for review, which no
+prototype can settle. Every other decision this RFC left open is settled by
+the prototype. Five of them:
+
+| Decision | Result |
 |---|---|
-| Whether `None` builds run protocols in which two tasks take turns, and how. (a) Coroutines on one stack, as in the Linear SAM: a receive that would block switches to the writer, by unwinding into records as the companion RFC's lowering already does. (b) Shared cells with a wait queue, an atomic "change the state or wait" operation, so that a semaphore is a cell instead of a task and needs no turn-taking. (c) Accept the limit, so such libraries need a `Tasks` platform | For (a), measure the cost of switching by unwinding on wasm, in ReleaseFast builds, against the protocols in the library patterns. For (b), prototype a cell-based semaphore in the `None` engine; it adds shared mutable state to the language, which needs its own justification |
-| Bounds and backpressure for mailboxes | Writing a service with a slow reader, and comparing a bounded queue whose post suspends with a protocol that grants send credits |
-| How a crash releases the `Post`s its task held | Prototyping mailboxes with holder sets |
-| Deadlock detection per root, and with `Post`s that cross roots | Prototyping a host with many roots and a service root |
-| How a host releases an end that a hosted operation holds, since releasing an `Out` end readies a task | Building a reference host with one hosted function that takes a permit |
-| Whether a lint for the obvious double uses of an end is worth adding to the first version | Writing the library patterns and recording the mistakes made |
-| Syntax spellings (`Session.pair!`, `Out`, `In`, `Post`, `Inbox`, `Got`, `Cancelled`, `Closed`) | Judgement; they are placeholders |
+| How a crash releases the `Post`s its task held | Holder sets, kept for every port (see "Holders") |
+| Deadlock detection per root, and with `Post`s that cross roots | Per root, with a port held by another root or by the host counting as one that may still be used (see "Deadlock detection", S10) |
+| How a host releases an end that a hosted operation holds | By releasing the operation's arguments, which P5 already defines. The release readies the waiting task through the channel's wake word, between resumes (see "Hosted operations that hold ends") |
+| Bounds and backpressure for mailboxes | A protocol, not a bounded queue: a sender waits for a reply before it sends again. Three senders of four messages each to a slow reader queued at most 3 messages with replies, and 12 without. A bounded queue would make `post` a suspension point and add a new wait for senders |
+| Whether a lint for the obvious double uses of an end is worth adding to the first version | Not for double uses: writing the semaphore and the pool produced none, since each end's one use is fixed by the library's structure. It surfaced a different mistake: a port whose last use is the operation that produced it is released at once, because a value is dropped after its last use. A lint for a port never used after it is bound would catch that |
+
+The sixth, and the largest, is whether `None` builds run protocols in which
+two tasks take turns, and how. The prototype ran all three options.
+
+- **(a) Coroutines on one stack**, as in the Linear SAM. A task that would
+  wait at a receive pauses by unwinding into records, as the companion RFC's
+  lowering already does, and the build's own scheduler resumes the ready task
+  earliest in input order. So a receiver that would block switches to the
+  writer it waits for. Hosted calls still finish in place.
+- **(b) Shared cells with a wait queue**: an atomic "change the state or wait"
+  operation, so that a semaphore is a cell instead of a task and needs no
+  turn-taking.
+- **(c) Accept the limit**, so such libraries need a `Tasks` platform.
+
+| Option | What the prototype found |
+|---|---|
+| (a) | It runs the semaphore, the pool and the request-reply-release server, all of which deadlock on one stack, and a real cycle of receives still deadlocks. On 2,000 generated programs, the unwinding and stackful engines and both lowerings agree under it, and programs whose result cannot depend on the schedule give the `None` build's result. Of the 250 programs that deadlock on one stack, it finishes 32, and it adds no deadlock. Its cost is a status check after every call that may reach a wait: in programs that use ports, 58% of procedures (12,738 of 22,088) get one, against 75% in a `Tasks` build. Natively the check is within noise. On wasm (V8 in Node 22, `-O2`) it adds 40% to 58% to a kernel made only of calls, and a pause and resume costs 14, 32 and 108 ns at depths 1, 4 and 16 |
+| (b) | A semaphore cell whose permit returns to the cell when it is released runs on one stack, matches the input-order schedule, and returns every permit under cancellation and crashes, including on 2,000 fuzzed programs. It works because returning a permit is a fixed runtime action. A general cell's state change is Roc code, which a cancelled task cannot run (R4), so (b) covers counting resources only |
+| (c) | Every library in "Library patterns" would need a `Tasks` platform |
+
+This settles it in favour of (a), for the programs that use ports. A `None`
+build of a program with no port operation is unchanged and has no status
+checks. One with ports is lowered as the companion RFC lowers `Tasks` builds,
+except that hosted calls are not suspension points, and it runs a scheduler of
+its own. Its schedule is then the coroutine order instead of the input-order
+schedule of "`None` builds", and S7 compares against that order. The cost
+falls on wasm, where the status checks are expensive. (b) is not needed beside
+(a), since a semaphore library runs under (a). Whether a finer analysis can
+leave out the loops whose entries never reach a port is a later refinement.
 
 ## Future possibilities
 
-- **Static checks.** A lint that reports an end used twice on one path, using
-  the uniqueness information the compiler already computes. Later, session
+- **Static checks.** A lint that reports a port never used after it is bound,
+  which ARC would release at once (see "Decisions left to prototypes"), and
+  one that reports an end used twice on one path, using the uniqueness
+  information the compiler already computes. Later, session
   types as an opt-in check over the same runtime, rejecting only programs that
   would crash.
 - **Durable obligations.** With durable execution, a saga's compensator and
@@ -754,18 +866,18 @@ These steps follow the companion RFC's plan, after concurrent loops exist.
 
 1. Add `Out`, `In` and their operations to LIR with `RcEffect` data; make
    `receive` a suspension point (C2).
-2. Add channel state, holders, closing on drop, on crash and on an abandoned
-   receive, and channel wake words to the task runtime. Extend the
-   conformance harness and the exact heap accounting (S1–S5).
-3. Add the `None` semantics of `receive` and `next`, and the input-order
-   schedule of S7 to the deterministic test host.
-4. Add deadlock detection per root (S6).
+2. Add channel state, holder sets, closing on drop, release after a crash,
+   closing on an abandoned receive, and channel wake words to the task
+   runtime. Extend the conformance harness and the exact heap accounting
+   (S1–S5).
+3. Add coroutine `None` builds for programs that use ports, and the schedule
+   S7 compares against to the deterministic test host.
+4. Add deadlock detection per root (S6, S10).
 5. In `ParallelTasks` builds, make sent values seeds (S8).
-6. Add mailboxes, with `Post` holders.
+6. Add mailboxes, with holder sets for `Post`s and `Inbox`es.
 7. Write the semaphore, pool and breaker libraries, and test them under
-   cancellation at every suspension point and crashes everywhere.
-8. Settle the `None` question above, then add service roots to one reference
-   platform.
+   cancellation at every suspension point and crashes everywhere (S9).
+8. Add service roots to one reference platform.
 
 ## References
 

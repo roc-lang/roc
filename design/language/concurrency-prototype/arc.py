@@ -19,7 +19,8 @@ from collections import Counter
 
 from ir import Block, Proc, Program, expr_vars
 
-CALL_LIKE = ("call", "callc", "host", "await", "spawn", "cancel", "group", "next", "spawn_in", "cancel_group", "pair", "send", "recv")
+CALL_LIKE = ("call", "callc", "host", "await", "spawn", "cancel", "group", "next", "spawn_in", "cancel_group", "pair", "send", "recv",
+             "mailbox", "post", "take", "sem", "acquire", "shared", "read", "step", "defer", "errdefer", "undefer")
 
 
 class ArcError(Exception):

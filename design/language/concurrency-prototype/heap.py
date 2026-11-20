@@ -11,6 +11,12 @@ from __future__ import annotations
 from collections import Counter
 
 
+# Objects whose release the runtime acts on (sessions.py): channel ends,
+# mailbox posts and inboxes, and semaphore permits; and shared variables'
+# cells, whose holders it tracks (shared.py).
+PORT_KINDS = ("out", "in", "post", "inbox", "permit", "shared")
+
+
 class HeapError(Exception):
     pass
 
@@ -69,7 +75,7 @@ class Heap:
         self.task = None  # the task running now (None: the host)
         self.thread = 0  # the thread running now
         self.confined = False
-        self.on_free = None  # the runtime's hook for session endpoints
+        self.on_free = None  # the runtime's hook for ports (sessions.py)
 
     def alloc(self, kind, tag, fields):
         self.next += 1
@@ -105,8 +111,8 @@ class Heap:
                 o.freed = True
                 self.stats["free"] += 1
                 stack.extend(f for f in o.fields if isinstance(f, Ref))
-                if o.kind in ("out", "in") and self.on_free is not None:
-                    self.on_free(o)
+                if o.kind in PORT_KINDS and self.on_free is not None:
+                    self.on_free(r.id, o)
 
     def bulk_free(self, ids):
         """Free objects as a region: no counts are read or changed."""
@@ -128,7 +134,7 @@ class Heap:
         o = self.obj(v)
         if o.kind == "str":
             return ("str", o.tag)
-        if o.kind in ("out", "in"):
+        if o.kind in PORT_KINDS or o.kind == "sem":
             return (o.kind,)
         return (o.kind, o.tag, tuple(self.data(f) for f in o.fields))
 

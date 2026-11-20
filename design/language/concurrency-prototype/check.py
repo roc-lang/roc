@@ -4,12 +4,19 @@ Per program:
   static   ARC certification (C5's ledger), C2, C3, for .lss and .boxy
   C1/C10   unwinding vs stackful engine, same host and schedule: identical
            results, effect traces and heap operations
-  C8       .lss vs .boxy lowering: identical results, traces and heap operations
+  C8       .lss vs .boxy lowering: identical results and traces, and identical
+           heap operations in runs without a crash
   C9/G3    None build vs Tasks build under an input-order schedule
   G4       programs without race!, all_ok!, crashes or loops whose bodies
            depend on arrival order (exits, errors, spawns): one result under
            every schedule, and the None build's
-  C5       cancel the root at every suspension in turn: exact heap accounting
+  C5       cancel the root at every suspension in turn: exact heap accounting,
+           and deferred steps of shared variables run exactly once (V5)
+  (a)      the None build as coroutines on one stack (concurrency-sessions.md,
+           "Decisions left to prototypes"): the unwinding lowering with hosted
+           calls that never suspend, under CoroutinePolicy. Engines and
+           lowerings agree, programs of G4 give the None build's result, and
+           deadlocks that coroutines avoid or add are counted
   R1-R6    monitored in every run (runtime.py); heap verified exact after
            every run, with crashed native frames as the only leak (R5)
 
@@ -23,9 +30,14 @@ import sys
 from collections import Counter
 
 from gen import gen_program
-from host import (InputOrderPolicy, PausePolicy, Policy, RandomPolicy, ReadyPolicy, run_none,
-                  run_tasks)
+from host import (HOSTED, CoroutinePolicy, InputOrderPolicy, PausePolicy, Policy, RandomPolicy, ReadyPolicy,
+                  run_none, run_tasks)
+from lower import Lowering
 from pipeline import build
+from sessions import DEADLOCK
+
+# A None build's hosted calls finish in place, so they are never sites.
+NONE_HOSTED = {k: False for k in HOSTED}
 
 sys.setrecursionlimit(100000)
 
@@ -88,10 +100,17 @@ def check_program(seed, stats, cancel_sites=6):
         stats["R7 supervise! gave up"] += r.runtime.get("R7 gave up", 0)
         stats["deferred erased calls"] += r.engine.get("deferred_calls", 0) if eng == "unwind" else 0
         for k in ("loops", "arrivals", "loop exits", "loop spawns", "limit refills", "shielded waits",
-                  "reports held for another wait", "linked crashes", "linked crashes pending at next"):
+                  "reports held for another wait", "linked crashes",
+                  "linked crashes pending at a suspension"):
             stats["loop: " + k] += r.runtime.get(k, 0)
-        for k in ("channels", "messages", "Cancelled delivered", "deadlocks crashed", "ends closed by a crash"):
+        for k in ("channels", "messages", "Cancelled delivered", "deadlocks crashed",
+                  "ports released after a crash", "receives abandoned", "mailboxes", "posts", "Closed delivered",
+                  "semaphore cells", "permits", "permits returned"):
             stats["session: " + k] += r.runtime.get(k, 0)
+        for k in ("shared variables", "steps run", "commits", "waits", "steps run again", "deferred steps",
+                  "deferred steps run", "deferred steps run at drop", "errdefers dropped", "deferred steps crashed",
+                  "cells poisoned", "poisoned steps", "cancellations turned into crashes", "steps crashed"):
+            stats["shared: " + k] += r.runtime.get(k, 0)
         return r
 
     policies = [lambda: ReadyPolicy(), lambda: PausePolicy(), lambda: InputOrderPolicy(),
@@ -114,8 +133,11 @@ def check_program(seed, stats, cancel_sites=6):
                 raise Failure(f"seed {seed}: unwind and stack differ under {pol.name}/{mode}:\n{u.result}\n{s.result}")
             if u.leaked_live > s.leaked_live:
                 raise Failure(f"seed {seed}: unwinding leaked more than the stackful oracle")
-        # C8: .lss and .boxy agree.
-        if key(runs[("lss", "unwind")]) != key(runs[("boxy", "unwind")]):
+        # C8: .lss and .boxy agree. A crash leaks the native frames live at it
+        # (R5), and those differ by design: a call .boxy defers runs under its
+        # driver's native frame, where .lss keeps the caller as a record that
+        # the crash drops. Both heaps are still verified exact.
+        if key(runs[("lss", "unwind")], heap=not crashed) != key(runs[("boxy", "unwind")], heap=not crashed):
             raise Failure(f"seed {seed}: lss and boxy differ under {pol.name}")
         stats["boxy extra checks"] += runs[("boxy", "unwind")].engine["checks"] - base.engine["checks"]
         stats["lss checks"] += base.engine["checks"]
@@ -130,7 +152,7 @@ def check_program(seed, stats, cancel_sites=6):
     # G4: deterministic programs give one result everywhere.
     # A session program may deadlock under one schedule and not another, or
     # crash in whichever task uses an end second.
-    if not features & {"race!", "all_ok!", "crash", "arrival order", "session"}:
+    if not features & {"race!", "all_ok!", "crash", "arrival order", "session", "shared"}:
         stats["G4 compared"] += 1
         for name, r in results.items():
             if r.result == ("cancelled",):
@@ -139,6 +161,37 @@ def check_program(seed, stats, cancel_sites=6):
                 raise Failure(f"seed {seed}: {name} result {r.result} != None {none.result}")
             if per_task(r.effects) != per_task(none.effects):
                 raise Failure(f"seed {seed}: {name} per-task effects differ from the None build")
+    # (a): coroutines on one stack.
+    dead = ("crashed", ("str", DEADLOCK))
+    co = {}
+    for mode in ("lss", "boxy"):
+        low = Lowering(arc, NONE_HOSTED, mode)
+        low.certify()
+        if "session" in features or "mailbox" in features or "semaphore cell" in features:
+            stats["coroutine: user procedures that may suspend, port programs"] += sum(
+                low.may[f] for f in procs if mode == "lss")
+            stats["coroutine: user procedures, port programs"] += len(procs) if mode == "lss" else 0
+            stats["coroutine: user procedures that may suspend in a Tasks build, port programs"] += sum(
+                lows["lss"].may[f] for f in procs if mode == "lss")
+        for eng in ("unwind", "stack"):
+            co[(mode, eng)] = r = run_tasks(low, eng, CoroutinePolicy())
+            stats["coroutine runs"] += 1
+            stats["leaked objects verified"] += r.leaked_live
+    c = co[("lss", "unwind")]
+    crashed = c.runtime.get("crashes", 0) > 0
+    for mode in ("lss", "boxy"):
+        if key(co[(mode, "unwind")], heap=not crashed) != key(co[(mode, "stack")], heap=not crashed):
+            raise Failure(f"seed {seed}: coroutines: unwind and stack differ under {mode}")
+    if key(c, heap=not crashed) != key(co[("boxy", "unwind")], heap=not crashed):  # as C8 above
+        raise Failure(f"seed {seed}: coroutines: lss and boxy differ")
+    stats["coroutine: status checks"] += c.engine["checks"]
+    if none.result == dead and c.result != dead:
+        stats["coroutine: completes where one stack deadlocks"] += 1
+    if c.result == dead and none.result != dead:
+        stats["coroutine: deadlocks where one stack does not"] += 1
+    if not features & {"race!", "all_ok!", "crash", "arrival order", "session", "shared"}:
+        if c.result != none.result or per_task(c.effects) != per_task(none.effects):
+            raise Failure(f"seed {seed}: coroutines differ from the None build on a deterministic program")
     # C5: cancel at every suspension.
     n = results["pause1"].host.get("pending", 0)
     for k in range(1, min(n, cancel_sites) + 1):

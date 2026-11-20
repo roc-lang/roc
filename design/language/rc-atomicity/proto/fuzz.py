@@ -1,12 +1,13 @@
 """Typed random program generator and soundness/precision fuzzer.
 
 Programs are composed from small typed constructs (construction, copy,
-projection, drop, in-place update, hosted calls, calls, nested forks), as
+projection, drop, in-place update, hosted calls, calls, nested forks, and,
+with --channels, a message sent from one child of a fork to a later one), as
 AGENTS.md requires of fuzzers. Shapes track which locals have fields:
 'L' (no fields), ('N', left, right), or 'U' (unknown, from a call).
 
 Usage:
-    python3 fuzz.py [count] [seed]
+    python3 fuzz.py [count] [seed] [--channels]
 """
 
 from __future__ import annotations
@@ -45,6 +46,8 @@ INSL = Proc("insl", ["t", "n"], [
 
 
 class Gen:
+    channels = False  # send a message between two children of some forks
+
     def __init__(self, rng, helpers):
         self.rng = rng
         self.helpers = helpers  # name -> arity of generated shape-agnostic procs
@@ -131,12 +134,33 @@ class Gen:
                 live[x] = "U"
             elif choice == "fork":
                 children = []
-                for _ in range(rng.choice([2, 2, 3])):
+                n = rng.choice([2, 2, 3])
+                chan = None
+                if self.channels and rng.random() < 0.6:
+                    si, ri = sorted(rng.sample(range(n), 2))
+                    chan = {"c": self.fresh("c"), "x": self.fresh("m"), "si": si, "ri": ri}
+                for ci in range(n):
                     k = rng.choice([0, 1, 1, 2])
                     args = rng.sample(names, min(k, len(names)))
                     binds = [(self.fresh("p"), a) for a in args]
-                    cbody, clive = self.body({p: live[a] for p, a in binds}, rng.randint(1, 5),
-                                             fork_depth + 1, allow_proj)
+                    start = {p: live[a] for p, a in binds}
+                    pre = []
+                    if chan and ci == chan["ri"]:
+                        pre = [("recv", chan["x"], chan["c"])]
+                        start[chan["x"]] = chan["shape"]
+                    cbody, clive = self.body(start, rng.randint(1, 5), fork_depth + 1, allow_proj)
+                    cbody = pre + cbody
+                    if chan and ci == chan["si"]:
+                        # Send something live, then go on using what is live.
+                        if not clive:
+                            y = self.fresh()
+                            cbody.append(("mk", y, ()))
+                            clive[y] = "L"
+                        y = rng.choice(sorted(clive))
+                        cbody.append(("send", chan["c"], y))
+                        chan["shape"] = clive[y]
+                        more, clive = self.body(clive, rng.randint(0, 3), fork_depth + 1, allow_proj)
+                        cbody += more
                     if clive and rng.random() < 0.6:
                         ret = rng.choice(sorted(clive))
                     else:
@@ -154,10 +178,11 @@ class Gen:
         return out, live
 
 
-def gen_program(rng):
+def gen_program(rng, channels=False):
     helpers = {}
     procs = {"walk": WALK, "insl": INSL}
     g = Gen(rng, helpers)
+    g.channels = channels
     for k in range(rng.randint(0, 2)):
         name = f"h{k}"
         params = [f"q{i}" for i in range(rng.randint(1, 2))]
@@ -225,7 +250,7 @@ def check(prog):
         m.run()
         if trace is None:
             trace = m.events
-            racy = racy_events(trace)
+            racy = racy_events(trace, m.used_channels)
         assert same_events(m.events, trace)
         bits = [True if e.local == ("host", "host") else an.atomic(e.ctx, e.local, e.path) for e in m.events]
         results[cls.name] = (score_trace(trace, racy, bits, inplace=m.inplace), bits)
@@ -242,7 +267,7 @@ def check(prog):
         an = cls(prog)
         m = Machine(prog, an, edge=edge, borrow=borrow)
         m.run()
-        lracy = racy_events(m.events)
+        lracy = racy_events(m.events, m.used_channels)
         bits = [e.atomic if edge else (e.local == ("host", "host") or an.atomic(e.ctx, e.local, e.path))
                 for e in m.events]
         results[name] = (score_trace(m.events, lracy, bits, tests=m.tests), bits)
@@ -254,14 +279,14 @@ NAMES = ["none", "all_atomic", "unify", "forward", "forward_ctx", "forward_pts",
          "lent_pts", "lent_edge"]
 
 
-def run(count, seed):
+def run(count, seed, channels=False):
     rng = random.Random(seed)
     totals = {name: Score() for name in NAMES}
     failures = []
     order_fail = [0] * len(ORDER)
     with_races = 0
     for k in range(count):
-        prog = gen_program(rng)
+        prog = gen_program(rng, channels)
         results, order = check(prog)
         if results["none"][0].racy:
             with_races += 1
@@ -275,9 +300,11 @@ def run(count, seed):
 
 
 def main(argv):
+    channels = "--channels" in argv
+    argv = [a for a in argv if a != "--channels"]
     count = int(argv[1]) if len(argv) > 1 else 2000
     seed = int(argv[2]) if len(argv) > 2 else 1
-    totals, failures, order_fail, with_races = run(count, seed)
+    totals, failures, order_fail, with_races = run(count, seed, channels)
     print(f"programs: {count} (seed {seed}), with racing events: {with_races}")
     print("precision order violations: " + ", ".join(
         f"{x} not within {y}: {n}" for (x, y), n in zip(ORDER, order_fail)))

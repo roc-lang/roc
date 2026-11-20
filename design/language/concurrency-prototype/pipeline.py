@@ -7,6 +7,7 @@ from combinators import BUILTINS
 from host import SUSPENDING
 from ir import Program, parse
 from lower import Lowering
+from shared import certify_defers
 
 
 def build(user, entry="main"):
@@ -15,6 +16,7 @@ def build(user, entry="main"):
     procs.update(parse(user) if isinstance(user, str) else user)
     arc = Arc(Program(procs, entry))
     certify(arc)
+    certify_defers(arc.prog)
     lows = {}
     for mode in ("lss", "boxy"):
         low = Lowering(arc, SUSPENDING, mode)

@@ -143,7 +143,10 @@ class NoneEngine:
         self.done_order = []
         self.limit_ids = 0
         self.stats = Counter()
-        self.sessions = Sessions(heap, self.stats, lambda c: None)
+        self.sessions = Sessions(heap, self.stats, lambda *a: None, track=False)
+        from shared import Shared
+        self.shared = Shared(prog, heap, self.stats, self.sessions, lambda *a: None)
+        self.defers = []  # one stack: a None build's entries run nested, to completion
 
     def run(self):
         return self.call(self.prog.entry, [])
@@ -202,6 +205,35 @@ class NoneEngine:
                     v = 0
                 elif k == "recv":
                     v = self.recv(env[e[1]])
+                elif k == "mailbox":
+                    v = self.sessions.mailbox()
+                elif k == "post":
+                    self.sessions.post(env[e[1]], env[e[2]])
+                    v = 0
+                elif k == "take":
+                    v = self.take(env[e[1]])
+                elif k == "sem":
+                    v = self.sessions.sem(env[e[1]])
+                elif k == "acquire":
+                    v = self.acquire(env[e[1]])
+                elif k == "shared":
+                    v = self.shared.new(env[e[1]])
+                elif k == "read":
+                    r = self.shared.read(env[e[1]])
+                    if r[0] == "crash":
+                        raise ProgramCrash(heap.data(r[1]), self.supervised > 0)
+                    v = r[1]
+                elif k == "step":
+                    v = self.step(e[1], [env[a] for a in e[2]], [env[a] for a in e[3]])
+                elif k in ("defer", "errdefer"):
+                    from shared import Step
+                    self.defers.append(Step(e[1], [env[a] for a in e[2]], [env[a] for a in e[3]], k == "errdefer"))
+                    v = 0
+                elif k == "undefer":
+                    r = self.shared.exit(self.defers.pop())
+                    if r is not None:
+                        raise ProgramCrash(heap.data(r[0]), self.supervised > 0)
+                    v = 0
                 elif k == "cancel_group":
                     for en in self.groups[env[e[1]].gid]:
                         if en.state == "unstarted":
@@ -293,17 +325,57 @@ class NoneEngine:
         return heap.alloc("tag", "Arrived", [self.done.pop(id(en))[1]])
 
     def recv(self, i):
-        """A receive whose message has not been sent runs, on demand, loop
-        entries that have not started and whose limits have room, earliest in
-        input order first, each to the end, until the message arrives. With none left, nothing can ever
-        send it: a deadlock, which crashes."""
         r = self.sessions.recv(i)
         if r[0] == "crash":
             raise ProgramCrash(("str", r[1]), self.supervised > 0)
         if r[0] == "ready":
             return r[1]
         c = r[1]
-        while c.state == "empty":
+        self.on_demand(lambda: c.state != "empty")
+        return self.sessions.take(c)
+
+    def take(self, b):
+        r = self.sessions.take_box(b)
+        if r[0] == "crash":
+            raise ProgramCrash(("str", r[1]), self.supervised > 0)
+        if r[0] == "ready":
+            return r[1]
+        box = r[1]
+        self.on_demand(lambda: box.queue or box.closed)
+        return self.sessions.deliver(box)
+
+    def acquire(self, s):
+        r = self.sessions.acquire(s)
+        if r[0] == "ready":
+            return r[1]
+        sem = r[1]
+        self.on_demand(lambda: sem.free > 0)
+        sem.free -= 1
+        return self.sessions.permit(sem)
+
+    def step(self, f, cells, args):
+        """A step that waits runs entries on demand, as a receive does, until
+        one of its cells changes, then runs again."""
+        from shared import WAIT_DEADLOCK, Step
+        st = Step(f, cells, args)
+        cs = [self.shared.cell(c) for c in cells]
+        while True:
+            r = self.shared.run(st)
+            if r[0] == "ready":
+                self.shared.release(st)
+                return r[1]
+            if r[0] == "crash":
+                raise ProgramCrash(self.heap.data(r[1]), self.supervised > 0)
+            seen = [c.version for c in cs]
+            self.on_demand(lambda: any(c.version != v or c.poisoned for c, v in zip(cs, seen)), WAIT_DEADLOCK)
+            self.stats["steps run again"] += 1
+
+    def on_demand(self, arrived, deadlock=DEADLOCK):
+        """A wait at a port whose message (or permit) has not come runs, on
+        demand, loop entries that have not started and whose limits have room,
+        earliest in input order first, each to the end, until it comes. With
+        none left, nothing can ever send it: a deadlock, which crashes."""
+        while not arrived():
             cands = []
             for g, entries in self.groups.items():
                 for en in entries:
@@ -311,11 +383,10 @@ class NoneEngine:
                         cands.append((self.group_owner[g] + (en.index,), g, en))
                         break
             if not cands:
-                raise ProgramCrash(("str", DEADLOCK), self.supervised > 0)
+                raise ProgramCrash(("str", deadlock), self.supervised > 0)
             _, g, en = min(cands, key=lambda c: c[0])
             self.stats["entries run on demand"] += 1
             self.run_entry(g, en)
-        return self.sessions.take(c)
 
     def await_any(self, kids, pname):
         """Run the earliest unreported child to completion (or report it cancelled)."""
@@ -349,6 +420,37 @@ def group_op(rt, t, env, e):
     if k == "spawn_in":
         return rt.spawn_in(t, env[e[1]], env[e[2]])
     return rt.cancel_group(t, env[e[1]])
+
+
+def port_op(rt, t, env, e):
+    """The port operations that never suspend and never crash."""
+    k, ses = e[0], rt.sessions
+    if k == "pair":
+        return ses.pair(t)
+    if k == "mailbox":
+        return ses.mailbox(t)
+    if k == "post":
+        ses.post(env[e[1]], env[e[2]])
+        return 0
+    return ses.sem(env[e[1]])
+
+
+SHARED_OPS = ("shared", "read", "step", "defer", "errdefer", "undefer")
+
+
+def shared_op(rt, t, env, e):
+    """Shared-variable operations (shared.py): ("ready", v), ("pending",) for a
+    step that waits, or ("crash", msg, leaked)."""
+    k = e[0]
+    if k == "shared":
+        return ("ready", rt.shared.new(env[e[1]], t))
+    if k == "read":
+        return rt.read_op(t, env[e[1]])
+    if k == "step":
+        return rt.step_op(t, e[1], [env[a] for a in e[2]], [env[a] for a in e[3]])
+    if k in ("defer", "errdefer"):
+        return ("ready", rt.defer_op(t, e[1], [env[a] for a in e[2]], [env[a] for a in e[3]], k == "errdefer"))
+    return rt.undefer_op(t)
 
 
 def take_match(heap, env, t):
@@ -471,18 +573,23 @@ class StackEngine:
                     elif k == "next":
                         r = rt.group_next(t, env[e[1]])
                         v = (yield "park") if r[0] == "pending" else r[1]
-                    elif k == "recv":
-                        r = rt.recv(t, env[e[1]])
+                    elif k in ("recv", "take", "acquire"):
+                        r = getattr(rt, k)(t, env[e[1]])
                         if r[0] == "crash":
                             raise RocCrash(heap.alloc("str", r[1], []), self.owned(t))
                         v = (yield "park") if r[0] == "pending" else r[1]
-                    elif k == "pair":
-                        v = rt.sessions.pair(t)
+                    elif k in ("pair", "mailbox", "post", "sem"):
+                        v = port_op(rt, t, env, e)
                     elif k == "send":
                         m = rt.sessions.send(env[e[1]], env[e[2]])
                         if m is not None:
                             raise RocCrash(heap.alloc("str", m, []), self.owned(t))
                         v = 0
+                    elif k in SHARED_OPS:
+                        r = shared_op(rt, t, env, e)
+                        if r[0] == "crash":
+                            raise RocCrash(r[1], self.owned(t) + r[2])
+                        v = (yield "park") if r[0] == "pending" else r[1]
                     elif k == "spawn":
                         v = rt.spawn(t, env[e[1]])
                     elif k == "cancel":
@@ -694,12 +801,15 @@ class UnwindEngine:
             return Cell(sid)
         return t.cell
 
-    def crash_at(self, t, sid, env, msg):
+    def crash_at(self, t, sid, env, msg, extra=()):
         """A crash raised by an operation mid-block: the values live after it
-        (its ledger) are leaked with every native frame's, as at a `crash`."""
+        (its ledger) are leaked with every native frame's, as at a `crash`,
+        and so is whatever the crash's own frames held (`extra`: a step's)."""
         live = [env[v] for v in self.low.calls[sid][4]]
-        leaked = [v for frame in t.native for v in frame] + live
-        raise RocCrash(self.heap.alloc("str", msg, []), leaked)
+        leaked = [v for frame in t.native for v in frame] + live + list(extra)
+        if isinstance(msg, str):
+            msg = self.heap.alloc("str", msg, [])
+        raise RocCrash(msg, leaked)
 
     def exec(self, t, pname, env, block, i, cell):
         heap, prog, rt, low = self.heap, self.prog, self.rt, self.low
@@ -752,7 +862,7 @@ class UnwindEngine:
                         rt.sup_end(t, v)
                     if v is PENDING_CALL:
                         assert sid in low.handed, f"a pending call reached {sid}, which neither drives nor hands up"
-                elif k in ("host", "await", "next", "recv"):
+                elif k in ("host", "await", "next", "recv", "take", "acquire"):
                     if k == "host":
                         r = rt.hosted(t, e[1], [env[a] for a in e[2]])
                     elif k == "await":
@@ -760,7 +870,7 @@ class UnwindEngine:
                     elif k == "next":
                         r = rt.group_next(t, env[e[1]])
                     else:
-                        r = rt.recv(t, env[e[1]])
+                        r = getattr(rt, k)(t, env[e[1]])
                         if r[0] == "crash":
                             self.crash_at(t, sid, env, r[1])
                     if sid in sites:
@@ -779,13 +889,26 @@ class UnwindEngine:
                     v = 0
                 elif k in ("group", "spawn_in", "cancel_group"):
                     v = group_op(rt, t, env, e)
-                elif k == "pair":
-                    v = rt.sessions.pair(t)
+                elif k in ("pair", "mailbox", "post", "sem"):
+                    v = port_op(rt, t, env, e)
                 elif k == "send":
                     m = rt.sessions.send(env[e[1]], env[e[2]])
                     if m is not None:
                         self.crash_at(t, sid, env, m)
                     v = 0
+                elif k in SHARED_OPS:
+                    r = shared_op(rt, t, env, e)
+                    if sid in sites:
+                        self.stats["checks"] += 1
+                    if r[0] == "crash":
+                        self.crash_at(t, sid, env, r[1], r[2])
+                    if r[0] == "pending":
+                        if sid not in sites:
+                            raise AssertionError(f"C2: {k} paused at non-site {sid}")
+                        t.pending = True
+                        self.save(t, pname, sid, env, cell, None)
+                        return None
+                    v = r[1]
                 else:
                     v = eval_simple(heap, env, e)
                 env[x] = v
