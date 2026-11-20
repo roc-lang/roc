@@ -9,6 +9,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const RunAppFn = *const fn (i64) callconv(.c) i64;
+const GenerationFn = *const fn () callconv(.c) u64;
 
 const DynLib = switch (builtin.target.os.tag) {
     .windows => struct {
@@ -141,6 +142,16 @@ pub fn main(init: std.process.Init) anyerror!void {
     const answer = roc_run_app(20);
     if (answer != 121) {
         std.debug.print("FAILED: roc_run_app(20) returned {d}, expected 121\n", .{answer});
+        return error.WrongAnswer;
+    }
+
+    const roc_hot_reload_generation = lib.lookup(GenerationFn, "roc_hot_reload_generation") orelse {
+        std.debug.print("FAILED: symbol roc_hot_reload_generation not found in {s}\n", .{lib_path});
+        return error.SymbolNotFound;
+    };
+    const generation = roc_hot_reload_generation();
+    if (generation != 0) {
+        std.debug.print("FAILED: roc_hot_reload_generation() returned {d}, expected 0\n", .{generation});
         return error.WrongAnswer;
     }
 

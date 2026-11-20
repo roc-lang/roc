@@ -4,7 +4,9 @@
 //! recursion, since such a platform's stack sits above static data, where
 //! nothing traps an overflow.
 
-const static_lib = @import("static_lib.zig");
+// Keep the complete extern-symbol export surface, including
+// roc_hot_reload_generation; only stack guarding differs from that root.
+const static_lib = @import("extern_static_lib.zig");
 
 /// The host that links this archive defines the runtime symbols.
 pub const roc_host_role: @import("host_abi.zig").HostRole = .platform;

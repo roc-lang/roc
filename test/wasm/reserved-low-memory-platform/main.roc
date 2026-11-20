@@ -16,13 +16,13 @@ platform ""
             inputs: ["host.wasm", app],
             output: Shared,
             global_base: 1024,
-            exports: ["wasm_main", "wasm_result_len", "wasm_reset_alloc_counts", "wasm_alloc_count", "wasm_dealloc_count"],
+            exports: ["wasm_main", "wasm_result_len", "wasm_reset_alloc_counts", "wasm_alloc_count", "wasm_dealloc_count", "roc_hot_reload_generation"],
         },
         wasm32v1: {
             inputs: ["host.wasm", app],
             output: Shared,
             global_base: 1024,
-            exports: ["wasm_main", "wasm_result_len", "wasm_reset_alloc_counts", "wasm_alloc_count", "wasm_dealloc_count"],
+            exports: ["wasm_main", "wasm_result_len", "wasm_reset_alloc_counts", "wasm_alloc_count", "wasm_dealloc_count", "roc_hot_reload_generation"],
         },
     }
 

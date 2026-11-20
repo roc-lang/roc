@@ -20,3 +20,13 @@ comptime {
     // the prebuilt object empty.
     if (static_lib != static_lib) unreachable; // a type always equals itself; the comparison only forces analysis
 }
+
+// The shims define their own `roc_hot_reload_generation`, so no shim link may
+// include this object.
+fn hotReloadGenerationStub() callconv(.c) u64 {
+    return 0;
+}
+
+comptime {
+    @export(&hotReloadGenerationStub, .{ .name = @import("shim_symbols.zig").roc_hot_reload_generation });
+}
