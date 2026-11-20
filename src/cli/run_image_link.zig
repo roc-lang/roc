@@ -198,14 +198,16 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
     const order = order_list.items;
 
     // Layout: the blocks in the code region, then each image's data and
-    // each image's zero-fill in the writable region.
+    // each image's zero-fill in the writable region. Each block starts on a
+    // page of the page-aligned code: an arm64 image resolved its in-block
+    // `ADRP` page and low-12-bit fields for a page-aligned block.
     const places = try gpa.alloc(Place, images.len);
     errdefer gpa.free(places);
     @memset(places, .{});
     var code_len: u64 = 0;
     for (order) |index| {
         const view = images[index].view;
-        code_len = std.mem.alignForward(u64, code_len, @max(view.blockAlign(), 16));
+        code_len = std.mem.alignForward(u64, code_len, UnitImage.page_size);
         places[index].block = code_len;
         code_len += view.block().len;
     }
@@ -736,4 +738,84 @@ test "a run image composed from COFF images carries the placed functions' unwind
     try std.testing.expect(@intFromPtr(composed.function_table.ptr) >= @intFromPtr(view.function_stubs.ptr) + view.function_stubs.len);
     try std.testing.expect(@intFromPtr(composed.unwind_info.ptr) + composed.unwind_info.len <= @intFromPtr(view.executable.ptr) + view.executable.len);
     try std.testing.expectEqual(@as(usize, 1), composed.host_sites.len);
+}
+
+const IMAGE_FILE_MACHINE_ARM64: u16 = 0xaa64;
+const IMAGE_REL_ARM64_BRANCH26: u16 = 0x0003;
+const IMAGE_REL_ARM64_PAGEBASE_REL21: u16 = 0x0004;
+const IMAGE_REL_ARM64_PAGEOFFSET_12A: u16 = 0x0006;
+const coff_rdata_flags: u32 = 0x4030_0040;
+
+test "an arm64 unit placed after another reads its read-only data through ADRP and ADD" {
+    const allocator = std.testing.allocator;
+    const ret: u32 = 0xd65f03c0;
+    // The support image: one function, smaller than a page, so the root's
+    // block would start inside the support block's page if packed.
+    var support_text: [12]u8 = undefined;
+    for (0..3) |i| std.mem.writeInt(u32, support_text[i * 4 ..][0..4], ret, .little);
+    const support_object = try TestCoffObject.encode(allocator, IMAGE_FILE_MACHINE_ARM64, &.{
+        .{ .name = ".text", .bytes = &support_text, .characteristics = coff_text_flags },
+    }, &.{
+        .{ .name = "helper", .section = 1, .value = 0, .function = true },
+    }, &.{});
+    defer allocator.free(support_object);
+    const support = try UnitImage.build(allocator, &.{support_object}, .{ .keep_debug = false, .atoms = .whole });
+    defer allocator.free(support);
+
+    // The root unit: `entry`, `bl helper; adrp x0, value;
+    // add x0, x0, :lo12:value; ret`, whose page fields the image resolves
+    // inside its block. The call places the support image first.
+    var root_text: [16]u8 = undefined;
+    std.mem.writeInt(u32, root_text[0..4], 0x94000000, .little);
+    std.mem.writeInt(u32, root_text[4..8], 0x90000000, .little);
+    std.mem.writeInt(u32, root_text[8..12], 0x91000000, .little);
+    std.mem.writeInt(u32, root_text[12..16], ret, .little);
+    const constant = "constant";
+    const root_object = try TestCoffObject.encode(allocator, IMAGE_FILE_MACHINE_ARM64, &.{
+        .{ .name = ".text", .bytes = &root_text, .characteristics = coff_text_flags },
+        .{ .name = ".rdata", .bytes = constant, .characteristics = coff_rdata_flags },
+    }, &.{
+        .{ .name = "entry", .section = 1, .value = 0, .function = true },
+        .{ .name = "value", .section = 2, .value = 0, .class = .static },
+        .{ .name = "helper", .section = 0 },
+    }, &.{
+        .{ .section = 1, .offset = 0, .symbol = 2, .type = IMAGE_REL_ARM64_BRANCH26 },
+        .{ .section = 1, .offset = 4, .symbol = 1, .type = IMAGE_REL_ARM64_PAGEBASE_REL21 },
+        .{ .section = 1, .offset = 8, .symbol = 1, .type = IMAGE_REL_ARM64_PAGEOFFSET_12A },
+    });
+    defer allocator.free(root_object);
+    const root = try UnitImage.build(allocator, &.{root_object}, .{ .keep_debug = false, .atoms = .whole });
+    defer allocator.free(root);
+
+    const units = [_]ImageInput{.{ .view = try UnitImage.View.init(root) }};
+    const inputs: Inputs = .{
+        .support = .{ .view = try UnitImage.View.init(support) },
+        .units = &units,
+        .root = 0,
+        .entrypoints = &.{"entry"},
+        .host_symbols = &.{},
+        .shim_builtins = &.{},
+        .function_table_entry_size = 8,
+    };
+    var composition = try plan(allocator, std.testing.io, inputs);
+    defer composition.deinit();
+
+    const page_size = std.heap.pageSize();
+    var shm = try ipc.SharedMemoryAllocator.createExecutable(std.testing.io, 1 << 20, page_size);
+    defer shm.deinit(allocator);
+    const composed = try RunImage.allocComposed(shm.allocator(), shm.base_ptr, page_size, composition.layout);
+    var timing: Timing = .{};
+    try write(&composition, std.testing.io, inputs, composed, &timing);
+
+    // Decode the address `entry` computes, as the processor would.
+    try std.testing.expect(composition.places[0].block < composition.places[1].block);
+    const adrp_at = composition.places[1].block + 4;
+    const code = @intFromPtr(composed.code.ptr);
+    const adrp = std.mem.readInt(u32, composed.code[@intCast(adrp_at)..][0..4], .little);
+    const add = std.mem.readInt(u32, composed.code[@intCast(adrp_at + 4)..][0..4], .little);
+    const page_delta: u21 = @intCast(((adrp >> 5) & 0x7ffff) << 2 | ((adrp >> 29) & 0x3));
+    const page = @as(i64, @intCast((code + adrp_at) & ~@as(usize, 0xfff))) + (@as(i64, @as(i21, @bitCast(page_delta))) << 12);
+    const address: usize = @intCast(page + ((add >> 10) & 0xfff));
+    const reached: [*]const u8 = @ptrFromInt(address);
+    try std.testing.expectEqualStrings(constant, reached[0..constant.len]);
 }
