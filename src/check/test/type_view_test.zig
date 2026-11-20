@@ -109,12 +109,12 @@ test "nominal views exhaustive boundary returns actual blockers only and permits
     defer arena.deinit();
     var blockers: std.ArrayList(Var) = .empty;
     defer blockers.deinit(testing.allocator);
-    try exhaustive.collectAbsentCtorPayloadBlockersForConstructedTags(
+    try exhaustive.collectAlternativePayloadBlockers(
         arena.allocator(),
         &f.store,
         idents,
-        root,
-        &.{ok},
+        &.{root},
+        &.{},
         &blockers,
     );
     try testing.expectEqualSlices(Var, &.{actual_b}, blockers.items);
@@ -124,12 +124,12 @@ test "nominal views exhaustive boundary returns actual blockers only and permits
     // this mutation. A new query sees the closed argument, not stale views.
     try f.store.setVarContent(actual_b, .{ .structure = .empty_tag_union });
     blockers.clearRetainingCapacity();
-    try exhaustive.collectAbsentCtorPayloadBlockersForConstructedTags(
+    try exhaustive.collectAlternativePayloadBlockers(
         arena.allocator(),
         &f.store,
         idents,
-        root,
-        &.{ok},
+        &.{root},
+        &.{},
         &blockers,
     );
     try testing.expectEqual(@as(usize, 0), blockers.items.len);
@@ -182,12 +182,12 @@ test "nominal views share a final declaration's dependency graph across reads" {
             defer cache.deinit();
             const idents = try builtinIdents(&f, &cache);
             blockers.clearRetainingCapacity();
-            try exhaustive.collectAbsentCtorPayloadBlockersForConstructedTags(
+            try exhaustive.collectAlternativePayloadBlockers(
                 arena.allocator(),
                 &f.store,
                 idents,
-                root,
-                &.{ok},
+                &.{root},
+                &.{},
                 &blockers,
             );
             try testing.expectEqualSlices(Var, &.{actual_b}, blockers.items);

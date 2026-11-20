@@ -115,7 +115,6 @@ const CopyContext = struct {
 /// from the source var.
 const Fill = struct {
     placeholder: Var,
-    empty_tag_union_is_default: bool,
     nominal_backing_structure: bool,
     /// A tag row a host-boundary annotation wrote is the same host row in
     /// every module that imports it (design.md "Row Joins").
@@ -382,7 +381,6 @@ fn request(ctx: *CopyContext, source_var: Var) std.mem.Allocator.Error!bool {
 
     const fill = Fill{
         .placeholder = placeholder_var,
-        .empty_tag_union_is_default = resolved.desc.flags.empty_tag_union_is_default,
         .nominal_backing_structure = resolved.desc.flags.nominal_backing_structure,
         .host_fixed_row = resolved.desc.flags.host_fixed_row,
         .uncommitted_record_tail = resolved.desc.flags.uncommitted_record_tail,
@@ -552,7 +550,6 @@ fn finishFrame(ctx: *CopyContext, fill: Fill, content: Content) std.mem.Allocato
         .content = content,
         .rank = types_mod.Rank.generalized,
         .flags = .{
-            .empty_tag_union_is_default = fill.empty_tag_union_is_default,
             .nominal_backing_structure = fill.nominal_backing_structure,
             .host_fixed_row = fill.host_fixed_row,
             .uncommitted_record_tail = fill.uncommitted_record_tail,

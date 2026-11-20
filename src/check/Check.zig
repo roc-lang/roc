@@ -162,10 +162,6 @@ return_constraints: std.ArrayListUnmanaged(ReturnConstraint) = .empty,
 try_return_conditions: collections.DenseMap(Var, CIR.Expr.Idx),
 /// Host origins of unchanged error returns produced by a lambda's plain `?`.
 try_lambda_host_origins: collections.DenseMap(CIR.Expr.Idx, Ident.Idx),
-/// Operands of every early return, owned by the lambda that produced them. A
-/// lambda's result is its body tail *or* one of these, so the constructed-tag
-/// facts a payload closing rests on must see them too.
-return_value_exprs: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
 /// Stack of active lambda-owned return constraint ranges.
 return_constraint_frames: std.ArrayListUnmanaged(ReturnConstraintFrame) = .empty,
 /// Lambda-local inventory and projections for directed error-row composition.
@@ -1718,11 +1714,9 @@ literal_defaulting_joined_receivers: collections.DenseMap(Var, void),
 alt_pattern_baseline: std.AutoHashMap(u32, MatchAltBaselineEntry),
 alt_pattern_bindings: std.ArrayList(PatternBinding) = .empty,
 alt_pattern_current: std.AutoHashMap(u32, CIR.Pattern.Idx),
-// Payload-emptiness scratch (front-loaded; cleared at each use).
+// Scrutinee analysis scratch (front-loaded; cleared at each use).
 collected_constructed_tags: std.ArrayList(Ident.Idx) = .empty,
-payload_vars_to_close: std.ArrayList(Var) = .empty,
-known_empty_payload_vars_destructure: std.ArrayList(Var) = .empty,
-known_empty_payload_vars_match: std.ArrayList(Var) = .empty,
+tested_payload_vars: std.ArrayList(Var) = .empty,
 /// Param-pattern spans of every checked `e_lambda` / `e_hosted_lambda`; the
 /// pinnable collection consumes this instead of re-walking the NodeStore.
 /// Union-find roots resolve at consumption time (eager roots would go stale).
@@ -1819,7 +1813,6 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .return_constraints = .frame_partitioned,
     .try_return_conditions = .keyed,
     .try_lambda_host_origins = .keyed,
-    .return_value_exprs = .frame_partitioned,
     .return_constraint_frames = .frame_stack,
     .try_return_rows = .scratch,
     .try_row_fixpoints = .frame_stack,
@@ -2254,9 +2247,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .alt_pattern_bindings = .scratch,
     .alt_pattern_current = .scratch,
     .collected_constructed_tags = .scratch,
-    .payload_vars_to_close = .scratch,
-    .known_empty_payload_vars_destructure = .scratch,
-    .known_empty_payload_vars_match = .scratch,
+    .tested_payload_vars = .scratch,
     .checked_lambda_params = .keyed,
     .match_tag_patterns = .settled,
     .useless_match_parts = .keyed,
@@ -4682,8 +4673,6 @@ const ReturnConstraintFrame = struct {
     lambda: CIR.Expr.Idx,
     /// Start of this lambda's deferred constraints in the shared scratch list.
     start: usize,
-    /// Start of this lambda's early-return operands in the shared scratch list.
-    returns_start: usize,
     /// The inferred body result that unannotated returns constrain after body checking.
     body_result: Var,
     /// The result supplied by an annotation or another explicit function expectation.
@@ -9756,7 +9745,6 @@ test "a frozen copy carries exactly the flags an instantiated copy carries" {
     const store = checker.types;
     const original = try store.freshFromContent(.{ .structure = .empty_record });
     const original_flags: types_mod.types.DescriptorFlags = .{
-        .empty_tag_union_is_default = true,
         .static_dispatch_rejected = true,
         .annotation_tag_ext = true,
         .nominal_backing_structure = true,
@@ -16080,7 +16068,6 @@ const ErroneousTypeMemo = struct {
             if (var_state == erroneous) break true;
             try self.setState(var_, visiting);
             try self.visited.append(gpa, var_);
-            if (resolved.desc.flags.empty_tag_union_is_default) continue;
             switch (resolved.desc.content) {
                 .err, .field_presence => break true,
                 .flex => |flex| for (store.sliceStaticDispatchConstraints(flex.constraints)) |constraint| try self.push(constraint.fn_var),
@@ -22551,7 +22538,6 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
         // pattern introduces is erroneous, annotated or not.
         if (self.patternNodeTag(def.pattern) != .pattern_identifier) try self.markPatternBindingsErroneous(def.pattern);
     }
-    try self.closeAbsentConstructedPayloadVars(def.expr, expr_var);
     if (self.exprIsFunctionDef(def.expr) and
         !self.defInCurrentRecursiveGroup(def_idx) and
         !self.isCompileTimeExecutableRootDef(def_idx))
@@ -26935,21 +26921,27 @@ fn definitionBodyExpr(self: *const Self, rhs: CIR.Expr.Idx) CIR.Expr.Idx {
 }
 
 /// After the module solves, close every still-open tag row anywhere in a
-/// top-level value's type (design.md "Value Rows: Uses Share One Row"). The
-/// module's uses have widened the shared rows as far as they will; nothing
-/// outside the module can widen them, so the closed type is the one importers
-/// read and the one the value is evaluated at. A row whose tail is
-/// quantified with a scheme, or carries constraints the row default does not
-/// discharge, is left alone.
+/// top-level value's type, and every constructor payload in the value's data
+/// that is still a type variable (design.md "Value Rows: Uses Share One
+/// Row"). The module's uses have widened the shared rows and decided the
+/// payloads as far as they will; nothing outside the module can, so the
+/// closed type is the one importers read and the one the value is evaluated
+/// at. A variable quantified with a scheme, or carrying constraints the empty
+/// union does not discharge, is left alone.
 fn closeTopLevelValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     const stack = &self.type_visit_stack;
     var tails: std.ArrayListUnmanaged(Var) = .empty;
     defer tails.deinit(self.gpa);
+    var unions: std.ArrayListUnmanaged(Var) = .empty;
+    defer unions.deinit(self.gpa);
+    var data_vars = collections.DenseMap(Var, void).init(self.gpa);
+    defer data_vars.deinit();
     for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
         const def = self.cir.store.getDef(def_idx);
         if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) continue;
         const pattern_var = ModuleEnv.varFrom(def.pattern);
         if (self.isBindingSchemeVar(pattern_var)) continue;
+        try self.closeTopLevelValuePayloads(pattern_var, &data_vars, &unions, env);
         // Collect first: closing a tail unifies, which must not run while the
         // type is being walked.
         tails.clearRetainingCapacity();
@@ -27001,6 +26993,59 @@ fn closeTopLevelValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
             const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, self.getRegionAt(tail));
             _ = try self.unify(tail, empty_tu_var, env);
         }
+    }
+}
+
+/// Close each constructor payload in a top-level value's data that is still
+/// a type variable to the empty tag union: no value of that type is in the
+/// value, and no use is left to decide it (design.md "Value Rows: Uses Share
+/// One Row"). Function types are not data, so their payloads are left alone.
+fn closeTopLevelValuePayloads(
+    self: *Self,
+    value_var: Var,
+    data_vars: *collections.DenseMap(Var, void),
+    unions: *std.ArrayListUnmanaged(Var),
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    data_vars.clearRetainingCapacity();
+    try self.collectDataReachableVars(value_var, data_vars);
+    unions.clearRetainingCapacity();
+    var reached = data_vars.keyIterator();
+    while (reached.next()) |reached_var| {
+        switch (self.types.resolveVar(reached_var.*).desc.content) {
+            .structure => |flat| switch (flat) {
+                .tag_union, .nominal_type => try unions.append(self.gpa, reached_var.*),
+                .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => {},
+            },
+            .flex, .rigid, .alias, .field_presence, .err => {},
+        }
+    }
+    if (unions.items.len == 0) return;
+
+    self.tested_payload_vars.clearRetainingCapacity();
+    {
+        var arena = base.SingleThreadArena.init(self.gpa);
+        defer arena.deinit();
+        var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies(), &self.argless_inhabitedness);
+        defer open_cache.deinit();
+        try exhaustive.collectAlternativeVariablePayloads(
+            arena.allocator(),
+            self.types,
+            self.exhaustiveBuiltinIdents(&open_cache),
+            unions.items,
+            &self.tested_payload_vars,
+        );
+    }
+    for (self.tested_payload_vars.items) |payload_var| {
+        const resolved = self.types.resolveVar(payload_var);
+        const flex = switch (resolved.desc.content) {
+            .flex => |flex| flex,
+            .rigid, .alias, .structure, .field_presence, .err => continue,
+        };
+        if (resolved.desc.rank == .generalized or resolved.desc.flags.frozen) continue;
+        if (flex.literal != .none or !self.rowDefaultDischargesConstraints(flex.constraints)) continue;
+        const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, self.getRegionAt(resolved.var_));
+        _ = try self.unify(resolved.var_, empty, env);
     }
 }
 
@@ -34839,7 +34884,6 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             } else if (!decl.decl_is_fn) {
                 try self.recordBinderSources(decl_stmt.pattern, decl_stmt.expr, applied_annotation != null);
             }
-            try self.closeAbsentConstructedPayloadVars(decl_stmt.expr, decl_expr_var);
             if (decl.decl_is_fn) {
                 try self.checkEffectfulFunctionName(decl_stmt.pattern, decl_stmt.expr);
             }
@@ -34948,7 +34992,6 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 try self.markErroneousValuePattern(var_stmt.pattern_idx);
             }
             const var_expr: Var = ModuleEnv.varFrom(var_stmt.expr);
-            try self.closeAbsentConstructedPayloadVars(var_stmt.expr, var_expr);
 
             const var_pattern_result = try self.unify(var_pattern_var, var_expr, env);
             _ = try self.unify(stmt_var, var_expr, env);
@@ -34965,7 +35008,6 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
         .s_reassign => |reassign| {
             const reassign_pattern_var: Var = ModuleEnv.varFrom(reassign.pattern_idx);
             const reassign_expr_var: Var = ModuleEnv.varFrom(reassign.expr);
-            try self.closeAbsentConstructedPayloadVars(reassign.expr, reassign_expr_var);
 
             // Unify the pattern with the expression
             //
@@ -35083,7 +35125,6 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
         },
         .s_return => |ret| {
             const expected_return = self.expectedReturnResultFor(ret.lambda);
-            try self.recordReturnValueExpr(ret.lambda, ret.expr);
 
             if (expected_return) |annotated_return| {
                 try self.checkReturnRelation(annotated_return, ret.expr, .early_return, env, .annotated);
@@ -35421,7 +35462,6 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
     if (child_does_fx) |body_does_fx| {
         self.restoreCallPosition(state.saved_call_position.?);
         state.saved_call_position = null;
-        try self.closeAbsentConstructedPayloadVarsForLambda(expr_idx, lambda.body, body_var);
         if (state.mb_anno_func) |expected_func| {
             // A `?` return composes the annotated result from the body's
             // result and its own contributions; that composition relates the
@@ -36826,7 +36866,6 @@ fn resumeReturnCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env
         .return_expr => .return_expr,
         .try_suffix => .try_suffix,
     };
-    try self.recordReturnValueExpr(ret.lambda, ret.expr);
 
     // An erroneous returned value already owns its report and crashes before
     // the function returns, so, like an erroneous branch value, it does not
@@ -37229,9 +37268,6 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
         },
         .cond => {
             state.cond_always_crashes = try self.exprAlwaysCrashes(match.cond, .only_explicit_crashes);
-            if (!match.is_try_suffix) {
-                try self.closeAbsentConstructedPayloadVars(match.cond, cond_var);
-            }
 
             // Assert we have at least 1 branch
             std.debug.assert(match.branches.span.len > 0);
@@ -37456,33 +37492,46 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
         try self.judgeRecordDestructBinds(env);
         if (self.erroneous_value_exprs.contains(expr_idx)) return .done;
 
-        self.known_empty_payload_vars_match.clearRetainingCapacity();
-        const cond_constructors_known = try self.collectKnownEmptyPayloadVarsForExpr(match.cond, cond_var, &self.known_empty_payload_vars_match);
+        const cond_constructed_tags = try self.scrutineeConstructedTags(match.cond);
+        if (cond_constructed_tags) |constructed_tags| try self.closeFreeNeverConstructedPayloadVars(cond_var, constructed_tags, env, match_region);
 
         var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies(), &self.argless_inhabitedness);
         defer open_cache.deinit();
         self.beginExhaustivenessArena();
         defer self.endExhaustivenessArena();
-        const result_or_err = exhaustive.checkMatch(
-            &self.exhaustiveness_arena,
-            self.types,
-            self.cir,
-            &self.cir.store,
-            self.exhaustiveBuiltinIdents(&open_cache),
-            match.branches,
-            cond_var,
-            match_region,
-            self.known_empty_payload_vars_match.items,
-            cond_constructors_known,
-        );
-        const result = result_or_err catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.TypeError => {
-                // Type error in pattern - exhaustiveness checking can't proceed
-                // This is expected when there are polymorphic types or type mismatches
-                // Don't report exhaustiveness errors in this case
-                return .done;
-            },
+        // A match whose patterns leave alternatives uncovered closes the
+        // free payload variables of those alternatives and is analyzed once
+        // more. A `?` match covers both of its alternatives by construction,
+        // and its `Err` branch forwards whatever the value holds.
+        var closed_free_payloads = match.is_try_suffix;
+        const result = while (true) {
+            const attempt = exhaustive.checkMatch(
+                &self.exhaustiveness_arena,
+                self.types,
+                self.cir,
+                &self.cir.store,
+                self.exhaustiveBuiltinIdents(&open_cache),
+                match.branches,
+                cond_var,
+                match_region,
+                cond_constructed_tags,
+            ) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                // A type error in a pattern: exhaustiveness checking cannot
+                // proceed, and reports nothing.
+                error.TypeError => return .done,
+            };
+            if (attempt.is_exhaustive or closed_free_payloads) break attempt;
+            closed_free_payloads = true;
+            var branch_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty;
+            defer branch_patterns.deinit(self.gpa);
+            for (branch_idxs) |branch_idx| {
+                const branch = self.cir.store.getMatchBranch(branch_idx);
+                for (self.cir.store.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
+                    try branch_patterns.append(self.gpa, self.cir.store.getMatchBranchPattern(branch_pattern_idx).pattern);
+                }
+            }
+            if (!try self.closeFreeUncoveredPayloadVars(branch_patterns.items, env, match_region)) break attempt;
         };
 
         try self.closeExhaustiveVars(result, env, match_region);
@@ -38624,10 +38673,6 @@ fn closeExhaustiveVars(
         const empty_tu_var = try self.freshUncommittedTagTail(env, region);
         _ = try self.unify(ext_var, empty_tu_var, env);
     }
-
-    for (result.payload_vars_to_close) |payload_var| {
-        try self.closePayloadVarToEmpty(payload_var);
-    }
 }
 
 fn appendUniqueIdent(gpa: std.mem.Allocator, out: *std.ArrayList(Ident.Idx), ident: Ident.Idx) Allocator.Error!void {
@@ -38694,107 +38739,179 @@ fn collectConstructedTagsForExpr(
     return true;
 }
 
-fn collectAbsentCtorPayloadBlockers(
-    self: *Self,
-    target_var: Var,
-    constructed_tags: []const Ident.Idx,
-    out: *std.ArrayList(Var),
-) Allocator.Error!void {
-    var arena = base.SingleThreadArena.init(self.gpa);
-    defer arena.deinit();
-
-    var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies(), &self.argless_inhabitedness);
-    defer open_cache.deinit();
-
-    try exhaustive.collectAbsentCtorPayloadBlockersForConstructedTags(
-        arena.allocator(),
-        self.types,
-        self.exhaustiveBuiltinIdents(&open_cache),
-        target_var,
-        constructed_tags,
-        out,
-    );
-}
-
-fn payloadVarCanResolveToEmpty(content: Content) bool {
-    return switch (content) {
-        // A deferred literal's still-undetermined type is the type of a
-        // value, whatever it turns out to be.
-        .flex => |flex| flex.constraints.len() == 0 and flex.literal == .none and if (flex.name) |name| name.attributes.ignored else true,
-        .rigid => |rigid| rigid.constraints.len() == 0 and rigid.name.attributes.ignored,
-        .alias, .field_presence, .structure, .err => false,
-    };
-}
-
-fn closePayloadVarToEmpty(
-    self: *Self,
-    payload_var: Var,
-) Allocator.Error!void {
-    const resolved = self.types.resolveVar(payload_var);
-    if (payloadVarCanResolveToEmpty(resolved.desc.content)) {
-        try self.types.setVarToEmptyTagUnionDefault(resolved.var_);
-    }
-}
-
-fn collectKnownEmptyPayloadVarsForExpr(
-    self: *Self,
-    expr_idx: CIR.Expr.Idx,
-    target_var: Var,
-    out: *std.ArrayList(Var),
-) Allocator.Error!bool {
+/// The tags `expr` can evaluate to, when it is a tag construction (through
+/// blocks, conditionals, matches and nominal wrappers), or null when it can
+/// evaluate to a value built anywhere else.
+fn scrutineeConstructedTags(self: *Self, expr: CIR.Expr.Idx) Allocator.Error!?[]const Ident.Idx {
     self.collected_constructed_tags.clearRetainingCapacity();
-
-    const known = try self.collectConstructedTagsForExpr(expr_idx, &self.collected_constructed_tags);
-    if (!known) return false;
-    if (self.collected_constructed_tags.items.len == 0) return true;
-
-    try self.collectAbsentCtorPayloadBlockers(target_var, self.collected_constructed_tags.items, out);
-    return true;
+    if (!try self.collectConstructedTagsForExpr(expr, &self.collected_constructed_tags)) return null;
+    return self.collected_constructed_tags.items;
 }
 
-/// Close the payload of every tag this lambda's result can never carry. A
-/// lambda returns its body's tail *or* one of its early-return operands, so
-/// both supply the constructed-tag facts. `?` desugars to an early return, and
-/// without its operand the `Err` it returns would look impossible here.
-fn closeAbsentConstructedPayloadVarsForLambda(
-    self: *Self,
-    lambda_idx: CIR.Expr.Idx,
-    body_expr: CIR.Expr.Idx,
-    target_var: Var,
-) Allocator.Error!void {
-    const frame = self.return_constraint_frames.items[self.innermostReturnFrameIndex(lambda_idx)];
-
-    self.collected_constructed_tags.clearRetainingCapacity();
-    if (!try self.collectConstructedTagsForExpr(body_expr, &self.collected_constructed_tags)) return;
-    for (self.return_value_exprs.items[frame.returns_start..]) |return_expr| {
-        if (!try self.collectConstructedTagsForExpr(return_expr, &self.collected_constructed_tags)) return;
+/// Close the free payload variables of each alternative the patterns of a
+/// match or destructure leave uncovered, in every union they test, and return
+/// whether any closed (design.md "Free Payload Variables Close Per Use").
+/// Called for a match or destructure the exhaustiveness analysis found not
+/// exhaustive.
+fn closeFreeUncoveredPayloadVars(self: *Self, patterns: []const CIR.Pattern.Idx, env: *Env, region: Region) Allocator.Error!bool {
+    // The type of each tag pattern, nested ones included, is the union it
+    // tests. A pattern that binds or ignores a value tests nothing.
+    var tested_unions: std.ArrayListUnmanaged(Var) = .empty;
+    defer tested_unions.deinit(self.gpa);
+    var tested_tags: std.ArrayListUnmanaged(exhaustive.ExcludedTag) = .empty;
+    defer tested_tags.deinit(self.gpa);
+    var pending: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty;
+    defer pending.deinit(self.gpa);
+    try pending.appendSlice(self.gpa, patterns);
+    while (pending.pop()) |pattern_idx| {
+        const store = &self.cir.store;
+        switch (store.getPattern(pattern_idx)) {
+            .assign,
+            .var_assign,
+            .underscore,
+            .num_literal,
+            .num_from_numeral_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .str_interpolation,
+            .runtime_error,
+            .deferred_import_ref,
+            => {},
+            .as => |p| try pending.append(self.gpa, p.pattern),
+            .nominal => |p| try pending.append(self.gpa, p.backing_pattern),
+            .nominal_external => |p| try pending.append(self.gpa, p.backing_pattern),
+            .list => |p| try pending.appendSlice(self.gpa, store.slicePatterns(p.patterns)),
+            .tuple => |p| try pending.appendSlice(self.gpa, store.slicePatterns(p.patterns)),
+            .record_destructure => |p| for (store.sliceRecordDestructs(p.destructs)) |destruct_idx| {
+                try pending.append(self.gpa, store.getRecordDestruct(destruct_idx).kind.toPatternIdx());
+            },
+            .applied_tag => |p| {
+                try pending.appendSlice(self.gpa, store.slicePatterns(p.args));
+                try tested_unions.append(self.gpa, ModuleEnv.varFrom(pattern_idx));
+                try tested_tags.append(self.gpa, .{ .union_var = ModuleEnv.varFrom(pattern_idx), .name = p.name });
+            },
+        }
     }
-    if (self.collected_constructed_tags.items.len == 0) return;
-
-    self.payload_vars_to_close.clearRetainingCapacity();
-    try self.collectAbsentCtorPayloadBlockers(
-        target_var,
-        self.collected_constructed_tags.items,
-        &self.payload_vars_to_close,
-    );
-
-    for (self.payload_vars_to_close.items) |payload_var| {
-        try self.closePayloadVarToEmpty(payload_var);
-    }
+    if (tested_unions.items.len == 0) return false;
+    return try self.closeFreePayloadVars(tested_unions.items, tested_tags.items, env, region);
 }
 
-fn closeAbsentConstructedPayloadVars(
-    self: *Self,
-    expr_idx: CIR.Expr.Idx,
-    target_var: Var,
-) Allocator.Error!void {
-    self.payload_vars_to_close.clearRetainingCapacity();
+/// Close the free payload variables of each alternative of a scrutinee's
+/// union that its value expression, a tag construction, never constructs
+/// (design.md "Free Payload Variables Close Per Use").
+fn closeFreeNeverConstructedPayloadVars(self: *Self, value_var: Var, constructed_tags: []const Ident.Idx, env: *Env, region: Region) Allocator.Error!void {
+    var constructed: std.ArrayListUnmanaged(exhaustive.ExcludedTag) = .empty;
+    defer constructed.deinit(self.gpa);
+    for (constructed_tags) |name| try constructed.append(self.gpa, .{ .union_var = value_var, .name = name });
+    _ = try self.closeFreePayloadVars(&.{value_var}, constructed.items, env, region);
+}
 
-    _ = try self.collectKnownEmptyPayloadVarsForExpr(expr_idx, target_var, &self.payload_vars_to_close);
-
-    for (self.payload_vars_to_close.items) |payload_var| {
-        try self.closePayloadVarToEmpty(payload_var);
+/// Close each free payload variable of an alternative of `unions` that
+/// `excluded` does not name to the empty tag union, and return whether any
+/// closed.
+///
+/// A constructor whose
+/// payload type is an unconstrained flex variable can only hold a value no one
+/// could have built, unless whoever chooses that variable can supply one. The
+/// variable is free at this use when nothing still being decided reaches it:
+/// not the parameters or own type of an enclosing lambda, nor a platform
+/// requirement's value (a caller or the application chooses those), not a
+/// member of a definition group being checked (its signature is still being
+/// inferred), and not the signature of a pending static-dispatch constraint or
+/// parked generated-codec relation (a method choice decides it). A rigid
+/// variable is an enclosing annotation's, so it is never free. Closing a free
+/// variable decides this use's own instance of it.
+fn closeFreePayloadVars(self: *Self, unions: []const Var, excluded: []const exhaustive.ExcludedTag, env: *Env, region: Region) Allocator.Error!bool {
+    self.tested_payload_vars.clearRetainingCapacity();
+    {
+        var arena = base.SingleThreadArena.init(self.gpa);
+        defer arena.deinit();
+        var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies(), &self.argless_inhabitedness);
+        defer open_cache.deinit();
+        try exhaustive.collectAlternativePayloadBlockers(
+            arena.allocator(),
+            self.types,
+            self.exhaustiveBuiltinIdents(&open_cache),
+            unions,
+            excluded,
+            &self.tested_payload_vars,
+        );
     }
+    if (self.tested_payload_vars.items.len == 0) return false;
+
+    // The signatures still being inferred around this use: each enclosing
+    // lambda's parameters and its own type, and the binder and value of each
+    // member of every definition group being checked, which an in-group
+    // reference relates to monomorphically.
+    var signature_vars: std.ArrayListUnmanaged(Var) = .empty;
+    defer signature_vars.deinit(self.gpa);
+    for (self.return_constraint_frames.items) |frame| {
+        const lambda = self.cir.store.getExpr(frame.lambda).e_lambda;
+        for (self.cir.store.slicePatterns(lambda.args)) |arg| try signature_vars.append(self.gpa, ModuleEnv.varFrom(arg));
+        try signature_vars.append(self.gpa, ModuleEnv.varFrom(frame.lambda));
+    }
+    // A platform requirement's value is the application's, so each use's
+    // instance of its type is chosen there.
+    for (self.nonlocal_value_lookups.items) |lookup| {
+        if (self.cir.store.getExpr(lookup) == .e_lookup_required) try signature_vars.append(self.gpa, ModuleEnv.varFrom(lookup));
+    }
+    if (self.check_order) |check_order| {
+        for (self.group_stack.items) |group| {
+            for (check_order.sccs[group.group_index].defs) |def_idx| {
+                const def = self.cir.store.getDef(def_idx);
+                try signature_vars.append(self.gpa, ModuleEnv.varFrom(def.pattern));
+                try signature_vars.append(self.gpa, ModuleEnv.varFrom(def.expr));
+            }
+        }
+    }
+    // A pending method choice decides every variable its signature
+    // mentions: a static-dispatch constraint on a variable the tested types
+    // reach or deferred to a generalization boundary, and a generated-codec
+    // relation parked for finalization.
+    {
+        var tested_reach: collections.DenseMapUnmanaged(Var, void) = .empty;
+        defer tested_reach.deinit(self.gpa);
+        try self.collectReachedVars(unions, &tested_reach);
+        var reached = tested_reach.keyIterator();
+        while (reached.next()) |reached_var| {
+            const constraints = switch (self.types.resolveVar(reached_var.*).desc.content) {
+                .flex => |flex| flex.constraints,
+                .rigid => |rigid| rigid.constraints,
+                .alias, .structure, .field_presence, .err => continue,
+            };
+            for (self.types.sliceStaticDispatchConstraints(constraints)) |constraint| try signature_vars.append(self.gpa, constraint.fn_var);
+        }
+    }
+    for (env.deferred_static_dispatch_constraints.items()) |deferred| {
+        try signature_vars.append(self.gpa, deferred.var_);
+        for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |constraint| try signature_vars.append(self.gpa, constraint.fn_var);
+    }
+    for (self.final_codec_dispatch_constraints.items) |parked| {
+        try signature_vars.append(self.gpa, parked.dispatcher_var);
+        try signature_vars.append(self.gpa, parked.constraint.fn_var);
+    }
+    var bound: collections.DenseMapUnmanaged(Var, void) = .empty;
+    defer bound.deinit(self.gpa);
+    try self.collectReachedVars(signature_vars.items, &bound);
+
+    var closed_any = false;
+    for (self.tested_payload_vars.items) |payload_var| {
+        // Closing one candidate can resolve another that shares its class.
+        const resolved = self.types.resolveVar(payload_var);
+        const unconstrained = switch (resolved.desc.content) {
+            .flex => |flex| flex.constraints.len() == 0 and flex.literal == .none,
+            .rigid, .alias, .structure, .field_presence, .err => false,
+        };
+        if (!unconstrained) continue;
+        if (bound.contains(resolved.var_)) continue;
+        const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
+        _ = try self.unify(resolved.var_, empty, env);
+        closed_any = true;
+    }
+    return closed_any;
 }
 
 fn pendingExhaustivenessMode(self: *const Self) ProblemStore.PendingStaticExhaustivenessMode {
@@ -38810,30 +38927,19 @@ fn checkDestructureExhaustiveness(
     region: Region,
 ) std.mem.Allocator.Error!bool {
     if (!try self.patternNeedsExhaustiveness(pattern_idx)) return false;
-
-    self.known_empty_payload_vars_destructure.clearRetainingCapacity();
-    const value_constructors_known = try self.collectKnownEmptyPayloadVarsForExpr(value_expr_idx, value_var, &self.known_empty_payload_vars_destructure);
-
-    return try self.checkPatternExhaustiveness(
-        pattern_idx,
-        value_var,
-        self.known_empty_payload_vars_destructure.items,
-        value_constructors_known,
-        env,
-        region,
-    );
+    return try self.checkPatternExhaustiveness(pattern_idx, value_var, value_expr_idx, env, region);
 }
 
 /// Check one pattern in an irrefutable binding position against its settled
-/// scrutinee type. Callers supply constructor facts only when a concrete value
-/// expression proves them; function parameters and iterator items have no such
-/// expression and must conservatively cover every inhabitant of their type.
+/// scrutinee type. Only a destructure has a value expression: its tested free
+/// payload variables close, and the tags it constructs are known when it is a
+/// tag construction. Function parameters and iterator items have no such
+/// expression and must cover every inhabitant of their type.
 fn checkPatternExhaustiveness(
     self: *Self,
     pattern_idx: CIR.Pattern.Idx,
     value_var: Var,
-    known_empty_payload_vars: []const Var,
-    value_constructors_known: bool,
+    value_expr_idx: ?CIR.Expr.Idx,
     env: *Env,
     region: Region,
 ) std.mem.Allocator.Error!bool {
@@ -38844,24 +38950,34 @@ fn checkPatternExhaustiveness(
     // pending record-destructure binds must be judged first.
     try self.judgeRecordDestructBinds(env);
 
+    const value_constructed_tags = if (value_expr_idx) |value_expr| try self.scrutineeConstructedTags(value_expr) else null;
+    if (value_constructed_tags) |constructed_tags| try self.closeFreeNeverConstructedPayloadVars(value_var, constructed_tags, env, region);
+
     var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies(), &self.argless_inhabitedness);
     defer open_cache.deinit();
     self.beginExhaustivenessArena();
     defer self.endExhaustivenessArena();
-    const result_or_err = exhaustive.checkDestructure(
-        &self.exhaustiveness_arena,
-        self.types,
-        self.cir,
-        &self.cir.store,
-        self.exhaustiveBuiltinIdents(&open_cache),
-        pattern_idx,
-        value_var,
-        known_empty_payload_vars,
-        value_constructors_known,
-    );
-    const result = result_or_err catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.TypeError => return false,
+    // A destructure whose pattern leaves alternatives uncovered closes the
+    // free payload variables of those alternatives and is analyzed once
+    // more.
+    var closed_free_payloads = value_expr_idx == null;
+    const result = while (true) {
+        const attempt = exhaustive.checkDestructure(
+            &self.exhaustiveness_arena,
+            self.types,
+            self.cir,
+            &self.cir.store,
+            self.exhaustiveBuiltinIdents(&open_cache),
+            pattern_idx,
+            value_var,
+            value_constructed_tags,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TypeError => return false,
+        };
+        if (attempt.is_exhaustive or closed_free_payloads) break attempt;
+        closed_free_payloads = true;
+        if (!try self.closeFreeUncoveredPayloadVars(&.{pattern_idx}, env, region)) break attempt;
     };
 
     try self.closeExhaustiveVars(result, env, region);
@@ -38935,7 +39051,7 @@ fn checkPatternExhaustivenessWithoutValue(
 
     const value_var = ModuleEnv.varFrom(pattern_idx);
     const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(pattern_idx));
-    _ = try self.checkPatternExhaustiveness(pattern_idx, value_var, &.{}, false, env, region);
+    _ = try self.checkPatternExhaustiveness(pattern_idx, value_var, null, env, region);
 }
 
 // stmts //
@@ -49188,7 +49304,6 @@ fn pushReturnConstraintFrame(
     try self.return_constraint_frames.append(self.gpa, .{
         .lambda = lambda_idx,
         .start = self.return_constraints.items.len,
-        .returns_start = self.return_value_exprs.items.len,
         .body_result = body_result,
         .expected_result = expected_result,
     });
@@ -49225,20 +49340,7 @@ fn discardReturnConstraintFrame(self: *Self, lambda_idx: CIR.Expr.Idx) void {
     const frame_idx = self.innermostReturnFrameIndex(lambda_idx);
     const frame = self.return_constraint_frames.items[frame_idx];
     self.return_constraints.shrinkRetainingCapacity(frame.start);
-    self.return_value_exprs.shrinkRetainingCapacity(frame.returns_start);
     self.return_constraint_frames.shrinkRetainingCapacity(frame_idx);
-}
-
-/// Record one early-return operand for the lambda that owns it. Every return
-/// is recorded, including the ones whose relation is checked immediately, so
-/// that the lambda's constructed-tag facts stay complete.
-fn recordReturnValueExpr(
-    self: *Self,
-    lambda_idx: CIR.Expr.Idx,
-    actual_expr: CIR.Expr.Idx,
-) std.mem.Allocator.Error!void {
-    _ = self.innermostReturnFrameIndex(lambda_idx);
-    try self.return_value_exprs.append(self.gpa, actual_expr);
 }
 
 fn appendReturnConstraint(
@@ -49865,7 +49967,6 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
     var frame = self.return_constraint_frames.items[frame_idx];
     defer {
         self.return_constraints.shrinkRetainingCapacity(frame.start);
-        self.return_value_exprs.shrinkRetainingCapacity(frame.returns_start);
         self.return_constraint_frames.shrinkRetainingCapacity(frame_idx);
     }
 
@@ -63207,17 +63308,7 @@ fn constrainDerivedParserErrorEquality(
         const resolved = self.types.resolveVar(current);
         switch (resolved.desc.content) {
             .structure => |structure| switch (structure) {
-                .empty_tag_union => {
-                    // Inclusion commits the instantiated child's absent-error
-                    // proof. Publication must retain a closed row here, not a
-                    // default awaiting a relation to the parent's wider row.
-                    if (resolved.desc.flags.empty_tag_union_is_default) {
-                        const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
-                        const result = try self.unify(resolved.var_, empty, env);
-                        if (!result.isEstablished()) return .reported_error;
-                    }
-                    break;
-                },
+                .empty_tag_union => break,
                 .tag_union => |row| {
                     const tags = self.types.getTagsSlice(row.tags);
                     for (tags.items(.name), tags.items(.args)) |name, args| {
@@ -66275,18 +66366,15 @@ test "closing a nested return frame drains only that frame's return-flow entries
 
     try checker.pushReturnConstraintFrame(outer_lambda, ModuleEnv.varFrom(outer_lambda), null);
     try checker.appendReturnConstraint(outer_lambda, outer_return, .return_expr);
-    try checker.recordReturnValueExpr(outer_lambda, outer_return);
 
     try checker.pushReturnConstraintFrame(inner_lambda, ModuleEnv.varFrom(inner_lambda), null);
     try checker.appendReturnConstraint(inner_lambda, inner_return, .try_suffix);
-    try checker.recordReturnValueExpr(inner_lambda, inner_return);
     try std.testing.expect(checker.returnFrameHasTrySuffix());
 
     checker.discardReturnConstraintFrame(inner_lambda);
     try std.testing.expectEqual(@as(usize, 1), checker.return_constraint_frames.items.len);
     try std.testing.expectEqual(@as(usize, 1), checker.return_constraints.items.len);
     try std.testing.expectEqual(outer_return, checker.return_constraints.items[0].actual_expr);
-    try std.testing.expectEqual(@as(usize, 1), checker.return_value_exprs.items.len);
     try std.testing.expect(!checker.returnFrameHasTrySuffix());
 
     const leaked = checker.openFrameState().?;
@@ -66354,7 +66442,6 @@ test "every checker frame stack and frame's own storage is checked for balance" 
     inline for (.{
         .return_constraint_frames,
         .return_constraints,
-        .return_value_exprs,
         .try_row_fixpoints,
         .group_stack,
         .pending_dispatch_targets,

@@ -1071,6 +1071,10 @@ const ValueInfo = struct {
     /// The read was stamped a take: the value claims its stored unit from
     /// `payload_source` and is never a view of the container's slots.
     payload_taken: bool = false,
+    /// A tag union view whose residual shell names its one slot. It copies
+    /// only its container's inline representation, and of that only the
+    /// discriminant is readable: no payload is read through it.
+    discriminant_only: bool = false,
     /// Complete outcome rows and exact argument-transfer receipts for a
     /// direct call result. Empty for every other value.
     call_outcomes: arc_sig.OutcomeSpan = .empty,
@@ -6271,11 +6275,30 @@ const Certifier = struct {
         tag_discriminant: ?u32,
         shell: anytype,
     ) CertifyError!void {
-        if (!self.isRc(target) and self.isRc(source) and
-            self.isInlineProductRepresentation(source))
-        {
-            _ = try self.requireAggregateRepresentation(state, source);
-            return;
+        if (!self.isRc(target) and self.isRc(source)) {
+            // A read that yields no refcounted data reads only the source's
+            // inline bytes, so it needs the source's bound representation
+            // rather than a live unit: a struct's scalar sibling of a field
+            // given away, or a scalar payload of an inline tag union whose
+            // refcounted payload slots have left. A tag union payload read
+            // still proves the variant it reads, and a discriminant-only
+            // shell admits no payload read at all.
+            if (self.isInlineProductRepresentation(source)) {
+                _ = try self.requireAggregateRepresentation(state, source);
+                return;
+            }
+            if (tag_discriminant) |discriminant| {
+                if (self.layouts.getLayout(self.store.getLocal(source).layout_idx).tag == .tag_union) {
+                    const representation = try self.requireAggregateRepresentation(state, source);
+                    if (self.values.items[representation].discriminant_only) {
+                        self.diag.context_local = source;
+                        self.diag.context_proc = self.current_proc;
+                        return self.fail("payload read through tag union shell {d}, which holds only its discriminant", .{@backingInt(source)});
+                    }
+                    try self.recordPayloadVariant(state, representation, discriminant);
+                    return;
+                }
+            }
         }
         // A view whose residual shell names every refcounted slot of its
         // layout holds no unit: it copies only its container's inline
@@ -6294,26 +6317,14 @@ const Certifier = struct {
             info.payload_source = representation;
             info.payload_projection = projection;
             info.payload_taken = false;
+            info.discriminant_only = self.layouts.getLayout(self.store.getLocal(target).layout_idx).tag == .tag_union;
             return;
         }
         const source_value = try self.requireLive(state, source);
-        // Reading a variant's payload proves the container holds that variant
-        // on this path; anything else is already undefined.
         if (tag_discriminant) |discriminant| {
             if (source_value != no_value and self.isRc(source)) {
                 const source_layout = self.layouts.getLayout(self.store.getLocal(self.values.items[source_value].origin).layout_idx);
-                if (source_layout.tag == .tag_union) {
-                    if (state.knownVariant(source_value)) |known| {
-                        if (known != discriminant) {
-                            return self.fail(
-                                "payload read of discriminant {d} on a value proven to hold discriminant {d}",
-                                .{ discriminant, known },
-                            );
-                        }
-                    } else {
-                        try state.setKnownVariant(source_value, discriminant);
-                    }
-                }
+                if (source_layout.tag == .tag_union) try self.recordPayloadVariant(state, source_value, discriminant);
             }
         }
         if (!self.isRc(target)) return;
@@ -6326,6 +6337,21 @@ const Certifier = struct {
         info.payload_source = source_value;
         info.payload_projection = projection;
         info.payload_taken = take_kind == .take;
+    }
+
+    /// Reading a variant's payload proves the tag union `value` holds that
+    /// variant on this path; anything else is already undefined.
+    fn recordPayloadVariant(self: *Certifier, state: *State, value: ValueId, discriminant: u32) CertifyError!void {
+        if (state.knownVariant(value)) |known| {
+            if (known != discriminant) {
+                return self.fail(
+                    "payload read of discriminant {d} on a value proven to hold discriminant {d}",
+                    .{ discriminant, known },
+                );
+            }
+        } else {
+            try state.setKnownVariant(value, discriminant);
+        }
     }
 
     /// Whether `shell`, already validated against `layout_idx` by
@@ -10334,14 +10360,23 @@ test "certify flags a view of a dismantled record that leaves its taken slot unn
     try testing.expect(std.mem.find(u8, f.diag.message(), "use of dead refcounted local") != null);
 }
 
-/// `outer = { 0: [Z, P({ Str, Str })], 1: Str }` as a parameter whose union
+/// What `buildUnionReadAfterTake` reads through the tag union view after its
+/// discriminant.
+const UnionViewPayloadRead = enum { none, whole, scalar };
+
+/// `outer = { 0: [Z, P({ Str, U64 })], 1: Str }` as a parameter whose union
 /// is taken and released, then read again as a tag union (marked with
-/// `union_shell`) for its discriminant, and, when `read_payload`, for its
-/// payload too, before field 1 is taken and released.
-fn buildUnionReadAfterTake(f: *CertifyTest, union_shell: []const u32, read_payload: bool) Allocator.Error!void {
+/// `union_shell`) for its discriminant, and then per `payload_read` for its
+/// whole payload or the payload's scalar, before field 1 is taken and
+/// released.
+fn buildUnionReadAfterTake(f: *CertifyTest, union_shell: []const u32, payload_read: UnionViewPayloadRead) Allocator.Error!void {
+    const payload_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = .str },
+        .{ .index = 1, .layout = .u64 },
+    });
     const union_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
         try f.layouts.ensureZstLayout(),
-        f.pair_str,
+        payload_layout,
     });
     const outer_layout = try f.layouts.putStructFields(&.{
         .{ .index = 0, .layout = union_layout },
@@ -10352,13 +10387,22 @@ fn buildUnionReadAfterTake(f: *CertifyTest, union_shell: []const u32, read_paylo
     const other = try f.local(.str);
     const view = try f.local(union_layout);
     const discriminant = try f.local(.u32);
-    const payload = try f.local(f.pair_str);
+    const payload = try f.local(payload_layout);
+    const scalar = try f.local(.u64);
     const result = try f.local(.i64);
     const ret = try f.ret(result);
     const result_assign = try f.assignI64(result, ret);
     const release_other = try f.decrefStmt(other, .str, result_assign);
     const take_other = try takeFieldStmt(f, other, outer, 1, release_other);
-    const after_discriminant = if (read_payload) try tagPayloadStructReadStmt(f, payload, view, 1, take_other) else take_other;
+    const after_discriminant = switch (payload_read) {
+        .none => take_other,
+        .whole => try tagPayloadStructReadStmt(f, payload, view, 1, take_other),
+        .scalar => try f.store.addCFStmt(.{ .assign_ref = .{
+            .target = scalar,
+            .op = .tagPayload(view, 1, 1, 1),
+            .next = take_other,
+        } }, .test_fixture),
+    };
     const read_discriminant = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = discriminant,
         .op = .discriminant(view),
@@ -10380,14 +10424,14 @@ fn buildUnionReadAfterTake(f: *CertifyTest, union_shell: []const u32, read_paylo
 test "certify accepts a discriminant read of a taken tag union whose shell names its slot" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
-    try buildUnionReadAfterTake(&f, &.{0}, false);
+    try buildUnionReadAfterTake(&f, &.{0}, .none);
     try f.certify();
 }
 
 test "certify flags a tag union read after its slot was taken without naming it absent" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
-    try buildUnionReadAfterTake(&f, &.{}, false);
+    try buildUnionReadAfterTake(&f, &.{}, .none);
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "after the field's stored unit was taken") != null);
 }
@@ -10395,9 +10439,97 @@ test "certify flags a tag union read after its slot was taken without naming it 
 test "certify flags a payload read through a tag union shell" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
-    try buildUnionReadAfterTake(&f, &.{0}, true);
+    try buildUnionReadAfterTake(&f, &.{0}, .whole);
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "after the field's stored unit was taken") != null);
+}
+
+test "certify flags a scalar payload read through a tag union shell" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildUnionReadAfterTake(&f, &.{0}, .scalar);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "holds only its discriminant") != null);
+}
+
+/// What `buildInlineUnionReadAfterTake` reads from the union once its
+/// payload's one refcounted field has been taken and released.
+const InlineUnionRead = enum {
+    /// The scalar beside the taken field, in the variant the take proved.
+    scalar,
+    /// The same scalar through the other variant.
+    scalar_other_variant,
+    /// The taken refcounted field again.
+    refcounted,
+};
+
+/// `tag = [P({ Str, U64 }), Q({ Str, U64 })]` as a parameter holding `Q`,
+/// whose payload's `Str` is taken and released, after which `read` reads the
+/// union again. Derived equality of a recursive union lowers to this shape,
+/// with the recursion box in place of the `Str`.
+fn buildInlineUnionReadAfterTake(f: *CertifyTest, read: InlineUnionRead) Allocator.Error!void {
+    const payload_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = .str },
+        .{ .index = 1, .layout = .u64 },
+    });
+    const union_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{ payload_layout, payload_layout });
+    const tag = try f.local(union_layout);
+    const taken = try f.local(.str);
+    const scalar = try f.local(.u64);
+    const again = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const read_stmt = switch (read) {
+        .scalar => try f.store.addCFStmt(.{ .assign_ref = .{
+            .target = scalar,
+            .op = .tagPayload(tag, 1, 1, 1),
+            .next = result_assign,
+        } }, .test_fixture),
+        .scalar_other_variant => try f.store.addCFStmt(.{ .assign_ref = .{
+            .target = scalar,
+            .op = .tagPayload(tag, 1, 0, 0),
+            .next = result_assign,
+        } }, .test_fixture),
+        .refcounted => try f.store.addCFStmt(.{ .assign_ref = .{
+            .target = again,
+            .op = .tagPayload(tag, 0, 1, 1),
+            .next = try f.decrefStmt(again, .str, result_assign),
+        } }, .test_fixture),
+    };
+    const release_taken = try f.decrefStmt(taken, .str, read_stmt);
+    const body = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = taken,
+        .op = .tagPayload(tag, 0, 1, 1),
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .take_kind = .take,
+        }),
+        .next = release_taken,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{tag}, body, .i64);
+}
+
+test "certify accepts a scalar payload read of an inline tag union whose refcounted payload was taken" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildInlineUnionReadAfterTake(&f, .scalar);
+    try f.certify();
+}
+
+test "certify flags a scalar payload read of an inline tag union through another variant" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildInlineUnionReadAfterTake(&f, .scalar_other_variant);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "payload read of discriminant 0 on a value proven to hold discriminant 1") != null);
+}
+
+test "certify flags a refcounted payload read of an inline tag union whose refcounted payload was taken" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildInlineUnionReadAfterTake(&f, .refcounted);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "use of dead refcounted local") != null);
 }
 
 /// `record = { 0: Str, 1: Str }` as a parameter, copied into the join cell

@@ -6738,9 +6738,10 @@ pub const ReportBuilder = struct {
                 .many = "Each of these patterns matches a type that has no possible values (an uninhabited type), so no value can ever match it.",
             }),
             .tag_never_produced => |tag| {
-                var report = try self.beginUselessPatternReport("Unmatchable Pattern", data.match_expr, data.branch_index, data.part, "can never match.");
+                const branch_patterns = self.uselessPatternBranchPatterns(data.match_expr, data.branch_index);
+                var report = try self.beginUselessPatternReport("Unmatchable Pattern", branch_patterns, data.branch_index, data.part, "can never match.");
                 errdefer report.deinit();
-                if (self.uselessPatternCount(data.match_expr, data.branch_index, data.part) > 1) {
+                if (uselessPatternCount(branch_patterns, data.part) > 1) {
                     try D.renderSlice(&.{
                         D.bytes("Each of these patterns needs a tag that the value it matches never has, such as"),
                         D.ident(tag).withAnnotation(.inline_code),
@@ -6780,22 +6781,30 @@ pub const ReportBuilder = struct {
         verdict: []const u8,
         explanation: struct { one: []const u8, many: []const u8 },
     ) Allocator.Error!Report {
-        var report = try self.beginUselessPatternReport(title, match_expr, branch_index, part, verdict);
+        const branch_patterns = self.uselessPatternBranchPatterns(match_expr, branch_index);
+        var report = try self.beginUselessPatternReport(title, branch_patterns, branch_index, part, verdict);
         errdefer report.deinit();
         try D.renderSlice(&.{
-            D.bytes(if (self.uselessPatternCount(match_expr, branch_index, part) > 1) explanation.many else explanation.one),
+            D.bytes(if (uselessPatternCount(branch_patterns, part) > 1) explanation.many else explanation.one),
         }, self, &report);
         return report;
     }
 
     /// How many patterns a useless-pattern warning is about: one alternative,
     /// or every alternative of its branch.
-    fn uselessPatternCount(self: *Self, match_expr: CIR.Expr.Idx, branch_index: u32, part: problem_mod.MatchBranchPart) usize {
+    fn uselessPatternCount(branch_patterns: []const CIR.Expr.Match.BranchPattern.Idx, part: problem_mod.MatchBranchPart) usize {
         if (part != .whole_branch) return 1;
+        return branch_patterns.len;
+    }
+
+    /// The patterns of the `match` branch a useless-pattern warning is about.
+    /// Error recovery can put a runtime error in place of the `match` after
+    /// the warning is recorded, so this reads the `match` as written.
+    fn uselessPatternBranchPatterns(self: *Self, match_expr: CIR.Expr.Idx, branch_index: u32) []const CIR.Expr.Match.BranchPattern.Idx {
         const store = &self.can_ir.store;
-        const match = store.getExpr(match_expr).e_match;
+        const match = store.getSourceExpr(match_expr).e_match;
         const branch = store.getMatchBranch(store.matchBranchSlice(match.branches)[branch_index]);
-        return store.sliceMatchBranchPatterns(branch.patterns).len;
+        return store.sliceMatchBranchPatterns(branch.patterns);
     }
 
     /// A useless-pattern warning's headline and highlighted patterns, before
@@ -6803,15 +6812,12 @@ pub const ReportBuilder = struct {
     fn beginUselessPatternReport(
         self: *Self,
         title: []const u8,
-        match_expr: CIR.Expr.Idx,
+        branch_patterns: []const CIR.Expr.Match.BranchPattern.Idx,
         branch_index: u32,
         part: problem_mod.MatchBranchPart,
         verdict: []const u8,
     ) Allocator.Error!Report {
         const store = &self.can_ir.store;
-        const match = store.getExpr(match_expr).e_match;
-        const branch = store.getMatchBranch(store.matchBranchSlice(match.branches)[branch_index]);
-        const branch_patterns = store.sliceMatchBranchPatterns(branch.patterns);
 
         var report = try Report.init(self.gpa, title, "", .warning);
         errdefer report.deinit();

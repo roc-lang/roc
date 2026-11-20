@@ -1988,7 +1988,6 @@ pub const Store = struct {
         var desc = resolved.desc;
         desc.content = content;
         desc.flags = desc.flags.forKind(types.ContentKind.of(content));
-        desc.flags.empty_tag_union_is_default = false;
         try self.setDescUnguarded(resolved.desc_idx, desc);
     }
 
@@ -2040,22 +2039,6 @@ pub const Store = struct {
         var desc = resolved.desc;
         desc.content = content;
         desc.flags = desc.flags.forKind(types.ContentKind.of(content));
-        desc.flags.empty_tag_union_is_default = false;
-        try self.setDesc(resolved.desc_idx, desc);
-    }
-
-    /// Close an otherwise-unresolved variable to the empty tag union while
-    /// retaining the checker's authoritative defaulting decision.
-    pub fn setVarToEmptyTagUnionDefault(self: *Self, target_var: Var) Allocator.Error!void {
-        self.debugAssertUnsealed();
-        std.debug.assert(@backingInt(target_var) < self.len());
-        try self.isolateWriteTarget(target_var);
-        const resolved = self.resolveVar(target_var);
-        self.noteContentRewrite(resolved.desc.content);
-        var desc = resolved.desc;
-        desc.content = .{ .structure = .empty_tag_union };
-        desc.flags = desc.flags.forKind(.empty_tag_union);
-        desc.flags.empty_tag_union_is_default = true;
         try self.setDesc(resolved.desc_idx, desc);
     }
 
@@ -3450,14 +3433,6 @@ pub const Store = struct {
             (a_flags.annotation_tag_ext or b_flags.annotation_tag_ext);
         flags.bounded_row_ext = a_flags.bounded_row_ext or b_flags.bounded_row_ext;
         flags.host_fixed_row = a_flags.host_fixed_row or b_flags.host_fixed_row;
-        if (merged_kind == .empty_tag_union) {
-            const a_is_explicit_empty = a_word.kind == .empty_tag_union and !a_flags.empty_tag_union_is_default;
-            const b_is_explicit_empty = b_word.kind == .empty_tag_union and !b_flags.empty_tag_union_is_default;
-            flags.empty_tag_union_is_default = !a_is_explicit_empty and !b_is_explicit_empty and
-                (a_flags.empty_tag_union_is_default or b_flags.empty_tag_union_is_default);
-        } else {
-            flags.empty_tag_union_is_default = false;
-        }
         // A rejected dispatch edge is a fact about the constraint callable's
         // equivalence class, so merging two classes rejects the result if
         // either side was rejected.

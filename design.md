@@ -1168,8 +1168,9 @@ The same graph separately records structural substitution dependencies,
 without the application-ownership dependencies of template-private unknowns.
 Following these dependencies through a view's actual arguments proves when
 no mutable source variable can be exported by blocker collection. In that
-case, known-absent constructor analysis returns no blockers without building
-an inhabitedness graph. This proof applies to the whole structural dependency
+case, tested-payload blocker collection (`collectAlternativePayloadBlockers`)
+returns no blockers for that payload without building an inhabitedness
+graph. This proof applies to the whole structural dependency
 graph, including recursive edges, aliases' hidden arguments, field presence,
 and row extensions; it is not inferred from arity or constructor shape. Only
 the final declaration's dependency summary persists across reads. Actual
@@ -1179,13 +1180,13 @@ no inhabitedness or blocker answer about mutable types is shared.
 An inhabitedness memo stores complete query answers, not provisional answers
 obtained by cutting an active recursive path. Its key includes the resolved
 root and the exact sorted, deduplicated known-empty assumptions; its lifetime is one
-mutation-free analysis. Constructor-payload and known-absent-payload queries,
-which carry no assumptions, keep one memo per query mode with the same
-lifetime. Within one analysis, the queries of one mode and assumption set
-share one graph: a query expands only the types no earlier query reached and
-then settles. Earlier nodes are already expanded and at their fixed point, and
-a query adds edges only out of its own new nodes, so no earlier value changes
-and each answer equals a from-scratch solve, which Debug builds check.
+mutation-free analysis. Constructor-payload queries, which carry no
+assumptions, keep their own memo with the same lifetime. Within one analysis,
+the queries of one mode and assumption set share one graph: a query expands
+only the types no earlier query reached and then settles. Earlier nodes are
+already expanded and at their fixed point, and a query adds edges only out of
+its own new nodes, so no earlier value changes and each answer equals a
+from-scratch solve, which Debug builds check.
 Shared DAG nodes are not recursive cycles. A cyclic
 query implementation must distinguish those states and establish its fixed-point
 or traversal rule before producing a reusable result. The same restriction
@@ -1216,10 +1217,10 @@ through their Roc backings, whose entries are a `List`. `Box(item)` declares
 `[ProvidedByCompiler(item)]`: a box holds exactly one item, so it has a value
 exactly when `item` does, as a user wrapper `Wrapped(a) := [W(a)]` does.
 `Try(Str, Box([]))` therefore needs no `Err` branch, and an `Err` branch on it
-is unmatchable. The known-absent-payload query reads the same declaration, so
-the `_` of an absent constructor's `Box(_)` payload closes to `[]` as the `_`
-of any other wrapper's payload does: `x : Try(Str, Box(_))` defined as
-`Ok("a")` has the type `Try(Str, Box([]))`. Nothing constructs or matches a
+is unmatchable. Closing free payload variables reads the same declaration, so
+a free `_` in the `Box(_)` payload of an alternative a use leaves uncovered or
+never constructs closes to `[]` exactly as the `_` of any other wrapper's
+payload does (Free Payload Variables Close Per Use). Nothing constructs or matches a
 `ProvidedByCompiler` tag; post-check stages take these types' representations
 from the compiler, not from the declaration, and Monotype's own
 uninhabitedness proof treats a box as uninhabited exactly when its payload is.
@@ -1238,12 +1239,11 @@ Leaf and tail policy is explicit:
 
 - General queries treat unconstrained flex and rigid leaves, and open union
   tails, as potentially inhabited.
-- Constructor-payload queries treat unbound flex and ignored rigid leaves as
-  empty candidates; constrained leaves remain inhabited. Their tails use the
+- Constructor-payload queries treat unbound flex leaves as empty candidates;
+  constrained flex leaves and every rigid leaf remain inhabited. A rigid is
+  the type the enclosing signature's caller chooses, whatever its name: an
+  underscore only silences the unused-variable warning. Their tails use the
   same constructor-payload policy for union alternatives.
-- Known-absent-payload queries treat every flex and ignored rigid leaf as empty
-  candidates regardless of constraints, ignore open union tails, and retain
-  the existing rejection of non-union nominal backing shapes.
 
 Payload recursion and row-extension cycles are different. Extension traversal
 flattens the finite row and cuts a cyclic extension as closed; it must not turn
@@ -6035,7 +6035,7 @@ from its low bit:
 |-------|-------|
 | 0-3   | content kind (`ContentKind`) |
 | 4-10  | the flags every kind can hold: `frozen`, `static_dispatch_rejected`, `default_decided`, `nominal_backing_structure`, `bounded_row_ext`, `deferred_callable`, `annotation_tag_ext` |
-| 11-15 | on a flex: `uncommitted_record_tail`, `uncommitted_copy`, `record_pattern_tail`, and the 2-bit literal marker (`Flex.Literal`); on every other kind: `empty_tag_union_is_default`, `host_fixed_row`, `compared_plain`, `annotation_tag_union`, `uncommitted_tag_tail` |
+| 11-15 | on a flex: `uncommitted_record_tail`, `uncommitted_copy`, `record_pattern_tail`, and the 2-bit literal marker (`Flex.Literal`); on every other kind: `host_fixed_row`, `compared_plain`, `annotation_tag_union`, `uncommitted_tag_tail` |
 | 16-17 | generalization's two scratch marks (`generalizing`, `rank_adjusted`) |
 | 18-31 | the 14-bit rank |
 
@@ -8077,7 +8077,11 @@ dispatch is a reference to the local procedure it selects: once targets
 settle, each lineage selecting one adds that reference for the candidates
 enclosing the lineage's outermost dispatch site, recorded when the site's
 constraint was created. The capture list is not that proof: canonicalization omits
-local functions and globally resolvable patterns from captures. A promoted
+local functions and globally resolvable patterns from captures. A
+declaration is a local function by the parser's declaration form: its body is
+a lambda, with grouping parentheses transparent, so `f = (|x| x)` is one. This
+is the same classification the checked local-procedure role makes from the
+declaration's canonical lambda or closure. A promoted
 local procedure outputs a `promoted_proc` checked statement in place of its
 binding, its own procedure template (`ProcBaseKind.promoted_local`), and its
 pattern's scheme; references resolve to `promoted_top_level_proc`, so it
@@ -8284,6 +8288,22 @@ Restoring a stored function replays each lexical scope's dispatch relations
 with that scope's retained evidence frame as the head. Scope labels alone
 cannot select evidence: depth/index references are relative to their owning
 frame, not to the innermost frame of the restored closure.
+
+A nested stored function restores in its own body, never in the body that
+requests it, in two steps. The first establishes the stored owner, the
+evidence frame topology, the capture bindings, and the restored lexical scope
+with its declaring-scope identity; a local-method edge of the stored evidence
+materializes there without a declaration context. The second resolves each
+such edge against that owner and scope (`resolveStoredLocalEdges`), checking
+its checked declaration anchor, before relation replay or the body reads the
+evidence. The split is required because resolving a restored declaration reads
+its declaring template's lexical evidence chain: the restored function's own
+chain, or the declaring template's chain stored after it. That stored chain
+materializes once per restoring body, and its own local-method edges resolve
+once the declaration that needed it is visible. Each declaration's context is
+created once per restoring body and shared by every edge naming it; it is
+never shared by declaration alone, since specializations of one declaration
+can differ in their captures.
 
 A block-local value binding whose own binders are referenced inside its
 expression is a recursive value. Canonicalization rejects an eager
@@ -10864,7 +10884,16 @@ at each instance instead ("Lambda Set Instances").
 The solved inline plan admits functions with exactly one non-cold external
 direct call and no function-value or root uses. A single call-site proof
 permits ordinary statements, branches, local loops, and typed join points because
-lowering the body once cannot duplicate stored code. That proof follows the
+lowering the body once cannot duplicate stored code. A call through a function
+value with several variants evaluates each argument once, into a temp ahead of
+the variant dispatch, and every variant's call takes that temp; the variants
+of one callable are specialized at its function type, so they share its
+parameter types. Only a local read or a literal, which binds no local and
+inlines no body, is lowered in each variant's branch instead, which keeps the
+dispatch directly after the callee's producer for tag-case fusion. No
+expression that binds a local or inlines a body is therefore lowered more than
+once per lowering of its owning body, and debug builds assert this for every
+single-use body. That proof follows the
 unique call's owning functions through the selected inline plan. If an owning
 wrapper has multiple direct inline sites or also survives as a function value,
 the nested single-use body remains a procedure; a non-inlined owner establishes
@@ -13348,6 +13377,13 @@ one rule whether the value is local or top-level:
   value's type with no copy), and the one the value is evaluated at. A row
   whose tail a scheme quantified, or that carries a constraint the empty row
   does not discharge, is left alone.
+- At the same point, every constructor payload in the value's data (not
+  inside a function type) that is still a type variable closes to `[]`
+  (`Check.closeTopLevelValuePayloads`), under the same quantification and
+  constraint conditions. No value of that type is in the value, and no use
+  is left to decide it: `x : Try(I64, _)` with `x = Ok(42)` is
+  `Try(I64, [])` unless a use decided the hole first (Free Payload Variables
+  Close Per Use).
 
 A value's record follows the same rule through its uncommitted tail
 (Uncommitted Record Tails): every use shares it, a use that lifts the record
@@ -13534,6 +13570,91 @@ The rejected side is pinned by
 and the journal of copies by the unifier tests in
 `src/check/test/unify_test.zig`, and a producer met through a shared extension
 by `src/check/test/issue_13105_test.zig`.
+
+### Free Payload Variables Close Per Use
+
+A definition's type is what its body and annotation infer, and nothing else.
+A `_` in an annotation constrains nothing: the type is exactly what leaving
+that part unannotated infers. A type variable written `_e` is the variable
+`e`; the underscore only silences the unused-variable warning, and checking
+never reads it. So a function whose body builds only `Ok` keeps its error
+row generalized whatever its annotation spells it as:
+`f : U64 -> Try(U64, _)` with `f = |n| if n == 0 Ok(0.U64) else Ok(n)` is
+`U64 -> Try(U64, _a)`, and each use relates its own instance of `_a`, so one
+use can be `Try(U64, [B])` and another `Try(U64, [C(Str)])`.
+
+A value of type `Try(U64, e)` for every `e` cannot be an `Err`: nothing could
+have built the payload. A `match` (other than a `?` desugaring, which forwards
+whatever the value holds) or a destructure whose patterns leave alternatives
+uncovered therefore takes its own instance of such a variable to be `[]`, but
+only when the variable is free at the use:
+
+- The exhaustiveness analysis runs first on the types as they stand. A match
+  or destructure it finds exhaustive closes nothing, so no payload variable is
+  decided by a use that does not need it decided.
+- Otherwise the checker reads each tag union a tag pattern of the match or
+  destructure tests, nested tag patterns included. A pattern that binds or
+  ignores a value tests nothing. For every alternative of each such union
+  that no tag pattern of that union names, the unconstrained flex variables
+  that make the alternative's payload empty under the constructor-payload
+  policy (Potential Inhabitedness Queries) are the candidates
+  (`collectAlternativePayloadBlockers`). An alternative a pattern names is
+  covered by that pattern, so its payload variables are left alone: a branch
+  the author wrote is never made unmatchable by this rule.
+- A candidate is free when, at the use, it is still an unconstrained flex
+  variable (no static-dispatch constraint, no literal requirement) and none of
+  these reaches it (`Check.collectReachedVars`):
+  - the parameter types and the own type of every lambda enclosing the use: a
+    parameter is the value a caller chooses, and a caller that chooses `err`
+    can pass an `Err`;
+  - the type of every use of a platform requirement in the module, whose
+    value the application supplies;
+  - the binder and value types of every member of every definition group
+    being checked, which an in-group reference relates to monomorphically,
+    so the variable belongs to a signature still being inferred;
+  - the signature of a static-dispatch constraint on any variable the tested
+    unions reach, of every constraint deferred to the current generalization
+    boundary, and of every generated-codec relation parked for finalization:
+    a pending method choice decides each variable its signature mentions.
+  A rigid variable is never a candidate: it is an enclosing annotation's
+  variable, which the caller chooses.
+- Each free candidate is unified with a fresh `[]`
+  (`Check.closeFreeUncoveredPayloadVars`), and when any closed, the analysis
+  runs once more and its result is the one reported. It then sees an
+  uninhabited alternative: an `Ok`-only match on `f(n)` is exhaustive. A
+  match on `f(n)` with both an `Ok` and an `Err(_)` branch is exhaustive as
+  written and leaves the error row undecided. The `[]` is an ordinary committed empty union, so lowering reads a
+  closed layout. A later relation that would give the variable a tag is a type
+  mismatch, as for any other relation of the closed instance.
+
+Inside `g : Try(I64, err) -> I64`, `match t { Ok(v) => v }` on the parameter is
+not exhaustive, and neither is the same match when the annotation writes `_err`
+or `_` for the error row: each such variable is reached from the parameter. A
+local `r = f(n)` matched later is closed exactly like `f(n)` itself, since its
+instance reaches no parameter. A top-level value annotated `x : Try(I64, _)`
+with `x = Ok(42)` is a value, so every use shares its one type (Value Rows:
+Uses Share One Row): the first use that decides the hole decides it for every
+use, and when none does, the module's end closes it.
+
+When the scrutinee's value expression is itself a tag construction (through
+blocks, conditionals, matches and nominal wrappers), the tags it constructs
+are a fact about that scrutinee alone: a root constructor it never constructs
+needs no branch (`exhaustive.checkMatch`'s `scrutinee_constructed_tags`).
+Such a constructor holds no value here, so before the analysis its payload
+variables close exactly as an uncovered alternative's do, and only when free
+(`Check.closeFreeNeverConstructedPayloadVars`): `Ok(y) = Err({})` gives `y`
+the type `[]`. A payload variable that is not free is left alone, since it
+may be shared with anything, such as a parameter bound by the pattern for it.
+In `f = |n| match Oops { Oops => n, Zero(p) => p }` the type of `p` is the
+type of `n`, `f` is `a -> a`, and the `Zero` branch is reported by
+Pattern-Only Tags.
+
+The accepted and rejected sides are pinned by the `issue 13236` and
+`issue 13237` tests in `src/check/test/repros_test.zig`, the inferred-hole
+tests in `src/check/test/exhaustiveness_test.zig` and
+`src/check/test/issue_11248_test.zig`, and run by
+`test/cli/Issue13237AllOkErrorRow.roc` and
+`test/cli/Issue13236UnmatchablePayloadParameter.roc`.
 
 ### Hosted Try Question Widening Removed
 
@@ -16909,16 +17030,25 @@ Other solved-graph mutations:
   Checking Effects And Const Roots. The immutable boundary formulas are solved
   together before any positive result is written; dispatch-call dependencies
   are checked by ordinary unification, not by a later graph repair.
-- `closeAbsentConstructedPayloadVars` /
-  `closeAbsentConstructedPayloadVarsForLambda` / `closePayloadVarToEmpty`—
-  policy: absent-constructor payload closing. A constructed value's
-  unconstrained, ignorable payload vars for tags the expression provably never
-  constructs close to the empty tag union, so matches on constructed values are
-  exhaustive without wildcard arms. A lambda result is constructed by its body
-  tail *or* by any of its early returns, so the lambda form reads the tags of
-  every recorded return operand as well; `?` desugars to one of those returns,
-  and its `Err` is what keeps an inferred error row open (see Try Return-Row
-  Composition above, whose contributions are composed only after this point).
+- `closeFreePayloadVars` (`closeFreeUncoveredPayloadVars`, `closeFreeNeverConstructedPayloadVars`)—policy: Free Payload Variables Close Per Use
+  (above). A probe of which payload variables are free at the use, among
+  those of the alternatives a non-exhaustive match's or destructure's tag
+  patterns leave uncovered and those of the root alternatives a constructing
+  scrutinee never constructs, gates an ordinary unification of each with a
+  fresh empty tag union. It introduces no redirect rule and writes nothing outside
+  unification. The accepted side (an `Ok`-only match on an all-`Ok`
+  function's result, and on a local holding it) and the rejected side (an
+  `Ok`-only match on a parameter, whatever its error row is named) are pinned
+  by the tests that section names.
+- `closeTopLevelValuePayloads`—policy: Value Rows: Uses Share One Row
+  (above). When the module finishes, each constructor payload in a top-level
+  value's data that is still an unquantified type variable whose constraints
+  the empty union discharges is unified with a fresh empty tag union, beside
+  `closeTopLevelValueRows`. It introduces no redirect rule. The accepted side
+  (`x : Try(I64, _)`, `x = Ok(42)` compared with `==`) and the rejected side
+  (a payload a use already decided stays decided) are pinned by the
+  `issue 13237` top-level value tests in `src/check/test/repros_test.zig` and
+  by `test/cli/issue_11765_default_closed_value_row/`.
 - `closeTagRowsForDerivation`—policy: Polarity and Derived Parser Tag-Row
   Closure (above). Codec dispatch eagerly closes only annotation-proven flexible
   extensions and alias polarity markers; inferred tag tails close at the final
@@ -19013,6 +19143,14 @@ host allocation and free operations.
   thunks, and no statement whose meaning depends on a path through a type.
   The only conversions are the row conversions and adapters of Sealed Result
   Rows, each between two types the checker relates.
+- Closed tag construction and payload projection both follow the union's
+  committed layout. A single-variant union whose payloads are all zero-sized
+  commits as `.zst`: constructing it writes no payload, and every read of one
+  of its payloads (a pattern, a row conversion, a codec, a stream step) goes
+  through the one closed projection (`Builder.readTagPayloadInto`), which
+  yields the payload type's zero-sized value without a load. A union with
+  storage reads its payloads from the variant's committed payload layout,
+  unboxing recursion boxes.
 - `--timings` reports the strategy's post-check work as `Boxy Lowering`
   followed by the shared `LIR Passes` and `ARC` entries. Progress text reports
   the pipeline position as `Lowering`.
@@ -22725,6 +22863,33 @@ operand the divergence column marks divergent, and nothing after it
 (`dbg`, effects, an earlier crash) and evaluate exactly as Boxy evaluates them.
 Only the divergent path does this work: a value that does not diverge lowers
 through the ordinary operand lowering.
+
+An operand whose evaluation has no effect is skipped by that sequence. The
+shared classification `exprEvaluationHasNoEffect` names those kinds: a read of
+a name (a local, a statically resolved procedure or constant, a platform
+requirement), a literal, an empty collection, a payload-free tag, and a
+closure or lambda. Each is a kind `checkedExprDivergence` never marks
+divergent, which a compile-time check beside the classification enforces.
+Its value is never used and its evaluation cannot be observed, so lowering
+requests no value, type, layout, callable, or specialization for it: a direct
+callee of a divergent call is not materialized as a procedure value (an
+intrinsic wrapper must only ever lower through a checked direct call), and a
+callee whose checked type holds the error type is never instantiated. A
+computed callee or an argument that can call, print, or crash still
+evaluates in source order. The walk stops at the first divergent operand: no
+later operand is read, and the call, comparison, or dispatch itself is never
+built, so its result layout, callable type, dispatch target, and callee
+specialization are never requested.
+
+Boxy applies the same sequence before its ordinary lowering of a call,
+structural equality or hash, list, tuple, tag, record, low-level operation, or
+dispatch requests any representation. It selects the sequence from the
+expression's own divergence fact, as its blocks and matches do: a strict
+expression checking marked divergent lowers as its operands up to the first
+divergent one, and one checking did not mark lowers ordinarily. A dispatch
+that cannot run and none of whose operands diverges evaluates them and then
+crashes with its dispatch crash. The value such an expression stands for has
+the expression's type, or no type when that type holds the error type.
 
 Which expression kinds can be marked divergent is one classification,
 `checkedExprDivergence`, defined with the checked expression kinds: a kind
@@ -28093,7 +28258,15 @@ through it of a slot already claimed is a read after a take unless the view's
 residual shell names that slot. A tag union read the same way is a view of
 its parent's one slot: a payload read through it after that slot was claimed
 is a read after a take, and a residual shell naming its slot leaves it
-readable only for its discriminant. Path states keep the first word inline and share sparse
+readable only for its discriminant. A read that yields no refcounted data
+reads only its source's inline bytes, so it requires the source's bound
+representation, not a live unit: a scalar field of a struct, or a scalar
+payload of an ordinary inline tag union, stays readable after every
+refcounted slot has left (derived equality of `[Leaf, Node(Tree, U64)]` takes
+and releases the child's recursion box, then reads the `U64`). Such a tag
+payload read still proves its variant against the value's known variant, and
+no payload, scalar or not, is read through a residual-shell tag union view.
+Path states keep the first word inline and share sparse
 persistent words for higher indices; forks and outcome-restitution receipts retain
 exact prior sets. Join comparison and memo hashing use field-set contents rather
 than snapshot addresses. A container's unit is spent only when its claims equal

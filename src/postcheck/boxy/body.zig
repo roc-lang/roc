@@ -112,7 +112,7 @@ pub const Task = union(enum) {
     diverged: ?TypeId,
     /// Crash as a dispatch that cannot run does; its value is of type
     /// `result`.
-    dispatch_crash: struct { kind: lower.CrashDictionary, result: TypeId },
+    dispatch_crash: struct { kind: lower.CrashDictionary, result: ?TypeId },
     /// Crash with a checked runtime error, whose value is of this type, or
     /// of no type when the checker gave it the erroneous type.
     runtime_error: ?TypeId,
@@ -2697,13 +2697,7 @@ pub const Builder = struct {
             const values = try self.allocator.alloc(LocalId, payload_types.len);
             defer self.allocator.free(values);
             for (values, payload_types, destination_payloads, 0..) |*slot, payload_ty, destination_ty, index| {
-                const payload = if (committed.tag != .tag_union) blk: {
-                    // A union without storage has only zero-sized payloads.
-                    const payload_local = try self.localOf(payload_ty, .frame);
-                    if (self.store.getLocal(payload_local).layout_idx != .zst) invariant("a storage-free union has a payload with storage");
-                    try self.emitLinear(.{ .assign_struct = .{ .target = payload_local, .fields = LIR.LocalSpan.empty(), .next = undefined } });
-                    break :blk payload_local;
-                } else try self.readTagPayload(value, from, variant, payload_types, index);
+                const payload = try self.readTagPayload(value, from, variant, payload_types, index);
                 slot.* = try self.adaptValue(payload, payload_ty, destination_ty);
             }
             const built = try self.buildTag(to_raw, tag.name, values);
@@ -3396,7 +3390,7 @@ pub const Builder = struct {
             },
             .dispatch_crash => |crash| {
                 try self.emitDispatchCrash(crash.kind);
-                try self.pushValue(try self.localOf(crash.result, .frame));
+                try self.pushValue(if (crash.result) |result_ty| try self.localOf(result_ty, .frame) else try self.closedLocal(.zst));
             },
             .push_value => |local| try self.pushValue(local),
             .unreachable_value => |ty| try self.pushValue(try self.localOf(ty, .frame)),
@@ -3887,6 +3881,90 @@ pub const Builder = struct {
         try self.push(.{ .own_expr = expr_id });
     }
 
+    /// A strict expression that checking marked divergent is lowered as its
+    /// divergent operand sequence (design.md "Divergent expressions evaluate
+    /// their earlier operands"). Its operands evaluate in source order, each
+    /// for its effect, up to and including the first divergent one, and an
+    /// operand whose evaluation has no effect (`exprEvaluationHasNoEffect`)
+    /// is skipped. A dispatch that cannot run and none of whose operands
+    /// diverges crashes once they have evaluated. The call, comparison, or
+    /// dispatch itself is never built: no callee, callable type, dispatch
+    /// target, or operand representation is requested.
+    fn lowerDivergentOperands(self: *Builder, expr_id: ExprId, expr: bodies_mod.Expr) Allocator.Error!bool {
+        switch (expr.data) {
+            .call, .structural_eq, .structural_hash, .run_low_level, .dispatch_call, .method_eq, .type_dispatch_call, .list, .tuple, .tag, .record => {},
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .interpolation, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda => return false,
+        }
+        const mode = self.inlineExpectMode();
+        if (!try self.bodies().exprDiverges(expr_id, mode)) return false;
+
+        var crash: ?lower.CrashDictionary = null;
+        var operands: std.ArrayList(ExprId) = .empty;
+        defer operands.deinit(self.allocator);
+        switch (expr.data) {
+            .call => |call| {
+                try operands.append(self.allocator, call.func);
+                try operands.appendSlice(self.allocator, call.args);
+            },
+            .structural_eq => |eq| try operands.appendSlice(self.allocator, &.{ eq.lhs, eq.rhs }),
+            .structural_hash => |hash| try operands.appendSlice(self.allocator, &.{ hash.value, hash.hasher }),
+            .list, .tuple => |items| try operands.appendSlice(self.allocator, items),
+            .tag => |tag| try operands.appendSlice(self.allocator, tag.args),
+            .record => |record| {
+                if (record.ext) |base_expr| try operands.append(self.allocator, base_expr);
+                for (record.fields) |field| try operands.append(self.allocator, self.bodies().recordFieldValue(field));
+            },
+            .run_low_level => |run_ll| try operands.appendSlice(self.allocator, run_ll.args[0 .. run_ll.args.len - run_ll.op.typeOnlyOperands()]),
+            .dispatch_call, .method_eq, .type_dispatch_call => {
+                const plan = self.dispatchPlan(self.bodies().dispatchPlan(@backingInt(expr_id)) orelse invariant("a dispatch had no checked plan"));
+                crash = switch (plan.resolution) {
+                    .checked_error => .checked_error,
+                    .@"unreachable" => .unreachable_value,
+                    .direct_closed, .direct_parametric, .evidence_dependent, .structural, .direct_pending => null,
+                };
+                for (plan.argsSlice(self.view.view.static_dispatch_plans)) |operand| switch (operand) {
+                    .checked_expr => |operand_expr| try operands.append(self.allocator, operand_expr),
+                    .generated_interpolation_segments => |interpolation_expr| {
+                        const interpolation = self.bodies().exprData(interpolation_expr).interpolation;
+                        try operands.append(self.allocator, interpolation.first);
+                        try operands.appendSlice(self.allocator, interpolation.parts);
+                    },
+                    .generated_numeral, .generated_quote => {},
+                    .literal_pattern_value, .literal_pattern_conversion => invariant("an expression's dispatch has a custom literal pattern operand"),
+                };
+            },
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .interpolation, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda => unreachable, // only a strict kind reaches here
+        }
+        const result: ?TypeId = if (try self.program.hasError(self.module, expr.ty)) null else try self.exprType(expr_id);
+        if (for (operands.items, 0..) |operand, index| {
+            if (try self.bodies().exprDiverges(operand, mode)) break index + 1;
+        } else null) |len| {
+            try self.push(.{ .diverged = result });
+            try self.pushDiscardedOperands(operands.items[0..len]);
+        } else if (crash) |kind| {
+            try self.push(.{ .dispatch_crash = .{ .kind = kind, .result = result } });
+            try self.pushDiscardedOperands(operands.items);
+        } else {
+            // The crash operation diverges by running, not through an operand.
+            if (expr.data == .run_low_level) return false;
+            invariant("checking marked a strict expression divergent with no divergent operand");
+        }
+        return true;
+    }
+
+    /// Push `operands` to evaluate in order, each for its effect, skipping
+    /// those whose evaluation has no effect.
+    fn pushDiscardedOperands(self: *Builder, operands: []const ExprId) Allocator.Error!void {
+        var index = operands.len;
+        while (index > 0) {
+            index -= 1;
+            const operand = operands[index];
+            if (checked.exprEvaluationHasNoEffect(std.meta.activeTag(self.bodies().exprData(operand)))) continue;
+            try self.push(.discard);
+            try self.push(.{ .expr = operand });
+        }
+    }
+
     fn lowerOwnExpr(self: *Builder, expr_id: ExprId) Allocator.Error!void {
         const expr = self.bodies().expr(expr_id);
         if (self.ownDestination(expr_id)) |destination| try self.passDestination(expr.data, destination);
@@ -3905,6 +3983,7 @@ pub const Builder = struct {
             .pending => |root| return try self.pendingValueRead(self.module, root, try self.exprType(expr_id)),
         };
         if (try self.inlineLiteralRead(expr_id)) |slot| return try self.pushValue(try self.staticRead(slot));
+        if (try self.lowerDivergentOperands(expr_id, expr)) return;
         const raw = @backingInt(expr_id);
         switch (expr.data) {
             .numeral => try self.lowerNumeral(.{ .expr = expr_id }, self.bodies().numeralLiteral(raw), self.bodies().numeralPlan(raw), self.bodies().literalConversionRoot(raw)),
@@ -10316,15 +10395,6 @@ pub const Builder = struct {
                             }
                             const payloads = self.program.store.span(tags[variant].payloads);
                             for (tag.args, 0..) |arg_pattern, arg_index| {
-                                if (committed.tag != .tag_union) {
-                                    // A union without storage has only
-                                    // zero-sized payloads.
-                                    const payload_local = try self.localOf(payloads[arg_index], .frame);
-                                    if (self.store.getLocal(payload_local).layout_idx != .zst) invariant("a storage-free union has a payload with storage");
-                                    try self.emitLinear(.{ .assign_struct = .{ .target = payload_local, .fields = LIR.LocalSpan.empty(), .next = undefined } });
-                                    try pending.append(self.allocator, .{ .pattern = arg_pattern, .value = payload_local, .ty = payloads[arg_index] });
-                                    continue;
-                                }
                                 const payload_local = try self.readTagPayload(item.value, structural, variant, payloads, arg_index);
                                 try pending.append(self.allocator, .{ .pattern = arg_pattern, .value = payload_local, .ty = payloads[arg_index] });
                             }
@@ -11132,8 +11202,16 @@ pub const Builder = struct {
         return local;
     }
 
-    /// `readTagPayload` into `target`.
+    /// `readTagPayload` into `target`. A union whose committed layout has no
+    /// storage holds only zero-sized payloads, so its payload is the
+    /// zero-sized value of the payload's type and reads nothing.
     pub fn readTagPayloadInto(self: *Builder, target: LocalId, value: LocalId, union_ty: TypeId, variant: usize, payloads: []const TypeId, index: usize) Allocator.Error!void {
+        const committed = self.program.result.layouts.getLayout(try self.program.layouts.layoutOf(union_ty));
+        if (committed.tag != .tag_union) {
+            if (self.store.getLocal(target).layout_idx != .zst) invariant("a storage-free union has a payload with storage");
+            try self.emitLinear(.{ .assign_struct = .{ .target = target, .fields = LIR.LocalSpan.empty(), .next = undefined } });
+            return;
+        }
         const payload_layout = try self.variantPayloadLayout(union_ty, variant);
         const whole = LIR.RefOp.tagPayloadStruct(value, @intCast(variant), @intCast(variant));
         if (payloads.len == 1) return try self.readSlotInto(target, whole, payloads[0], payload_layout);
