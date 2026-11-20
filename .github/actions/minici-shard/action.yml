@@ -1,0 +1,220 @@
+name: 'Run a MiniCI shard'
+description: >-
+  Restore the build artifact the `minici-build` action uploaded for this shard,
+  run one MiniCI shard (see `shards` in src/build/minici.zig) without compiling
+  what `build-ci` already built, and upload its report and logs. Run after
+  checkout.
+inputs:
+  shard:
+    description: 'The MiniCI shard to run'
+    required: true
+  valgrind:
+    description: 'Whether to install Valgrind (for run-check-str-eq-same-allocation)'
+    required: false
+    default: 'false'
+runs:
+  using: 'composite'
+  steps:
+    - name: Enlarge pagefile (Windows)
+      if: runner.os == 'Windows'
+      uses: ./.github/actions/enlarge-windows-pagefile
+
+    - name: Enlarge swap (Linux)
+      if: runner.os == 'Linux'
+      uses: ./.github/actions/enlarge-linux-swap
+
+    # Same deterministic Zig path as the build job (see `use-tool-cache` in
+    # the `minici-build` action), so the restored cache hits.
+    - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
+      with:
+        version: 0.17.1
+        use-cache: false
+        use-tool-cache: 'true'
+
+    - name: Download MiniCI build artifact
+      uses: actions/download-artifact@v8.0.1 # ratchet:actions/download-artifact@v8.0.1
+      with:
+        name: minici-build-${{ inputs.shard }}
+        path: .
+
+    - name: Unpack MiniCI build artifact
+      shell: bash
+      env:
+        MINICI_SHARD: ${{ inputs.shard }}
+      run: |
+        set -euo pipefail
+        zstd -dc "minici-build-$MINICI_SHARD.tar.zst" | tar -xf -
+        rm "minici-build-$MINICI_SHARD.tar.zst"
+
+    # Every file here is new to this machine: the sources come from a fresh
+    # checkout and the cache from the archive above, so nothing has the inode
+    # or mtime the cache recorded. Zig 0.17 counts that as a miss for C
+    # sources and linked artifacts even when the contents are identical, and
+    # would recompile every binary this shard runs. The tool records the new
+    # stat for each entry whose contents still match; it ships in the build
+    # artifact so it can run before the first `zig` command. See
+    # ci/restamp_zig_cache.zig.
+    - name: Re-stamp the restored Zig cache
+      shell: bash
+      run: ./zig-out/bin/restamp-zig-cache
+
+    - uses: ./.github/actions/setup-rust
+
+    - name: Install Valgrind
+      if: inputs.valgrind == 'true'
+      shell: bash
+      run: |
+        # libc6-dbg is required for Valgrind's function redirections. Ubuntu's
+        # Valgrind is enough here because build.zig pins x86-64 builds to the
+        # baseline CPU, so they contain no AVX-512 instructions it can't emulate.
+        sudo apt-get update && sudo apt-get install -y libc6-dbg valgrind
+        valgrind --version
+
+    # The embedded lld-link resolves /defaultlib via the LIB env and roc's
+    # linker locates the Windows SDK/MSVC libpaths at runtime (needed by
+    # run-test-cli / run-test-dylib / run-test-archive inside minici).
+    - name: Setup MSVC (Windows)
+      if: runner.os == 'Windows'
+      uses: TheMrMilchmann/setup-msvc-dev@79dac248aac9d0059f86eae9d8b5bfab4e95e97c # ratchet:TheMrMilchmann/setup-msvc-dev@v4.0.0
+      with:
+        arch: x64
+
+    # The image `build-ci` ran on, recorded by the build job's pack step.
+    - name: Read the runner image build-ci ran on
+      shell: bash
+      run: echo "MINICI_BUILD_RUNNER_IMAGE=$(cat .zig-cache/minici-build-runner-image)" >> "$GITHUB_ENV"
+
+    # A composite step names its shell, so the run step comes in the shells a
+    # workflow `run:` step defaults to: PowerShell on Windows, bash elsewhere.
+    # The same configuration options as the jobs MiniCI runs
+    # (`configurationArgs` in src/build/minici.zig), so this command reuses
+    # the configuration and steps the artifact carries for them.
+    - name: Run MiniCI
+      if: runner.os != 'Windows'
+      shell: bash
+      run: zig build minici --color off -Dembed-builtin-unit=true -- --minici-skip-build --minici-build-runner-image "$MINICI_BUILD_RUNNER_IMAGE" --minici-shard "$MINICI_SHARD"
+      env:
+        MINICI_SHARD: ${{ inputs.shard }}
+
+    - name: Run MiniCI (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: zig build minici --color off -Dembed-builtin-unit=true -- --minici-skip-build --minici-build-runner-image "$env:MINICI_BUILD_RUNNER_IMAGE" --minici-shard "$env:MINICI_SHARD"
+      env:
+        MINICI_SHARD: ${{ inputs.shard }}
+
+    # `.zig-cache` doubles as Zig's global cache, its local cache, and the
+    # build temp dir. It is restored from the MiniCI build artifact, so the
+    # composition after each shard is the restored cache plus whatever the
+    # shard's own run-time builds added on top. The packed artifact itself is
+    # measured in the build job, at pack time.
+    # One level deep on purpose: o/, h/, p/, tmp/ is the whole question.
+    #
+    # `df` first: the cache lives next to the unpacked artifact, and a runner
+    # that fills its disk dies without flushing logs, which looks identical to
+    # memory exhaustion ("lost communication with the server", no logs). The
+    # free-space line is what tells the two apart afterwards.
+    #
+    # The warning threshold applies to `.zig-cache` as it stands *after* a
+    # shard runs: the cache restored from the build artifact plus everything
+    # the shard's own run-time compilation added. Observed post-shard sizes
+    # (2026-07-26, run 30212177851) were 8.4-22.3 GB, the largest being the
+    # then-unsharded Linux lane; this sits ~28% above that, quiet while
+    # healthy but tripped by a real blowup.
+    - name: Report .zig-cache composition
+      if: always() && runner.os != 'Windows'
+      continue-on-error: true
+      shell: bash
+      env:
+        MINICI_SHARD_ZIG_CACHE_WARN_MB: '28672'
+      run: |
+        set -uo pipefail
+        root="${ZIG_LOCAL_CACHE_DIR:-$GITHUB_WORKSPACE/.zig-cache}"
+        limit_mb="$MINICI_SHARD_ZIG_CACHE_WARN_MB"
+        echo "root=$root  TMPDIR=${TMPDIR:-unset}"
+        df -h "$GITHUB_WORKSPACE" || true
+        if [ ! -d "$root" ]; then echo "(no .zig-cache)"; exit 0; fi
+        # `du -sk`, not `-sh`/`--block-size`: -k is POSIX and identical on BSD
+        # (macOS) and GNU du, and its output can be sorted numerically.
+        for d in "$root"/* "$root"/.[!.]*; do
+          [ -e "$d" ] || continue
+          du -sk "$d"
+        done | sort -rn | awk '{ printf "%10.1f MB  %s\n", $1/1024, $2 }'
+        total_kb="$(du -sk "$root" | awk '{ print $1 }')"
+        awk -v k="$total_kb" -v l="$limit_mb" \
+          'BEGIN { printf "%10.1f MB  TOTAL (limit %s MB)\n", k/1024, l }'
+        if [ "$total_kb" -gt "$(( limit_mb * 1024 ))" ]; then
+          echo "::warning::.zig-cache is $(( total_kb / 1024 )) MB after this shard, over the ${limit_mb} MB post-shard warning threshold."
+        fi
+
+    - name: Report .zig-cache composition (Windows)
+      if: always() && runner.os == 'Windows'
+      continue-on-error: true
+      shell: pwsh
+      env:
+        MINICI_SHARD_ZIG_CACHE_WARN_MB: '28672'
+      run: |
+        $root = if ($env:ZIG_LOCAL_CACHE_DIR) { $env:ZIG_LOCAL_CACHE_DIR }
+                else { Join-Path $env:GITHUB_WORKSPACE '.zig-cache' }
+        $limitMb = [int]$env:MINICI_SHARD_ZIG_CACHE_WARN_MB
+        Write-Host "root=$root  TEMP=$env:TEMP"
+        # Disk headroom, for the same reason the Unix branch runs `df`.
+        Get-PSDrive -PSProvider FileSystem |
+          Select-Object Name, @{n='UsedGB';e={[math]::Round($_.Used/1GB,1)}},
+                              @{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}} |
+          Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+        if (-not (Test-Path -LiteralPath $root)) { Write-Host '(no .zig-cache)'; exit 0 }
+        # -Force is required, or dotted/hidden subdirs are silently missed.
+        # -ErrorAction SilentlyContinue because deep Zig cache paths can exceed
+        # the enumerator's MAX_PATH; a partial number beats a red step.
+        $rows = Get-ChildItem -LiteralPath $root -Force | ForEach-Object {
+          $m = Get-ChildItem -LiteralPath $_.FullName -Recurse -Force -File -ErrorAction SilentlyContinue |
+               Measure-Object -Property Length -Sum
+          [pscustomobject]@{
+            Name  = $_.Name
+            MB    = [math]::Round(($m.Sum / 1MB), 1)
+            Files = $m.Count
+          }
+        }
+        $rows | Sort-Object MB -Descending | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+        $totalMb = [math]::Round((($rows | Measure-Object MB -Sum).Sum), 1)
+        $totalFiles = ($rows | Measure-Object Files -Sum).Sum
+        Write-Host ("TOTAL {0} MB across {1} files (limit {2} MB)" -f $totalMb, $totalFiles, $limitMb)
+        if ($totalMb -gt $limitMb) {
+          Write-Host ("::warning::.zig-cache is {0} MB after this shard, over the {1} MB post-shard warning threshold." -f $totalMb, $limitMb)
+        }
+
+    - name: Collect macOS compiler crash reports
+      if: failure() && runner.os == 'macOS'
+      continue-on-error: true
+      shell: bash
+      run: |
+        python3 - <<'PYTHON'
+        from pathlib import Path
+        import shutil
+
+        output = Path("zig-out/minici/crash-reports")
+        output.mkdir(parents=True, exist_ok=True)
+        programs = ("roc", "eval-test-runner")
+        roots = (Path.home() / "Library/Logs/DiagnosticReports",
+                 Path("/Library/Logs/DiagnosticReports"))
+        for index, root in enumerate(roots):
+            if not root.is_dir():
+                continue
+            for report in root.rglob("*"):
+                if report.is_file() and any(report.name.startswith(name + "-") or
+                                            report.name.startswith(name + "_")
+                                            for name in programs):
+                    shutil.copy2(report, output / (str(index) + "-" + report.name))
+                    print("Collected " + str(report))
+        PYTHON
+
+    # Uploaded for passing shards too: each phase's log ends with the
+    # `zig build --summary all` tree, the only record of which steps the
+    # shard compiled and which it took from the build job's cache.
+    - name: Upload MiniCI report and logs
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
+      with:
+        name: minici-${{ inputs.shard }}
+        path: zig-out/minici/

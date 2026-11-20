@@ -184,6 +184,9 @@ static inline uint8_t* roc_erased_callable_capture_ptr(RocErasedCallable callabl
 typedef struct Builder Builder;
 typedef struct HostTree HostTree;
 typedef struct Host Host;
+typedef struct Iter Iter;
+typedef struct TryType20 TryType20;
+typedef struct Stream Stream;
 typedef struct Padded Padded;
 typedef struct PaddedMixed PaddedMixed;
 typedef struct PaddedSlot PaddedSlot;
@@ -314,6 +317,99 @@ struct Host {
 ROC_STATIC_ASSERT(sizeof(Host) == 12, "Host size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(Host) == 4, "Host alignment mismatch");
 ROC_STATIC_ASSERT(offsetof(Host, name) == 0, "Host.name offset mismatch");
+#endif
+
+typedef uint8_t TryType20Tag;
+enum {
+    TryType20Tag_Err = 0,
+    TryType20Tag_Ok = 1
+};
+typedef union {
+    uint8_t err;
+    uint64_t ok;
+} TryType20TagPayloadStorage;
+#if UINTPTR_MAX == UINT64_MAX
+struct TryType20 {
+    TryType20TagPayloadStorage payload;
+    TryType20Tag tag;
+};
+ROC_STATIC_ASSERT(sizeof(TryType20) == 16, "TryType20 size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(TryType20) == 8, "TryType20 alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(TryType20, tag) == 8, "TryType20.tag offset mismatch");
+#else
+struct TryType20 {
+    ROC_ALIGNAS(8) uint8_t payload[8];
+    TryType20Tag tag;
+};
+ROC_STATIC_ASSERT(sizeof(TryType20) == 16, "TryType20 size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(TryType20) == 8, "TryType20 alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(TryType20, tag) == 8, "TryType20.tag offset mismatch");
+#endif
+static inline TryType20 TryType20_make_err(void) {
+    TryType20 out = {0};
+    out.tag = TryType20Tag_Err;
+    return out;
+}
+
+static inline TryType20 TryType20_make_ok(uint64_t payload) {
+    TryType20 out = {0};
+    out.tag = TryType20Tag_Ok;
+#if UINTPTR_MAX == UINT64_MAX
+    out.payload.ok = payload;
+#else
+    roc_abi_copy_bytes(out.payload, &payload, sizeof(payload));
+#endif
+    return out;
+}
+
+static inline uint64_t TryType20_payload_ok(const TryType20* value) {
+#if UINTPTR_MAX == UINT64_MAX
+    return value->payload.ok;
+#else
+    uint64_t payload;
+    roc_abi_copy_bytes(&payload, value->payload, sizeof(payload));
+    return payload;
+#endif
+}
+
+#if UINTPTR_MAX == UINT64_MAX
+struct Iter {
+    TryType20 len_if_known;
+    RocErasedCallable step;
+};
+ROC_STATIC_ASSERT(sizeof(Iter) == 24, "Iter size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(Iter) == 8, "Iter alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(Iter, len_if_known) == 0, "Iter.len_if_known offset mismatch");
+ROC_STATIC_ASSERT(offsetof(Iter, step) == 16, "Iter.step offset mismatch");
+#else
+struct Iter {
+    TryType20 len_if_known;
+    RocErasedCallable step;
+};
+ROC_STATIC_ASSERT(sizeof(Iter) == 24, "Iter size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(Iter) == 8, "Iter alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(Iter, len_if_known) == 0, "Iter.len_if_known offset mismatch");
+ROC_STATIC_ASSERT(offsetof(Iter, step) == 16, "Iter.step offset mismatch");
+#endif
+
+#if UINTPTR_MAX == UINT64_MAX
+struct Stream {
+    TryType20 len_if_known;
+    RocErasedCallable step_bang;
+};
+ROC_STATIC_ASSERT(sizeof(Stream) == 24, "Stream size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(Stream) == 8, "Stream alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(Stream, len_if_known) == 0, "Stream.len_if_known offset mismatch");
+ROC_STATIC_ASSERT(offsetof(Stream, step_bang) == 16, "Stream.step_bang offset mismatch");
+#else
+struct Stream {
+    TryType20 len_if_known;
+    RocErasedCallable step_bang;
+};
+ROC_STATIC_ASSERT(sizeof(Stream) == 24, "Stream size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(Stream) == 8, "Stream alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(Stream, len_if_known) == 0, "Stream.len_if_known offset mismatch");
+ROC_STATIC_ASSERT(offsetof(Stream, step_bang) == 16, "Stream.step_bang offset mismatch");
 #endif
 
 #if UINTPTR_MAX == UINT64_MAX
@@ -550,6 +646,10 @@ static inline RocStr ProcHandleCloseResult_payload_err(const ProcHandleCloseResu
 
 typedef HostTree HostTreeNode;
 typedef ProcHandlePollResult ProcHandleReadExactlyResult;
+typedef Iter HostReleaseBoxedIterArg0;
+typedef TryType20 IterLenIfKnownResult;
+typedef Stream HostReleaseBoxedStreamArg0;
+typedef TryType20 StreamLenIfKnownResult;
 
 // Hosted Function Infrastructure
 
@@ -924,7 +1024,7 @@ typedef struct {
  * Refcounted fields are owned by the hosted function.
  */
 typedef struct {
-    RocErasedCallable arg0;
+    Iter* arg0;
 } HostReleaseBoxedIterArgs;
 
 /**
@@ -933,7 +1033,7 @@ typedef struct {
  * Refcounted fields are owned by the hosted function.
  */
 typedef struct {
-    RocErasedCallable arg0;
+    Stream* arg0;
 } HostReleaseBoxedStreamArgs;
 
 
@@ -1051,10 +1151,10 @@ extern RocStr roc_stdin_line(void);
 extern void roc_stdout_line(RocStr arg0);
 
 /* Host.release_boxed_iter!: Box(Iter(U8)) => {} */
-extern void roc_host_release_boxed_iter(RocErasedCallable arg0);
+extern void roc_host_release_boxed_iter(Iter* arg0);
 
 /* Host.release_boxed_stream!: Box(Stream(U8)) => {} */
-extern void roc_host_release_boxed_stream(RocErasedCallable arg0);
+extern void roc_host_release_boxed_stream(Stream* arg0);
 
 
 // Provided Symbols

@@ -212,7 +212,7 @@ test "redundant open rows - associated and block-local annotations" {
     , .exact);
 }
 
-test "redundant open rows - where-method signatures" {
+test "redundant open rows - where-method signatures report no `..`" {
     try expectFormatterMatchesChecker(
         \\f : a -> Str
         \\    where [
@@ -226,12 +226,51 @@ test "redundant open rows - where-method signatures" {
     , .exact);
 }
 
+test "redundant open rows - a function's own result beside a where clause" {
+    // The function produces its own result row, so its `..` is redundant;
+    // the method's is not.
+    try expectFormatterMatchesChecker(
+        \\load : a -> [Loaded, Failed, ..] where [a.fetch : a -> [IoErr, Done, ..]]
+        \\load = |_| Loaded
+    , .exact);
+}
+
 test "redundant open rows - where-method error row through a local alias" {
+    // The alias places its formal in an argument of `Try`, where a `..`
+    // quantifies the row: neither the checker nor the formatter calls it
+    // redundant.
     try expectFormatterMatchesChecker(
         \\Res(e) : Try(Str, e)
         \\
-        \\load : a -> Res([IoErr, Other]) where [a.fetch : a -> Res([IoErr, ..])]
-        \\load = |x| x.fetch()
+        \\load : a -> Str where [a.fetch : a -> Res([IoErr, ..])]
+        \\load = |x| match x.fetch() {
+        \\    Ok(s) => s
+        \\    Err(_) => ""
+        \\}
+    , .exact);
+}
+
+test "redundant open rows - where-method error row written inline" {
+    try expectFormatterMatchesChecker(
+        \\load : a -> Str where [a.fetch : a -> Try(Str, [IoErr, ..])]
+        \\load = |x| match x.fetch() {
+        \\    Ok(s) => s
+        \\    Err(_) => ""
+        \\}
+    , .exact);
+}
+
+test "redundant open rows - where-method result row through a local alias" {
+    // The alias places its formal on the signature's direct result, where a
+    // `..` quantifies the row as it does in an argument of `Try`.
+    try expectFormatterMatchesChecker(
+        \\Outcome(e) : e
+        \\
+        \\load : a -> Str where [a.fetch : a -> Outcome([IoErr, Done, ..])]
+        \\load = |x| match x.fetch() {
+        \\    Done => "done"
+        \\    _ => ""
+        \\}
     , .exact);
 }
 
@@ -331,7 +370,7 @@ test "redundant open rows - recursive nominal positions and transparent resets" 
     , .exact);
 }
 
-test "redundant open rows - entire function aliases preserve adapter reach" {
+test "redundant open rows - a where-method written as a function alias keeps its `..`" {
     try expectFormatterMatchesChecker(
         \\Result(e) : Try(Str, e)
         \\Method(a,e) : a -> Result(e)
@@ -340,7 +379,7 @@ test "redundant open rows - entire function aliases preserve adapter reach" {
     , .exact);
 }
 
-test "redundant open rows - adapter reach crosses long alias chains" {
+test "redundant open rows - a where-method row behind a long alias chain keeps its `..`" {
     var source: std.ArrayList(u8) = .empty;
     defer source.deinit(testing.allocator);
     try source.appendSlice(testing.allocator, "R0(e) : Try(Str,e)\n");

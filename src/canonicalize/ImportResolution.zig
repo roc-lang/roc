@@ -326,20 +326,6 @@ const Resolver = struct {
         }
     }
 
-    // Name assembly.
-
-    fn scratchQualified(
-        self: *Resolver,
-        prefix: []const u8,
-        suffix: []const u8,
-    ) std.mem.Allocator.Error![]const u8 {
-        self.scratch.clearRetainingCapacity();
-        try self.scratch.appendSlice(self.env.gpa, prefix);
-        try self.scratch.append(self.env.gpa, '.');
-        try self.scratch.appendSlice(self.env.gpa, suffix);
-        return self.scratch.items;
-    }
-
     // Lookups inside one module.
 
     fn exposedTarget(
@@ -348,23 +334,7 @@ const Resolver = struct {
         prefix: Prefix,
         path: []const u8,
     ) std.mem.Allocator.Error!?collections.ExposedItemTarget {
-        if (prefix.text) |text| {
-            const qualified = try self.scratchQualified(text, path);
-            if (other.common.findIdent(qualified)) |ident| {
-                if (other.getExposedTargetById(ident)) |target| return target;
-            }
-            if (prefix.exclusive) return null;
-        }
-        {
-            const qualified = try self.scratchQualified(other.module_name, path);
-            if (other.common.findIdent(qualified)) |ident| {
-                if (other.getExposedTargetById(ident)) |target| return target;
-            }
-        }
-        if (other.common.findIdent(path)) |ident| {
-            if (other.getExposedTargetById(ident)) |target| return target;
-        }
-        return null;
+        return lookupExposed(self.env.gpa, &self.scratch, other, prefix, path);
     }
 
     fn exposedTypeNode(
@@ -385,58 +355,6 @@ const Resolver = struct {
     ) std.mem.Allocator.Error!?u32 {
         const target = (try self.exposedTarget(other, prefix, path)) orelse return null;
         return target.valueDefNode();
-    }
-
-    /// Find a type declaration by the header name it carries in its own
-    /// module, which covers declarations a module does not expose by name but
-    /// which a public selection still reaches.
-    fn typeDeclNodeByHeader(
-        self: *Resolver,
-        other: *const ModuleEnv,
-        prefix: Prefix,
-        path: []const u8,
-    ) std.mem.Allocator.Error!?u32 {
-        const qualified_ident = blk: {
-            if (prefix.text) |text| {
-                const qualified = try self.scratchQualified(text, path);
-                if (other.common.findIdent(qualified)) |ident| break :blk ident;
-                if (prefix.exclusive) return null;
-            }
-            {
-                const qualified = try self.scratchQualified(other.module_name, path);
-                if (other.common.findIdent(qualified)) |ident| break :blk ident;
-            }
-            break :blk other.common.findIdent(path) orelse return null;
-        };
-
-        for (other.store.sliceStatements(other.all_statements)) |stmt_idx| {
-            const header_idx = switch (other.store.getStatement(stmt_idx)) {
-                inline .s_nominal_decl, .s_alias_decl, .s_where_alias_decl => |decl| decl.header,
-                .s_decl,
-                .s_var,
-                .s_var_uninitialized,
-                .s_reassign,
-                .s_crash,
-                .s_dbg,
-                .s_expr,
-                .s_expect,
-                .s_for,
-                .s_while,
-                .s_infinite_loop,
-                .s_breakable_loop,
-                .s_break,
-                .s_return,
-                .s_import,
-                .s_type_anno,
-                .s_type_var_alias,
-                .s_runtime_error,
-                => continue,
-            };
-            if (other.store.getTypeHeader(header_idx).name.eql(qualified_ident)) {
-                return @backingInt(stmt_idx);
-            }
-        }
-        return null;
     }
 
     /// The declaration an exposed alias names, when the alias's annotation is
@@ -512,9 +430,6 @@ const Resolver = struct {
         if (try self.exposedTypeNode(other, prefix, path)) |node_idx| {
             return DeclRef{ .env = other, .node_idx = node_idx };
         }
-        if (try self.typeDeclNodeByHeader(other, prefix, path)) |node_idx| {
-            return DeclRef{ .env = other, .node_idx = node_idx };
-        }
         if (depth == 0) return null;
 
         // Longest exposed prefix first: `A.B.C` prefers an `A.B` that exists
@@ -523,8 +438,7 @@ const Resolver = struct {
         while (split) |dot| : (split = lastDot(path[0..dot])) {
             const head = path[0..dot];
             const rest = path[dot + 1 ..];
-            const head_node = (try self.exposedTypeNode(other, prefix, head)) orelse
-                (try self.typeDeclNodeByHeader(other, prefix, head)) orelse continue;
+            const head_node = (try self.exposedTypeNode(other, prefix, head)) orelse continue;
             const alias_target = self.followAlias(other, head_node) orelse continue;
             // The alias names one declaration, so the walk continues inside
             // that declaration and nothing else in its module.
@@ -1318,8 +1232,30 @@ fn declPrefix(other: *const ModuleEnv, node_idx: u32) ?[]const u8 {
     return selectedPrefix(other, @fromBackingInt(@intCast(node_idx)));
 }
 
-/// The name an import's exposed declarations carry as their prefix: the
-/// declaration a package header makes public, or a type module's main type.
+/// Resolve a source-local platform header slot against its checked module's
+/// normal exposed-value namespace, without checking the platform body.
+pub fn hostedTarget(gpa: std.mem.Allocator, scratch: *std.ArrayList(u8), env: *const ModuleEnv, path: []const u8) std.mem.Allocator.Error!?u32 {
+    const target = try lookupExposed(gpa, scratch, env, .{}, path) orelse return null;
+    return target.valueDefNode();
+}
+
+fn lookupExposed(gpa: std.mem.Allocator, scratch: *std.ArrayList(u8), other: *const ModuleEnv, prefix: Prefix, path: []const u8) std.mem.Allocator.Error!?collections.ExposedItemTarget {
+    for ([_]?[]const u8{ prefix.text, other.module_name }, 0..) |maybe, index| {
+        const text = maybe orelse continue;
+        scratch.clearRetainingCapacity();
+        try scratch.appendSlice(gpa, text);
+        try scratch.append(gpa, '.');
+        try scratch.appendSlice(gpa, path);
+        if (other.common.findIdent(scratch.items)) |ident| {
+            if (other.getExposedTargetById(ident)) |target| return target;
+        }
+        if (index == 0 and prefix.exclusive) return null;
+    }
+    const ident = other.common.findIdent(path) orelse return null;
+    return other.getExposedTargetById(ident);
+}
+
+/// The declaration selected by the import, or a type module's main type.
 fn importPrefix(available: ResolvedImport.Available) Prefix {
     if (selectedPrefix(available.module_env, available.selected_type_decl)) |prefix| {
         // A header that made a declaration nested inside another one public

@@ -189,6 +189,36 @@ const SettledDescs = struct {
         for (self.list.items) |index| self.bits.unset(index);
         self.list.clearRetainingCapacity();
     }
+
+    /// What a merge of two classes needs to know about this set before it
+    /// writes anything (see `Store.unionRows`).
+    const Merge = struct {
+        before: usize,
+        a_settled: bool,
+        b_settled: bool,
+    };
+
+    /// Note a merge that will give `a`'s and `b`'s vars content `a_kept` or
+    /// `b_kept` says is each side's own. A settled side whose content
+    /// changes clears the set.
+    inline fn beginMerge(self: *SettledDescs, a: DescStore.Idx, b: DescStore.Idx, a_kept: bool) Merge {
+        if (self.list.items.len == 0) return .{ .before = 0, .a_settled = false, .b_settled = false };
+        const merge: Merge = .{ .before = self.list.items.len, .a_settled = self.contains(a), .b_settled = self.contains(b) };
+        if (merge.a_settled and !a_kept) {
+            self.clear();
+            return .{ .before = 0, .a_settled = merge.a_settled, .b_settled = merge.b_settled };
+        }
+        return merge;
+    }
+
+    /// After the merge: when nothing cleared the set and a settled side kept
+    /// its content, the merged class `merged` is settled.
+    inline fn finishMerge(self: *SettledDescs, gpa: Allocator, merge: Merge, merged: DescStore.Idx, a_kept: bool, b_kept: bool) Allocator.Error!void {
+        const nothing_changed = self.list.items.len == merge.before and merge.before != 0;
+        if (nothing_changed and ((merge.a_settled and a_kept) or (merge.b_settled and b_kept))) {
+            try self.insert(gpa, merged);
+        }
+    }
 };
 
 /// Reperents either type data *or* a symlink to another type variable
@@ -243,6 +273,11 @@ pub const Store = struct {
 
     gpa: Allocator,
 
+    /// In builds with runtime safety, the identifiers this store's tag names
+    /// index while a checker writes to it, so every tag-union descriptor
+    /// written can be asserted to hold its own tags in name order.
+    debug_idents: if (std.debug.runtime_safety) ?*const base.Ident.Store else void = if (std.debug.runtime_safety) null else {},
+
     /// Type variable storage
     slots: SlotStore,
     descs: DescStore,
@@ -256,6 +291,8 @@ pub const Store = struct {
     /// Storage for compound type parts
     vars: VarSafeList,
     record_fields: RecordFieldSafeMultiList,
+    /// Every tag-union descriptor's own range is in name order
+    /// (`debugAssertTagsInNameOrder`).
     tags: TagSafeMultiList,
     interpolation_parts: InterpolationPartMetadata.SafeList,
     numeral_infos: NumeralInfo.SafeList,
@@ -334,6 +371,10 @@ pub const Store = struct {
     /// Descriptors a scan recorded as settled (see `SettledDescs`).
     /// Runtime-only: never serialized, cloned, or relocated.
     settled_descs: SettledDescs = .{},
+    /// Descriptors a scan found to reach no function type (see
+    /// `SettledDescs` and `markFunctionFree`), kept exactly like
+    /// `settled_descs`. Runtime-only: never serialized, cloned, or relocated.
+    function_free_descs: SettledDescs = .{},
     /// Set while `union_` relinks storage roots whose observable content it
     /// has already compared, so the relinking itself settles nothing away.
     relinking_compared_classes: bool = false,
@@ -570,39 +611,36 @@ pub const Store = struct {
         }
         for (self.nominal_decls.items()) |*decl| decl.backing = self.representativeVar(decl.backing);
 
-        var live = live_descs.iterator(.{});
-        while (live.next()) |index| {
-            const desc_idx: DescStore.Idx = @fromBackingInt(@intCast(index));
-            var desc = self.descAt(desc_idx);
-            switch (desc.content) {
-                .flex, .rigid, .alias, .field_presence, .err => continue,
-                .structure => |*flat| switch (flat.*) {
-                    .tuple, .nominal_type, .empty_record, .empty_tag_union => continue,
-                    .fn_pure, .fn_effectful, .fn_unbound => |*func| func.ret = self.representativeVar(func.ret),
-                    .record => |*record| record.ext = self.representativeVar(record.ext),
-                    .tag_union => |*tag_union| tag_union.ext = self.representativeVar(tag_union.ext),
-                },
-            }
-            self.descs.setRow(desc_idx, self.encodeDescWithoutIdentity(desc));
-        }
-
+        // One pass over the live descriptors, in index order, reading each
+        // one's kind. Only a function, a record and a tag union hold a
+        // variable inline (a return or an extension), so only those are read
+        // past their word. Resolving a row's extension also tells whether it
+        // is itself a row: such a row absorbs its chain, and every other one
+        // only has its extension replaced. A chain's segments are read as
+        // stored: a segment at a lower index has absorbed its own chain
+        // already, and one at a higher index has not.
         var row_fields: std.ArrayListUnmanaged(RecordField) = .empty;
         defer row_fields.deinit(self.gpa);
         var row_tags: std.ArrayListUnmanaged(Tag) = .empty;
         defer row_tags.deinit(self.gpa);
-        live = live_descs.iterator(.{});
+        var live = live_descs.iterator(.{});
         while (live.next()) |index| {
             const desc_idx: DescStore.Idx = @fromBackingInt(@intCast(index));
-            var desc = self.descAt(desc_idx);
-            const flat = switch (desc.content) {
-                .structure => |*flat| flat,
-                .flex, .rigid, .alias, .field_presence, .err => continue,
-            };
-            switch (flat.*) {
-                .record => |*record| {
-                    if (self.extensionRecord(record.ext) == null) continue;
+            switch (self.descs.getWord(desc_idx).kind) {
+                .flex, .rigid, .alias, .field_presence, .err, .tuple, .nominal_type, .empty_record, .empty_tag_union => {},
+                .fn_pure, .fn_effectful, .fn_unbound => {
+                    const ret: Var = @fromBackingInt(self.descs.getPayloadWord(desc_idx, Desc.fn_ret_payload_word));
+                    self.setInlineVarForSeal(desc_idx, Desc.fn_ret_payload_word, self.representativeVar(ret));
+                },
+                .record => {
+                    const record = self.recordAt(desc_idx);
+                    const ext = self.findStorageRoot(record.ext);
+                    if (self.descs.getWord(ext.desc_idx).kind != .record) {
+                        self.setInlineVarForSeal(desc_idx, Desc.row_ext_payload_word, representativeOf(ext));
+                        continue;
+                    }
                     row_fields.clearRetainingCapacity();
-                    var segment = record.*;
+                    var segment = record;
                     var guard = debug.IterationGuard.init("canonicalizeForSeal.record");
                     while (true) {
                         guard.tick();
@@ -611,12 +649,22 @@ pub const Store = struct {
                         segment = self.extensionRecord(segment.ext) orelse break;
                     }
                     std.mem.sort(RecordField, row_fields.items, idents, RecordField.sortByNameAsc);
-                    record.* = .{ .fields = try self.record_fields.appendSlice(self.gpa, row_fields.items), .ext = segment.ext };
+                    var desc = self.descAt(desc_idx);
+                    desc.content = .{ .structure = .{ .record = .{
+                        .fields = try self.record_fields.appendSlice(self.gpa, row_fields.items),
+                        .ext = self.representativeVar(segment.ext),
+                    } } };
+                    self.descs.setRow(desc_idx, self.encodeDescWithoutIdentity(desc));
                 },
-                .tag_union => |*tag_union| {
-                    if (self.extensionTagUnion(tag_union.ext) == null) continue;
+                .tag_union => {
+                    const tag_union = self.tagUnionAt(desc_idx);
+                    const ext = self.findStorageRoot(tag_union.ext);
+                    if (self.descs.getWord(ext.desc_idx).kind != .tag_union) {
+                        self.setInlineVarForSeal(desc_idx, Desc.row_ext_payload_word, representativeOf(ext));
+                        continue;
+                    }
                     row_tags.clearRetainingCapacity();
-                    var segment = tag_union.*;
+                    var segment = tag_union;
                     var guard = debug.IterationGuard.init("canonicalizeForSeal.tag_union");
                     while (true) {
                         guard.tick();
@@ -625,21 +673,42 @@ pub const Store = struct {
                         segment = self.extensionTagUnion(segment.ext) orelse break;
                     }
                     std.mem.sort(Tag, row_tags.items, idents, Tag.sortByNameAsc);
-                    tag_union.* = .{ .tags = try self.tags.appendSlice(self.gpa, row_tags.items), .ext = segment.ext };
+                    var desc = self.descAt(desc_idx);
+                    desc.content = .{ .structure = .{ .tag_union = .{
+                        .tags = try self.tags.appendSlice(self.gpa, row_tags.items),
+                        .ext = self.representativeVar(segment.ext),
+                    } } };
+                    self.descs.setRow(desc_idx, self.encodeDescWithoutIdentity(desc));
                 },
-                .tuple, .nominal_type, .empty_record, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound => continue,
             }
-            self.descs.setRow(desc_idx, self.encodeDescWithoutIdentity(desc));
         }
     }
 
-    /// The checked representative of `var_`'s class.
-    fn representativeVar(self: *const Self, var_: Var) Var {
-        const representative = self.resolveVar(var_).var_;
+    /// Replace the variable a function or row descriptor holds inline in
+    /// `payload_word`, leaving the rest of its stored row as it is: the row
+    /// is then what encoding the descriptor with that variable gives.
+    fn setInlineVarForSeal(self: *Self, desc_idx: DescStore.Idx, comptime payload_word: usize, var_: Var) void {
+        self.descs.setPayloadWord(desc_idx, payload_word, @backingInt(var_));
+        if (std.debug.runtime_safety) {
+            const reencoded = self.encodeDescWithoutIdentity(self.descAt(desc_idx));
+            if (!std.meta.eql(self.descs.getRow(desc_idx), reencoded)) {
+                base.invariant("a sealed descriptor's stored row is not its descriptor's encoding", .{});
+            }
+        }
+    }
+
+    /// The checked representative of the class `root` stores.
+    fn representativeOf(root: StorageRoot) Var {
+        const representative = root.meta.checked_var;
         if (std.debug.runtime_safety and @backingInt(representative) >= (@as(u32, 1) << 31)) {
             base.invariant("type variable {d} does not fit below the checked synthesized-type bit", .{@backingInt(representative)});
         }
         return representative;
+    }
+
+    /// The checked representative of `var_`'s class.
+    fn representativeVar(self: *const Self, var_: Var) Var {
+        return representativeOf(self.findStorageRoot(var_));
     }
 
     /// The record `ext` resolves to, when it is one.
@@ -697,6 +766,8 @@ pub const Store = struct {
         self.class_watch = .{};
         self.settled_descs.deinit(self.gpa);
         self.settled_descs = .{};
+        self.function_free_descs.deinit(self.gpa);
+        self.function_free_descs = .{};
         self.detach_members_scratch.deinit(self.gpa);
         self.detach_members_scratch = .empty;
         self.slot_trail.deinit(self.gpa);
@@ -986,6 +1057,7 @@ pub const Store = struct {
         self.debugAssertUnsealed();
         self.class_watch.noteRollback();
         self.settled_descs.clear();
+        self.function_free_descs.clear();
         // Replay journaled in-place writes in reverse so each pre-existing entry
         // lands back on its original value.
         var di = self.desc_trail.items.len;
@@ -1102,10 +1174,9 @@ pub const Store = struct {
             .root => |desc_idx| {
                 self.class_watch.noteWrite(desc_idx);
                 // The slot's vars stop resolving to a settled descriptor.
-                if (!self.relinking_compared_classes and self.settled_descs.contains(desc_idx) and
-                    !std.meta.eql(val, Slot{ .root = desc_idx }))
-                {
-                    self.settled_descs.clear();
+                if (!self.relinking_compared_classes and !std.meta.eql(val, Slot{ .root = desc_idx })) {
+                    if (self.settled_descs.contains(desc_idx)) self.settled_descs.clear();
+                    if (self.function_free_descs.contains(desc_idx)) self.function_free_descs.clear();
                 }
             },
             .redirect => {},
@@ -1146,8 +1217,11 @@ pub const Store = struct {
         // generalization pass has marked.
         std.debug.assert(!self.descs.getWord(idx).marked());
         try self.journalDescWrite(idx);
-        if (self.settled_descs.contains(idx) and !DescStore.sameContent(self.descs.getRow(idx), row)) {
-            self.settled_descs.clear();
+        if ((self.settled_descs.contains(idx) or self.function_free_descs.contains(idx)) and
+            !DescStore.sameContent(self.descs.getRow(idx), row))
+        {
+            if (self.settled_descs.contains(idx)) self.settled_descs.clear();
+            if (self.function_free_descs.contains(idx)) self.function_free_descs.clear();
         }
         self.descs.setRow(idx, row);
     }
@@ -1197,6 +1271,21 @@ pub const Store = struct {
     /// `markSettled`). This scan hint is discarded when checking seals the store.
     pub fn isSettled(self: *const Self, var_: Var) bool {
         return self.settled_descs.contains(self.resolveVar(var_).desc_idx);
+    }
+
+    /// Record the class of each of `vars` as reaching no function type. The
+    /// caller guarantees that every class reachable from these classes is
+    /// among them or already recorded.
+    pub fn markFunctionFree(self: *Self, vars: []const Var) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        for (vars) |var_| try self.function_free_descs.insert(self.gpa, self.resolveVar(var_).desc_idx);
+    }
+
+    /// Whether a checking scan recorded `var_`'s class as reaching no
+    /// function type (see `markFunctionFree`). Exact while recorded: any
+    /// change to a recorded class's observable content forgets every record.
+    pub fn isFunctionFree(self: *const Self, var_: Var) bool {
+        return self.function_free_descs.contains(self.resolveVar(var_).desc_idx);
     }
 
     /// In-place equivalence-class root metadata write. See setSlot.
@@ -1303,6 +1392,7 @@ pub const Store = struct {
         std.debug.assert(!self.savepoint_active);
         const index: u32 = @backingInt(desc_idx);
         if (index < self.settled_descs.bits.bit_length) self.settled_descs.bits.unset(index);
+        if (index < self.function_free_descs.bits.bit_length) self.function_free_descs.bits.unset(index);
         if (index < self.class_watch.watched.bit_length) self.class_watch.watched.unset(index);
         if (self.descs.getWord(desc_idx).flags().frozen) _ = self.frozen_anchors.remove(desc_idx);
         const plan_slot = self.derivedMapPlanSlot(desc_idx);
@@ -1473,6 +1563,30 @@ pub const Store = struct {
         return row.payload[0];
     }
 
+    /// The identity row an alias descriptor names (`nominalIdentityRowAt`).
+    pub inline fn aliasIdentityRowAt(self: *const Self, desc_idx: DescStore.Idx) u32 {
+        const row = self.descs.getRow(desc_idx);
+        std.debug.assert(row.word.kind == .alias);
+        return row.payload[0];
+    }
+
+    /// A tag-union descriptor's own range holds its tags in name order. A
+    /// label may repeat only where a copy flattens a row whose extension chain
+    /// repeats it (design.md "Row Union Normalization"), so equal neighbors
+    /// are in order. Checked where a descriptor is encoded, while
+    /// `debug_idents` is known.
+    pub fn debugAssertTagsInNameOrder(self: *const Self, range: TagSafeMultiList.Range) void {
+        if (!std.debug.runtime_safety) return;
+        const idents = self.debug_idents orelse return;
+        if (range.count < 2) return;
+        const names = self.tags.sliceRange(range).items(.name);
+        for (names[0 .. names.len - 1], names[1..]) |prev, next| {
+            if (base.Ident.textOrder(idents.getText(prev), idents.getText(next)) == .gt) {
+                base.invariant("a tag union's own tags are not in name order: {s} before {s}", .{ idents.getText(prev), idents.getText(next) });
+            }
+        }
+    }
+
     /// `desc` as a stored row, interning the identity of a nominal type or
     /// alias.
     inline fn encodeDesc(self: *Self, desc: Desc) Allocator.Error!Desc.Row {
@@ -1549,7 +1663,9 @@ pub const Store = struct {
         };
     }
 
-    /// The row holding `identity`, appending one when no row does.
+    /// The row holding `identity`, appending one when no row does. No two
+    /// rows hold the same identity, so a descriptor copied within the store
+    /// may keep its source's row (`fillFreshPlaceholderWithIdentity`).
     fn internIdentity(
         comptime Identity: type,
         gpa: Allocator,
@@ -1561,7 +1677,8 @@ pub const Store = struct {
         const all = rows.items();
         while (indexed.* < all.len) : (indexed.* += 1) {
             const entry = try index.getOrPut(gpa, all[indexed.*]);
-            if (!entry.found_existing) entry.value_ptr.* = indexed.*;
+            std.debug.assert(!entry.found_existing);
+            entry.value_ptr.* = indexed.*;
         }
         const entry = try index.getOrPut(gpa, identity);
         if (entry.found_existing) return entry.value_ptr.*;
@@ -1834,6 +1951,29 @@ pub const Store = struct {
             std.debug.assert(self.getRootMeta(desc_idx).checked_var == fresh_var);
         }
         try self.setDesc(desc_idx, desc);
+    }
+
+    /// `fillFreshPlaceholder` for a nominal type or alias whose identity is
+    /// row `identity` of this store, as the descriptor it was copied from
+    /// names it. Identity rows are unique (`internIdentity`), so `identity`
+    /// is the row interning `desc`'s identity finds.
+    pub inline fn fillFreshPlaceholderWithIdentity(self: *Self, fresh_var: Var, desc: Desc, identity: u32) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        const desc_idx = self.resolveDescIdx(fresh_var);
+        if (std.debug.runtime_safety) {
+            const word = self.descs.getWord(desc_idx);
+            std.debug.assert(word.kind == .flex and !word.flags().frozen);
+            std.debug.assert(self.getRootMeta(desc_idx).checked_var == fresh_var);
+            switch (desc.content) {
+                .alias => |alias| std.debug.assert(std.meta.eql(self.aliasIdentity(identity), AliasIdentity.of(alias))),
+                .structure => |flat| switch (flat) {
+                    .nominal_type => |nominal| std.debug.assert(std.meta.eql(self.nominalIdentity(identity), NominalIdentity.of(nominal))),
+                    .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => unreachable, // only a nominal type or alias names an identity
+                },
+                .flex, .rigid, .field_presence, .err => unreachable, // only a nominal type or alias names an identity
+            }
+        }
+        try self.setDescRow(desc_idx, desc.encode(identity, self));
     }
 
     /// Show `target_var`'s whole class with `content` until the active
@@ -3359,12 +3499,10 @@ pub const Store = struct {
         // a's vars come to see the merged descriptor. When its content is
         // what a settled side already had, that side's settledness carries
         // over to the merged class; otherwise a settled side has changed.
-        const settled_before = self.settled_descs.list.items.len;
-        const a_settled = self.settled_descs.contains(a_data.desc_idx);
-        const b_settled = self.settled_descs.contains(b_data.desc_idx);
         const a_kept = DescStore.sameContent(self.descs.getRow(a_data.desc_idx), merged_row);
         const b_kept = DescStore.sameContent(self.descs.getRow(b_data.desc_idx), merged_row);
-        if (a_settled and !a_kept) self.settled_descs.clear();
+        const settled_merge = self.settled_descs.beginMerge(a_data.desc_idx, b_data.desc_idx, a_kept);
+        const function_free_merge = self.function_free_descs.beginMerge(a_data.desc_idx, b_data.desc_idx, a_kept);
 
         // The unifier computes merged content for b's descriptor destination.
         // Keep that destination even when balancing retains a's storage root.
@@ -3373,10 +3511,8 @@ pub const Store = struct {
         defer self.relinking_compared_classes = false;
         try self.linkStorageRoots(a_data, b_data, b_data.desc_idx, b_data.meta.checked_var);
         try self.freeDesc(a_data.desc_idx, a_data.storage_var);
-        const nothing_changed = self.settled_descs.list.items.len == settled_before and settled_before != 0;
-        if (nothing_changed and ((a_settled and a_kept) or (b_settled and b_kept))) {
-            try self.settled_descs.insert(self.gpa, b_data.desc_idx);
-        }
+        try self.settled_descs.finishMerge(self.gpa, settled_merge, b_data.desc_idx, a_kept, b_kept);
+        try self.function_free_descs.finishMerge(self.gpa, function_free_merge, b_data.desc_idx, a_kept, b_kept);
     }
 
     /// `union_` when either class is frozen. The merged class keeps the frozen
@@ -3896,6 +4032,17 @@ const DescStore = struct {
     /// Overwrite the word of descriptor `idx`, keeping its payload.
     fn setWord(self: *Self, idx: Idx, word: Desc.Word) void {
         self.backing.items(.word)[@backingInt(idx)] = word;
+    }
+
+    /// One word of descriptor `idx`'s payload.
+    inline fn getPayloadWord(self: *const Self, idx: Idx, comptime word: usize) u32 {
+        return self.backing.items(.payload)[@backingInt(idx)][word];
+    }
+
+    /// Overwrite one word of descriptor `idx`'s payload, keeping its word
+    /// and the rest of its payload.
+    fn setPayloadWord(self: *Self, idx: Idx, comptime word: usize, value: u32) void {
+        self.backing.items(.payload)[@backingInt(idx)][word] = value;
     }
 
     inline fn rowIdx(idx: Idx) Rows.Idx {
@@ -4744,6 +4891,39 @@ test "settled classes survive content-preserving merges and clear on any observa
     var savepoint = try store.createSavepoint();
     store.rollbackToSavepoint(&savepoint);
     try std.testing.expect(!store.isSettled(witness));
+}
+
+test "function-free records are kept apart from settled ones and forgotten on any observable change" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    // A flex merged into a recorded class keeps its content, and the merged
+    // class stays recorded. The two kinds of record are independent.
+    const recorded = try store.freshFromContent(.{ .structure = .empty_record });
+    try store.markFunctionFree(&.{recorded});
+    try std.testing.expect(!store.isSettled(recorded));
+    const joining = try store.fresh();
+    try store.union_(joining, recorded, .{ .content = .{ .structure = .empty_record }, .rank = Rank.outermost });
+    try std.testing.expect(store.isFunctionFree(recorded));
+    try std.testing.expect(store.isFunctionFree(joining));
+
+    // A recorded flex that comes to see other content forgets every record,
+    // and leaves the settled classes alone.
+    const recorded_flex = try store.fresh();
+    const settled = try store.freshFromContent(.{ .structure = .empty_record });
+    try store.markSettled(&.{settled});
+    try store.markFunctionFree(&.{recorded_flex});
+    const structure = try store.freshFromContent(.{ .structure = .empty_record });
+    try store.union_(recorded_flex, structure, .{ .content = .{ .structure = .empty_record }, .rank = Rank.outermost });
+    try std.testing.expect(!store.isFunctionFree(recorded));
+    try std.testing.expect(store.isSettled(settled));
+
+    // A rollback forgets every record.
+    try store.markFunctionFree(&.{settled});
+    var savepoint = try store.createSavepoint();
+    store.rollbackToSavepoint(&savepoint);
+    try std.testing.expect(!store.isFunctionFree(settled));
 }
 
 test "savepoint clone cross-check is compiled in for test builds" {

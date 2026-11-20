@@ -12,9 +12,10 @@
 //! is an output, function arguments flip the surrounding polarity, and every
 //! other position keeps it; a type application's argument is generated at the
 //! application's polarity composed with the positions of the declaration
-//! formal it is substituted for; a where-method signature opens only the rows
-//! within the row coercion's reach (design.md "Closed Result Rows At Template
-//! Boundaries"). Which annotations qualify at all
+//! formal it is substituted for. A where-method signature is left alone: its
+//! direct result row is deferred per use and every other row is generated as
+//! written, so a `..` anywhere in it quantifies the row (design.md
+//! "Polarity"). Which annotations qualify at all
 //! mirrors `Check.bindingRhsGeneralizes` together with
 //! `Check.collectHostBoundaryAnnotations`.
 //!
@@ -49,8 +50,6 @@ pub const StatementScope = enum {
     block,
 };
 
-const try_type_name = "Try";
-
 const Polarity = enum {
     pos,
     neg,
@@ -63,24 +62,11 @@ const Polarity = enum {
     }
 };
 
-/// `Check.GenTypeAnnoCtx.AnnotationGenCtx.OpeningBehavior`.
-const Opening = enum { implicit_open, per_use, as_written };
-
-/// `Check.GenTypeAnnoCtx.AnnotationGenCtx.AdapterReach`.
-const Reach = enum { signature, result, try_row, nested };
-
-const Ctx = struct {
-    opening: Opening,
-    reach: Reach,
-
-    fn withReach(self: Ctx, reach: Reach) Ctx {
-        return .{ .opening = self.opening, .reach = reach };
-    }
-
-    fn withOpening(self: Ctx, opening: Opening) Ctx {
-        return .{ .opening = opening, .reach = self.reach };
-    }
-};
+/// How the checker generates an annotation position's rows: opened where
+/// they are outputs (`OpeningBehavior.implicit_open`), or exactly as written.
+/// A `where` method's signature is not walked: every `..` in it quantifies
+/// its row, so none is redundant.
+const Opening = enum { implicit_open, as_written };
 
 /// A question the walk could not answer the way the checker does.
 /// The declarations one written type name could resolve to.
@@ -422,18 +408,16 @@ pub const OpenRows = struct {
         self.occurrences.clearRetainingCapacity();
         const occurrences = &self.occurrences;
 
-        const ctx = Ctx{ .opening = .implicit_open, .reach = .nested };
+        const ctx: Opening = .implicit_open;
         try self.walk(anno_idx, ctx, .pos, occurrences);
 
         const where_coll = where orelse return;
         const coll = self.ast.store.getCollection(where_coll);
         for (self.ast.store.whereClauseSlice(.{ .span = coll.span })) |clause_idx| {
             switch (self.ast.store.getWhereClause(clause_idx)) {
-                .mod_method => |method| {
-                    if (!receiverOpens(occurrences, self.tokenName(method.var_tok))) continue;
-                    // `Check.completeOwnedStaticDispatchConstraint`.
-                    try self.walk(method.anno, .{ .opening = .per_use, .reach = .signature }, .pos, null);
-                },
+                // A method signature's rows are deferred per use or
+                // generated as written; a `..` in one is never redundant.
+                .mod_method => {},
                 .mod_alias => |alias| {
                     if (!receiverOpens(occurrences, self.tokenName(alias.var_tok))) continue;
                     // `Check.generateWhereAliasReferenceArgs`.
@@ -463,7 +447,7 @@ pub const OpenRows = struct {
     /// One annotation position still to visit.
     const WalkItem = struct {
         anno: AST.TypeAnno.Idx,
-        ctx: Ctx,
+        ctx: Opening,
         polarity: Polarity,
     };
 
@@ -471,7 +455,7 @@ pub const OpenRows = struct {
     /// wait on a heap-backed stack, so annotation nesting never becomes native
     /// call depth; visiting only sets marks and joins occurrence flags, so the
     /// order positions are visited in does not matter.
-    fn walk(self: *OpenRows, anno_idx: AST.TypeAnno.Idx, ctx: Ctx, polarity: Polarity, occurrences: ?*VarOccurrences) Allocator.Error!void {
+    fn walk(self: *OpenRows, anno_idx: AST.TypeAnno.Idx, ctx: Opening, polarity: Polarity, occurrences: ?*VarOccurrences) Allocator.Error!void {
         const pending = &self.walk_pending;
         std.debug.assert(pending.items.len == 0);
         defer pending.clearRetainingCapacity();
@@ -490,39 +474,40 @@ pub const OpenRows = struct {
             .parens => |parens| try pending.append(self.gpa, .{ .anno = parens.anno, .ctx = ctx, .polarity = polarity }),
             .@"fn" => |func| {
                 for (self.ast.store.typeAnnoSlice(func.args)) |arg| {
-                    try pending.append(self.gpa, .{ .anno = arg, .ctx = ctx.withReach(.nested), .polarity = polarity.flip() });
+                    try pending.append(self.gpa, .{ .anno = arg, .ctx = ctx, .polarity = polarity.flip() });
                 }
-                const ret_reach = base.annotation_positions.functionReturnReach(ctx.reach);
-                try pending.append(self.gpa, .{ .anno = func.ret, .ctx = ctx.withReach(ret_reach), .polarity = polarity });
+                try pending.append(self.gpa, .{ .anno = func.ret, .ctx = ctx, .polarity = polarity });
             },
             .tag_union => |tag_union| {
                 const tags = self.ast.store.typeAnnoSlice(tag_union.tags);
                 for (tags) |tag_idx| {
                     switch (self.ast.store.getTypeAnno(tag_idx)) {
                         .apply => |tag| for (self.ast.store.typeAnnoSlice(tag.args)[1..]) |payload| {
-                            try pending.append(self.gpa, .{ .anno = payload, .ctx = ctx.withReach(.nested), .polarity = polarity });
+                            try pending.append(self.gpa, .{ .anno = payload, .ctx = ctx, .polarity = polarity });
                         },
                         .ty_var, .underscore_type_var, .underscore, .ty, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => {},
                     }
                 }
                 switch (tag_union.ext) {
-                    .open => if (tags.len > 0 and polarity == .pos and outputOpens(ctx)) {
+                    // An output-position union with tags is opened, and an
+                    // anonymous `..` there is generated as its absence is.
+                    .open => if (tags.len > 0 and polarity == .pos and ctx == .implicit_open) {
                         self.redundant.set(@backingInt(anno_idx));
                     },
-                    .named => |named| try pending.append(self.gpa, .{ .anno = named.anno, .ctx = ctx.withReach(.nested), .polarity = polarity }),
+                    .named => |named| try pending.append(self.gpa, .{ .anno = named.anno, .ctx = ctx, .polarity = polarity }),
                     .closed => {},
                 }
             },
             .tuple => |tuple| for (self.ast.store.typeAnnoSlice(tuple.annos)) |elem| {
-                try pending.append(self.gpa, .{ .anno = elem, .ctx = ctx.withReach(.nested), .polarity = polarity });
+                try pending.append(self.gpa, .{ .anno = elem, .ctx = ctx, .polarity = polarity });
             },
             .record => |record| {
                 for (self.ast.store.annoRecordFieldSlice(record.fields)) |field_idx| {
                     const field = self.ast.store.getAnnoRecordField(field_idx) catch continue;
-                    try pending.append(self.gpa, .{ .anno = field.ty, .ctx = ctx.withReach(.nested), .polarity = polarity });
+                    try pending.append(self.gpa, .{ .anno = field.ty, .ctx = ctx, .polarity = polarity });
                 }
                 switch (record.ext) {
-                    .named => |named| try pending.append(self.gpa, .{ .anno = named.anno, .ctx = ctx.withReach(.nested), .polarity = polarity }),
+                    .named => |named| try pending.append(self.gpa, .{ .anno = named.anno, .ctx = ctx, .polarity = polarity }),
                     .open, .closed => {},
                 }
             },
@@ -533,13 +518,9 @@ pub const OpenRows = struct {
 
                 const positions = try self.applyPositions(head, args.len);
 
-                const reaches = if (ctx.opening == .per_use and ctx.reach != .nested) try self.applyReaches(head, args.len, ctx.reach) else null;
-                defer if (reaches) |items| self.gpa.free(items);
-
                 for (args, 0..) |arg, arg_index| {
-                    const reach: Reach = if (reaches) |known| known[arg_index] else .nested;
                     const as_written = if (positions) |known| known[arg_index].isInvariant() else true;
-                    const arg_ctx = if (as_written) ctx.withReach(reach).withOpening(.as_written) else ctx.withReach(reach);
+                    const arg_ctx: Opening = if (as_written) .as_written else ctx;
                     const arg_polarity = if (positions) |known| known[arg_index].polarity(polarity) else polarity;
                     try pending.append(self.gpa, .{ .anno = arg, .ctx = arg_ctx, .polarity = arg_polarity });
                 }
@@ -547,23 +528,10 @@ pub const OpenRows = struct {
         }
     }
 
-    /// Whether an output-position union with tags is opened in this context,
-    /// with an anonymous `..` generated as its absence is.
-    fn outputOpens(ctx: Ctx) bool {
-        return switch (ctx.opening) {
-            .implicit_open => true,
-            .per_use => switch (ctx.reach) {
-                .signature, .result, .try_row => true,
-                .nested => false,
-            },
-            .as_written => false,
-        };
-    }
-
-    fn noteOccurrence(gpa: Allocator, occurrences: ?*VarOccurrences, name: []const u8, ctx: Ctx) Allocator.Error!void {
+    fn noteOccurrence(gpa: Allocator, occurrences: ?*VarOccurrences, name: []const u8, ctx: Opening) Allocator.Error!void {
         const map = occurrences orelse return;
         const entry = try map.getOrPut(gpa, name);
-        const as_written = ctx.opening == .as_written;
+        const as_written = ctx == .as_written;
         if (entry.found_existing) {
             entry.value_ptr.* = entry.value_ptr.* or as_written;
         } else {
@@ -702,41 +670,6 @@ pub const OpenRows = struct {
         }
     }
 
-    fn applyReaches(self: *OpenRows, head: AST.TypeAnno.Idx, arity: usize, reach: Reach) Allocator.Error!?[]Reach {
-        const found = self.candidates(head);
-        if (found.external) return null;
-        var answer: ?[]Reach = null;
-        errdefer if (answer) |items| self.gpa.free(items);
-        for (found.locals) |statement| {
-            const candidate = (try ReachAnalysis.analyze(self.gpa, .{ .owner = self, .statement = statement }, reach)) orelse {
-                if (answer) |items| self.gpa.free(items);
-                return null;
-            };
-            defer self.gpa.free(candidate);
-            if (candidate.len != arity or (answer != null and !std.mem.eql(Reach, answer.?, candidate))) {
-                if (answer) |items| self.gpa.free(items);
-                return null;
-            }
-            if (answer == null) answer = try self.gpa.dupe(Reach, candidate);
-        }
-        if (found.builtin) {
-            const owner = try self.builtinRows();
-            const name = self.tokenName(self.ast.store.getTypeAnno(head).ty.token);
-            const declaration = owner.builtinDeclaration(name);
-            const candidate = (try ReachAnalysis.analyze(self.gpa, .{ .owner = owner, .statement = declaration }, reach)) orelse {
-                if (answer) |items| self.gpa.free(items);
-                return null;
-            };
-            defer self.gpa.free(candidate);
-            if (candidate.len != arity or (answer != null and !std.mem.eql(Reach, answer.?, candidate))) {
-                if (answer) |items| self.gpa.free(items);
-                return null;
-            }
-            if (answer == null) answer = try self.gpa.dupe(Reach, candidate);
-        }
-        return answer;
-    }
-
     /// Every uppercase name written in an import's token range.
     fn addUpperNamesIn(self: *OpenRows, region: AST.TokenizedRegion) Allocator.Error!void {
         const tags = self.ast.tokens.tokens.items(.tag);
@@ -863,158 +796,5 @@ const PositionAdapter = struct {
             .malformed => return .invalid,
         }
         return .{ .children = self.children.items };
-    }
-};
-
-/// Exact alias source-formal adapter reach over a finite declaration/context graph.
-/// Nominal bodies are not transparent; unresolved parser names supply no proof.
-const ReachAnalysis = struct {
-    const Key = struct { declaration: PositionAdapter.Key, reach: Reach };
-    const State = struct { key: Key, results: []u4 };
-    const Item = struct { annotation: AST.TypeAnno.Idx, reaches: u4 };
-    allocator: Allocator,
-    states: std.ArrayList(State) = .empty,
-    indices: std.AutoHashMapUnmanaged(Key, usize) = .empty,
-    pending: std.ArrayList(Item) = .empty,
-    invalid: bool = false,
-
-    fn bit(reach: Reach) u4 {
-        return @as(u4, 1) << @as(u2, @intCast(@backingInt(reach)));
-    }
-
-    fn register(self: *ReachAnalysis, key: Key) Allocator.Error!?usize {
-        if (self.indices.get(key)) |index| return index;
-        const owner = key.declaration.owner;
-        const decl = owner.ast.store.getStatement(key.declaration.statement).type_decl;
-        const header = owner.ast.store.getTypeHeader(decl.header) catch return null;
-        const args = owner.ast.store.typeAnnoSlice(header.args);
-        const results = try self.allocator.alloc(u4, args.len);
-        errdefer self.allocator.free(results);
-        @memset(results, 0);
-        if (decl.kind != .alias) {
-            const builtin_try = owner.builtin_owner and std.mem.eql(u8, owner.tokenName(header.name), try_type_name);
-            for (results, 0..) |*result, index| result.* = bit(base.annotation_positions.nominalArgumentReach(key.reach, builtin_try, index));
-        }
-        const index = self.states.items.len;
-        try self.indices.put(self.allocator, key, index);
-        try self.states.append(self.allocator, .{ .key = key, .results = results });
-        return index;
-    }
-
-    fn push(self: *ReachAnalysis, annotation: AST.TypeAnno.Idx, reaches: u4) Allocator.Error!void {
-        if (reaches != 0) try self.pending.append(self.allocator, .{ .annotation = annotation, .reaches = reaches });
-    }
-
-    fn pushSlice(self: *ReachAnalysis, annotations: []const AST.TypeAnno.Idx, reaches: u4) Allocator.Error!void {
-        for (annotations) |annotation| try self.push(annotation, reaches);
-    }
-
-    fn evaluate(self: *ReachAnalysis, index: usize) Allocator.Error!bool {
-        const state = self.states.items[index];
-        const owner = state.key.declaration.owner;
-        const ast = owner.ast;
-        const decl = ast.store.getStatement(state.key.declaration.statement).type_decl;
-        if (decl.kind != .alias) return false;
-        const header = ast.store.getTypeHeader(decl.header) catch {
-            self.invalid = true;
-            return false;
-        };
-        const formals = ast.store.typeAnnoSlice(header.args);
-        var changed = false;
-        self.pending.clearRetainingCapacity();
-        try self.push(decl.anno, bit(state.key.reach));
-        while (self.pending.pop()) |item| {
-            if (owner.varName(item.annotation)) |name| {
-                if (owner.formalIndex(name, formals)) |formal| {
-                    const previous = state.results[formal];
-                    state.results[formal] |= item.reaches;
-                    changed = changed or previous != state.results[formal];
-                    continue;
-                }
-            }
-            switch (ast.store.getTypeAnno(item.annotation)) {
-                .parens => |parens| try self.push(parens.anno, item.reaches),
-                .@"fn" => |func| {
-                    try self.pushSlice(ast.store.typeAnnoSlice(func.args), bit(.nested));
-                    var returns: u4 = 0;
-                    inline for (@typeInfo(Reach).@"enum".field_names) |field_name| {
-                        const reach: Reach = @fromBackingInt(@intCast(@backingInt(@field(Reach, field_name))));
-                        if (item.reaches & bit(reach) != 0) returns |= bit(base.annotation_positions.functionReturnReach(reach));
-                    }
-                    try self.push(func.ret, returns);
-                },
-                .tuple => |tuple| try self.pushSlice(ast.store.typeAnnoSlice(tuple.annos), bit(.nested)),
-                .record => |record| {
-                    for (ast.store.annoRecordFieldSlice(record.fields)) |field_index| {
-                        const field = ast.store.getAnnoRecordField(field_index) catch {
-                            self.invalid = true;
-                            continue;
-                        };
-                        try self.push(field.ty, bit(.nested));
-                    }
-                    if (record.ext == .named) try self.push(record.ext.named.anno, bit(.nested));
-                },
-                .tag_union => |union_| {
-                    for (ast.store.typeAnnoSlice(union_.tags)) |tag| switch (ast.store.getTypeAnno(tag)) {
-                        .apply => |application| try self.pushSlice(ast.store.typeAnnoSlice(application.args)[1..], bit(.nested)),
-                        .ty => {},
-                        .ty_var, .underscore_type_var, .underscore, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => self.invalid = true,
-                    };
-                    if (union_.ext == .named) try self.push(union_.ext.named.anno, item.reaches);
-                },
-                .apply => |application| {
-                    const all_args = ast.store.typeAnnoSlice(application.args);
-                    const args = all_args[1..];
-                    switch (try PositionAdapter.reference(owner, all_args[0])) {
-                        .invalid => self.invalid = true,
-                        .builtin => try self.pushSlice(args, bit(.nested)),
-                        .declaration => |target| {
-                            inline for (@typeInfo(Reach).@"enum".field_names) |field_name| {
-                                const reach: Reach = @fromBackingInt(@intCast(@backingInt(@field(Reach, field_name))));
-                                if (item.reaches & bit(reach) != 0) {
-                                    const target_index = (try self.register(.{ .declaration = target, .reach = reach })) orelse {
-                                        self.invalid = true;
-                                        return false;
-                                    };
-                                    const results = self.states.items[target_index].results;
-                                    if (results.len != args.len) {
-                                        self.invalid = true;
-                                        return false;
-                                    }
-                                    for (args, results) |arg, reaches| try self.push(arg, reaches);
-                                }
-                            }
-                        },
-                    }
-                },
-                .ty_var, .underscore_type_var, .underscore, .ty => {},
-                .malformed => self.invalid = true,
-            }
-        }
-        return changed;
-    }
-
-    fn analyze(allocator: Allocator, declaration: PositionAdapter.Key, reach: Reach) Allocator.Error!?[]Reach {
-        var self = ReachAnalysis{ .allocator = allocator };
-        defer {
-            for (self.states.items) |state| allocator.free(state.results);
-            self.states.deinit(allocator);
-            self.indices.deinit(allocator);
-            self.pending.deinit(allocator);
-        }
-        const root = (try self.register(.{ .declaration = declaration, .reach = reach })) orelse return null;
-        var changed = true;
-        while (changed and !self.invalid) {
-            changed = false;
-            const count = self.states.items.len;
-            for (0..count) |index| changed = (try self.evaluate(index)) or changed;
-            changed = changed or count != self.states.items.len;
-        }
-        if (self.invalid) return null;
-        const result = try allocator.alloc(Reach, self.states.items[root].results.len);
-        for (result, self.states.items[root].results) |*value, mask| {
-            value.* = if (mask == 0 or mask & bit(.nested) != 0) .nested else if (@popCount(mask) > 1) .try_row else @fromBackingInt(@intCast(@ctz(mask)));
-        }
-        return result;
     }
 };

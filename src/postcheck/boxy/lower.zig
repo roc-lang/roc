@@ -160,6 +160,9 @@ pub const ModuleUnit = struct {
     root: bool,
     /// The name each module of the link gives its workers and nominal types.
     names: *const types.ModuleNames,
+    /// Resolved platform-header slots of this library unit. An empty slice
+    /// means the selected platform binds none; null means no supplied plan.
+    hosted_bindings: ?[]const checked.UnitHostedBinding = null,
     /// Whether this is a test unit (`roc test`): every inline expect it
     /// lowers gets a unit-local expect site, whether or not the unit lowers
     /// any test root (design.md "Unit-Image Test Execution").
@@ -368,7 +371,7 @@ pub const WorkerKey = union(enum) {
     /// `captured_scheme` is set for a local procedure's function value whose
     /// own scheme's instantiation it captures (a value compile-time
     /// evaluation stored) rather than taking per call.
-    lambda: struct { module: ModuleIndex, expr: ExprId, outer: WorkerId, captured_scheme: bool = false },
+    lambda: struct { module: ModuleIndex, expr: ExprId, outer: WorkerId, captured_scheme: bool = false, reuse: ReuseKind = .none },
     /// The erased-callable entry of a template worker that a dictionary
     /// names: it takes the method's arguments as its argument record, the
     /// target's hidden descriptors and dictionaries as its captures, and
@@ -572,6 +575,13 @@ pub const RowNode = struct {
     /// The type as the worker's signature has it, over its variables.
     ty: TypeId,
 };
+
+/// What an erased-callable allocation a worker receives for reuse holds:
+/// a dynamic capture record with its capacity, which a dynamic packing
+/// repacks, or the closed capture layout `static`, which a packing of that
+/// same layout repacks (design.md "Destination-Passing Results and
+/// Allocation Reuse").
+pub const ReuseKind = union(enum) { none, dynamic, static: layout.Idx };
 
 /// One worker: its procedure and the signature callers use.
 pub const Worker = struct {
@@ -1213,6 +1223,17 @@ pub const Program = struct {
                 }
                 hashWord(&hasher, site.ordinal);
                 hasher.update(&[_]u8{@intFromBool(lambda.captured_scheme)});
+                // A reuse variant is named by its kind; a closed capture
+                // layout by its content digest, which every lowering of the
+                // layout shares.
+                switch (lambda.reuse) {
+                    .none => {},
+                    .dynamic => hasher.update("reuse.dynamic"),
+                    .static => |static| {
+                        hasher.update("reuse.static");
+                        hasher.update(&(try self.layouts.layouts.contentDigest(static)));
+                    },
+                }
             },
             .method_entry => |target| {
                 hasher.update("method_entry");
@@ -2302,13 +2323,14 @@ pub const Program = struct {
     /// worker `outer`.
     pub fn lambdaWorker(
         self: *Program,
-        outer: WorkerId,
+        outer_creator: WorkerId,
         lambda_expr: ExprId,
         captures: []const checked.CheckedCapture,
         capture_types: []const TypeId,
         fn_ty: TypeId,
         own: ?LocalScheme,
     ) Allocator.Error!WorkerId {
+        const outer = self.reuseOriginal(outer_creator);
         const outer_worker = self.worker(outer).*;
         // A lambda that checking gave a dispatch scope is a link of every
         // evidence and literal chain that reaches through it, even when the
@@ -2395,6 +2417,52 @@ pub const Program = struct {
         };
         try self.worker_ids.put(self.allocator, key, id);
         if (!imported) try self.worklist.append(self.allocator, id);
+        return id;
+    }
+
+    /// The worker a reuse variant (`directReuseVariant`) varies, or
+    /// `id` itself: the lambdas of a variant's body are the lambdas of the
+    /// procedure it varies, whose scope and tables are the variant's.
+    pub fn reuseOriginal(self: *Program, id: WorkerId) WorkerId {
+        const key = self.worker(id).key;
+        if (key != .lambda or key.lambda.reuse == .none) return id;
+        var original = key;
+        original.lambda.reuse = .none;
+        return self.worker_ids.get(original) orelse invariant("a reuse variant's original worker is missing");
+    }
+
+    /// The variant of the local procedure only direct calls reach `callee`
+    /// that receives an erased-callable allocation of kind `reuse` as its
+    /// last argument, which its body's first packing of that kind repacks
+    /// (design.md "Destination-Passing Results and Allocation Reuse").
+    pub fn directReuseVariant(self: *Program, callee: WorkerId, reuse: ReuseKind) Allocator.Error!WorkerId {
+        const original = self.worker(callee).*;
+        if (!original.direct) invariant("a reuse variant was asked of a worker that is not a direct local procedure");
+        // The caller is lowered here, and the callee is declared in a body
+        // of the caller's scope chain, whose workers are never imported.
+        if (original.imported) invariant("a reuse variant was asked of an imported worker");
+        var key = original.key;
+        key.lambda.reuse = reuse;
+        if (self.worker_ids.get(key)) |existing| return existing;
+        const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
+        const identity = try self.workerIdentity(key);
+        const proc = try self.result.store.addProcSpec(.{
+            .name = self.result.store.freshSyntheticSymbol(),
+            .identity = identity,
+            .emission_unit = LIR.EmissionUnit.module(@backingInt(original.module)),
+            .args = .empty(),
+            .ret_layout = .zst,
+            .abi = .roc,
+        }, base.SourceLoc.none);
+        var variant = original;
+        variant.key = key;
+        variant.proc = proc;
+        variant.lowered = false;
+        variant.queued = false;
+        variant.needs = null;
+        try self.workers.append(self.allocator, variant);
+        try self.worker_ids.put(self.allocator, key, id);
+        try self.worklist.append(self.allocator, id);
         return id;
     }
 
@@ -2485,8 +2553,8 @@ pub const Program = struct {
                         if (!named) try residual.append(allocator, candidate);
                     }
                     if (record.ext.get()) |ext| {
-                        const remainder = if (residual.items.len == 0 and other.record.ext == .none)
-                            try store.emptyRecord()
+                        const remainder = if (residual.items.len == 0)
+                            other.record.ext.get() orelse try store.emptyRecord()
                         else
                             try store.intern(.{ .record = .{ .fields = residual.items, .ext = other.record.ext.get() } });
                         try pending.append(allocator, .{ ext, remainder });
@@ -2518,7 +2586,11 @@ pub const Program = struct {
                             },
                             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function => {},
                         };
-                        try pending.append(allocator, .{ ext, try store.intern(.{ .tag_union = .{ .tags = residual.items, .ext = actual.ext } }) });
+                        const remainder = if (residual.items.len == 0 and actual.ext != null)
+                            actual.ext.?
+                        else
+                            try store.intern(.{ .tag_union = .{ .tags = residual.items, .ext = actual.ext } });
+                        try pending.append(allocator, .{ ext, remainder });
                     }
                 },
                 .primitive, .empty_record, .variable => {},
@@ -5193,6 +5265,22 @@ fn seedSourceFiles(program: *Program) Allocator.Error!void {
 /// in scope; otherwise every declaration in a stable order.
 fn initHosted(program: *Program) Allocator.Error!void {
     const allocator = program.allocator;
+    if (program.moduleUnit()) |unit| if (unit.hosted_bindings) |bindings| {
+        const root = program.moduleByKey(program.input.modules.root.module.key.digest());
+        for (root.view.hosted_procs.procs.items()) |proc| {
+            try program.hosted.put(allocator, .{ .module = root.index, .template = proc.template.template }, .{
+                .symbol = root.nameStore().externalSymbolNameText(proc.external_symbol_name),
+                .dispatch_index = null,
+            });
+        }
+        for (bindings) |binding| {
+            program.hosted.getPtr(.{ .module = root.index, .template = binding.template }).?.* = .{
+                .symbol = binding.symbol,
+                .dispatch_index = binding.dispatch_index,
+            };
+        }
+        return;
+    };
     const DefKey = struct { module: ModuleIndex, def: u32 };
     var by_def: std.AutoHashMapUnmanaged(DefKey, TemplateKey) = .empty;
     defer by_def.deinit(allocator);

@@ -78,7 +78,7 @@ test "JSON parsing platform derives structural parser without runtime allocation
 
     const allocator = testing.allocator;
 
-    var tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = util.tmpDir(testing.io);
     defer tmp_dir.cleanup();
 
     const tmp_path = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator);

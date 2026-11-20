@@ -103,15 +103,36 @@ pub const ResultCheckError = error{
     UnexpectedSuccess,
 };
 
-fn reserveUniqueTestDir(io: std.Io, allocator: std.mem.Allocator, namespace: []const u8) TestDirError![]u8 {
-    // These directories are disposable test scratch, not reusable Zig cache.
-    // Keep them out of `.zig-cache` so CI cache actions do not try to save
-    // per-test Roc caches, local Zig caches, temp files, or preserved failure
-    // work dirs.
-    const cache_parent_rel = try std.fs.path.join(allocator, &.{ "zig-out", "roc-test", namespace });
-    defer allocator.free(cache_parent_rel);
+/// The absolute directory every test writes its scratch files under. The
+/// working directory is the prepared fixture tree, which tests only read; the
+/// process that runs the tests names this directory (`--scratch-root` for the
+/// CLI runner, `--roc-scratch-root` for Zig test binaries).
+pub fn scratchRoot() []const u8 {
+    return @import("root").rocTestScratchRoot();
+}
 
-    try std.Io.Dir.cwd().createDirPath(io, cache_parent_rel);
+/// A `std.testing.TmpDir` under `scratchRoot()` rather than under the working
+/// directory's `.zig-cache`.
+pub fn tmpDir(io: std.Io) std.testing.TmpDir {
+    var random_bytes: [12]u8 = undefined;
+    io.random(&random_bytes);
+    var sub_path: @FieldType(std.testing.TmpDir, "sub_path") = undefined;
+    _ = std.base64.url_safe.Encoder.encode(&sub_path, &random_bytes);
+    var root = std.Io.Dir.cwd().createDirPathOpen(io, scratchRoot(), .{}) catch
+        @panic("unable to make tmp dir for testing: unable to open the scratch root");
+    defer root.close(io);
+    const parent_dir = root.createDirPathOpen(io, "tmp", .{}) catch
+        @panic("unable to make tmp dir for testing: unable to make the scratch tmp dir");
+    const dir = parent_dir.createDirPathOpen(io, &sub_path, .{}) catch
+        @panic("unable to make tmp dir for testing: unable to make the tmp dir");
+    return .{ .dir = dir, .parent_dir = parent_dir, .sub_path = sub_path };
+}
+
+fn reserveUniqueTestDir(io: std.Io, allocator: std.mem.Allocator, namespace: []const u8) TestDirError![]u8 {
+    const cache_parent = try std.fs.path.join(allocator, &.{ scratchRoot(), namespace });
+    defer allocator.free(cache_parent);
+
+    try std.Io.Dir.cwd().createDirPath(io, cache_parent);
 
     while (true) {
         const cache_dir_id = next_test_dir_id.fetchAdd(1, .monotonic);
@@ -122,14 +143,14 @@ fn reserveUniqueTestDir(io: std.Io, allocator: std.mem.Allocator, namespace: []c
         const random = prng.random().int(u64);
         // Keep the leaf short: on Windows the compiled test executables live
         // several directories below it, and the total path must stay under
-        // MAX_PATH (260), which the fixture root's own prefix already uses up.
+        // MAX_PATH (260), which the scratch root's own prefix already uses up.
         const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{x:0>8}", .{
             cache_dir_id,
             @as(u32, @truncate(random)),
         });
         defer allocator.free(cache_leaf);
 
-        const cache_root_rel = try std.fs.path.join(allocator, &.{ cache_parent_rel, cache_leaf });
+        const cache_root_rel = try std.fs.path.join(allocator, &.{ cache_parent, cache_leaf });
         errdefer allocator.free(cache_root_rel);
 
         std.Io.Dir.cwd().createDir(io, cache_root_rel, .default_dir) catch |err| switch (err) {
@@ -544,9 +565,6 @@ pub fn runChildWithTimeout(
 
 /// Create unique Roc and Zig local cache directories for one CLI test subprocess.
 pub fn createIsolatedTestCacheDirs(io: std.Io, allocator: std.mem.Allocator) TestDirError!IsolatedCacheDirs {
-    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
-    defer allocator.free(cwd_path);
-
     const cache_root_rel = try reserveUniqueTestDir(io, allocator, "cache");
     defer allocator.free(cache_root_rel);
 
@@ -567,11 +585,11 @@ pub fn createIsolatedTestCacheDirs(io: std.Io, allocator: std.mem.Allocator) Tes
     try std.Io.Dir.cwd().createDirPath(io, temp_rel);
 
     return .{
-        .root = try std.fs.path.join(allocator, &.{ cwd_path, cache_root_rel }),
-        .roc_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, roc_cache_rel }),
-        .zig_local_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, zig_local_cache_rel }),
-        .install_dir = try std.fs.path.join(allocator, &.{ cwd_path, install_rel }),
-        .temp_dir = try std.fs.path.join(allocator, &.{ cwd_path, temp_rel }),
+        .root = try allocator.dupe(u8, cache_root_rel),
+        .roc_cache_dir = try allocator.dupe(u8, roc_cache_rel),
+        .zig_local_cache_dir = try allocator.dupe(u8, zig_local_cache_rel),
+        .install_dir = try allocator.dupe(u8, install_rel),
+        .temp_dir = try allocator.dupe(u8, temp_rel),
     };
 }
 
@@ -598,9 +616,6 @@ pub fn cleanupTestCacheDirs(io: std.Io, dirs: IsolatedCacheDirs) void {
 
 /// Create unique Roc cache, Zig local cache, and work directories for one CLI test job.
 pub fn createIsolatedTestDirs(io: std.Io, allocator: std.mem.Allocator) TestDirError!TestProcessDirs {
-    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
-    defer allocator.free(cwd_path);
-
     const work_dir_rel = try reserveUniqueTestDir(io, allocator, "work");
     defer allocator.free(work_dir_rel);
 
@@ -621,11 +636,11 @@ pub fn createIsolatedTestDirs(io: std.Io, allocator: std.mem.Allocator) TestDirE
     try std.Io.Dir.cwd().createDirPath(io, temp_rel);
 
     return .{
-        .roc_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, roc_cache_rel }),
-        .zig_local_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, zig_local_cache_rel }),
-        .install_dir = try std.fs.path.join(allocator, &.{ cwd_path, install_rel }),
-        .temp_dir = try std.fs.path.join(allocator, &.{ cwd_path, temp_rel }),
-        .work_dir = try std.fs.path.join(allocator, &.{ cwd_path, work_dir_rel }),
+        .roc_cache_dir = try allocator.dupe(u8, roc_cache_rel),
+        .zig_local_cache_dir = try allocator.dupe(u8, zig_local_cache_rel),
+        .install_dir = try allocator.dupe(u8, install_rel),
+        .temp_dir = try allocator.dupe(u8, temp_rel),
+        .work_dir = try allocator.dupe(u8, work_dir_rel),
     };
 }
 

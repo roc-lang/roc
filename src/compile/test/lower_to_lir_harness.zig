@@ -354,19 +354,13 @@ pub fn expectDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void 
 /// configuration twice so this checks both worker-count independence and
 /// repeated scheduling independence without relying on timing.
 pub fn expectSpecializationParallelismDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void {
-    try expectPostCheckParallelismDeterministicLir(app_body, false, false);
-}
-
-/// Assert deterministic serial/parallel output for a fixture whose worker-local
-/// specialization must eagerly lower an iterator-producing callee.
-pub fn expectEagerIteratorSpecializationParallelismDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void {
-    try expectPostCheckParallelismDeterministicLir(app_body, false, true);
+    try expectPostCheckParallelismDeterministicLir(app_body, false);
 }
 
 /// Lower an app with two independent platform-required procedure roots and
 /// compare complete LIR output across one, two, and four post-check workers.
 pub fn expectProcedureRootParallelismDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void {
-    try expectPostCheckParallelismDeterministicLir(app_body, true, false);
+    try expectPostCheckParallelismDeterministicLir(app_body, true);
 }
 
 /// Forms whose admission must be demonstrated by worker commits, not serial fallback.
@@ -542,7 +536,7 @@ pub fn expectSpecConstrParallelismDeterministicLir(
     try std.testing.expectEqualDeep(serial, timing.spec_constr_parallel);
     try std.testing.expectEqual(@as(u64, 0), serial.tasks_submitted);
     try std.testing.expectEqual(@as(u64, 0), serial.tasks_committed);
-    try std.testing.expectEqual([3]u64{ 0, 0, 0 }, serial.committed_by_phase);
+    try std.testing.expectEqual([2]u64{ 0, 0 }, serial.committed_by_phase);
     try std.testing.expect(serial.peak_retained_shards > 0);
     try std.testing.expect(serial.peak_retained_shards <= 32);
     if (options.inline_mode == .none) {
@@ -589,9 +583,6 @@ pub fn expectSpecConstrParallelismDeterministicLir(
             var committed: u64 = 0;
             for (metrics.committed_by_phase) |count| committed += count;
             try std.testing.expectEqual(metrics.tasks_committed, committed);
-            if (options.inline_mode == .none) {
-                try std.testing.expectEqual(metrics.tasks_committed, metrics.committed_by_phase[@backingInt(lir.CheckedPipeline.SpecConstrPhase.iterator_fusion)]);
-            }
             inline for (phases) |phase| {
                 try std.testing.expect(metrics.committed_by_phase[@backingInt(phase)] > 0);
                 try std.testing.expect(metrics.changed_by_phase[@backingInt(phase)] > 0);
@@ -922,6 +913,38 @@ pub fn expectSolvedLirCapturingBodyParallelismDeterministicLir() LowerToLirHarne
     }
 }
 
+/// Lower `app_body`, whose generalized functions have further lambda-set
+/// instances, serially and with two and four workers in both completion
+/// orders, and compare the complete LIR. Every parallel run must commit a
+/// further instance's body on a worker, so the worker preparation of syntax
+/// read under an instance is exercised.
+pub fn expectSolvedLirInstanceParallelismDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void {
+    const gpa = std.testing.allocator;
+    const cap = 1 << 22;
+    const reference = try gpa.alloc(u8, cap);
+    defer gpa.free(reference);
+    var reference_writer = std.Io.Writer.fixed(reference);
+    try runToLir(app_body, &reference_writer, .{ .specialization_workers = 1 }, null);
+
+    for ([_]usize{ 2, 4 }) |specialization_workers| {
+        for ([_]bool{ false, true }) |reverse_post_check_completions| {
+            const candidate = try gpa.alloc(u8, cap);
+            defer gpa.free(candidate);
+            var candidate_writer = std.Io.Writer.fixed(candidate);
+            var metrics: lir.CheckedPipeline.SolvedLirParallelMetrics = .{};
+            try runToLir(app_body, &candidate_writer, .{
+                .specialization_workers = specialization_workers,
+                .reverse_post_check_completions = reverse_post_check_completions,
+                .solved_lir_parallel_metrics_out = &metrics,
+            }, null);
+
+            try std.testing.expectEqualStrings(reference_writer.buffered(), candidate_writer.buffered());
+            try std.testing.expectEqual(metrics.tasks_submitted, metrics.tasks_committed);
+            try std.testing.expect(metrics.worker_instance_tasks_committed > 0);
+        }
+    }
+}
+
 fn expectNamedWorkerLocalCommitted(
     store: *const lir.LirStore,
     _: *const layout.Store,
@@ -937,7 +960,6 @@ fn expectNamedWorkerLocalCommitted(
 fn expectPostCheckParallelismDeterministicLir(
     app_body: []const u8,
     parallel_procedure_root_fixture: bool,
-    require_eager_iterator_specialization: bool,
 ) LowerToLirHarnessError!void {
     const gpa = std.testing.allocator;
     const cap = 1 << 22;
@@ -960,20 +982,10 @@ fn expectPostCheckParallelismDeterministicLir(
                 .specialization_workers = specialization_workers,
                 .parallel_procedure_root_fixture = parallel_procedure_root_fixture,
                 .timing_out = &timing,
-                .detailed_monotype_diagnostics = require_eager_iterator_specialization,
                 .solved_lir_parallel_metrics_out = &solved_lir_parallel,
                 .reverse_post_check_completions = attempt == 1,
             }, if (parallel_procedure_root_fixture) expectNamedWorkerLocalCommitted else null);
             try std.testing.expectEqualStrings(reference_writer.buffered(), candidate_writer.buffered());
-            if (require_eager_iterator_specialization) {
-                try std.testing.expect(timing.monotype_parallel.specialization_tasks_submitted > 0);
-                try std.testing.expect(
-                    timing.monotype_diagnostics.body.eager_iterator_template_bodies_lowered > 0,
-                );
-                try std.testing.expect(
-                    timing.monotype_diagnostics.body.lowered_template_bodies_discarded > 0,
-                );
-            }
             if (parallel_procedure_root_fixture) {
                 const parallel = timing.monotype_parallel;
                 try std.testing.expectEqual(@as(u64, 2), parallel.root_tasks_submitted);

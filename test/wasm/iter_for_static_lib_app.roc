@@ -1,12 +1,10 @@
 app [main!] { pf: platform "./static-lib-platform/main.roc" }
 
-# End-to-end cart gate for the minted-iterator `for`-loop drive on the
-# `--opt=size` (LLVM) build path. A `for` over a minted chain sinks the loop
-# into the chain and rebases the step's inline captures; a drive that loses the
-# advanced successor `rest` freezes the inner iterator and never terminates
-# (the regression that hung the Rocci cart at boot). Each `for` here is inlined
-# in `main!` so it exercises that drive directly, and the whole app must boot
-# and return "ok".
+# End-to-end cart gate for `for` loops over iterator adapter chains on the
+# `--opt=size` (LLVM) build path. A loop that loses the advanced successor
+# `rest` freezes the inner iterator and never terminates. Each `for` here is
+# inlined in `main!` so it exercises that loop directly, and the whole app must
+# boot and return "ok".
 main! : U64 => Str
 main! = |_seed| {
     var $append_sum = 0.U64

@@ -1,0 +1,117 @@
+name: 'Build MiniCI for this host'
+description: >-
+  Run `build-ci` once and upload, for each MiniCI shard of this host, a build
+  artifact holding the part of its outputs that shard reads (see the
+  `minici-shard` action), so the shards run the tests without compiling them
+  again. Run after checkout, in a job whose `MINICI_HOST` environment variable
+  names the host (a `Host` in src/build/minici.zig).
+inputs:
+  jobs:
+    description: 'A `-jN` limit on `build-ci` parallelism, or empty for one job per CPU'
+    required: false
+    default: ''
+runs:
+  using: 'composite'
+  steps:
+    - name: Enlarge pagefile (Windows)
+      if: runner.os == 'Windows'
+      uses: ./.github/actions/enlarge-windows-pagefile
+
+    - name: Enlarge swap (Linux)
+      if: runner.os == 'Linux'
+      uses: ./.github/actions/enlarge-linux-swap
+
+    # `use-tool-cache` installs Zig at $RUNNER_TOOL_CACHE/zig/<version>/<arch>,
+    # the same path in this build job and in every shard of its host. Without
+    # it Zig lands in a random per-job directory, and Run steps that invoke
+    # the zig executable (the wasm32 builtins `zig wasm-ld -r` merge) hash
+    # that absolute path, so every shard would miss the restored cache and
+    # rebuild everything that embeds the wasm32 builtins through eval.
+    #
+    # `use-cache: false`: the build outputs travel to the shards as the
+    # artifacts below.
+    - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
+      with:
+        version: 0.17.1
+        use-cache: false
+        use-tool-cache: 'true'
+
+    - uses: ./.github/actions/setup-rust
+
+    - name: Cache Zig dependency packages
+      uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
+      with:
+        # Zig stores fetched packages in the `p/` subdir of the global cache.
+        # Caching just that under a stable build.zig.zon-hash key keeps deps
+        # present across runs, so a cold runner does not re-download deps from
+        # GitHub and hit HttpConnectionClosing.
+        path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
+        key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+        restore-keys: |
+          zig-deps-${{ runner.os }}-${{ runner.arch }}-
+
+    # The embedded lld-link resolves /defaultlib via the LIB env and roc's
+    # linker locates the Windows SDK/MSVC libpaths at runtime (needed by
+    # run-test-cli / run-test-dylib / run-test-archive inside minici).
+    - name: Setup MSVC (Windows)
+      if: runner.os == 'Windows'
+      uses: TheMrMilchmann/setup-msvc-dev@79dac248aac9d0059f86eae9d8b5bfab4e95e97c # ratchet:TheMrMilchmann/setup-msvc-dev@v4.0.0
+      with:
+        arch: x64
+
+    # The eval runner and eval unit tests each link the embedded LLVM libraries.
+    # Building the runner first keeps their large Windows link processes from
+    # overlapping in build-ci, which exhausted the hosted runner's memory.
+    - name: Build eval runner first (Windows)
+      if: runner.os == 'Windows'
+      uses: ./.github/actions/flaky-retry
+      with:
+        command: zig build build-test-eval-runner
+        retry_count: 3
+
+    # The remaining compilation happens here, where network flakes surface
+    # on stdout for flaky-retry to match. The shards then consume the build
+    # artifact and go straight to the run steps, so their failures are
+    # genuine and never retried.
+    # No `error_string_contains` override: this command has no flake signature
+    # of its own, so it uses the action's default list.
+    - name: Build MiniCI binaries
+      uses: ./.github/actions/flaky-retry
+      with:
+        command: zig build ${{ inputs.jobs }} build-ci -Dembed-builtin-unit=true
+        retry_count: 3
+
+    # `minici-build-runner-image` names the hosted runner image this job ran
+    # on. A shard compares it with its own (`--minici-build-runner-image`):
+    # on another image the system headers and libraries differ, so compile
+    # steps that read them miss the restored cache for a reason that is not
+    # build.zig's, and MiniCI's cache-reuse canary says so instead of failing.
+    - name: Record the runner image
+      shell: bash
+      run: printf '%s/%s\n' "${ImageOS:?}" "${ImageVersion:?}" > .zig-cache/minici-build-runner-image
+
+    # Each shard gets an artifact of its own, holding only what its `zig
+    # build` commands read: their configurations, the manifests and entries
+    # of the cached steps in their graphs, the files those record as
+    # inputs, the restamp tool, and `zig-pkg`, where Zig 0.17 unpacks
+    # dependencies (the cache records those files as link inputs). The packer
+    # records where `build-ci` left each entry, so it builds with exactly
+    # `build-ci`'s options and every step it reads is a cache hit.
+    - name: Build the MiniCI artifact packer
+      shell: bash
+      run: zig build build-minici-pack -Dembed-builtin-unit=true
+
+    # One slot per shard on the host with the most shards; a slot past this
+    # host's last shard does nothing, and a host with more shards fails.
+    - uses: ./.github/actions/pack-minici-shard
+      with: { slot: 0, slots: 6 }
+    - uses: ./.github/actions/pack-minici-shard
+      with: { slot: 1, slots: 6 }
+    - uses: ./.github/actions/pack-minici-shard
+      with: { slot: 2, slots: 6 }
+    - uses: ./.github/actions/pack-minici-shard
+      with: { slot: 3, slots: 6 }
+    - uses: ./.github/actions/pack-minici-shard
+      with: { slot: 4, slots: 6 }
+    - uses: ./.github/actions/pack-minici-shard
+      with: { slot: 5, slots: 6 }

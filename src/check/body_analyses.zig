@@ -2676,7 +2676,7 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
         const target = switch (plans.evidenceNode(direct.evidence).target.kind) {
             .procedure => |procedure| switch (procedure.runtime_target) {
                 .procedure => local.template(procedure.template),
-                .low_level, .intrinsic, .graph_participating => null,
+                .low_level, .intrinsic => null,
             },
             .local_proc, .structural, .callable_binding => null,
         };

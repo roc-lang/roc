@@ -427,6 +427,12 @@ pub const Descriptor = struct {
     /// are a function of the descriptor alone.
     pub const Payload = [3]u32;
 
+    /// The payload word a function row keeps its return variable in.
+    pub const fn_ret_payload_word = 1;
+    /// The payload word a record or tag union row keeps its extension
+    /// variable in.
+    pub const row_ext_payload_word = 2;
+
     /// A stored descriptor. Every byte belongs to a field.
     pub const Row = struct {
         word: Word,
@@ -480,7 +486,7 @@ pub const Descriptor = struct {
             .structure => |flat| switch (flat) {
                 .record => |record| kind: {
                     putRange(&payload, 0, record.fields);
-                    payload[2] = @backingInt(record.ext);
+                    payload[row_ext_payload_word] = @backingInt(record.ext);
                     break :kind .record;
                 },
                 .tuple => |tuple| kind: {
@@ -494,14 +500,15 @@ pub const Descriptor = struct {
                 },
                 inline .fn_pure, .fn_effectful, .fn_unbound => |func, tag| kind: {
                     payload[0] = store.storedVarRange(func.args);
-                    payload[1] = @backingInt(func.ret);
+                    payload[fn_ret_payload_word] = @backingInt(func.ret);
                     payload[2] = store.storedVarRange(func.effect_deps);
                     break :kind @field(ContentKind, @tagName(tag));
                 },
                 .empty_record => .empty_record,
                 .tag_union => |tag_union| kind: {
+                    store.debugAssertTagsInNameOrder(tag_union.tags);
                     putRange(&payload, 0, tag_union.tags);
-                    payload[2] = @backingInt(tag_union.ext);
+                    payload[row_ext_payload_word] = @backingInt(tag_union.ext);
                     break :kind .tag_union;
                 },
                 .empty_tag_union => .empty_tag_union,
@@ -592,7 +599,7 @@ pub const Descriptor = struct {
     /// The record a `.record` row holds.
     pub inline fn decodeRecord(row: Row) Record {
         std.debug.assert(row.word.kind == .record);
-        return .{ .fields = getRange(RecordField.SafeMultiList.Range, row.payload, 0), .ext = @fromBackingInt(row.payload[2]) };
+        return .{ .fields = getRange(RecordField.SafeMultiList.Range, row.payload, 0), .ext = @fromBackingInt(row.payload[row_ext_payload_word]) };
     }
 
     /// The tuple a `.tuple` row holds.
@@ -618,7 +625,7 @@ pub const Descriptor = struct {
         std.debug.assert(row.word.kind == .fn_pure or row.word.kind == .fn_effectful or row.word.kind == .fn_unbound);
         return .{
             .args = store.varRange(row.payload[0]),
-            .ret = @fromBackingInt(row.payload[1]),
+            .ret = @fromBackingInt(row.payload[fn_ret_payload_word]),
             .effect_deps = store.varRange(row.payload[2]),
         };
     }
@@ -626,7 +633,7 @@ pub const Descriptor = struct {
     /// The tag union a `.tag_union` row holds.
     pub inline fn decodeTagUnion(row: Row) TagUnion {
         std.debug.assert(row.word.kind == .tag_union);
-        return .{ .tags = getRange(Tag.SafeMultiList.Range, row.payload, 0), .ext = @fromBackingInt(row.payload[2]) };
+        return .{ .tags = getRange(Tag.SafeMultiList.Range, row.payload, 0), .ext = @fromBackingInt(row.payload[row_ext_payload_word]) };
     }
 
     inline fn putRange(payload: *Payload, at: usize, range: anytype) void {

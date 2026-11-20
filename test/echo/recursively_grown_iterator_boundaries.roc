@@ -1,8 +1,7 @@
-# Iterators grown by recursion take the forced-dynamic representation, whose
-# step functions are erased callables. These programs drive such iterators
-# through closures, returned values, and destructuring `next!` calls, where
-# public `Iter`/`Stream` types view the forced-dynamic values. Every backend
-# must print the same results.
+# Iterators grown by recursion: a chain whose length is decided at run time
+# forms a self-containing lambda set. These programs drive such iterators
+# through closures, returned values, and destructuring `next!` calls. Every
+# backend must print the same results.
 
 grow_iter : Iter(U64), U64 -> Iter(U64)
 grow_iter = |it, n| if n == 0 { it } else { grow_iter(it.map(|x| x + 1), n - 1) }

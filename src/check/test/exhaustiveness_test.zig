@@ -5,6 +5,7 @@
 //! - Redundant patterns produce REDUNDANT PATTERN warnings
 //! - Exhaustive matches pass without errors
 
+const std = @import("std");
 const TestEnv = @import("TestEnv.zig");
 
 // Basic Tag Union Exhaustiveness
@@ -1284,4 +1285,276 @@ test "non-exhaustive - missing tuple reports the uncovered value of each element
         \\
         \\
     );
+}
+
+// Builtin inhabitedness: a builtin type has values exactly when its declared
+// backing does, like any other nominal type. A user type that shares a
+// builtin's name is an ordinary type.
+
+/// Checks `source`, expecting only builtin-shadowing warnings and no type problems.
+fn expectShadowingOnlyAndNoTypeProblems(source: []const u8) TestEnv.TestEnvError!void {
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    const diagnostics = try test_env.module_env.getDiagnostics();
+    defer test_env.gpa.free(diagnostics);
+    for (diagnostics) |diagnostic| {
+        try std.testing.expectEqual(std.meta.activeTag(diagnostic), .builtin_type_shadowed_warning);
+    }
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.problems.problems.items.len);
+}
+
+test "exhaustive - an empty user nominal named like a number needs no Err" {
+    try expectShadowingOnlyAndNoTypeProblems(
+        \\U8 :: []
+        \\
+        \\f : Try(Str, U8) -> Str
+        \\f = |t| match t {
+        \\    Ok(s) => s
+        \\}
+    );
+}
+
+test "exhaustive - an empty user alias named like a number needs no Err" {
+    try expectShadowingOnlyAndNoTypeProblems(
+        \\U8 : []
+        \\
+        \\f : Try(Str, U8) -> Str
+        \\f = |t| match t {
+        \\    Ok(s) => s
+        \\}
+    );
+}
+
+test "exhaustive - an empty user nominal with an ordinary name needs no Err" {
+    try expectShadowingOnlyAndNoTypeProblems(
+        \\V8 :: []
+        \\
+        \\f : Try(Str, V8) -> Str
+        \\f = |t| match t {
+        \\    Ok(s) => s
+        \\}
+    );
+}
+
+test "non-exhaustive - the builtin U8 error payload requires Err" {
+    const source =
+        \\f : Try(Str, U8) -> Str
+        \\f = |t| match t {
+        \\    Ok(s) => s
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Non Exhaustive Match");
+}
+
+test "non-exhaustive - a builtin number reached through a user alias requires Err" {
+    const source =
+        \\Byte : U8
+        \\
+        \\f : Try(Str, Byte) -> Str
+        \\f = |t| match t {
+        \\    Ok(s) => s
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Non Exhaustive Match");
+}
+
+/// Checks that a `match` with only an `Ok` branch on `Try(Str, <error_type>)`
+/// is rejected for its missing `Err` branch, which is what an error type that
+/// has values requires.
+fn expectErrBranchRequired(comptime error_type: []const u8) TestEnv.TestEnvError!void {
+    const body =
+        \\f = |t| match t {
+        \\    Ok(s) => s
+        \\}
+    ;
+    const source = "f : Try(Str, " ++ error_type ++ ") -> Str\n" ++ body;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Non Exhaustive Match");
+}
+
+test "non-exhaustive - every builtin number error payload requires Err" {
+    inline for (.{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "F32", "F64", "Dec" }) |number| {
+        try expectErrBranchRequired(number);
+    }
+}
+
+test "non-exhaustive - a builtin number inside a structure requires Err" {
+    try expectErrBranchRequired("{ code : U16, message : Str }");
+    try expectErrBranchRequired("(I64, F64)");
+    try expectErrBranchRequired("[Code(U8)]");
+}
+
+test "non-exhaustive - a compiler-provided builtin error payload requires Err" {
+    try expectErrBranchRequired("Str");
+    try expectErrBranchRequired("U8x16");
+    try expectErrBranchRequired("Box(U8)");
+}
+
+test "non-exhaustive - a collection of an empty type requires Err because the empty collection exists" {
+    try expectErrBranchRequired("List([])");
+    try expectErrBranchRequired("Set([])");
+    try expectErrBranchRequired("Dict([], Str)");
+    try expectErrBranchRequired("Dict(Str, [])");
+    try expectErrBranchRequired("Iter([])");
+}
+
+// `Box(item)` has a value exactly when `item` does, exactly like the user
+// wrapper `MyBox(a) := [B(a)]`.
+
+/// Checks that a `match` with only an `Ok` branch on `Try(Str, <error_type>)`
+/// is accepted, which is what an error type without values allows.
+fn expectNoErrBranchNeeded(comptime declarations: []const u8, comptime error_type: []const u8) TestEnv.TestEnvError!void {
+    const body =
+        \\f = |t| match t {
+        \\    Ok(s) => s
+        \\}
+    ;
+    const source = declarations ++ "f : Try(Str, " ++ error_type ++ ") -> Str\n" ++ body;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+/// Checks that an `Err` branch on `Try(Str, <error_type>)` is reported as
+/// unmatchable.
+fn expectErrBranchUnmatchable(comptime declarations: []const u8, comptime error_type: []const u8) TestEnv.TestEnvError!void {
+    const body =
+        \\f = |t| match t {
+        \\    Ok(s) => s
+        \\    Err(_) => ""
+        \\}
+    ;
+    const source = declarations ++ "f : Try(Str, " ++ error_type ++ ") -> Str\n" ++ body;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeWarning("Unmatchable Pattern");
+}
+
+const my_box = "MyBox(a) := [B(a)]\n\n";
+
+test "exhaustive - a Box of an empty type needs no Err, like a user wrapper" {
+    try expectNoErrBranchNeeded("", "Box([])");
+    try expectNoErrBranchNeeded(my_box, "MyBox([])");
+}
+
+test "unmatchable - an Err branch on a Box of an empty type, like a user wrapper" {
+    try expectErrBranchUnmatchable("", "Box([])");
+    try expectErrBranchUnmatchable(my_box, "MyBox([])");
+}
+
+test "non-exhaustive - a Box of a type with values requires Err, like a user wrapper" {
+    try expectErrBranchRequired("Box(Str)");
+    try expectErrBranchRequired("Box(List([]))");
+    try expectErrBranchRequired("Box({})");
+}
+
+test "exhaustive - a Box is empty through nested structure" {
+    try expectNoErrBranchNeeded("", "Box(Box([]))");
+    try expectNoErrBranchNeeded("", "Box({ a : [], b : Str })");
+    try expectNoErrBranchNeeded("", "Box((Str, []))");
+    try expectNoErrBranchNeeded("E := []\n\n", "Box(E)");
+    try expectNoErrBranchNeeded("", "{ boxed : Box([]) }");
+}
+
+test "non-exhaustive - a list of boxes of an empty type requires Err" {
+    try expectErrBranchRequired("List(Box([]))");
+}
+
+// A free `_` in a `Box` payload is decided exactly as one in the payload of the
+// user wrapper `MyBox(a) := [B(a)]`: a use decides it, and a top-level value no
+// use decides closes it to `[]` when the module finishes.
+
+/// Checks `body`, with `W` standing for the wrapper, once for `Box` and once
+/// for the user twin, expecting both to be accepted.
+fn expectBoxAndTwinAccepted(comptime body: []const u8) TestEnv.TestEnvError!void {
+    inline for (.{ .{ "", "Box" }, .{ my_box, "MyBox" } }) |wrapper| {
+        const source = wrapper[0] ++ comptime replaceWrapper(body, wrapper[1]);
+        var test_env = try TestEnv.init("Test", source);
+        defer test_env.deinit();
+
+        try test_env.assertNoErrors();
+    }
+}
+
+fn replaceWrapper(comptime body: []const u8, comptime wrapper: []const u8) []const u8 {
+    comptime var result: []const u8 = "";
+    comptime var start: usize = 0;
+    inline for (body, 0..) |byte, index| {
+        if (byte == '@') {
+            result = result ++ body[start..index] ++ wrapper;
+            start = index + 1;
+        }
+    }
+    return result ++ body[start..];
+}
+
+const absent_payload_top_level =
+    \\x : Try(Str, @(PAYLOAD))
+    \\x = Ok("a")
+    \\
+    \\y : Try(Str, @(U8))
+    \\y = x
+;
+
+const absent_payload_local =
+    \\f : Str -> Try(Str, @(U8))
+    \\f = |s| {
+    \\    x : Try(Str, @(PAYLOAD))
+    \\    x = Ok(s)
+    \\    x
+    \\}
+;
+
+const absent_payload_if_branches =
+    \\f : Str, @(U8) -> Try(Str, @(U8))
+    \\f = |s, b| {
+    \\    x : Try(Str, @(PAYLOAD))
+    \\    x = Ok(s)
+    \\    if s == "" Err(b) else x
+    \\}
+;
+
+fn withPayload(comptime body: []const u8, comptime payload: []const u8) []const u8 {
+    comptime var result: []const u8 = "";
+    comptime var start: usize = 0;
+    comptime var index: usize = 0;
+    inline while (index < body.len) : (index += 1) {
+        if (index + 7 <= body.len and std.mem.eql(u8, body[index..][0..7], "PAYLOAD")) {
+            result = result ++ body[start..index] ++ payload;
+            start = index + 7;
+        }
+    }
+    return result ++ body[start..];
+}
+
+test "a use decides an Err payload's Box(_) like a user wrapper's" {
+    try expectBoxAndTwinAccepted(comptime withPayload(absent_payload_top_level, "_"));
+    try expectBoxAndTwinAccepted(comptime withPayload(absent_payload_local, "_"));
+    try expectBoxAndTwinAccepted(comptime withPayload(absent_payload_if_branches, "_"));
+}
+
+test "a Box of a written payload type with values is accepted like a user wrapper's" {
+    try expectBoxAndTwinAccepted(comptime withPayload(absent_payload_top_level, "U8"));
+    try expectBoxAndTwinAccepted(comptime withPayload(absent_payload_local, "U8"));
+    try expectBoxAndTwinAccepted(comptime withPayload(absent_payload_if_branches, "U8"));
+}
+
+test "a top-level value's undecided Box(_) Err payload closes to Box([]) like a user wrapper's" {
+    inline for (.{ .{ "", "Box" }, .{ my_box, "MyBox" } }) |wrapper| {
+        var test_env = try TestEnv.init("Test", wrapper[0] ++ "x : Try(Str, " ++ wrapper[1] ++ "(_))\nx = Ok(\"a\")\n");
+        defer test_env.deinit();
+
+        try test_env.assertDefType("x", "Try(Str, " ++ wrapper[1] ++ "([]))");
+    }
 }

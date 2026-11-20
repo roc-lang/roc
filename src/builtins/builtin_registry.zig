@@ -129,8 +129,6 @@ pub const BuiltinFn = enum {
     erased_callable_decref,
     erased_callable_decref_single_thread,
     erased_callable_repack,
-    boxed_sequence_pack,
-    boxed_sequence_unpack,
     native_callable_call,
     native_callable_defer,
     native_callable_drive,
