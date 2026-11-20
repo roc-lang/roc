@@ -990,6 +990,12 @@ const Lowerer = struct {
         /// its task records until the call finishes, and inner calls stack
         /// their runs above it.
         inline_substitutions: std.ArrayList(bool) = .empty,
+        /// Debug builds only: the single-use bodies inlined into the bodies
+        /// being lowered, those of the innermost body from
+        /// `single_use_inlined_start` on. Each is lowered at most once per
+        /// lowering of its owning body (design.md "solved inline plan").
+        single_use_inlined: std.ArrayList(Lifted.FnId) = .empty,
+        single_use_inlined_start: usize = 0,
         /// Arenas a finished match or constant query released, kept for the
         /// next one. Each is heap-allocated so an arena's allocator stays
         /// valid while its owning task frame moves.
@@ -1008,6 +1014,7 @@ const Lowerer = struct {
             for (self.spare_arenas.items) |arena| self.destroyArena(arena);
             self.spare_arenas.deinit(self.allocator);
             self.inline_substitutions.deinit(self.allocator);
+            self.single_use_inlined.deinit(self.allocator);
             self.frame_locals.deinit(self.allocator);
             self.proc_locals.deinit();
         }
@@ -1035,6 +1042,30 @@ const Lowerer = struct {
         fn destroyArena(self: *LaneScratch, arena: *base.SingleThreadArena) void {
             arena.deinit();
             self.allocator.destroy(arena);
+        }
+
+        /// Debug builds only. Start recording the single-use bodies inlined
+        /// into one body's lowering; the result restores the enclosing
+        /// body's record in `leaveSingleUseScope`.
+        fn enterSingleUseScope(self: *LaneScratch) usize {
+            const saved = self.single_use_inlined_start;
+            self.single_use_inlined_start = self.single_use_inlined.items.len;
+            return saved;
+        }
+
+        fn leaveSingleUseScope(self: *LaneScratch, saved: usize) void {
+            self.single_use_inlined.shrinkRetainingCapacity(self.single_use_inlined_start);
+            self.single_use_inlined_start = saved;
+        }
+
+        /// Debug builds only. Record that `fn_id`'s single-use body is being
+        /// inlined into the current body's lowering, which must not already
+        /// hold it.
+        fn noteSingleUseInlined(self: *LaneScratch, fn_id: Lifted.FnId) std.mem.Allocator.Error!void {
+            for (self.single_use_inlined.items[self.single_use_inlined_start..]) |inlined| {
+                if (inlined == fn_id) Common.invariant("a single-use inline body was lowered twice in one lowering of its owning body");
+            }
+            try self.single_use_inlined.append(self.allocator, fn_id);
         }
     };
 
@@ -2736,6 +2767,8 @@ const Lowerer = struct {
         const saved_current_proc = self.current_proc;
         var proc_locals = self.lane_scratch.proc_locals.acquire();
         defer self.lane_scratch.proc_locals.release(&proc_locals);
+        const single_use_scope = if (builtin.mode == .debug) self.lane_scratch.enterSingleUseScope() else {};
+        defer if (builtin.mode == .debug) self.lane_scratch.leaveSingleUseScope(single_use_scope);
         defer {
             self.current_ret_ty = saved_ret_ty;
             self.current_proc_locals = saved_proc_locals;
@@ -2866,6 +2899,8 @@ const Lowerer = struct {
                 const saved_erased_reuse = self.current_erased_reuse;
                 var proc_locals = self.lane_scratch.proc_locals.acquire();
                 defer self.lane_scratch.proc_locals.release(&proc_locals);
+                const single_use_scope = if (builtin.mode == .debug) self.lane_scratch.enterSingleUseScope() else {};
+                defer if (builtin.mode == .debug) self.lane_scratch.leaveSingleUseScope(single_use_scope);
 
                 self.current_proc_locals = &proc_locals;
                 self.current_ret_ty = entry.ret;
@@ -6402,12 +6437,19 @@ const Lowerer = struct {
             operands: []const Lifted.CaptureOperand,
             ty: Type.TypeId,
         } = null,
+        /// Borrowed from the calling value call, which outlives this task.
+        /// Empty, or one entry per argument: the local a multi-variant value
+        /// call evaluated that argument into ahead of its variant dispatch,
+        /// at this callee's parameter type, or null for an argument this
+        /// call lowers itself (`operandIsLocalOrLiteral`).
+        prelowered: []const ?LIR.LocalId = &.{},
         /// The capture value types, then the argument types.
         arg_tys: []Type.TypeId = &.{},
         lowered: ?LoweredExprLocals = null,
-        /// Where the argument positions an inlined call bound directly to
-        /// the caller locals they read start in the lane's
-        /// `inline_substitutions`.
+        /// Where the argument positions this call does not lower start in the
+        /// lane's `inline_substitutions`: those `prelowered` supplies, and
+        /// those an inlined call bound directly to the caller locals they
+        /// read.
         substituted_start: ?usize = null,
     };
 
@@ -6448,6 +6490,14 @@ const Lowerer = struct {
         done: ValueJoin = undefined,
         /// Each variant's call, indexed by variant. Owned.
         bodies: []LIR.CFStmtId = &.{},
+        /// With several variants, the parameter types every variant's target
+        /// shares, one per argument. Owned.
+        arg_tys: []Type.TypeId = &.{},
+        /// With several variants, one entry per argument: the temp the
+        /// argument is evaluated into once, ahead of the variant dispatch,
+        /// or null for an argument each variant's call lowers itself
+        /// (`operandIsLocalOrLiteral`). Owned.
+        prelowered: []?LIR.LocalId = &.{},
     };
 
     const CallableVariantTask = struct {
@@ -6960,6 +7010,10 @@ const Lowerer = struct {
                 task.variants = &.{};
                 self.allocator.free(task.bodies);
                 task.bodies = &.{};
+                self.allocator.free(task.arg_tys);
+                task.arg_tys = &.{};
+                self.allocator.free(task.prelowered);
+                task.prelowered = &.{};
             },
             .match_ => |*task| {
                 if (task.arena) |arena| self.lane_scratch.releaseArena(arena);
@@ -8389,20 +8443,18 @@ const Lowerer = struct {
     }
 
     fn stepKnownCall(self: *Lowerer, frame: *LowerFrame, task: *KnownCallTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
-        // The capture record is built; the arguments are lowered ahead of it.
-        if (frame.cursor == 2) {
-            return .{ .tail = try self.operandChain(task.where, task.lowered.?, task.arg_tys, null, input.?) };
-        }
-        if (frame.cursor == 1) {
-            const lowered = task.lowered.?;
-            const start = task.substituted_start.?;
-            const substituted = self.lane_scratch.inline_substitutions.items[start..][0..lowered.ids.len];
-            return .{ .tail = try self.operandChainSkipping(task.where, lowered, task.arg_tys, substituted, null, input.?) };
-        }
+        // Cursor 2: the capture record is built, and the arguments are
+        // lowered ahead of it. Cursor 1: the inlined body is lowered, and the
+        // arguments it did not bind to caller locals are lowered ahead of it.
+        if (frame.cursor != 0) return .{ .tail = try self.knownCallOperandChain(task, input.?) };
         const callee = task.callee;
         const where = task.where;
         const target = task.target;
         const capture_count = task.capture_values.len;
+        if (builtin.mode == .debug and task.prelowered.len != 0) {
+            if (task.prelowered.len != task.args.len) Common.invariant("a call's pre-lowered argument count differed from its argument count");
+            if (task.demand_shaped or capture_count != 0) Common.invariant("a call with pre-lowered arguments was demand-shaped or carried capture values");
+        }
         if (task.demand_shaped) {
             // The arguments keep the call's own types; the callee's parameters
             // accept their layouts at its holes.
@@ -8412,7 +8464,15 @@ const Lowerer = struct {
             if (@import("builtin").mode == .debug) try self.requireDemandShapedCallLayouts(callee, task.arg_tys, task.result_ty);
         } else if (capture_count == 0) {
             task.arg_tys = try self.lowerFnSpecArgTypes(callee);
-            task.lowered = try self.lowerExprsToTempsAtTypes(task.args, task.arg_tys);
+            if (task.prelowered.len == 0) {
+                task.lowered = try self.lowerExprsToTempsAtTypes(task.args, task.arg_tys);
+            } else {
+                task.lowered = try self.lowerExprsToTempsAtTypesReusing(task.args, task.arg_tys, task.prelowered);
+                const substitutions = &self.lane_scratch.inline_substitutions;
+                task.substituted_start = substitutions.items.len;
+                try substitutions.ensureUnusedCapacity(self.allocator, task.prelowered.len);
+                for (task.prelowered) |prelowered| substitutions.appendAssumeCapacity(prelowered != null);
+            }
         } else {
             const arg_tys = try self.lowerFnSpecArgTypes(callee);
             defer self.allocator.free(arg_tys);
@@ -8456,13 +8516,16 @@ const Lowerer = struct {
                 // one outcome would retain it across every other outcome's
                 // consuming use.
                 const substitutions = &self.lane_scratch.inline_substitutions;
-                const start = substitutions.items.len;
-                try substitutions.ensureUnusedCapacity(self.allocator, lowered.ids.len);
-                task.substituted_start = start;
-                for (lowered.exprs, task.arg_tys, 0..) |arg_expr, arg_ty, i| {
-                    const source = try self.inlineArgumentLocal(arg_expr, arg_ty, lowered.ids[i], call_target);
-                    substitutions.appendAssumeCapacity(source != null);
-                    if (source) |local| lowered.ids[i] = local;
+                if (task.substituted_start == null) {
+                    task.substituted_start = substitutions.items.len;
+                    try substitutions.appendNTimes(self.allocator, false, lowered.ids.len);
+                }
+                const substituted = substitutions.items[task.substituted_start.?..][0..lowered.ids.len];
+                for (lowered.exprs, task.arg_tys, substituted, 0..) |arg_expr, arg_ty, *bound, i| {
+                    if (bound.*) continue;
+                    const source = try self.inlineArgumentLocal(arg_expr, arg_ty, lowered.ids[i], call_target) orelse continue;
+                    bound.* = true;
+                    lowered.ids[i] = source;
                 }
                 const capture_locals = lowered.ids[0..capture_count];
                 const arg_locals = lowered.ids[capture_count..];
@@ -8512,7 +8575,18 @@ const Lowerer = struct {
             frame.cursor = 2;
             return .{ .call = try self.captureRecordTask(where, capture_local, record.captures, record.operands, record.ty, current) };
         }
-        return .{ .tail = try self.operandChain(where, lowered, task.arg_tys, null, current) };
+        return .{ .tail = try self.knownCallOperandChain(task, current) };
+    }
+
+    /// The chain lowering a known call's arguments ahead of `next`, skipping
+    /// the positions it does not lower (`KnownCallTask.substituted_start`).
+    fn knownCallOperandChain(self: *Lowerer, task: *const KnownCallTask, next: LIR.CFStmtId) Common.LowerError!LowerTask {
+        const lowered = task.lowered.?;
+        const substituted: ?[]const bool = if (task.substituted_start) |start|
+            self.lane_scratch.inline_substitutions.items[start..][0..lowered.ids.len]
+        else
+            null;
+        return try self.operandChainSkipping(task.where, lowered, task.arg_tys, substituted, null, next);
     }
 
     fn stepInlineCall(self: *Lowerer, frame: *LowerFrame, task: *InlineCallTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
@@ -8525,6 +8599,10 @@ const Lowerer = struct {
         }
         const spec = self.fn_specs.items[@backingInt(task.callee)];
         if (spec.abi != .finite) Common.invariant("attempted to inline a non-finite function spec");
+        if (builtin.mode == .debug) switch (self.inline_plan.kind(spec.source)) {
+            .single_use, .source_single_use => try self.lane_scratch.noteSingleUseInlined(spec.source),
+            .none, .wrapper => {},
+        };
 
         const source_fn = self.solved.lifted.getFn(spec.source);
         const fn_content = self.solved.types.rootContent(spec.solved_fn_ty);
@@ -8715,6 +8793,7 @@ const Lowerer = struct {
                 task.callee = try self.addTemp(task.callee_ty);
                 task.done = self.valueJoinFor(task.next, task.target);
                 task.bodies = try self.allocator.alloc(LIR.CFStmtId, task.variants.len);
+                if (task.variants.len > 1) try self.prelowerCallableCallArgs(task);
                 frame.index = task.variants.len;
                 frame.cursor = 1;
             },
@@ -8726,10 +8805,67 @@ const Lowerer = struct {
             const variant = task.variants[frame.index];
             const variant_index: layout.VariantIndex = @intCast(frame.index);
             const branch_done = try self.joinJump(task.where, task.done.id);
-            return .{ .call = try self.callableVariantCallTask(task.where, task.target, task.result_ty, task.callee, variant, variant_index, task.args, branch_done) };
+            return .{ .call = try self.callableVariantCallTask(task.where, task.target, task.result_ty, task.callee, variant, variant_index, task.args, task.prelowered, branch_done) };
         }
         frame.cursor = 2;
-        return .{ .call = exprTask(task.where, task.callee, task.callee_expr, task.callee_ty, try self.callableVariantDispatch(task.where, task.callee, task.bodies)) };
+        const dispatch = try self.callableVariantDispatch(task.where, task.callee, task.bodies);
+        // The callee is evaluated first, then each argument that is not a
+        // local read or a literal, left to right, into its temp ahead of the
+        // dispatch, so every variant's call reads the same values.
+        var items: std.ArrayList(ChainItem) = .empty;
+        errdefer items.deinit(self.allocator);
+        var i = task.prelowered.len;
+        while (i > 0) {
+            i -= 1;
+            const temp = task.prelowered[i] orelse continue;
+            try items.append(self.allocator, .{ .expr = .{ .target = temp, .expr = task.args[i], .ty = task.arg_tys[i] } });
+        }
+        try items.append(self.allocator, .{ .expr = .{ .target = task.callee, .expr = task.callee_expr, .ty = task.callee_ty } });
+        return .{ .call = try self.chainTask(task.where, &items, dispatch) };
+    }
+
+    /// A call through a callable with several variants evaluates each
+    /// argument that is not a local read or a literal once, ahead of the
+    /// variant dispatch, rather than in every variant's branch: an argument
+    /// lowered in each branch would define its locals, and lower any body
+    /// inlined in it, once per variant. A local read or a literal binds
+    /// nothing and inlines nothing, so each variant's call lowers it next to
+    /// the call; when every argument is one, the dispatch directly follows
+    /// the callee's producer, where tag-case fusion selects each variant's
+    /// call from the edge that builds the callee.
+    ///
+    /// Every variant's target is specialized at the callable's own function
+    /// type (`MembersTask.solved_fn_ty`), so the variants share their
+    /// parameter types, and each argument's temp has the type every
+    /// variant's call takes it at.
+    fn prelowerCallableCallArgs(self: *Lowerer, task: *CallableCallTask) Common.LowerError!void {
+        task.arg_tys = try self.lowerFnSpecArgTypes(task.variants[0].target);
+        if (task.arg_tys.len != task.args.len) Common.invariant("a value call's argument count differed from its callee's arity");
+        if (builtin.mode == .debug) {
+            for (task.variants[1..]) |variant| {
+                const variant_arg_tys = try self.lowerFnSpecArgTypes(variant.target);
+                defer self.allocator.free(variant_arg_tys);
+                if (!std.mem.eql(Type.TypeId, variant_arg_tys, task.arg_tys)) {
+                    Common.invariant("the variants of one callable had different parameter types");
+                }
+            }
+        }
+        task.prelowered = try self.allocator.alloc(?LIR.LocalId, task.args.len);
+        for (task.args, task.arg_tys, task.prelowered) |arg, ty, *temp| {
+            temp.* = if (self.operandIsLocalOrLiteral(arg)) null else try self.addTemp(ty);
+        }
+    }
+
+    /// Whether an operand is a local read or a literal, either possibly
+    /// wrapped in nominal types, whose lowering binds no local of the
+    /// program and inlines no body.
+    fn operandIsLocalOrLiteral(self: *const Lowerer, expr_id: Lifted.ExprId) bool {
+        var current = expr_id;
+        while (true) switch (self.solved.lifted.getExpr(current).data) {
+            .nominal => |backing| current = backing,
+            .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit => return true,
+            else => return false,
+        };
     }
 
     /// One multiway switch selecting the call of the callee's variant: the
@@ -8780,6 +8916,7 @@ const Lowerer = struct {
         variant: Type.FnVariant,
         variant_index: layout.VariantIndex,
         arg_exprs: []const Lifted.ExprId,
+        prelowered: []const ?LIR.LocalId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LowerTask {
         const args = arg_exprs;
@@ -8799,6 +8936,7 @@ const Lowerer = struct {
                     .capture_arg = payload,
                     .is_cold = false,
                     .next = next,
+                    .prelowered = prelowered,
                 },
             } };
         }
@@ -8811,6 +8949,7 @@ const Lowerer = struct {
             .capture_arg = null,
             .is_cold = false,
             .next = next,
+            .prelowered = prelowered,
         } };
     }
 
@@ -12553,6 +12692,23 @@ const Lowerer = struct {
         const ids = try self.allocator.alloc(LIR.LocalId, owned_exprs.len);
         errdefer self.allocator.free(ids);
         for (tys, 0..) |ty, i| ids[i] = try self.addTemp(ty);
+        return .{ .exprs = owned_exprs, .ids = ids };
+    }
+
+    /// `lowerExprsToTempsAtTypes`, with each position `prelowered` supplies
+    /// holding that local instead of a fresh temp.
+    fn lowerExprsToTempsAtTypesReusing(
+        self: *Lowerer,
+        exprs: []const Lifted.ExprId,
+        tys: []const Type.TypeId,
+        prelowered: []const ?LIR.LocalId,
+    ) Common.LowerError!LoweredExprLocals {
+        if (exprs.len != tys.len or exprs.len != prelowered.len) Common.invariant("typed expression temp arity differed from expression arity");
+        const owned_exprs = try self.allocator.dupe(Lifted.ExprId, exprs);
+        errdefer self.allocator.free(owned_exprs);
+        const ids = try self.allocator.alloc(LIR.LocalId, owned_exprs.len);
+        errdefer self.allocator.free(ids);
+        for (tys, prelowered, ids) |ty, local, *id| id.* = local orelse try self.addTemp(ty);
         return .{ .exprs = owned_exprs, .ids = ids };
     }
 

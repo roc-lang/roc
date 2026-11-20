@@ -10715,7 +10715,16 @@ boundary.
 The solved inline plan admits functions with exactly one non-cold external
 direct call and no function-value or root uses. A single call-site proof
 permits ordinary statements, branches, local loops, and typed join points because
-lowering the body once cannot duplicate stored code. That proof follows the
+lowering the body once cannot duplicate stored code. A call through a function
+value with several variants evaluates each argument once, into a temp ahead of
+the variant dispatch, and every variant's call takes that temp; the variants
+of one callable are specialized at its function type, so they share its
+parameter types. Only a local read or a literal, which binds no local and
+inlines no body, is lowered in each variant's branch instead, which keeps the
+dispatch directly after the callee's producer for tag-case fusion. No
+expression that binds a local or inlines a body is therefore lowered more than
+once per lowering of its owning body, and debug builds assert this for every
+single-use body. That proof follows the
 unique call's owning functions through the selected inline plan. If an owning
 wrapper has multiple direct inline sites or also survives as a function value,
 the nested single-use body remains a procedure; a non-inlined owner establishes
