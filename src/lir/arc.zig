@@ -2963,6 +2963,17 @@ const Inserter = struct {
                     .construct => {
                         const operands = try self.dynOperands(op);
                         const transferred = step.transfer_positions.of(u32, &self.arc_plans.positions);
+                        if (op == .record_update) {
+                            // The helper moves the replacements into the result, but
+                            // releases the base inside the operation. Its owned unit
+                            // must already exist when the helper starts.
+                            const cause: RcCause = .{ .stmt = at, .reason = .stored_in_aggregate };
+                            std.debug.assert(operands[0] == op.record_update.base);
+                            next = try self.retainLocalsFrom(operands, 1, transferred, cause, next);
+                            const update = try self.addWithNext(stmt, next, origin);
+                            if (transferred.len != 0 and transferred[0] == 0) break :blk update;
+                            break :blk try self.retainLocalIfRc(op.record_update.base, cause, update);
+                        }
                         if (op == .closure and op.closure.reuse != null) {
                             // The capture record is retained after the
                             // closure takes it, like any construction's
@@ -7777,10 +7788,21 @@ const Inserter = struct {
         cause: RcCause,
         next: LIR.CFStmtId,
     ) ResourceError!LIR.CFStmtId {
+        return self.retainLocalsFrom(locals, 0, skip_positions, cause, next);
+    }
+
+    fn retainLocalsFrom(
+        self: *Inserter,
+        locals: anytype,
+        first: usize,
+        skip_positions: []const u32,
+        cause: RcCause,
+        next: LIR.CFStmtId,
+    ) ResourceError!LIR.CFStmtId {
         var current = next;
         var skip_index = skip_positions.len;
         var i = locals.len;
-        while (i > 0) {
+        while (i > first) {
             i -= 1;
             if (skip_index > 0 and @as(usize, skip_positions[skip_index - 1]) == i) {
                 skip_index -= 1;
@@ -20498,6 +20520,45 @@ test "ARC dyn field views supply ownership to consuming low-level operations" {
     try d.f.expectRc(view, 2, 0, 0);
     try d.f.expectRc(param, 0, 1, 0);
     try d.expectDynamicRcShape();
+}
+
+test "ARC supplies a borrowed record update base before the update" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const parent_desc = try d.desc();
+    const record_desc = try d.desc();
+    const plan = try d.desc();
+    const parent = try d.value(parent_desc, .param);
+    const replacement = try d.f.local(.str);
+    const base = try d.value(record_desc, .view);
+    const updated = try d.value(record_desc, .frame);
+    const equal = try d.f.local(.bool);
+
+    // Compare a nested record with its updated copy. The runtime update
+    // releases one base unit before returning; a later retain cannot
+    // supply that unit. Inspect the ARC schedule, never run the program.
+    const ret = try d.f.ret(equal);
+    const compare = try d.op(equal, .{ .eq = .{ .lhs = base, .rhs = updated, .desc = record_desc } }, ret);
+    const update = try d.op(updated, .{ .record_update = .{
+        .base = base,
+        .base_desc = record_desc,
+        .desc = record_desc,
+        .plan = plan,
+        .values = try d.f.span(&.{replacement}),
+    } }, compare);
+    const read = try d.op(base, .{ .field_addr = .{ .base = parent, .desc = parent_desc, .field_index = .{ .immediate = 0 } } }, update);
+    const proc = try d.proc(&.{ parent_desc, record_desc, plan, parent, replacement }, read, .bool, null);
+    try d.run(&.{proc});
+
+    var cursor = d.f.store.getProcSpecImmediate(proc).body.get().?;
+    var supplied = false;
+    while (true) {
+        const stmt = d.f.store.getCFStmtImmediate(cursor).*;
+        if (stmt == .incref and stmt.incref.value == base) supplied = true;
+        if (stmt == .dyn and d.f.store.stmtRow(stmt.dyn.data) == .record_update) break;
+        cursor = body_clone.linearNextOrNull(stmt) orelse return error.ExpectedRecordUpdate;
+    }
+    try testing.expectEqual(true, supplied);
 }
 
 test "ARC dyn eq and inspect borrow their operand" {

@@ -732,7 +732,11 @@ const InlineAnalyzer = struct {
                     }
 
                     const fn_use = self.use(fn_id);
-                    const settled: ?bool = if (fn_use.external_calls == 0)
+                    // One reference to a wrapper as a value can lead to many
+                    // dispatch sites, each materializing the wrapper's body.
+                    const settled: ?bool = if (fn_use.value_refs != 0)
+                        false
+                    else if (fn_use.external_calls == 0)
                         true
                     else if (fn_use.external_calls != 1)
                         false
@@ -744,7 +748,6 @@ const InlineAnalyzer = struct {
                             Common.invariant("single-call inline owner use was not a direct call expression");
                         }
                         if (call_expr.data.call_proc.is_cold) break :blk true;
-                        if (fn_use.value_refs != 0) break :blk false;
                         break :blk null;
                     };
                     if (settled) |once| {

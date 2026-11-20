@@ -2593,6 +2593,19 @@ const Certifier = struct {
         seen: *std.bit_set.DynamicBitSetUnmanaged,
         mutations: ?*std.ArrayList(OwnershipMutation),
     ) Allocator.Error!bool {
+        return self.parentUnit(state, root, seen, mutations, .consume);
+    }
+
+    /// Observing the same projection uses the same availability proof,
+    /// without settling balances or recording a claim on the path.
+    fn parentUnit(
+        self: *Certifier,
+        state: *State,
+        root: ValueId,
+        seen: *std.bit_set.DynamicBitSetUnmanaged,
+        mutations: ?*std.ArrayList(OwnershipMutation),
+        comptime mode: enum { observe, consume },
+    ) Allocator.Error!bool {
         var marked = std.ArrayList(ValueId).empty;
         defer {
             for (marked.items) |value| seen.unset(@intCast(value));
@@ -2679,6 +2692,15 @@ const Certifier = struct {
                     // another explicit unit the container holds, which starts
                     // or continues a dismantle of its own.
                     if (state.conditionalConditionOf(container) != null) break :walk false;
+                    if (mode == .observe and (!existing.eql(required) or state.balanceOf(container) >= 2)) {
+                        const balance = state.balanceOf(container);
+                        if (balance < 2) return false;
+                        for (range.first..range.first + range.count) |slot| {
+                            const field: u32 = @intCast(slot);
+                            if (required.contains(field) and state.claimCount(container, field) >= @as(u32, @intCast(balance))) return false;
+                        }
+                        return true;
+                    }
                     if (!existing.eql(required)) {
                         break :walk try self.claimRepeatedFields(state, container, required, range, mutations);
                     }
@@ -2696,7 +2718,7 @@ const Certifier = struct {
                         break :walk true;
                     }
                     if (state.balanceOf(container) != 1) break :walk false;
-                    try pending.append(self.allocator, .{ .container = container, .claim = claim, .existing = .{}, .settles_spent = true });
+                    if (mode == .consume) try pending.append(self.allocator, .{ .container = container, .claim = claim, .existing = .{}, .settles_spent = true });
                     value = container;
                     continue :walk;
                 }
@@ -2704,6 +2726,7 @@ const Certifier = struct {
                 // from an intact surplus aggregate unit. The first unit remains
                 // represented by the existing claim set.
                 if (try self.hasIntactSurplusUnit(state, container)) {
+                    if (mode == .observe) return true;
                     const before = state.balanceOf(container);
                     try state.addBalance(container, -1);
                     if (mutations) |list| try list.append(self.allocator, .{ .balance = .{
@@ -2721,6 +2744,7 @@ const Certifier = struct {
                 continue :walk;
             }
             if (state.balanceOf(container) >= 1) {
+                if (mode == .observe) return true;
                 try self.claimContainerField(state, container, claim, existing, mutations);
                 break :walk true;
             }
@@ -2730,7 +2754,7 @@ const Certifier = struct {
             // own parent. This is bookkeeping only: the parent claim and child
             // balance are the two sides of the same single runtime ownership
             // unit.
-            try pending.append(self.allocator, .{ .container = container, .claim = claim, .existing = existing });
+            if (mode == .consume) try pending.append(self.allocator, .{ .container = container, .claim = claim, .existing = existing });
             value = container;
         };
 
@@ -6432,6 +6456,9 @@ const Certifier = struct {
             => false,
         };
         if (!taken) return;
+        if (state.balanceOf(container) == 1 and state.conditionalConditionOf(container) == null and
+            self.values.items[container].payload_source != no_value and
+            try self.parentUnit(state, container, try self.valueWalkScratch(), null, .observe)) return;
         self.diag.context_local = source;
         self.diag.context_proc = self.current_proc;
         self.diag.context_stmt = self.current_stmt;
@@ -6893,7 +6920,16 @@ const Certifier = struct {
                 }
                 try self.bindSameValue(state, defined, source);
             },
-            .construct => try self.applyAggregate(state, target.?, self.dyn_operands.items),
+            .construct => {
+                if (op == .record_update) {
+                    // The old record isn't held in the result: the operation
+                    // releases it. Unlike a stored operand, it cannot run
+                    // a temporary deficit to be restored by a trailing retain.
+                    const base = op.record_update.base;
+                    if (self.isRc(base)) try self.consumeUnit(state, state.valueOf(base), base);
+                    try self.applyAggregate(state, target.?, self.dyn_operands.items[1..]);
+                } else try self.applyAggregate(state, target.?, self.dyn_operands.items);
+            },
             .borrow_operands => {
                 const defined = target.?;
                 if (self.isRc(defined)) _ = try self.bindFresh(state, defined, 1, &.{});
@@ -8877,6 +8913,37 @@ test "certify rejects dismantling a payload view in a join after its only unit w
     try buildPayloadViewDismantledBeforeJoin(&f, false);
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "use of dead refcounted local") != null);
+}
+
+test "certify a field borrow after dismantling one of a projected record's two units" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const record_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = .str }});
+    const parent_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = record_layout }});
+    const parent = try f.local(parent_layout);
+    const record = try f.local(record_layout);
+    const spent = try f.local(.str);
+    const borrowed = try f.local(.str);
+    const length = try f.local(.u64);
+
+    // A take out of the parent supplies the original record; retaining it
+    // supplies a second unit. Releasing one via its sole field does not
+    // invalidate a borrow from the record that is still owed a release.
+    var body = try f.decrefStmt(record, record_layout, try f.ret(length));
+    body = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = length,
+        .op = .str_count_utf8_bytes,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.str_count_utf8_bytes.rcEffect()),
+        .args = try f.store.addLocalSpan(&.{borrowed}),
+        .next = body,
+    } }, .test_fixture);
+    body = try fieldReadStmt(&f, borrowed, record, 0, body);
+    body = try takeFieldStmt(&f, spent, record, 0, try f.decrefStmt(spent, .str, body));
+    body = try f.increfStmt(record, record_layout, body);
+    body = try takeFieldStmt(&f, record, parent, 0, body);
+    _ = try f.addProc(&.{parent}, body, .u64);
+    errdefer std.debug.print("{s}\n", .{f.diag.message()});
+    try f.certify();
 }
 
 /// A payload taken from a tag borrows the tag's stored unit until it is
