@@ -4845,6 +4845,13 @@ pub fn build(b: *std.Build) void {
     });
 
     test_suites.register(.{
+        .step_suffix = "checked-root-graph",
+        .description = "Run checked root graph Zig tests over source-built programs",
+        .compile = compiler_suites_test,
+        .namespace = "eval.test.checked_root_graph_test.",
+    });
+
+    test_suites.register(.{
         .step_suffix = "lir-inline",
         .description = "Run LIR inline Zig tests",
         .compile = compiler_suites_test,
