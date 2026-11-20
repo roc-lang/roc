@@ -30266,7 +30266,12 @@ const BodyContext = struct {
         if (mask.len != subst.len) Common.invariant("parametric request substitution differed from its scheme's quantified variables");
         var count: usize = 0;
         for (mask, subst) |is_parametric, slot| {
-            if (is_parametric and slot == .node) count += 1;
+            switch (slot) {
+                .node => |node| if (is_parametric and !self.classHasFixedSlot(mask, subst, node)) {
+                    count += 1;
+                },
+                .checked_error => {},
+            }
         }
         if (count == 0) return .{};
         const nodes = try allocator.alloc(NodeId, count);
@@ -30277,7 +30282,7 @@ const BodyContext = struct {
         for (mask, subst) |is_parametric, slot| {
             switch (slot) {
                 .node => |node| {
-                    if (is_parametric) {
+                    if (is_parametric and !self.classHasFixedSlot(mask, subst, node)) {
                         nodes[next] = node;
                         root_indices[next] = root_index;
                         next += 1;
@@ -30288,6 +30293,23 @@ const BodyContext = struct {
             }
         }
         return .{ .nodes = nodes, .root_indices = root_indices };
+    }
+
+    /// Whether a slot the mask keeps out of the holes holds `node`'s class.
+    /// A hole makes its whole class an interface parameter, so it may stand
+    /// only for slots that are all parametric. Checking can give a value slot
+    /// and a row tail slot one class: a closed `{}` passed where the scheme's
+    /// row `{ ..tail }` closes at the same `{}`. A hole there would make the
+    /// tail the parameter its own row extends.
+    fn classHasFixedSlot(self: *BodyContext, mask: []const bool, subst: SpecSubstitution, node: NodeId) bool {
+        for (mask, subst) |is_parametric, slot| {
+            if (is_parametric) continue;
+            switch (slot) {
+                .node => |other| if (self.graph.sameClass(other, node)) return true,
+                .checked_error => {},
+            }
+        }
+        return false;
     }
 
     /// An unfinished expansion is joined only by a request for the types it
