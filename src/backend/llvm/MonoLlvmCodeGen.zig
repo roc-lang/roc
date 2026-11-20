@@ -5632,25 +5632,6 @@ pub const MonoLlvmCodeGen = struct {
             try self.materializeLocalSpanIfDeferred(arg_locals);
         }
         switch (op) {
-            .boxed_sequence_pack => {
-                const ptr_ty = try self.ptrType();
-                const record = GuardedList.at(arg_locals, 0);
-                const offset = GuardedList.at(arg_locals, 1);
-                const result = try self.callBuiltin(.boxed_sequence_pack, ptr_ty, &.{ ptr_ty, self.ptrSizedIntType(), self.ptrSizedIntType() }, &.{
-                    self.slot(record).ptr,
-                    try self.intValue(self.ptrSizedIntType(), self.layoutByteSize(self.localLayout(record))),
-                    try self.coerceScalar(try self.loadLocalScalar(offset, .u32), self.ptrSizedIntType(), false),
-                });
-                try self.storePointer(self.slot(target).ptr, result);
-            },
-            .boxed_sequence_unpack => {
-                const ptr_ty = try self.ptrType();
-                try self.callBuiltinVoid(.boxed_sequence_unpack, &.{ ptr_ty, ptr_ty, self.ptrSizedIntType() }, &.{
-                    self.slot(target).ptr,
-                    try self.loadPointer(self.slot(GuardedList.at(arg_locals, 0)).ptr),
-                    try self.intValue(self.ptrSizedIntType(), self.layoutByteSize(self.localLayout(target))),
-                });
-            },
             .num_plus, .num_minus, .num_times => unreachable, // LIR lowering commits these to typed operations through CheckedArithmetic.lowerOp
             .list_prefetched => unreachable, // LIR lowering splits this into an alias and `list_prefetch`
             .bool_not => {
@@ -12664,7 +12645,6 @@ pub const MonoLlvmCodeGen = struct {
     fn boxyListOp(op: lir.LowLevel) ?BoxyListOp {
         return switch (op) {
             .dec_mul_saturated => null,
-            .boxed_sequence_pack, .boxed_sequence_unpack => null,
             .list_capacity => .capacity,
             .list_slack_unique => .slack_unique,
             .list_owned_unique => .owned_unique,
@@ -12711,7 +12691,6 @@ pub const MonoLlvmCodeGen = struct {
 
         switch (op) {
             .dec_mul_saturated => {},
-            .boxed_sequence_pack, .boxed_sequence_unpack => unreachable, // sequence operations never carry list element descriptors
             .list_prefetch => return,
             .list_len => {
                 const len = try self.loadUsize(try self.offsetPtr(try self.bytesAddress(GuardedList.at(all_args, 0)), self.rocListLenOffset()));

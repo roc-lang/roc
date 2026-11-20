@@ -168,7 +168,7 @@ NO CHANGE
 							(e-num (value "5"))))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 289)
+		(e-call (constraint-fn-var 303)
 			(e-lookup-local
 				(p-assign (ident "func")))
 			(e-num (value "10"))

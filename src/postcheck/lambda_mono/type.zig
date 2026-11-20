@@ -141,7 +141,7 @@ pub const NamedBacking = struct {
 pub const OptionalNamedBacking = collections.OptionalStruct(NamedBacking, "ty");
 
 comptime {
-    std.debug.assert(@sizeOf(NamedContent) == 152);
+    std.debug.assert(@sizeOf(NamedContent) == 76);
     std.debug.assert(@sizeOf(Field) == 20);
 }
 
@@ -454,11 +454,6 @@ pub const Store = struct {
                 writeBytes(hasher, name_store.moduleIdentityBytes(named.def.module));
                 writeOptionalU32(hasher, named.def.source_decl.get());
                 writeBytes(hasher, name_store.typeNameText(named.def.type_name));
-                writeOptionalDigest(hasher, named.def.generated);
-                writeBytes(hasher, @tagName(named.def.iterator_representation));
-                writeBytes(hasher, @tagName(named.def.iterator_kind));
-                writeU32(hasher, named.def.iterator_depth);
-                writeIteratorTopology(hasher, name_store, named.def.iterator_topology.get());
                 writeBytes(hasher, @tagName(named.kind));
                 if (named.builtin_owner.get()) |owner| {
                     writeBytes(hasher, "builtin");
@@ -869,37 +864,6 @@ fn writeOptionalU32(hasher: *TypeDigestHasher, value: ?u32) void {
     } else {
         hasher.update(&[_]u8{0});
     }
-}
-
-fn writeOptionalDigest(hasher: *TypeDigestHasher, value: ?names.TypeDigest) void {
-    if (value) |digest| {
-        hasher.update(&[_]u8{1});
-        hasher.update(&digest.bytes);
-    } else {
-        hasher.update(&[_]u8{0});
-    }
-}
-
-fn writeIteratorTopology(
-    hasher: *TypeDigestHasher,
-    name_store: *const names.NameStore,
-    topology: ?MonoType.IteratorTopology,
-) void {
-    const value = topology orelse {
-        writeBytes(hasher, "no-iterator-topology");
-        return;
-    };
-    writeBytes(hasher, "iterator-topology");
-    writeBytes(hasher, name_store.recordFieldLabelText(value.len_field));
-    writeBytes(hasher, name_store.recordFieldLabelText(value.step_field));
-    writeBytes(hasher, name_store.tagLabelText(value.ok_tag));
-    writeBytes(hasher, name_store.tagLabelText(value.err_tag));
-    writeBytes(hasher, name_store.tagLabelText(value.unknown_tag));
-    writeBytes(hasher, name_store.tagLabelText(value.done_tag));
-    writeBytes(hasher, name_store.tagLabelText(value.one_tag));
-    writeBytes(hasher, name_store.tagLabelText(value.skip_tag));
-    writeBytes(hasher, name_store.recordFieldLabelText(value.item_field));
-    writeBytes(hasher, name_store.recordFieldLabelText(value.rest_field));
 }
 
 fn writeU32(hasher: *TypeDigestHasher, value: u32) void {

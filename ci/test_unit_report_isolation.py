@@ -145,7 +145,7 @@ def main():
         helper.write_bytes(original)
     build = source / "build.zig"
     original_build = build.read_bytes()
-    unique = b'.description = "Build helper report isolation fixture",\n        .compile = build_helpers_test,'
+    unique = b'.description = "Build helper report isolation fixture",\n        .compile = build_helpers_test,\n    }).step, build_helpers_test.name);'
     assert original_build.count(unique) == 1
     try:
         build.write_bytes(original_build.replace(unique, unique.replace(b"build_helpers_test", b"minici_compile")))

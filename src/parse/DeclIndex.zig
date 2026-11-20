@@ -212,8 +212,9 @@ pub const Import = struct {
     /// targets retain their explicit base spelling; package targets include
     /// their lowercase qualifier.
     module_name: Ident.Idx,
-    /// Binding introduced when this target selects a module directly.
-    module_binding: ?Ident.Idx,
+    /// Name this import binds in the header's scope (including a selected
+    /// nested type), null for imports local to a body.
+    file_binding: ?Ident.Idx,
     qualifier: ?Ident.Idx,
     origin: Origin,
     base: LocalBase,

@@ -1,10 +1,12 @@
-# The widening dispatch sits inside a generalized local (`widen`), and the
-# row it widens is the error row of a `Try`, whose tail the requirement's
-# annotation leaves to each instantiation. `forward` and `repeat` hand their
-# own evidence on at the same requirement, to another definition and around
-# a recursive call; `describe` hands it to the local at a row two tags wider.
-# `Aaa` sorts before `Bad`, so an `Err(Bad(_))` numbered by the
-# implementation's row alone shows up as a wrong tag through `show`.
+# The dispatch sits inside a generalized local (`widen`), and the row it
+# widens is the error row of a `Try`. The requirement's error row is exactly
+# the implementation's, so the local composes it into its own result with
+# `?`, and each use of the local decides how much wider that result is.
+# `forward` and `repeat` hand their own evidence on at the same requirement,
+# to another definition and around a recursive call; `describe` uses the
+# local at a row two tags wider. `Aaa` sorts before `Bad`, so an
+# `Err(Bad(_))` numbered by the implementation's row alone shows up as a
+# wrong tag through `show`.
 WidenClosedTryImplLocalScope := {}
 
 Job := [Pending, Failed].{
@@ -25,7 +27,8 @@ show = |v| match v {
 
 describe : a -> Str where [a.status : a -> Try(Str, [Bad(Str)])]
 describe = |x| {
-    widen = |y| y.status()
+    widen : b -> Try(Str, [Bad(Str)]) where [b.status : b -> Try(Str, [Bad(Str)])]
+    widen = |y| Ok(y.status()?)
     show(widen(x))
 }
 

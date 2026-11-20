@@ -35,6 +35,25 @@ pub fn copy(program: *Ast.Program, root: Ast.ExprId) Allocator.Error!Ast.ExprId 
     return try copier.copyOne(root);
 }
 
+/// Locals renamed by `copyRenamingReads`, each to its replacement.
+pub const Renames = collections.DenseMapUnmanaged(Ast.LocalId, Ast.LocalId);
+
+/// The expression rooted at `root`, with every read of a local in `renames`
+/// reading its replacement instead. A read is a `local` expression, an
+/// initialized-payload switch's payload, or a local a join point retains.
+/// Only the expressions on a path from `root` to such a read are added
+/// again; every other expression stays the one `root` names, so a body
+/// that reads no renamed local is returned as it is.
+pub fn copyRenamingReads(program: *Ast.Program, root: Ast.ExprId, renames: *const Renames) Allocator.Error!Ast.ExprId {
+    var copier: Copier = .{ .program = program, .renames = renames };
+    defer copier.deinit();
+    try copier.markRenamedPaths(root);
+    if (!copier.renamed_paths.contains(root)) return root;
+    const position = copier.savePosition();
+    defer copier.restorePosition(position);
+    return try copier.copyOne(root);
+}
+
 /// Give `parent` a copy of its own of each expression in `shared`, which are
 /// expressions directly inside it that another parent also holds. An
 /// expression listed twice is copied at two of the places `parent` names it.
@@ -80,9 +99,16 @@ const Copier = struct {
     field_scratch: std.ArrayList(Ast.FieldExpr) = .empty,
     capture_scratch: std.ArrayList(Ast.CaptureOperand) = .empty,
     branch_scratch: std.ArrayList(Ast.Branch) = .empty,
+    /// For `copyRenamingReads`: the locals it renames, and the expressions
+    /// on a path from its root to a read of one, which alone are copied.
+    renames: ?*const Renames = null,
+    renamed_paths: collections.DenseMapUnmanaged(Ast.ExprId, void) = .empty,
+    typed_local_scratch: std.ArrayList(Ast.TypedLocal) = .empty,
 
     fn deinit(self: *Copier) void {
         const allocator = self.program.allocator;
+        self.typed_local_scratch.deinit(allocator);
+        self.renamed_paths.deinit(allocator);
         self.branch_scratch.deinit(allocator);
         self.capture_scratch.deinit(allocator);
         self.field_scratch.deinit(allocator);
@@ -150,11 +176,62 @@ const Copier = struct {
         }
     }
 
+    /// Whether `data` itself reads a local this copy renames.
+    fn readsRenamed(self: *const Copier, data: Ast.ExprData) bool {
+        const renames = self.renames.?;
+        return switch (data) {
+            .local => |local| renames.contains(local),
+            .if_initialized_payload => |conditional| renames.contains(conditional.payload),
+            .join_point => |join| for (0..join.retained.len) |index| {
+                if (renames.contains(GuardedList.at(self.program.typedLocalSpan(join.retained), index).local)) break true;
+            } else false,
+            .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => false,
+        };
+    }
+
+    /// Record every expression on a path from `root` to a read of a renamed
+    /// local, visiting each expression after the expressions inside it.
+    fn markRenamedPaths(self: *Copier, root: Ast.ExprId) Allocator.Error!void {
+        const allocator = self.program.allocator;
+        const Visit = struct { expr: Ast.ExprId, inside_done: bool };
+        var stack: std.ArrayList(Visit) = .empty;
+        defer stack.deinit(allocator);
+        try stack.append(allocator, .{ .expr = root, .inside_done = false });
+        while (stack.pop()) |visit| {
+            const data = self.program.getExpr(visit.expr).data;
+            self.children.clearRetainingCapacity();
+            if (!data.isLeaf()) try self.collectChildren(data);
+            if (!visit.inside_done) {
+                try stack.append(allocator, .{ .expr = visit.expr, .inside_done = true });
+                for (self.children.items) |inside| try stack.append(allocator, .{ .expr = inside, .inside_done = false });
+                continue;
+            }
+            const on_path = self.readsRenamed(data) or for (self.children.items) |inside| {
+                if (self.renamed_paths.contains(inside)) break true;
+            } else false;
+            if (on_path) try self.renamed_paths.put(allocator, visit.expr, {});
+        }
+    }
+
     /// Deliver a leaf as it is, or queue the expressions inside `expr` ahead
     /// of assembling its copy around theirs.
     fn begin(self: *Copier, expr: Ast.ExprId) Allocator.Error!void {
         const allocator = self.program.allocator;
-        const data = self.program.getExpr(expr).data;
+        const source = self.program.getExpr(expr);
+        const data = source.data;
+        if (self.renames) |renames| {
+            if (!self.renamed_paths.contains(expr)) {
+                try self.delivered.append(allocator, expr);
+                return;
+            }
+            if (data == .local) {
+                self.program.current_loc = self.program.exprLoc(expr);
+                self.program.current_region = self.program.exprRegion(expr);
+                self.program.current_inline_scope = self.program.exprInlineScope(expr);
+                try self.delivered.append(allocator, try self.program.addExpr(.{ .ty = source.ty, .data = .{ .local = renames.get(data.local).? } }));
+                return;
+            }
+        }
         if (data.isLeaf()) {
             try self.delivered.append(allocator, expr);
             return;
@@ -189,7 +266,10 @@ const Copier = struct {
             .checked_error,
             .comptime_exhaustiveness_failed,
             => {},
-            .let_ => Common.invariant("a `let` expression reached a lifted body copy"),
+            .let_ => |binding| {
+                try self.child(binding.value);
+                try self.child(binding.rest);
+            },
             .lambda, .def_ref, .fn_def => Common.invariant("an unlifted function reached a lifted body copy"),
             .list, .tuple => |items| try self.childExprs(items),
             .tag => |tag| try self.childExprs(tag.payloads),
@@ -351,12 +431,33 @@ const Copier = struct {
         const copies = try program.allocator.dupe(Ast.ExprId, self.delivered.items[first..]);
         defer program.allocator.free(copies);
         self.delivered.shrinkRetainingCapacity(first);
-        const data = try self.assembledData(source.data, copies);
+        var data = try self.assembledData(source.data, copies);
+        if (self.renames) |renames| try self.renameEmbeddedReads(&data, renames);
 
         program.current_loc = program.exprLoc(expr);
         program.current_region = program.exprRegion(expr);
         program.current_inline_scope = program.exprInlineScope(expr);
         try self.delivered.append(program.allocator, try program.addExpr(.{ .ty = source.ty, .data = data }));
+    }
+
+    /// Rename the reads `data` holds as locals rather than as expressions.
+    fn renameEmbeddedReads(self: *Copier, data: *Ast.ExprData, renames: *const Renames) Allocator.Error!void {
+        switch (data.*) {
+            .if_initialized_payload => |*conditional| if (renames.get(conditional.payload)) |renamed| {
+                conditional.payload = renamed;
+            },
+            .join_point => |*join| {
+                if (join.retained.len == 0) return;
+                self.typed_local_scratch.clearRetainingCapacity();
+                for (0..join.retained.len) |index| {
+                    var retained = GuardedList.at(self.program.typedLocalSpan(join.retained), index);
+                    if (renames.get(retained.local)) |renamed| retained.local = renamed;
+                    try self.typed_local_scratch.append(self.program.allocator, retained);
+                }
+                join.retained = try self.program.addTypedLocalSpan(self.typed_local_scratch.items);
+            },
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
+        }
     }
 
     /// `source` around `inside`, which holds one expression for each
@@ -383,7 +484,10 @@ const Copier = struct {
             .checked_error,
             .comptime_exhaustiveness_failed,
             => {},
-            .let_ => Common.invariant("a `let` expression reached a lifted body copy"),
+            .let_ => |*binding| {
+                binding.value = taken.one();
+                binding.rest = taken.one();
+            },
             .lambda, .def_ref, .fn_def => Common.invariant("an unlifted function reached a lifted body copy"),
             .list, .tuple => |*items| items.* = try self.takeExprs(&taken, items.*),
             .tag => |*tag| tag.payloads = try self.takeExprs(&taken, tag.payloads),
@@ -496,11 +600,11 @@ const Copier = struct {
             .crash,
             .checked_error,
             .comptime_exhaustiveness_failed,
-            .let_,
             .lambda,
             .def_ref,
             .fn_def,
             => unreachable, // `begin` queues an assembly only for the forms below
+            .let_ => 2,
             .list, .tuple => |items| items.len,
             .tag => |tag| tag.payloads.len,
             .low_level => |call| call.args.len,
@@ -606,4 +710,53 @@ test "a parent given its own copy of a shared expression keeps its id and everyt
     try std.testing.expect(third != constant);
     try std.testing.expect(second != third);
     try std.testing.expectEqualDeep(t.program.getExpr(seven).data, t.program.getExpr(GuardedList.at(t.program.exprSpan(t.program.getExpr(second).data.tuple), 1)).data);
+}
+
+test "a renaming copy adds again only the expressions on a path to a renamed read" {
+    var t = try sequenced.TestProgram.init(std.testing.allocator);
+    defer t.deinit();
+    const captured = try t.program.addLocal(@fromBackingInt(@intCast(1)), t.ty);
+    const other = try t.program.addLocal(@fromBackingInt(@intCast(2)), t.ty);
+    const own = try t.program.addLocal(@fromBackingInt(@intCast(3)), t.ty);
+    const read_captured = try t.expr(.{ .local = captured });
+    const untouched = try t.tuple(&.{ try t.expr(.{ .local = other }), try t.int(1) });
+    const reading = try t.tuple(&.{read_captured});
+    const root = try t.tuple(&.{ untouched, reading });
+
+    var renames: Renames = .empty;
+    defer renames.deinit(std.testing.allocator);
+    try renames.put(std.testing.allocator, captured, own);
+
+    const copied = try copyRenamingReads(&t.program, root, &renames);
+    try std.testing.expect(copied != root);
+    const items = t.program.exprSpan(t.program.getExpr(copied).data.tuple);
+    try std.testing.expectEqual(untouched, GuardedList.at(items, 0));
+    const copied_reading = GuardedList.at(items, 1);
+    try std.testing.expect(copied_reading != reading);
+    const read = GuardedList.at(t.program.exprSpan(t.program.getExpr(copied_reading).data.tuple), 0);
+    try std.testing.expectEqual(own, t.program.getExpr(read).data.local);
+    // The source keeps reading the captured local.
+    try std.testing.expectEqual(captured, t.program.getExpr(read_captured).data.local);
+
+    try std.testing.expectEqual(untouched, try copyRenamingReads(&t.program, untouched, &renames));
+}
+
+test "a renaming copy renames reads under a `let` that a SpecConstr body can hold" {
+    var t = try sequenced.TestProgram.init(std.testing.allocator);
+    defer t.deinit();
+    const captured = try t.program.addLocal(@fromBackingInt(@intCast(1)), t.ty);
+    const bound = try t.program.addLocal(@fromBackingInt(@intCast(2)), t.ty);
+    const own = try t.program.addLocal(@fromBackingInt(@intCast(3)), t.ty);
+    const bind = try t.program.addPat(.{ .ty = t.ty, .data = .{ .bind = bound } });
+    const rest = try t.expr(.{ .local = bound });
+    const root = try t.expr(.{ .let_ = .{ .bind = bind, .value = try t.expr(.{ .local = captured }), .rest = rest } });
+
+    var renames: Renames = .empty;
+    defer renames.deinit(std.testing.allocator);
+    try renames.put(std.testing.allocator, captured, own);
+
+    const copied = t.program.getExpr(try copyRenamingReads(&t.program, root, &renames)).data.let_;
+    try std.testing.expectEqual(bind, copied.bind);
+    try std.testing.expectEqual(rest, copied.rest);
+    try std.testing.expectEqual(own, t.program.getExpr(copied.value).data.local);
 }

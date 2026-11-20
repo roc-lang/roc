@@ -787,6 +787,13 @@ const UniqueCallFact = struct {
 
 const OwnershipFlow = struct { target: LIR.LocalId, source: LIR.LocalId };
 
+/// One consuming-result operation at `stmt` of procedure `proc`.
+const ConsumingSlice = struct {
+    flow: OwnershipFlow,
+    stmt: LIR.CFStmtId,
+    proc: u32,
+};
+
 const BindingFact = union(enum) {
     fresh: LIR.LocalId,
     multi: LIR.LocalId,
@@ -953,6 +960,10 @@ const Solver = struct {
     /// Static ARC facts projected during the sole reachable-statement lift.
     /// Later analyses consume these typed facts without decoding LIR again.
     binding_facts: std.ArrayList(BindingFact),
+    /// Every reachable operation whose owned result consumes its input
+    /// (`list_sublist`), with the procedure it was lifted from, so the
+    /// dead-lender transfer can ask what its lender does afterwards.
+    consuming_slices: std.ArrayList(ConsumingSlice),
     visibility_facts: std.ArrayList(VisibilityFact),
     unique_facts: std.ArrayList(UniqueFact),
     address_taken: std.bit_set.DynamicBitSetUnmanaged,
@@ -1032,6 +1043,7 @@ pub fn solveWithOptions(
         .maybe_uninitialized_condition_mask = .empty,
         .param_uses = .empty,
         .binding_facts = .empty,
+        .consuming_slices = .empty,
         .visibility_facts = .empty,
         .unique_facts = .empty,
         .address_taken = .{},
@@ -1063,6 +1075,7 @@ pub fn solveWithOptions(
         solver.maybe_uninitialized_condition_mask.deinit(allocator);
         solver.param_uses.deinit(allocator);
         solver.binding_facts.deinit(allocator);
+        solver.consuming_slices.deinit(allocator);
         solver.visibility_facts.deinit(allocator);
         solver.unique_facts.deinit(allocator);
         solver.address_taken.deinit(allocator);
@@ -1219,6 +1232,7 @@ pub fn solveWithOptions(
             solveInvariant("incremental return binding update disagreed with independent solve");
         }
     }
+    try demandDeadLenderSlices(&solver, &binding);
 
     // Allocation-level cleanup ends at this ownership-transfer boundary.
     // Later failures are handled exclusively by Solution.deinit.
@@ -2364,7 +2378,7 @@ fn liftReachableStatements(solver: *Solver) SolveError!void {
             try liftProcStmtFacts(solver, @intCast(proc_index), current);
             if (!facts_seen.isSet(stmt_index)) {
                 facts_seen.set(stmt_index);
-                try liftSharedStmtFacts(solver, current);
+                try liftSharedStmtFacts(solver, @intCast(proc_index), current);
             }
             try body_clone.appendSuccessorsInOrder(solver.store, &solver.stack, current, solver.allocator, .{ .switch_edges = .arms_first });
         }
@@ -2756,6 +2770,125 @@ fn solveParameterModes(solver: *Solver) SolveError!void {
     }
 }
 
+/// A slice solved as a borrow keeps its lender's whole allocation live until
+/// the slice's last read, items it drops included. When the lender is an
+/// owned binding whose place is not read at or after some read of the slice,
+/// the borrow stretches the lender past its own last use, holding a buffer
+/// the slice may have dropped and the items it holds shared. Each such slice
+/// is demanded: the lender's unit (or, when the lender is read after the
+/// slice, one retain of it) moves into the consuming operation, which
+/// releases an emptied list, shrinks a unique list in place and releases the
+/// items it drops at once, and the lender is released at its own last use.
+/// A demand removes the slice's readers from its lender's place, which can
+/// leave another slice of that place outliving the rest of it in turn, so
+/// the demands are settled to a fixpoint.
+fn demandDeadLenderSlices(solver: *Solver, binding: *BindingResult) SolveError!void {
+    if (solver.consuming_slices.items.len == 0) return;
+    const allocator = solver.allocator;
+    while (true) {
+        var places = try EdgeRows.build(allocator, binding.leader.len, binding.leader);
+        defer places.deinit(allocator);
+        var order: ?UseOrder = null;
+        defer if (order) |*active| active.deinit();
+        var order_proc: u32 = 0;
+        var demanded = false;
+        for (solver.consuming_slices.items) |slice| {
+            const target = solver.domain.indexOf(slice.flow.target) orelse continue;
+            if (solver.demand[target] or !binding.borrowed.isSet(target)) continue;
+            const lender = binding.leader[target];
+            if (binding.borrowed.isSet(lender)) continue;
+            if (!unitIsLenders(solver, slice.flow.source, lender)) continue;
+            if (order == null or order_proc != slice.proc) {
+                if (order) |*active| active.deinit();
+                order = null;
+                order = try UseOrder.initFromStore(allocator, solver.store, @as(LIR.LirProcSpecId, @fromBackingInt(slice.proc)));
+                order_proc = slice.proc;
+            }
+            if (!try sliceOutlivesLender(solver, binding, places, &order.?, slice.stmt, lender, target)) continue;
+            // The demand flows exactly as the ownership-flow edges carry it:
+            // into the consumed input and along its pure aliases to the
+            // lender, which is already owned, so no signature changes and a
+            // lender read after the slice is retained for it.
+            solver.demand[target] = true;
+            var cursor = solver.domain.indexOf(slice.flow.source).?;
+            while (true) {
+                solver.demand[cursor] = true;
+                if (cursor == lender) break;
+                cursor = solver.alias_source[cursor].get().?;
+            }
+            demanded = true;
+        }
+        if (!demanded) return;
+        const resolved = try resolveBindings(solver);
+        binding.deinit(allocator);
+        binding.* = resolved;
+    }
+}
+
+/// Whether `source` holds the lender's own unit: it is the lender or a chain
+/// of pure same-value aliases of it, so a demand on it moves that unit.
+fn unitIsLenders(solver: *const Solver, source: LIR.LocalId, lender: u32) bool {
+    var cursor = solver.domain.indexOf(source) orelse return false;
+    while (cursor != lender) {
+        cursor = solver.alias_source[cursor].get() orelse return false;
+    }
+    return true;
+}
+
+/// Whether the slice, or a borrow anchored through it, has a read (or its
+/// definition at `stmt`) after which no other member of the lender's place
+/// is read, so that the borrow would keep the lender live past its own last
+/// use.
+fn sliceOutlivesLender(
+    solver: *const Solver,
+    binding: *const BindingResult,
+    places: EdgeRows,
+    order: *UseOrder,
+    stmt: LIR.CFStmtId,
+    lender: u32,
+    slice: u32,
+) SolveError!bool {
+    const allocator = solver.allocator;
+    var slice_members: std.ArrayList(u32) = .empty;
+    defer slice_members.deinit(allocator);
+    var lender_members: std.ArrayList(u32) = .empty;
+    defer lender_members.deinit(allocator);
+    members: for (places.row(lender)) |member| {
+        std.debug.assert(binding.leader[member] == lender);
+        var cursor = member;
+        while (cursor != lender) {
+            if (cursor == slice) {
+                try slice_members.append(allocator, member);
+                continue :members;
+            }
+            cursor = switch (solver.defs[cursor]) {
+                .borrow_capable => |source| source,
+                .none, .multi, .fresh => solveInvariant("ARC borrowed binding had no lender link"),
+            };
+        }
+        try lender_members.append(allocator, member);
+    }
+    if (!try lenderReadAfter(solver, order, lender_members.items, @backingInt(stmt), false)) return true;
+    for (slice_members.items) |member| {
+        const local: LIR.LocalId = @fromBackingInt(@intCast(solver.domain.localAt(member)));
+        for (order.topology.reads_of.row(local)) |read| {
+            if (!try lenderReadAfter(solver, order, lender_members.items, read, true)) return true;
+        }
+    }
+    return false;
+}
+
+/// Whether a member of `lender_members` is read after the statement `from`,
+/// or, when `inclusive`, by `from` itself.
+fn lenderReadAfter(solver: *const Solver, order: *UseOrder, lender_members: []const u32, from: u32, inclusive: bool) SolveError!bool {
+    for (lender_members) |member| {
+        const local: LIR.LocalId = @fromBackingInt(@intCast(solver.domain.localAt(member)));
+        if (inclusive and order.reads(from, local)) return true;
+        if (try order.usesAfter(from, local)) return true;
+    }
+    return false;
+}
+
 fn flipParamIfRequired(solver: *Solver, local_index: u32, work: *std.ArrayList(u32)) SolveError!void {
     const proc_index = solver.param_proc[local_index].get() orelse return;
     const position = solver.param_position.get(local_index);
@@ -2985,7 +3118,7 @@ fn joinParamCarriesUnit(solver: *const Solver, param: LIR.LocalId) bool {
     return !solver.layouts.layoutHoldsHole(solver.store.getLocal(param).layout_idx);
 }
 
-fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
+fn liftSharedStmtFacts(solver: *Solver, proc_index: u32, current: LIR.CFStmtId) SolveError!void {
     const store = solver.store;
     const allocator = solver.allocator;
     switch (store.getCFStmtImmediate(current).*) {
@@ -3104,10 +3237,12 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 const consumed = store.stmtRow(assign.rc_effect).consume_args;
                 for (0..@min(GuardedList.borrowLen(args), 64)) |position| {
                     if ((consumed & (@as(u64, 1) << @as(u6, @intCast(position)))) == 0) continue;
-                    try solver.binding_facts.append(allocator, .{ .consuming_result = .{
+                    const flow: OwnershipFlow = .{
                         .target = assign.target,
                         .source = GuardedList.at(args, position),
-                    } });
+                    };
+                    try solver.binding_facts.append(allocator, .{ .consuming_result = flow });
+                    try solver.consuming_slices.append(allocator, .{ .flow = flow, .stmt = current, .proc = proc_index });
                 }
             }
             const borrow_source = lowLevelBorrowSource(solver.domain, rc_effect, args);

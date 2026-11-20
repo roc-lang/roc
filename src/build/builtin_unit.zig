@@ -129,7 +129,6 @@ const BuiltinUnit = struct {
         return .{
             .gpa = gpa,
             .artifact = &self.builtins.checked_artifact,
-            .platform = null,
             .views = &.{},
             .target = self.lowering.target,
             .config = config,

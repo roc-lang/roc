@@ -5,7 +5,7 @@
 
 const TestCase = @import("parallel_runner.zig").TestCase;
 
-const boxed_sequence_source =
+const boxed_iterator_source =
     \\{
     \\    text = Str.concat("abcdefghijklmnopqrstuvwxyz", "0123456789")
     \\    original = Box.box(text.iter_utf8())
@@ -20,13 +20,13 @@ const boxed_sequence_source =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
-        .name = "issue 12887: boxed sequence records preserve shared captures (lss)",
-        .source = boxed_sequence_source,
+        .name = "issue 12887: boxed iterator records preserve shared captures (lss)",
+        .source = boxed_iterator_source,
         .expected = .{ .inspect_str = "72" },
     },
     .{
-        .name = "issue 12887: boxed sequence records preserve shared captures (boxy)",
-        .source = boxed_sequence_source,
+        .name = "issue 12887: boxed iterator records preserve shared captures (boxy)",
+        .source = boxed_iterator_source,
         .expected = .{ .inspect_str = "72" },
         .specialization_strategy = .boxy,
     },

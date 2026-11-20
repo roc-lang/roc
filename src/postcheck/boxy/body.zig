@@ -214,7 +214,7 @@ pub const Task = union(enum) {
     /// Pop the slots of a stored list's items and push the list's.
     finish_static_list: struct { ty: TypeId, count: u32, capacity: u64 },
     /// Pop the slot of a stored box's payload and push the box's.
-    finish_static_box: struct { ty: TypeId, sequence_step_offset: ?u32 = null },
+    finish_static_box: struct { ty: TypeId },
     remember_static_value: lower.Program.StoredValueKey,
     /// Record the slot on top of `Builder.static_parts` as the stored
     /// value's, leaving it there.
@@ -232,7 +232,7 @@ pub const Task = union(enum) {
     /// reach and call its worker `callee` with `captures`, the arguments
     /// (adapted from `arg_types` to `params` when `arg_types` is not empty),
     /// and its table at `inputs` (`finishDirectLocalCall`).
-    finish_direct_local_call: struct { callee: WorkerId, captures: []const LocalId, inputs: []const Word, params: []const TypeId, arg_types: []const TypeId, ret: TypeId, result: TypeId },
+    finish_direct_local_call: struct { callee: WorkerId, captures: []const LocalId, inputs: []const Word, params: []const TypeId, arg_types: []const TypeId, ret: TypeId, result: TypeId, hand_on: bool = false },
     /// Push an interpolation's literal segments as the `List(Str)` of `ty`.
     segments_arg: struct { expr: ExprId, ty: TypeId },
     /// Pop an interpolation's assembler and call it with the interpolated
@@ -677,6 +677,14 @@ pub const Builder = struct {
     /// The expressions whose value is the procedure's result, as their
     /// parents read them.
     tail_exprs: collections.DenseMapUnmanaged(ExprId, void) = .empty,
+    /// The expressions whose value is the procedure's result or a part of
+    /// the record, tuple, tag or nominal value the procedure returns: a
+    /// call among them may receive the procedure's reuse allocation
+    /// (`handOnReuse`).
+    result_exprs: collections.DenseMapUnmanaged(ExprId, void) = .empty,
+    /// Set by a call task whose expression is in `result_exprs`, for the
+    /// call it finishes next.
+    hand_on_armed: bool = false,
     /// The procedure's calls and joins as emitted, for its tail calls.
     tail_calls: lir_core.TailCallBuilder,
     /// The statement emitted last, while nothing follows it.
@@ -715,7 +723,7 @@ pub const Builder = struct {
     /// layout `static`, which a packing of that same layout repacks.
     reuse_kind: ReuseKind = .none,
 
-    pub const ReuseKind = union(enum) { none, dynamic, static: layout.Idx };
+    pub const ReuseKind = lower.ReuseKind;
 
     /// The reuse argument for a packing emitted in the body, consumed:
     /// later packings start fresh.
@@ -728,6 +736,48 @@ pub const Builder = struct {
         }
         self.reuse_available = false;
         return self.reuse_arg;
+    }
+
+    /// Hand this body's unconsumed reuse allocation to a direct call of
+    /// `callee.*` whose result `ret` holds exactly one erased-callable
+    /// slot: `callee.*` becomes the callee's variant that receives an
+    /// allocation of this body's reuse kind as its last argument, which is
+    /// returned. Only a local procedure only direct calls reach has such
+    /// variants.
+    pub fn handOnReuse(self: *Builder, hand_on: bool, callee: *WorkerId, ret: TypeId) Allocator.Error!?LocalId {
+        if (!hand_on or !self.reuse_available or self.emitting_entry or self.reuse_kind == .none) return null;
+        const worker = self.program.worker(callee.*).*;
+        if (worker.key != .lambda or !worker.direct) return null;
+        if (try self.program.converter().erasedResultSlots(ret) != .single) return null;
+        callee.* = try self.program.directReuseVariant(callee.*, self.reuse_kind);
+        self.reuse_available = false;
+        return self.reuse_arg;
+    }
+
+    /// Record `root` and every expression whose value is a part of its
+    /// value as a result: a block's final expression, every branch of an
+    /// `if` or `match`, and the parts of a record, tuple, tag or nominal
+    /// value (`result_exprs`).
+    fn markResultExprs(self: *Builder, root: ExprId) Allocator.Error!void {
+        var pending: std.ArrayList(ExprId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |expr| {
+            try self.result_exprs.put(self.allocator, expr, {});
+            switch (self.bodies().exprData(expr)) {
+                .block => |block| try pending.append(self.allocator, block.final_expr),
+                .if_ => |if_| {
+                    for (if_.branches) |branch| try pending.append(self.allocator, self.bodies().ifBranch(branch).body);
+                    try pending.append(self.allocator, if_.final_else);
+                },
+                .match_ => |match| for (match.branches) |branch| try pending.append(self.allocator, self.bodies().matchBranch(branch).value),
+                .tag => |tag| try pending.appendSlice(self.allocator, tag.args),
+                .tuple => |elems| try pending.appendSlice(self.allocator, elems),
+                .record => |record| for (record.fields) |field| try pending.append(self.allocator, self.bodies().recordField(field).value),
+                .nominal => |nominal| try pending.append(self.allocator, nominal.backing_expr),
+                .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .call, .empty_record, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            }
+        }
     }
 
     /// The reuse parameter of an erased worker: the trailing argument the
@@ -806,6 +856,7 @@ pub const Builder = struct {
         self.coerced_destinations.deinit(self.allocator);
         self.value_destinations.deinit(self.allocator);
         self.tail_exprs.deinit(self.allocator);
+        self.result_exprs.deinit(self.allocator);
         self.tail_calls.deinit();
         self.merges.deinit(self.allocator);
         self.loops.deinit(self.allocator);
@@ -2055,6 +2106,7 @@ pub const Builder = struct {
                         // type, which its rows join (design.md "Row Joins").
                         try self.destination_types.put(self.allocator, lambda.body, worker.ret);
                         try self.tail_exprs.put(self.allocator, lambda.body, {});
+                        try self.markResultExprs(lambda.body);
                         try self.tasks.append(self.allocator, .{ .expr = lambda.body });
                     },
                     .hosted_lambda => {
@@ -2163,7 +2215,7 @@ pub const Builder = struct {
         const extern_params = try self.allocator.alloc(LocalId, params.len);
         defer self.allocator.free(extern_params);
         for (params, param_types, extern_args, extern_params) |param, param_ty, *arg, *extern_param| {
-            const abi = try self.hostAbiLayout(param_ty);
+            const abi = try self.program.layouts.hostAbiLayout(param_ty);
             extern_param.* = try self.closedLocal(abi);
             if (try self.closed(param_ty)) {
                 arg.* = param;
@@ -2172,7 +2224,7 @@ pub const Builder = struct {
             arg.* = try self.closedLocal(abi);
             try self.emitDyn(arg.*, .{ .copy = .{ .src = param, .desc = try self.descOf(param_ty) } });
         }
-        const ret_abi = try self.hostAbiLayout(ret_ty);
+        const ret_abi = try self.program.layouts.hostAbiLayout(ret_ty);
         const extern_proc = try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
             .identity = self.program.programLocalIdentity("boxy.hosted_extern", @backingInt(self.worker_id)),
@@ -2191,109 +2243,6 @@ pub const Builder = struct {
             try self.pushValue(value);
         }
         try self.step(.ret);
-    }
-
-    /// The layout a hosted declaration's type `root` has at the host: its
-    /// committed layout where it is closed, and where a `Box` holds one of
-    /// the declaration's variables, the opaque box `RocBox(RocUnknown)`
-    /// (design.md "Host ABI"). The worker's own values of such a box are
-    /// dynamic locals, and each crossing copies between the two, so a local
-    /// of the opaque box is never the last owner of its allocation.
-    fn hostAbiLayout(self: *Builder, root: TypeId) Allocator.Error!layout.Idx {
-        const store = &self.program.store;
-        const layouts = &self.program.result.layouts;
-        var done: collections.DenseMapUnmanaged(TypeId, layout.Idx) = .empty;
-        defer done.deinit(self.allocator);
-        const Frame = struct { ty: TypeId, expanded: bool };
-        var stack: std.ArrayList(Frame) = .empty;
-        defer stack.deinit(self.allocator);
-        var children: std.ArrayList(TypeId) = .empty;
-        defer children.deinit(self.allocator);
-        try stack.append(self.allocator, .{ .ty = root, .expanded = false });
-        while (stack.pop()) |frame| {
-            if (done.contains(frame.ty)) continue;
-            if (try self.closed(frame.ty)) {
-                try done.put(self.allocator, frame.ty, try self.program.layouts.layoutOf(frame.ty));
-                continue;
-            }
-            children.clearRetainingCapacity();
-            switch (store.get(frame.ty)) {
-                .box => |payload| if (!try self.closed(payload)) {
-                    try done.put(self.allocator, frame.ty, try layouts.insertBox(.opaque_ptr));
-                    continue;
-                } else try children.append(self.allocator, payload),
-                .nominal => try children.append(self.allocator, try self.program.converter().backing(frame.ty)),
-                .tuple => |items| try children.appendSlice(self.allocator, store.span(items)),
-                .record => |record| {
-                    if (record.ext != .none) invariant("a hosted declaration's record row is closed, as checking requires");
-                    const storage = try self.program.layouts.recordStorage(record);
-                    defer self.allocator.free(storage);
-                    try children.appendSlice(self.allocator, storage);
-                },
-                .tag_union => |tag_union| {
-                    if (tag_union.ext != null) invariant("a hosted declaration's tag row is closed, as checking requires");
-                    const tags = try self.allocator.dupe(types.Tag, store.tagSpan(tag_union.tags));
-                    defer self.allocator.free(tags);
-                    for (tags) |tag| {
-                        const payloads = try self.allocator.dupe(TypeId, store.span(tag.payloads));
-                        defer self.allocator.free(payloads);
-                        if (try self.program.layouts.tagPayload(payloads)) |payload| try children.append(self.allocator, payload);
-                    }
-                },
-                .variable => invariant("a hosted declaration's variable appears only inside a Box, as checking requires"),
-                .list => invariant("a hosted declaration's variable inside a List is outside a Box, which checking rejects"),
-                .function, .primitive, .empty_record => unreachable, // closed
-            }
-            if (!frame.expanded) {
-                try stack.append(self.allocator, .{ .ty = frame.ty, .expanded = true });
-                for (children.items) |child| if (!done.contains(child)) try stack.append(self.allocator, .{ .ty = child, .expanded = false });
-                continue;
-            }
-            const child_layouts = try self.allocator.alloc(layout.Idx, children.items.len);
-            defer self.allocator.free(child_layouts);
-            for (children.items, child_layouts) |child, *child_layout| child_layout.* = done.get(child).?;
-            const built: layout.Idx = switch (store.get(frame.ty)) {
-                .box => try layouts.insertBox(child_layouts[0]),
-                .nominal => child_layouts[0],
-                .record => |record| blk: {
-                    const fields = try self.allocator.alloc(layout.StructField, child_layouts.len);
-                    defer self.allocator.free(fields);
-                    const declared = record.declared.get() orelse {
-                        for (fields, child_layouts, 0..) |*field, child_layout, index| field.* = .{ .index = @intCast(index), .layout = child_layout };
-                        break :blk try layouts.putStructFields(fields);
-                    };
-                    for (fields, store.declaredSlots(declared)) |*field, slot| {
-                        field.* = .{ .index = slot, .layout = child_layouts[slot], .is_padding = slot >= record.fields.len };
-                    }
-                    break :blk try layouts.putNominalStructFields(fields);
-                },
-                .tuple => blk: {
-                    const fields = try self.allocator.alloc(layout.StructField, child_layouts.len);
-                    defer self.allocator.free(fields);
-                    for (fields, child_layouts, 0..) |*field, child_layout, index| field.* = .{ .index = @intCast(index), .layout = child_layout };
-                    break :blk try layouts.putStructFields(fields);
-                },
-                .tag_union => |tag_union| blk: {
-                    const tags = try self.allocator.dupe(types.Tag, store.tagSpan(tag_union.tags));
-                    defer self.allocator.free(tags);
-                    const variants = try self.allocator.alloc(layout.Idx, tags.len);
-                    defer self.allocator.free(variants);
-                    var next: usize = 0;
-                    for (tags, variants) |tag, *variant| {
-                        if (tag.payloads.len == 0) {
-                            variant.* = .zst;
-                        } else {
-                            variant.* = child_layouts[next];
-                            next += 1;
-                        }
-                    }
-                    break :blk try layouts.putTagUnion(variants);
-                },
-                .primitive, .empty_record, .list, .function, .variable => unreachable, // only the composite kinds above expand
-            };
-            try done.put(self.allocator, frame.ty, built);
-        }
-        return done.get(root).?;
     }
 
     /// Whether any local of this procedure lives in the dynamic frame region.
@@ -2488,6 +2437,7 @@ pub const Builder = struct {
         try self.tasks.append(self.allocator, .ret);
         try self.destination_types.put(self.allocator, lambda.body, worker.ret);
         try self.tail_exprs.put(self.allocator, lambda.body, {});
+        try self.markResultExprs(lambda.body);
         try self.tasks.append(self.allocator, .{ .expr = lambda.body });
         try self.run();
         if (self.reuse_arg == null) _ = try self.beginReuseArg(.none);
@@ -2523,6 +2473,9 @@ pub const Builder = struct {
         for (worker.params) |param_ty| try args.append(self.allocator, try self.localOf(param_ty, .param));
         const instance_start = args.items.len;
         if (self.table_local) |table| try args.append(self.allocator, table);
+        const reuse_kind = worker.key.lambda.reuse;
+        const reuse_param: ?LocalId = if (reuse_kind != .none) try self.beginReuseArg(reuse_kind) else null;
+        if (reuse_param) |param| try args.append(self.allocator, param);
         var ret_layout: layout.Idx = undefined;
         if (try self.closed(worker.ret)) {
             ret_layout = try self.program.layouts.layoutOf(worker.ret);
@@ -2537,6 +2490,7 @@ pub const Builder = struct {
         try self.tasks.append(self.allocator, .ret);
         try self.destination_types.put(self.allocator, lambda.body, worker.ret);
         try self.tail_exprs.put(self.allocator, lambda.body, {});
+        try self.markResultExprs(lambda.body);
         try self.tasks.append(self.allocator, .{ .expr = lambda.body });
         try self.run();
 
@@ -2544,6 +2498,7 @@ pub const Builder = struct {
         self.tail_calls.instance_start = instance_start;
         defer self.tail_calls.loop_params = &.{};
         try self.finishProc(entry, body_start, args.items, ret_layout);
+        if (reuse_param) |param| self.store.getProcSpecPtr(self.currentWorker().proc).erased_reuse_arg = .of(param);
     }
 
     /// An adapter's body (`WorkerKey.adapter`): each argument adapted to the
@@ -3504,7 +3459,10 @@ pub const Builder = struct {
                 }
             },
             .finish_local_call => |call| try self.finishLocalCall(call.closure, call.words, call.params, call.ret, call.arg_types, call.result),
-            .finish_direct_local_call => |call| try self.finishDirectLocalCall(call.callee, call.captures, call.inputs, call.params, call.arg_types, call.ret, call.result),
+            .finish_direct_local_call => |call| {
+                self.hand_on_armed = call.hand_on;
+                try self.finishDirectLocalCall(call.callee, call.captures, call.inputs, call.params, call.arg_types, call.ret, call.result);
+            },
             .finish_hash => |hash| {
                 const hasher = self.popValue();
                 const value = self.popValue();
@@ -3663,7 +3621,7 @@ pub const Builder = struct {
                 try self.finishStaticParts(restore.ty, restore.count, .{ .tag = @intCast(variant) });
             },
             .finish_static_list => |value| try self.finishStaticParts(value.ty, value.count, .{ .list = value.capacity }),
-            .finish_static_box => |value| try self.finishStaticParts(value.ty, 1, if (value.sequence_step_offset) |offset| .{ .boxed_sequence = offset } else .box),
+            .finish_static_box => |value| try self.finishStaticParts(value.ty, 1, .box),
             .remember_static_value => |key| {
                 const value = self.popValue();
                 try self.program.stored_value_slots.put(self.allocator, key, try self.constantSlot(value));
@@ -6626,6 +6584,7 @@ pub const Builder = struct {
                 .arg_types = arg_types,
                 .ret = ret,
                 .result = try self.exprType(expr_id),
+                .hand_on = self.result_exprs.contains(expr_id),
             } });
             return try self.pushExprsReversed(call.args);
         }
@@ -6683,6 +6642,7 @@ pub const Builder = struct {
             .arg_types = &.{},
             .ret = function.ret,
             .result = try self.exprType(expr_id),
+            .hand_on = self.result_exprs.contains(expr_id),
         } });
         try self.pushExprsReversed(call.args);
     }
@@ -6699,14 +6659,22 @@ pub const Builder = struct {
         if (arg_types.len != 0) {
             for (args, arg_types, params) |*arg, arg_ty, param_ty| arg.* = try self.adaptValue(arg.*, arg_ty, param_ty);
         }
-        const table: ?LocalId = if (self.isOwnTable(callee, inputs)) self.table_local else try self.tableLocal(callee, inputs);
-        const all = try self.allocator.alloc(LocalId, captures.len + args.len + @intFromBool(table != null));
+        // A call whose result holds exactly one erased-callable slot hands
+        // this body's unconsumed reuse allocation to the callee's variant
+        // that receives one of its kind.
+        var target_worker = callee;
+        const hand_on = self.hand_on_armed;
+        self.hand_on_armed = false;
+        const reuse = try self.handOnReuse(hand_on, &target_worker, ret);
+        const table: ?LocalId = if (self.isOwnTable(target_worker, inputs)) self.table_local else try self.tableLocal(target_worker, inputs);
+        const all = try self.allocator.alloc(LocalId, captures.len + args.len + @intFromBool(table != null) + @intFromBool(reuse != null));
         defer self.allocator.free(all);
         @memcpy(all[0..captures.len], captures);
         @memcpy(all[captures.len..][0..args.len], args);
-        if (table) |local| all[all.len - 1] = local;
+        if (table) |local| all[captures.len + args.len] = local;
+        if (reuse) |local| all[all.len - 1] = local;
         const target = try self.localOf(ret, .frame);
-        try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(callee).proc, .args = try self.store.addLocalSpan(all), .next = undefined } });
+        try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(target_worker).proc, .args = try self.store.addLocalSpan(all), .next = undefined } });
         try self.pushValue(try self.adaptValue(target, ret, result_ty));
     }
 
@@ -6968,13 +6936,8 @@ pub const Builder = struct {
                     .box => |payload| payload,
                     .primitive, .empty_record, .record, .tuple, .tag_union, .list, .nominal, .function, .variable => invariant("a stored box restored at a non-Box type"),
                 };
-                const sequence_step_offset: ?u32 = if (store.isSequence(payload)) blk: {
-                    const payload_layout = try self.program.layouts.layoutOf(payload);
-                    const layouts = &self.program.result.layouts;
-                    break :blk layouts.getStructFieldOffsetByOriginalIndex(layouts.getLayout(payload_layout).getStruct().idx, 1);
-                } else null;
                 try self.push(.{ .remember_static_part = key });
-                try self.push(.{ .finish_static_box = .{ .ty = raw_ty, .sequence_step_offset = sequence_step_offset } });
+                try self.push(.{ .finish_static_box = .{ .ty = raw_ty } });
                 try self.push(.{ .restore_part = .{ .source = source, .node = child, .ty = payload } });
             },
             .tuple, .record => |children| {
@@ -8462,7 +8425,6 @@ pub const Builder = struct {
                 // in need not be the one restoring it.
                 .named => |named| blk: {
                     if (named.kind == .alias) break :blk done.get(named.backing.get().?.ty).?;
-                    if (named.def.generated != null) invariant("a stored type names a generated nominal, which only specialization mints");
                     const identity = names.moduleIdentityBytes(named.def.module).*;
                     const declaring = self.program.modules.by_identity.get(identity) orelse
                         invariant("a stored type's declaring module is not in this lowering");
@@ -9277,14 +9239,11 @@ pub const Builder = struct {
         // unboxing one is the callable itself.
         switch (op) {
             .dec_mul_saturated => {},
-            .boxed_sequence_pack, .boxed_sequence_unpack => invariant("LIR-only sequence operation reached checked-body lowering"),
             .box_box => if (store.get(result_ty) == .box and store.get(store.get(result_ty).box) == .function) return try self.pushValue(args[0]),
             .box_unbox, .box_unbox_borrowed => if (store.get(result_ty) == .function) return try self.pushValue(args[0]),
             .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_append, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_prefetched, .list_prefetch, .list_append_unsafe, .list_concat, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_sublist, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_move_out_unsafe, .list_map_write_unsafe, .list_item_size_at_most, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .erased_capture_load_borrowed, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
         }
-        const sequence_box = (op == .box_box and store.get(result_ty) == .box and store.isSequence(store.get(result_ty).box)) or
-            ((op == .box_unbox or op == .box_unbox_borrowed) and store.isSequence(result_ty));
-        if (!open and !sequence_box) {
+        if (!open) {
             const target = try self.localOf(result_ty, .frame);
             // Source arithmetic commits to its operand type's behavior.
             const committed = if (args.len != 0) CheckedArithmetic.lowerOp(op, self.store.getLocal(args[0]).layout_idx) else op;
@@ -9293,7 +9252,6 @@ pub const Builder = struct {
         }
         switch (op) {
             .dec_mul_saturated => {},
-            .boxed_sequence_pack, .boxed_sequence_unpack => invariant("LIR-only sequence operation reached a generic source operation"),
             .box_box => {
                 const target = try self.localOf(result_ty, .frame);
                 try self.emitDyn(target, .{ .box = .{ .desc = try self.descOf(arg_types[0]), .payload = args[0] } });
@@ -10973,437 +10931,8 @@ pub const Builder = struct {
             return;
         }
         try self.push(.{ .unreachable_or_unit = {} });
-        if (try self.iteratorChain(plan_id)) |chain| {
-            try self.forChainStart(loop_node, pattern, body, plan_id, chain);
-            return;
-        }
         try self.push(.{ .for_start = .{ .loop = loop_node, .pattern = pattern, .body = body, .plan = plan_id } });
         try self.push(.{ .expr = iterable });
-    }
-
-    /// One producer of a `for` loop's iterable, which the loop runs
-    /// structurally when the checker stamped every producer of the chain
-    /// (design.md "Iterator `for`"): a source yielding each item of a
-    /// list, a string's bytes, or the steps of an iterator value, and the
-    /// adapters over it, innermost first. Operands are checked expressions
-    /// the loop evaluates in chain order before it starts.
-    pub const ChainLayer = union(enum) {
-        list: ChainListSource,
-        list_rev: ChainListSource,
-        str: struct { str: ExprId },
-        /// An iterator value whose steps the loop takes through the `Iter`
-        /// protocol, as a loop over the value alone does.
-        value: struct { iterator: ExprId },
-        map: struct { transform: ExprId, item_ty: TypeId },
-        keep_if: struct { predicate: ExprId },
-        drop_if: struct { predicate: ExprId },
-        /// The stamped `iter_with_index` worker: its counter starts at the
-        /// second operand.
-        with_index: struct { start: ExprId, item_ty: TypeId },
-        take_first: struct { count: ExprId },
-        drop_first: struct { count: ExprId },
-    };
-
-    pub const ChainListSource = struct { list: ExprId, item_ty: TypeId };
-
-    /// The structural chain of a `for` loop's iterable, innermost producer
-    /// first, or null when the loop takes its steps through the `Iter`
-    /// protocol alone: its `iter` dispatch and every producer of the
-    /// iterable expression are read from the checker's
-    /// `IteratorProcedureId` stamps on their resolved targets, never from
-    /// names or type shapes, and a producer without a stamp this lowering
-    /// runs structurally ends the chain as an iterator value.
-    fn iteratorChain(self: *Builder, plan_id: static_dispatch.IteratorForPlanId) Allocator.Error!?[]const ChainLayer {
-        const plan = self.view.view.static_dispatch_plans.iterator_for_plans.items()[@backingInt(plan_id)];
-        const for_site = plan.forLoopSite();
-        const iterator_ty = try self.convert(plan.iterator_ty);
-        // The loop steps the chain's result and every iterator value in it
-        // through the builtin protocol, whose step field the loop calls.
-        if (try self.builtinStepField(plan.next, iterator_ty) == null) return null;
-        var layers: std.ArrayList(ChainLayer) = .empty;
-        defer layers.deinit(self.allocator);
-        const iter_stamp = self.dispatchStamp(plan.iter.resolution);
-        switch (iter_stamp orelse return null) {
-            .list_iter => try layers.append(self.allocator, .{ .list = .{ .list = for_site.iterable, .item_ty = try self.iteratorItemType(iterator_ty) } }),
-            .list_iter_rev => try layers.append(self.allocator, .{ .list_rev = .{ .list = for_site.iterable, .item_ty = try self.iteratorItemType(iterator_ty) } }),
-            .str_iter_utf8 => try layers.append(self.allocator, .{ .str = .{ .str = for_site.iterable } }),
-            .identity => {
-                var current = for_site.iterable;
-                walk: while (true) {
-                    const call = try self.chainCall(current) orelse {
-                        try layers.append(self.allocator, .{ .value = .{ .iterator = current } });
-                        break :walk;
-                    };
-                    const item_ty = try self.iteratorItemType(try self.exprType(current));
-                    switch (call.stamp) {
-                        .identity => current = call.operands[0],
-                        .list_iter => {
-                            try layers.append(self.allocator, .{ .list = .{ .list = call.operands[0], .item_ty = item_ty } });
-                            break :walk;
-                        },
-                        .list_iter_rev => {
-                            try layers.append(self.allocator, .{ .list_rev = .{ .list = call.operands[0], .item_ty = item_ty } });
-                            break :walk;
-                        },
-                        .str_iter_utf8 => {
-                            try layers.append(self.allocator, .{ .str = .{ .str = call.operands[0] } });
-                            break :walk;
-                        },
-                        .map => {
-                            try layers.append(self.allocator, .{ .map = .{ .transform = call.operands[1], .item_ty = item_ty } });
-                            current = call.operands[0];
-                        },
-                        .keep_if => {
-                            try layers.append(self.allocator, .{ .keep_if = .{ .predicate = call.operands[1] } });
-                            current = call.operands[0];
-                        },
-                        .drop_if => {
-                            try layers.append(self.allocator, .{ .drop_if = .{ .predicate = call.operands[1] } });
-                            current = call.operands[0];
-                        },
-                        .with_index => {
-                            try layers.append(self.allocator, .{ .with_index = .{ .start = call.operands[1], .item_ty = item_ty } });
-                            current = call.operands[0];
-                        },
-                        .take_first => {
-                            try layers.append(self.allocator, .{ .take_first = .{ .count = call.operands[1] } });
-                            current = call.operands[0];
-                        },
-                        .drop_first => {
-                            try layers.append(self.allocator, .{ .drop_first = .{ .count = call.operands[1] } });
-                            current = call.operands[0];
-                        },
-                        .next, .custom, .single, .concat, .append, .step_by, .from_iter, .range_iter, .numeric_range_iter, .numeric_to, .numeric_until, .from_step, .range_done => {
-                            try layers.append(self.allocator, .{ .value = .{ .iterator = current } });
-                            break :walk;
-                        },
-                    }
-                }
-            },
-            .next, .custom, .single, .map, .keep_if, .drop_if, .take_first, .drop_first, .concat, .append, .with_index, .step_by, .from_iter, .range_iter, .numeric_range_iter, .numeric_to, .numeric_until, .from_step, .range_done => return null,
-        }
-        // A chain of one iterator value and nothing over it is the loop the
-        // protocol lowering already emits.
-        if (layers.items.len == 1 and layers.items[0] == .value) return null;
-        std.mem.reverse(ChainLayer, layers.items);
-        return try self.program.arena.allocator().dupe(ChainLayer, layers.items);
-    }
-
-    /// The `IteratorProcedureId` the checker stamped on the procedure a
-    /// dispatch resolves to, or null when it resolves to anything else.
-    fn dispatchStamp(self: *Builder, resolution: static_dispatch.CheckedCallResolution) ?static_dispatch.IteratorProcedureId {
-        const table = self.view.view.static_dispatch_plans;
-        const node = switch (resolution) {
-            .direct_closed, .direct_parametric => |direct| table.evidenceNode(direct.evidence),
-            .evidence_dependent, .checked_error, .@"unreachable", .structural, .direct_pending => return null,
-        };
-        return switch (node.target.kind) {
-            .procedure => |procedure| procedure.runtime_target.iteratorProcedure(),
-            .local_proc, .structural, .callable_binding => null,
-        };
-    }
-
-    pub const ChainCall = struct { stamp: static_dispatch.IteratorProcedureId, operands: []const ExprId };
-
-    /// The stamped producer call `expr` is: a dispatch of a value result on
-    /// the pure `Iter` protocol whose target the checker stamped, with its
-    /// checked operand expressions (the receiver first). Null for any other
-    /// expression.
-    fn chainCall(self: *Builder, expr: ExprId) Allocator.Error!?ChainCall {
-        const plan_id = switch (self.bodies().exprData(expr)) {
-            .dispatch_call, .type_dispatch_call => self.bodies().dispatchPlan(@backingInt(expr)) orelse return null,
-            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
-        };
-        const call_plan = self.dispatchPlan(plan_id);
-        // A `map` dispatch on a type with a map method carries the map
-        // result mode, which a direct resolution calls as a value does.
-        switch (call_plan.result_mode) {
-            .value, .map => {},
-            .equality, .hash, .parser_for, .encoder_for, .map_effectful => return null,
-        }
-        const stamp = self.dispatchStamp(call_plan.resolution) orelse return null;
-        switch (self.program.store.get(try self.exprType(expr))) {
-            .nominal => |nominal| if ((nominal.builtin orelse return null) != .iter) return null,
-            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => return null,
-        }
-        const operands = call_plan.argsSlice(self.view.view.static_dispatch_plans);
-        const exprs = try self.program.arena.allocator().alloc(ExprId, operands.len);
-        for (operands, exprs) |operand, *slot| {
-            slot.* = switch (operand) {
-                .checked_expr => |operand_expr| operand_expr,
-                .generated_interpolation_segments, .generated_numeral, .generated_quote, .literal_pattern_value, .literal_pattern_conversion => return null,
-            };
-        }
-        const expected_operands: usize = switch (stamp) {
-            .identity, .list_iter, .list_iter_rev, .str_iter_utf8 => 1,
-            .map, .keep_if, .drop_if, .take_first, .drop_first, .with_index => 2,
-            .next, .custom, .single, .concat, .append, .step_by, .from_iter, .range_iter, .numeric_range_iter, .numeric_to, .numeric_until, .from_step, .range_done => return .{ .stamp = stamp, .operands = exprs },
-        };
-        if (exprs.len != expected_operands) invariant("a stamped iterator producer's checked operand count differs from its definition's");
-        return .{ .stamp = stamp, .operands = exprs };
-    }
-
-    /// The item type of the iterator nominal `iterator_ty`: its one
-    /// argument.
-    fn iteratorItemType(self: *Builder, iterator_ty: TypeId) Allocator.Error!TypeId {
-        const args = switch (self.program.store.get(iterator_ty)) {
-            .nominal => |nominal| self.program.store.nominalArgs(nominal),
-            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => invariant("an iterator's type is not the iterator nominal"),
-        };
-        if (args.len != 1) invariant("the iterator nominal has one argument");
-        return args[0];
-    }
-
-    /// A `u64` local holding `value`.
-    fn u64Literal(self: *Builder, value: u64) Allocator.Error!LocalId {
-        const local = try self.closedLocal(.u64);
-        try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .i64_literal = .{ .value = @bitCast(value), .layout_idx = .u64 } }, .next = undefined } });
-        return local;
-    }
-
-    /// `lhs op rhs` for `u64` operands.
-    fn u64Op(self: *Builder, op: LIR.LowLevel, lhs: LocalId, rhs: LocalId) Allocator.Error!LocalId {
-        const local = try self.closedLocal(if (op == .num_is_eq) .bool else .u64);
-        try self.emitLowLevel(local, op, &.{ lhs, rhs });
-        return local;
-    }
-
-    /// `for pattern in <chain> { body }` over a structural chain: the loop
-    /// carries the chain's state (a list source's index, a reversed list
-    /// source's remaining count, an iterator source's value, an adapter's
-    /// counter) in one tuple, and each iteration steps the source and runs
-    /// the adapters over its item, innermost first, exactly as each
-    /// producer's step does: a `take_first` at its count is done before the
-    /// source steps, a `keep_if` or `drop_if` or `drop_first` skip
-    /// continues with the state the inner producers advanced to, and a
-    /// `with_index` counter advances only when its item is yielded.
-    fn forChainStart(self: *Builder, loop_node: u32, pattern: PatternId, body: ExprId, plan_id: static_dispatch.IteratorForPlanId, chain: []const ChainLayer) Allocator.Error!void {
-        const table = self.view.view.static_dispatch_plans;
-        const plan = table.iterator_for_plans.items()[@backingInt(plan_id)];
-        const for_site = plan.forLoopSite();
-        const store = &self.program.store;
-        const names = self.view.nameStore();
-
-        // The chain's operands, in chain order.
-        const Evaluated = union(enum) {
-            list: struct { list: LocalId, list_ty: TypeId, item_ty: TypeId, len: LocalId },
-            str: struct { str: LocalId, len: LocalId },
-            value: struct { iterator_ty: TypeId, step_name: types.NameId },
-            map: struct { transform: LocalId, fn_ty: TypeId, item_ty: TypeId },
-            keep_if: struct { predicate: LocalId, fn_ty: TypeId },
-            drop_if: struct { predicate: LocalId, fn_ty: TypeId },
-            with_index: struct { item_ty: TypeId },
-            take_first,
-            drop_first,
-        };
-        const evaluated = try self.allocator.alloc(Evaluated, chain.len);
-        defer self.allocator.free(evaluated);
-        // The loop's state tuple: each layer's carried slot, and its initial
-        // value.
-        var state_types: std.ArrayList(TypeId) = .empty;
-        defer state_types.deinit(self.allocator);
-        var state_init: std.ArrayList(LocalId) = .empty;
-        defer state_init.deinit(self.allocator);
-        const slot_of = try self.allocator.alloc(?usize, chain.len);
-        defer self.allocator.free(slot_of);
-        const u64_ty = try store.primitive(.u64);
-        for (chain, evaluated, slot_of) |layer, *done, *slot| {
-            slot.* = null;
-            switch (layer) {
-                inline .list, .list_rev => |source, tag| {
-                    const list = try self.lowerNow(.{ .expr = source.list });
-                    const list_ty = try self.exprType(source.list);
-                    const len = try self.closedLocal(.u64);
-                    try self.emitListLowLevel(len, .list_len, &.{list}, source.item_ty, list_ty);
-                    done.* = .{ .list = .{ .list = list, .list_ty = list_ty, .item_ty = source.item_ty, .len = len } };
-                    slot.* = state_types.items.len;
-                    try state_types.append(self.allocator, u64_ty);
-                    try state_init.append(self.allocator, if (tag == .list) try self.u64Literal(0) else len);
-                },
-                .str => |source| {
-                    const str = try self.lowerNow(.{ .expr = source.str });
-                    const len = try self.closedLocal(.u64);
-                    try self.emitLowLevel(len, .str_count_utf8_bytes, &.{str});
-                    done.* = .{ .str = .{ .str = str, .len = len } };
-                    slot.* = state_types.items.len;
-                    try state_types.append(self.allocator, u64_ty);
-                    try state_init.append(self.allocator, try self.u64Literal(0));
-                },
-                .value => |source| {
-                    const iterator = try self.lowerNow(.{ .expr = source.iterator });
-                    const iterator_ty = try self.exprType(source.iterator);
-                    const step_name = (try self.builtinStepField(plan.next, iterator_ty)) orelse invariant("a chain's iterator value is not stepped by the builtin protocol");
-                    done.* = .{ .value = .{ .iterator_ty = iterator_ty, .step_name = step_name } };
-                    slot.* = state_types.items.len;
-                    try state_types.append(self.allocator, iterator_ty);
-                    try state_init.append(self.allocator, iterator);
-                },
-                .map => |adapter| {
-                    const transform = try self.lowerNow(.{ .expr = adapter.transform });
-                    done.* = .{ .map = .{ .transform = transform, .fn_ty = try self.exprType(adapter.transform), .item_ty = adapter.item_ty } };
-                },
-                .keep_if => |adapter| {
-                    const predicate = try self.lowerNow(.{ .expr = adapter.predicate });
-                    done.* = .{ .keep_if = .{ .predicate = predicate, .fn_ty = try self.exprType(adapter.predicate) } };
-                },
-                .drop_if => |adapter| {
-                    const predicate = try self.lowerNow(.{ .expr = adapter.predicate });
-                    done.* = .{ .drop_if = .{ .predicate = predicate, .fn_ty = try self.exprType(adapter.predicate) } };
-                },
-                .with_index => |adapter| {
-                    const start = try self.lowerNow(.{ .expr = adapter.start });
-                    done.* = .{ .with_index = .{ .item_ty = adapter.item_ty } };
-                    slot.* = state_types.items.len;
-                    try state_types.append(self.allocator, u64_ty);
-                    try state_init.append(self.allocator, start);
-                },
-                inline .take_first, .drop_first => |adapter, tag| {
-                    const count = try self.lowerNow(.{ .expr = adapter.count });
-                    done.* = if (tag == .take_first) .take_first else .drop_first;
-                    slot.* = state_types.items.len;
-                    try state_types.append(self.allocator, u64_ty);
-                    try state_init.append(self.allocator, count);
-                },
-            }
-        }
-        const state_ty = try store.intern(.{ .tuple = state_types.items });
-        const initial = try self.buildStruct(state_ty, state_init.items);
-
-        const binders = try self.bodies().loopMutationBinders(loop_node);
-        const exit_merge = try self.beginMerge(binders, .joined);
-        const head_merge = try self.beginMerge(binders, .joined);
-        const exit = self.freshJoin();
-        const head = self.freshJoin();
-        const state = try self.localOf(state_ty, .frame);
-        const after = try self.declareMergeJoin(exit, null, exit_merge);
-        const head_body = try self.declareMergeJoin(head, state, head_merge);
-        try self.emitJump(head, initial);
-        self.store.shapes.loop = true;
-
-        self.hole = head_body;
-        if (head_merge) |m| try self.enterMerge(m);
-        // The state this iteration advances to, slot by slot.
-        const current = try self.allocator.alloc(LocalId, state_types.items.len);
-        defer self.allocator.free(current);
-        for (current, state_types.items, 0..) |*slot, slot_ty, index| slot.* = try self.readField(state_ty, state, @intCast(index), slot_ty);
-
-        // A `take_first` at its count is done before anything steps.
-        for (chain, slot_of) |layer, slot| {
-            if (layer != .take_first) continue;
-            const remaining = current[slot.?];
-            const is_done = try self.u64Op(.num_is_eq, remaining, try self.u64Literal(0));
-            const holes = try self.emitBoolSwitch(is_done);
-            self.hole = holes.then;
-            try self.emitJump(exit, null);
-            self.hole = holes.otherwise;
-        }
-
-        // The source's item.
-        var item: TypedValue = undefined;
-        switch (evaluated[0]) {
-            .list => |source| {
-                const index = current[slot_of[0].?];
-                const reversed = chain[0] == .list_rev;
-                const is_done = try self.u64Op(.num_is_eq, index, if (reversed) try self.u64Literal(0) else source.len);
-                const holes = try self.emitBoolSwitch(is_done);
-                self.hole = holes.then;
-                try self.emitJump(exit, null);
-                self.hole = holes.otherwise;
-                const one = try self.u64Literal(1);
-                const at = if (reversed) try self.u64Op(.num_int_sub_wrap, index, one) else index;
-                const value = try self.localOf(source.item_ty, .frame);
-                try self.emitListLowLevel(value, .list_get_unsafe, &.{ source.list, at }, source.item_ty, source.list_ty);
-                item = .{ .value = value, .ty = source.item_ty };
-                current[slot_of[0].?] = if (reversed) at else try self.u64Op(.num_int_add_wrap, index, one);
-            },
-            .str => |source| {
-                const index = current[slot_of[0].?];
-                const is_done = try self.u64Op(.num_is_eq, index, source.len);
-                const holes = try self.emitBoolSwitch(is_done);
-                self.hole = holes.then;
-                try self.emitJump(exit, null);
-                self.hole = holes.otherwise;
-                const value = try self.closedLocal(.u8);
-                try self.emitLowLevel(value, .str_get_utf8_byte_unsafe, &.{ source.str, index });
-                item = .{ .value = value, .ty = try store.primitive(.u8) };
-                current[slot_of[0].?] = try self.u64Op(.num_int_add_wrap, index, try self.u64Literal(1));
-            },
-            .value => |source| {
-                const iterator = current[slot_of[0].?];
-                const thunk = try self.recordFieldValue(iterator, source.iterator_ty, source.step_name);
-                const step_ty = switch (store.get(thunk.ty)) {
-                    .function => |function| function.ret,
-                    .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("an iterator's step field is not a function"),
-                };
-                const step_value = try self.emitErasedCall(thunk.value, thunk.ty, &.{}, step_ty);
-                const done_name = try store.internName(names.tagLabelText(for_site.step_topology.done_tag));
-                const skip_name = try store.internName(names.tagLabelText(for_site.step_topology.skip_tag));
-                const one_name = try store.internName(names.tagLabelText(for_site.step_topology.one_tag));
-                const item_name = try store.internName(names.recordFieldLabelText(for_site.step_topology.item_field));
-                const rest_name = try store.internName(names.recordFieldLabelText(for_site.step_topology.rest_field));
-                const not_done_hole = try self.newHole();
-                try self.branchOnTag(step_value, step_ty, done_name, not_done_hole);
-                try self.emitJump(exit, null);
-                self.hole = not_done_hole;
-                const one_hole = try self.newHole();
-                try self.branchOnTag(step_value, step_ty, skip_name, one_hole);
-                {
-                    const payload = try self.tagPayloadValue(step_value, step_ty, skip_name, 0);
-                    const rest = try self.recordFieldValue(payload.value, payload.ty, rest_name);
-                    current[slot_of[0].?] = rest.value;
-                    try self.emitJump(head, try self.buildStruct(state_ty, current));
-                }
-                self.hole = one_hole;
-                const payload = try self.tagPayloadValue(step_value, step_ty, one_name, 0);
-                item = try self.recordFieldValue(payload.value, payload.ty, item_name);
-                current[slot_of[0].?] = (try self.recordFieldValue(payload.value, payload.ty, rest_name)).value;
-            },
-            .map, .keep_if, .drop_if, .with_index, .take_first, .drop_first => invariant("a structural chain does not start with a source"),
-        }
-
-        // The adapters, innermost first.
-        for (evaluated[1..], slot_of[1..]) |layer, slot| {
-            switch (layer) {
-                .map => |adapter| item = .{ .value = try self.emitErasedCall(adapter.transform, adapter.fn_ty, &.{item.value}, adapter.item_ty), .ty = adapter.item_ty },
-                inline .keep_if, .drop_if => |adapter, tag| {
-                    const verdict = try self.emitErasedCall(adapter.predicate, adapter.fn_ty, &.{item.value}, try store.primitive(.bool));
-                    const holes = try self.emitBoolSwitch(verdict);
-                    // A rejected item is skipped: the loop continues with the
-                    // state the inner producers advanced to.
-                    self.hole = if (tag == .keep_if) holes.otherwise else holes.then;
-                    try self.emitJump(head, try self.buildStruct(state_ty, current));
-                    self.hole = if (tag == .keep_if) holes.then else holes.otherwise;
-                },
-                .with_index => |adapter| {
-                    const index = current[slot.?];
-                    item = .{ .value = try self.buildStruct(adapter.item_ty, &.{ index, item.value }), .ty = adapter.item_ty };
-                    current[slot.?] = try self.u64Op(.num_int_add_wrap, index, try self.u64Literal(1));
-                },
-                .take_first => current[slot.?] = try self.u64Op(.num_int_sub_wrap, current[slot.?], try self.u64Literal(1)),
-                .drop_first => {
-                    const pending = current[slot.?];
-                    const yields = try self.u64Op(.num_is_eq, pending, try self.u64Literal(0));
-                    const holes = try self.emitBoolSwitch(yields);
-                    self.hole = holes.otherwise;
-                    current[slot.?] = try self.u64Op(.num_int_sub_wrap, pending, try self.u64Literal(1));
-                    try self.emitJump(head, try self.buildStruct(state_ty, current));
-                    current[slot.?] = pending;
-                    self.hole = holes.then;
-                },
-                .list, .str, .value => invariant("a structural chain has one source, first"),
-            }
-        }
-
-        const next_state = try self.buildStruct(state_ty, current);
-        try self.bindIrrefutable(pattern, item.value, item.ty);
-        try self.loops.append(self.allocator, .{ .join = exit, .reached = true });
-        try self.push(.end_loop);
-        if (exit_merge) |m| try self.push(.{ .enter_merge = m });
-        try self.push(.{ .resume_at = after });
-        try self.push(.{ .jump = head });
-        try self.push(.{ .push_value = next_state });
-        try self.push(.discard);
-        try self.push(.{ .expr = body });
     }
 
     /// `for pattern in iterable { body }`: the iterable's iterator is the
@@ -11431,10 +10960,7 @@ pub const Builder = struct {
 
         self.hole = head_body;
         if (head_merge) |m| try self.enterMerge(m);
-        const step_value = if (try self.builtinStepField(plan.next, iterator_ty)) |step_name| blk: {
-            const thunk = try self.recordFieldValue(state, iterator_ty, step_name);
-            break :blk try self.emitErasedCall(thunk.value, thunk.ty, &.{}, step_ty);
-        } else try self.emitDispatch(plan.next.resolution, plan.next.callable_ty, &.{state}, step_ty);
+        const step_value = try self.emitDispatch(plan.next.resolution, plan.next.callable_ty, &.{state}, step_ty);
         const names = self.view.nameStore();
         const done = try self.program.store.internName(names.tagLabelText(for_site.step_topology.done_tag));
         const skip = try self.program.store.internName(names.tagLabelText(for_site.step_topology.skip_tag));
@@ -11469,37 +10995,6 @@ pub const Builder = struct {
         try self.push(.{ .push_value = rest.value });
         try self.push(.discard);
         try self.push(.{ .expr = body });
-    }
-
-    /// The step field of a `for` loop's iterator when the loop's `next`
-    /// dispatch resolves to the procedure the checker stamped
-    /// `IteratorProcedureId.next` of the pure `Iter` protocol, which is
-    /// `|iterator| (iterator.step)()`: the loop then calls the step thunk
-    /// itself, owning the iterator it dismantles, so the call transfers the
-    /// thunk's allocation to it (design.md "Iterator `for`"). Null for
-    /// every other `next`, which the loop dispatches to.
-    fn builtinStepField(self: *Builder, next: static_dispatch.IteratorDispatchCall, iterator_ty: TypeId) Allocator.Error!?types.NameId {
-        const table = self.view.view.static_dispatch_plans;
-        const node = switch (next.resolution) {
-            .direct_closed, .direct_parametric => |direct| table.evidenceNode(direct.evidence),
-            .evidence_dependent, .checked_error, .@"unreachable", .structural, .direct_pending => return null,
-        };
-        const stamp = switch (node.target.kind) {
-            .procedure => |procedure| procedure.runtime_target.iteratorProcedure(),
-            .local_proc, .structural, .callable_binding => return null,
-        };
-        if (stamp != .next) return null;
-        const owner: static_dispatch.IteratorOwner = switch (self.program.store.get(iterator_ty)) {
-            .nominal => |nominal| switch (nominal.builtin orelse return null) {
-                .iter => .iter,
-                .stream, .bool, .try_, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .list, .box, .dict, .set, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => return null,
-            },
-            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => return null,
-        };
-        const topologies = table.iterator_topologies.items();
-        if (topologies.len != std.enums.values(static_dispatch.IteratorOwner).len) invariant("a checked module omitted an iterator representation topology");
-        const topology = topologies[@backingInt(owner)];
-        return try self.program.store.internName(self.view.nameStore().recordFieldLabelText(topology.step_field));
     }
 
     /// Continue at the next statement when `value` (of `ty`) holds tag

@@ -162,7 +162,7 @@ test "inhabitedness memo owns keys and handles allocation failure" {
 }
 
 /// Whether two type-variable lists name the same variables in the same order.
-fn varsEqual(a: []const Var, b: []const Var) bool {
+pub fn varsEqual(a: []const Var, b: []const Var) bool {
     if (a.len != b.len) return false;
     for (a, b) |left, right| {
         if (left != right) return false;

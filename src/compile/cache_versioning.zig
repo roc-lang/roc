@@ -79,8 +79,15 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// completes. It rejects every earlier format, including the independent
 /// version 19 through 51 formats.
 /// Version 52 also excludes artifacts with builtin-conflicting import bindings.
+/// Version 53 stores constant stores whose type tables hold one copy of each
+/// type a store writer copied from its program.
+/// Version 54 stores every tag union's own tags in name order.
+/// Version 55 stores lists of tag unions whose payloads are all zero-sized,
+/// and of records and tuples holding them, as packed bytes.
+/// Version 56 combines version 55 with checked bindings and stored constant
+/// types that carry no iterator representation fields.
 /// Platform-pairing entries share it.
-const checked_envelope_version: u32 = 52;
+const checked_envelope_version: u32 = 56;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment. Version 5 rejects builtin-conflicting import
@@ -180,8 +187,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x3C, 0x4E, 0x24, 0x24, 0xA7, 0x38, 0x6A, 0xD6, 0x0F, 0x93, 0xD6, 0x56, 0xFF, 0xD4, 0xE8, 0x65,
-        0x7F, 0xBF, 0x64, 0xBA, 0xB4, 0x30, 0xB9, 0xD1, 0x32, 0xB6, 0x69, 0xC2, 0xC9, 0xA3, 0xED, 0x8C,
+        0x5B, 0x7A, 0xA6, 0x22, 0xFF, 0x4B, 0x14, 0xC9, 0x3F, 0xB1, 0x21, 0xB3, 0x44, 0x7D, 0x04, 0x5B,
+        0x34, 0xD4, 0x74, 0x5A, 0xDE, 0xEC, 0xB0, 0xA7, 0x1D, 0xB5, 0x38, 0xE3, 0xB1, 0x30, 0x22, 0x10,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

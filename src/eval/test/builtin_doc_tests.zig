@@ -105,10 +105,10 @@ fn prePublishedBuiltin() ?test_helpers.PrePublishedBuiltin {
     };
 }
 
-/// Path to the Builtin.roc file, relative to the project root (the directory
-/// where `zig build run-test-zig` is invoked from).
-const builtin_roc_path = "src/build/roc/Builtin.roc";
-/// Where to write debug files when a block fails.
+/// Absolute path to the checkout's Builtin.roc.
+const builtin_roc_path = @import("fixture_options").build_root ++ "/src/build/roc/Builtin.roc";
+/// Where to write debug files when a block fails, relative to the private
+/// scratch directory the suite runs in.
 const debug_dir = "test/echo";
 /// Path to the compiled roc binary used for reproducing failures.
 const roc_binary = blk: {
@@ -885,7 +885,7 @@ test "Builtin.roc doc code blocks check and evaluate" {
     const ctx = CoreCtx.default(allocator, allocator, std.testing.io);
     const source = ctx.readFile(builtin_roc_path, allocator) catch |err| {
         std.debug.print(
-            "[builtin-doc-tests] could not read {s} ({s}); tests must run from the project root.\n",
+            "[builtin-doc-tests] could not read {s} ({s})\n",
             .{ builtin_roc_path, @errorName(err) },
         );
         return err;

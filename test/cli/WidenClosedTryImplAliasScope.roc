@@ -1,7 +1,8 @@
 # A requirement's dictionary handed on from an alias's scope, where the row
-# the consumer widens is the error row of a `Try`. Each alias of the chain
-# states the requirement one tag wider than the one before it, so every step
-# of the chain hands its dictionary to a consumer naming another storage.
+# the body widens is the error row of a `Try`. A requirement's `Try` error
+# row is exactly the implementation's, so every alias of the chain states the
+# same requirement and hands its dictionary on as it is; the dispatching
+# procedure composes the error row into its wider result with `?`.
 # `Aaa` sorts before `Bad`, so an `Err(Bad(_))` numbered by the
 # implementation's row alone shows up as a wrong tag through `show`.
 WidenClosedTryImplAliasScope := {}
@@ -24,10 +25,10 @@ show = |v| match v {
 
 apply = |f, v| f(v)
 
-widen : c -> Try(Str, [Bad(Str), Aaa, Zzz]) where [c.status : c -> Try(Str, [Bad(Str), Aaa, Zzz])]
-widen = |y| y.status()
+widen : c -> Try(Str, [Bad(Str), Aaa, Zzz]) where [c.status : c -> Try(Str, [Bad(Str)])]
+widen = |y| Ok(y.status()?)
 
-mid : b -> Try(Str, [Bad(Str), Aaa, Zzz]) where [b.status : b -> Try(Str, [Bad(Str), Aaa])]
+mid : b -> Try(Str, [Bad(Str), Aaa, Zzz]) where [b.status : b -> Try(Str, [Bad(Str)])]
 mid = widen
 
 narrow : b -> Try(Str, [Bad(Str), Aaa, Zzz]) where [b.status : b -> Try(Str, [Bad(Str)])]
@@ -45,7 +46,8 @@ repeat = |x, remaining| if remaining == 0 describe(x) else repeat(x, remaining -
 # The same chain's last step as a local alias of a generalized local.
 local_alias : a -> Str where [a.status : a -> Try(Str, [Bad(Str)])]
 local_alias = |x| {
-    local_widen = |y| y.status()
+    local_widen : c -> Try(Str, [Bad(Str)]) where [c.status : c -> Try(Str, [Bad(Str)])]
+    local_widen = |y| Ok(y.status()?)
     local_narrow : b -> Try(Str, [Bad(Str), Aaa, Zzz]) where [b.status : b -> Try(Str, [Bad(Str)])]
     local_narrow = local_widen
     show(local_narrow(x))
@@ -53,7 +55,8 @@ local_alias = |x| {
 
 local_alias_value : a -> Str where [a.status : a -> Try(Str, [Bad(Str)])]
 local_alias_value = |x| {
-    local_widen = |y| y.status()
+    local_widen : c -> Try(Str, [Bad(Str)]) where [c.status : c -> Try(Str, [Bad(Str)])]
+    local_widen = |y| Ok(y.status()?)
     local_narrow : b -> Try(Str, [Bad(Str), Aaa, Zzz]) where [b.status : b -> Try(Str, [Bad(Str)])]
     local_narrow = local_widen
     show(apply(local_narrow, x))

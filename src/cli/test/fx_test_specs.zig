@@ -125,17 +125,17 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "A boxed app state whose fields hold functions survives a host round trip (issue #12953)",
     },
     .{
-        .roc_file = "test/fx/host_constant_boxed_sequence.roc",
+        .roc_file = "test/fx/host_constant_boxed_iter_stream.roc",
         .io_spec = "1>[1, 2, 3]|1>[4, 5]|1>[93]|1>[93]",
         .description = "Constant boxed iterators and streams survive storage and host round trips (issue #12887)",
     },
     .{
-        .roc_file = "test/fx/host_release_boxed_sequence.roc",
+        .roc_file = "test/fx/host_release_boxed_iter_stream.roc",
         .io_spec = "0<abcdefghijklmnopqrstuvwxyz0123456789|1>drops primitive=2 nested_record=0 nested_str=0 recursive_tree=0 tree_child_boxes=0 boxed_capture=0 transition_outer=0 transition_inner=0 transition_nonnull=0",
         .description = "Host release destroys boxed iterator and stream captures exactly once (issue #12887)",
     },
     .{
-        .roc_file = "test/fx/host_boxed_sequence_boundary.roc",
+        .roc_file = "test/fx/host_boxed_iter_stream_boundary.roc",
         .io_spec = "0<abcdefghijklmnopqrstuvwxyz0123456789|1>iter 36 36|1>stream 36 36",
         .description = "Boxed iterators and streams retain captured state across a shared host round trip (issue #12887)",
     },
@@ -849,6 +849,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/issue_12692_handle_shape.roc",
         .io_spec = "1>method call: closed|1>qualified call: closed|1>recursive helper: closed|1>wrapper call: closed",
         .description = "Regression test for #12692: a record argument returned to its caller on a switched result outcome keeps the field its callee passed to a hosted call",
+    },
+    .{
+        .roc_file = "test/fx/where_method_try_question_hosted_wrapper.roc",
+        .io_spec = "1>twice: ok 14|1>forward: ok 7|1>broken twice: closed|1>broken forward: closed",
+        .description = "Issue #11286: a where-method served by a Roc method that rebuilds a hosted error has its Try error row composed into a wider one with `?`",
     },
     .{
         .roc_file = "test/fx/issue_12746_single_field_handle.roc",

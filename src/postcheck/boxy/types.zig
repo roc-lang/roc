@@ -967,16 +967,9 @@ pub const Store = struct {
         return self.nodes.items[@backingInt(id)];
     }
 
-    /// Whether this is the compiler-owned Iter or Stream nominal.
-    pub fn isSequence(self: *const Store, id: TypeId) bool {
-        const node = self.get(id);
-        if (node != .nominal) return false;
-        return node.nominal.builtin == .iter or node.nominal.builtin == .stream;
-    }
-
     /// Direct payloads whose explicit Box is one erased allocation.
     pub fn isErasedBoxPayload(self: *const Store, id: TypeId) bool {
-        return self.get(id) == .function or self.isSequence(id);
+        return self.get(id) == .function;
     }
 
     pub fn isClosed(self: *const Store, id: TypeId) bool {
@@ -1671,7 +1664,7 @@ pub const Converter = struct {
             .nominal => |nominal| switch (nominal.representation) {
                 .builtin => |builtin_nominal| switch (checked.builtinRuntimeEncoding(builtin_nominal)) {
                     .primitive => |prim| try self.store.primitive(prim),
-                    .bool_tag_union, .try_nominal, .list, .box, .dict, .set, .iterator, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => null,
+                    .bool_tag_union, .try_nominal, .list, .box, .declared_backing, .parse_tag_union_spec, .fields, .field => null,
                 },
                 .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => null,
             },
@@ -1970,7 +1963,7 @@ pub const Converter = struct {
             .nominal => |nominal| {
                 if (nominal.representation == .builtin) switch (checked.builtinRuntimeEncoding(nominal.representation.builtin)) {
                     .primitive => |prim| return try self.store.primitive(prim),
-                    .bool_tag_union, .try_nominal, .list, .box, .dict, .set, .iterator, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
+                    .bool_tag_union, .try_nominal, .list, .box, .declared_backing, .parse_tag_union_spec, .fields, .field => {},
                 };
                 return try self.nominalNode(module, nominal, args);
             },
@@ -2001,7 +1994,7 @@ pub const Converter = struct {
                             // lowering supplies the options-record call signature.
                             return try self.store.intern(.{ .function = .{ .args = children[1..], .ret = children[0], .effectful = false } });
                         },
-                        .bool_tag_union, .try_nominal, .dict, .set, .iterator, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
+                        .bool_tag_union, .try_nominal, .declared_backing => {},
                     },
                     .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
                 }

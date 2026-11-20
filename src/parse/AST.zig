@@ -2256,6 +2256,24 @@ pub const SymbolMapEntry = struct {
     func: Token.Idx, // LowerIdent (or NoSpaceDotLowerIdent when qualified) naming the function
     region: TokenizedRegion,
 
+    /// The identifier path below the module qualifier (e.g. `Idx.get!`).
+    /// Discovery and canonicalization must name the same exposed declaration.
+    pub fn functionPath(entry: SymbolMapEntry, ast: *const AST, gpa: std.mem.Allocator, buf: *std.ArrayList(u8)) std.mem.Allocator.Error!?[]const u8 {
+        const first = if (entry.module) |module| module + 1 else entry.func;
+        if (first == entry.func) {
+            const ident = ast.tokens.resolveIdentifier(first) orelse return null;
+            return ast.env.getIdent(ident);
+        }
+        buf.clearRetainingCapacity();
+        var token = first;
+        while (token <= entry.func) : (token += 1) {
+            const ident = ast.tokens.resolveIdentifier(token) orelse return null;
+            if (buf.items.len != 0) try buf.append(gpa, '.');
+            try buf.appendSlice(gpa, ast.env.getIdent(ident));
+        }
+        return buf.items;
+    }
+
     pub const Idx = enum(u32) { _ };
     pub const Span = struct {
         span: base.DataSpan,

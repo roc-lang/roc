@@ -1,4 +1,4 @@
-//! Real-worker determinism for constructor and iterator continuation fusion.
+//! Real-worker determinism for constructor continuation fusion.
 
 const harness = @import("lower_to_lir_harness.zig");
 
@@ -24,18 +24,5 @@ test "LIR pass workers deterministically fuse branch-return Try consumers" {
         \\    echo!(Str.inspect(consume(count) + consume(count + 1)))
         \\    Ok({})
         \\}
-    }, .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .iterator_fusion, .dump_proc_identities = true }, &.{.tag_fusion});
-}
-
-test "LIR pass workers deterministically forward generated iterator joins in none mode" {
-    // A numeric iterator keeps the forwarded continuations ownership-neutral;
-    // the runtime bound prevents specialization from erasing the loop.
-    try harness.expectLirPassParallelismDeterministicLir(.{ .app_body =
-        \\main! : List(Str) => Try({}, [Exit(I8), ..])
-        \\main! = |args| {
-        \\    total = 0.U64.until(List.len(args)).map(|n| n * 2).fold(0.U64, |sum, n| sum + n)
-        \\    echo!(Str.inspect(total))
-        \\    Ok({})
-        \\}
-    }, .{ .inline_mode = .none, .dump_proc_identities = true }, &.{.forwarding_join});
+    }, .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .no_calls, .dump_proc_identities = true }, &.{.tag_fusion});
 }

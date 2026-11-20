@@ -130,11 +130,14 @@ pub const FnVariantId = enum(u32) { _ };
 /// Own captures belong to `source`; solved captures name their producer span.
 pub const FrozenCallableContext = struct {
     abi: enum { finite, erased },
+    /// The function at its instance (`Instances.SpecFnId`).
     source: u32,
     fn_type: u32,
+    /// The instance `fn_type` reads under.
+    fn_type_env: u32 = 0,
     captures: union(enum) {
         own: u32,
-        solved: struct { start: u32, len: u32 },
+        solved: struct { start: u32, len: u32, env: u32 = 0 },
     },
 };
 
@@ -157,7 +160,7 @@ pub const FnTemplate = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(FnTemplate) == 392);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(FnTemplate) == 400);
 }
 
 /// Capture field copied from a checked binding into a callable payload. `id`
@@ -191,7 +194,7 @@ pub const FnVariant = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(FnVariant) == 424);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(FnVariant) == 432);
 }
 
 /// Runtime tag-union encoding for a finite callable set.
@@ -210,7 +213,7 @@ pub const ErasedFn = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(ErasedFn) == 440);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(ErasedFn) == 448);
 }
 
 /// Runtime encoding for an erased callable value type.
@@ -259,8 +262,6 @@ pub const ConstPlan = union(enum) {
     str,
     list: ConstPlanId,
     box: ConstPlanId,
-    /// A semantic Box(sequence), whose record is a view of its erased allocation.
-    boxed_sequence: BoxedSequencePlan,
     tuple: []const ConstPlanId,
     record: []const ConstPlanId,
     tag_union: []const ConstTagVariant,
@@ -273,27 +274,6 @@ pub const ConstPlan = union(enum) {
     /// A function value of a `.boxy` compile-time program, stored by what
     /// it captured (`postcheck.Boxy.StoredFn`).
     boxy_fn,
-};
-
-/// The semantic payload and committed record view of a boxed Iter or Stream.
-pub const BoxedSequencePlan = struct {
-    payload: ConstPlanId,
-    view_layout: layout.Idx,
-
-    /// The length and step plans in the builtin record's canonical logical order.
-    pub fn recordPlans(self: BoxedSequencePlan, plans: []const ConstPlan) [2]ConstPlanId {
-        var current = self.payload;
-        for (0..plans.len) |_| {
-            const plan = plans[@backingInt(current)];
-            if (plan == .named) {
-                current = plan.named.backing;
-                continue;
-            }
-            if (plan != .record or plan.record.len != 2) base.invariant("boxed sequence plan omitted its two-field record", .{});
-            return .{ plan.record[0], plan.record[1] };
-        }
-        base.invariant("boxed sequence plan contains a nominal cycle", .{});
-    }
 };
 
 /// Constant root metadata needed after LIR interpretation finishes.
@@ -406,8 +386,6 @@ pub const StaticDataParts = struct {
         /// children.
         list: u64,
         box,
-        /// One sequence record child, with its committed step byte offset.
-        boxed_sequence: u32,
         tag: u32,
         callable: struct {
             proc: LIR.LirProcSpecId,
@@ -700,7 +678,6 @@ pub fn deinitConstPlans(allocator: Allocator, plans: []const ConstPlan) void {
             .str,
             .list,
             .box,
-            .boxed_sequence,
             .named,
             .boxy_fn,
             => {},

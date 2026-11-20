@@ -1784,7 +1784,7 @@ const BoxyObjects = struct {
     fn eligibility(self: *BoxyObjects, artifact: *const Artifact) enum { never, later, now } {
         if (artifact.platform_type_inputs.requirements.items().len != 0) return .never;
         if (Coordinator.unevaluatedRequestCount(artifact, .boxy) != 0) return .later;
-        if (artifact.hosted_procs.procs.items().len != 0 and self.platformOf(artifact) == null) {
+        if (artifact.hosted_procs.procs.items().len != 0 and self.coordinator.hostedPlanFor(artifact) == null and self.platformOf(artifact) == null) {
             return if (self.coordinator.frontend_complete) .never else .later;
         }
         return .now;
@@ -1793,11 +1793,11 @@ const BoxyObjects = struct {
     /// `artifact`'s unit, which `eligibility` admitted.
     fn prepare(self: *BoxyObjects, artifact: *const Artifact) Error!Prepared {
         const gpa = self.coordinator.gpa;
-        const platform = self.platformOf(artifact);
+        const bindings = try self.coordinator.libraryHostedBindings(artifact, self.arena.allocator());
         const views = try self.coordinator.collectImportedArtifactViews(gpa, artifact);
         errdefer gpa.free(views);
         var config = self.lowering.config;
-        config.boxy_unit = .{ .imports = self.interfaces, .root = false, .names = &self.digests.names };
+        config.boxy_unit = .{ .imports = self.interfaces, .root = false, .names = &self.digests.names, .hosted_bindings = bindings };
         // The unit's ARC and code generation run their waves on the same
         // pool, whichever thread runs the unit.
         config.post_check_executor = self.coordinator.postCheckExecutor();
@@ -1808,7 +1808,6 @@ const BoxyObjects = struct {
         return .{ .unit = .{
             .gpa = gpa,
             .artifact = artifact,
-            .platform = platform,
             .views = views,
             .target = self.lowering.target,
             .config = config,
@@ -1835,7 +1834,7 @@ const BoxyObjects = struct {
         const started = CtfeTiming.startStep(&self.coordinator.ctfe_timing);
         const unit = &prepared.unit;
         try self.digests.ensurePrepared(unit.artifact);
-        unit.key = try boxy_unit.objectKey(self.coordinator.gpa, &self.digests, unit.artifact, unit.platform, self.lowering.opt, self.lowering.inline_expects, self.lowering.target, &.{}, false, false, false);
+        unit.key = try boxy_unit.libraryKey(self.coordinator.gpa, &self.digests, unit.artifact, unit.config.boxy_unit.?.hosted_bindings, self.lowering.opt, self.lowering.inline_expects, self.lowering.target, false, false);
         if (CtfeTiming.detailOf(&self.coordinator.ctfe_timing)) |timing| {
             const elapsed: u64 = @intCast(@max(0, CtfeTiming.startStep(timing) - started));
             timing.steps_ns[@backingInt(CtfeTiming.Step.unit_keys)].add(elapsed);
@@ -2398,6 +2397,7 @@ pub const Coordinator = struct {
     /// Exact-key index for checked artifacts published during this build. This
     /// does not own artifacts; it points at the module storage that owns them.
     checked_artifact_index: std.AutoHashMap([32]u8, ModuleRef),
+    hosted_header: ?@import("hosted_header.zig").Plan = null,
 
     /// Checked artifacts that have been replaced but may still be referenced by
     /// `ImportedModuleView`s already handed to worker threads.
@@ -2608,6 +2608,7 @@ pub const Coordinator = struct {
         }
         if (self.boxy_objects) |*objects| objects.deinit();
         self.boxy_objects = null;
+        if (self.hosted_header) |*plan| plan.deinit();
         // The workers stopped, so no program build borrows the evaluation's
         // modules any more.
         if (self.early_evaluation) |early| early.destroy();
@@ -2686,6 +2687,24 @@ pub const Coordinator = struct {
     /// requirement surface always comes from a completed platform check.
     pub fn markPlatformPackage(self: *Coordinator, package_name: []const u8) void {
         self.platform_root_package_name = package_name;
+    }
+
+    fn hostedPlanFor(self: *Coordinator, artifact: *const CheckedArtifact.CheckedModuleArtifact) ?ModuleRef {
+        if (artifact.hosted_procs.procs.items().len == 0 or self.hosted_header == null or artifact.module_identity.kind == .platform) return null;
+        const ref = self.checked_artifact_index.get(artifact.key.bytes) orelse return null;
+        const platform = self.platform_root_package_name orelse return null;
+        if (!std.mem.eql(u8, ref.pkg.name, platform)) return null;
+        return ref;
+    }
+
+    /// The ordinary library ABI, shared by test, evaluation and link tasks.
+    pub fn libraryHostedBindings(self: *Coordinator, artifact: *const CheckedArtifact.CheckedModuleArtifact, arena: Allocator) Allocator.Error!?[]const CheckedArtifact.UnitHostedBinding {
+        if (artifact.hosted_procs.procs.items().len == 0) return null;
+        if (self.hostedPlanFor(artifact)) |ref| return try self.hosted_header.?.bindings(ref.module().name, artifact);
+        if (self.findRootModule(.platform)) |root| {
+            if (root.mod.checkedArtifact()) |platform| return try boxy_unit.checkedHostedBindings(arena, artifact, CheckedArtifact.importedView(platform));
+        }
+        return null;
     }
 
     pub fn markAppPackage(self: *Coordinator, package_name: []const u8) void {
@@ -3259,7 +3278,7 @@ pub const Coordinator = struct {
             const artifact = self.checkedArtifactByKey(.{ .bytes = entry.key_ptr.* }).?;
             try appendImportedArtifactViewIfMissing(&available, self.gpa, platform.key, artifact);
         }
-        var paired = try CheckedArtifact.pairCheckedPlatform(self.gpa, platform, app, available.items);
+        var paired = try CheckedArtifact.pairCheckedPlatform(self.gpa, platform, app, available.items, self.builtin_modules.checked_artifact.key.digest());
         var paired_owned = true;
         errdefer if (paired_owned) paired.deinitRetainingModuleEnv(self.gpa);
         const state = try self.gpa.create(messages.PendingEvaluationState);
@@ -8348,6 +8367,7 @@ pub const Coordinator = struct {
             result_alloc,
             env,
             self.builtin_modules.builtin_module.env,
+            self.builtin_modules.checked_artifact.key.digest(),
             task.imported_envs,
             task.imported_artifacts,
             task.available_artifacts,

@@ -547,14 +547,14 @@ pub const tests = [_]TestCase{
         .expected = .{ .problem = {} },
     },
     .{
-        .name = "regression B091: polymorphic top-level constant is rejected before runtime planning",
+        .name = "regression B091: top-level constant with an unpinned item type inspects as its value",
         .source_kind = .module,
         .source =
         \\x = []
         \\
         \\main = Str.inspect(x)
         ,
-        .expected = .{ .problem = {} },
+        .expected = .{ .inspect_str = "\"[]\"" },
     },
     .{
         .name = "regression B092: ambiguous List.sum on empty list is rejected",

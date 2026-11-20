@@ -97,6 +97,8 @@ Evaluation coverage lives in `src/eval/test/`:
   stack-safety gates and the CFold/NQueens/RBTreeCk benchmark ports.
 - `trmc_lir_test.zig`, `lir_inline_test.zig`—Standalone binaries asserting
   on LIR structure (TRMC pointer ops, detection/transform outcomes, inlining).
+- `checked_root_graph_test.zig`—Compile-time root dependency graph tests
+  over checked programs built from source.
 - `host_effects_runner.zig` / `host_effects_tests.zig`—Runtime host-effect
   coverage.
 - `runtime_host.zig`—Shared `RocOps` host with allocation leak checks and

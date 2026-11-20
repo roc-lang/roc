@@ -425,7 +425,20 @@ pub const Layouts = struct {
             try self.memo.put(self.allocator, ty, .{ .idx = idx, .digest = null });
             return idx;
         }
+        return self.commitLayout(.value, ty);
+    }
 
+    /// Generic hosted externs have the declared container layout, but an open
+    /// box is opaque to the host. Only closed Roc types enter the value-layout cache.
+    pub fn hostAbiLayout(self: *Layouts, ty: TypeId) Allocator.Error!layout.Idx {
+        if (try self.converter.representationClosed(ty)) return self.layoutOf(ty);
+        if (self.store.get(ty) == .box) return self.layouts.insertBox(.opaque_ptr);
+        return self.commitLayout(.host, ty);
+    }
+
+    const LayoutUse = enum { value, host };
+
+    fn commitLayout(self: *Layouts, comptime use: LayoutUse, ty: TypeId) Allocator.Error!layout.Idx {
         var graph = layout.Graph{};
         defer graph.deinit(self.allocator);
         var nodes: collections.DenseMapUnmanaged(TypeId, layout.GraphNodeId) = .empty;
@@ -435,18 +448,19 @@ pub const Layouts = struct {
 
         // Reserve one node per reachable type that needs one; fill every
         // node once all are reserved, so back edges resolve to their node.
-        const root = try self.input(&graph, &nodes, &order, ty);
+        const root = try self.input(use, &graph, &nodes, &order, ty);
         var cursor: usize = 0;
         while (cursor < order.items.len) : (cursor += 1) {
             const node_ty = order.items[cursor];
             const node = nodes.get(node_ty).?;
-            const content = try self.nodeContent(&graph, &nodes, &order, node_ty);
+            const content = try self.nodeContent(use, &graph, &nodes, &order, node_ty);
             graph.setNode(node, content);
         }
 
         var commit = try self.layouts.commitGraph(&graph, root);
         defer commit.deinit(self.allocator);
         if (layout.graphInputCommitted(root)) |idx| return idx;
+        if (use == .host) return commit.value_layouts[@backingInt(layout.graphInputLocal(root).?)];
         var it = nodes.iterator();
         while (it.next()) |entry| {
             const index = @backingInt(entry.value_ptr.*);
@@ -471,7 +485,7 @@ pub const Layouts = struct {
         };
     }
 
-    fn input(self: *Layouts, graph: *layout.Graph, nodes: *collections.DenseMapUnmanaged(TypeId, layout.GraphNodeId), order: *std.ArrayList(TypeId), ty: TypeId) Allocator.Error!layout.GraphInput {
+    fn input(self: *Layouts, comptime use: LayoutUse, graph: *layout.Graph, nodes: *collections.DenseMapUnmanaged(TypeId, layout.GraphNodeId), order: *std.ArrayList(TypeId), ty: TypeId) Allocator.Error!layout.GraphInput {
         if (nodes.get(ty)) |node| return layout.localGraphInput(node);
         if (self.memo.get(ty)) |committed| {
             if (committed.digest) |digest| {
@@ -481,6 +495,9 @@ pub const Layouts = struct {
             }
             return layout.committedGraphInput(committed.idx);
         }
+        if (use == .host and self.store.get(ty) == .box and !try self.converter.representationClosed(ty)) {
+            return layout.committedGraphInput(try self.layouts.insertBox(.opaque_ptr));
+        }
         if (try self.directLayout(ty)) |idx| return layout.committedGraphInput(idx);
         const node = try graph.reserveNode(self.allocator);
         try nodes.put(self.allocator, ty, node);
@@ -488,17 +505,17 @@ pub const Layouts = struct {
         return layout.localGraphInput(node);
     }
 
-    fn nodeContent(self: *Layouts, graph: *layout.Graph, nodes: *collections.DenseMapUnmanaged(TypeId, layout.GraphNodeId), order: *std.ArrayList(TypeId), ty: TypeId) Allocator.Error!layout.GraphNode {
+    fn nodeContent(self: *Layouts, comptime use: LayoutUse, graph: *layout.Graph, nodes: *collections.DenseMapUnmanaged(TypeId, layout.GraphNodeId), order: *std.ArrayList(TypeId), ty: TypeId) Allocator.Error!layout.GraphNode {
         switch (self.store.get(ty)) {
-            .list => |elem| return .{ .list = try self.input(graph, nodes, order, elem) },
-            .box => |payload| return .{ .box = try self.input(graph, nodes, order, payload) },
+            .list => |elem| return .{ .list = try self.input(use, graph, nodes, order, elem) },
+            .box => |payload| return .{ .box = try self.input(use, graph, nodes, order, payload) },
             .tuple => |items_span| {
                 const items = try self.allocator.dupe(TypeId, self.store.span(items_span));
                 defer self.allocator.free(items);
                 const fields = try self.allocator.alloc(layout.GraphField, items.len);
                 defer self.allocator.free(fields);
                 for (items, fields, 0..) |item, *field, index| {
-                    field.* = .{ .index = @intCast(index), .child = try self.input(graph, nodes, order, item) };
+                    field.* = .{ .index = @intCast(index), .child = try self.input(use, graph, nodes, order, item) };
                 }
                 return .{ .struct_ = try graph.appendFields(self.allocator, fields) };
             },
@@ -510,12 +527,12 @@ pub const Layouts = struct {
                 defer self.allocator.free(fields);
                 if (record.declared.get()) |declared| {
                     for (self.store.declaredSlots(declared), fields) |slot, *field| {
-                        field.* = .{ .index = slot, .child = try self.input(graph, nodes, order, storage[slot]), .is_padding = slot >= record.fields.len };
+                        field.* = .{ .index = slot, .child = try self.input(use, graph, nodes, order, storage[slot]), .is_padding = slot >= record.fields.len };
                     }
                     return .{ .struct_ = graph.declaredOrder(try graph.appendFields(self.allocator, fields)) };
                 }
                 for (storage, fields, 0..) |slot_ty, *field, index| {
-                    field.* = .{ .index = @intCast(index), .child = try self.input(graph, nodes, order, slot_ty) };
+                    field.* = .{ .index = @intCast(index), .child = try self.input(use, graph, nodes, order, slot_ty) };
                 }
                 return .{ .struct_ = try graph.appendFields(self.allocator, fields) };
             },
@@ -529,7 +546,7 @@ pub const Layouts = struct {
                     const payloads = try self.allocator.dupe(TypeId, self.store.span(tag.payloads));
                     defer self.allocator.free(payloads);
                     ref.* = if (try self.tagPayload(payloads)) |payload|
-                        try self.input(graph, nodes, order, payload)
+                        try self.input(use, graph, nodes, order, payload)
                     else
                         layout.committedGraphInput(.zst);
                 }
@@ -538,7 +555,7 @@ pub const Layouts = struct {
             .nominal => |nominal| {
                 if (!nominal.has_backing) types.invariant("an opaque type without a backing reached committed layout selection");
                 const backing = try self.converter.backing(ty);
-                return .{ .nominal = try self.input(graph, nodes, order, backing) };
+                return .{ .nominal = try self.input(use, graph, nodes, order, backing) };
             },
             .primitive, .empty_record, .function, .variable => unreachable, // `directLayout` answers these
         }

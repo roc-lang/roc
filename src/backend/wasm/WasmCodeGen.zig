@@ -9999,7 +9999,6 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
 fn boxyListOp(op: base.LowLevel) ?BoxyListOp {
     return switch (op) {
         .dec_mul_saturated => null,
-        .boxed_sequence_pack, .boxed_sequence_unpack => null,
         .list_capacity => .capacity,
         .list_slack_unique => .slack_unique,
         .list_owned_unique => .owned_unique,
@@ -10054,7 +10053,6 @@ fn generateDynElemLowLevel(self: *Self, assign: anytype) Allocator.Error!void {
 
     switch (assign.op) {
         .dec_mul_saturated => {},
-        .boxed_sequence_pack, .boxed_sequence_unpack => unreachable, // sequence operations never carry list element descriptors
         .list_prefetch => {
             if (self.localDyn(dst) == null) {
                 try self.emitZeroValue(try self.procLocalValType(dst));
@@ -11456,22 +11454,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
     const args = self.store.getLocalSpan(ll.args);
 
     switch (ll.op) {
-        .boxed_sequence_pack => {
-            const record = GuardedList.at(args, 0);
-            try self.emitBytesAddress(record);
-            try self.emitI32Const(@intCast(try self.layoutStorageByteSize(self.procLocalLayoutIdx(record))));
-            try self.emitProcLocal(GuardedList.at(args, 1));
-            try self.emitBuiltinCall(.boxed_sequence_pack);
-        },
-        .boxed_sequence_unpack => {
-            const size = try self.layoutStorageByteSize(ll.ret_layout);
-            const slot = try self.allocStackMemory(size, 8);
-            try self.emitFpOffset(slot);
-            try self.emitProcLocal(GuardedList.at(args, 0));
-            try self.emitI32Const(@intCast(size));
-            try self.emitBuiltinCall(.boxed_sequence_unpack);
-            try self.emitFpOffset(slot);
-        },
         .num_from_le_bytes_unchecked => try self.emitNumFromLeBytes(ll, args),
         .simd_load_16_unchecked => return self.emitSimdLowLevel(.simd_load_16_unchecked, ll, args),
         .simd_store_16_unchecked => return self.emitSimdLowLevel(.simd_store_16_unchecked, ll, args),
