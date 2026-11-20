@@ -119,6 +119,12 @@ pub const OutputStream = enum {
     stderr,
 };
 
+/// ANSI capabilities of the destinations where a watch run will be replayed.
+pub const AnsiStreams = struct {
+    stdout: bool = false,
+    stderr: bool = false,
+};
+
 /// If output should use colors
 pub const ColorMode = enum {
     auto,
@@ -225,6 +231,9 @@ pub const CliCtx = struct {
     no_color: bool,
     /// Lazily loaded once because color environment variables are process-wide.
     color_policy: ?ColorPolicy,
+    /// When replayed by a watcher, color is rendered for its destinations,
+    /// not for the pipes connecting this child to the watcher.
+    replay_ansi: ?AnsiStreams = null,
 
     const Self = @This();
 
@@ -324,9 +333,14 @@ pub const CliCtx = struct {
         return config;
     }
 
-    fn streamSupportsAnsi(self: *const Self, stream: OutputStream) bool {
+    /// Detect ANSI support before applying the user's color preferences.
+    pub fn streamSupportsAnsi(self: *const Self, stream: OutputStream) bool {
         if (comptime builtin.target.cpu.arch == .wasm32 or builtin.target.os.tag == .freestanding) return false;
 
+        if (self.replay_ansi) |ansi| return switch (stream) {
+            .stdout => ansi.stdout,
+            .stderr => ansi.stderr,
+        };
         const file = switch (stream) {
             .stdout => std.Io.File.stdout(),
             .stderr => std.Io.File.stderr(),
