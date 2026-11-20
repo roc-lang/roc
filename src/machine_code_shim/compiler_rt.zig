@@ -18,12 +18,86 @@ pub const want_windows_v2u64_abi = false;
 /// Match the toolchain's runtime arithmetic rather than its test instrumentation.
 pub const test_safety = false;
 
-/// Upstream modules must not register their public compiler-rt exports.
-pub fn symbol(comptime _: *const anyopaque, comptime _: []const u8) void {}
+/// Upstream modules register each entry point here under its libcall name.
+/// Each one this build emits is bound locally under that name, so the
+/// libcalls the entry points themselves lower to resolve inside this runtime
+/// (an unoptimized build emits every registered entry point, including the
+/// f16, f80, f128 and 128-bit ones the shim never calls). A name `retain`
+/// binds is left to it.
+pub fn symbol(comptime func: *const anyopaque, comptime name: []const u8) void {
+    @setEvalBranchQuota(100 * helpers.len * name.len);
+    inline for (helpers) |helper| {
+        if (comptime std.mem.eql(u8, helper[0], name)) return;
+    }
+    _ = &LocalBinding(func, name).bind;
+}
+
+fn LocalBinding(comptime func: *const anyopaque, comptime name: []const u8) type {
+    return struct {
+        // Emitted only alongside `func`: an optimized build drops both.
+        fn bind() callconv(.c) void {
+            asm volatile (".local " ++ name ++ "\n.set " ++ name ++ ", " ++
+                    (if (want_aeabi) "%[func]" else "%[func:P]")
+                :
+                : [func] "X" (func),
+            );
+        }
+    };
+}
+
+// The f16 conversions and f80/f128 comparisons that the conversion modules'
+// entry points lower to on ARM, registered the same way.
+comptime {
+    if (want_aeabi) {
+        _ = @import("compiler_rt/comparef.zig");
+        _ = @import("compiler_rt/extendf.zig");
+        _ = @import("compiler_rt/truncf.zig");
+    }
+}
+
+/// Whether f16 conversions to and from f32 use the GNU names, as in the
+/// toolchain's compiler-rt for the Linux targets this runtime serves.
+pub const gnu_f16_abi = switch (builtin.abi) {
+    .eabi, .eabihf => false,
+    .none,
+    .gnu,
+    .gnuabin32,
+    .gnuabi64,
+    .gnueabi,
+    .gnueabihf,
+    .gnuf32,
+    .gnusf,
+    .gnux32,
+    .abin32,
+    .x32,
+    .ilp32,
+    .android,
+    .androideabi,
+    .musl,
+    .muslabin32,
+    .muslabi64,
+    .musleabi,
+    .musleabihf,
+    .muslf32,
+    .muslsf,
+    .muslx32,
+    .msvc,
+    .itanium,
+    .simulator,
+    .ohos,
+    .ohoseabi,
+    .call0,
+    => true,
+};
+/// The f16 carrier for a conversion with any other type, which on Linux does
+/// not depend on that type.
+pub fn f16Conv(comptime _: type) type {
+    return @"f16";
+}
 
 // The upstream conversion modules resolve the full set of their private
 // exports against this root, so it declares the target-ABI facts they read.
-// Only the pure `*_floatFromInt_*`/`*_intFromFloat_*` helpers are called.
+// The shim itself calls only the `*_floatFromInt_*`/`*_intFromFloat_*` helpers.
 /// This private runtime does not serve PowerPC.
 pub const want_ppc_abi = false;
 /// This private runtime does not serve SPARC.

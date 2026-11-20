@@ -2049,7 +2049,10 @@ const ArcPlanStep = struct {
     /// An erased call moves its closure's unit into the callee.
     transfer_closure: bool = false,
     reuse_unique: bool = false,
-    skip_result_retain: bool = false,
+    low_level_flags: packed struct {
+        skip_result_retain: bool = false,
+        release_lender_before_rebind: bool = false,
+    } = .{},
     unique_args: u64 = 0,
     /// The borrowed-result variant selected for a low-level op, whose RC
     /// effect is that variant's own.
@@ -2086,7 +2089,7 @@ const ArcPlanStep = struct {
         self.transfer_single = false;
         self.transfer_closure = false;
         self.reuse_unique = false;
-        self.skip_result_retain = false;
+        self.low_level_flags = .{};
         self.unique_args = 0;
         self.low_level_selection = null;
         self.retain_call_result = false;
@@ -2879,7 +2882,7 @@ const Inserter = struct {
                 if (rc_effect.retain_args != 0) {
                     next = try self.retainMaskedArgs(assign.args, rc_effect.retain_args & ~step.transfer_mask, .{ .stmt = at, .reason = .low_level_arg_effect }, next);
                 }
-                if (rc_effect.retain_result and !step.skip_result_retain) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .low_level_result_effect }, next);
+                if (rc_effect.retain_result and !step.low_level_flags.skip_result_retain) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .low_level_result_effect }, next);
                 if (op.deadLenderArg()) |lender_position| {
                     // Normalize ownership transfer into operations whose RC
                     // meaning is already explicit in LIR. The result retain
@@ -2899,8 +2902,21 @@ const Inserter = struct {
                     extra.unique_args = step.unique_args;
                     break :row try self.store.addOptionalStmtRow(LIR.LowLevelExtra, extra);
                 };
+                // Stage the result if writing it would hide the old lender
+                // before we can release it.
+                const destination = if (step.low_level_flags.release_lender_before_rebind) staged: {
+                    const temp = try self.store.addLocal(self.store.getLocal(assign.target));
+                    try self.dismantle_temps.append(self.lane_allocator, temp);
+                    next = try self.store.addCFStmt(.{ .assign_ref = .{
+                        .target = assign.target,
+                        .op = .local(temp),
+                        .next = next,
+                    } }, origin);
+                    next = try self.releaseLocalIfRc(assign.target, .{ .stmt = at, .reason = .rebind_old_value }, next);
+                    break :staged temp;
+                } else assign.target;
                 break :blk try self.store.addCFStmt(.{ .assign_low_level = .{
-                    .target = assign.target,
+                    .target = destination,
                     .op = op,
                     .rc_effect = rc_effect_row orelse try self.store.addRcEffect(rc_effect),
                     .args = assign.args,
@@ -3355,14 +3371,16 @@ const Inserter = struct {
                         segment.cursor,
                         assign.args,
                         selected_effect,
+                        selected_op.representationArgs(),
                         assign.target,
                         assign.next,
                         true,
                     );
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.preserve_consumed_args = transfer.preserve_consumed_args;
+                    step.low_level_flags.release_lender_before_rebind = transfer.release_lender_before_rebind;
                     step.transfer_mask = transfer.transfer_mask;
-                    step.skip_result_retain = self.isBindingBorrowed(assign.target);
+                    step.low_level_flags.skip_result_retain = self.isBindingBorrowed(assign.target);
                     step.unique_args = transfer.unique_args;
                     if (borrowed_variant != null) {
                         step.low_level_selection = selected_op;
@@ -5546,6 +5564,7 @@ const Inserter = struct {
         /// their group survives or because an owned variant needs a unit from
         /// an argument whose solved binding is borrowed.
         preserve_consumed_args: u64,
+        release_lender_before_rebind: bool,
         /// Retained positions whose group dies here: their unit moves into
         /// the result instead of paying the trailing retain.
         transfer_mask: u64,
@@ -5567,6 +5586,7 @@ const Inserter = struct {
         stmt: LIR.CFStmtId,
         args: LIR.LocalSpan,
         rc_effect: LIR.LowLevel.RcEffect,
+        representation_args: u64,
         target: LIR.LocalId,
         next: LIR.CFStmtId,
         want_unique: bool,
@@ -5574,6 +5594,7 @@ const Inserter = struct {
         if ((rc_effect.result_aliases_consumed_args & ~rc_effect.consume_args) != 0) {
             arcInvariant("ARC low-level result-token metadata referenced a non-consumed argument");
         }
+        const lent = self.consumedPlacesLentAtOp(args, rc_effect.consume_args, representation_args, target);
         // Operands carrying their container's stored field unit pay no
         // retain and leave no unit of their own to move.
         var operand_take_mask: u64 = 0;
@@ -5582,12 +5603,13 @@ const Inserter = struct {
             for (0..@min(GuardedList.borrowLen(locals), 64)) |position| {
                 const bit = argMaskBit(position);
                 if (((rc_effect.consume_args | rc_effect.retain_args) & bit) == 0) continue;
+                if ((lent.mask & bit) != 0) continue;
                 if ((rc_effect.consume_args & bit) == 0 and !self.localContainsRefcounted(target)) continue;
                 if (GuardedList.at(locals, position) == target) continue;
                 if (try self.applyOperandTake(owned, stmt, position)) operand_take_mask |= bit;
             }
         }
-        var preserve_consumed_args = try self.preserveConsumedArgMask(
+        var preserve_consumed_args = lent.mask | try self.preserveConsumedArgMask(
             args,
             rc_effect.consume_args & ~operand_take_mask,
             rc_effect.result_aliases_consumed_args,
@@ -5632,8 +5654,9 @@ const Inserter = struct {
         else
             0;
         const target_consumed = self.maskedArgsContainLocal(args, rc_effect.consume_args, target);
+        const release_lender_before_rebind = lent.target_lends and owned.contains(target);
         var release_old_target = false;
-        if (target_consumed) {
+        if (target_consumed or release_lender_before_rebind) {
             _ = try self.takeUnit(owned, target);
         } else {
             release_old_target = try self.takeRebindTarget(owned, target);
@@ -5648,6 +5671,7 @@ const Inserter = struct {
         try self.placeUnit(owned, target);
         return .{
             .preserve_consumed_args = preserve_consumed_args,
+            .release_lender_before_rebind = release_lender_before_rebind,
             .transfer_mask = transfer_mask,
             .unique_args = unique_args,
             .release_old_target = release_old_target,
@@ -5872,6 +5896,33 @@ const Inserter = struct {
             current = try self.retainLocalIfRc(retains[i].local, .{ .stmt = stmt, .reason = retains[i].reason }, current);
         }
         return current;
+    }
+
+    /// A payload borrow needs its place throughout the op, even at its last
+    /// use. Independent owned aliases have distinct places. Two consumes
+    /// alone need a unit each, but no extra unit backing a borrow.
+    fn consumedPlacesLentAtOp(self: *Inserter, span: LIR.LocalSpan, consumes: u64, representation: u64, target: LIR.LocalId) struct { mask: u64 = 0, target_lends: bool = false } {
+        if (consumes == 0 or span.len < 2 or @popCount(consumes) == span.len) return .{};
+        const locals = self.store.getLocalSpan(span);
+        var lent: u64 = 0;
+        var target_lends = false;
+        for (0..span.len) |i| {
+            if (i < 64 and consumes & argMaskBit(i) != 0) continue;
+            const borrower = GuardedList.at(locals, i);
+            if (!self.localContainsRefcounted(borrower)) continue;
+            if (i < 64 and representation & argMaskBit(i) != 0 and self.isClosedList(borrower)) continue;
+            var remaining = consumes & ~lent;
+            while (remaining != 0) : (remaining &= remaining - 1) {
+                const position = @ctz(remaining);
+                const consumed = GuardedList.at(locals, position);
+                if (!self.localContainsRefcounted(consumed)) continue;
+                const lender = self.ownershipPlaceLeader(borrower);
+                if (self.ownershipPlaceLeader(consumed) != lender) continue;
+                lent |= argMaskBit(position);
+                target_lends = target_lends or lender == target;
+            }
+        }
+        return .{ .mask = lent, .target_lends = target_lends };
     }
 
     fn preserveConsumedArgMask(
@@ -8627,6 +8678,86 @@ fn expectRepeatedConsumedOperandRetained(through_field: bool) (Allocator.Error |
     _ = try f.addProc(&.{}, body, f.list_i64);
     try f.run();
     try f.expectRc(operand, 1, 0, 0);
+}
+
+test "RC preserves a final same-operation borrow of a consumed place" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const elem = try f.local(.i64);
+    const operand = try f.local(f.list_i64);
+    const result = try f.local(.u64);
+    const ret = try f.ret(result);
+    // Synthetic effect for ARC only: position 0 consumes, position 1
+    // borrows the same place. The opcode is a placeholder, never executed.
+    const call = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = result,
+        .op = .list_len,
+        .rc_effect = try f.store.addRcEffect(.{
+            .consume_args = 0b01,
+            .may_retain_or_release = true,
+        }),
+        .args = try f.span(&.{ operand, operand }),
+        .next = ret,
+    } }, .test_fixture);
+    const build = try f.assignList(operand, &.{elem}, call);
+    const body = try f.assignI64(elem, 3, build);
+    _ = try f.addProc(&.{}, body, .u64);
+    try f.run();
+
+    // The only intervening statement must retain a unit for the consume;
+    // the original unit backs the borrow until the operation returns.
+    const literal = f.store.getCFStmtImmediate(f.procBody()).*;
+    try testing.expect(literal == .assign_literal);
+    const list = f.store.getCFStmtImmediate(literal.assign_literal.next).*;
+    try testing.expect(list == .assign_list);
+    const retain = f.store.getCFStmtImmediate(list.assign_list.next).*;
+    try testing.expectEqual(.incref, std.meta.activeTag(retain));
+    try testing.expectEqual(operand, retain.incref.value);
+    const op = f.store.getCFStmtImmediate(retain.incref.next).*;
+    try testing.expect(op == .assign_low_level);
+    const release = f.store.getCFStmtImmediate(op.assign_low_level.next).*;
+    try testing.expectEqual(.decref, std.meta.activeTag(release));
+    try testing.expectEqual(operand, release.decref.value);
+}
+
+test "RC same-operation borrow does not retain independently owned or disjoint operands" {
+    for ([_]bool{ true, false }) |alias| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+        const elem = try f.local(.i64);
+        const rhs = try f.local(f.list_i64);
+        const lhs = try f.local(f.list_i64);
+        const result = try f.local(.u64);
+        const op = try f.assignLowLevel(result, &.{ lhs, rhs }, .{ .consume_args = 1 }, try f.ret(result));
+        const bind_lhs = if (alias) try f.assignRefLocal(lhs, rhs, op) else try f.assignList(lhs, &.{elem}, op);
+        const bind_rhs = try f.assignList(rhs, &.{elem}, bind_lhs);
+        _ = try f.addProc(&.{}, try f.assignI64(elem, 3, bind_rhs), .u64);
+        try f.run();
+        // An owned alias gets its unit at the binding, not a second time at
+        // its consuming use. Disjoint operands need no retain at all.
+        try f.expectRc(lhs, @intFromBool(alias), 0, 0);
+        try f.expectRc(rhs, 0, 1, 0);
+    }
+}
+
+test "RC final same-operation borrow outlives a rebinding write" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const elem = try f.local(.i64);
+    const value = try f.local(f.list_i64);
+    const op = try f.assignLowLevel(value, &.{ value, value }, .{ .consume_args = 1 }, try f.ret(value));
+    const list = try f.assignList(value, &.{elem}, op);
+    _ = try f.addProc(&.{}, try f.assignI64(elem, 3, list), f.list_i64);
+    try f.run();
+    try f.expectRc(value, 1, 1, 0);
+    const literal = f.store.getCFStmtImmediate(f.procBody()).assign_literal;
+    const retain = f.store.getCFStmtImmediate(f.store.getCFStmtImmediate(literal.next).assign_list.next).incref;
+    const operation = f.store.getCFStmtImmediate(retain.next).assign_low_level;
+    try testing.expect(operation.target != value);
+    const release = f.store.getCFStmtImmediate(operation.next).decref;
+    const rebind = f.store.getCFStmtImmediate(release.next).assign_ref;
+    try testing.expectEqual(value, rebind.target);
+    try testing.expectEqual(operation.target, rebind.op.source);
 }
 
 fn testListObservationAfterReserve(op: LIR.LowLevel) (Allocator.Error || error{TestExpectedEqual})!void {
@@ -18453,6 +18584,11 @@ test "RC field takes through a nested complete projection whose outer read repea
 }
 
 test "RC complete projection after a rebind of its root keeps its own read" {
+    try checkProjectionAfterRebind(false);
+    try checkProjectionAfterRebind(true);
+}
+
+fn checkProjectionAfterRebind(direct_assignment: bool) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
 
@@ -18486,7 +18622,10 @@ test "RC complete projection after a rebind of its root keeps its own read" {
     const make_result = try f.assignStruct(result, &.{ changed, tag }, ret);
     const read_tag = try f.assignRefField(tag, second_view, 1, make_result);
     const project_again = try f.assignRefField(second_view, wrapper, 0, read_tag);
-    const rebind = try f.setLocal(wrapper, next_wrapper, .replace_existing, project_again);
+    const rebind = if (direct_assignment)
+        try f.assignRefLocal(wrapper, next_wrapper, project_again)
+    else
+        try f.setLocal(wrapper, next_wrapper, .replace_existing, project_again);
     const make_next_wrapper = try f.assignStruct(next_wrapper, &.{next_inner}, rebind);
     const make_next_inner = try f.assignStruct(next_inner, &.{ next_list, next_scalar }, make_next_wrapper);
     const assign_next_scalar = try f.assignI64(next_scalar, 1, make_next_inner);

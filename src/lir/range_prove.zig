@@ -154,10 +154,11 @@ const statement_nodes: usize = 5;
 const loop_param_seed_nodes: usize = 2 + 2 * 3 * meet_bound_cap;
 
 /// The most nodes seeding one region allocates besides its loop parameters:
-/// each persisted environment entry's met value and two per stored bound,
+/// each persisted environment entry's met value, its local's value if not
+/// yet materialized, and two per stored bound,
 /// two per in-round met entry, and two per term of each of the at most three
 /// persisted fact lists a region seeds.
-const region_seed_nodes: usize = merge_env_persist_cap * (1 + 2 * 2 * meet_bound_cap) + merge_env_cap * 2 + 3 * loop_fact_cap * 2 * 2;
+const region_seed_nodes: usize = merge_env_persist_cap * (2 + 2 * 2 * meet_bound_cap) + merge_env_cap * 2 + 3 * loop_fact_cap * 2 * 2;
 
 /// Prove and rewrite qualifying checks in every proc.
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
@@ -1100,6 +1101,61 @@ fn testEnvMeet(local: LocalId, bounds: []const MeetBound) EnvMeet {
     };
     for (bounds) |bound| meet.bounds.append(bound);
     return meet;
+}
+
+test "range prove keeps a persisted byte refinement inside its region after a definition folds away" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var pass = Pass.init(allocator);
+    defer pass.deinit();
+    pass.store = &store;
+    const byte = try store.addLocal(.{ .layout_idx = .u8 });
+    const alias = try store.addLocal(.{ .layout_idx = .u8 });
+    const cr = try store.addLocal(.{ .layout_idx = .u8 });
+    const head: CFStmtId = @fromBackingInt(7);
+
+    // The guarded list read still has two arms. Both paths into a later
+    // merge inside the carriage-return branch carry the bound byte == 13.
+    pass.resetRound();
+    try pass.bumpAssign(byte);
+    try pass.bumpAssign(byte);
+    const zero = try pass.constNode(0);
+    var state = MergeState{ .live = true, .captures = 2, .facts = .empty, .stable = .{}, .env = .empty, .entry_captures = 0, .entry_stable = .{} };
+    defer state.env.deinit(allocator);
+    var meet = testEnvMeet(byte, &.{.{ .root = zero, .c = 13 }});
+    meet.lower.append(.{ .root = zero, .c = -13 });
+    try state.env.append(allocator, meet);
+    try pass.persistMergeEnv(head, &state);
+
+    // The bounds check folded: byte now has one definition. A copy made
+    // before the merge denotes that same byte, including inside the arm.
+    pass.resetRound();
+    pass.grantRegionSeedNodes(head);
+    try pass.bumpAssign(byte);
+    try pass.bindCopy(alias, byte);
+    try pass.bind(cr, .{ .node = try pass.constNode(13) });
+    try pass.seedMergeEnv(head);
+
+    for ([_]LocalId{ alias, byte }, 0..) |operand, i| {
+        if (i == 1) try pass.rewindTo(0, 0, 0); // the continuation outside the CR arm
+        const result = try store.addLocal(.{ .layout_idx = .bool });
+        const done = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+        const cmp = try store.addCFStmt(.{ .assign_low_level = .{
+            .target = result,
+            .op = .num_is_eq,
+            .rc_effect = try store.addRcEffect(.none()),
+            .args = try store.addLocalSpan(&.{ operand, cr }),
+            .next = done,
+        } }, .test_fixture);
+        try pass.modelLowLevel(cmp, store.getCFStmt(cmp).assign_low_level);
+        const stmt = store.getCFStmt(cmp);
+        if (i == 0) {
+            try std.testing.expect(stmt == .assign_tag and stmt.assign_tag.discriminant == 1);
+        } else {
+            try std.testing.expect(stmt == .assign_low_level and stmt.assign_low_level.op == .num_is_eq);
+        }
+    }
 }
 
 test "range prove reaches a fixpoint when a merge's bound drops out and reappears" {
@@ -4681,6 +4737,8 @@ const Pass = struct {
     /// path around that loop assigns are bound: the meet is over the loop's
     /// entry edges, so it describes their values throughout the loop.
     fn seedEnvFromMeet(self: *Pass, state: *const MergeState, loop_join: ?JoinPointId) ResourceError!void {
+        // This round's env meet captures only path_env, hence only locals
+        // with multiple definitions this round. Its bindings are path-scoped.
         for (state.env.items) |meet| {
             if (loop_join) |join_id| {
                 if (self.joinAssigns(join_id, meet.local)) continue;
@@ -5067,8 +5125,20 @@ const Pass = struct {
                     .constant => used = true,
                 }
             }
-            if (used) try self.bind(entry.local, .{ .node = node });
+            if (used) try self.seedMetValue(entry.local, node);
         }
+    }
+
+    /// A persisted meet describes the local in this region, not at its
+    /// definition. Folding a branch between rounds can leave the local with
+    /// a single definition. In that case its binding (also used by aliases)
+    /// is global: relate it to the met value in the path's fact graph
+    /// instead of replacing it. Leaving the region drops both inequalities.
+    fn seedMetValue(self: *Pass, local: LocalId, met: NodeId) ResourceError!void {
+        if (!self.isSingleAssign(local)) return self.bind(local, .{ .node = met });
+        const value = try self.valueOf(local);
+        try self.addFact(self.orderingFact(value, met, 0, .meet));
+        try self.addFact(self.orderingFact(met, value, 0, .meet));
     }
 
     /// A fresh value for a met local: its layout's range narrowed by the
@@ -5434,7 +5504,7 @@ const Pass = struct {
                 },
             }
         }
-        if (used) try self.bind(local, .{ .node = node });
+        if (used) try self.seedMetValue(local, node);
     }
 
     /// Seed a list-valued loop parameter's length invariants: an opaque value
@@ -5442,8 +5512,13 @@ const Pass = struct {
     /// fact. Pending bounds are assumptions—seeding one makes this an
     /// assumption round, so no rewrite can rest on them before they verify.
     fn seedLenInvariants(self: *Pass, stored: *LoopBounds, local: LocalId) ResourceError!void {
-        const list_node = try self.unknownFor(self.localLayout(local));
-        const len_term = try self.freshRoot(0, std.math.maxInt(i64));
+        // For a single-definition list, refine its existing length term only
+        // on this path. A loop-carried list instead gets a new path binding.
+        const single = self.isSingleAssign(local);
+        const len_term = if (single)
+            try self.materializeTerm(.{ .len_of = local })
+        else
+            try self.freshRoot(0, std.math.maxInt(i64));
         var seeded = false;
         for (stored.len_items[0..stored.len_count]) |*item| {
             item.hit = false;
@@ -5472,7 +5547,8 @@ const Pass = struct {
             try self.addFact(.{ .a = resolved.root, .b = len_term, .c = resolved.c, .origin = .meet, .assumed = item.assume_bit });
             seeded = true;
         }
-        if (seeded) {
+        if (seeded and !single) {
+            const list_node = try self.unknownFor(self.localLayout(local));
             try self.len_terms.put(list_node, len_term);
             try self.path_len_roots.put(len_term, local);
             try self.bind(local, .{ .node = list_node });

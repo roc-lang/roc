@@ -25779,6 +25779,12 @@ first round bound it to; without this the induction on a parameter that is
 merely passed through never starts. Parameter values keep their identity
 through intermediate merges for the same reason.
 
+A persisted merge or loop bound describes the value in that region, not at
+its definition. If a rewrite leaves just one definition in the next round,
+the definition and its aliases still name one value globally; only the
+region that proved the bound may use it. The same rule applies to a list's
+length.
+
 A constructed struct is a value whose integer fields are the values it was
 built from, and a merge meets those fields like locals of their own, so a
 loop exit that packs several values into one record and unpacks them after
@@ -26337,17 +26343,23 @@ every unrolled occurrence, which matches the typing rule below that nested
 modes are uniform through an owning rc.
 
 A dynamic local normally carries one opaque owned unit. For a closed-row
-record or tuple, Boxy lowering also emits its checked product shape:
+record or tuple whose logical fields account for all its stored ownership,
+Boxy lowering also emits its checked product shape:
 the fields' layouts and descriptor locals. This is ownership data,
 not a memory layout: field addresses and representation sizes still come
 from runtime descriptors. A dynamic field occupies one ownership slot;
 a concrete struct field expands into its concrete slots. An open row or an
-unknown type has no enumerated product shape and remains opaque.
+unknown type has no enumerated product shape and remains opaque. The same
+applies when a substitution can put a recursion box around a field: projecting
+the logical payload does not transfer the box. The parent descriptor must
+remain responsible for its release. Type arguments reached only through a
+list, explicit box, or callable do not affect inline size.
 
 A dynamic tag union has no enumerated shape, but each of its payload reads
 names the variant it reads: the read sits under the arm that matched the tag,
 or follows the constructor that built it. Boxy lowering, which knows the tag's
-payload count from its checked type, reads the only payload of a tag, into a
+payload count from its checked type, reads the only payload of a tag that is
+known to be stored inline, into a
 local whose layout can hold refcounted data, as an `assign_ref`
 `tag_payload_struct` of the dynamic union into independent frame storage
 (backends copy it with the union's descriptor as `dyn.tag_payload_addr` of
@@ -26534,7 +26546,9 @@ generates constraints per statement:
   container's stored unit. Repeated consuming positions each need a unit.
   Args outside `consume_args` and
   `representationArgs` are borrowed occurrences whose lender must be live at
-  the call. Representation-only operands require a bound descriptor. Args in
+  the call, independently of the units handed to consuming positions.
+  A borrow whose last use is this operation still needs that protection until
+  the operation returns. Representation-only operands require a bound descriptor. Args in
   `retain_args` are stored by the op, so the stored value's storage
   constraint applies. A new mask, `result_borrows_args`, names the args the
   result may alias without owning (for example `list_get_unsafe` results
@@ -28104,6 +28118,12 @@ or tag-payload reads along a single control-flow path, dismantle analysis
 chooses the earliest same-root, same-layout read that dominates each later read
 and rewrites those later reads as explicit local aliases before ARC solving.
 Representatives are struct or tag-union reads.
+An incoming projection can transfer its unit on that edge without making
+the receiving cell a projection of its source on every edge. A binding
+with multiple definitions starts its own ownership path: reads of that
+cell may share a representative only if no intervening definition can
+reach the later read. Direct assignments into the cell count as writes,
+not just explicit join initializers.
 That rewrite is materialized only when the representative holds a committed
 take: it lies on the access path of a committed projected container, or it is
 a struct representative that commits a dismantle plan of its own. A tag-union

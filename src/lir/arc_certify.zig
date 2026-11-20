@@ -6711,7 +6711,19 @@ const Certifier = struct {
         }
 
         var arg_values_buffer: [64]ValueId = undefined;
+        const consumes = self.store.stmtRow(assign.rc_effect).consume_args;
+        // Settle the consumed units first. A payload borrow needs a live
+        // lender even after the op has taken everything it is owed.
+        var remaining = consumes;
+        while (remaining != 0) : (remaining &= remaining - 1) {
+            const index = @ctz(remaining);
+            const arg = GuardedList.at(arg_locals, index);
+            const value = try self.requireLive(state, arg);
+            arg_values_buffer[index] = value;
+            if (self.isRc(arg)) try self.consumeUnit(state, value, arg);
+        }
         for (0..GuardedList.borrowLen(arg_locals)) |index| {
+            if (index < 64 and consumes & (@as(u64, 1) << @intCast(index)) != 0) continue;
             const arg = GuardedList.at(arg_locals, index);
             // Only a closed list's inline header outlives its buffer; a
             // dynamic list operand is read through its address.
@@ -6719,16 +6731,6 @@ const Certifier = struct {
                 self.isListRepresentation(arg);
             const value = if (representation_only) try self.requireListRepresentation(state, arg) else try self.requireLive(state, arg);
             if (index < arg_values_buffer.len) arg_values_buffer[index] = value;
-        }
-
-        // Consumed positions transfer one unit each into the op.
-        for (0..GuardedList.borrowLen(arg_locals)) |index| {
-            const arg = GuardedList.at(arg_locals, index);
-            if (index >= 64) break;
-            if (!self.isRc(arg)) continue;
-            const bit = @as(u64, 1) << @as(u6, @intCast(index));
-            if ((self.store.stmtRow(assign.rc_effect).consume_args & bit) == 0) continue;
-            try self.consumeUnit(state, arg_values_buffer[index], arg);
         }
 
         var target_value: ValueId = no_value;
@@ -7761,6 +7763,30 @@ test "certify flags use after release" {
     _ = try f.addProc(&.{}, body, .str);
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "dead refcounted local") != null);
+}
+
+test "certify checks a same-operation borrow after consuming its lender's unit" {
+    for ([_]bool{ false, true }) |protect| {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+        const value = try f.local(.str);
+        const result = try f.local(.i64);
+        const ret = try f.ret(result);
+        const op = try f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = result,
+            .op = .compare,
+            .rc_effect = try f.store.addRcEffect(.{ .consume_args = 1 }),
+            .args = try f.store.addLocalSpan(&.{ value, value }),
+            .next = if (protect) try f.decrefStmt(value, .str, ret) else ret,
+        } }, .test_fixture);
+        _ = try f.addProc(&.{value}, if (protect) try f.increfStmt(value, .str, op) else op, .i64);
+        if (protect) {
+            try f.certify();
+        } else {
+            try testing.expectError(error.Certification, f.certify());
+            try testing.expect(std.mem.find(u8, f.diag.message(), "dead refcounted local") != null);
+        }
+    }
 }
 
 test "certify accepts an aliased value released through either name" {

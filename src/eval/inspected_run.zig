@@ -146,6 +146,7 @@ const DevError = Allocator.Error || error{
     UnwindRegistrationFailed,
     VirtualAllocFailed,
     VirtualProtectFailed,
+    FlushInstructionCacheFailed,
 };
 
 const WasmError = Allocator.Error || error{

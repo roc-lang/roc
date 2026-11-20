@@ -15649,6 +15649,7 @@ const UnitImageTestProgram = struct {
         try self.loaded.ensureUnusedCapacity(self.gpa, 1);
         var loaded = backend.dev.UnitImageLoader.load(self.gpa, view, .{ .context = &context, .resolve = LoadContext.resolve }, &diagnostic) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
+            error.FlushInstructionCacheFailed => return error.FlushInstructionCacheFailed,
             error.UndefinedImport => base.invariant("roc test invariant violated: a test unit's image imports {s}, which nothing loaded defines", .{diagnostic.name}),
             error.SiteOutOfRange => base.invariant("roc test invariant violated: a test unit's image has a reference to '{s}' out of its field's reach", .{diagnostic.name}),
         };
@@ -20536,6 +20537,7 @@ fn handleProcessFileError(err: ProcessFileError, stderr: anytype, path: []const 
         error.UnwindRegistrationFailed,
         error.VirtualAllocFailed,
         error.VirtualProtectFailed,
+        error.FlushInstructionCacheFailed,
         error.WatchBackendFailed,
         error.WatchInputsMalformed,
         error.WatchInputsMissing,
@@ -20680,6 +20682,7 @@ fn requireReportableCheckFailure(err: CheckFileWithBuildEnvPreservedError) error
         error.UnwindRegistrationFailed,
         error.VirtualAllocFailed,
         error.VirtualProtectFailed,
+        error.FlushInstructionCacheFailed,
         => {},
     }
 }
