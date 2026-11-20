@@ -926,6 +926,7 @@ pub const CompileTimeFinalizer = struct {
         UnwindRegistrationFailed,
         VirtualAllocFailed,
         VirtualProtectFailed,
+        FlushInstructionCacheFailed,
     };
 
     context: ?*anyopaque = null,
