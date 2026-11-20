@@ -5500,6 +5500,33 @@ pub fn build(b: *std.Build) void {
     // Last, so that every top-level step exists -- including the ones created
     // inside addMainExe.
     assertGranularTestStepsAreIsolated(b);
+    splitArm32FunctionSections(b);
+}
+
+/// ARM32 branches reach 32 MB, and LLD places range-extension thunks only
+/// between input sections, so an ARM32 binary whose monolithic `.text` is
+/// larger fails to link with "InputSection too large for range extension
+/// thunk". Debug test binaries and runners that link most of the compiler are
+/// that large, so every ELF compile step for 32-bit ARM emits one section per
+/// function (`splitCompilerSections` does this, and more, for the compiler
+/// executables on every target).
+fn splitArm32FunctionSections(b: *std.Build) void {
+    var visited: std.AutoHashMapUnmanaged(*Step, void) = .empty;
+    defer visited.deinit(b.allocator);
+    var pending: std.ArrayList(*Step) = .empty;
+    defer pending.deinit(b.allocator);
+    for (b.top_level_steps.values()) |top_level| {
+        pending.append(b.allocator, &top_level.step) catch @panic("OOM while walking the build graph");
+    }
+    while (pending.pop()) |step| {
+        const entry = visited.getOrPut(b.allocator, step) catch @panic("OOM while walking the build graph");
+        if (entry.found_existing) continue;
+        if (step.cast(Step.Compile)) |compile| {
+            const compile_target = compile.rootModuleTarget();
+            if (compile_target.cpu.arch.isArm() and compile_target.ofmt == .elf) compile.link_function_sections = true;
+        }
+        pending.appendSlice(b.allocator, step.dependencies.items) catch @panic("OOM while walking the build graph");
+    }
 }
 
 /// Configure-time guard: a public `run-test-zig-*` step must pull exactly the
@@ -5881,6 +5908,9 @@ fn addMachineCodeShimLib(
             "udivmodsi4_test.zig", "udivmoddi4_test.zig",     "udivmodti4_test.zig",
             "divti3_test.zig",     "modti3_test.zig",         "float_from_int.zig",
             "int_from_float.zig",  "float_from_int_test.zig", "int_from_float_test.zig",
+            "comparef.zig",        "comparesf2_test.zig",     "comparedf2_test.zig",
+            "extendf.zig",         "extendf_test.zig",        "truncf.zig",
+            "truncf_test.zig",
         }) |file| {
             _ = private_rt.addCopyFile(std.Build.LazyPath.zig_lib.path(b, b.pathJoin(&.{ "compiler_rt", file })), b.pathJoin(&.{ "compiler_rt", file }));
         }
