@@ -1930,12 +1930,16 @@ fn parseMachO(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildE
                 const value: i64 = if (kind == .abs64) @bitCast(readU64(field, 0)) else if (kind == .abs32) readU32(field, 0) else @as(i64, @as(i32, @bitCast(readU32(field, 0)))) + field_address;
                 addend = value - @as(i64, @intCast(raw.items[r_symbolnum - 1].addr));
             }
-            const trailing: u8 = if (x86_pcrel) switch (r_type) {
-                X86_64_RELOC_SIGNED_1 => 1,
-                X86_64_RELOC_SIGNED_2 => 2,
-                X86_64_RELOC_SIGNED_4 => 4,
-                else => 0,
-            } else 0;
+            const trailing: u8 = if (!x86_pcrel)
+                0
+            else if (r_type == X86_64_RELOC_SIGNED_1)
+                1
+            else if (r_type == X86_64_RELOC_SIGNED_2)
+                2
+            else if (r_type == X86_64_RELOC_SIGNED_4)
+                4
+            else
+                0;
             try relocs.append(arena, .{ .section = @intCast(section_index), .offset = r_address, .kind = kind, .symbol = symbol, .addend = addend, .pc_trailing = trailing });
         }
         if (pending_addend != null) return error.InvalidObject;
