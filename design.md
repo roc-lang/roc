@@ -25776,6 +25776,12 @@ first round bound it to; without this the induction on a parameter that is
 merely passed through never starts. Parameter values keep their identity
 through intermediate merges for the same reason.
 
+A persisted merge or loop bound describes the value in that region, not at
+its definition. If a rewrite leaves just one definition in the next round,
+the definition and its aliases still name one value globally; only the
+region that proved the bound may use it. The same rule applies to a list's
+length.
+
 A constructed struct is a value whose integer fields are the values it was
 built from, and a merge meets those fields like locals of their own, so a
 loop exit that packs several values into one record and unpacks them after
@@ -26531,7 +26537,9 @@ generates constraints per statement:
   container's stored unit. Repeated consuming positions each need a unit.
   Args outside `consume_args` and
   `representationArgs` are borrowed occurrences whose lender must be live at
-  the call. Representation-only operands require a bound descriptor. Args in
+  the call, independently of the units handed to consuming positions.
+  A borrow whose last use is this operation still needs that protection until
+  the operation returns. Representation-only operands require a bound descriptor. Args in
   `retain_args` are stored by the op, so the stored value's storage
   constraint applies. A new mask, `result_borrows_args`, names the args the
   result may alias without owning (for example `list_get_unsafe` results
