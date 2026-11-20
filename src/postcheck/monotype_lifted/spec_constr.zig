@@ -17666,7 +17666,7 @@ test "a callable worker's body inlines a call that builds the worker's source" {
         .symbol = @fromBackingInt(2),
         .args = .empty(),
         .captures = .empty(),
-        .body = .hosted,
+        .body = .{ .hosted = .empty() },
         .ret = ty,
     });
     const builder = struct {
