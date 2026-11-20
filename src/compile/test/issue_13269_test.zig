@@ -29,10 +29,18 @@ test "issue 13269: a tagged callable's empty captures are defined in their arms"
         \\    echo!(Str.inspect(c(0, f)))
         \\    Ok({})
         \\}
-    , .{ .specialization_strategy = .lss }, expectDefinedCapture);
+    , .{ .specialization_strategy = .lss }, expectDefinedTaggedCaptures);
 }
 
 fn expectDefinedCapture(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    try std.testing.expectEqual(@as(usize, 1), try definedCaptureCount(store, layouts));
+}
+
+fn expectDefinedTaggedCaptures(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    try std.testing.expectEqual(@as(usize, 2), try definedCaptureCount(store, layouts));
+}
+
+fn definedCaptureCount(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!usize {
     for (store.getProcSpecs(), 0..) |proc, i| {
         const id: lir.LirProcSpecId = @fromBackingInt(@as(u32, @intCast(i)));
         const name = store.procDebugName(id) orelse continue;
@@ -42,8 +50,7 @@ fn expectDefinedCapture(store: *const lir.LirStore, layouts: *const layout.Store
         defer defined.deinit(std.testing.allocator);
         const params = store.getLocalSpan(proc.args);
         for (0..params.len) |j| try defined.append(std.testing.allocator, GuardedList.at(params, j));
-        try std.testing.expect(try checkPath(store, layouts, proc.body.get().?, &defined) != 0);
-        return;
+        return try checkPath(store, layouts, proc.body.get().?, &defined);
     }
     return error.TestUnexpectedResult;
 }
