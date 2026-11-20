@@ -17,7 +17,8 @@ const Leaf = struct { packed_offset: u32, memory_offset: u32, width: u32, byte_o
 /// one NaN whatever bits the evaluation produced.
 const FloatLeaf = struct { packed_offset: u32, precision: enum { f32, f64 } };
 
-/// A payload-free tag union's leaf: its discriminant's `width` bytes at
+/// A tag union's leaf, for a union every one of whose payloads is zero-sized
+/// (`discriminantOnly`): its discriminant's `width` bytes at
 /// `packed_offset` in the canonical bytes, which hold the index of the
 /// item's tag among the union's `variant_count` tags in byte-wise name order,
 /// the order that assigns discriminants, so the canonical bytes are the
@@ -34,8 +35,8 @@ pub const Plan = struct {
     packed_width: u32 = 0,
     memory_width: u32,
 
-    /// Compile a plan for a producer-proven scalar, payload-free tag union, or
-    /// fixed product of them.
+    /// Compile a plan for a producer-proven scalar, discriminant-only tag union
+    /// (`discriminantOnly`), or fixed product of them (`layoutPacks`).
     pub fn init(allocator: std.mem.Allocator, layouts: *const layout.Store, element: layout.Idx) std.mem.Allocator.Error!Plan {
         var plan = Plan{ .allocator = allocator, .memory_width = layouts.layoutSize(layouts.getLayout(element)) };
         errdefer plan.deinit();
@@ -83,15 +84,8 @@ pub const Plan = struct {
                 },
                 .tag_union => {
                     const data = layouts.getTagUnionData(value.getTagUnion().idx);
+                    if (!discriminantOnly(data.*)) base.invariant("packed data invariant violated: fixed product holds a tag union with a payload that has bytes", .{});
                     const variants = layouts.getTagUnionVariants(data);
-                    for (0..variants.len) |i| {
-                        if (layouts.layoutSize(layouts.getLayout(variants.get(@intCast(i)).payload_layout)) != 0) {
-                            base.invariant("packed data invariant violated: fixed product holds a tag union with a payload", .{});
-                        }
-                    }
-                    // A non-zero-sized union of payload-free tags is its
-                    // discriminant alone.
-                    if (builtin.mode == .debug) std.debug.assert(data.discriminant_size != 0 and layouts.layoutSize(value) == data.discriminant_size);
                     try self.tags.append(self.allocator, .{ .packed_offset = self.packed_width, .width = data.discriminant_size, .variant_count = @intCast(variants.len) });
                     try self.appendLeaf(offset + data.discriminant_offset.get(layouts.targetUsize()), data.discriminant_size, .little);
                 },
@@ -115,6 +109,45 @@ pub const Plan = struct {
                 .box, .box_of_zst, .list, .list_of_zst, .closure, .ptr, .erased_callable => base.invariant("packed data invariant violated: fixed product holds a {s} layout", .{@tagName(value.tag)}),
             }
         }
+    }
+
+    /// Whether a value of the tag union `data` is its discriminant alone on
+    /// every target: every payload is zero-sized, so the union's size is the
+    /// discriminant's and the discriminant is at its start. A union of one
+    /// tag is zero-sized and never a tag union layout.
+    pub fn discriminantOnly(data: layout.TagUnionData) bool {
+        return data.discriminant_size != 0 and
+            data.size.get(.u32) == data.discriminant_size and data.size.get(.u64) == data.discriminant_size and
+            data.discriminant_offset.get(.u32) == 0 and data.discriminant_offset.get(.u64) == 0;
+    }
+
+    /// Whether the layout `root` is one a plan packs: scalars other than
+    /// strings and opaque pointers, zero-sized values, discriminant-only tag
+    /// unions, and structs of them.
+    pub fn layoutPacks(allocator: std.mem.Allocator, layouts: *const layout.Store, root: layout.Idx) std.mem.Allocator.Error!bool {
+        var pending: std.ArrayList(layout.Idx) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |next| {
+            const value = layouts.getLayout(next);
+            switch (value.tag) {
+                .zst => {},
+                .scalar => switch (value.getScalar().tag) {
+                    .int, .frac, .vector => {},
+                    .str, .opaque_ptr => return false,
+                },
+                .tag_union => if (!discriminantOnly(layouts.getTagUnionData(value.getTagUnion().idx).*)) return false,
+                .struct_ => {
+                    const info = layouts.getStructInfo(value);
+                    for (0..info.fields.len) |i| {
+                        const field = info.fields.get(@intCast(i));
+                        if (!field.is_padding) try pending.append(allocator, field.layout);
+                    }
+                },
+                .hole, .dynamic, .box, .box_of_zst, .list, .list_of_zst, .closure, .ptr, .erased_callable => return false,
+            }
+        }
+        return true;
     }
 
     /// Appends the `width` bytes at `offset` in the layout as the next leaf.
@@ -289,7 +322,7 @@ test "packed products store every float NaN as Roc's one NaN" {
     try std.testing.expectEqualSlices(u8, &expected, &out);
 }
 
-test "packed products store a payload-free tag union as its discriminant" {
+test "packed products store a tag union with no payloads as its discriminant" {
     const gpa = std.testing.allocator;
     inline for (.{ .u32, .u64 }) |target| {
         var layouts = try layout.Store.init(gpa, target);
@@ -361,6 +394,48 @@ test "packed products store a payload-free tag union as its discriminant" {
         const int_offset = layouts.getStructFieldOffsetByOriginalIndex(layouts.getLayout(product).getStruct().idx, 2);
         for (0..items.len) |index| std.mem.reverse(u8, big_endian[index * plan.memory_width + int_offset ..][0..4]);
         plan.encode(&roundtrip, big_endian, items.len, .big);
+        try std.testing.expectEqualSlices(u8, &canonical, &roundtrip);
+    }
+}
+
+test "a tag union packs exactly when its payloads are all zero-sized" {
+    const gpa = std.testing.allocator;
+    inline for (.{ .u32, .u64 }) |target| {
+        var layouts = try layout.Store.init(gpa, target);
+        defer layouts.deinit();
+        const unit = try layouts.putStructFields(&.{});
+        const units = try layouts.putStructFields(&.{ .{ .index = 0, .layout = .zst }, .{ .index = 1, .layout = unit } });
+        const only = try layouts.putTagUnion(&.{.zst});
+        // `[A({}), B]`, `[A({}, {}), B, C([Only])]` and `[A(U8), B]`.
+        const unit_payload = try layouts.putTagUnion(&.{ unit, .zst });
+        const nested = try layouts.putTagUnion(&.{ units, .zst, only });
+        const byte_payload = try layouts.putTagUnion(&.{ .u8, .zst });
+        const product = try layouts.putStructFields(&.{
+            .{ .index = 0, .layout = nested },
+            .{ .index = 1, .layout = .u16 },
+            .{ .index = 2, .layout = unit_payload },
+        });
+        for ([_]layout.Idx{ unit_payload, nested, product }) |packs| {
+            try std.testing.expect(try Plan.layoutPacks(gpa, &layouts, packs));
+        }
+        for ([_]layout.Idx{ byte_payload, try layouts.putStructFields(&.{ .{ .index = 0, .layout = byte_payload }, .{ .index = 1, .layout = .u16 } }) }) |unpacked| {
+            try std.testing.expect(!try Plan.layoutPacks(gpa, &layouts, unpacked));
+        }
+        try std.testing.expect(!Plan.discriminantOnly(layouts.getTagUnionData(layouts.getLayout(byte_payload).getTagUnion().idx).*));
+
+        var plan = try Plan.init(gpa, &layouts, product);
+        defer plan.deinit();
+        // Two discriminant bytes around the U16.
+        try std.testing.expectEqual(@as(u32, 4), plan.packed_width);
+        try std.testing.expectEqual(@as(usize, 2), plan.tags.items.len);
+        try std.testing.expectEqual(@as(u32, 3), plan.tags.items[0].variant_count);
+        try std.testing.expectEqual(@as(u32, 2), plan.tags.items[1].variant_count);
+        const canonical = [_]u8{ 2, 0x34, 0x12, 1, 0, 0xff, 0xff, 0 };
+        var memory_buffer: [16]u8 = undefined;
+        const memory = memory_buffer[0 .. 2 * plan.memory_width];
+        plan.decode(memory, &canonical, 2);
+        var roundtrip: [canonical.len]u8 = undefined;
+        plan.encode(&roundtrip, memory, 2, .little);
         try std.testing.expectEqualSlices(u8, &canonical, &roundtrip);
     }
 }

@@ -651,16 +651,17 @@ pub const ConstString = struct {
 };
 
 /// Packed list with little-endian scalar leaves in semantic field order.
-/// Product bytes omit padding. A union of payload-free tags is a leaf as
-/// wide as its discriminant, holding the index of the item's tag among the
-/// union's tags in byte-wise name order, the order that assigns
-/// discriminants; a union of one tag has no leaf.
+/// Product bytes omit padding. A discriminant-only tag union, one whose
+/// every payload is zero-sized, is a leaf as wide as its discriminant,
+/// holding the index of the item's tag among the union's tags in byte-wise
+/// name order, the order that assigns discriminants; its payloads have no
+/// bytes, and a union of one tag has no leaf.
 /// `blobData(bytes).len == len * byteWidth()`.
 pub const ConstPackedList = struct {
     bytes: ConstBlobDataId,
     len: u32,
-    /// Null for products and payload-free tag unions; the stored checked type
-    /// supplies their field structure and tags.
+    /// Null for products and discriminant-only tag unions; the stored checked
+    /// type supplies their field structure, tags and zero-sized payloads.
     element: ?ConstPackedScalar,
     /// Sum of leaf widths in checked field order, excluding all padding.
     product_width: u32 = 0,
@@ -672,7 +673,7 @@ pub const ConstPackedList = struct {
 };
 
 /// A list's items, stored either as child nodes or packed fixed-product
-/// bytes, payload-free tags among a product's leaves.
+/// bytes, discriminant-only tag unions among a product's leaves.
 pub const ConstListItems = union(enum) {
     nodes: []const ConstNodeId,
     packed_bytes: ConstPackedList,

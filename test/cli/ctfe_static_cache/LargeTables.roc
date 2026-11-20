@@ -45,6 +45,9 @@ light_weight = |light| match light {
     Green => 3
 }
 
+local_marks : List([Hit({}), Miss])
+local_marks = [Hit({}), Miss, Hit({})]
+
 literals : List(U16)
 literals = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, 6765, 10946, 17711, 28657, 46368]
 
@@ -66,5 +69,17 @@ main! = || {
     }
     light_sum = Tags.lights.fold(0.U64, |sum, light| sum + light_weight(light)) * 100 + local_lights.fold(0.U64, |sum, light| sum + light_weight(light))
     cell_sum = Tags.cells.fold(0.U64, |sum, cell| if cell.alive and cell.light == Red { sum + cell.age.to_u64() } else { sum })
+    mark_sum = Tags.marks.fold(0.U64, |sum, mark| match mark {
+        Hit(unit) => if unit == {} { sum + 1 } else { sum }
+        Miss => sum + 10
+        Skip(unit, only) => match only {
+            Only => if unit == {} { sum + 100 } else { sum }
+        }
+    })
+    mark_equal = match Tags.marks.get(start + 2) {
+        Ok(mark) => if mark == Miss { "eq" } else { "ne" }
+        Err(_) => "none"
+    }
+    Stdout.line!("${Str.inspect(Tags.marks.take_first(start + 1))} ${Str.inspect(local_marks)} ${mark_sum.to_str()} ${mark_equal}")
     Stdout.line!("${byte_sum.to_str()} ${wide_sum.to_str()} ${float_nans.to_str()} ${float_bits.to_str()} ${point_nans.to_str()} ${point_sum.to_str()} ${literal_sum.to_str()} ${flag_count.to_str()} ${local_flag_count.to_str()} ${heading_sum.to_str()} ${picked.to_str()} ${light_sum.to_str()} ${cell_sum.to_str()}")
 }
