@@ -246,6 +246,7 @@ pub const PlatformRequirementsCheckOutput = struct {
 
 /// Public `ArtifactPublicationInputs` declaration.
 pub const ArtifactPublicationInputs = struct {
+    builtin_artifact: CheckedArtifact.BuiltinArtifact,
     available_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
     relation_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey = null,
@@ -536,6 +537,7 @@ pub fn typeCheckModule(
     artifact_alloc: Allocator,
     env: *ModuleEnv,
     builtin_module_env: *const ModuleEnv,
+    builtin_artifact: CheckedArtifact.ModuleId,
     imported_envs: []const *ModuleEnv,
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
@@ -633,6 +635,7 @@ pub fn typeCheckModule(
         imported_envs,
         imported_artifacts,
         .{
+            .builtin_artifact = .{ .imported = builtin_artifact },
             .platform_requirement_context = platform_requirement_context,
             .platform_app_relation = null,
             .explicit_roots = explicit_roots,
@@ -714,6 +717,7 @@ pub fn publishFromPrebuiltModules(
         module_idx,
         .{
             .module_env_storage = module_env_storage,
+            .builtin_artifact = publication.builtin_artifact,
             .io = publication.io,
             .imports = imported_artifacts,
             .available_artifacts = publication.available_artifacts,

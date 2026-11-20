@@ -545,11 +545,10 @@ test "open rows - associated and block-local function annotations drop their `..
     );
 }
 
-test "open rows - where-method signatures open only the rows a use may widen" {
-    // A where-method's direct result and a `Try` result's error row open per
-    // use; its arguments, a `Try`'s ok row, and anything nested deeper keep
-    // their rows as written.
-    try expectFormatsTo(
+test "open rows - where-method signatures keep every `..`" {
+    // A `..` in a where-method's signature quantifies its row, at the direct
+    // result as in an argument or under a named type, so none is redundant.
+    try expectUnchanged(
         \\f : a -> Str
         \\    where [
         \\        a.direct : a -> [X, ..],
@@ -560,32 +559,34 @@ test "open rows - where-method signatures open only the rows a use may widen" {
         \\    ]
         \\f = |_| "x"
         \\
-    ,
-        \\f : a -> Str
-        \\    where [
-        \\        a.direct : a -> [X],
-        \\        a.error : a -> Try(Str, [X]),
-        \\        a.ok : a -> Try([X, ..], Str),
-        \\        a.nested : a -> List([X, ..]),
-        \\        a.arg : a, [X, ..] -> Str,
-        \\    ]
-        \\f = |_| "x"
+    );
+}
+
+test "open rows - where-method rows through local aliases keep their `..`" {
+    try expectUnchanged(
+        \\Res(e) : Try(Str, e)
+        \\
+        \\load : a -> Str where [a.fetch : a -> Res([IoErr, ..])]
+        \\load = |_| ""
+        \\
+    );
+    try expectUnchanged(
+        \\Outcome(e) : e
+        \\
+        \\load : a -> Str where [a.status : a -> Outcome([IoErr, Done, ..])]
+        \\load = |_| ""
         \\
     );
 }
 
-test "open rows - where-method error row through a local alias" {
+test "open rows - a function's own result drops its `..` beside a where clause" {
     try expectFormatsTo(
-        \\Res(e) : Try(Str, e)
-        \\
-        \\load : a -> Res([IoErr, Other]) where [a.fetch : a -> Res([IoErr, ..])]
-        \\load = |x| x.fetch()
+        \\load : a -> [Loaded, Failed, ..] where [a.fetch : a -> [IoErr, Done, ..]]
+        \\load = |_| Loaded
         \\
     ,
-        \\Res(e) : Try(Str, e)
-        \\
-        \\load : a -> Res([IoErr, Other]) where [a.fetch : a -> Res([IoErr])]
-        \\load = |x| x.fetch()
+        \\load : a -> [Loaded, Failed] where [a.fetch : a -> [IoErr, Done, ..]]
+        \\load = |_| Loaded
         \\
     );
 }

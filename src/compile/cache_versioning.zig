@@ -79,8 +79,13 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// completes. It rejects every earlier format, including the independent
 /// version 19 through 51 formats.
 /// Version 52 also excludes artifacts with builtin-conflicting import bindings.
+/// Version 53 stores constant stores whose type tables hold one copy of each
+/// type a store writer copied from its program.
+/// Version 54 stores every tag union's own tags in name order.
+/// Version 55 stores lists of tag unions whose payloads are all zero-sized,
+/// and of records and tuples holding them, as packed bytes.
 /// Platform-pairing entries share it.
-const checked_envelope_version: u32 = 52;
+const checked_envelope_version: u32 = 55;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment. Version 5 rejects builtin-conflicting import

@@ -244,8 +244,3 @@ pub fn Solver(comptime Adapter: type) type {
 pub fn functionReturnReach(reach: anytype) @TypeOf(reach) {
     return if (reach == .signature) .result else .nested;
 }
-
-/// Existing adapters descend only into the error argument of a direct Try result.
-pub fn nominalArgumentReach(reach: anytype, builtin_try: bool, index: usize) @TypeOf(reach) {
-    return if (builtin_try and reach == .result and index == 1) .try_row else .nested;
-}

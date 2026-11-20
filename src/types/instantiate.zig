@@ -31,8 +31,8 @@ const Rank = types_mod.Rank;
 const Polarity = types_mod.Polarity;
 const Ident = base.Ident;
 
-/// Where a position sits relative to the result rows a where-method use may
-/// widen: the signature's direct result row and a `Try` result's error row
+/// Where a position sits relative to the result row a where-method use may
+/// widen: the signature's direct result row
 /// (design.md "Closed Result Rows At Template Boundaries"). The checker's
 /// annotation walk makes this decision for rows written inline in a signature;
 /// this axis makes the same decision for rows a referenced type declaration
@@ -45,10 +45,8 @@ pub const AdapterReachPosition = enum {
     /// annotation put this declaration in, when that is the signature's direct
     /// result.
     result,
-    /// The ERROR argument of a `Try` standing in that direct result.
-    try_row,
-    /// Every other position: inside a `List`, a record field, a tuple, a tag
-    /// payload, a function, or a non-`Try` nominal.
+    /// Every other position: inside a record field, a tuple, a tag payload, a
+    /// function, or an argument of a named type.
     nested,
 };
 
@@ -703,6 +701,8 @@ const FlexLikeFrame = struct {
 const AliasFrame = struct {
     common: FillCommon,
     alias: Alias,
+    /// The identity row the source alias names, which its copy names too.
+    identity_row: u32,
     /// Raw base index of the alias's arg run (backing var excluded).
     args_start: u32,
     args_count: u32,
@@ -724,15 +724,15 @@ const NominalFrame = struct {
     saved_polarity: Polarity,
     common: FillCommon,
     nominal: NominalType,
+    /// The identity row the source application names, which its copy names
+    /// too.
+    identity_row: u32,
     args_start: u32,
     args_count: u32,
     vars_base: u32,
-    /// The adapter reach surrounding this nominal application. A `Try` written
-    /// as the direct result passes it to the ERROR argument; every other
-    /// argument of every nominal is a nested position.
+    /// The adapter reach surrounding this nominal application, restored once
+    /// its arguments, which are all nested positions, are instantiated.
     saved_reach: AdapterReachPosition,
-    /// Whether this application is the builtin `Try(ok, err)`.
-    is_try: bool,
 };
 
 const FuncFrame = struct {
@@ -904,6 +904,13 @@ pub const Instantiator = struct {
     /// `instantiateVarHelp` for the whole copy, so it is null only between
     /// instantiations.
     marker_choices: ?*std.AutoHashMapUnmanaged(Var, bool) = null,
+    /// The marker pre-walk (`collectMarkerChoices`) outcome of the next root
+    /// this instantiator copies with a behavior that walks
+    /// (`.resolve_by_polarity`, `.preserve_one_sided`, `.defer_open`): read
+    /// from it when an earlier instantiation of the same root at the same
+    /// behavior, polarity and reach recorded one, written to it otherwise.
+    /// That root copy consumes it.
+    marker_choices_memo: ?*MarkerChoicesMemo = null,
     /// The polarity of the position currently being instantiated. Starts at
     /// the polarity of the instantiation root (callers using
     /// `.resolve_by_polarity` set it). Function argument positions flip it
@@ -914,30 +921,44 @@ pub const Instantiator = struct {
     /// Where the position currently being instantiated sits relative to the
     /// rows a where-method use may widen. Starts at the reach of the
     /// instantiation ROOT (callers using `.defer_open` set it) and demotes to
-    /// `.nested` under every constructor except a function's result and a
-    /// `Try`'s error argument. Only consulted by `.defer_open`.
+    /// `.nested` under every constructor except the signature's own function
+    /// result. Only consulted by `.defer_open`.
     current_reach: AdapterReachPosition = .nested,
-    /// Identity of the builtin `Try(ok, err)` nominal. When null, no nominal is
-    /// treated as a `Try`, so a `Try` error row reached through a declaration
-    /// reference is a nested position like any other nominal argument.
-    try_nominal: ?TryNominalIdent = null,
     /// Set when the walk shared a source variable instead of copying it, so
     /// the copy names a variable of the source graph.
     shared_any: bool = false,
 
-    /// How to recognize the builtin `Try(ok, err)` nominal while walking. Both
-    /// spellings are needed for the same reason `builtinNominalDeclForIdentInEnv`
-    /// accepts both: a `Try` written through its module interns the qualified
-    /// name. Builtin origin is required on top of the name, so a user nominal
-    /// that shadows `Try` is not mistaken for it.
-    pub const TryNominalIdent = struct {
-        short: Ident.Idx,
-        qualified: Ident.Idx,
-    };
-
     pub const SharedSubtree = struct {
         source: Var,
         copy: Var,
+    };
+
+    /// One polarity marker's choice: true opens it (or, for
+    /// `.preserve_one_sided`, keeps it deferred).
+    pub const MarkerChoice = struct { marker: Var, chosen: bool };
+
+    /// What the marker pre-walk decided for one root: the copy is rejected
+    /// (a placement provider reported a rejected declaration), or it copies
+    /// with exactly these marker choices, keyed by resolved marker var.
+    pub const MarkerChoicesOutcome = union(enum) {
+        rejected,
+        chosen: []const MarkerChoice,
+    };
+
+    /// A root copy's pre-walk outcome, owned by the caller (see
+    /// `marker_choices_memo`).
+    pub const MarkerChoicesMemo = struct {
+        /// The outcome an earlier instantiation recorded; the copy reads it
+        /// instead of walking, before anything can append to `sink`.
+        known: ?MarkerChoicesOutcome = null,
+        /// Where a copy that walks appends its marker choices.
+        sink: *std.ArrayListUnmanaged(MarkerChoice),
+        /// Set when the copy walked: `rejected` is its verdict, and an
+        /// accepted copy's choices are `sink.items[start..][0..len]`.
+        walked: bool = false,
+        rejected: bool = false,
+        start: u32 = 0,
+        len: u32 = 0,
     };
 
     /// Re-exported so callers name one enum: `Instantiator.AdapterReach`.
@@ -1071,16 +1092,6 @@ pub const Instantiator = struct {
 
     fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
         return self.idents.getText(idx);
-    }
-
-    /// Whether this nominal application is the builtin `Try(ok, err)`. Builtin
-    /// origin is required alongside the name, so a user nominal that shadows
-    /// `Try` keeps every one of its type arguments a nested position.
-    fn nominalIsBuiltinTry(self: *const Self, nominal: NominalType) bool {
-        const try_nominal = self.try_nominal orelse return false;
-        if (!nominal.originIsBuiltin()) return false;
-        const name = nominal.ident.ident_idx;
-        return name.eql(try_nominal.short) or name.eql(try_nominal.qualified);
     }
 
     fn scratch(self: *Self) *Scratch {
@@ -1371,13 +1382,12 @@ pub const Instantiator = struct {
                             std.debug.assert(nominal.sourceDeclOptional() == null);
                             break :blk .{ .at = item.polarity };
                         };
-                        const reach: AdapterReachPosition = base.annotation_positions.nominalArgumentReach(item.reach, self.nominalIsBuiltinTry(nominal), index);
                         switch (position) {
-                            .at => |polarity| try pending.append(allocator, .{ .var_ = arg, .polarity = polarity, .reach = reach }),
+                            .at => |polarity| try pending.append(allocator, .{ .var_ = arg, .polarity = polarity, .reach = .nested }),
                             // Visiting the argument at both polarities makes
                             // every marker in it stand on both sides.
                             .both => for ([_]Polarity{ .pos, .neg }) |polarity| {
-                                try pending.append(allocator, .{ .var_ = arg, .polarity = polarity, .reach = reach });
+                                try pending.append(allocator, .{ .var_ = arg, .polarity = polarity, .reach = .nested });
                             },
                         }
                     },
@@ -1447,6 +1457,28 @@ pub const Instantiator = struct {
         }
     }
 
+    /// A recorded pre-walk outcome stands for a walk this instantiation does
+    /// not run, so it must be exactly what that walk would decide: checked
+    /// against the walk itself in builds with runtime safety. `known` is
+    /// null for a recorded rejection, and otherwise the recorded choices.
+    fn debugAssertKnownMarkerChoices(self: *Self, root: Var, known: ?*const std.AutoHashMapUnmanaged(Var, bool)) std.mem.Allocator.Error!void {
+        if (!std.debug.runtime_safety) return;
+        var walked: std.AutoHashMapUnmanaged(Var, bool) = .empty;
+        defer walked.deinit(self.store.gpa);
+        const accepted = try self.collectMarkerChoices(root, &walked);
+        const choices = known orelse {
+            if (accepted) base.invariant("a recorded marker pre-walk rejected a root whose walk accepts it", .{});
+            return;
+        };
+        if (!accepted) base.invariant("a recorded marker pre-walk accepted a root whose walk rejects it", .{});
+        if (walked.count() != choices.count()) base.invariant("a recorded marker pre-walk has {d} marker choices, the walk {d}", .{ choices.count(), walked.count() });
+        var entries = choices.iterator();
+        while (entries.next()) |entry| {
+            const chosen = walked.get(entry.key_ptr.*) orelse base.invariant("a recorded marker pre-walk names a marker the walk does not reach", .{});
+            if (chosen != entry.value_ptr.*) base.invariant("a recorded marker pre-walk chose differently from the walk", .{});
+        }
+    }
+
     fn instantiateVarHelp(
         self: *Self,
         initial_var: Var,
@@ -1459,7 +1491,42 @@ pub const Instantiator = struct {
         defer self.marker_choices = previous_choices;
         switch (self.polarity_var_behavior) {
             .resolve_by_polarity, .preserve_one_sided, .defer_open => {
-                if (!try self.collectMarkerChoices(initial_var, &marker_choices)) {
+                const memo = self.marker_choices_memo;
+                self.marker_choices_memo = null;
+                const known = if (memo) |entry| entry.known else null;
+                const accepted = if (known) |outcome| accepted: {
+                    switch (outcome) {
+                        .rejected => {
+                            try self.debugAssertKnownMarkerChoices(initial_var, null);
+                            break :accepted false;
+                        },
+                        .chosen => |choices| {
+                            // The recorded slice is read before the debug
+                            // walk, whose placement providers may record
+                            // other outcomes and move it.
+                            try marker_choices.ensureTotalCapacity(self.store.gpa, @intCast(choices.len));
+                            for (choices) |choice| marker_choices.putAssumeCapacityNoClobber(choice.marker, choice.chosen);
+                            try self.debugAssertKnownMarkerChoices(initial_var, &marker_choices);
+                            break :accepted true;
+                        },
+                    }
+                } else accepted: {
+                    const walked = try self.collectMarkerChoices(initial_var, &marker_choices);
+                    if (memo) |entry| {
+                        entry.walked = true;
+                        entry.rejected = !walked;
+                        if (walked) {
+                            const sink = entry.sink;
+                            try sink.ensureUnusedCapacity(self.store.gpa, marker_choices.count());
+                            entry.start = @intCast(sink.items.len);
+                            entry.len = marker_choices.count();
+                            var entries = marker_choices.iterator();
+                            while (entries.next()) |choice| sink.appendAssumeCapacity(.{ .marker = choice.key_ptr.*, .chosen = choice.value_ptr.* });
+                        }
+                    }
+                    break :accepted walked;
+                };
+                if (!accepted) {
                     const rejected = try self.store.freshFromContentWithRank(.err, self.current_rank);
                     try self.var_map.put(self.store.resolveVar(initial_var).var_, rejected);
                     return rejected;
@@ -1749,6 +1816,7 @@ pub const Instantiator = struct {
                         .flags = flags,
                     },
                     .alias = alias,
+                    .identity_row = self.store.aliasIdentityRowAt(desc_idx),
                     .args_start = @backingInt(arg_span.start),
                     .args_count = arg_span.count,
                     .vars_base = @intCast(machine.value_stack.items.len),
@@ -1798,11 +1866,11 @@ pub const Instantiator = struct {
                                 .flags = flags,
                             },
                             .nominal = nominal,
+                            .identity_row = self.store.nominalIdentityRowAt(desc_idx),
                             .args_start = @backingInt(arg_span.start),
                             .args_count = arg_span.count,
                             .vars_base = @intCast(machine.value_stack.items.len),
                             .saved_reach = self.current_reach,
-                            .is_try = self.nominalIsBuiltinTry(nominal),
                             .saved_polarity = self.current_polarity,
                         } });
                         return false;
@@ -1925,6 +1993,22 @@ pub const Instantiator = struct {
         content: Content,
     ) std.mem.Allocator.Error!void {
         try self.fillPlaceholder(common.fresh_var, content, common.flags);
+        try self.scratch().value_stack.append(self.store.gpa, common.fresh_var);
+    }
+
+    /// `finishFrame` for a copied nominal type or alias, whose identity is
+    /// row `identity` of the store, the row its source names.
+    inline fn finishFrameWithIdentity(
+        self: *Self,
+        common: FillCommon,
+        content: Content,
+        identity: u32,
+    ) std.mem.Allocator.Error!void {
+        try self.store.fillFreshPlaceholderWithIdentity(common.fresh_var, .{
+            .content = content,
+            .rank = self.current_rank,
+            .flags = common.flags,
+        }, identity);
         try self.scratch().value_stack.append(self.store.gpa, common.fresh_var);
     }
 
@@ -2088,17 +2172,16 @@ pub const Instantiator = struct {
             const values = machine.value_stack.items;
             const fresh_backing_var = values[frame.vars_base];
             const fresh_args = values[frame.vars_base + 1 ..][0..frame.args_count];
-            const fresh_content = try self.store.mkAliasWithSourceDeclAndBuiltinOrigin(
+            const fresh_content = try self.store.mkAliasWithPackedSourceDecl(
                 frame.alias.ident,
                 fresh_backing_var,
                 fresh_args,
                 frame.alias.source_arg_count,
                 frame.alias.origin_module,
-                frame.alias.source_decl.toOptional(),
-                frame.alias.source_decl.originIsBuiltin(),
+                frame.alias.source_decl,
             );
             machine.value_stack.items.len = frame.vars_base;
-            try self.finishFrame(frame.common, fresh_content);
+            try self.finishFrameWithIdentity(frame.common, fresh_content, frame.identity_row);
             return true;
         }
     }
@@ -2142,24 +2225,16 @@ pub const Instantiator = struct {
                     .at => |polarity| polarity,
                     .both => .neg,
                 };
-                // A `Try` written as the direct result passes the adapter's
-                // reach to its ERROR row. The ok row is deliberately NOT
-                // reachable: the adapter asserts the ok type is unchanged.
-                self.current_reach = base.annotation_positions.nominalArgumentReach(frame.saved_reach, frame.is_try, arrived);
+                // An argument of a named type is a nested position.
+                self.current_reach = .nested;
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
             }
             self.current_polarity = frame.saved_polarity;
-            const fresh_content = try self.store.mkNominalWithSourceDeclAndBuiltinOrigin(
-                frame.nominal.ident,
-                machine.value_stack.items[frame.vars_base..][0..frame.args_count],
-                frame.nominal.origin_module,
-                frame.nominal.sourceDeclOptional(),
-                frame.nominal.isOpaque(),
-                frame.nominal.originIsBuiltin(),
-            );
+            var fresh_nominal = frame.nominal;
+            fresh_nominal.args = try self.store.appendVars(machine.value_stack.items[frame.vars_base..][0..frame.args_count]);
             machine.value_stack.items.len = frame.vars_base;
-            try self.finishFrame(frame.common, fresh_content);
+            try self.finishFrameWithIdentity(frame.common, .{ .structure = .{ .nominal_type = fresh_nominal } }, frame.identity_row);
             return true;
         }
     }
@@ -2315,9 +2390,8 @@ pub const Instantiator = struct {
             switch (frame.stage) {
                 .tags => {
                     if (frame.tag_idx == frame.source_tags.count) {
-                        // Sort the fresh tags alphabetically by name before appending.
-                        // This ensures tag discriminants are consistent after instantiation.
-                        sortTagsByName(machine.pending_tags.items[frame.tags_base..], self.idents);
+                        // The source's own tags are in name order, and the
+                        // copy keeps their order.
                         frame.tags_range = try self.store.appendTags(machine.pending_tags.items[frame.tags_base..]);
                         machine.pending_tags.items.len = frame.tags_base;
                         frame.stage = .await_ext;
@@ -2440,14 +2514,3 @@ pub const Instantiator = struct {
         });
     }
 };
-
-/// Order tags by name text. Instantiation copies a source union's tags in
-/// order, and source unions are almost always already ordered, so the ordered
-/// case is confirmed in one pass before sorting.
-fn sortTagsByName(tags: []Tag, idents: *const Ident.Store) void {
-    var index: usize = 1;
-    while (index < tags.len) : (index += 1) {
-        if (Tag.orderByName(idents, tags[index - 1], tags[index]) == .gt) break;
-    } else return;
-    std.mem.sort(Tag, tags, idents, comptime Tag.sortByNameAsc);
-}
