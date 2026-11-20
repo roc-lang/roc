@@ -6002,7 +6002,7 @@ pub const CheckedTypeStore = struct {
             }
 
             var cloned = CheckedTypeProjectResults{ .items = results.items[frame.results_start..] };
-            const cloned_payload = try cloneCheckedTypeBuildPayload(allocator, self, frame.snapshot, &cloned);
+            const cloned_payload = try cloneCheckedTypeBuildPayload(allocator, self, frame.snapshot, &cloned, substitution, frame.target);
             std.debug.assert(cloned.next == cloned.items.len);
             try self.fillSyntheticTypeRoot(allocator, frame.target, cloned_payload);
 
@@ -6010,7 +6010,18 @@ pub const CheckedTypeStore = struct {
             deinitCheckedTypePayloadBuild(allocator, &finished.snapshot);
             children.shrinkRetainingCapacity(finished.children_start);
             results.shrinkRetainingCapacity(finished.results_start);
-            if (frames.items.len == 0) return finished.target;
+            if (frames.items.len == 0) {
+                if (std.debug.runtime_safety and substitution.payload_pairs.items.len != 0) {
+                    var scratch = CheckedTypeStoreView.EqualityScratch.init(allocator);
+                    defer scratch.deinit();
+                    for (substitution.payload_pairs.items) |pair| {
+                        if (!try self.view().rootAliasTransparentEql(&scratch, pair[0], pair[1]))
+                            checkedArtifactInvariant("substitution changed the payload of a repeated tag", .{});
+                    }
+                    substitution.payload_pairs.clearRetainingCapacity();
+                }
+                return finished.target;
+            }
             try results.append(allocator, @backingInt(finished.target));
         }
     }
@@ -6045,10 +6056,7 @@ pub const CheckedTypeStore = struct {
         // variable reaches a later instantiation under another root, as a
         // literal requirement of a nested local function forwarded through
         // its enclosing generalized local does.
-        const source_origin = self.identityOrigin(source);
-        for (substitution.formals, substitution.actuals) |formal, actual| {
-            if (source == formal or source_origin == self.identityOrigin(formal)) return .{ .done = actual };
-        }
+        if (substitution.boundActual(self, source)) |actual| return .{ .done = actual };
         if (substitution.images.get(source)) |existing| return .{ .done = existing };
         if (substitution.independent) |reaches| if (!reaches.contains(source)) return .{ .done = source };
 
@@ -6171,6 +6179,8 @@ fn cloneCheckedTypeBuildPayload(
     store: *const CheckedTypeStore,
     payload: CheckedTypePayloadBuild,
     cloned: *CheckedTypeProjectResults,
+    substitution: *CheckedTypeSubstitution,
+    target: CheckedTypeId,
 ) Allocator.Error!CheckedTypePayloadBuild {
     return switch (payload) {
         .pending => unreachable, // enterSubstitutingClone rejects pending snapshots before they are cloned
@@ -6245,6 +6255,40 @@ fn cloneCheckedTypeBuildPayload(
             } };
         },
         .tag_union => |tag_union| blk: {
+            // The source row was normalized before publication. Only tags
+            // introduced by substituting its extension can repeat a head
+            // label. Keep the shared suffix intact and omit the outer copy.
+            const ext: CheckedTypeId = @fromBackingInt(cloned.items[cloned.items.len - 1]);
+            const suffix = if (substitution.boundActual(store, tag_union.ext)) |actual|
+                if (store.payload(actual) == .tag_union) actual else null
+            else
+                substitution.added_suffixes.get(ext);
+            if (suffix) |actual| {
+                try substitution.added_suffixes.put(allocator, target, actual);
+                const labels = try substitution.suffixLabels(store, actual, allocator);
+                var kept: usize = 0;
+                for (tag_union.tags) |tag| kept += @intFromBool(!labels.contains(tag.name));
+                const out = try allocator.alloc(CheckedTag, kept);
+                var written: usize = 0;
+                errdefer {
+                    for (out[0..written]) |tag| allocator.free(tag.args);
+                    allocator.free(out);
+                }
+                for (tag_union.tags) |tag| {
+                    if (labels.get(tag.name)) |at| {
+                        const existing = store.payload(at.row).tag_union.tags.get(at.index);
+                        if (existing.args.len != tag.args.len) checkedArtifactInvariant("substitution changed the arity of a repeated tag", .{});
+                        for (existing.args) |arg| {
+                            const child = cloned.typeId();
+                            if (child != arg) try substitution.checkPayloadPair(allocator, child, arg);
+                        }
+                    } else {
+                        out[written] = .{ .name = tag.name, .args = try cloned.typeIds(allocator, tag.args.len) };
+                        written += 1;
+                    }
+                }
+                break :blk .{ .tag_union = .{ .tags = out, .ext = cloned.typeId() } };
+            }
             const tags: []const CheckedTag = if (tag_union.tags.len == 0) &.{} else tags_blk: {
                 const out = try allocator.alloc(CheckedTag, tag_union.tags.len);
                 for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
@@ -8318,6 +8362,11 @@ const CheckedTypeViewIdentityScan = struct {
 /// each formal stands for its actual. It keeps each cloned source root's
 /// image, so a root reached again reuses it.
 pub const CheckedTypeSubstitution = struct {
+    const TagLocation = struct { row: CheckedTypeId, index: u32 };
+    const Labels = collections.DenseMapUnmanaged(canonical.TagLabelId, TagLocation);
+    added_suffixes: collections.DenseMapUnmanaged(CheckedTypeId, CheckedTypeId) = .empty,
+    suffix_indexes: collections.DenseMapUnmanaged(CheckedTypeId, Labels) = .empty,
+    payload_pairs: std.ArrayListUnmanaged([2]CheckedTypeId) = .empty,
     images: collections.DenseMap(CheckedTypeId, CheckedTypeId),
     formals: []const CheckedTypeId,
     actuals: []const CheckedTypeId,
@@ -8342,7 +8391,43 @@ pub const CheckedTypeSubstitution = struct {
     }
 
     pub fn deinit(self: *CheckedTypeSubstitution) void {
+        const allocator = self.images.allocator;
+        self.payload_pairs.deinit(allocator);
+        var indexes = self.suffix_indexes.valueIterator();
+        while (indexes.next()) |labels| labels.deinit(allocator);
+        self.suffix_indexes.deinit(allocator);
+        self.added_suffixes.deinit(allocator);
         self.images.deinit();
+    }
+
+    fn boundActual(self: *const CheckedTypeSubstitution, store: *const CheckedTypeStore, source: CheckedTypeId) ?CheckedTypeId {
+        const origin = store.identityOrigin(source);
+        for (self.formals, self.actuals) |formal, actual| {
+            if (source == formal or origin == store.identityOrigin(formal)) return actual;
+        }
+        return null;
+    }
+
+    fn suffixLabels(self: *CheckedTypeSubstitution, store: *const CheckedTypeStore, actual: CheckedTypeId, allocator: Allocator) Allocator.Error!*const Labels {
+        const entry = try self.suffix_indexes.getOrPut(allocator, actual);
+        if (entry.found_existing) return entry.value_ptr;
+        entry.value_ptr.* = .empty;
+        var row = actual;
+        var seen: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty;
+        defer seen.deinit(allocator);
+        while (!(try seen.getOrPut(allocator, row)).found_existing) {
+            const payload = store.payload(row);
+            if (payload != .tag_union) break;
+            var tags = payload.tag_union.tags.iterator();
+            var index: u32 = 0;
+            while (tags.next()) |tag| : (index += 1) try entry.value_ptr.put(allocator, tag.name, .{ .row = row, .index = index });
+            row = payload.tag_union.ext;
+        }
+        return entry.value_ptr;
+    }
+
+    fn checkPayloadPair(self: *CheckedTypeSubstitution, allocator: Allocator, left: CheckedTypeId, right: CheckedTypeId) Allocator.Error!void {
+        if (std.debug.runtime_safety) try self.payload_pairs.append(allocator, .{ left, right });
     }
 };
 
@@ -39967,6 +40052,37 @@ test "a substituting clone gives a field the kind its kind variable was committe
     const kept = try store.cloneCheckedTypeRootSubstituting(allocator, open, &unrelated);
     const kept_kind = store.payload(checkedFunctionPayload(&store, kept, "test callable").ret).record.fields.get(0).kind;
     try std.testing.expectEqual(kind_variable, store.identityOrigin(kept_kind.undeterminedVariable().?));
+}
+
+test "issue 13213 substituting a row tail preserves the union of repeated tags" {
+    const allocator = std.testing.allocator;
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+    try attachTestSynthesizedKeys(allocator, &store, &names);
+
+    const label = try names.internTagLabel("Oops");
+    const tail = try testRowTail(allocator, &store, .{ .flex = .{} });
+    const empty = try store.appendSyntheticPayloadRoot(allocator, .empty_tag_union);
+    const open_tags = try allocator.dupe(CheckedTag, &.{.{ .name = label }});
+    const open = try store.appendSyntheticPayloadRoot(allocator, .{ .tag_union = .{
+        .tags = open_tags,
+        .ext = tail,
+    } });
+    const closed_tags = try allocator.dupe(CheckedTag, &.{.{ .name = label }});
+    const closed = try store.appendSyntheticPayloadRoot(allocator, .{ .tag_union = .{
+        .tags = closed_tags,
+        .ext = empty,
+    } });
+    var substitution = CheckedTypeSubstitution.init(allocator, &.{tail}, &.{closed});
+    defer substitution.deinit();
+    const instantiated = try store.cloneCheckedTypeRootSubstituting(allocator, open, &substitution);
+
+    // [Oops, ..[Oops]] denotes [Oops], including for canonical identity.
+    const expected = try store.rootKey(closed);
+    const actual = try store.rootKey(instantiated);
+    try std.testing.expectEqualSlices(u8, &expected.bytes, &actual.bytes);
 }
 
 test "a literal requirement's instantiation is closed exactly when every variable is decided" {
