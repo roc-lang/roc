@@ -3599,6 +3599,26 @@ test "a wrapper selected as a function value does not duplicate its single-use c
     try std.testing.expectEqual(@as(usize, 1), comparisons);
 }
 
+test "inlined helper locals do not leak between callable specializations" {
+    // The two curried calls enter the same source body. Its local record
+    // holds a callable with a different captured value in each copy.
+    _ = try lowerAndRunUserIter(
+        \\make = |f, captured| {
+        \\    invoke = |n| f(n, captured)
+        \\    bound = { invoke: invoke }
+        \\    |n| (bound.invoke)(n)
+        \\}
+        \\main : I64
+        \\main = {
+        \\    left = make(|x, n| x + n, 3.I64)
+        \\    right = make(|x, s| if s == "ab" x * 2 else 0, "ab")
+        \\    result = left(4) * 10 + right(4)
+        \\    dbg result
+        \\    result
+        \\}
+    , .wrappers, "78");
+}
+
 test "bodies on interlocking call cycles are decided alike in every definition order" {
     // `a` and `b` call each other, and so do `b` and `c`. Which of them are
     // inlined depends on the call graph alone, never on the order the

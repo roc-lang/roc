@@ -10898,7 +10898,10 @@ unique call's owning functions through the selected inline plan. If an owning
 wrapper has multiple direct inline sites or is referenced as a function value
 (one reference can feed several indirect calls even with no direct calls),
 the nested single-use body remains a procedure; a non-inlined owner establishes
-a single procedure-body boundary. Bodies with procedure-relative returns or
+a single procedure-body boundary. Each emitted inline body binds its own LIR
+locals; two specializations can read the same lifted binder at different
+callable representations. Only its explicit arguments and captures import
+values from the caller. Bodies with procedure-relative returns or
 loop control not owned by a loop inside the body remain procedures. A
 cycle of direct calls among closed candidate bodies (a strongly connected
 component of that call graph, or a body that calls itself) is kept from
@@ -22492,7 +22495,9 @@ expected one is a list or box of holes and the actual one is a list or box,
 or when both are structs of one shape whose fields accept pairwise. Direct LIR lowers a shaped call's arguments at their own types, and
 its local assignments and representation boundaries accept a value at a
 hole-holding layout; an inlined shaped body binds its parameters to the
-caller's locals directly.
+caller's locals directly. When a header-only operand is snapshotted inside
+that body, its temporary keeps the concrete binding's element layout. The
+snapshot can then own a reference if its source does not outlive it.
 
 No refcount plan exists for a value holding a hole. ARC borrows every such
 parameter, because the body never consumes it: the solver starts the position
@@ -28841,10 +28846,18 @@ the death point sits inside a matched arm—the common shape—the discriminant 
 a known constant there and the backend folds the dispatch back to
 straight-line code.
 
+Reconciling field masks on an incoming join edge is not the death of the
+container. It releases only the excess fields of the dismantled variant; a
+different variant has none of those fields and keeps its whole unit. This
+distinction matters even when the mask difference covers every field: the
+join still carries the container, possibly with an empty field mask.
+
 What makes the emitted dispatch certifiable is variant knowledge per path.
 Reading a variant's payload proves the container holds it (anything else is
 already undefined), and a switch arm on a discriminant read of that container
-proves the arm's variant where nothing did before. Arms a proven variant
+proves the arm's variant where nothing did before. A default edge proves
+the sole remaining variant when the other discriminants are all listed.
+Arms a proven variant
 excludes are not walked: they cannot describe any runtime value, which is
 exactly what lets the residual switch's default arm hold a whole release on a
 path whose container is fully claimed. Joins meet the knowledge rather than

@@ -6065,6 +6065,12 @@ const Certifier = struct {
                         var default_state = try state.clone();
                         errdefer default_state.deinit();
                         default_state.clearOutcomeDiscriminants();
+                        if (variant_container) |container| {
+                            if (known_variant == null) {
+                                if (try self.soleDefaultVariant(container, branches)) |variant|
+                                    try default_state.setKnownVariant(container, variant);
+                            }
+                        }
                         if (outcome_result) |result| {
                             if (self.defaultCallOutcomeMask(result, branches)) |mask| {
                                 try self.restoreCallOutcome(&default_state, result, mask);
@@ -6361,6 +6367,28 @@ const Certifier = struct {
         info.payload_source = source_value;
         info.payload_projection = projection;
         info.payload_taken = take_kind == .take;
+    }
+
+    /// A default edge proves a variant when the explicit arms name every
+    /// other discriminant. In particular a later residual-release switch
+    /// must not inspect a payload whose arm was already ruled out.
+    fn soleDefaultVariant(self: *Certifier, value: ValueId, branches: anytype) Allocator.Error!?u32 {
+        const layout = self.layouts.getLayout(self.store.getLocal(self.values.items[value].origin).layout_idx);
+        if (layout.tag != .tag_union) return null;
+        const n = self.layouts.getTagUnionInfo(layout).variants.len;
+        if (n == 0 or branches.len != n - 1) return null;
+        if (n == 2) {
+            const arm = GuardedList.at(branches, 0).value;
+            return if (arm < 2) @intCast(1 - arm) else null;
+        }
+        var remaining = try std.DynamicBitSetUnmanaged.initFull(self.allocator, n);
+        defer remaining.deinit(self.allocator);
+        for (0..branches.len) |i| {
+            const arm = GuardedList.at(branches, i).value;
+            if (arm >= n or !remaining.isSet(@intCast(arm))) return null;
+            remaining.unset(@intCast(arm));
+        }
+        return @intCast(remaining.findFirstSet().?);
     }
 
     /// Reading a variant's payload proves the tag union `value` holds that

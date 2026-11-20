@@ -1042,6 +1042,7 @@ const Lowerer = struct {
         /// its task records until the call finishes, and inner calls stack
         /// their runs above it.
         inline_substitutions: std.ArrayList(bool) = .empty,
+        spare_bindings: std.ArrayList(*InlineBindings) = .empty,
         /// Debug builds only: the single-use bodies inlined into the bodies
         /// being lowered, those of the innermost body from
         /// `single_use_inlined_start` on. Each is lowered at most once per
@@ -1063,12 +1064,33 @@ const Lowerer = struct {
         }
 
         fn deinit(self: *LaneScratch) void {
+            for (self.spare_bindings.items) |bindings| self.destroyBindings(bindings);
+            self.spare_bindings.deinit(self.allocator);
             for (self.spare_arenas.items) |arena| self.destroyArena(arena);
             self.spare_arenas.deinit(self.allocator);
             self.inline_substitutions.deinit(self.allocator);
             self.single_use_inlined.deinit(self.allocator);
             self.frame_locals.deinit(self.allocator);
             self.proc_locals.deinit();
+        }
+
+        fn acquireBindings(self: *LaneScratch) Allocator.Error!*InlineBindings {
+            if (self.spare_bindings.pop()) |bindings| return bindings;
+            const bindings = try self.allocator.create(InlineBindings);
+            bindings.* = .{ .locals = .init(self.allocator), .typed = .init(self.allocator) };
+            return bindings;
+        }
+
+        fn releaseBindings(self: *LaneScratch, bindings: *InlineBindings) void {
+            bindings.locals.clearRetainingCapacity();
+            bindings.typed.clearRetainingCapacity();
+            self.spare_bindings.append(self.allocator, bindings) catch self.destroyBindings(bindings);
+        }
+
+        fn destroyBindings(self: *LaneScratch, bindings: *InlineBindings) void {
+            bindings.locals.deinit();
+            bindings.typed.deinit();
+            self.allocator.destroy(bindings);
         }
 
         /// An empty arena, reusing a released arena's buffers when one is
@@ -3359,7 +3381,9 @@ const Lowerer = struct {
         }
         if (self.local_map.get(local)) |source| {
             try self.noteLocal(source);
-            const source_ty = try self.lowerLocalTy(local);
+            // The parameter or inlined argument carries its producer's
+            // specialization, not necessarily the type of this body use.
+            const source_ty = self.boundLocalType(source);
             try self.noteReturnForwardingLocal(target, source);
             return try self.assignTypedBoundary(where, target, ty, source, source_ty, next);
         }
@@ -6590,9 +6614,9 @@ const Lowerer = struct {
         capture_locals: []const LIR.LocalId,
         body_expr: Lifted.ExprId,
         next: LIR.CFStmtId,
-        /// The bindings the callee's arguments and captures shadowed, once
-        /// installed.
-        saved: ?[]collections.OptionalId(LIR.LocalId) = null,
+        /// Each emitted copy has its own bindings, including locals
+        /// bound by the body itself, not only parameters and captures.
+        saved: ?*InlineBindings = null,
         /// The caller's instance, put back once the callee's body is
         /// lowered.
         saved_env: Env = .global,
@@ -6601,6 +6625,16 @@ const Lowerer = struct {
         consumer_pushed: bool = false,
         /// The return destination this call's body replaced.
         saved_inline_return: ?InlineReturn = null,
+    };
+
+    const InlineBindings = struct {
+        locals: collections.DenseMap(Lifted.LocalId, LIR.LocalId),
+        typed: TypedLocalMap,
+
+        fn swap(self: *InlineBindings, lowerer: *Lowerer) void {
+            std.mem.swap(@TypeOf(self.locals), &self.locals, &lowerer.local_map);
+            std.mem.swap(TypedLocalMap, &self.typed, &lowerer.typed_local_map);
+        }
     };
 
     const CallableCallTask = struct {
@@ -7329,7 +7363,7 @@ const Lowerer = struct {
         const source = if (self.typed_local_map.get(.{ .local = local, .ty = ty })) |typed|
             typed
         else if (self.local_map.get(local)) |plain| blk: {
-            if (try self.lowerLocalTy(local) != ty) return null;
+            if (self.boundLocalType(plain) != ty) return null;
             break :blk plain;
         } else return null;
         if (source == call_target) return null;
@@ -7456,7 +7490,7 @@ const Lowerer = struct {
         const expr_ty = try self.lowerExprTy(expr_id);
         const where = try self.exprSite(request.parent, expr_id);
         return switch (expr_data.data) {
-            .local => |local| .{ .ret = try self.lowerLocalInto(where, target, local, expr_ty, next) },
+            .local => |local| .{ .ret = try self.lowerLocalInto(where, target, local, self.typeOfLocalOr(target, expr_ty), next) },
             .unit => .{ .ret = try self.assignZst(where, target, next) },
             .int_lit => |value| .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
@@ -8748,15 +8782,15 @@ const Lowerer = struct {
         const captures = self.captureSpan(spec.captures);
         if (task.capture_locals.len != captures.len) Common.invariant("inline call capture count differed from function captures");
 
-        const saved = try self.allocator.alloc(collections.OptionalId(LIR.LocalId), lifted_args.len + captures.len);
-        errdefer self.allocator.free(saved);
+        const saved = try self.lane_scratch.acquireBindings();
+        saved.swap(self);
+        task.saved = saved;
         for (0..lifted_args.len) |i| {
-            saved[i] = .of(try self.shadowLocal(GuardedList.at(lifted_args, i).local, task.arg_locals[i]));
+            try self.local_map.put(GuardedList.at(lifted_args, i).local, task.arg_locals[i]);
         }
         for (0..captures.len) |i| {
-            saved[lifted_args.len + i] = .of(try self.shadowLocal(GuardedList.at(captures, i).local, task.capture_locals[i]));
+            try self.local_map.put(GuardedList.at(captures, i).local, task.capture_locals[i]);
         }
-        task.saved = saved;
 
         // The callee body's lifted inline scopes are rebased under the known
         // call's scope, whose call site is this call.
@@ -8789,41 +8823,12 @@ const Lowerer = struct {
         return .{ .call = try self.valueBranchTask(callee_parent, task.target, task.body_expr, ret_ty, true, done.id, task.next) };
     }
 
-    /// Put back the bindings an inlined call's arguments and captures
-    /// shadowed, in the reverse of the order they were installed.
+    /// No binding created while emitting the callee escapes its body.
     fn restoreInlineCallArgs(self: *Lowerer, task: *InlineCallTask) void {
         const saved = task.saved orelse return;
-        const spec = self.fn_specs.items[@backingInt(task.callee)];
-        const lifted_args = self.solved.lifted.typedLocalSpan(self.solved.lifted.getFn(spec.source).args);
-        const captures = self.captureSpan(spec.captures);
-        var i = captures.len;
-        while (i > 0) {
-            i -= 1;
-            self.restoreShadowedLocal(GuardedList.at(captures, i).local, saved[lifted_args.len + i].get());
-        }
-        i = lifted_args.len;
-        while (i > 0) {
-            i -= 1;
-            self.restoreShadowedLocal(GuardedList.at(lifted_args, i).local, saved[i].get());
-        }
-        self.allocator.free(saved);
+        saved.swap(self);
+        self.lane_scratch.releaseBindings(saved);
         task.saved = null;
-    }
-
-    /// Bind `local` to `value`, returning the binding it shadows.
-    fn shadowLocal(self: *Lowerer, local: Lifted.LocalId, value: LIR.LocalId) std.mem.Allocator.Error!?LIR.LocalId {
-        const entry = try self.local_map.getOrPut(local);
-        const previous = if (entry.found_existing) entry.value_ptr.* else null;
-        entry.value_ptr.* = value;
-        return previous;
-    }
-
-    fn restoreShadowedLocal(self: *Lowerer, local: Lifted.LocalId, previous: ?LIR.LocalId) void {
-        if (previous) |binding| {
-            self.local_map.getPtr(local).?.* = binding;
-        } else {
-            _ = self.local_map.remove(local);
-        }
     }
 
     /// The capture record fields of a capturing specialization, in capture
@@ -12855,8 +12860,24 @@ const Lowerer = struct {
         errdefer self.allocator.free(owned_exprs);
         const ids = try self.allocator.alloc(LIR.LocalId, owned_exprs.len);
         errdefer self.allocator.free(ids);
-        for (owned_exprs, 0..) |expr_id, i| ids[i] = try self.addTemp(try self.lowerExprTy(expr_id));
+        for (owned_exprs, ids) |expr_id, *id| id.* = try self.addTemp(try self.operandSnapshotType(expr_id));
         return .{ .exprs = owned_exprs, .ids = ids };
+    }
+
+    /// Shaping removes item types from a borrowed interface, not from the
+    /// caller's value. An operand snapshot may need its own unit if its
+    /// source is rebound. Never erase its available element layout.
+    fn operandSnapshotType(self: *Lowerer, expr_id: Lifted.ExprId) Common.LowerError!Type.TypeId {
+        const ty = try self.lowerExprTy(expr_id);
+        const expected = try self.layoutOfType(ty);
+        if (!self.result.layouts.layoutHoldsHole(expected)) return ty;
+        const data = self.solved.lifted.getExpr(expr_id).data;
+        if (data != .local) return ty;
+        const bound = self.existingLocalForTyped(data.local, ty) orelse return ty;
+        const actual = self.result.store.getLocal(bound).layout_idx;
+        if (actual == expected) return ty;
+        if (!try self.result.layouts.acceptsAtHoles(self.allocator, actual, expected)) return ty;
+        return self.boundLocalType(bound);
     }
 
     fn lowerExprsToTempsAtTypes(
@@ -12982,6 +13003,10 @@ const Lowerer = struct {
         return self.local_types.get(local) orelse fallback;
     }
 
+    fn boundLocalType(self: *Lowerer, local: LIR.LocalId) Type.TypeId {
+        return self.local_types.get(local) orelse Common.invariant("a bound value local lacked its producer's type");
+    }
+
     fn setLocalName(self: *Lowerer, lir_local: LIR.LocalId, lifted_local: Lifted.LocalId) Common.LowerError!void {
         const name = self.solved.lifted.localName(lifted_local);
         try self.result.store.setLocalName(lir_local, name);
@@ -13087,6 +13112,7 @@ const Lowerer = struct {
             }
         } else if (self.layoutsMatch(declared_layout, requested_layout)) {
             const lir_local = try self.addLocalForLayout(requested_layout);
+            try self.local_types.put(lir_local, ty);
             try self.setLocalName(lir_local, local);
             try self.local_map.put(local, lir_local);
             return lir_local;
@@ -16606,6 +16632,57 @@ test "value encoding preserves tag identities but excludes finite call targets" 
     try std.testing.expectEqual(try lowerer.layoutOfType(ab), try lowerer.layoutOfType(ba));
     visited.clearRetainingCapacity();
     try std.testing.expect(!try lowerer.typesEquivalentInMode(.value_encoding, ab, ba, &visited));
+}
+
+test "an inlined header-only operand keeps its concrete element layout" {
+    const allocator = std.testing.allocator;
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+    const hole = try solved.types.add(.hole);
+    const header = try solved.types.add(.{ .list = hole });
+    const formal: Lifted.LocalId = @fromBackingInt(0);
+    const lifted_header = try solved.lifted.types.add(.{ .list = try solved.lifted.types.add(.hole) });
+    const read = try solved.lifted.addExpr(.{ .ty = lifted_header, .data = .{ .local = formal } });
+    try solved.expr_tys.append(allocator, header);
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+    const concrete = try lowerer.types.add(.{ .list = try lowerer.types.add(.{ .primitive = .str }) });
+    try lowerer.local_map.put(formal, try lowerer.addTemp(concrete));
+    const operands = try lowerer.lowerExprsToTemps(&[_]Lifted.ExprId{read});
+    defer operands.deinit(allocator);
+    try std.testing.expectEqual(try lowerer.layoutOfType(concrete), lowerer.result.store.getLocal(operands.ids[0]).layout_idx);
+}
+
+test "a lexical parameter read converts from the argument's bound encoding" {
+    const allocator = std.testing.allocator;
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+    const a = try solved.lifted.names.internTagLabel("A");
+    const b = try solved.lifted.names.internTagLabel("B");
+    const declared = try solved.types.add(.{ .tag_union = try solved.types.addTags(&.{
+        .{ .name = a, .checked_name = a, .payloads = .empty() },
+        .{ .name = b, .checked_name = b, .payloads = .empty() },
+    }) });
+    try solved.local_tys.append(allocator, declared);
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+    const requested = try lowerer.lowerType(.global(declared));
+    const bound = try lowerer.types.add(.{ .tag_union = try lowerer.types.addTags(&.{
+        .{ .name = b, .checked_name = b, .payloads = .empty() },
+        .{ .name = a, .checked_name = a, .payloads = .empty() },
+    }) });
+    const formal: Lifted.LocalId = @fromBackingInt(0);
+    const argument = try lowerer.addTemp(bound);
+    const result = try lowerer.addTemp(requested);
+    try lowerer.local_map.put(formal, argument);
+    const site = LowerSite{ .loc = .none, .region = base.Region.zero(), .inline_scope = .none, .outer = .none, .mode = .source };
+    const ret = try lowerer.result.store.addCFStmt(.{ .ret = .{ .value = result } }, site.scaffold());
+    const read = try lowerer.lowerLocalInto(site, result, formal, requested, ret);
+    // Equal physical layouts, opposite meanings for each discriminant. A
+    // plain copy would silently return the other tag.
+    const stmt = lowerer.result.store.getCFStmtImmediate(read);
+    try std.testing.expect(stmt.* == .assign_ref and stmt.assign_ref.op.kind == .discriminant);
+    try std.testing.expect(lowerer.result.store.getCFStmtImmediate(stmt.assign_ref.next).* == .switch_stmt);
 }
 
 test "typed boundaries from empty rows are terminal even with matching layouts" {
