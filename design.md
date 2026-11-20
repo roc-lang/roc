@@ -14325,6 +14325,9 @@ result afterward. Such translation occurs outside the spec boundary; custom
 payload validation translates domain errors before returning the format error.
 Checking establishes this through ordinary nominal-argument unification.
 Both lowerers preserve all four parameters in generated spec identities.
+In particular, when the checked format method decodes a nominal's backing,
+the spec and the method result both name that backing. The enclosing parser,
+not the format method, constructs the public nominal.
 
 ### Derived Dict Parser Duplicate Keys
 

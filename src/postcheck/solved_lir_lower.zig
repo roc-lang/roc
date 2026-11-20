@@ -7166,7 +7166,7 @@ const Lowerer = struct {
                     return .{ .call = .{ .known_call = call } };
                 }
                 const call = input.?;
-                if (self.isZstLocal(task.payload)) return .{ .ret = call };
+                if (self.isZstLocal(task.payload)) return .{ .ret = try self.assignZst(task.where, task.payload, call) };
                 return .{ .ret = try self.addAssignRef(task.where.source(), task.payload, LIR.RefOp.tagPayloadStruct(task.callee, task.variant_index, task.variant_index), call) };
             },
             .match_ => |*task| self.stepMatch(frame, task, input),
@@ -8918,36 +8918,35 @@ const Lowerer = struct {
         arg_exprs: []const Lifted.ExprId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LowerTask {
-        const args = arg_exprs;
+        var call = KnownCallTask{
+            .where = where,
+            .target = target,
+            .result_ty = result_ty,
+            .callee = variant.target,
+            .args = arg_exprs,
+            .capture_arg = null,
+            .is_cold = false,
+            .next = next,
+        };
         if (variant.capture_ty != .none) {
-            const payload = try self.addLocalForLayout(self.tagUnionPayloadLayout(self.result.store.getLocal(callee).layout_idx, variant_index));
+            const callee_layout = self.result.store.getLocal(callee).layout_idx;
+            // A zero-sized callable is its sole member's zero-sized capture.
+            // Use the already evaluated callee, not another empty local.
+            if (callee_layout == .zst) {
+                call.capture_arg = callee;
+                return .{ .known_call = call };
+            }
+            const payload = try self.addLocalForLayout(self.tagUnionPayloadLayout(callee_layout, variant_index));
+            call.capture_arg = payload;
             return .{ .callable_variant = .{
                 .where = where,
                 .callee = callee,
                 .variant_index = variant_index,
                 .payload = payload,
-                .call = .{
-                    .where = where,
-                    .target = target,
-                    .result_ty = result_ty,
-                    .callee = variant.target,
-                    .args = args,
-                    .capture_arg = payload,
-                    .is_cold = false,
-                    .next = next,
-                },
+                .call = call,
             } };
         }
-        return .{ .known_call = .{
-            .where = where,
-            .target = target,
-            .result_ty = result_ty,
-            .callee = variant.target,
-            .args = args,
-            .capture_arg = null,
-            .is_cold = false,
-            .next = next,
-        } };
+        return .{ .known_call = call };
     }
 
     fn lowLevelStep(self: *Lowerer, where: LowerSite, target: LIR.LocalId, op: can.CIR.Expr.LowLevel, span: Lifted.Span(Lifted.ExprId), next: LIR.CFStmtId) Common.LowerError!LowerStep {
@@ -11449,6 +11448,10 @@ const Lowerer = struct {
 
         pub fn isZstLirLocal(self: MatchTreeCtx, local: LIR.LocalId) bool {
             return self.l.isZstLocal(local);
+        }
+
+        pub fn defineZst(self: MatchTreeCtx, target: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            return try self.l.assignZst(self.where, target, next);
         }
 
         pub fn readDiscriminant(self: MatchTreeCtx, disc: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
