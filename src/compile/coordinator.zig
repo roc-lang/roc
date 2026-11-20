@@ -8323,6 +8323,7 @@ pub const Coordinator = struct {
             error.UnwindRegistrationFailed,
             error.VirtualAllocFailed,
             error.VirtualProtectFailed,
+            error.FlushInstructionCacheFailed,
             => |e| WorkerResult{ .operation_failed = .{
                 .package_name = task.package_name,
                 .module_id = task.module_id,

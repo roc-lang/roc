@@ -20,18 +20,14 @@ pub fn flush(memory: []const u8) Error!void {
                 return error.FlushInstructionCacheFailed;
         },
         .aarch64, .aarch64_be => switch (builtin.os.tag) {
-            .linux => flushLinuxAarch64(memory),
-            .macos => darwin.sys_icache_invalidate(memory.ptr, memory.len),
+            // These kernels let user space read CTR_EL0 and maintain caches by
+            // virtual address.
+            .linux, .freebsd, .openbsd, .netbsd => flushAarch64ByAddress(memory),
+            .macos, .ios, .maccatalyst, .tvos, .visionos, .watchos, .driverkit => darwin.sys_icache_invalidate(memory.ptr, memory.len),
             .windows => {
                 if (windows.FlushInstructionCache(std.os.windows.GetCurrentProcess(), memory.ptr, memory.len) == .FALSE)
                     return error.FlushInstructionCacheFailed;
             },
-            .driverkit,
-            .ios,
-            .maccatalyst,
-            .tvos,
-            .visionos,
-            .watchos,
             .freestanding,
             .other,
             .contiki,
@@ -45,9 +41,6 @@ pub fn flush(memory: []const u8) Error!void {
             .rtems,
             .serenity,
             .dragonfly,
-            .freebsd,
-            .openbsd,
-            .netbsd,
             .uefi,
             .wiiu,
             .@"switch",
@@ -139,9 +132,10 @@ const windows = struct {
     extern "kernel32" fn FlushInstructionCache(process: std.os.windows.HANDLE, start: [*]const u8, len: usize) callconv(.winapi) std.os.windows.BOOL;
 };
 
-fn flushLinuxAarch64(memory: []const u8) void {
-    // Linux exposes a migration-safe CTR_EL0 value (emulating the read when
-    // CPUs differ). Read it per publication rather than cache a CPU-local value.
+fn flushAarch64ByAddress(memory: []const u8) void {
+    // The kernel exposes a migration-safe CTR_EL0 value (Linux emulates the
+    // read when CPUs differ). Read it per publication rather than cache a
+    // CPU-local value.
     const ctr = asm volatile ("mrs %[ctr], ctr_el0"
         : [ctr] "=r" (-> u64),
     );
