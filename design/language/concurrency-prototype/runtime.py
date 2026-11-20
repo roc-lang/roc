@@ -18,7 +18,9 @@ from __future__ import annotations
 
 from collections import Counter
 
-from heap import Handle
+from heap import GroupRef, Handle
+from plans import Entry, Group, flatten
+from sessions import DEADLOCK, Sessions
 
 PENDING, DONE, CANCELLED, CRASHED = "PENDING", "DONE", "CANCELLED", "CRASHED"
 
@@ -48,7 +50,8 @@ class Task:
     __slots__ = ("id", "parent", "path", "children", "closure", "phase", "wake", "cancel_req",
                  "waiting", "op_pending", "slot", "reports", "await_kids", "outcome", "dead",
                  "gen", "frames", "records", "native", "pending", "spawned", "parks", "readies",
-                 "freed", "status", "cell", "op_written", "op_woken", "sup", "final")
+                 "freed", "status", "cell", "op_written", "op_woken", "sup", "final", "groups",
+                 "wait_group", "entry", "wait_chan", "start_seq", "wait_mark")
 
     def __init__(self, tid, parent, path, closure):
         self.id, self.parent, self.path, self.closure = tid, parent, path, closure
@@ -78,6 +81,12 @@ class Task:
         self.op_woken = False  # ... and roc_task_wake has been called for it
         self.sup = None  # the open supervise! call: its max_restarts and the children it started (R7)
         self.final = None  # the data of this task's result or crash message, kept for R7
+        self.groups = []  # this task's open concurrent loops, innermost last
+        self.wait_group = None  # the loop whose head this task waits at
+        self.entry = None  # (group, entry) when this task runs a concurrent loop's entry
+        self.wait_chan = None  # the session channel whose message this task waits for
+        self.start_seq = None  # the order in which tasks first ran (for InputOrderPolicy)
+        self.wait_mark = None  # how many tasks had started when this one parked at a receive
 
 
 class Runtime:
@@ -90,6 +99,15 @@ class Runtime:
         self.active = []  # tasks whose resume is in progress, outermost first
         self.leaked = []  # values owned by crashed tasks' native frames
         self.stats = Counter()
+        self.groups = {}
+        self.limit_ids = 0
+        self.sessions = Sessions(heap, self.stats, self.chan_wake)
+        self.starts = 0
+        # Mutation switches for the regression tests.
+        self.limit_slack = 0  # start one more entry than a Limit allows
+        self.ignore_shields = False  # a loop exit cancels shielded entries too
+        self.one_wake_word = False  # one wake word per task, not per wait source
+        self.no_linked_crashes = False  # an entry's crash waits for its loop's head
 
     # ------------------------------------------------------------------ ABI
     def start_root(self, closure):
@@ -121,7 +139,18 @@ class Runtime:
                 if t.phase in ("cancelling", "crashing", "finishing"):
                     # Readied only to report a terminal status (roots).
                     break
-                out = self.engine.start(t) if t.phase == "new" else self.engine.resume(t)
+                k = self.linked_crash(t) if t.phase == "live" else None
+                if k is not None:
+                    # Crashed through a link while queued: before taking any
+                    # arrival, as at a wait.
+                    self.crash_at_wait(t, k)
+                    break
+                if t.phase == "new":
+                    t.start_seq = self.starts
+                    self.starts += 1
+                    out = self.engine.start(t)
+                else:
+                    out = self.engine.resume(t)
                 t.phase = "live"
                 if out[0] == "done":
                     self.finish_code_done(t, out[1])
@@ -129,9 +158,14 @@ class Runtime:
                 if out[0] == "crash":
                     self.finish_code_crashed(t, out[1], out[2])
                     break
-                # Pending: park, unless cancelled or woken meanwhile.
+                # Pending: park, unless cancelled, crashed through a link, or
+                # woken meanwhile.
                 if t.cancel_req:
                     self.finish_code_cancelled(t)
+                    break
+                k = self.linked_crash(t)
+                if k is not None:
+                    self.crash_at_wait(t, k)
                     break
                 if PROTOCOL == "counted":
                     if self.deliverable(t):
@@ -183,6 +217,40 @@ class Runtime:
             t.wake = "woken"
         # woken or queued: already recorded
 
+    def report_wake(self, p):
+        """A child's report readies its parent only if the parent is parked on
+        the source the report belongs to. Each wait source (the pending hosted
+        operation, each running set) has its own counted word, and a task parks
+        on exactly one; a report for another source is counted there and
+        delivered when the parent next waits on it. One word per task would
+        ready a parent parked on a hosted call, or on an inner loop, for a
+        report it cannot take (R1)."""
+        if PROTOCOL == "counted" and not self.one_wake_word and p.wake == "parked" and not self.deliverable(p):
+            self.stats["reports held for another wait"] += 1
+            return
+        self.wake(p)
+
+    def linked_crash(self, t):
+        """A crash report from one of t's loop entries: OTP links propagate it
+        at once, wherever t waits, ahead of arrivals t has not taken yet. (In
+        a None build a crash ends the program where it happens.)"""
+        if self.no_linked_crashes:
+            return None
+        for k, (c, rep) in enumerate(t.reports):
+            if rep[0] == "crashed" and c.entry is not None:
+                return k
+        return None
+
+    def crash_at_wait(self, t, k):
+        """Crash a paused task with its entry's message. It is paused, so every
+        value it owns is in consistent records and is dropped exactly."""
+        c, rep = t.reports.pop(k)
+        c.entry[1].state = "crashed"
+        self.stats["linked crashes"] += 1
+        # A linked crash may reach t inside supervise! (from a loop entry
+        # running beside it): that is not supervise! giving up.
+        self.finish_code_crashed(t, rep[1], [], linked=True)
+
     def cancel_root(self, root):
         require(root.parent is None, "P8", "roc_task_cancel on a child")
         self.cancel_task(root)
@@ -229,17 +297,20 @@ class Runtime:
         require(self.heap.data(v) == kids[-1].final, "R7", "supervise! returned something other than its child's result")
         self.stats["R7 returned"] += 1
 
-    def spawn(self, t, closure):
-        if t.sup is not None:
+    def spawn(self, t, closure, index=None):
+        if index is None and t.sup is not None:
             mx, kids = t.sup
             require(len(kids) <= mx, "R7", f"supervise! in task {t.id} restarted more than {mx} times")
             require(not kids or kids[-1].status == CRASHED, "R7",
                     f"supervise! in task {t.id} restarted a child that did not crash")
-        c = self.new_task(t, t.path + (t.spawned,), closure)
-        t.spawned += 1
+        raw = index is None  # task_spawn itself, not a concurrent loop's entry
+        if raw:
+            index = t.spawned
+            t.spawned += 1
+        c = self.new_task(t, t.path + (index,), closure)
         t.children.append(c)
         self.stats["spawns"] += 1
-        if t.sup is not None:
+        if t.sup is not None and raw:
             t.sup[1].append(c)
         self.host.ready(c)
         c.readies += 1
@@ -269,6 +340,162 @@ class Runtime:
     def cancel(self, t, h):
         self.cancel_task(self.tasks[h.task])
 
+    # ------------------------------------------------- concurrent loops
+    def group(self, t, plan):
+        """Enter a concurrent loop: start the running set of `plan`."""
+
+        def fresh_limit():
+            self.limit_ids += 1
+            return self.limit_ids
+
+        g = Group(len(self.groups) + 1, t, flatten(self.heap, plan, fresh_limit))
+        self.groups[g.gid] = g
+        for e in g.entries:  # identities fixed in input order (C9, G3)
+            e.index = t.spawned
+            t.spawned += 1
+        t.groups.append(g)
+        self.stats["loops"] += 1
+        self.start_more(t, g)
+        return GroupRef(g.gid)
+
+    def spawn_in(self, t, gref, closure):
+        """`spawn` in a loop body: one more entry, under no Limit."""
+        g = self.groups[gref.gid]
+        require(g.open and not g.closing and g.owner is t, "G5", f"spawn into loop {g.gid}, which is not running")
+        e = Entry(closure, (), False, t.spawned)
+        t.spawned += 1
+        g.entries.append(e)
+        self.stats["loop spawns"] += 1
+        self.start_more(t, g)
+        return 0
+
+    def start_more(self, t, g, refill=False):
+        """Start every unstarted entry whose Limits have room, in input order."""
+        if g.closing or t.phase not in ("new", "live"):
+            return
+        for e in g.entries:
+            if e.state != "unstarted":
+                continue
+            ok = True
+            for lid, n in e.limits:
+                busy = sum(1 for f in g.entries if f.state == "running" and f.task.phase != "finished"
+                           and any(l == lid for l, _ in f.limits))
+                if busy >= n + self.limit_slack:
+                    ok = False
+            if not ok:
+                continue
+            for lid, n in e.limits:
+                busy = sum(1 for f in g.entries if f.state == "running" and f.task.phase != "finished"
+                           and any(l == lid for l, _ in f.limits))
+                require(busy < n, "R8", f"loop {g.gid} starts an entry with {busy} of its Limit({n}) running")
+            clo, e.clo = e.clo, None
+            e.state = "running"
+            c = self.spawn(t, clo, e.index)
+            e.task = self.tasks[c.task]
+            e.task.entry = (g, e)
+            if refill:
+                self.stats["limit refills"] += 1
+
+    def group_next(self, t, gref):
+        """The loop head."""
+        g = self.groups[gref.gid]
+        require(g.open and g.owner is t, "G5", f"next on loop {g.gid}, which has ended")
+        if self.linked_crash(t) is not None:
+            # An entry crashed while t was running (in a ParallelTasks build,
+            # on another thread). t takes no result once a crash is pending:
+            # the loop head suspends instead, and the runtime crashes t at
+            # this wait, where everything t owns is in records and is dropped
+            # exactly. So next never reports a crash, and a linked crash never
+            # leaks. The prototype's hosts run a task to its next pause in one
+            # step, so no report arrives while its parent runs and this path
+            # is not exercised here (its count stays 0).
+            self.stats["linked crashes pending at next"] += 1
+            t.waiting, t.wait_group = "group", g
+            return ("pending",)
+        r = self.take_group_report(t, g)
+        if r is not None:
+            return ("ready", r)
+        if any(e.state == "running" for e in g.entries):
+            t.waiting, t.wait_group = "group", g
+            return ("pending",)
+        require(all(e.state != "unstarted" for e in g.entries), "R6",
+                f"loop {g.gid} has unstarted entries and none running")
+        g.open = False
+        t.groups.remove(g)
+        self.stats["loops ended"] += 1
+        return ("ready", self.heap.alloc("tag", "Ended", []))
+
+    def cancel_group(self, t, gref):
+        """A loop exit: unstarted entries never start; running ones are cancelled
+        unless shielded and begun, and the exit then waits for them all."""
+        g = self.groups[gref.gid]
+        require(g.open and not g.closing, "G5", f"loop {g.gid} exited twice")
+        g.closing = True
+        self.stats["loop exits"] += 1
+        for e in g.entries:
+            if e.state == "unstarted":
+                self.heap.drop(e.clo)
+                e.clo, e.state = None, "discarded"
+            elif e.state == "running" and e.task.phase != "finished":
+                if e.shield and e.task.phase != "new" and not self.ignore_shields:
+                    self.stats["shielded waits"] += 1
+                    continue
+                self.cancel_task(e.task)
+        return 0
+
+    def take_group_report(self, t, g):
+        for k, (c, rep) in enumerate(t.reports):
+            if c.entry is None or c.entry[0] is not g:
+                continue
+            del t.reports[k]
+            e = c.entry[1]
+            kind = rep[0]
+            if kind == "done":
+                e.state = "arrived"
+                self.stats["arrivals"] += 1
+                return self.heap.alloc("tag", "Arrived", [rep[1]])
+            if kind == "cancelled":
+                e.state = "cancelled"
+                return self.heap.alloc("tag", "Cancelled", [])
+            e.state = "crashed"
+            return self.heap.alloc("tag", "Crashed", [rep[1]])
+        return None
+
+    # ------------------------------------------------- session channels
+    # sessions.py holds the channels; the runtime parks and readies receivers.
+    def recv(self, t, i):
+        r = self.sessions.recv(i)
+        if r[0] != "empty":
+            return r
+        c = r[1]
+        t.waiting, t.wait_chan, t.wait_mark = "chan", c, self.starts
+        c.waiter = t
+        return ("pending",)
+
+    def chan_wake(self, c):
+        w = c.waiter
+        if w is not None and w.wake is not None and w.waiting == "chan" and w.wait_chan is c:
+            self.report_wake(w)
+
+    def break_deadlock(self):
+        """The host has nothing more it will run, and no hosted operation is
+        pending. A task parked at a receive whose message can never come is a
+        deadlock in the program (a protocol outside the tree discipline,
+        concurrency-sessions.md). The runtime crashes the task that parked at
+        a receive last; the crash reaches the rest through the tree. Returns
+        False if no task waits at a receive.
+
+        (The input-order schedule models a None build, where code below a
+        receive on the one stack cannot run until it returns, so it may stop
+        with tasks still ready; a fair host stops only when none is.)"""
+        stuck = [t for t in self.tasks.values() if t.waiting == "chan" and t.wake == "parked" and not t.dead]
+        if not stuck:
+            return False
+        t = max(stuck, key=lambda t: (t.wait_mark, t.id))
+        self.stats["deadlocks crashed"] += 1
+        self.finish_code_crashed(t, self.heap.alloc("str", DEADLOCK, []), [])
+        return True
+
     def resume_value(self, t):
         if t.waiting == "host":
             require(not t.op_pending, "R1", f"task {t.id} resumed before its result was written")
@@ -279,6 +506,16 @@ class Runtime:
             require(r is not None, "R1", f"task {t.id} resumed with no report")
             t.waiting = None
             return r
+        if t.waiting == "group":
+            r = self.take_group_report(t, t.wait_group)
+            require(r is not None, "R1", f"task {t.id} resumed at a loop head with no arrival")
+            t.waiting, t.wait_group = None, None
+            return r
+        if t.waiting == "chan":
+            c = t.wait_chan
+            require(c.state != "empty", "R1", f"task {t.id} resumed at a receive with no message")
+            t.waiting, t.wait_chan, c.waiter = None, None, None
+            return self.sessions.take(c)
         raise Violation(f"R1: task {t.id} resumed while waiting on nothing")
 
     def deliverable(self, t):
@@ -287,6 +524,10 @@ class Runtime:
             return not t.op_pending
         if t.waiting == "children":
             return any(c.id in t.await_kids for c, _ in t.reports)
+        if t.waiting == "group":
+            return any(c.entry is not None and c.entry[0] is t.wait_group for c, _ in t.reports)
+        if t.waiting == "chan":
+            return t.wait_chan.state != "empty"
         return False
 
     # ----------------------------------------------------------- internals
@@ -329,7 +570,17 @@ class Runtime:
             if t.slot is not None:
                 self.heap.drop(t.slot)
                 t.slot = None
-        t.waiting = None
+        if t.waiting == "chan":
+            t.wait_chan.waiter = None
+            self.sessions.abandon(t.wait_chan)
+        t.waiting, t.wait_group, t.wait_chan = None, None, None
+        for g in t.groups:  # entries that never started
+            for e in g.entries:
+                if e.state == "unstarted":
+                    self.heap.drop(e.clo)
+                    e.clo, e.state = None, "discarded"
+            g.open = False
+        t.groups = []
         self.engine.drop_paused(t)
         for _, rep in t.reports:
             if rep[0] in ("done", "crashed"):
@@ -347,14 +598,15 @@ class Runtime:
 
     def finish_code_done(self, t, v):
         t.dead = True
+        require(not t.groups, "G5", f"task {t.id} returned from inside a concurrent loop")
         require(all(c.phase == "finished" for c in t.children), "R3",
                 f"task {t.id} returned with live children")
         require(not t.reports, "R3", f"task {t.id} returned with unread reports")
         t.phase, t.outcome = "finishing", ("done", v)
         self.check_finished(t)
 
-    def finish_code_crashed(self, t, msg, leaked):
-        if t.sup is not None:
+    def finish_code_crashed(self, t, msg, leaked, linked=False):
+        if t.sup is not None and not linked:
             # A crash inside supervise! is its giving up: after exactly
             # max_restarts restarts, with the last child's message.
             mx, kids = t.sup
@@ -366,6 +618,7 @@ class Runtime:
         self.leaked += leaked
         self.stats["crashes"] += 1
         self.release_state(t)
+        self.sessions.close_held(t)
         t.phase, t.outcome = "crashing", ("crashed", msg)
         for c in t.children:
             self.cancel_task(c)
@@ -397,8 +650,18 @@ class Runtime:
             self.check_finished(p)
         else:
             require(p.phase == "live", "R3", f"report to task {p.id} in phase {p.phase}")
+            if kind == "done":
+                self.sessions.transfer(rep[1], p)  # ends in the result now belong to the parent
             p.reports.append((t, rep))
-            self.wake(p)
+            if kind == "crashed" and p.wake == "parked":
+                k = self.linked_crash(p)
+                if k is not None:
+                    self.crash_at_wait(p, k)
+                    return
+            if t.entry is not None and t.entry[0].open:
+                # A Limit slot is free: refill it at once, not at the loop head.
+                self.start_more(p, t.entry[0], refill=True)
+            self.report_wake(p)
 
     # ------------------------------------------------------------ checks
     def check_quiescent(self):

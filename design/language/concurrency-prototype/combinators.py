@@ -1,19 +1,158 @@
-"""The `Concurrent` combinators, written in the IR over the three internal
-operations, as the RFC specifies ("The `Concurrent` module").
+"""The builtins: plans, the loop exit, and the `Concurrent` library.
+
+Plans are inert values built by pure functions (plans.py). A concurrent loop
+
+    for! arrival in plan { body }
+
+is lowered to explicit operations, the way the compiler lowers it:
+
+    g = group(plan)                     enter: start the running set
+    loop:
+      match next(g)                     the loop head, a suspension site
+        Arrived(v)  => body             any exit of the body runs close_loop(g)
+        Crashed(m)  => crash m          the body never sees a crash
+        Ended       => after the loop   every entry has arrived
+
+`close_loop` is the one exit sequence: cancel what may be cancelled, then wait
+at the loop head until every entry still running has finished. A crash among
+them crashes the caller. The body never sees `Cancelled`; only `close_loop`
+does.
+
+`all!`, `both!`, `all_ok!` and `race!` are ordinary library functions written
+with loops. `supervise!` is the one place that reacts to a crash, so it stays
+on the runtime's internal operations (`spawn`, `await`), whose `Crashed`
+report programs cannot reach.
 
 The same code gives the concurrent behavior in `Tasks` builds and the
-sequential behavior in `None` builds, because only the meaning of `spawn`,
-`await` and `cancel` changes between them.
-
-`await` returns one of
-    Done(i, v)      child i of the list finished with v
-    Cancelled(i)    child i was cancelled
-    Crashed(i, m)   child i crashed with message m
+sequential behavior in `None` builds, because only the meaning of the loop
+operations changes between them.
 """
 
 from ir import parse
 
 SOURCE = r"""
+; ------------------------------------------------------------- plans (pure)
+(proc concurrently (fs) pure (ret (tag Each fs)))
+
+(proc concat (p q) pure (ret (tag Cat p q)))
+
+(proc limit (p n) pure
+  (let z (lt n 1))
+  (if z
+    (block (let u (str "Concurrently.limit: the limit must be positive")) (crash u))
+    (block (ret (tag Limit n p)))))
+
+(proc shielded (p) pure (ret (tag Shield p)))
+
+; ------------------------------------------------------------- loop exit
+(proc close_loop (g) eff
+  (do (cancel_group g))
+  (tail close_wait g))
+
+(proc close_wait (g) eff
+  (let a (next g))
+  (match a
+    (Arrived (v) (block (tail close_wait g)))
+    (Cancelled () (block (tail close_wait g)))
+    (Crashed (m) (block (crash m)))
+    (Ended () (block (ret 0)))))
+
+; ------------------------------------------------------------- helpers
+; A list of n zeros, to hold results by index.
+(proc zeros (n acc) pure
+  (let z (eq n 0))
+  (if z
+    (block (ret acc))
+    (block
+      (let acc2 (push acc 0))
+      (let n2 (sub n 1))
+      (tail zeros n2 acc2))))
+
+; Each closure, wrapped so that its arrival says which one it was.
+(proc indexed (f i) eff
+  (let v (callc! f))
+  (ret (tup i v)))
+
+(proc index_all (fs i n acc) pure
+  (let c (lt i n))
+  (if c
+    (block
+      (let f (get fs i))
+      (let w (clo indexed f i))
+      (let acc2 (push acc w))
+      (let i2 (add i 1))
+      (tail index_all fs i2 n acc2))
+    (block (ret acc))))
+
+; ------------------------------------------------------------- Concurrent
+(proc all! (fs) eff
+  (let n (len fs))
+  (let ws (call index_all fs 0 n (list)))
+  (let p (call concurrently ws))
+  (let res (call zeros n (list)))
+  (let g (group p))
+  (tail all_loop g res))
+
+(proc all_loop (g res) eff
+  (let a (next g))
+  (match a
+    (Arrived (iv) (block
+      (let i (field iv 0))
+      (let v (field iv 1))
+      (let res2 (set res i v))
+      (tail all_loop g res2)))
+    (Crashed (m) (block (crash m)))
+    (Cancelled () (block (let u (str "unreachable: a loop body saw Cancelled")) (crash u)))
+    (Ended () (block (ret res)))))
+
+(proc both! (f g) eff
+  (let fs (list f g))
+  (let res (call all! fs))
+  (let a (get res 0))
+  (let b (get res 1))
+  (ret (tup a b)))
+
+(proc all_ok! (fs) eff
+  (let n (len fs))
+  (let ws (call index_all fs 0 n (list)))
+  (let p (call concurrently ws))
+  (let res (call zeros n (list)))
+  (let g (group p))
+  (tail ok_loop g res))
+
+(proc ok_loop (g res) eff
+  (let a (next g))
+  (match a
+    (Arrived (iv) (block
+      (let i (field iv 0))
+      (let v (field iv 1))
+      (match v
+        (Ok (x) (block
+          (let res2 (set res i x))
+          (tail ok_loop g res2)))
+        (Err (e) (block
+          (do (call close_loop g))
+          (ret (tag Err e)))))))
+    (Crashed (m) (block (crash m)))
+    (Cancelled () (block (let u (str "unreachable: a loop body saw Cancelled")) (crash u)))
+    (Ended () (block (ret (tag Ok res))))))
+
+(proc race! (f fs) eff
+  (let first (list f))
+  (let p1 (call concurrently first))
+  (let p2 (call concurrently fs))
+  (let p (call concat p1 p2))
+  (let g (group p))
+  (let a (next g))
+  (match a
+    (Arrived (v) (block
+      (do (call close_loop g))
+      (ret v)))
+    (Crashed (m) (block (crash m)))
+    (Cancelled () (block (let u (str "unreachable: a loop body saw Cancelled")) (crash u)))
+    (Ended () (block (let u (str "unreachable: race! always has an entrant")) (crash u)))))
+
+; ------------------------------------------------------------- supervise!
 ; Spawn every closure in fs, from index i; returns the list of handles.
 (proc spawn_all (fs i n acc) eff
   (let c (lt i n))
@@ -25,114 +164,6 @@ SOURCE = r"""
       (let i2 (add i 1))
       (tail spawn_all fs i2 n acc2))
     (block (ret acc))))
-
-; A list of n zeros, to hold results by index.
-(proc zeros (n acc) pure
-  (let z (eq n 0))
-  (if z
-    (block (ret acc))
-    (block
-      (let acc2 (push acc 0))
-      (let n2 (sub n 1))
-      (tail zeros n2 acc2))))
-
-(proc cancel_all (kids i n) eff
-  (let c (lt i n))
-  (if c
-    (block
-      (let h (get kids i))
-      (do (cancel h))
-      (let i2 (add i 1))
-      (tail cancel_all kids i2 n))
-    (block (ret 0))))
-
-; Await `left` more reports and discard them.
-(proc drain (kids left) eff
-  (let z (eq left 0))
-  (if z
-    (block (ret 0))
-    (block
-      (let r (await kids))
-      (let l2 (sub left 1))
-      (tail drain kids l2))))
-
-; Cancel the rest, await them, and crash with m: the response to a Crashed
-; report in every combinator but supervise!.
-(proc fail (kids left m) eff
-  (let n (len kids))
-  (do (call cancel_all kids 0 n))
-  (do (call drain kids left))
-  (crash m))
-
-(proc all! (fs) eff
-  (let n (len fs))
-  (let kids (call spawn_all fs 0 n (list)))
-  (let res (call zeros n (list)))
-  (tail await_all kids res n))
-
-(proc await_all (kids res left) eff
-  (let z (eq left 0))
-  (if z
-    (block (ret res))
-    (block
-      (let r (await kids))
-      (let l2 (sub left 1))
-      (match r
-        (Done (i v) (block
-          (let res2 (set res i v))
-          (tail await_all kids res2 l2)))
-        (Crashed (i m) (block (tail fail kids l2 m)))
-        (Cancelled (i) (block (let u (str "unreachable: all! saw Cancelled")) (crash u)))))))
-
-(proc both! (f g) eff
-  (let fs (list f g))
-  (let res (call all! fs))
-  (let a (get res 0))
-  (let b (get res 1))
-  (ret (tup a b)))
-
-(proc all_ok! (fs) eff
-  (let n (len fs))
-  (let kids (call spawn_all fs 0 n (list)))
-  (let res (call zeros n (list)))
-  (tail await_ok kids res n))
-
-(proc await_ok (kids res left) eff
-  (let z (eq left 0))
-  (if z
-    (block (ret (tag Ok res)))
-    (block
-      (let r (await kids))
-      (let l2 (sub left 1))
-      (match r
-        (Done (i v) (block
-          (match v
-            (Ok (x) (block
-              (let res2 (set res i x))
-              (tail await_ok kids res2 l2)))
-            (Err (e) (block
-              (let n (len kids))
-              (do (call cancel_all kids 0 n))
-              (do (call drain kids l2))
-              (ret (tag Err e)))))))
-        (Crashed (i m) (block (tail fail kids l2 m)))
-        (Cancelled (i) (block (let u (str "unreachable: all_ok! saw Cancelled")) (crash u)))))))
-
-(proc race! (f fs) eff
-  (let first (list f))
-  (let n (len fs))
-  (let kids0 (call spawn_all first 0 1 (list)))
-  (let kids (call spawn_all fs 0 n kids0))
-  (let r (await kids))
-  (let left (len kids))
-  (let l2 (sub left 1))
-  (match r
-    (Done (i v) (block
-      (do (call cancel_all kids 0 left))
-      (do (call drain kids l2))
-      (ret v)))
-    (Crashed (i m) (block (tail fail kids l2 m)))
-    (Cancelled (i) (block (let u (str "unreachable: race! saw Cancelled")) (crash u)))))
 
 (proc supervise! (max f) eff
   (tail sup_loop max f 0))

@@ -3,16 +3,21 @@
 | | |
 |---|---|
 | Status | Draft. Not adopted; nothing here is part of `design.md`. |
-| Scope | One builtin module, platform and hosted declarations, host ABI, one LIR pass |
+| Scope | Plans and concurrent loops, a builtin library, platform and hosted declarations, host ABI, one LIR pass |
+| Companion | [Sessions, Channels and Shared Resources](concurrency-sessions.md): the rest of the same design |
 | Supersedes | The stackful prototype on `origin/greenthreads` |
 
 ## Summary
 
 This RFC lets Roc programs run effects concurrently without adding `async`,
-futures or a task type to the language. It has three parts:
+futures or a task type to the language. It has four parts:
 
-1. **A builtin `Concurrent` module** with structured combinators (`both!`,
-   `all!`, `all_ok!`, `race!`) that take ordinary effectful functions.
+1. **Plans and concurrent loops.** A plan is an inert value describing work
+   that may overlap: building, storing or returning one runs nothing. A `for!`
+   loop over a plan runs it. Each entry becomes a child task, the loop body sees
+   each result as it arrives, and every way out of the loop cancels or waits for
+   what is still running. The familiar combinators (`all!`, `both!`, `all_ok!`,
+   `race!`) are ordinary library functions written with these loops.
 2. **A platform opt-in.** A platform declares that it schedules tasks and marks
    the hosted functions that may *suspend*: return to the host before their
    result is ready. The host schedules suspended work however its domain needs.
@@ -31,6 +36,15 @@ no effect polymorphism. Only effectful code can suspend, so the compiler knows
 which procedures need the transformation without any new annotation in
 application code. The output is ordinary code that returns to its host, so it
 runs on every WebAssembly engine, with no stack switching.
+
+This RFC is half of one design. Its model is a tree of tasks with a session
+between each child and its parent, and here every session carries exactly one
+message: the child's result. The companion RFC,
+[Sessions, Channels and Shared Resources](concurrency-sessions.md), lets
+sessions carry protocols, makes cancellation a message the other end of a
+session receives, and builds synchronization from shared sessions. It adds to
+this RFC. Where it extends one of this RFC's invariants (C2, C6, C9 and R6),
+the invariant's row says so.
 
 ## Motivation
 
@@ -122,6 +136,75 @@ Each argument is an ordinary effectful function that takes no arguments.
 Nothing about `Http.get_utf8!` changes; it is the same function a sequential
 program calls.
 
+### Concurrent loops
+
+When a program decides what to do as results arrive, it loops over a plan:
+
+```roc
+# Done once 2 of 3 replicas acknowledge; the third write is cancelled.
+write_quorum! : List(Replica), Bytes => Try({}, [NoQuorum])
+write_quorum! = |replicas, data| {
+    var $acks = 0
+    for! result in replicas.map(|r| || Db.write!(r, data)).concurrently() {
+        match result {
+            Ok({}) => {
+                $acks = $acks + 1
+                if $acks == 2 { return Ok({}) }
+            }
+            Err(_) => {}
+        }
+    }
+    Err(NoQuorum)
+}
+```
+
+`List.concurrently` turns a list of effectful functions into a plan, a value of
+type `Concurrently(a)`. Nothing runs until a loop runs it:
+
+- Entering the loop starts the plan's entries as child tasks.
+- Each iteration binds one entry's result, in the order the entries finish.
+- Leaving the loop by `break`, `return` or `?` cancels the entries still
+  running and waits until they have stopped. Reaching the end of the loop
+  means every entry has finished.
+- If an entry crashes, the others are cancelled and the crash propagates to
+  the loop's caller. The body never sees it.
+
+State lives in `var`s, so the body is ordinary effectful code: it can log,
+call other functions, and run loops of its own.
+
+Plans compose. Each of these is a pure function that returns a new plan:
+
+| | |
+|---|---|
+| `plan.limit(n)` | At most `n` of the plan's entries run at once; the next one starts as soon as one finishes |
+| `plan.shielded()` | A loop exit waits for the plan's entries that have begun instead of cancelling them |
+| `plan.concat(other)` | `plan`'s entries, then `other`'s |
+
+A type can define a `concurrently` method that returns a plan, the way it can
+define `iter` for `for` loops. A sharded store might run one entry per shard,
+limited to the connections it has. Custom types decide what runs and how it is
+grouped; the runtime always decides how it runs.
+
+Inside a loop body, `spawn f` adds one more entry to the running loop. A hedged
+request sends a backup only when the primary is slow:
+
+```roc
+hedged_get! = |primary, backup, key| {
+    for! arrival in [|| Got(Kv.get!(primary, key)), || { Sleep.millis!(50); Slow }].concurrently() {
+        match arrival {
+            Got(Ok(value)) => return Ok(value)
+            Got(Err(_)) => {}
+            Slow => spawn || Got(Kv.get!(backup, key))
+        }
+    }
+    Err(AllFailed)
+}
+```
+
+The entries return different tags, and the anonymous union `[Got(…), Slow]`
+holds them all. That is how a loop combines different kinds of work: each entry
+tags its result, and the body matches.
+
 ### Errors
 
 `all_ok!` takes functions that return `Try`. The first `Err` to arrive cancels
@@ -134,43 +217,56 @@ fetch_all! = |urls| Concurrent.all_ok!(urls.map(|url| || Http.get_utf8!(url)))
 
 `List.map` is pure, and so is the function passed to it: it only creates
 effectful closures, and creating a function value is not an effectful call.
-`all!` is the same without the `Try` handling.
+`all!` is the same without the `Try` handling. Both are library functions
+written with a concurrent loop.
 
 ### Racing and timeouts
 
 `race!` returns whichever function finishes first and cancels the rest. It
 takes its first function separately, so it can never be called with nothing to
-race:
+race. Tagging each entrant says which one won:
 
 ```roc
 fetch_with_timeout! : Str => Try(Str, [HttpErr(U16), TimedOut])
 fetch_with_timeout! = |url|
-    Concurrent.race!(
-        || Ok(Http.get_utf8!(url)?),
-        [|| {
-            Sleep.millis!(2_000)
-            Err(TimedOut)
-        }],
-    )
+    match Concurrent.race!(|| Fetched(Http.get_utf8!(url)), [|| { Sleep.millis!(2_000); TimedOut }]) {
+        Fetched(Ok(body)) => Ok(body)
+        Fetched(Err(HttpErr(code))) => Err(HttpErr(code))
+        TimedOut => Err(TimedOut)
+    }
 ```
+
+### Draining instead of cancelling
+
+Cancellation stops an entry at its current suspension point, and effects it
+already performed stay performed. When a program must account for every
+effect, as a saga that compensates each completed step must, leaving the loop
+at the first failure is wrong: a cancelled step may or may not have happened.
+Such a loop keeps going after a failure and compensates each later success as
+it arrives, or shields the entries whose outcome it must know.
 
 ### What concurrency means in Roc
 
 - **Interleaving happens only at suspension points.** A function runs without
-  interruption until it calls a hosted function that suspends, or waits on
-  `Concurrent`. Pure code is never interrupted.
+  interruption until it calls a hosted function that suspends, or waits at a
+  concurrent loop's head or exit. Pure code is never interrupted.
 - **There are no data races.** Concurrent functions share only immutable
   values. A nested function can read a `var` but never reassign it, and it sees
   the value from when it was created, so there is no shared mutable state.
-- **Effect order between branches is unspecified.** Within one branch, effects
-  happen in program order, as always. Results are returned in a fixed order.
-- **Cancellation is silent.** A cancelled branch stops at its current
+- **Effect order between entries is unspecified.** Within one entry, effects
+  happen in program order, as always. A loop body sees results in the order
+  they arrive; the combinators return them in input order.
+- **Cancellation is silent.** A cancelled entry stops at its current
   suspension point. No code of its own runs afterward (Roc has no `finally` or
   destructors), and its values are released. Effects it already performed stay
   performed.
-- **The structure is lexical.** Every combinator returns only after every
-  function it started, and everything those started, has finished or been
-  cancelled. Nothing outlives the call that started it.
+- **The structure is lexical.** A loop's entries, and everything they start,
+  finish or are cancelled before the loop is left. Nothing outlives the loop
+  that started it, so nothing outlives a combinator call either.
+- **Pure code is untouched.** A pure function can build plans and closures but
+  cannot run them, and it compiles exactly as it does today. Parallel
+  evaluation of pure code is a separate, deterministic feature (see "Future
+  possibilities").
 
 ### Crashes
 
@@ -180,11 +276,14 @@ supervisor restarts or abandons that work from a known state.
 
 - **A crash ends its task.** No Roc code catches it, and no code of the
   crashed task runs again.
-- **Links follow the structure.** Every task started by a combinator is linked
-  to the combinator's caller. When a child crashes, its siblings are cancelled
-  and the caller crashes with the same message. This is OTP's `one_for_all`
-  behavior, and it matches what structured concurrency requires: a combinator
-  cannot return a result it does not have.
+- **Links follow the structure.** Every entry a loop starts is linked to the
+  loop's caller. When an entry crashes, the caller crashes with the same
+  message at once, wherever it is waiting: at that loop's head, inside a
+  nested loop, or on a hosted call, which is aborted. It does not first take
+  results that other entries have already returned. The crash then cancels
+  the caller's other entries, as every crash does. This is OTP's `one_for_all`
+  behavior, and it matches what structured concurrency requires: a loop
+  cannot deliver a result it does not have.
 - **Supervisors stop the propagation.** The platform supervises every root
   task. A web server platform can fail only the crashed request and keep
   serving, much as an OTP supervisor restarts one worker. A command-line
@@ -214,8 +313,11 @@ today.
 
 ### On platforms that do not schedule tasks
 
-On a platform that does not opt in, the combinators run their functions one at
-a time, in order, starting each only when the previous one has finished:
+On a platform that does not opt in, a loop runs its entries one at a time, in
+order. Each starts only when the loop asks for the next result, and runs to
+completion before the body sees it. Limits and shields change nothing, `spawn`
+appends an entry, and the entries not yet started when the loop is left never
+start. So:
 
 - `all!` and `both!` run every function and return the same results;
 - `all_ok!` stops at the first `Err`, and later functions never start;
@@ -223,9 +325,9 @@ a time, in order, starting each only when the previous one has finished:
 
 So the timeout example still returns the fetch result, but the timeout cannot
 interrupt a call that blocks. A crash still stops the whole program on these
-platforms, as it does today, and `supervise!` runs its function once. Packages can use `Concurrent` freely: they get
-concurrency where the platform offers it and sensible sequential behavior
-elsewhere.
+platforms, as it does today, and `supervise!` runs its function once. Packages
+can use concurrent loops and `Concurrent` freely: they get concurrency where
+the platform offers it and sensible sequential behavior elsewhere.
 
 ### For platform authors
 
@@ -273,12 +375,15 @@ implements the task ABI below and a scheduler.
 
 - A **suspension point** is a call to a `suspending` hosted function, a call
   through an erased effectful function value in a `Tasks` build without
-  lambda-set specialization (see below), or a wait inside `Concurrent`.
+  lambda-set specialization (see below), a concurrent loop's head or exit, or
+  `supervise!`'s wait.
 - A procedure is **suspendable** if it may reach a suspension point.
 - A **task** is one running effectful function, with its native frames while
   it runs and its records while it is paused. The host starts
-  root tasks through `provides` entries; each function a combinator runs is a
+  root tasks through `provides` entries; each entry a concurrent loop runs is a
   child task.
+- A **wait source** is something a task can park on: its pending hosted
+  operation, or the running set of one of its concurrent loops.
 
 ### Explicit inputs
 
@@ -321,7 +426,8 @@ restricted to the procedures Roc knows can pause.
 
 The pass is local to each **suspendable call site**: a call to a suspendable
 procedure, a suspending hosted call, an erased effectful call in a `.boxy`
-`Tasks` build, or a combinator wait. It needs no whole-program frame layout.
+`Tasks` build, a concurrent loop's head or exit, or `supervise!`'s wait. It
+needs no whole-program frame layout.
 
 - **Hidden task parameter.** Every suspendable procedure takes the current task
   as a hidden parameter, the way a procedure that may leave a call pending
@@ -495,28 +601,37 @@ void roc_task_abort(RocTask *task);     // abandon the operation it is waiting o
 RocPoll roc_http_get_utf8(RocTask *task, HttpResult *out, RocStr url);
 ```
 
-**What the Roc runtime guarantees.** Every task has an atomic wake word: a
-parked bit and a count of completions that have been published but not yet
-consumed.
+**What the Roc runtime guarantees.** Every wait source has an atomic wake word:
+a parked bit and a count of completions that have been published but not yet
+consumed. A task's pending hosted operation has one, and so does each running
+set; a task parks on exactly one at a time.
 
-- A completion (a child's report, or a hosted result) first publishes its
-  data, then increments the count in one atomic step that also clears the
-  parked bit. It calls `roc_task_ready` only if the task was parked.
-- Each wait consumes one completion and decrements the count. Parking is a
-  compare-and-swap that succeeds only when the count is zero; otherwise the
-  task continues with the completion that is waiting for it.
+- A completion (a hosted result, or a report from an entry of a running set)
+  first publishes its data, then increments its own source's count in one
+  atomic step that also clears the parked bit. It calls `roc_task_ready` only
+  if the task was parked on that source.
+- Each wait consumes one completion from its source and decrements that count.
+  Parking is a compare-and-swap on the source's word that succeeds only when
+  its count is zero; otherwise the task continues with the completion that is
+  waiting for it.
 - So `roc_task_ready` is called at most once per park, a host never resumes a
   task twice for one wake or resumes a running task, and a completion that
-  arrives while the task is still running (a child finishing on another
+  arrives while the task is still running (an entry finishing on another
   thread, or a hosted result arriving before the hosted function has
   returned) is never lost.
-- A single "woken while running" flag is not enough, even if each wait clears
-  it: it cannot tell a pending wake from one whose report an earlier wait has
-  already consumed, and the task then resumes with nothing to deliver. The
-  [model](concurrency-prototype/README.md) finds this in a plain `all!` over
-  two children on two threads.
-- A child counts as finished, and wakes its parent, only when it and every task
-  it started have completed or been dropped.
+- One word per task is not enough. A loop body can wait on a hosted call while
+  the loop's entries keep finishing, and nested loops wait on different
+  running sets. With one word, a report readies, or lets continue, a task whose
+  current wait has nothing to deliver. The
+  [prototype](concurrency-prototype/README.md) finds this in its fuzzer, and its
+  Maude model finds it in every interleaving of one hosted call and one entry.
+- A single "woken while running" flag is not enough either, even if each wait
+  clears it: it cannot tell a pending wake from one whose report an earlier
+  wait has already consumed, and the task then resumes with nothing to
+  deliver. The model finds this in a plain `all!` over two children on two
+  threads.
+- An entry counts as finished, and reports to its parent, only when it and
+  every task it started have completed or been dropped.
 - Roc owns child tasks. After `roc_task_resume` returns for a child, the host
   forgets it.
 
@@ -567,7 +682,79 @@ while (scheduler.pop()) |task| switch (roc_task_resume(task)) {
 // roc_task_ready(task) pushes onto `scheduler`.
 ```
 
-### The `Concurrent` module
+### Concurrent loops
+
+**Plans.** `Concurrently(a)` is an opaque builtin type built by pure functions:
+
+```roc
+List.concurrently : List(() => a) -> Concurrently(a)
+Concurrently.limit : Concurrently(a), U64 -> Concurrently(a)    # crashes if the limit is 0
+Concurrently.shielded : Concurrently(a) -> Concurrently(a)
+Concurrently.concat : Concurrently(a), Concurrently(a) -> Concurrently(a)
+```
+
+A plan is a tree of entries, limits and shields. It owns its closures and is
+reference counted like any value. It holds no tasks.
+
+**The `for!` protocol.** `for!` already calls `stream` on what it loops over. A
+value of type `Concurrently(a)` is a third case, selected by its type. The loop
+creates a **running set** that exists only inside it. No expression names the
+running set, so it cannot be stored, captured or returned.
+
+**Lowering.** Before the suspension pass, a concurrent loop is lowered to four
+internal operations, each with explicit `RcEffect` data:
+
+| Operation | Meaning in `Tasks` builds | Meaning in `None` builds |
+|---|---|---|
+| `group(plan)` | Flatten the plan into entries in input order, fix each entry's place in the task tree, and start every entry whose limits have room | Record the entries; start nothing |
+| `next(g)` | A suspension point: wait for the next finished entry and report `Arrived(v)`, `Cancelled` or `Ended` | Run the earliest unstarted entry to completion and report `Arrived(v)`, or report `Ended`. Entries that a receive already ran (companion RFC) are reported first, in the order they finished |
+| `spawn_in(g, f)` | Add an entry under no limit, and start it | Append an entry |
+| `cancel_group(g)` | Discard unstarted entries; cancel running ones unless they are shielded and have begun | Discard unstarted entries |
+
+A loop becomes:
+
+```text
+g = group(plan)
+head:
+  match next(g)
+    Arrived(v) => body      # an edge back to the head continues the loop;
+                            # every edge out of the body runs exit(g) first
+    Ended      => after the loop
+
+exit(g): cancel_group(g); repeat next(g) until Ended, discarding Arrived and
+         Cancelled
+```
+
+The body never sees `Cancelled`; only the exit sequence does. `next` never
+reports a crash. Once one of a task's entries has crashed, the task takes no
+more results: the runtime crashes it where it waits, and a `next` called while
+a crash is pending suspends so that the runtime can crash it there (see "Crash
+mechanics"). Exits are edges
+the compiler already knows, so waiting at an exit is an ordinary suspension
+point, and no drop ever waits.
+
+**Entries.**
+
+- Each entry's place in the task tree is fixed by `group` or `spawn_in`, in
+  input order. A child's identity does not depend on when the schedule starts
+  it.
+- A limit counts the entries running under it. When one of them finishes, the
+  runtime starts the next eligible entry at once, without waiting for the loop
+  head.
+- An entry has **begun** once its task has run any code. A loop exit cancels an
+  entry that has not begun even if it is shielded, so it never starts. This
+  keeps a `None` build's behavior a schedule of a `Tasks` build (C9).
+- A crash ends the loop's task like any crash, which cancels every entry,
+  shielded ones included. Shields protect entries from exits, not from crashes.
+- An entry's crash crashes the loop's task at once, wherever it waits, and the
+  task takes no more arrivals (see "Crash mechanics").
+
+**Sessions.** Each entry is the parent's end of a session whose protocol is a
+single message: the entry's result. `Arrived(v)` is that message, and `Ended`
+says every session in the set has closed. The companion RFC lets an entry's
+protocol carry more messages; arrivals keep this shape.
+
+### The `Concurrent` library
 
 ```roc
 Concurrent :: [].{
@@ -579,35 +766,20 @@ Concurrent :: [].{
 }
 ```
 
-They are written in Roc over three internal low-level operations, each with
-explicit `RcEffect` data:
+- `all!` wraps each function so its result carries its index, runs a loop over
+  the plan, and stores each arrival by index. `both!` is `all!` over two
+  results wrapped in a tag union.
+- `all_ok!` is the same loop, leaving it at the first `Err` to arrive.
+- `race!` leaves its loop at the first arrival.
+- `supervise!` is the one place that reacts to a crash, so it is not written
+  with a loop. It uses the runtime's internal `task_spawn` and
+  `task_await_any`, whose `Crashed` report programs cannot reach. It spawns its
+  function, awaits it, and spawns it again after a crash, until `max_restarts`
+  restarts have happened. Then it crashes with the last message.
 
-| Operation | Meaning in `Tasks` builds | Meaning in `None` builds |
-|---|---|---|
-| `task_spawn(f)` | Create a child task and ready it | Record `f`; run nothing yet |
-| `task_await_any(children)` | Suspend until any child finishes; report which, with its result, `Cancelled` or `Crashed` | Run the earliest unstarted child to completion and report it |
-| `task_cancel(child)` | Request cancellation; the child later reports `Cancelled` | Discard an unstarted child |
-
-With these definitions, one implementation of each combinator gives both the
-concurrent and the sequential behavior described above:
-
-- `all!` spawns every function, awaits each finish, and stores results by
-  index. `both!` is `all!` over two results wrapped in a tag union.
-- `all_ok!` cancels the remaining children at the first `Err` to finish (in
-  `None` builds, the lowest index), awaits their cancellation, and returns it.
-- `race!` cancels every other child as soon as one finishes, awaits their
-  cancellation, and returns the winner.
-
-- `supervise!` spawns its function, awaits it, and spawns it again after a
-  `Crashed` report, until `max_restarts` restarts have happened. It then
-  crashes with the last message.
-- Every other combinator treats a `Crashed` report the same way: it cancels the
-  remaining children, awaits them, and crashes with the child's message.
-
-Combinators always await cancelled children before returning or crashing.
-Together with the runtime's subtree rule, this is what keeps the structure
-lexical. `Crashed` is visible only to these builtin implementations;
-`task_await_any` is not exposed to programs, so programs cannot observe a crash.
+In `None` builds these give the sequential behavior described above with no
+separate implementation, because only the meaning of the loop operations
+changes.
 
 ### Crash mechanics
 
@@ -626,11 +798,18 @@ in the process, as crashes do today. Then:
    records were saved at call sites and are consistent, so they are dropped
    exactly. Any children it had already started are cancelled and dropped
    exactly, and the crash is reported upward only after they are gone.
-2. Its parent receives a `Crashed` report at its wait inside the combinator.
-   The parent is paused there, so its state is entirely in consistent records.
-   The combinator cancels the siblings, which are dropped exactly, and then
-   crashes the parent at that same point, so the parent's records are dropped
-   exactly, not leaked.
+2. If the crashed task was a loop entry, its parent crashes with the same
+   message. A parent that is paused, whether at that loop's head, at another
+   loop's head or exit, or on a hosted call, crashes there at once: its pending
+   hosted operation is aborted, and arrivals it has not taken are dropped. Its
+   state is entirely in consistent records, which are dropped exactly, not
+   leaked. A parent that is running, which happens only in `ParallelTasks`
+   builds where the entry crashed on another thread, takes no result
+   afterwards: its next suspension point, a `next` included, suspends, and the
+   runtime crashes it there in the same way. Either way its loops' other
+   entries are cancelled and dropped exactly. A child of
+   `supervise!` is not a loop entry: its crash is reported to `supervise!` at
+   its wait, as a `Crashed` report that programs cannot reach.
 3. Propagation stops at a `supervise!`, or at a root, which reports
    `ROC_TASK_CRASHED` to the host.
 
@@ -660,7 +839,7 @@ one of three values:
 
 | Value | Meaning |
 |---|---|
-| `None` | No tasks; combinators run sequentially |
+| `None` | No tasks; concurrent loops run their entries one at a time |
 | `Tasks` | The host runs at most one resume at a time (P10). It may move tasks between threads, under host rule 1 |
 | `ParallelTasks` | Resumes may run at the same time on several threads |
 
@@ -808,7 +987,9 @@ No choice of atomicity makes contended updates cheaper; lending removes them.
 
 - **ARC.** The thread-confined analysis keeps its host seeds and equality
   classes. It adds:
-  - spawn seeds, through explicit `RcEffect` data on `task_spawn`;
+  - spawn seeds, through explicit `RcEffect` data on `group`, `spawn_in` and
+    `task_spawn`: a plan's closures, and what they capture, are what entries
+    may share;
   - forward edges over (local, path) facts;
   - mode specialization.
 - **Helper plans** are selected by layout and mode, where a mode is a set of
@@ -835,6 +1016,7 @@ ReleaseFast benchmarks on the reference host.
 | Effectful call that does not pause | One load and predictable branch on the task's pending flag; suspending hosted calls return their result through `out` |
 | Code size | A save block per suspendable call site, plus resume and drop entries, in effectful code only. Asyncify's roughly 50% comes from instrumenting conservatively; this pass touches only code that can pause, usually a small share of a program |
 | Spawning a child task | One allocation for the task header and its first record, wake-state setup, and a host enqueue: estimated tens of nanoseconds |
+| Entering a concurrent loop | Flattening the plan, plus one child task per entry as it starts. The loop head and each exit wait are suspension points |
 | Pausing and resuming | Saving and restoring a few values per paused procedure, one or two compare-and-swaps for the wake protocol (more under cross-core contention), the host's queue, and a `setjmp` per resume for crash exits |
 | Values shared with child tasks | None in `Tasks` builds. In `ParallelTasks` builds, atomic counts on the positions children may share, and in the code that runs on them, but not in code before the fork or after the join. Children borrow their captures, so read-only sharing updates no counts. Truly contended updates cost the most, and only lending removes them ("Reference counting across tasks") |
 | `.boxy` dev builds | A flag check after every erased effectful call |
@@ -861,7 +1043,7 @@ pausing itself.
    seed only captures a sibling can reach, propagate modes forward, specialize
    procedures by mode, and let children borrow their captures ("Reference
    counting across tasks").
-6. **Batch spawns.** `all!` allocates all of its children in one block.
+6. **Batch spawns.** `group` allocates all of a plan's entries in one block.
 
 A stackful switch saves a fixed set of registers at any depth; unwinding saves
 only live values, but once per paused procedure. A hand-lowered C
@@ -909,27 +1091,29 @@ established:
 |---|---|---|
 | G1 | **Pure code is never interrupted.** Tasks interleave only at suspension points. | C1, C2, R2 |
 | G2 | **No data races.** Tasks share only immutable values, and counts on shared values are atomic. | C6, R2, P2, P6, P10 |
-| G3 | **Concurrency does not change meaning.** On a platform without tasks, a program behaves as it would on a task platform that runs each combinator's children to completion in input order. | C1, C9 |
-| G4 | **Fixed result order.** Combinator results come back in input order. Only effect interleaving, which `Err` arrives first, and which `race!` branch wins depend on scheduling. | R1, R3, Model of combinators |
-| G5 | **Structured lifetimes.** No task outlives the combinator call that started it. | R3, R4 |
+| G3 | **Concurrency does not change meaning.** On a platform without tasks, a program behaves as it would on a task platform that starts each loop entry only when its loop asks for the next result, and runs it to completion. | C1, C9 |
+| G4 | **Fixed result order.** Combinators return results in input order. Only effect interleaving and the order in which loop bodies see arrivals depend on scheduling, and through them which `Err` arrives first and which `race!` entrant wins. | R1, R3, Model of combinators |
+| G5 | **Structured lifetimes.** No task outlives the loop that started it: every way out of a loop cancels or waits for each of its entries, and the running set never escapes the loop. | C11, R3, R4 |
 | G6 | **Silent, exact cancellation.** A cancelled task runs no more of its own code and releases everything it owns. | C5, R4, P3, P4 |
-| G7 | **OTP crash semantics.** A crash ends its task, propagates through links to the nearest supervisor, is never observable to other code, and does not affect tasks outside that supervisor's subtree. | R5, R7, P1, P8 |
+| G7 | **OTP crash semantics.** A crash ends its task, propagates at once through links to the nearest supervisor, is never observable to other code, and does not affect tasks outside that supervisor's subtree. | R5, R7, P1, P8 |
 | G8 | **Tail calls stay constant-space**, including between effectful functions. | C7 |
+| G9 | **Plan properties.** No more than `n` entries under `limit(n)` run at once, and a loop exit waits for a shielded entry that has begun instead of cancelling it. | R8 |
 
 ### Compiler invariants
 
 | | Invariant | Established by |
 |---|---|---|
 | C1 | **Transparency.** If every suspending call completes immediately, the lowered program's results, effects and crashes equal those of the program without the pass. | Differential: a host that always returns `READY`, against a `None` build |
-| C2 | **Suspension only where declared.** A procedure marked `never` contains no suspendable call site; the pending flag is set only at a suspension point; and every suspension point traces to a `suspending` marker, an erased effectful call in a `.boxy` `Tasks` build, or a combinator wait. | Certify |
+| C2 | **Suspension only where declared.** A procedure marked `never` contains no suspendable call site; the pending flag is set only at a suspension point; and every suspension point traces to a `suspending` marker, an erased effectful call in a `.boxy` `Tasks` build, a concurrent loop's head or exit, or `supervise!`'s wait. The companion RFC adds channel and inbox receives. | Certify |
 | C3 | **Record completeness.** At every suspendable call site, the pending edge saves every value the procedure uses after that call, other than the call's result. | Certify |
 | C4 | **No native addresses in records.** A record never holds the address of native-frame storage: frame callables passed to suspendable call sites are heap-allocated, and suspendable procedures' pending cells live in task storage. | Certify |
 | C5 | **Ownership conservation.** At each suspendable call site, the suspension ledger equals what ARC owns after the call. Dropping a record releases each owned value exactly once, and so does resuming it to completion. | Certify, plus cancel-at-every-site tests with allocation tracking |
-| C6 | **Atomicity soundness.** An allocation that two tasks able to run in parallel can update counts on, or that the host can reach, uses atomic counts. Hosted arguments and results are seeds, closed under today's equality classes. In `ParallelTasks` builds, a `task_spawn` capture that a sibling may alias is a seed too, and modes propagate forward along copies, calls, returns, construction and projection; child results are not seeds. Every count statement on a position whose mode is atomic is atomic, plain and atomic updates of one allocation never race, and a borrowed capture is never released by a child. | Certify, checking each forward constraint locally (extends the existing rule) |
+| C6 | **Atomicity soundness.** An allocation that two tasks able to run in parallel can update counts on, or that the host can reach, uses atomic counts. Hosted arguments and results are seeds, closed under today's equality classes. In `ParallelTasks` builds, an entry's capture that a sibling may alias is a seed too, and modes propagate forward along copies, calls, returns, construction and projection; child results are not seeds. Every count statement on a position whose mode is atomic is atomic, plain and atomic updates of one allocation never race, and a borrowed capture is never released by a child. The companion RFC adds sent messages as seeds (S8). | Certify, checking each forward constraint locally (extends the existing rule) |
 | C7 | **Constant-space tail calls.** A frame-replacing call has no status check and leaves no record, so a paused tail cycle holds records only for the procedures actually live. | Certify, plus record-count tests on deep tail cycles that pause |
 | C8 | **Strategy equivalence.** `.lss` and `.boxy` builds produce the same traces under the same deterministic schedule. | Differential |
-| C9 | **Sequential equivalence.** A `None` build's combinator results and effects equal a `Tasks` build's under an input-order schedule. | Differential: a deterministic test host with an input-order policy, against a `None` build |
+| C9 | **Sequential equivalence.** A `None` build's results and effects equal a `Tasks` build's under the input-order schedule that starts each loop entry only when its loop asks for the next result. The companion RFC extends the schedule to receives, which may start entries early (S7). | Differential: a deterministic test host with that policy, against a `None` build |
 | C10 | **Resume fidelity.** A resume entry continues at exactly the call site its record names, with every restored value equal to the saved one. Records resume innermost first, and each result reaches the record that was next in line, exactly as the returns would have. | Certify the entry tables; Differential: a host that pauses every suspending call, against one that never pauses |
+| C11 | **Loop exits.** Every edge out of a concurrent loop's body, other than a crash, passes through the loop's exit sequence, and a running set is used only by its own loop's operations. | Certify |
 
 ### Runtime invariants
 
@@ -939,13 +1123,14 @@ ThreadSanitizer with real threads.
 
 | | Invariant |
 |---|---|
-| R1 | **Exactly-once readiness.** For each park there is exactly one `roc_task_ready`. A completion that arrives before the task parks is never lost: it is counted in the wake word, and the task continues instead of parking. No wake readies a task twice, and no task is resumed without a completion to deliver. |
+| R1 | **Exactly-once readiness.** For each park there is exactly one `roc_task_ready`, from a completion of the source the task parked on. A completion that arrives before the task waits on its source is never lost: it is counted in that source's wake word, and the task continues instead of parking when it waits there. No wake readies a task twice, and no task is resumed or continues without a completion to deliver. |
 | R2 | **Exclusive execution.** Given P1 and P2, a task never runs on two threads at once and is never re-entered while running. |
 | R3 | **Tree shape.** Live tasks form a forest. A task reaches a terminal state only after all of its descendants have, and a parent processes a child's report only after that child's subtree is gone. |
 | R4 | **Cancellation finality.** After cancellation is requested, a task runs no more Roc code once it next parks (at once, if already parked). Its drop runs exactly once and runs no user code. |
 | R5 | **Crash containment.** After a crash in task `t`: `t` never runs again and is never dropped; children `t` started are dropped exactly; propagation stops at the nearest `supervise!` or root; tasks outside that supervisor's subtree are unaffected; nothing reachable is freed; `t`'s records are dropped exactly; and the only leak is what `t`'s running native frames owned. |
-| R6 | **Progress.** Tasks wait only on their own children, so waits form no cycles. Given P7, every combinator call whose children's work terminates returns, crashes or is cancelled. |
+| R6 | **Progress.** Tasks wait only on their own hosted operation or their own loops' entries, so waits form no cycles. Given P7, every loop whose entries' work terminates is left, crashes or is cancelled. Receives (companion RFC) can wait in cycles; a task tree stalled on them crashes the receiver that waited last instead (S6). |
 | R7 | **Bounded restarts.** `supervise!` restarts at most `max_restarts` times and then crashes with the last crash message. |
+| R8 | **Limits.** A running set never has more than `n` running entries under a `limit(n)`, and starts an eligible entry as soon as one under the same limit finishes. |
 
 ### Platform obligations
 
@@ -977,13 +1162,16 @@ testable once the first reference host exists.
 [concurrency-prototype/](concurrency-prototype/README.md) establishes the
 first group on models:
 - `maude/wake.maude` searches every thread interleaving of the wake protocol,
-  and of a hosted completion racing cancellation. It finds the flag protocol
-  unsound and the counted wake word sound.
+  of a hosted completion racing cancellation, and of a loop body waiting on a
+  hosted call while an entry reports. It finds the flag protocol and one wake
+  word per task unsound, and one counted word per wait source sound.
 - An executable Python model of the lowering, runtime and host runs fuzzed
   programs against a stackful oracle under adversarial schedules, checking
-  C1–C5, C7–C10, G3, G4 and R1–R7, with exact heap accounting after every
+  C1–C5, C7–C11, G3–G5, G9 and R1–R8, with exact heap accounting after every
   run, including after crashes and cancellation at every suspension. It
-  includes deferred erased calls and their pending cells.
+  includes deferred erased calls and their pending cells, and concurrent loops
+  over generated plans whose bodies leave early, return errors, spawn more
+  entries and nest. The `Concurrent` library is written with those loops.
 - A conformance harness runs hosts that each break one of P1 or P3–P10, and
   the runtime's monitors or the exact heap catch every one. Conforming hosts
   pass, including one with a thread-confined allocator and one that reclaims
@@ -993,11 +1181,13 @@ first group on models:
 - `bench/wake_tsan.c` runs the counted wake word on real threads under
   ThreadSanitizer: it is race-free and readies each park exactly once, and
   both flag protocols break R1 there too.
+- The same model runs the companion RFC's channels, and establishes its S1–S7
+  in the same way, with the same coverage matrix.
 
 Fuzzing composes small typed effectful constructs (loops, matches, closures,
-recursion, combinators) with randomly placed suspension points, crashes and
-cancellations, as AGENTS.md requires, and checks C1, C5, C8 and C10 on what it
-generates.
+recursion, plans, concurrent loops, combinators) with randomly placed
+suspension points, crashes and cancellations, as AGENTS.md requires, and
+checks C1, C5, C8 and C10 on what it generates.
 
 ## Drawbacks
 
@@ -1013,6 +1203,12 @@ generates.
   continues. A stackful switch costs the same at any depth.
 - **No preemption.** A long pure computation keeps its thread until it
   finishes. Platforms that need fairness use several threads.
+- **Exits wait.** Leaving a loop waits until its cancelled entries stop, and an
+  entry stops only at a suspension point. A long pure computation in an entry
+  delays every exit, including a timeout's.
+- **A third `for!` protocol.** Whether a loop is concurrent is chosen by the
+  type of what it loops over. A plan built elsewhere does not show at the loop
+  that it is concurrent; its type and its name have to.
 - **Debugging.** A parked task has no native stack. Its records name their call
   sites, so its waiting path can be printed, but debuggers need new tooling to
   show it.
@@ -1039,7 +1235,13 @@ generates.
 | Copying stack segments in and out (as Python's greenlet does) | Impossible on wasm, whose value stack is not addressable |
 | A user-visible `Task` or `async` type | Adds a second function color; Roc replaced `Task` with effectful functions |
 | Platform-defined concurrency modules | Packages using concurrency would be tied to one platform |
-| Unstructured `spawn` | Tasks could outlive their caller, making cancellation and errors ad hoc |
+| Unstructured `spawn` | Tasks could outlive their caller, making cancellation and errors ad hoc. `spawn` exists only inside a concurrent loop's body, where it adds to that loop |
+| Combinators as the only primitives (this RFC's earlier draft) | A closed menu: a quorum, the first success, hedged requests or a retry policy would each need a new builtin. A loop makes the policy a `match` |
+| A fold whose step returns `[Continue(s), Break(s)]`, like `List.fold_until` | Works, but threads state through a step function. A loop body keeps state in `var`s and can perform effects of its own |
+| A stream of arrivals as a value | It could be stored or returned with its entries still running, and leaving a loop over it would have to wait inside a drop, which cannot suspend |
+| A scoped handle passed to a closure, like Swift's `withTaskGroup` | A closure could capture the handle and keep it; preventing that needs non-escaping types, which Roc does not have |
+| A new keyword for concurrent loops | The type of what the loop runs over selects the protocol, as `iter` and `stream` already do. Only `spawn` needs a keyword |
+| Exits that wait for entries instead of cancelling them (Swift task groups on normal exit) | Most loops leave because they have their answer, and the rest of the work is wasted. Shields give the waiting behavior to the entries that need it |
 | The host polls tasks (Rust `Future::poll`) | A wake-and-ready protocol fits io_uring, IOCP, JavaScript promises and callback-based APIs directly |
 | Suspension as a property of every hosted call | Every effectful call site would pay the flag check and save block, including calls that never pause |
 | Suspending functions listed in the platform header | Packages and `.boxy` units do not import the platform root, so the information must live with the declaration |
@@ -1069,17 +1271,19 @@ can pause, and code that does not pause runs as it does today.
 | Lean 4 and Koka | Per-object atomicity: a negative count marks an object shared, a spawn marks everything its closure reaches, every count update tests the sign, and shared objects lose in-place reuse. The alternative this RFC rejects in favor of static modes |
 | Choi, Shull and Torrellas, *Biased Reference Counting* (PACT 2018); CPython PEP 703 | Owner-thread counts updated non-atomically, other threads' counts atomically |
 | Rust `Rc` and `Arc` | Atomicity chosen statically per type, written by the programmer; mode specialization infers the same choice per position |
-| Swift concurrency (SE-0304, SE-0317) | Structured task groups and `async let`; frames from a per-task stack-discipline allocator |
+| Swift concurrency (SE-0304, SE-0317) | Structured task groups and `async let`; frames from a per-task stack-discipline allocator. A task group is consumed with `for await` in completion order. On normal exit it waits for its remaining children without cancelling them, and cancels them only when its body throws; concurrent loops cancel at every exit unless shielded |
+| Osvald et al., *Gentrification Gone too Far? Affordable 2nd-Class Values for Fun and (Co-)Effect* (OOPSLA 2016) | Second-class values that can be used but not kept; a running set is one, enforced by having no name |
 | Zig 0.6–0.10 async | Stackless frames of known size; recursion made frame sizes uncomputable; removed in 0.11 |
 | Java structured concurrency (JEP 505) | Children scoped to a block and cancelled on failure |
-| Trio nurseries | Children cannot outlive their scope |
+| Trio nurseries | Children cannot outlive their scope; a concurrent loop is a nursery whose scope is the loop |
 | Erlang/OTP | "Let it crash"; links propagate abnormal exits; supervisors trap exits and restart children (`one_for_one`, `one_for_all`); per-process heaps make a crash's memory reclaimable |
 | js_of_ocaml and wasm_of_ocaml | Partial CPS for effects on JavaScript and wasm, with JSPI and stack-switching modes as alternatives |
 
 ## Decisions left to prototypes
 
-Syntax spellings (`suspending`, `concurrency: Tasks`, `ParallelTasks`) are placeholders and are
-not decided here. The remaining open points are left to experiment, prototype
+Syntax spellings (`suspending`, `concurrency: Tasks`, `ParallelTasks`,
+`concurrently`, `limit`, `shielded`, `spawn`) are placeholders and are not
+decided here. The remaining open points are left to experiment, prototype
 or judgement, as follows:
 
 | Decision | Settled by |
@@ -1090,19 +1294,29 @@ or judgement, as follows:
 | How hosts map tasks onto WASI 0.3 and onto JavaScript promises | Building the browser and WASI reference hosts |
 | How `.boxy` records hold dynamically sized values: inline after a descriptor-sized header, or as separate allocations | The prototype's microbenchmark favours inline records in the per-task buffer: separate allocations cost 5% to 35% more from the same buffer, and about twice as much from `malloc`. Confirm when prototyping the `.boxy` pass |
 | How a deferred erased call whose target is suspendable hands its pending call up through a suspension | Prototyped: the two rules under "Calls between suspendable procedures". Confirm when building the pass alongside `tail_drive` |
-| Whether `race!` needs a variant that reports which branch won | Judgement after writing real programs against the API |
+| Whether a loop exit should cancel its entries (this RFC) or wait for them (Swift) by default | Judgement after writing real programs against the API; shields give the other behavior per plan |
+| Whether `spawn` belongs in the first version, or only plans fixed when the loop starts | Judgement: the prototype implements both, and `spawn` is what crawlers and hedged requests need |
 | Whether `supervise!` needs a time window for its restart limit, which would require a clock from the platform | Judgement after building a supervised server |
 | Crash exits on targets that `src/sljmp` does not cover yet, such as 32-bit x86 | Porting, or accepting process-wide crashes there |
 
 ## Future possibilities
 
-- **Dynamic nurseries** (`Concurrent.scope!` with `spawn!` and `join!`) for
-  workloads like crawlers that discover work as they go.
-- **Concurrent streams**, such as a `Stream.map_concurrent!` with a
-  concurrency limit, built on the same operations.
-- **Data parallelism for pure code.** Purity lets a platform run pure work
-  across cores; on wasm this already works with shared memory, atomics and
-  workers.
+- **Sessions, channels and shared resources**, in the companion RFC.
+- **Concurrent streams**, such as a `Stream` whose items come from a limited
+  plan, built on the same operations.
+- **Parallel evaluation of pure code.** Purity lets a platform run pure work
+  across cores, and on wasm this already works with shared memory, atomics and
+  workers. It must be deterministic, so it differs from a concurrent loop in
+  three ways. Results come in input order. When several entries crash, the
+  crash reported is the lowest-indexed one, reported only after every lower
+  index has finished, so a sequential program that would have looped forever
+  first still does. And abandoning pure work is unobservable, so nothing needs
+  to wait: it can be an ordinary `Iter` adapter, a first-class value, which
+  pure code can use.
+- **Durable execution.** C4 already keeps native addresses out of records, so
+  a paused task is values only. With the same binary, a platform could write a
+  paused task to storage and resume it after a restart, which long-running
+  sagas need.
 - **Deterministic simulation testing.** A test platform with a seeded,
   single-threaded scheduler makes every interleaving reproducible.
 - **Alternative lowerings.** JSPI or WasmFX could become explicit,
@@ -1120,7 +1334,8 @@ or judgement, as follows:
    pending cells.
 5. Add the task runtime with its wake protocol and crash exit, the host ABI,
    glue, the conformance harness, and one native reference platform.
-6. Implement `Concurrent`, including `supervise!` and `None` behavior.
+6. Implement plans, concurrent loops and their lowering, then the `Concurrent`
+   library over them, including `supervise!` and `None` behavior.
    In `ParallelTasks` builds, add spawn seeds with forward propagation and
    mode specialization, then borrowed captures, measuring each.
 7. Extend the pass to `.boxy` and erased calls.
@@ -1144,7 +1359,9 @@ or judgement, as follows:
 - Swift, [SE-0304 discussion](https://forums.swift.org/t/se-0304-structured-concurrency/45314), [SE-0317 discussion](https://forums.swift.org/t/se-0317-async-let/48848), [task allocator](https://sources.debian.org/src/swiftlang/6.0.3-2/swift/stdlib/public/Concurrency/TaskAlloc.cpp)
 - Zig, [async in 0.11](https://zig.guide/0.11/async/introduction)
 - OpenJDK, [JEP 505: Structured Concurrency](https://openjdk.org/jeps/505)
-- Smith, [Notes on structured concurrency](https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/)
+- Smith, [Notes on structured concurrency, or: Go statement considered harmful](https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/), 2018
+- Swift Evolution, [SE-0304: Structured concurrency](https://github.com/swiftlang/swift-evolution/blob/main/proposals/0304-structured-concurrency.md)
+- Osvald, Essertel, Wu, González Alayón and Rompf, [Gentrification Gone too Far? Affordable 2nd-Class Values for Fun and (Co-)Effect](https://doi.org/10.1145/2983990.2984004), OOPSLA 2016
 - Erlang/OTP, [supervisor](https://www.erlang.org/docs/24/man/supervisor) and [supervision principles](https://www.erlang.org/docs/19/design_principles/sup_princ.html); Hébert, [Who Supervises The Supervisors?](https://learnyousomeerlang.com/supervisors)
 - Erlang, [binary handling and process heaps](https://www.erlang.org/docs/22/efficiency_guide/binaryhandling)
 - WebAssembly, [Wasm 3.0 completed](https://webassembly.org/news/2025-09-17-wasm-3.0/)

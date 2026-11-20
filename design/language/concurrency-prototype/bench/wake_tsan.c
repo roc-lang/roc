@@ -4,7 +4,10 @@
 // A parent task runs `rounds` rounds of all!: it spawns `kids` children onto a
 // pool of worker threads and awaits every report. Children write a plain
 // payload, push a report, then wake the parent. The parent runs on whichever
-// worker resumes it, so every handoff crosses threads.
+// worker resumes it, and never on the worker that ran it last, so every
+// handoff crosses threads. (On one thread program order would order the
+// parent's state whatever the atomics say, and the broken builds would race
+// only when the scheduler happened to move the parent.)
 //
 // Checked by assertion counters:
 //   R1  every park is readied exactly once; a task that continues or is
@@ -89,16 +92,21 @@ static Report *pop_report(void) {
 #define CLAIM memory_order_acquire
 #endif
 enum { QSIZE = 1024 };
-static int queue[QSIZE];
+// Slots are relaxed atomics: a worker may read a slot with a stale head
+// index, which its compare-and-swap then rejects, while the producer reuses
+// the slot. The handoff's ordering comes only from qtail (PUBLISH/CLAIM).
+static _Atomic int queue[QSIZE];
 static atomic_long qhead, qtail;
 static atomic_int parent_slot;  // 1: the parent is queued
 static atomic_int finished;
 static atomic_long readies;
 static atomic_int running;      // R2
+static atomic_int last_runner;  // the worker that ran the parent last; no ordering
+static _Thread_local int me = -1;  // this worker's index; -1 on the main thread
 
 static void enqueue_child(int i) {
     long t = atomic_load_explicit(&qtail, memory_order_relaxed);
-    queue[t % QSIZE] = i;
+    atomic_store_explicit(&queue[t % QSIZE], i, memory_order_relaxed);
     atomic_store_explicit(&qtail, t + 1, PUBLISH);
 }
 
@@ -106,7 +114,7 @@ static int dequeue_child(void) {
     long h = atomic_load_explicit(&qhead, memory_order_relaxed);
     for (;;) {
         if (h >= atomic_load_explicit(&qtail, CLAIM)) return -1;
-        int i = queue[h % QSIZE];
+        int i = atomic_load_explicit(&queue[h % QSIZE], memory_order_relaxed);
         if (atomic_compare_exchange_weak_explicit(&qhead, &h, h + 1, memory_order_relaxed, memory_order_relaxed))
             return i;
     }
@@ -118,6 +126,10 @@ static void ready_parent(void) {
 }
 
 static int take_parent(void) {
+    // Coherence: a worker that ran the parent last reads its own write (or
+    // none newer), so it never takes the parent back. A stale read can only
+    // make another worker skip a turn.
+    if (atomic_load_explicit(&last_runner, memory_order_relaxed) == me) return 0;
     return atomic_exchange_explicit(&parent_slot, 0, CLAIM);
 }
 
@@ -238,6 +250,7 @@ static void resume_parent(int first) {
 #else
     if (atomic_exchange(&running, 1)) violation("R2: resumed while running");
 #endif
+    atomic_store_explicit(&last_runner, me, memory_order_relaxed);
     Report *r = first ? NULL : on_resume();
     if (r) deliver(r);
     else if (!first && atomic_load(&violations) == 0) violation("R1: resumed with nothing to deliver");
@@ -264,7 +277,7 @@ static void resume_parent(int first) {
 }
 
 static void *worker(void *arg) {
-    (void)arg;
+    me = (int)(intptr_t)arg;
     while (!atomic_load(&finished)) {
         if (take_parent()) {
             resume_parent(0);
@@ -284,7 +297,7 @@ int main(int argc, char **argv) {
     P.remaining = 0;
     resume_parent(1);
     pthread_t th[WORKERS];
-    for (int i = 0; i < WORKERS; i++) pthread_create(&th[i], NULL, worker, NULL);
+    for (int i = 0; i < WORKERS; i++) pthread_create(&th[i], NULL, worker, (void *)(intptr_t)i);
     for (int i = 0; i < WORKERS; i++) pthread_join(th[i], NULL);
     long want = 0;
     for (int r = 1; r <= rounds; r++)

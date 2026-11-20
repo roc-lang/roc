@@ -19,7 +19,9 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 
-from heap import Handle, Ref
+from heap import GroupRef, Handle, Ref
+from plans import Entry, flatten
+from sessions import DEADLOCK, Sessions
 from ir import expr_vars
 
 
@@ -134,6 +136,14 @@ class NoneEngine:
         self.spawned = Counter()  # path -> children spawned so far
         self.supervised = 0
         self.steps = 0
+        self.groups = {}
+        self.group_owner = {}  # gid -> the path of the code that started the loop
+        self.at_head = []  # loops whose owner is waiting at the head, outermost first
+        self.done = {}  # id(entry) -> (completion order, result) until it arrives
+        self.done_order = []
+        self.limit_ids = 0
+        self.stats = Counter()
+        self.sessions = Sessions(heap, self.stats, lambda c: None)
 
     def run(self):
         return self.call(self.prog.entry, [])
@@ -177,6 +187,27 @@ class NoneEngine:
                         heap.drop(c["clo"])
                         c["state"] = "cancelled"
                     v = 0
+                elif k == "group":
+                    v = self.group(env[e[1]])
+                elif k == "next":
+                    v = self.group_next(env[e[1]])
+                elif k == "spawn_in":
+                    v = self.spawn_in(env[e[1]], env[e[2]])
+                elif k == "pair":
+                    v = self.sessions.pair()
+                elif k == "send":
+                    m = self.sessions.send(env[e[1]], env[e[2]])
+                    if m is not None:
+                        raise ProgramCrash(("str", m), self.supervised > 0)
+                    v = 0
+                elif k == "recv":
+                    v = self.recv(env[e[1]])
+                elif k == "cancel_group":
+                    for en in self.groups[env[e[1]].gid]:
+                        if en.state == "unstarted":
+                            heap.drop(en.clo)
+                            en.clo, en.state = None, "discarded"
+                    v = 0
                 else:
                     v = eval_simple(heap, env, e)
                 env[x] = v
@@ -200,6 +231,92 @@ class NoneEngine:
             elif k == "crash":
                 raise ProgramCrash(heap.data(env[t[1]]), self.supervised > 0)
 
+    # A None build runs a concurrent loop's entries one at a time, in input
+    # order, each to completion when the loop head asks for the next arrival.
+    # Shields change nothing: nothing runs while the body does. A limit
+    # matters only to a receive that runs entries on demand while one of the
+    # same limit is still running.
+    def group(self, plan):
+        me = self.path[-1]
+        entries = flatten(self.heap, plan, self.fresh_limit)
+        for en in entries:
+            en.index = self.spawned[me]
+            self.spawned[me] += 1
+        g = len(self.groups) + 1
+        self.groups[g] = entries
+        self.group_owner[g] = me
+        return GroupRef(g)
+
+    def spawn_in(self, gref, clo):
+        me = self.path[-1]
+        self.groups[gref.gid].append(Entry(clo, (), False, self.spawned[me]))
+        self.spawned[me] += 1
+        return 0
+
+    def fresh_limit(self):
+        self.limit_ids += 1
+        return self.limit_ids
+
+    def has_room(self, en):
+        return all(sum(1 for es in self.groups.values() for o in es
+                       if o.state == "running" and (lid, n) in o.limits) < n for lid, n in en.limits)
+
+    def run_entry(self, g, en):
+        heap = self.heap
+        en.state = "running"
+        self.path.append(self.group_owner[g] + (en.index,))
+        f, caps = open_closure(heap, en.clo)
+        en.clo = None
+        v = self.call(f, caps)
+        self.path.pop()
+        en.state = "done"
+        self.done[id(en)] = (len(self.done_order), v)
+        self.done_order.append(en)
+
+    def group_next(self, gref):
+        """The earliest entry to finish arrives first: one run on demand while
+        an earlier entry waited at a receive finishes before it."""
+        heap, g = self.heap, gref.gid
+        entries = self.groups[g]
+        if not any(en.state == "done" for en in entries):
+            en = next((en for en in entries if en.state == "unstarted"), None)
+            if en is None:
+                assert all(en.state in ("arrived", "discarded") for en in entries), "a loop head waited on a running entry"
+                return heap.alloc("tag", "Ended", [])
+            self.at_head.append(g)
+            try:
+                self.run_entry(g, en)
+            finally:
+                self.at_head.pop()
+        en = min((en for en in entries if en.state == "done"), key=lambda en: self.done[id(en)][0])
+        en.state = "arrived"
+        return heap.alloc("tag", "Arrived", [self.done.pop(id(en))[1]])
+
+    def recv(self, i):
+        """A receive whose message has not been sent runs, on demand, loop
+        entries that have not started and whose limits have room, earliest in
+        input order first, each to the end, until the message arrives. With none left, nothing can ever
+        send it: a deadlock, which crashes."""
+        r = self.sessions.recv(i)
+        if r[0] == "crash":
+            raise ProgramCrash(("str", r[1]), self.supervised > 0)
+        if r[0] == "ready":
+            return r[1]
+        c = r[1]
+        while c.state == "empty":
+            cands = []
+            for g, entries in self.groups.items():
+                for en in entries:
+                    if en.state == "unstarted" and self.has_room(en):
+                        cands.append((self.group_owner[g] + (en.index,), g, en))
+                        break
+            if not cands:
+                raise ProgramCrash(("str", DEADLOCK), self.supervised > 0)
+            _, g, en = min(cands, key=lambda c: c[0])
+            self.stats["entries run on demand"] += 1
+            self.run_entry(g, en)
+        return self.sessions.take(c)
+
     def await_any(self, kids, pname):
         """Run the earliest unreported child to completion (or report it cancelled)."""
         heap = self.heap
@@ -222,6 +339,16 @@ class NoneEngine:
             self.path.pop()
             return heap.alloc("tag", "Done", [i, v])
         raise AssertionError("await with no unreported child")
+
+
+def group_op(rt, t, env, e):
+    """The concurrent-loop operations that never suspend."""
+    k = e[0]
+    if k == "group":
+        return rt.group(t, env[e[1]])
+    if k == "spawn_in":
+        return rt.spawn_in(t, env[e[1]], env[e[2]])
+    return rt.cancel_group(t, env[e[1]])
 
 
 def take_match(heap, env, t):
@@ -341,11 +468,28 @@ class StackEngine:
                     elif k == "await":
                         r = rt.await_any(t, env[e[1]])
                         v = (yield "park") if r[0] == "pending" else r[1]
+                    elif k == "next":
+                        r = rt.group_next(t, env[e[1]])
+                        v = (yield "park") if r[0] == "pending" else r[1]
+                    elif k == "recv":
+                        r = rt.recv(t, env[e[1]])
+                        if r[0] == "crash":
+                            raise RocCrash(heap.alloc("str", r[1], []), self.owned(t))
+                        v = (yield "park") if r[0] == "pending" else r[1]
+                    elif k == "pair":
+                        v = rt.sessions.pair(t)
+                    elif k == "send":
+                        m = rt.sessions.send(env[e[1]], env[e[2]])
+                        if m is not None:
+                            raise RocCrash(heap.alloc("str", m, []), self.owned(t))
+                        v = 0
                     elif k == "spawn":
                         v = rt.spawn(t, env[e[1]])
                     elif k == "cancel":
                         rt.cancel(t, env[e[1]])
                         v = 0
+                    elif k in ("group", "spawn_in", "cancel_group"):
+                        v = group_op(rt, t, env, e)
                     else:
                         v = eval_simple(heap, env, e)
                     env[x] = v
@@ -550,6 +694,13 @@ class UnwindEngine:
             return Cell(sid)
         return t.cell
 
+    def crash_at(self, t, sid, env, msg):
+        """A crash raised by an operation mid-block: the values live after it
+        (its ledger) are leaked with every native frame's, as at a `crash`."""
+        live = [env[v] for v in self.low.calls[sid][4]]
+        leaked = [v for frame in t.native for v in frame] + live
+        raise RocCrash(self.heap.alloc("str", msg, []), leaked)
+
     def exec(self, t, pname, env, block, i, cell):
         heap, prog, rt, low = self.heap, self.prog, self.rt, self.low
         sites = low.sites
@@ -601,8 +752,17 @@ class UnwindEngine:
                         rt.sup_end(t, v)
                     if v is PENDING_CALL:
                         assert sid in low.handed, f"a pending call reached {sid}, which neither drives nor hands up"
-                elif k in ("host", "await"):
-                    r = rt.hosted(t, e[1], [env[a] for a in e[2]]) if k == "host" else rt.await_any(t, env[e[1]])
+                elif k in ("host", "await", "next", "recv"):
+                    if k == "host":
+                        r = rt.hosted(t, e[1], [env[a] for a in e[2]])
+                    elif k == "await":
+                        r = rt.await_any(t, env[e[1]])
+                    elif k == "next":
+                        r = rt.group_next(t, env[e[1]])
+                    else:
+                        r = rt.recv(t, env[e[1]])
+                        if r[0] == "crash":
+                            self.crash_at(t, sid, env, r[1])
                     if sid in sites:
                         self.stats["checks"] += 1
                     if r[0] == "pending":
@@ -616,6 +776,15 @@ class UnwindEngine:
                     v = rt.spawn(t, env[e[1]])
                 elif k == "cancel":
                     rt.cancel(t, env[e[1]])
+                    v = 0
+                elif k in ("group", "spawn_in", "cancel_group"):
+                    v = group_op(rt, t, env, e)
+                elif k == "pair":
+                    v = rt.sessions.pair(t)
+                elif k == "send":
+                    m = rt.sessions.send(env[e[1]], env[e[2]])
+                    if m is not None:
+                        self.crash_at(t, sid, env, m)
                     v = 0
                 else:
                     v = eval_simple(heap, env, e)

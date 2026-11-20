@@ -28,7 +28,9 @@ from __future__ import annotations
 
 from ir import blocks, expr_vars
 
-SITE_KINDS = ("call", "callc", "host", "await")
+SITE_KINDS = ("call", "callc", "host", "await", "next", "recv")
+TASK_OPS = ("host", "await", "spawn", "cancel", "group", "next", "spawn_in", "cancel_group", "pair", "send",
+            "recv")
 
 
 class LowerError(Exception):
@@ -55,7 +57,7 @@ class Lowering:
         for p in self.prog.procs.values():
             for b, i, st in lets(p.body):
                 _, x, e, sid = st
-                if e[0] in ("call", "callc", "host", "await", "spawn", "cancel"):
+                if e[0] in ("call", "callc") + TASK_OPS:
                     info = (p.name, b, i, x, arc.ledger[sid])
                     self.calls[sid] = info
                     if self.is_site(p, e):
@@ -102,14 +104,22 @@ class Lowering:
                                 for a, q in zip(e[2], ps[len(ps) - len(e[2]):]):
                                     changed |= flow((g, q), get(p.name, a))
                                 changed |= flow((p.name, x), ret[g])
-                        elif k in ("tup", "tag", "list", "set", "push"):
+                        elif k in ("tup", "tag", "list", "set", "push", "send"):
                             for a in expr_vars(e):
                                 n = get(p.name, a)
                                 if not n <= heap:
                                     heap |= n
                                     changed = True
-                        elif k in ("field", "get", "await"):
+                        elif k in ("field", "get", "await", "next", "recv"):
                             changed |= flow((p.name, x), heap)
+                        elif k in ("group", "spawn_in"):
+                            # The running set runs closures from the plan (in
+                            # the heap) or the one given; arrivals are heap data.
+                            run = set(heap) | (get(p.name, e[2]) if k == "spawn_in" else set())
+                            for g in run:
+                                if not ret[g] <= heap:
+                                    heap |= ret[g]
+                                    changed = True
                         elif k == "spawn":
                             for g in list(get(p.name, e[1])):
                                 if not ret[g] <= heap:
@@ -212,7 +222,7 @@ class Lowering:
         k = e[0]
         if k == "host":
             return self.hosted[e[1]]
-        if k == "await":
+        if k in ("await", "next", "recv"):
             return True
         if k == "call":
             return may[e[1]]
@@ -236,7 +246,7 @@ class Lowering:
                 sid = st[3]
                 if sid in self.sites and not self.may[p.name]:
                     raise LowerError(f"C2: never-suspending {p.name} has site {sid}")
-                if not p.eff and st[2][0] in ("host", "await", "spawn", "cancel"):
+                if not p.eff and st[2][0] in TASK_OPS:
                     raise LowerError(f"pure {p.name} performs {st[2][0]}")
         for sid, (proc, b, i, x, ledger) in self.sites.items():
             need = suffix_uses(b, i + 1) - {x}

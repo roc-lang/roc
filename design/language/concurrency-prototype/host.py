@@ -81,11 +81,60 @@ class PausePolicy(Policy):
 
 
 class InputOrderPolicy(Policy):
+    """The sequential schedule, which a None build must match (C9, G3). A None
+    build has one stack, so this schedule acts on the task earliest in input
+    order, and
+
+    - while a task waits at a receive, lets only the tasks that started since
+      run (in a None build, everything else is below the receive on the
+      stack). The receiver that parked last is the top of the stack; it is
+      "active" when every task that started since it parked has finished (a
+      None build runs each demanded entry to its end);
+    - starts a concurrent loop's entry only when its owner waits at that
+      loop's head, or the top receiver is active (a None build runs entries
+      that have not started on demand until the message arrives);
+    - resumes the top receiver only when it is active;
+    - resumes a task at a loop head only when none of that loop's entries has
+      begun and not finished (in a None build, the head runs one entry to its
+      end before it returns; an entry run on demand meanwhile may finish
+      first, and arrives first, but the head waits for the one it runs).
+
+    A host may delay any ready task, so this is one legal schedule."""
+
     name = "input_order"
 
+    def allowed(self, host, t):
+        top = host.top
+        if top is None or host.rt.linked_crash(t) is not None:
+            return True  # a crash unwinds the one stack at once
+        if t is top:
+            return host.active
+        return t.start_seq is None or t.start_seq >= top.wait_mark
+
+    def eligible(self, host, t):
+        if not self.allowed(host, t):
+            return False
+        if t.waiting == "group" and host.rt.linked_crash(t) is None and any(
+                e.task is not None and e.task.start_seq is not None and e.task.phase != "finished"
+                for e in t.wait_group.entries):
+            return False
+        if t.entry is None or t.phase != "new" or t.cancel_req:
+            return True
+        owner = t.parent
+        return host.active or (owner.waiting == "group" and owner.wait_group is t.entry[0])
+
     def choose(self, host):
-        cands = [(t.path, 0, ("resume", i)) for i, t in enumerate(host.queue)]
-        cands += [(op.task.path, 1, ("complete", i)) for i, op in enumerate(host.ops) if not op.aborted]
+        waiters = [u for u in host.rt.tasks.values() if u.waiting == "chan"]
+        # A crash unwinds the one stack at once: finish propagating it first.
+        crashing = [(t.path, i) for i, t in enumerate(host.queue) if host.rt.linked_crash(t) is not None]
+        if crashing:
+            return ("resume", min(crashing)[1])
+        top = host.top = max(waiters, key=lambda u: (u.wait_mark, u.id)) if waiters else None
+        host.active = top is not None and all(u.phase == "finished" for u in host.rt.tasks.values()
+                                              if u.start_seq is not None and u.start_seq >= top.wait_mark)
+        cands = [(t.path, 0, ("resume", i)) for i, t in enumerate(host.queue) if self.eligible(host, t)]
+        cands += [(op.task.path, 1, ("complete", i)) for i, op in enumerate(host.ops)
+                  if not op.aborted and self.allowed(host, op.task)]
         if cands:
             return min(cands, key=lambda c: (c[0], c[1]))[2]
         if host.ops:
@@ -124,6 +173,8 @@ class RandomPolicy(Policy):
 
 class Host:
     def __init__(self, rt, heap, policy):
+        self.top = None  # InputOrderPolicy: the receiver at the top of the one stack
+        self.active = False  # InputOrderPolicy: whether it runs entries on demand now
         self.rt, self.heap, self.policy = rt, heap, policy
         self.queue = []
         self.ops = []
@@ -254,7 +305,7 @@ def run_tasks(lowering, engine_kind, policy, concurrency="Tasks", max_steps=2000
     host.queue.append(host.root)
     steps = 0
     while host.root_status == PENDING:
-        if not host.step():
+        if not host.step() and not rt.break_deadlock():
             raise Violation("R6: no task can run and the root has not finished")
         steps += 1
         if steps > max_steps:
@@ -263,7 +314,7 @@ def run_tasks(lowering, engine_kind, policy, concurrency="Tasks", max_steps=2000
         host.complete(host.ops[0])
     host.drained()
     rt.check_quiescent()
-    live = heap.verify(rt.leaked)
+    live = heap.verify(rt.leaked + rt.sessions.held())
     return Run(host.result, host.effects, heap.stats, getattr(eng, "stats", Counter()), rt.stats, host.stats,
                leaked_live=live)
 
@@ -293,8 +344,9 @@ def run_none(prog):
         v = eng.run()
     except ProgramCrash as c:
         return Run(("crashed", c.msg), host.effects, heap.stats, Counter(), Counter(), Counter(),
-                   extra={"supervised": c.supervised})
+                   extra={"supervised": c.supervised, "on demand": eng.stats["entries run on demand"]})
     result = ("done", heap.data(v))
     heap.drop(v)
     heap.verify([])
-    return Run(result, host.effects, heap.stats, Counter({"steps": eng.steps}), Counter(), Counter())
+    return Run(result, host.effects, heap.stats, Counter({"steps": eng.steps}), Counter(), Counter(),
+               extra={"on demand": eng.stats["entries run on demand"]})

@@ -182,4 +182,95 @@ endm
 search init(wakeInLock) =>! C:Conf such that not ok(C:Conf) .
 search init(wakeInLock) =>* C:Conf err .
 search [1] init(wakeOutside) =>* C:Conf err .
+*** Two wait sources: a loop body waits on a hosted call while the loop's
+*** child reports (RFC, "Concurrent loops").
+***
+*** The parent makes a suspending hosted call and waits for it (the host
+*** source), then waits at the loop head for its one child's report (the set
+*** source). A host thread completes the operation; another runs the child.
+*** Each completion publishes its data, then increments a count in one atomic
+*** step that readies the parent only if it is parked.
+***
+***   oneWord    one counted word per task: both sources count into it, and
+***              the parent parks only when it is zero.
+***   perSource  one counted word per wait source: the parent parks on exactly
+***              one, and only that word's completions ready it.
+***
+*** Error states: the parent resumed, or continued, at a wait with nothing to
+*** deliver for that wait (err); a ready while not parked is impossible by
+*** construction here, so R2 is not modeled.
+
+mod SOURCES is
+  protecting NAT .
+  sorts Proto PC Src Conf .
+  ops oneWord perSource : -> Proto [ctor] .
+  ops nil host set : -> Src [ctor] .
+  ops call waitH waitS parked queued resumed fin err : -> PC [ctor] .
+  op none : -> Conf [ctor] .
+  op __ : Conf Conf -> Conf [ctor assoc comm id: none] .
+  op proto : Proto -> Conf [ctor] .
+  op par : PC Src -> Conf [ctor] .     --- pc, and the source it waits on
+  op hw : Nat -> Conf [ctor] .         --- hosted results published, not consumed
+  op sw : Nat -> Conf [ctor] .         --- child reports published, not consumed
+  ops child chdone op opdone qp : -> Conf [ctor] .
+  ops readies parks : Nat -> Conf [ctor] .
+
+  vars N M K : Nat . var P : Proto . var PC : PC . var S : Src . var C : Conf .
+
+  --- the parent's program
+  rl [call] : par(call, nil) => par(waitH, host) op .
+
+  --- a completion of source S readies a parent parked on it (perSource),
+  --- or a parent parked on anything (oneWord)
+  op readies? : Proto Src Src -> Bool .
+  eq readies?(perSource, S, S) = true .
+  eq readies?(oneWord, S, S':Src) = true .
+  eq readies?(P, S, S':Src) = false [owise] .
+
+  crl [child-ready] : proto(P) child par(parked, S) sw(N) readies(K)
+                   => proto(P) chdone par(queued, S) sw(s N) qp readies(s K) if readies?(P, set, S) .
+  crl [child-count] : proto(P) child par(PC, S) sw(N) => proto(P) chdone par(PC, S) sw(s N)
+    if PC =/= parked or not readies?(P, set, S) .
+  crl [op-ready] : proto(P) op par(parked, S) hw(N) readies(K)
+                => proto(P) opdone par(queued, S) hw(s N) qp readies(s K) if readies?(P, host, S) .
+  crl [op-count] : proto(P) op par(PC, S) hw(N) => proto(P) opdone par(PC, S) hw(s N)
+    if PC =/= parked or not readies?(P, host, S) .
+
+  --- a wait: continue if its word is nonzero, else park (one compare-and-swap)
+  op count : Proto Src Nat Nat -> Nat .
+  eq count(perSource, host, N, M) = N .
+  eq count(perSource, set, N, M) = M .
+  eq count(oneWord, S, N, M) = N + M .
+  op next : Src -> PC .
+  eq next(host) = waitS .
+  eq next(set) = fin .
+  op src : PC -> Src .
+  eq src(waitH) = host .
+  eq src(waitS) = set .
+
+  crl [continue] : proto(P) par(PC, S) hw(N) sw(M) => proto(P) par(resumed, S) hw(N) sw(M)
+    if (PC == waitH or PC == waitS) and count(P, S, N, M) > 0 .
+  crl [park] : proto(P) par(PC, S) hw(N) sw(M) parks(K) => proto(P) par(parked, S) hw(N) sw(M) parks(s K)
+    if (PC == waitH or PC == waitS) and count(P, S, N, M) == 0 .
+  rl [resume] : qp par(queued, S) => par(resumed, S) .
+
+  --- a resumed or continuing wait takes its own source's completion
+  rl [take-host] : par(resumed, host) hw(s N) => par(waitS, set) hw(N) .
+  rl [take-set] : par(resumed, set) sw(s N) => par(fin, nil) sw(N) .
+  rl [nothing-host] : par(resumed, host) hw(0) => par(err, host) hw(0) .
+  rl [nothing-set] : par(resumed, set) sw(0) => par(err, set) sw(0) .
+
+  op init : Proto -> Conf .
+  eq init(P) = proto(P) par(call, nil) child hw(0) sw(0) readies(0) parks(0) .
+
+  op ok : Conf -> Bool .
+  eq ok(proto(P) par(fin, nil) chdone opdone hw(0) sw(0) readies(K) parks(N)) = K <= N .
+  eq ok(C) = false [owise] .
+endm
+
+*** Expected: oneWord reaches err (the child's report readies a parent parked
+*** on its hosted call); perSource never does, and every final state is ok.
+search [1] init(oneWord) =>* C:Conf par(err, S:Src) .
+search init(perSource) =>* C:Conf par(err, S:Src) .
+search init(perSource) =>! C:Conf such that not ok(C:Conf) .
 quit

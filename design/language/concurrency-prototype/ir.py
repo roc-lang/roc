@@ -22,6 +22,18 @@ Expressions (arguments are variables)
     ('spawn', c)              task_spawn: start a child running closure c
     ('await', kids)           task_await_any over a list of child handles
     ('cancel', h)             task_cancel
+    ('group', p)              enter a concurrent loop: start the running set
+                              of plan p (RFC, "Concurrent loops"); the
+                              result names it and never escapes the loop
+    ('next', g)               the loop head: wait for the next arrival;
+                              Arrived(v), Crashed(m), Cancelled or Ended
+    ('spawn_in', g, c)        `spawn` in a loop body: add c to the running set
+    ('cancel_group', g)       a loop exit: discard unstarted entries and cancel
+                              running ones that are not shielded
+    ('pair',)                 a one-shot session channel: (Out, In)
+                              (concurrency-sessions.md)
+    ('send', o, v)            send v on Out o; never waits
+    ('recv', i)               wait for In i's message: Got(v) or Cancelled
 
 Terminators
     ('ret', x)
@@ -172,6 +184,20 @@ class Parser:
             return ("await", rest[0])
         if op == "cancel":
             return ("cancel", rest[0])
+        if op in ("group", "next", "cancel_group"):
+            (x,) = self.args(rest, pre)
+            return (op, x)
+        if op == "spawn_in":
+            g, c = self.args(rest, pre)
+            return ("spawn_in", g, c)
+        if op == "pair":
+            return ("pair",)
+        if op == "send":
+            o, v = self.args(rest, pre)
+            return ("send", o, v)
+        if op == "recv":
+            (i,) = self.args(rest, pre)
+            return ("recv", i)
         raise SyntaxError(f"unknown expression {op}")
 
     def block(self, forms):
@@ -247,13 +273,17 @@ def blocks(block):
 
 def expr_vars(e):
     k = e[0]
-    if k in ("int", "str"):
+    if k in ("int", "str", "pair"):
         return []
     if k in ("prim", "tup", "list"):
         return list(e[-1])
     if k == "tag":
         return list(e[2])
-    if k in ("field", "len", "spawn", "await", "cancel"):
+    if k in ("field", "len", "spawn", "await", "cancel", "group", "next", "cancel_group"):
+        return [e[1]]
+    if k in ("spawn_in", "send"):
+        return [e[1], e[2]]
+    if k == "recv":
         return [e[1]]
     if k == "get":
         return [e[1], e[2]]

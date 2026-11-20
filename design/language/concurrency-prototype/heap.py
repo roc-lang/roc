@@ -1,7 +1,8 @@
 """Reference-counted heap with exact accounting.
 
-Values are Python ints (unboxed), `Ref` (a counted heap object) or `Handle`
-(a child task; Roc owns child tasks, so handles are not counted). Freed
+Values are Python ints (unboxed), `Ref` (a counted heap object), `Handle`
+(a child task; Roc owns child tasks, so handles are not counted) or
+`GroupRef` (a concurrent loop's running set, likewise). Freed
 objects stay in the table, so any later access is caught as a use after free.
 """
 
@@ -34,6 +35,19 @@ class Handle:
         return f"task{self.task}"
 
 
+class GroupRef:
+    """A concurrent loop's running set. The loop owns it and it never escapes
+    the loop, so it is not counted either."""
+
+    __slots__ = ("gid",)
+
+    def __init__(self, g):
+        self.gid = g
+
+    def __repr__(self):
+        return f"group{self.gid}"
+
+
 class Obj:
     __slots__ = ("kind", "tag", "fields", "rc", "freed", "owner", "thread")
 
@@ -55,6 +69,7 @@ class Heap:
         self.task = None  # the task running now (None: the host)
         self.thread = 0  # the thread running now
         self.confined = False
+        self.on_free = None  # the runtime's hook for session endpoints
 
     def alloc(self, kind, tag, fields):
         self.next += 1
@@ -90,6 +105,8 @@ class Heap:
                 o.freed = True
                 self.stats["free"] += 1
                 stack.extend(f for f in o.fields if isinstance(f, Ref))
+                if o.kind in ("out", "in") and self.on_free is not None:
+                    self.on_free(o)
 
     def bulk_free(self, ids):
         """Free objects as a region: no counts are read or changed."""
@@ -106,9 +123,13 @@ class Heap:
             return v
         if isinstance(v, Handle):
             return ("handle",)
+        if isinstance(v, GroupRef):
+            return ("group",)
         o = self.obj(v)
         if o.kind == "str":
             return ("str", o.tag)
+        if o.kind in ("out", "in"):
+            return (o.kind,)
         return (o.kind, o.tag, tuple(self.data(f) for f in o.fields))
 
     def live(self):

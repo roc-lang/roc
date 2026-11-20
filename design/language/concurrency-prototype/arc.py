@@ -19,7 +19,7 @@ from collections import Counter
 
 from ir import Block, Proc, Program, expr_vars
 
-CALL_LIKE = ("call", "callc", "host", "await", "spawn", "cancel")
+CALL_LIKE = ("call", "callc", "host", "await", "spawn", "cancel", "group", "next", "spawn_in", "cancel_group", "pair", "send", "recv")
 
 
 class ArcError(Exception):

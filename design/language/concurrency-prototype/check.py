@@ -6,8 +6,9 @@ Per program:
            results, effect traces and heap operations
   C8       .lss vs .boxy lowering: identical results, traces and heap operations
   C9/G3    None build vs Tasks build under an input-order schedule
-  G4       programs without race!, all_ok! or crashes: one result under every
-           schedule, and the None build's
+  G4       programs without race!, all_ok!, crashes or loops whose bodies
+           depend on arrival order (exits, errors, spawns): one result under
+           every schedule, and the None build's
   C5       cancel the root at every suspension in turn: exact heap accounting
   R1-R6    monitored in every run (runtime.py); heap verified exact after
            every run, with crashed native frames as the only leak (R5)
@@ -73,6 +74,7 @@ def check_program(seed, stats, cancel_sites=6):
         stats["feature " + f] += 1
     none = run_none(arc.prog)
     stats["none " + none.result[0]] += 1
+    stats["session: None entries run on demand"] += none.extra.get("on demand", 0)
 
     def run(mode, eng, pol, conc="Tasks"):
         r = run_tasks(lows[mode], eng, pol, conc)
@@ -85,6 +87,11 @@ def check_program(seed, stats, cancel_sites=6):
         stats["R7 supervise! returned"] += r.runtime.get("R7 returned", 0)
         stats["R7 supervise! gave up"] += r.runtime.get("R7 gave up", 0)
         stats["deferred erased calls"] += r.engine.get("deferred_calls", 0) if eng == "unwind" else 0
+        for k in ("loops", "arrivals", "loop exits", "loop spawns", "limit refills", "shielded waits",
+                  "reports held for another wait", "linked crashes", "linked crashes pending at next"):
+            stats["loop: " + k] += r.runtime.get(k, 0)
+        for k in ("channels", "messages", "Cancelled delivered", "deadlocks crashed", "ends closed by a crash"):
+            stats["session: " + k] += r.runtime.get(k, 0)
         return r
 
     policies = [lambda: ReadyPolicy(), lambda: PausePolicy(), lambda: InputOrderPolicy(),
@@ -121,7 +128,9 @@ def check_program(seed, stats, cancel_sites=6):
                           f"{none.effects}\n{io.effects}")
         stats["C9 compared"] += 1
     # G4: deterministic programs give one result everywhere.
-    if not features & {"race!", "all_ok!", "crash"}:
+    # A session program may deadlock under one schedule and not another, or
+    # crash in whichever task uses an end second.
+    if not features & {"race!", "all_ok!", "crash", "arrival order", "session"}:
         stats["G4 compared"] += 1
         for name, r in results.items():
             if r.result == ("cancelled",):
