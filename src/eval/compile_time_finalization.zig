@@ -7767,7 +7767,21 @@ fn unreportedFailedRootPayload(
     failure: RootFailure,
 ) Allocator.Error!checked.CompileTimeRootPayload {
     if (root.guarded) return .runtime;
-    return .{ .const_node = try appendFailureConst(module, message, failure) };
+    return switch (root.kind) {
+        // The validated destructure stays in the runtime body, where it fails
+        // the same way when reached, since no diagnostic reported it here.
+        .hoisted_validation => .runtime,
+        .constant,
+        .hoisted_constant,
+        .callable_binding,
+        .expect,
+        .numeral_conversion,
+        .quote_conversion,
+        .interpolation_conversion,
+        .repl_expr,
+        .literal_argument,
+        => .{ .const_node = try appendFailureConst(module, message, failure) },
+    };
 }
 
 fn appendCrashConst(

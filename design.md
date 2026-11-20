@@ -7854,7 +7854,10 @@ while a kept owner prevents the right-hand side from evaluating twice.
 
 A surviving validation-only root evaluates the right-hand side and matches the
 complete source pattern, but its successful result is discarded rather than
-archived as a unit constant. A binder-free source declaration may then be erased
+archived as a unit constant. A failure is discarded only once it is reported.
+Where finalization reports nothing for the root's module, a failed validation
+records the `runtime` payload, guarded or not, and the destructure stays in
+the runtime body, which fails the same way when it is reached. A binder-free source declaration may then be erased
 from runtime lowering. The pending exhaustiveness site is explicitly classified
 for empirical compile-time validation when the eligible candidate is recorded.
 No candidate is recorded inside an ordinary top-level constant, because that
@@ -17999,6 +18002,16 @@ A nominal whose overrides are instantiated at types that mention the nominal
 (a method generic in its receiver) holds its own descriptor through its
 `Methods` record: the descriptor and the override callables that capture it
 are one group of recipes that lead back to one another, evaluated together.
+
+A nominal's descriptor holds every override instantiated at the nominal's
+arguments, including an override whose `where` clause those arguments do not
+satisfy (`to_hash` requiring `a.frob` on a `Nullable(Str)` that is only ever
+compared). Checking reports a missing method at any dispatch that reaches such
+an override, so a requirement over a resolved dispatcher with no method and no
+structural derivation resolves to a `checked_error` crash dictionary. So does
+a requirement on one of a body's own variables that its scopes hold no
+dictionary for, where the body composes such a nominal's descriptor over that
+variable without the override's `where` clause in scope.
 
 A type declared in a function body may name the body's type variables in its
 backing. Its occurrences are instantiated at those variables' types as well as

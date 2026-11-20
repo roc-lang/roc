@@ -25595,7 +25595,8 @@ pub const CompileTimeRootPayload = union(enum) {
     fn_value: ConstFnId,
     discarded,
     expect,
-    /// A guarded hoisted root whose compile-time evaluation failed. Runtime
+    /// A guarded hoisted root whose compile-time evaluation failed, or a
+    /// hoisted validation whose failure no diagnostic reported. Runtime
     /// lowering evaluates its original expression and declaration in place.
     runtime,
 };
@@ -28844,9 +28845,10 @@ fn verifyCompileTimeRootPayloadMatchesKind(root: CompileTimeRoot, payload: Compi
             .runtime => root.guarded,
             .pending, .unevaluated, .fn_value, .discarded, .expect => false,
         },
+        // A failure no diagnostic reported leaves the validated destructure
+        // to runtime, guarded or not.
         .hoisted_validation => switch (payload) {
-            .discarded, .unevaluated => true,
-            .runtime => root.guarded,
+            .discarded, .unevaluated, .runtime => true,
             .pending, .const_node, .fn_value, .expect => false,
         },
         .callable_binding => switch (payload) {

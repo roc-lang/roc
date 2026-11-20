@@ -3455,9 +3455,10 @@ pub const Program = struct {
     /// What resolves `requirement`, seen from the module that states it: the
     /// method its dispatcher's owner registers; a structural derivation
     /// where the owner registers none; a crash where no value of the
-    /// dispatcher can exist; and for a scope variable, a structural method
-    /// over its descriptor for a method descriptors carry, or else its
-    /// scope's dictionary.
+    /// dispatcher can exist; a checked-error crash where the dispatcher has
+    /// neither; and for a scope variable, a structural method over its
+    /// descriptor for a method descriptors carry, or else its scope's
+    /// dictionary.
     pub fn resolveRequirement(self: *Program, requirement: DictRequirement) Allocator.Error!RequirementResolution {
         const method_text = self.module(requirement.module).nameStore().methodNameText(requirement.method);
         switch (self.store.get(requirement.dispatcher)) {
@@ -3488,7 +3489,12 @@ pub const Program = struct {
             .structural => structuralResolution(requirement.structural.?, requirement.dispatcher),
             .unreachable_value => .{ .crash = .unreachable_value },
         };
-        const kind = requirement.structural orelse invariant("a type-resolved requirement's dispatcher has no method and no structural derivation, which checking rejects");
+        // A nominal's descriptor composes every override at the nominal's
+        // arguments, including an override whose `where` clause those
+        // arguments do not satisfy. Checking reports a missing method at
+        // every dispatch that reaches such a requirement, so it crashes as
+        // that checked error.
+        const kind = requirement.structural orelse return .{ .crash = .checked_error };
         return structuralResolution(kind, requirement.dispatcher);
     }
 

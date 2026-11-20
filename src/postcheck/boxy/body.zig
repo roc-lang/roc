@@ -1754,7 +1754,7 @@ pub const Builder = struct {
                     const literal_count = self.program.worker(procedure.target).literal_params;
                     const hidden = try self.program.arena.allocator().alloc(Word, procedure.bound.len + procedure.dicts.len + literal_count);
                     for (procedure.bound, hidden[0..procedure.bound.len]) |bound_ty, *desc| desc.* = try self.descWord(bound_ty);
-                    for (procedure.dicts, hidden[procedure.bound.len..][0..procedure.dicts.len]) |requirement, *dict| dict.* = try self.dictionaryFromType(requirement);
+                    for (procedure.dicts, hidden[procedure.bound.len..][0..procedure.dicts.len]) |requirement, *dict| dict.* = try self.dictionaryOfTree(.{ .requirement = requirement }, .checked_error);
                     for (hidden[procedure.bound.len + procedure.dicts.len ..], 0..) |*literal, index| literal.* = try self.derivedLiteralArg(procedure.target, procedure.bound, @intCast(index));
                     try self.recipes.set(id.?, try self.dictionaryRecipe(procedure.entry, hidden));
                 },
@@ -7780,8 +7780,18 @@ pub const Builder = struct {
     /// (`Program.resolveRequirement`), with each method target's own
     /// requirements resolved the same way (`Program.dictionaryTree`).
     pub fn dictionaryFromType(self: *Builder, root: lower.DictRequirement) Allocator.Error!Word {
-        return try self.dictionaryOfTree(.{ .requirement = root });
+        return try self.dictionaryOfTree(.{ .requirement = root }, .invariant);
     }
+
+    /// What a dictionary tree holds for a requirement on a scope variable
+    /// that this body's scopes hold no dictionary for. A body's own dispatch
+    /// never names one, since checking requires the dictionary in scope. A
+    /// nominal's override does where the body composes the nominal's
+    /// descriptor at its own variables without the override's `where`
+    /// clause in scope; checking reports a missing method at any dispatch
+    /// from this body that reaches that override, so it crashes as that
+    /// checked error.
+    const MissingScopeDictionary = enum { invariant, checked_error };
 
     /// The dictionary of the requirement tree `root`: a target's dictionary
     /// is its entry capturing the descriptors of the types its scheme takes,
@@ -7791,7 +7801,7 @@ pub const Builder = struct {
     /// the dictionaries of a requirement that reaches itself capture one
     /// another (`materializeCallable`). Children follow their parents in the
     /// tree, so building it from the last node builds every child first.
-    fn dictionaryOfTree(self: *Builder, root: lower.DictionaryRoot) Allocator.Error!Word {
+    fn dictionaryOfTree(self: *Builder, root: lower.DictionaryRoot, missing: MissingScopeDictionary) Allocator.Error!Word {
         const tree = try self.program.dictionaryTree(root);
         const words = try self.allocator.alloc(?Word, tree.len);
         defer self.allocator.free(words);
@@ -7811,7 +7821,10 @@ pub const Builder = struct {
                 .resolved => |resolution| switch (resolution) {
                     .structural => |structural| try self.composeDictionary(try self.program.structuralWorker(self.module, structural.method), &.{try self.descWord(structural.over)}),
                     .crash => |kind| try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, kind), &.{}),
-                    .scope_variable => |variable| try self.variableDictionary(variable, node.requirement.?),
+                    .scope_variable => |variable| try self.variableDictionary(variable, node.requirement.?) orelse switch (missing) {
+                        .invariant => invariant("a scope variable's method requirement has no dictionary in its scope, which checking requires"),
+                        .checked_error => try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, .checked_error), &.{}),
+                    },
                     .callable_eval => |entry| try self.composeDictionary(entry, &.{}),
                     .derived => invariant("a derived codec or map dictionary is resolved from a type alone, but checking records each with its plan at the dispatch it serves"),
                     .target => invariant("a dictionary's target requirement is not a resolved node"),
@@ -7844,13 +7857,14 @@ pub const Builder = struct {
     }
 
     /// The dictionary this body's scopes hold for `requirement`'s method on
-    /// scope variable `index`, as `requirement` calls it. The worker's scope
+    /// scope variable `index`, as `requirement` calls it, or null when they
+    /// hold none (`MissingScopeDictionary`). The worker's scope
     /// holds the dictionary at the interface its own requirement names, so
     /// a requirement naming another storage of that signature (the wider
     /// result row of a nominal override's or a target's own requirement)
     /// takes it adapted, as evidence handing the dictionary on does
     /// (`dictionaryOfAt`, design.md "Sealed Result Rows").
-    fn variableDictionary(self: *Builder, index: u32, requirement: lower.DictRequirement) Allocator.Error!Word {
+    fn variableDictionary(self: *Builder, index: u32, requirement: lower.DictRequirement) Allocator.Error!?Word {
         const worker = self.currentWorker().*;
         if (index >= worker.scheme_vars.len) invariant("a dispatcher variable is outside its worker's scope");
         const variable = worker.scheme_vars[index];
@@ -7868,7 +7882,7 @@ pub const Builder = struct {
             }
             offset += scope.len;
         }
-        invariant("a scope variable's method requirement has no dictionary in its scope, which checking requires");
+        return null;
     }
 
     /// The dictionary of a derived map with the checked selection `plan`,
