@@ -229,13 +229,17 @@ MATRIX = {
            "every generated program; a wait nothing can end is the same deadlock in every build",
            ["SharedVariables.test_a_wait_ends_when_another_task_commits",
             "SharedVariables.test_a_wait_nothing_can_end_is_a_deadlock_in_every_build", FUZZ]),
+    "V9": ("Generated declarations and types: the rule with lambda sets is exact against a counting heap "
+           "(accepted types never leak, rejected ones have a leaking witness); the checker's rule without "
+           "them is sound and rejects more only for functions in states; checking each declaration once "
+           "with summaries agrees with checking expanded types; dropping the function rule or the "
+           "parameter requirements is caught",
+           ["NoCycles.test_the_rule_is_exact_sound_and_modular_on_generated_types",
+            "NoCycles.test_examples", "NoCycles.test_each_part_of_the_rule_is_needed"]),
 }
 
 # Rows the prototype does not establish yet.
-PENDING = {
-    "V9": "The prototype's IR is untyped, so the no-cycles rule on state types needs a typed prototype "
-          "or the checker",
-}
+PENDING = {}
 
 
 def table(path, end_heading):

@@ -16,8 +16,9 @@ tables (G1–G9, C1–C11, R1–R8, P1–P10), of the sessions RFC's (S1–S10) 
 the shared state RFC's (V1–V9) has an entry in `coverage.py` naming how the
 prototype establishes it and the regression tests that pin it. The `Coverage`
 test fails if a row is missing or names a test that does not exist.
-`python3 coverage.py` prints the matrix. Every row is established except V9,
-which needs types the prototype's IR does not have.
+`python3 coverage.py` prints the matrix. Every row is established; none is
+pending. V9, the no-cycles rule, needs types the IR does not have, so
+`cycles.py` establishes it on a typed model of its own.
 
 The reference-count atomicity side has its own models in
 [rc-atomicity/](../rc-atomicity/README.md). `tests.py` runs both.
@@ -61,6 +62,10 @@ cd design/language/concurrency-prototype && python3 shared_model.py
 ```
 
 ```bash
+cd design/language/concurrency-prototype && python3 cycles.py 100000 7
+```
+
+```bash
 cd design/language/concurrency-prototype && python3 bench/shared_vs_actor.py
 ```
 
@@ -83,6 +88,7 @@ cd design/language/concurrency-prototype/bench && clang -O1 -g -fsanitize=thread
 | `sessions.py` | Sessions RFC | Channels, mailboxes and semaphore cells; ports (ends, `Post`s, `Inbox`es, permits) and what their release does; holder sets, and releasing a port no live task can use |
 | `library.py` | Sessions RFC and shared state RFC, "Library patterns" | The semaphore and the pool as server tasks, written in the IR as a library author would write them in Roc; the semaphore cell experiment; and the semaphore, pool and circuit breaker over `Shared` handles |
 | `shared.py` | Shared state RFC | `Shared` cells: atomic updates by a pure function's result (`Set`, `Keep` or `Wait`), waiters, cleanup (`finally!`, which always runs, and `on_failure!`, which runs only on cancellation or a crash), and poisoning. The IR spells these as `shared`, `step`, `defer`, `errdefer` and `undefer`; the RFC's "What the prototype shows" gives the mapping. A pure evaluator with exact ownership runs the update functions. `certify_defers` checks statically that shared operations appear only in effectful procedures, that steps call pure ones, and that every cleanup is matched on every path |
+| `cycles.py` | Shared state RFC, "No cycles" | The no-cycles rule on generated, possibly recursive and generic type declarations, decided three ways: with lambda sets, by the checker's rules on expanded types, and per declaration with summaries and requirements. Checked against a heap that counts references, with a leaking witness for every rejected type and two mutations it must catch |
 | `shared_model.py` | Shared state RFC, "Runtime" | The `ParallelTasks` lock protocol for atomic updates, explored over every interleaving of locks, reads, writes, wakes and parks, with three broken protocols it must catch |
 | `pipeline.py` | | Builds a program through ARC and both lowerings, with every static check |
 | `gen.py`, `check.py` | "What to establish first" | A typed program generator built from small constructs, and the checks run on each generated program |
@@ -338,3 +344,5 @@ The rule is `Shared.wake_rule = "latest"`, the default. Under it, 2,000 fuzzed p
 **Finding 19: a pool needs `on_failure!`, and the open belongs inside it.** A pool that takes back a resource with `finally!` lends it again in whatever state its user's crash or cancellation left it. With `on_failure!`, the pool counts the resource as lost, and the next borrower that finds none free opens a replacement. The pinned test shows the difference. The first version of the pool opened a replacement, a hosted call, before entering `on_failure!`: a borrower cancelled during the open lost the pool's slot for good. The open must be inside the body that `on_failure!` guards, right after the update that takes the slot.
 
 **Finding 20: the lock protocol is correct, and each of its rules is needed.** `shared_model.py` explores every interleaving of four scenarios: three threads sharing a permit, a taker waiting for a giver, two footprints of two variables named in opposite orders, and two waiters fed by a step over two variables. The correct protocol finishes every run in a state a serial order gives (729, 25, 369 and 307 states). Locking each footprint in the thread's own order deadlocks the two-cell footprints (V4); the RFC takes one handle per update, so this matters only if updates over several handles are added. Registering as a waiter after releasing the locks loses a wakeup in every scenario (V7). Steps without locks lose an update or a wakeup (V2, V7).
+
+**Finding 21: the no-cycles rule cannot use lambda sets, so states hold no functions.** `Shared` brings the first way for a Roc value to reach itself: a state that holds its own handle. Deciding this with lambda sets is exact: over 100,000 generated types, every accepted type ran 4 random programs (1,518,146 cells) without a leak, and every rejected type had a witness that leaked. But `.boxy` builds never compute lambda sets, and validity cannot depend on the lowering, so the checker must decide without seeing captures. Its rules (no function in a state, and no type that reaches its own handle through a state) accepted nothing the exact rule rejected, and rejected 8,359 of the 87,114 acyclic types, every one for a function in a state. Checked once per declaration, with summaries of earlier declarations and requirements on parameters, the rules gave the same answer as on the expanded type for every type, but only after three fixes the fuzzer found: a declared type's arguments are types the program writes even where a parameter is ignored; a phantom parameter carries no requirement; and a parameter that appears only inside a function's captured state still carries one.

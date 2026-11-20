@@ -5,7 +5,7 @@
 | Status | Draft. Not adopted; nothing here is part of `design.md`. |
 | Scope | The builtin `Shared(s)` type and its functions (`new!`, `update!`, `finally!`, `on_failure!`), atomic updates, waiting, cleanup on cancellation and crash, poisoning, their runtime representation and lowering, and the changes they make to the companion RFCs |
 | Companions | [Suspendable Effects and Platform-Scheduled Concurrency](concurrency-explicit-suspension.md): the task tree, plans, concurrent loops and crashes this RFC builds on. [Sessions, Channels and Shared Resources](concurrency-sessions.md): if this RFC is adopted, it replaces that RFC's mailboxes and its shared-resource libraries; channels remain for streaming |
-| Prototype | [`concurrency-prototype/`](concurrency-prototype/): `shared.py`, `shared_model.py`, the libraries in `library.py` and the `SharedVariables` and `SharedModel` tests. See "What the prototype shows" |
+| Prototype | [`concurrency-prototype/`](concurrency-prototype/): `shared.py`, `shared_model.py`, `cycles.py`, the libraries in `library.py`, and the `SharedVariables`, `SharedConveniences`, `SharedModel` and `NoCycles` tests. See "What the prototype shows" |
 
 ## Summary
 
@@ -13,14 +13,17 @@ The companion RFC's tasks share only immutable values. That covers fan-out,
 races and supervision, but not a resource that many tasks use while they run:
 a semaphore, a rate limiter, a pool, a circuit breaker shared across requests.
 The sessions RFC builds each of those as a server task that other tasks reach
-through a mailbox. This RFC instead adds one builtin opaque type and four
-functions, and no syntax:
+through a mailbox. This RFC instead adds one builtin opaque type, four
+functions and two shorthands, and no syntax:
 
 ```roc
 Shared.new! : s => Shared(s)
 Shared.update! : Shared(s), (s -> [Set(s, r), Keep(r), Wait]) => r
 Shared.finally! : Shared(s), (s -> s), (() => a) => a
 Shared.on_failure! : Shared(s), (s -> s), (() => a) => a
+
+Shared.get! : Shared(s) => s                   # update!(|s| Keep(s))
+Shared.modify! : Shared(s), (s -> s) => {}     # update!(|s| Set(g(s), {}))
 ```
 
 1. **A handle.** `Shared.new!(4)` creates shared state and returns a handle to
@@ -34,6 +37,8 @@ Shared.on_failure! : Shared(s), (s -> s), (() => a) => a
    abandons the update until another task changes the state, then runs `f`
    again. The `->` in `f`'s type is the atomicity boundary: a pure function
    cannot suspend or perform I/O, so nothing can happen in the middle of it.
+   `get!` and `modify!` are `update!` with a fixed answer, for reading and for
+   plain replacement.
 3. **Cleanup.** `permits.finally!(cleanup, body)` runs `body`, then applies
    `cleanup` to the state however `body` ends: by returning, by cancellation or
    by a crash. `on_failure!` applies it only on cancellation or a crash.
@@ -44,8 +49,12 @@ shared state is never left half-updated. A cleanup that crashes poisons the
 state, so a broken cleanup obligation becomes a crash at its next use instead
 of a silent leak.
 
+Two type rules keep reference counting complete: a state cannot hold a
+function, and no type can reach its own handle through a state. So cells never
+form a cycle, and each is freed when its last handle is.
+
 All names (`Shared`, `update!`, `Set`, `Keep`, `Wait`, `finally!`,
-`on_failure!`) are placeholders.
+`on_failure!`, `get!`, `modify!`) are placeholders.
 
 ## Motivation
 
@@ -120,8 +129,9 @@ A handle is not a reference in that sense:
 6. A crash never leaves shared state half-written, and a broken cleanup
    obligation is loud.
 7. No new syntax, no new kind of name and no references: one builtin opaque
-   type and its functions. No effect polymorphism, no non-escaping types, no
-   implicit conversions.
+   type and its functions, and one inferred requirement on the types a state
+   holds. No effect polymorphism, no non-escaping types, no implicit
+   conversions.
 8. No reference cycles, which Roc's reference counting cannot free.
 9. The same meaning under `None`, `Tasks` and `ParallelTasks`, up to
    scheduling.
@@ -159,7 +169,7 @@ download_all! = |urls| {
     total = urls.len()
     downloads = urls.map(|url| || {
         file = Http.get_bytes!(url)
-        done.update!(|n| Set(n + 1, {}))
+        done.modify!(|n| n + 1)
         Downloaded(file)
     })
     reporter = || {
@@ -195,9 +205,11 @@ The reporter above waits for the count to move instead of polling it. Its
 function captures `$seen` as nested functions capture any `var`: as the value
 it had when the function was defined, which is a new one on each iteration.
 
-Reading the state is an update that keeps it: `done.update!(|n| Keep(n))`.
-What a read returns may be out of date by the next line. To act on the state,
-decide inside the update.
+Two shorthands cover the commonest updates. `done.get!()` reads the state: it
+is `done.update!(|n| Keep(n))`. `done.modify!(|n| n + 1)` replaces it: it is
+`done.update!(|n| Set(n + 1, {}))`, as in the downloads above. What `get!`
+returns may be out of date by the next line. To act on the state, decide
+inside an update.
 
 ### Atomic updates
 
@@ -319,13 +331,35 @@ main! = |{}| {
 }
 
 handle! = |server, req| {
-    server.hits.update!(|n| Set(n + 1, {}))
+    server.hits.modify!(|n| n + 1)
     guarded!(server.breaker, Clock.now!(), || route!(req))
 }
 ```
 
 Two handles from two calls to `Shared.new!` are different state, even if they
 start equal. Copying a handle copies the handle, not the state.
+
+### What a state can hold
+
+Reference counting cannot free a cycle, and before `Shared` Roc had none: an
+immutable value cannot come to hold itself. A state can, if an update stores a
+value that reaches the same handle. Two type rules prevent it:
+
+- **A state holds no function**, anywhere inside it, including inside the
+  state of another handle it holds. A function's type does not say what it
+  captures, so any function in a state could capture that state's own handle.
+- **No type reaches its own handle through a state.** This is an error:
+
+```roc
+Node : [Nil, Next(Shared(Node))]
+```
+
+A `Node` could be stored in the state its own `Next` points to.
+
+Handles inside states are fine when they cannot lead back. A registry of
+sessions, `Shared(Dict(Str, Shared(Session)))`, is valid as long as `Session`
+holds no function and no `Shared(Dict(Str, Shared(Session)))`. A queue of jobs,
+`Shared(List(() => {}))`, is not valid, even if no job captures anything.
 
 ### Crashes
 
@@ -356,9 +390,9 @@ That is correct: the broken state lies outside the subtree being restarted.
   `Shared` calls in the same function body.
 - **Reading in one update and writing in another:** an update function that
   ignores its argument and returns `Set` of a value computed from an earlier
-  read of the same handle, as in `n = c.update!(|s| Keep(s))` followed by
-  `c.update!(|_| Set(n - 1, {}))`. That is a lost update. The warning suggests
-  deciding inside one update.
+  read of the same handle, as in `n = c.get!()` followed by
+  `c.modify!(|_| n - 1)`. That is a lost update. The warning suggests deciding
+  inside one update.
 - **A suspension point between an update and its cleanup:** a call that can
   suspend between an `update!` and the `finally!` or `on_failure!` on the same
   handle that follows it in the same body. A cancellation there skips the
@@ -452,6 +486,8 @@ Shared.new! : s => Shared(s)
 Shared.update! : Shared(s), (s -> [Set(s, r), Keep(r), Wait]) => r
 Shared.finally! : Shared(s), (s -> s), (() => a) => a
 Shared.on_failure! : Shared(s), (s -> s), (() => a) => a
+Shared.get! : Shared(s) => s
+Shared.modify! : Shared(s), (s -> s) => {}
 ```
 
 - `Shared(s)` is a builtin opaque type. It has no other functions, no equality
@@ -461,11 +497,16 @@ Shared.on_failure! : Shared(s), (s -> s), (() => a) => a
   not an effect.
 - The update and cleanup functions are pure. That is the whole of the
   atomicity rule, and the type checker already enforces it.
-- **No cycles.** The state type `s` of a `Shared(s)` may not contain
-  `Shared(s)`, directly, through other handles' state types, inside opaque
-  types, or in the captures of functions it holds. A reference cycle through
-  handles would need such a type, so this rules them out. Roc's lambda sets
-  make captures explicit, so the check consumes explicit data.
+- `get!` and `modify!` are defined with `update!` and add no semantics.
+- **No cycles.** For every `Shared(s)` the program forms:
+  1. No function type is reachable from `s` through records, tag unions,
+     lists, the contents of opaque types, and the state types of handles.
+  2. `Shared(s)` is not reachable from `s` through the same constructs.
+
+  A reference cycle between cells needs a path from a state back to its own
+  handle. That path runs through types, which rule 2 forbids, or through a
+  function's captures, which rule 1 forbids. See "No cycles" below for how the
+  checker applies the rules.
 - Hosted function signatures cannot mention `Shared` in the first version.
 
 ### `update!`
@@ -513,6 +554,33 @@ and drops it as usual. It has taken nothing.
 
 A cleanup can never wait: `s -> s` has no `Wait`. An update's pending `Wait`
 holds no entry, so a task parked in `Wait` has nothing of the update to undo.
+
+### No cycles
+
+The checker applies the two rules once per declaration, as it checks a
+declaration's other properties, and never to expanded types:
+
+- **Declarations.** A type declaration is checked with its parameters as
+  leaves. Each earlier declaration it uses is replaced by a summary: whether
+  its values hold a function, which of its parameters its values hold, and
+  which parameters end up inside a state. A type can reach itself only
+  through a recursive declaration, or a recursive tag union the solver infers
+  (checked where it is inferred), so every cycle is seen where it is declared.
+- **Requirements.** A parameter that ends up inside a state passes the rules
+  on to its arguments. `Box(a) : { h : Shared(a) }` is valid; `S : [Nil,
+  N(Box(S))]` is an error at `S`, and so is `Box(() => {})` wherever it is
+  written. Generic code that calls `Shared.new!` on a value of type `a` gets
+  the same requirement on `a`, inferred and passed on to its callers like a
+  static dispatch requirement.
+- **Phantom parameters.** A parameter that a declaration's values never hold,
+  and that no state of it holds, places no requirement. Its arguments are
+  still types the program writes, and are checked like any other.
+
+The rules need no lambda sets, and could not use them: `.boxy` builds never
+compute lambda sets, and a program's validity cannot depend on how it is
+lowered. That is why rule 1 is conservative. Without lambda sets, the checker
+cannot tell a function that captures nothing from one that captures the
+handle.
 
 ### Poisoning
 
@@ -580,6 +648,7 @@ so later stages consume it and never reconstruct it:
 - `finally!` and `on_failure!` lower to a push, the call of `body`, and a pop
   followed by the cleanup update (`finally!`) or by dropping the entry
   (`on_failure!`). Push and pop are balanced by construction, and certified.
+- `get!` and `modify!` are library functions that call `update!`.
 
 Backends see calls to builtins and ordinary `incref` and `decref` statements.
 They need no new knowledge of reference counting.
@@ -591,8 +660,8 @@ by tasks on several threads. Storing a value into a cell is an atomicity seed,
 like a hosted argument in the companion RFC's C6, and cells always use atomic
 counts. In `None` and `Tasks` builds, nothing changes.
 
-Because no state type can reach its own handle type, cells form no cycles,
-and reference counting frees every cell once the last handle to it is gone.
+Because of the no-cycles rules, cells form no cycles, and reference counting
+frees every cell once the last handle to it is gone (V9).
 
 ### Deadlocks and liveness
 
@@ -631,7 +700,7 @@ waited-on cell can run, the waiters crash with the deadlock message.
 | V6 | **Poisoning.** After a cleanup crashes, every update of its handle crashes, and so does every task waiting on it | Language guarantee | Tests |
 | V7 | **No lost wakeups.** A waiter registers before it releases its cell, so a store that follows the release always probes it. A waiter that a probe readies and that ends without storing, including by cancellation, probes on, so a waiter whose function would not wait is never left parked | Runtime invariant | Model (readying every waiter); tests and differential runs (readying the first) |
 | V8 | **Sequential equivalence.** C9 holds for programs that use `Shared`: a `None` build's `Wait` runs loop entries on demand, and is a deadlock only where the input-order schedule deadlocks | Language guarantee | Differential |
-| V9 | **No cycles.** No state type reaches its own handle type, so cells are freed when their last handle is. Not yet prototyped: the prototype's IR is untyped | Language guarantee | Typing rules |
+| V9 | **No cycles.** No state holds a function, and no type reaches its own handle through a state, so cells form no reference cycles and each is freed when its last handle is | Language guarantee | Typing rules; a typed model against a counting heap |
 
 ## Drawbacks
 
@@ -642,9 +711,9 @@ waited-on cell can run, the waiters crash with the deadlock message.
 - **Handles have identity.** Two equal-looking handles can be different state.
   Roc programs already handle values like this (streams, connections), but
   only from platforms.
-- **Every transition is a lambda.** `done.update!(|n| Set(n + 1, {}))` is
-  longer than an assignment. Small conveniences could shorten the common
-  cases; see "Decisions left to review".
+- **Transitions are lambdas.** `get!` and `modify!` cover reading and plain
+  replacement, but an update that decides or waits is a function that answers
+  with a tag, longer than an assignment.
 - **One handle per update.** State that changes together must share a handle,
   so unrelated state put in one record for one update becomes contended for
   every update.
@@ -662,8 +731,14 @@ waited-on cell can run, the waiters crash with the deadlock message.
   time the lock is held.
 - **Code runs during cancellation.** Cleanups are pure, but they are still Roc
   code running in a dropped task.
-- **The no-cycles rule** forbids some data structures, such as shared state
-  holding a closure that captures its own handle.
+- **States cannot hold functions.** A job queue or a table of callbacks in
+  shared state is a type error, even when no function in it captures a
+  handle, because the checker cannot see captures. Among generated types that
+  could never form a cycle, the rule rejected about one in ten; real programs
+  will differ.
+- **A new kind of inferred requirement.** Generic code that puts a type
+  variable inside a state passes a requirement on to its callers, and error
+  messages must explain it.
 - **Poison outside a supervised scope** crashes every restart until the limit,
   by design.
 
@@ -683,6 +758,10 @@ waited-on cell can run, the waiters crash with the deadlock message.
 | Running the first eligible waiter's update at the `Set` and handing it the result, as the sessions RFC's semaphore cell hands over a permit | Commits an update on behalf of a task that has not run. If that task is cancelled first, its update stays committed and the `finally!` after it never runs, so a permit is lost. The semaphore cell can give a permit back; a pure update has no inverse |
 | Probing the oldest waiter first, for fairness | A `None` build runs only the most recent waiter, so a `Tasks` build that served the oldest could not follow the input-order schedule, and C9 fails. The fuzzer found such a program |
 | Waking one waiter without probing, which passes the wake on if it waits again | Each `Set` by the woken waiter starts the chain again, so a semaphore still dispatches every waiter on every release |
+| Deciding cycles from lambda sets, which show what each function captures | Exact, as the prototype shows, and it would allow functions in states. But only `.lss` builds compute lambda sets, and a program's validity cannot depend on how it is lowered |
+| Checking each instantiation of a generic type when it is specialized | `.boxy` builds compile each generic function once and never specialize. Summaries and requirements give the same answer once per declaration, and the prototype checks that they agree |
+| A cycle collector for cells | Roc has no tracing collector, and cells would be the one thing that needed one |
+| Allowing functions in states, but not closures that capture handles | A function's type does not say what it captures, so the checker cannot enforce it |
 | A `match` with no case for a state means `Wait` | A forgotten case would become a hang instead of a compile error |
 | Optimistic retries, as in software transactional memory | Pure updates make retries safe, but long updates would redo work and could starve under contention. A lock fits because an update touches one known cell |
 | Handles that cannot escape their scope | Requires non-escaping closures in the type checker, and state shared across requests must escape anyway |
@@ -711,6 +790,7 @@ and the generated programs exercise each part of it:
 | `h.update!(f)` | `(step f (h) args)`, where `f` is a `pure` procedure returning `Set`, `Keep` or `Wait`; `Set` puts the result first, then the new state |
 | `h.finally!(c, body)` | `(defer c (h) args)`, the body, then `(undefer)` |
 | `h.on_failure!(c, body)` | `(errdefer c (h) args)`, the body, then `(undefer)` |
+| `h.get!()`, `h.modify!(g)` | `sv_get` and `sv_modify` in `library.py`, steps whose functions answer `Keep(s)` and, in the IR's order, `Set({}, g(s))`; the generated programs' peeks and increments |
 | Reading in a test | `(read h)` |
 
 `certify_defers` checks that every `defer` is matched on every path, so the
@@ -721,7 +801,8 @@ exercise the lock order.
 **Libraries** (`library.SHARED_SOURCE`): a semaphore, a pool with a lost count
 and `on_failure!`, the same pool with `finally!`, and the circuit breaker.
 
-**Tests** (`SharedVariables`, 17 tests, and `SharedModel`):
+**Tests** (`SharedVariables`, 17 tests, `SharedConveniences`, `SharedModel`
+and `NoCycles`):
 
 - Every permit comes back under every schedule and when the root is cancelled
   at any suspension point, and at most one job holds the permit at once.
@@ -754,6 +835,9 @@ and `on_failure!`, the same pool with `finally!`, and the circuit breaker.
   Without passing it on, some schedule deadlocks.
 - Static checks: unbalanced cleanups, impure update functions, and `Shared`
   operations in pure procedures are rejected.
+- The download counter: three workers call `modify!`, a reporter waits for
+  the third, and `get!` reads the total, with the same result under every
+  schedule and in a `None` build.
 - `shared_model.py` explores every interleaving of the `ParallelTasks` lock
   protocol. It finds no deadlock, lost wakeup or lost update, and catches
   locking two-cell steps in each thread's own order (V4), registering a waiter
@@ -808,9 +892,49 @@ fuzzed programs: 1,964 compared against the input-order schedule (C9),
 15,924 cancelled at a suspension point, 5,028 probes, and 336 wakes passed on
 by a readied waiter that was dropped before it ran.
 
+**No cycles** (`cycles.py`). The prototype's IR is untyped, so the rule has a
+model of its own. It generates type declarations, in a library group and a
+program group, each possibly recursive and generic, and closed types over
+them, by composing records, tag unions, lists, handles, function types and
+declared types at random. Function types carry their lambda sets, which a Roc
+type would not show. For each type it decides three ways:
+
+- **With lambda sets**, where a function reaches its captures: no handle lies
+  on a cycle of the type graph.
+- **The checker's rules**, without lambda sets, on the expanded type.
+- **The checker's rules per declaration**, with summaries and requirements,
+  as "No cycles" describes.
+
+It runs random programs over each accepted type on a heap that counts
+references: they make values, store new states that may hold any handle the
+program has, the cell's own included, read states back and drop handles. When
+the program ends, any cell reference counting cannot free is a leak. For each
+rejected type it builds a witness: a cell whose state reaches its own handle
+along the cycle.
+
+Over 100,000 generated types:
+
+| | Types | Result |
+|---|---|---|
+| Accepted with lambda sets | 87,114 | 348,456 random programs, 1,518,146 cells, no leak |
+| Rejected with lambda sets | 12,886 | Every witness leaks; 3,436 random programs leak too |
+| Accepted by the checker's rules | 78,755 | Each also accepted with lambda sets |
+| Rejected by the checker's rules only | 8,359 | Every one for a function in a state |
+| Per declaration against expanded types | 100,000 | The same answer for every type |
+
+So the rule with lambda sets is exact, the checker's rules are sound, and
+checking each declaration once suffices. Dropping rule 1 accepts types whose
+cells form a cycle through captures. Dropping the requirements on parameters
+accepts uses that put a function or a cycle inside a state. The tests catch
+both. Building the model found three things the checker must do: count a
+declared type's arguments as types the program writes, even for a parameter
+the declaration ignores; give a phantom parameter no requirement; and keep
+the requirement of a parameter that appears only inside a function's captured
+state.
+
 ## Decisions left to review
 
-Names are placeholders. The prototype settled four earlier questions:
+Names are placeholders. The prototype settled six earlier questions:
 
 - **Cleanup that knows how its body ended.** Needed: the pool must not lend a
   connection whose user crashed. `on_failure!` is the second form.
@@ -826,6 +950,14 @@ Names are placeholders. The prototype settled four earlier questions:
   proposal needed equality for, leaves dispatches quadratic. Handing a result
   to a waiter at the `Set` loses permits when the waiter is cancelled. See
   "Runtime" and the alternatives table.
+- **The no-cycles rule for generic code.** Checked once per declaration, with
+  summaries of earlier declarations and requirements on parameters, and an
+  inferred requirement on type variables in generic code. It agrees with
+  checking every expanded type on 100,000 generated types. It cannot use
+  lambda sets, so states hold no functions.
+- **Conveniences.** `get!` and `modify!` are in, defined with `update!`.
+  `get!` also makes reading and then acting separately easier to write, so
+  the read-then-write warning covers it.
 
 Still open:
 
@@ -836,19 +968,21 @@ Still open:
 - **(b) Contention under `ParallelTasks`:** whether spinning then yielding is
   enough, and how a hot handle compares with a semaphore task. The Python
   prototype cannot measure it; it needs the real runtime.
-- **(c) How the checker states the no-cycles rule for polymorphic code:** as a
-  constraint on `s` that callers inherit, or as a check when a state type is
-  known. Not prototyped.
-- **(d) The cost of probing.** Probes are still about n² pure calls under
+- **(c) The cost of probing.** Probes are still about n² pure calls under
   contention, each inside a crash boundary and, under `ParallelTasks`, under
   the cell's lock. Options to cut them: skip a waiter whose state equals the
   one it waited on, for state types that have equality, which saves calls but
   keeps old states alive; or let a library declare that its waiters are
   interchangeable, so that a probe that finds one waiter waiting stops. The
   real runtime should measure whether either is worth it.
-- **(e) Conveniences:** `get!` for `update!(|s| Keep(s))`, and `modify!` for
-  `update!(|s| Set(g(s), {}))`. Each would make the common case shorter; `get!`
-  also makes reading and then acting separately easier to write.
+- **(d) Channel ends in states.** An end reaches the values in its channel's
+  buffer, so the rules should treat it as holding its message type. The
+  sessions RFC's ends also have holder sets, which this model does not
+  include. Not prototyped.
+- **(e) Whether functions in states are worth a finer rule.** Job queues and
+  callback tables are the cases rule 1 rejects. If real programs need them in
+  shared state, a finer rule needs to know captures, and so would have to
+  work without lambda sets in `.boxy` builds.
 
 ## Future possibilities
 
@@ -864,10 +998,11 @@ Still open:
 
 ## Implementation plan
 
-1. **Prototype.** Done for the semantics; see "What the prototype shows". The
-   no-cycles rule needs a typed prototype or the checker itself.
-2. **Builtins.** `Shared(s)` and its four functions, with their types.
-3. **Checker.** The no-cycles rule, and the three warnings.
+1. **Prototype.** Done; see "What the prototype shows".
+2. **Builtins.** `Shared(s)`, its four functions and the two shorthands, with
+   their types.
+3. **Checker.** The no-cycles rules, per declaration with summaries, the
+   inferred requirement on type variables, and the three warnings.
 4. **Post-check IR.** Explicit updates, cleanup pushes and pops, certified
    (V3, V5).
 5. **Runtime.** Cells, locking per build, waiters, cleanup stacks, poisoning

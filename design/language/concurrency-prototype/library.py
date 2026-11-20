@@ -256,6 +256,23 @@ SHARED_SOURCE = r"""
   (do (undefer))
   (ret v))
 
+; ---- get! and modify!, which are update! with a fixed answer
+;   get! = |h| h.update!(|s| Keep(s))
+;   modify! = |h, g| h.update!(|s| Set(g(s), {}))
+(proc sv_keep (s) pure (ret (tag Keep s)))
+
+(proc sv_apply (s g) pure
+  (let n (callc g s))
+  (ret (tag Set 0 n)))
+
+(proc sv_get (h) eff
+  (let v (step sv_keep (h)))
+  (ret v))
+
+(proc sv_modify (h g) eff
+  (do (step sv_apply (h) g))
+  (ret 0))
+
 ; ---- pool
 ; The cell holds (free resources, resources lost). A lease that ends by
 ; cancellation or a crash loses its resource (on_failure!); the next borrower

@@ -2141,6 +2141,76 @@ class SharedVariables(unittest.TestCase):
         self.assertLess(c.heap["alloc"], a.heap["alloc"])
 
 
+class SharedConveniences(unittest.TestCase):
+    """get! and modify! (library.SHARED_SOURCE), which are update! with a
+    fixed answer: the RFC's download counter and its reporter."""
+
+    PROGRESS = """
+    (proc inc (n) pure (ret (add n 1)))
+    (proc worker (h k) eff (let a (host work k)) (do (call sv_modify h (clo inc))) (ret a))
+    (proc seen_all (n total) pure
+      (let short (lt n total))
+      (if short (block (ret (tag Wait))) (block (ret (tag Keep n)))))
+    (proc reporter (h) eff (let n (step seen_all (h) 3)) (ret n))
+    (proc main () eff
+      (let h (shared 0))
+      (let r (call all! (list (clo worker h 1) (clo reporter h) (clo worker h 2) (clo worker h 3))))
+      (let n (call sv_get h))
+      (ret (tup r n)))
+    """
+
+    def test_modify_and_get_are_updates(self):
+        lows = build(library.SOURCE + library.SHARED_SOURCE + self.PROGRESS)[1]
+        want = ("done", ("tup", None, (("list", None, (101, 3, 102, 103)), 3)))
+        self.assertEqual(everywhere(lows), {want})
+        self.assertEqual(run_none(lows["lss"].prog).result, want)
+        # The reporter waits until the third modify! and is woken by it.
+        r = tasks(lows, PausePolicy())
+        self.assertGreaterEqual(r.runtime["waits"], 1)
+
+
+class NoCycles(unittest.TestCase):
+    """The no-cycles rule on state types (cycles.py; V9)."""
+
+    def setUp(self):
+        import cycles
+        self.cycles = cycles
+        self.addCleanup(lambda: cycles.MUTATIONS.update({k: False for k in cycles.MUTATIONS}))
+
+    def test_the_rule_is_exact_sound_and_modular_on_generated_types(self):
+        # precise (with lambda sets) never accepts a type that leaks and
+        # always has a leaking witness for one it rejects; the checker
+        # (without them) accepts nothing precise rejects, and rejects more
+        # only for a function in a state; checking each declaration once
+        # with summaries agrees with checking the expanded type.
+        stats, failures = self.cycles.fuzz(3000, 0)
+        self.assertEqual(failures, [])
+        self.assertEqual(stats["witnesses that leak"], stats["precise rejects"])
+        self.assertGreater(stats["precise rejects"], 100)
+        self.assertGreater(stats["rejected only for a function in a state"], 100)
+        self.assertGreater(stats["cells made"], 10000)
+
+    def test_examples(self):
+        for name, (decls, x, precise, checker) in self.cycles.EXAMPLES.items():
+            self.assertEqual(self.cycles.precise_ok(decls, x), precise, name)
+            self.assertEqual(self.cycles.checker_verdict(decls, x)[0], checker, name)
+            self.assertEqual(self.cycles.modular_verdict(decls, [[n] for n in decls], x), checker, name)
+
+    def test_each_part_of_the_rule_is_needed(self):
+        def failures(mutation):
+            self.cycles.MUTATIONS[mutation] = True
+            try:
+                return [why for _, why, _ in self.cycles.fuzz(5000, 0)[1]]
+            finally:
+                self.cycles.MUTATIONS[mutation] = False
+        # Allowing functions in states accepts types whose cells can form a
+        # cycle through a closure's captures.
+        self.assertTrue(any(w.startswith("checker accepts") for w in failures("no_fn_rule")))
+        # Forgetting which parameters end up inside a state accepts uses
+        # that put a function or a cycle there.
+        self.assertTrue(any(w.startswith("modular True") for w in failures("no_requirements")))
+
+
 class SharedModel(unittest.TestCase):
     def test_every_interleaving_of_the_lock_protocol(self):
         import shared_model
