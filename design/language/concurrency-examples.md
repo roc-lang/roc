@@ -207,7 +207,8 @@ Latch :: Shared(U64).{
 Inside one loop, the end of the loop is already a latch. A `Latch` is for tasks
 in different parts of the tree, such as request handlers that must not start
 until a warm-up elsewhere has finished. One `count_down!` too many is a bug: it
-overflows inside the update, so it crashes and changes nothing.
+overflows inside the update, which poisons the latch, so the task that counted
+down crashes and so does every task waiting on it.
 
 ### Barrier
 
@@ -948,19 +949,7 @@ timer needs. Throttling is the rate limiter, and timeouts are deadlines.
 The examples need no new primitive. They do expose places where the design is
 slower, wordier or weaker than it could be, roughly in order of importance.
 
-1. **Updates may copy large state.** The bounded queue, the log, the cache
-   and the replication record all change a collection inside `update!`. An
-   update that crashes changes nothing, so the cell must still hold the old
-   state if the function crashes. If the cell keeps its own reference for that
-   while the function runs, the function never has the only reference, and
-   every `append` or `insert` copies the whole collection. `Keep` and `Wait`
-   paths could hand the state back unchanged, but a crash halfway through an
-   in-place change cannot. The alternative is to lend the state uniquely and
-   poison the handle when an update crashes, as a crashing cleanup already
-   does. The shared-state RFC leaves this as open decision (f), and the choice
-   decides whether queues and caches in `Shared` cost O(1) or O(n) per
-   operation.
-2. **Waking many tasks is serialized.** A barrier opening, a watched value
+1. **Waking many tasks is serialized.** A barrier opening, a watched value
    changing, a log gaining an event, or a cache entry becoming ready all release
    many waiters whose updates keep the state. Each is readied only after the
    one before it has run and passed the wake on, so releasing `n` waiters takes
@@ -968,27 +957,27 @@ slower, wordier or weaker than it could be, roughly in order of importance.
    them in parallel. Readying at once every waiter whose probe would `Keep`,
    together with the first that would `Set`, would fix this at the cost of
    probing every waiter. The shared-state RFC lists it under open decision (c).
-3. **Waiters on unrelated keys are probed.** In `cached!`, every store to the
+2. **Waiters on unrelated keys are probed.** In `cached!`, every store to the
    dictionary probes the waiters for every other key. Holding one handle per
    key inside an outer handle (`Shared(Dict(k, Shared(Entry(v))))`) avoids it,
    and a state may hold handles, but nothing points programmers there.
-4. **One entry cannot be cancelled on its own.** The debouncer leaves a
+3. **One entry cannot be cancelled on its own.** The debouncer leaves a
    sleeping task for every event and ignores the stale ones, and graceful
    shutdown races each accept against the stop flag. Both work, and both cost
    a task or a race that a way to cancel one entry would save. Such a
    cancellation would need a name for an entry, which the loop deliberately
    lacks. Background entries cover the commonest case, a deadline that should
    not hold the loop open.
-5. **Compensation cannot run on cancellation.** Cleanups are pure, so a saga
+4. **Compensation cannot run on cancellation.** Cleanups are pure, so a saga
    whose caller cancels it cannot undo the bookings it made. This follows from
    silent cancellation, which the main RFC chose deliberately. A saga must
    either run where nothing cancels it, or record each step durably so that a
    recovery task compensates later, as sagas do in practice.
-6. **One handle per update.** The philosophers and the replication record fit
+5. **One handle per update.** The philosophers and the replication record fit
    in one handle. A transfer between two accounts held in separate handles
    does not, so it must use a record of both, which is the shared-state RFC's
    `update2!` future possibility.
-7. **Supervision has no restart window or backoff.** OTP limits restarts per
+6. **Supervision has no restart window or backoff.** OTP limits restarts per
    period of time, and production supervisors wait between restarts.
    `supervise!` counts restarts for its whole life. The main RFC settled this
    deliberately: in its prototype, supervising each unit of work with a
@@ -996,12 +985,12 @@ slower, wordier or weaker than it could be, roughly in order of importance.
    died after a few transient crashes. A window matters for long-lived
    processes, which the task tree makes rare. Backoff between restarts is
    still missing, and would be a field of the configuration record.
-8. **Pure parallel computation is out of scope.** Sorting or transforming
+7. **Pure parallel computation is out of scope.** Sorting or transforming
    large data in parallel, without effects, is the main RFC's future
    deterministic parallelism, not something these features give.
 
-Three earlier gaps are now closed in the RFCs, though the prototype has not
-caught up with them:
+Four earlier gaps are now closed in the RFCs. The prototype models the first
+three:
 
 - **Fairness.** `None` builds now pause a waiting task instead of running
   others on top of it, so waking no longer has to follow one stack's order.
@@ -1011,6 +1000,10 @@ caught up with them:
   without counting by hand.
 - **A limited `all!`.** `plan.all!()` and `plan.all_ok!()` return any plan's
   results in input order.
+- **Copying large state.** `update!` moves the state into its function, so
+  the bounded queue, the log, the cache and the replication record change in
+  place, at the cost of a list append or a dictionary insert. An update that
+  crashes now poisons its handle, as a crashing cleanup does.
 
 Everything else reads like the sequential program. The concurrency is in a
 plan, a loop or an update, and the state is a value. Most examples in sections

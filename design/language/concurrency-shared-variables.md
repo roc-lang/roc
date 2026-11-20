@@ -51,10 +51,16 @@ Shared.modify! : Shared(s), (s -> s) => {}     # update!(|s| Set(g(s), {}))
    functions. A queue has a `stream` method, so `for! item in queue` reads
    from it, which is how tasks stream values to each other.
 
-Crashes keep OTP's semantics. An update that crashes changes nothing, so
-shared state is never left half-updated. A cleanup that crashes poisons the
-state, so a broken cleanup obligation becomes a crash at its next use instead
-of a silent leak.
+An update has the state to itself. `update!` moves the state out of the
+handle into `f`, and `Keep` and `Wait` put the same state back, so a state
+that nothing else holds changes in place, as a unique value does anywhere in
+Roc. A queue in a handle costs what a list costs.
+
+Crashes keep OTP's semantics. An OTP server that crashes loses its state, and
+an update or a cleanup that crashes poisons its handle: every later use of it
+crashes, and restarting the scope that created it makes a new one. Shared state
+is never seen half-updated, and a broken update or cleanup obligation becomes a
+crash at its next use instead of a silent leak.
 
 A state can hold any value, functions and its own handle included.
 Reference counting frees a cell when its last handle is gone. Cells that hold
@@ -149,8 +155,8 @@ A handle is not a reference in that sense:
    construction.
 5. Cleanup that runs on cancellation, without letting a cancelled task perform
    effects or suspend.
-6. A crash never leaves shared state half-written, and a broken cleanup
-   obligation is loud.
+6. A crash never leaves shared state half-written, and a crash in an update
+   or a broken cleanup obligation is loud.
 7. No new syntax, no new kind of name and no references: one builtin opaque
    type and its functions. No new type rules, no effect polymorphism, no
    non-escaping types, no implicit conversions.
@@ -159,6 +165,8 @@ A handle is not a reference in that sense:
    holds.
 9. The same meaning under `None`, `Tasks` and `ParallelTasks`, up to
    scheduling.
+10. Changing a state costs what changing a value of its type costs: a state
+    that only the update holds changes in place.
 
 ## Guide-level explanation
 
@@ -286,6 +294,32 @@ release, not ten.
 When the function is a `match`, the case that waits is written out, so a
 forgotten case is a compile error, not a hang.
 
+### Large states change in place
+
+`update!` moves the state into its function. The handle holds nothing while
+the function runs, so unless a task still holds the state from a `get!` or an
+earlier answer, the function holds the only reference, and the state changes
+in place as any unique value does. `Queue.push!` (see "The library") appends
+to a list in a handle at the cost of appending to a list:
+
+```roc
+push! = |Queue.(cell), item| cell.update!(|q|
+    if q.closed {
+        Keep(Closed)
+    } else if q.items.len() == q.capacity {
+        Wait
+    } else {
+        Set({ ..q, items: q.items.append(item) }, Pushed)
+    })
+```
+
+`Keep` and `Wait` put back the state the function was given, so a branch that
+answers one of them still needs the old state. The rule is the one for any
+Roc value: decide first, then build the new state in the branch that answers
+`Set`. A new state built before the decision, or in another function that
+returns the tag, is built while the old state may still be needed, so it is a
+copy.
+
 ### Cleanup that always runs
 
 `permits.finally!(cleanup, body)` calls `body` and returns its result. However
@@ -396,11 +430,15 @@ should clear their states first, or run each iteration in a task.
 
 ### Crashes
 
-- **An update that crashes changes nothing.** An overflow inside the function
-  leaves the state as it was, and the task crashes at the `update!` call.
-- **A cleanup that crashes poisons the state.** Every later update of a
-  poisoned handle crashes with "this shared state was poisoned when a cleanup
-  crashed at …". No code can test for poison or clear it.
+- **An update or a cleanup that crashes poisons its handle.** The function
+  had the state to itself, so the state goes with the crash, and the task
+  crashes at the call. Every later update of a poisoned handle crashes with
+  "this shared state was poisoned when an update crashed at …" (or a
+  cleanup), and so does every task waiting on it. No task ever sees a
+  half-made state. No code can test for poison or clear it.
+- **Decide inside, crash outside.** An update that finds the state wrong
+  answers with a tag that says so, and its caller crashes after the update, so
+  that other tasks keep the state. `Reply.answer!` below does this.
 - **Where the handle is created decides what a restart does.** A handle
   created inside a supervised function is new on every restart:
 
@@ -558,14 +596,19 @@ Reply(a) :: Shared([Pending, Done(a), Dropped]).{
     new! = || Reply.(Shared.new!(Pending))
 
     answer! : Reply(a), (() => a) => {}
-    answer! = |Reply.(cell), f|
-        cell.on_failure!(|_| Dropped, || {
+    answer! = |Reply.(cell), f| {
+        answered = cell.on_failure!(|r| match r { Pending => Dropped, _ => r }, || {
             value = f()
             cell.update!(|r| match r {
-                Pending => Set(Done(value), {})
-                _ => crash "this reply was already answered"
+                Pending => Set(Done(value), Answered)
+                _ => Keep(AlreadyAnswered)
             })
         })
+        match answered {
+            Answered => {}
+            AlreadyAnswered => crash "this reply was already answered"
+        }
+    }
 
     wait! : Reply(a) => [Done(a), Dropped]
     wait! = |Reply.(cell)| cell.update!(|r| match r {
@@ -742,18 +785,22 @@ Shared.modify! : Shared(s), (s -> s) => {}
 
 1. Acquire `h` (see "Runtime").
 2. If `h` is poisoned, release it and crash.
-3. Call `f` on the state. While `f` runs, the state is borrowed: `f` sees the
-   current value and cannot be told apart from a call on an ordinary value.
-4. On `Set(new, r)`: store `new`, release the old state, wake waiters as
-   "Waking" under "Runtime" describes, release `h`, and return `r`.
-5. On `Keep(r)`: release `h` and return `r`.
-6. On `Wait`: register the task as a waiter on `h` while still holding it,
-   release `h` and park. When another task's update stores to `h`, or `h` is
-   poisoned, the waiter may be readied (see "Waking" under "Runtime"). A
-   readied waiter starts again at step 1.
+3. Move the state out of `h` and call the update form of `f` on it (see
+   "Lowering"). `h` holds nothing while `f` runs, so `f` holds the state's
+   reference, and where it is the only one, `f` changes the state in place.
+   `f` cannot be told apart from a call on an ordinary value.
+4. On `Set(new, r)`: store `new`, wake waiters as "Waking" under "Runtime"
+   describes, release `h`, and return `r`.
+5. On `Keep(r)`: put back the state `f` was given, release `h` and return `r`.
+6. On `Wait`: put back the state `f` was given, register the task as a waiter
+   on `h` while still holding it, release `h` and park. When another task's
+   update stores to `h`, or `h` is poisoned, the waiter may be readied (see
+   "Waking" under "Runtime"). A readied waiter starts again at step 1.
 
-If `f` crashes, nothing is stored, `h` is released as part of the crash, and
-the task crashes at the call.
+If `f` crashes, `h` stays empty and is poisoned, its waiters are readied so
+that they crash, `h` is released as part of the crash, and the task crashes at
+the call. The state `f` held is in the crashed frames, which the companion
+RFC's R5 leaks.
 
 `update!` is a suspension point and adds a wait source: the handle the task
 waits on. Cancelling a task parked in `Wait` removes it from the waiter list
@@ -774,7 +821,8 @@ and drops it as usual. It has taken nothing.
   task's children, then runs the task's pending entries, innermost first. The
   closures were built before `body` was called, so they do not depend on the
   native frames whose state the crash left unknown.
-- **A cleanup that crashes** stores nothing and poisons its handle. The
+- **A cleanup** gets the state moved in, as an update does, and its result
+  is stored. **A cleanup that crashes** stores nothing and poisons its handle. The
   remaining entries still run. If the task was being cancelled, it now
   crashes, and crash links take over. If it was already crashing, the first
   crash propagates, with the cleanup's message attached.
@@ -837,9 +885,9 @@ finish, and the cells are released.
 
 ### Poisoning
 
-Each handle's state carries a poisoned flag. A cleanup that crashes sets it.
-Any later update of a poisoned handle crashes with a message naming the
-cleanup's source location. Waiters on a poisoned handle are readied, so that
+Each handle's state carries a poisoned flag. An update or a cleanup that
+crashes sets it. Any later update of a poisoned handle crashes with a message
+naming the source location of the function that crashed. Waiters on a poisoned handle are readied, so that
 they crash too.
 
 ### Runtime
@@ -856,8 +904,9 @@ flag, a list of waiters, in `Tasks` and `ParallelTasks` builds a holder set
 
 **Waking.** Waiters are kept in the order they began waiting. After a `Set`,
 while still holding the cell, the runtime probes them, oldest first: it
-calls each waiter's function on the new state and discards the result,
-storing nothing. It readies the first waiter whose function would not answer
+calls the probe form of each waiter's function on the new state, which the
+cell keeps, and stores nothing. The probe form decides the tag and builds no
+state and no answer (see "Lowering"), so a probe never copies the state. It readies the first waiter whose function would not answer
 `Wait`, and stops. Oldest first is fair: a waiter that could go ahead is
 never passed over for one that began waiting later. A readied waiter that
 waits again keeps its place. The readied waiter is marked as carrying the
@@ -870,7 +919,8 @@ wake:
   lost with it.
 
 Probing is exact: a pure function given the same state and captures gives
-the same answer. It commits nothing on a waiter's behalf, so a waiter
+the same answer, and the probe form answers `Wait` exactly when the function
+would. It commits nothing on a waiter's behalf, so a waiter
 cancelled after it was readied has taken nothing. A probe that crashes counts
 as not waiting: the waiter is readied and crashes when it runs. Each probe
 runs inside a crash boundary in the storing task, and in `ParallelTasks`
@@ -893,9 +943,10 @@ be cancelled there.
 so later stages consume it and never reconstruct it:
 
 - `Shared.new!` lowers to a call that allocates a cell.
-- `update!` lowers to an acquire, a load of the state, a call of the function,
-  a `match` on its tag with a store, release and wake on `Set`, a release on
-  `Keep`, and a register, release and suspend followed by a jump back to the
+- `update!` lowers to an acquire, a move of the state out of the cell, a
+  call of the function's update form, a `match` on its tag with a store,
+  release and wake on `Set`, a put-back and release on `Keep`, and a
+  put-back, register, release and suspend followed by a jump back to the
   acquire on `Wait`. In `None` and `Tasks` builds, acquire and release are
   omitted; the `concurrency` field is already an explicit input to every
   unit's compilation.
@@ -903,6 +954,26 @@ so later stages consume it and never reconstruct it:
   followed by the cleanup update (`finally!`) or by dropping the entry
   (`on_failure!`). Push and pop are balanced by construction, and certified.
 - `get!` and `modify!` are library functions that call `update!`.
+- **The update form.** Each function literal written as `update!`'s argument
+  is lowered twice. In the update form, each tail position of its body,
+  followed through `if`, `match` and blocks, is rewritten: a tail that builds
+  `Keep(r)` or `Wait` also returns the parameter, the state the function was
+  given; a tail that builds `Set(new, r)` is unchanged; and any other tail
+  expression `e`, such as a call that returns the tag, becomes a `match` on
+  `e` that does both. Reference counting then runs as usual. On a path that
+  ends in `Set`, the state is not used after the new one is built, so a state
+  with a count of one changes in place. On a path that ends in `Keep` or
+  `Wait`, the state is still used and is kept. A tail that is a call keeps the
+  state alive across the call, so a `Set` built inside it copies. A function
+  passed to `update!` as a value is called from such a tail. The rule reads
+  only the literal's own body, so it is the same in `.lss` and `.boxy` builds.
+- **The probe form.** In the probe form, a tail that builds `Set(new, r)` or
+  `Keep(r)` evaluates neither `new` nor `r` and answers that the waiter would
+  go ahead; a `Wait` tail answers that it would wait; any other tail calls
+  `e` and inspects its tag. A crash in `new` or `r` would also have readied
+  the waiter ("Waking"), so skipping them changes no outcome.
+- **Cleanups** are `s -> s`, so they need no rewrite: the state is moved in
+  and the result stored.
 
 Backends see calls to builtins and ordinary `incref` and `decref` statements.
 They need no new knowledge of reference counting.
@@ -966,14 +1037,15 @@ tasks not waiting on a cell, checking holders only when it reaches zero.
 | | Invariant | Kind | Established by |
 |---|---|---|---|
 | V1 | **Visibility.** Shared state is reached only through `Shared` functions, all effectful; pure code can hold a handle but has no operation on it | Language guarantee | Typing rules |
-| V2 | **Update atomicity.** An update's function sees one state, and its `Set` is stored whole or not at all | Language guarantee | Model; differential runs under random schedules |
+| V2 | **Update atomicity.** An update's function sees one state, and its `Set` is stored whole. A function that crashes stores nothing and poisons the handle, so no task sees a half-made state | Language guarantee | Model; differential runs under random schedules |
 | V3 | **Updates do not suspend.** Update and cleanup functions are pure, so they contain no effectful call and no suspension point; `Wait` suspends only after its update is abandoned | Compiler invariant | Certify |
 | V4 | **No lock deadlock.** An update holds one cell's lock, runs only pure code while holding it, and releases it before any suspension | Runtime invariant | Model |
 | V5 | **Cleanups run exactly once:** a `finally!` cleanup on every exit from its body (return, cancellation, crash), an `on_failure!` cleanup on cancellation and crash only | Language guarantee | Certify push and pop; cancel at every suspension point; crash at every update |
-| V6 | **Poisoning.** After a cleanup crashes, every update of its handle crashes, and so does every task waiting on it | Language guarantee | Tests |
+| V6 | **Poisoning.** After an update or a cleanup crashes, every update of its handle crashes, and so does every task waiting on it | Language guarantee | Tests |
 | V7 | **No lost wakeups.** A waiter registers before it releases its cell, so a store that follows the release always probes it. A waiter that a probe readies and that ends without storing, including by cancellation, probes on, so a waiter whose function would not wait is never left parked | Runtime invariant | Model (readying every waiter); tests and differential runs (readying the first) |
 | V8 | **Sequential equivalence.** C9 holds for programs that use `Shared`: a `None` build's `Wait` pauses its task and runs the next ready one, as the coroutine schedule does, and is a deadlock only where that schedule deadlocks | Language guarantee | Differential |
 | V9 | **Every cell is freed.** A cell is freed when its last handle goes, or, when its remaining references are only in the states of cells that no running task holds or in crashed frames, when its last holder finishes and the runtime releases it. A released cell is never updated again | Runtime invariant | Exact heap accounting after every run of generated programs whose states hold handles and jobs; an assertion at every use of a cell; mutations |
+| V10 | **Forms agree.** A function's probe form answers `Wait` exactly when its update form does, and its update form puts back on `Keep` and `Wait` the state it was given | Compiler invariant | Certify; differential runs of probes against updates |
 
 ## Drawbacks
 
@@ -992,9 +1064,15 @@ tasks not waiting on a cell, checking holders only when it reaches zero.
   every update.
 - **Contention.** Under `ParallelTasks`, one hot handle serializes every task
   that updates it, and a long update delays them all.
-- **Changing a large state copies it.** The update borrows the state, so it
-  never holds the only reference, and appending to a queue in a handle copies
-  the whole queue. See open decision (f).
+- **A crash in an update loses the state.** Borrowing the state would keep
+  it. Here a bug in an update function poisons its handle, and every task that
+  uses the handle crashes, not just the one that hit the bug. Deciding inside
+  and crashing outside keeps intended crashes from doing this.
+- **Where the new state is built decides whether it is copied.** A state
+  built before the decision, or by another function that returns the tag, is
+  built while `Keep` or `Wait` may still need the old one, so it is a copy.
+  The rule is the one for any Roc value, but the old state's last use is
+  hidden in `Keep` and `Wait`.
 - **Waking many waiters is serialized.** When a `Set` lets many waiters go
   ahead without changing the state, as when a barrier opens or a watched value
   changes, each is readied only after the one before it has run and passed
@@ -1017,7 +1095,7 @@ tasks not waiting on a cell, checking holders only when it reaches zero.
 - **Stores walk their state.** To pass holders on, every store walks the parts
   of the new state that can hold a handle. Deadlock detection already needs
   this walk, but a large state full of handles makes every store O(n), even
-  if open decision (f) makes changing it in place cheap.
+  when the change itself is in place.
 - **A reply nobody will answer is a deadlock, not a value.** A channel's
   receiver learned `Cancelled` when the sender's end was dropped. A cell has
   no ends: a `Reply` becomes `Dropped` only when the task answering it fails
@@ -1038,6 +1116,9 @@ tasks not waiting on a cell, checking holders only when it reaches zero.
 | One-shot channels that carry the next end, for streams (the sessions RFC) | Ends used once and checked only at run time, one reader per stream, and no backpressure without a protocol of replies. See "Why not channels for streams" |
 | Tasks that own the state, reached through mailboxes (the sessions RFC) | A server task per resource, two messages per acquire, end rules checked only at run time, and servers written as recursion. See "Why not tasks that own the state" |
 | Shared variables: `var $$x`, `&$$x`, `wait` and `defer` (this RFC's earlier draft) | References in Roc: names whose plain reads see other tasks' writes, an operator that aliases storage, and a statement rule for atomicity. See "Why not shared variables" |
+| Lending the state while the cell keeps it, so that an update that crashes changes nothing (this RFC's earlier draft) | The function never holds the only reference, so every `Set` copies the whole state: a queue, a log or a cache in a handle costs O(n) per operation, and a waiter's probe copies it again |
+| Lending the state and recommending collections that share structure for large states | Keeps the old state for a crash at O(log n) per change, but the obvious `List` and `Dict` stay at O(n), a cost that is easy to miss |
+| Returning the state on every path, as Lean's `modifyGet` does | A `Keep` could return a changed state, and waiters would never hear of the change. Here the compiler puts the state back, so `Keep` cannot change it |
 | `update!` returning a pair `(new, r)`, as Haskell's `atomicModifyIORef` does | Cannot say "unchanged", so every read would wake waiters, and cannot wait |
 | A separate `when!(condition, f)` for waiting | Two functions where one tag does, and the condition and the change could disagree |
 | `defer` and `errdefer` keywords | Keywords, and a choice between block scope and function scope. A closure's scope settles it |
@@ -1068,7 +1149,8 @@ tasks not waiting on a cell, checking holders only when it reaches zero.
 | Harris, Marlow, Peyton Jones and Herlihy, *Composable Memory Transactions* (PPoPP 2005) | `retry` abandons a transaction until something it read changes, as `Wait` does. Haskell's types keep effects out of transactions, as `->` does here |
 | Haskell `atomicModifyIORef'` and `bracket`, `bracketOnError` | A pure function that returns the new state and a result; cleanup scoped to a function, always or only on an exception |
 | Clojure atoms | `swap!` applies a pure function to shared state atomically |
-| Rust `Mutex` | Poisoning when a thread panics while holding the lock. Here only a crashing cleanup poisons, since an update that crashes stores nothing |
+| Rust `Mutex` | Poisoning when a thread panics while holding the lock, as here when an update or a cleanup crashes |
+| Lean 4 `ST.Ref.modify` | Takes the value out of the reference while the function runs, so the function holds the only reference and changes it in place, as `update!` moves the state |
 | Zig `errdefer` | Cleanup only on an error exit, as `on_failure!` |
 | Erlang/OTP supervisors | Restart from known state. Where a handle is created decides which restarts reset it |
 | Bacon and Rajan, *Concurrent Cycle Collection in Reference Counted Systems* (ECOOP 2001); Nim's ORC | Reference counting plus a cycle collector, restricted to types that can form cycles. Here no collector runs: holder sets say when the task tree can no longer reach a cell |
@@ -1120,7 +1202,9 @@ and `CellRelease`):
 - The breaker opens after the third failure, rejects four requests without
   calling through, probes and closes; a cancelled probe reopens it, and
   without its cleanup it stays `Probing`.
-- An update that crashes stores nothing.
+- An update that crashes stores nothing. This checks the earlier rule; an
+  update that crashes now poisons its handle, which the prototype does not
+  model yet.
 - 20 clients contend for one permit. Readying only the oldest waiter that a
   probe finds would not wait takes 80 task resumes and runs 19 updates again,
   as most recent first did; readying every waiter, the regression switch,
@@ -1273,7 +1357,8 @@ model.
 
 ## Decisions left to review
 
-Names are placeholders. The prototype settled six earlier questions:
+Names are placeholders. Seven earlier questions are settled, six of them by
+the prototype:
 
 - **Cleanup that knows how its body ended.** Needed: the pool must not lend a
   connection whose user crashed. `on_failure!` is the second form.
@@ -1302,6 +1387,18 @@ Names are placeholders. The prototype settled six earlier questions:
 - **Conveniences.** `get!` and `modify!` are in, defined with `update!`.
   `get!` also makes reading and then acting separately easier to write, so
   the read-then-write warning covers it.
+- **Changing a large state in place** (open decision (f) in earlier drafts).
+  `update!` moves the state into its function, `Keep` and `Wait` put the same
+  state back, and an update that crashes poisons its handle. A state that the
+  update holds alone changes in place, so a queue, a log or a cache in a
+  handle costs what the same collection costs as a value. Lending the state
+  kept "an update that crashes changes nothing", but copied the whole state on
+  every `Set`, and again in the probe that readies a waiter. Collections that
+  share structure would have cut that to O(log n) while leaving the obvious
+  `List` and `Dict` at O(n). The two rules differ only when an update crashes,
+  which is a bug in a pure function, and an OTP server that crashes loses its
+  state too. Moving never copies where lending would not, so this needed no
+  benchmark: it was not measured.
 
 Still open:
 
@@ -1334,26 +1431,6 @@ Still open:
   programs do this, and whether a debug diagnostic that reports cells freed
   by release, with where each was made, is enough, needs programs written
   against the real runtime.
-- **(f) Changing a large state in place.** In step 3 of `update!`, `f`
-  borrows the state, so the cell still holds it if `f` crashes, and an update
-  that crashes changes nothing. But `f` then never holds the only reference.
-  Every `Set` that appends to a list or inserts into a dictionary copies all
-  of it. A queue, a log or a cache in a handle costs O(n) per update, not
-  O(1). The bounded queue, the broadcast log, the single-flight cache and the
-  replicated log in [the examples](concurrency-examples.md) all do this.
-  - **Move the state into `f`.** `f` would return the state along with its
-    answer, and lowering would add the return to the `Keep` and `Wait` paths.
-    A unique state then changes in place, as a unique `var` does. The cost is
-    rollback: if `f` crashes after changing the state, the old state is gone,
-    so the handle is poisoned, as when a cleanup crashes. "An update that
-    crashes changes nothing" would no longer hold.
-  - **Keep borrowing, and recommend collections that share structure.** A
-    persistent queue or map makes each copy O(log n) and keeps rollback. But
-    the cost is easy to miss, and the obvious `List` costs O(n).
-
-  The prototype counts operations, not copies, so it cannot decide this. A
-  benchmark in the real runtime of a queue in a handle under each option
-  can.
 
 ## Future possibilities
 
@@ -1374,8 +1451,8 @@ Still open:
 2. **Builtins.** `Shared(s)`, its four functions and the two shorthands, with
    their types.
 3. **Checker.** The three warnings.
-4. **Post-check IR.** Explicit updates, cleanup pushes and pops, certified
-   (V3, V5).
+4. **Post-check IR.** Explicit updates with their update and probe forms,
+   cleanup pushes and pops, certified (V3, V5, V10).
 5. **Runtime.** Cells, locking per build, waiters, cleanup stacks, poisoning,
    and holder sets with release, checked against the model (V4, V7, V9).
 6. **Reference counting.** Cell stores as atomicity seeds in `ParallelTasks`
