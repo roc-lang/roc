@@ -14,17 +14,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS is build-only: PR CI already runs MiniCI on macos-15, and
-          # macOS runners are the scarce resource PR CI queues on.
+          # Every leg builds roc in the dev shell. The arm64 Linux leg builds
+          # everything MiniCI runs (`build-ci`) there too, so the dev shell is
+          # known to build the whole test suite; MiniCI's tests themselves run
+          # in ci_zig.yml's shards, not again here. macOS runners are the
+          # scarce resource PR CI queues on, so macOS stays on the plain build.
           - os: macos-15
-            target_flag: ''
-            nix_ci_mode: --build-only
-          - os: ubuntu-24.04
-            target_flag: -Dtarget=x86_64-linux-musl
-            nix_ci_mode: --build-only
-          - os: ubuntu-24.04-arm
-            target_flag: ''
+            zig_build_flags: ''
             nix_ci_mode: ''
+          - os: ubuntu-24.04
+            zig_build_flags: -Dtarget=x86_64-linux-musl
+            nix_ci_mode: ''
+          # Two jobs: hosted arm64 runners lose network mid-`build-ci` at
+          # full parallelism.
+          - os: ubuntu-24.04-arm
+            zig_build_flags: -j2
+            nix_ci_mode: --build-ci
 
     steps:
       - name: Checkout
@@ -55,15 +60,15 @@ jobs:
               max-free = 5368709120
               # When free space drops below min-free (1 GB), nix GCs until max-free (5 GB) is available. This avoids "No space left on device" on CI.
 
-      # The test leg runs MiniCI (see ci/zig_nix_ci.sh), whose Rust glue
-      # checks call the runner's rustc from inside the dev shell.
-      - if: matrix.nix_ci_mode == ''
+      # The `build-ci` leg builds MiniCI's binaries, as the MiniCI build job
+      # does with the pinned Rust toolchain in place.
+      - if: matrix.nix_ci_mode == '--build-ci'
         uses: ./.github/actions/setup-rust
 
       - name: Build inside a nix dev shell
         uses: ./.github/actions/flaky-retry
         with:
-          command: 'nix develop ./src/ -c bash ci/zig_nix_ci.sh ${{ matrix.nix_ci_mode }} ${{ matrix.target_flag }}'
+          command: 'nix develop ./src/ -c bash ci/zig_nix_ci.sh ${{ matrix.nix_ci_mode }} ${{ matrix.zig_build_flags }}'
           retry_count: 3
 
       - name: Check Zig dependency package cache contents
