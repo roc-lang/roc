@@ -517,8 +517,8 @@ Shared.modify! : Shared(s), (s -> s) => {}
 2. If `h` is poisoned, release it and crash.
 3. Call `f` on the state. While `f` runs, the state is borrowed: `f` sees the
    current value and cannot be told apart from a call on an ordinary value.
-4. On `Set(new, r)`: store `new`, release the old state, ready every task
-   waiting on `h`, release `h`, and return `r`.
+4. On `Set(new, r)`: store `new`, release the old state, wake waiters as
+   "Waking" under "Runtime" describes, release `h`, and return `r`.
 5. On `Keep(r)`: release `h` and return `r`.
 6. On `Wait`: register the task as a waiter on `h` while still holding it,
    release `h` and park. When another task's update stores to `h`, or `h` is
@@ -719,6 +719,9 @@ waited-on cell can run, the waiters crash with the deadlock message.
   every update.
 - **Contention.** Under `ParallelTasks`, one hot handle serializes every task
   that updates it, and a long update delays them all.
+- **Changing a large state copies it.** The update borrows the state, so it
+  never holds the only reference, and appending to a queue in a handle copies
+  the whole queue. See open decision (f).
 - **No fairness among waiters.** The most recent waiter is probed first, so
   under sustained contention an early waiter can wait indefinitely while
   later ones are served. Readying every waiter promised nothing either: the
@@ -983,6 +986,26 @@ Still open:
   callback tables are the cases rule 1 rejects. If real programs need them in
   shared state, a finer rule needs to know captures, and so would have to
   work without lambda sets in `.boxy` builds.
+- **(f) Changing a large state in place.** In step 3 of `update!`, `f`
+  borrows the state, so the cell still holds it if `f` crashes, and an update
+  that crashes changes nothing. But `f` then never holds the only reference.
+  Every `Set` that appends to a list or inserts into a dictionary copies all
+  of it. A queue, a log or a cache in a handle costs O(n) per update, not
+  O(1). The bounded queue, the broadcast log, the single-flight cache and the
+  replicated log in [the examples](concurrency-examples.md) all do this.
+  - **Move the state into `f`.** `f` would return the state along with its
+    answer, and lowering would add the return to the `Keep` and `Wait` paths.
+    A unique state then changes in place, as a unique `var` does. The cost is
+    rollback: if `f` crashes after changing the state, the old state is gone,
+    so the handle is poisoned, as when a cleanup crashes. "An update that
+    crashes changes nothing" would no longer hold.
+  - **Keep borrowing, and recommend collections that share structure.** A
+    persistent queue or map makes each copy O(log n) and keeps rollback. But
+    the cost is easy to miss, and the obvious `List` costs O(n).
+
+  The prototype counts operations, not copies, so it cannot decide this. A
+  benchmark in the real runtime of a queue in a handle under each option
+  can.
 
 ## Future possibilities
 
