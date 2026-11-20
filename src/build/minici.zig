@@ -2663,6 +2663,9 @@ pub fn main(init: std.process.Init) !void {
     std.Io.Dir.cwd().deleteTree(io, out_dir) catch {};
     try std.Io.Dir.cwd().createDirPath(io, raw_dir);
     try std.Io.Dir.cwd().createDirPath(io, logs_dir);
+    // Harness jobs run in their prepared fixture trees, so they are given the
+    // stats destination as an absolute path.
+    const raw_dir_absolute = try std.Io.Dir.cwd().realPathFileAlloc(io, raw_dir, allocator);
 
     std.debug.print("=== MINICI ORCHESTRATOR ===\n", .{});
     const build_jobs = memoryAwareBuildJobs(io, allocator, init.environ_map);
@@ -2714,7 +2717,7 @@ pub fn main(init: std.process.Init) !void {
     for (jobs, 0..) |job, job_index| {
         const log_path = try std.fmt.allocPrint(allocator, "{s}/{s}.txt", .{ logs_dir, job.name });
         const stats_path: ?[]const u8 = if (job.kind == .harness)
-            try std.fmt.allocPrint(allocator, "{s}/{s}.json", .{ raw_dir, job.name })
+            try std.fmt.allocPrint(allocator, "{s}/{s}.json", .{ raw_dir_absolute, job.name })
         else
             null;
         const job_build_args = try std.mem.concat(allocator, []const u8, &.{ build_args, job.build_args });

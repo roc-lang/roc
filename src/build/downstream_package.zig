@@ -27,6 +27,7 @@ pub fn create(b: *std.Build, host_tool_target: std.Build.ResolvedTarget) *std.Bu
     prepare.addDirectoryArg(source.getDirectory());
     prepare.addDirectoryArg(fixture.getDirectory().path(b, "consumer"));
     const output = prepare.addOutputDirectoryArg("downstream-package");
+    const smoke_name = b.fmt("downstream-compiler-smoke{s}", .{host_tool_target.result.exeFileExt()});
     // The consumer is compiled on one machine and may run on another, so it is
     // built for the same explicit CPU as the compiler's own host tools rather
     // than the one `zig build` would detect where the helper happens to run.
@@ -36,14 +37,17 @@ pub fn create(b: *std.Build, host_tool_target: std.Build.ResolvedTarget) *std.Bu
     build_step.dependOn(&prepare.step);
 
     const run = std.Build.Step.Run.create(b, "run downstream compiler driver");
-    run.addFileArg(output.path(b, b.fmt("prefix/bin/downstream-compiler-smoke{s}", .{builtin.target.exeFileExt()})));
-    run.addFileArg(output.path(b, "consumer/app.roc"));
+    run.addFileArg(output.path(b, smoke_name));
+    run.addFileArg(fixture.getDirectory().path(b, "consumer/app.roc"));
     const run_step = b.step("run-test-downstream-package", "Check, lower, and execute a Roc program through fetched compiler modules");
     run_step.dependOn(&run.step);
     return build_step;
 }
 
-/// Fetch the source snapshot and build the standalone consumer against its archive.
+/// Fetch the source snapshot and build the standalone consumer against its
+/// archive. The consumer project, its fetched packages, its build cache and its
+/// install prefix live in a work directory that is deleted before returning, so
+/// the step's output holds only the installed smoke binary.
 pub fn main(init: std.process.Init) !void {
     const arena = init.arena.allocator();
     const io = init.io;
@@ -66,7 +70,9 @@ pub fn main(init: std.process.Init) !void {
     // value would name a different directory inside the consumer, so children
     // are given the absolute one the build runner is using.
     try init.environ_map.put("ZIG_GLOBAL_CACHE_DIR", global_cache);
-    const consumer = try std.fs.path.join(arena, &.{ output, "consumer" });
+    const work = try std.fs.path.join(arena, &.{ output, "work" });
+    defer std.Io.Dir.cwd().deleteTree(io, work) catch |err| std.debug.print("unable to delete {s}: {t}\n", .{ work, err });
+    const consumer = try std.fs.path.join(arena, &.{ work, "consumer" });
     const platform = try std.fs.path.join(arena, &.{ consumer, "platform" });
     try std.Io.Dir.cwd().createDirPath(io, platform);
     inline for (.{ "build.zig", "main.zig", "app.roc", "platform/main.roc" }) |file| {
@@ -90,9 +96,16 @@ pub fn main(init: std.process.Init) !void {
         \\
     });
     _ = try command(init, &.{ zig, "fetch", "--save-exact=roc", archive }, consumer);
-    const prefix = try std.fs.path.join(arena, &.{ output, "prefix" });
-    const cache = try std.fs.path.join(arena, &.{ output, "consumer-cache" });
+    const prefix = try std.fs.path.join(arena, &.{ work, "prefix" });
+    const cache = try std.fs.path.join(arena, &.{ work, "cache" });
     _ = try command(init, &.{ zig, "build", "--cache-dir", cache, "--prefix", prefix, target_option, cpu_option }, consumer);
+    const smoke_name = try std.fmt.allocPrint(arena, "downstream-compiler-smoke{s}", .{builtin.target.exeFileExt()});
+    try std.Io.Dir.cwd().rename(
+        try std.fs.path.join(arena, &.{ prefix, "bin", smoke_name }),
+        std.Io.Dir.cwd(),
+        try std.fs.path.join(arena, &.{ output, smoke_name }),
+        io,
+    );
 }
 
 fn command(init: std.process.Init, argv: []const []const u8, cwd: ?[]const u8) ![]const u8 {

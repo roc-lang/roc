@@ -5054,7 +5054,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12632: boxy roc build dev passes a capturing function from main to a host-stored boxed closure", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache", "--specialize=no" }, .roc_file = "test/postcheck/issue_12632_capturing_main_function_to_host_box/app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "target slot has no corresponding host root" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12632: boxy roc build dev evaluates a constant whose boxed closure reads a later constant", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache", "--specialize=no" }, .roc_file = "test/postcheck/issue_12632_capturing_main_function_to_host_box/app_member_reads_later_root.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "target slot has no corresponding host root" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build dev builds a platform whose rejected provided export crashes when called", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache", "--target=x64musl" }, .roc_file = "test/postcheck/boxy_rejected_provided_export/app.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stdout, .text = "successfully building" }, .{ .stream = .stderr, .text = "type mismatch" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12744: boxy roc build dev gives a platform's call of an app binding the binding's derived codec evidence", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache", "--target=x64musl", "--specialize=no", "--output=zig-out/issue_12744_platform_derived_codec.a" }, .roc_file = "test/cli/issue_12744_platform_derived_codec/app.roc" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12744: boxy roc build dev gives a platform's call of an app binding the binding's derived codec evidence", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache", "--target=x64musl", "--specialize=no", "--output=issue_12744_platform_derived_codec.a" }, .roc_file = "test/cli/issue_12744_platform_derived_codec/app.roc" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12744: a platform calls and stores an app binding that parses a record (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12744_platform_record_codec.roc", .exit = .success, .stdout_exact = "3\n4\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12744: a platform calls and stores an app binding that parses a record (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12744_platform_record_codec.roc", .exit = .success, .stdout_exact = "3\n4\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12744: a platform calls and stores an app binding that parses a record (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12744_platform_record_codec.roc", .exit = .success, .stdout_exact = "3\n4\n" } } },
@@ -6270,6 +6270,14 @@ var project_root_path: []const u8 = "";
 /// object-cache entry the first wrote and must behave the same. Custom cases,
 /// which manage their own caches and check what a cache served, are skipped.
 var shared_object_store: ?[]const u8 = null;
+/// `--scratch-root=<dir>`: every file a case writes lives under this absolute
+/// directory, because the working directory is the read-only fixture tree.
+var scratch_root: []const u8 = "";
+
+/// Where `util` reserves scratch directories.
+pub fn rocTestScratchRoot() []const u8 {
+    return scratch_root;
+}
 
 /// The cache root a case's processes use.
 fn caseCacheRoot(dirs: util.TestProcessDirs) []const u8 {
@@ -6969,12 +6977,23 @@ fn runRocInEnv(
 ) CliRunnerError!std.process.RunResult {
     const argv = try buildRocArgv(allocator, args, roc_file, file_path_mode, app_args);
     return util.runChildWithTimeout(io, allocator, argv, .{
-        .cwd = project_root_path,
+        .cwd = rocCommandCwd(env, args, file_path_mode),
         .env_map = &env.env_map,
         .max_output_bytes = 10 * 1024 * 1024,
         .stdin = stdin,
         .timeout_ms = timeout_ms,
     });
+}
+
+/// The fixture tree is read-only, and `roc build` and `roc docs` write their
+/// default and relative outputs into the working directory, so those commands
+/// run in the case's work directory. Every argument they get is absolute
+/// unless the case resolves its file relative to the fixture tree, which then
+/// must stay the working directory.
+fn rocCommandCwd(env: *const CaseEnv, args: []const []const u8, file_path_mode: FilePathMode) []const u8 {
+    if (file_path_mode == .relative or args.len == 0) return project_root_path;
+    if (std.mem.eql(u8, args[0], "build") or std.mem.eql(u8, args[0], "docs")) return env.dirs.work_dir;
+    return project_root_path;
 }
 
 fn runRawInEnv(
@@ -22263,6 +22282,7 @@ fn printUsage() void {
         \\  --cross-target <name> Build platform cases for this target without running them
         \\  --glue-roc <path>    Roc binary to use for glue generation (default: <roc_binary>)
         \\  --glue-opt <opt>     Glue execution mode: default, dev, size, or speed
+        \\  --scratch-root=<dir> Absolute directory for every file the cases write (required)
         \\  --verbose            Show PASS results with timing
         \\
     , .{});
@@ -22375,6 +22395,15 @@ fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) CliRunn
                 return error.InvalidArgs;
             }
             cross_target = value;
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--scratch-root=")) {
+            const value = arg["--scratch-root=".len..];
+            if (!std.fs.path.isAbsolute(value)) {
+                std.debug.print("--scratch-root needs an absolute path\n", .{});
+                return error.InvalidArgs;
+            }
+            scratch_root = value;
             continue;
         }
         if (std.mem.startsWith(u8, arg, "--shared-object-store=")) {
@@ -22577,7 +22606,7 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
         return;
     }
 
-    if (args.positional.len < 1) {
+    if (args.positional.len < 1 or scratch_root.len == 0) {
         printUsage();
         std.process.exit(1);
     }
