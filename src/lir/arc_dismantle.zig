@@ -3031,6 +3031,10 @@ fn projectionEdgeOf(
     stmt_id: LIR.CFStmtId,
     assign: anytype,
 ) ?ProjectionEdge {
+    // The access path and its representative describe the binding, not just
+    // this arrival. A cell with different definitions starts a new root;
+    // the projection on this edge can still transfer its unit at this read.
+    if (solution.multiple_definitions.isSet(@backingInt(assign.target))) return null;
     const source: LIR.LocalId, const is_projection: bool = switch (assign.op.kind) {
         .local => blk: {
             if (!solution.isBorrowed(assign.target)) return null;
@@ -3091,7 +3095,7 @@ fn placeLinkOf(
     return .{ .source = @backingInt(source), .target = @backingInt(assign.target), .kind = kind };
 }
 
-/// One `set_local` statement and the local it writes.
+/// One definition that can change the value read from a root.
 const Rebind = struct {
     target: LIR.LocalId,
     stmt: LIR.CFStmtId,
@@ -3119,8 +3123,8 @@ const StatementFacts = struct {
     allocator: Allocator,
     /// Join cells written by an `initialize_join_param` statement.
     join_init_targets: std.ArrayList(LIR.LocalId) = .empty,
-    /// Every `set_local`, whatever its mode: a later read of its target
-    /// may observe the written value rather than an earlier read's.
+    /// Writes to a cell. A direct assignment into a join parameter changes
+    /// its value just as an explicit `set_local` initializer does.
     rebinds: std.ArrayList(Rebind) = .empty,
     projection_edges: std.ArrayList(ProjectionEdge) = .empty,
     place_reads: std.ArrayList(PlaceRead) = .empty,
@@ -3136,13 +3140,29 @@ const StatementFacts = struct {
         self.calls.deinit(self.allocator);
     }
 
+    const WriteSite = struct {
+        facts: *StatementFacts,
+        stmt: LIR.CFStmtId,
+
+        fn note(site: WriteSite, target: LIR.LocalId) Error!void {
+            if (site.facts.solution.multiple_definitions.isSet(@backingInt(target))) {
+                try site.facts.rebinds.append(site.facts.allocator, .{ .target = target, .stmt = site.stmt });
+            }
+        }
+    };
+
     fn collect(self: *StatementFacts, allocator: Allocator) Error!void {
         self.allocator = allocator;
         var index = self.start;
         while (index < self.end) : (index += 1) {
             if (!self.reachable.isSet(index)) continue;
             const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(index));
-            switch (self.store.getCFStmtImmediate(stmt_id).*) {
+            const node = self.store.getCFStmtImmediate(stmt_id).*;
+            // A join declares its cells; its incoming edges do the writing.
+            if (node != .join and node != .set_local) {
+                try body_clone.tryForEachStmtDef(self.store, node, WriteSite{ .facts = self, .stmt = stmt_id }, WriteSite.note);
+            }
+            switch (node) {
                 .set_local => |stmt| {
                     try self.rebinds.append(allocator, .{ .target = stmt.target, .stmt = stmt_id });
                     if (stmt.mode == .initialize_join_param) try self.join_init_targets.append(allocator, stmt.target);

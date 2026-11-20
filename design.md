@@ -28518,6 +28518,12 @@ or tag-payload reads along a single control-flow path, dismantle analysis
 chooses the earliest same-root, same-layout read that dominates each later read
 and rewrites those later reads as explicit local aliases before ARC solving.
 Representatives are struct or tag-union reads.
+An incoming projection can transfer its unit on that edge without making
+the receiving cell a projection of its source on every edge. A binding
+with multiple definitions starts its own ownership path: reads of that
+cell may share a representative only if no intervening definition can
+reach the later read. Direct assignments into the cell count as writes,
+not just explicit join initializers.
 That rewrite is materialized only when the representative holds a committed
 take: it lies on the access path of a committed projected container, or it is
 a struct representative that commits a dismantle plan of its own. A tag-union
