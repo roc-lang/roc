@@ -30466,8 +30466,9 @@ image or a `.boxy` module object's `CodeLocations`:
 
 The compile-time host records a failure's point when it happens. A crash or a
 failed `expect` reaches the host through a fixed runtime symbol, possibly from
-inside a builtin; the host walks frame pointers from its own frame and records
-every return address into generated code, innermost first. Generated code, the
+inside a builtin; the host records the innermost generated call for its
+meaning and the first generated call with source information for its location.
+These can be different when a generated helper has no source span. Generated code, the
 builtins the compiler links in-process, and the host's callbacks keep frame
 pointers, so the chain is intact, and the walk reads only stack between the
 failing frame and the frame that entered generated code. On Windows x64,
@@ -30475,9 +30476,12 @@ compiled host and builtin code points its frame pointer into the middle of its
 frame rather than at a saved-frame-pointer record, so the host unwinds those
 frames with the system unwind tables until it reaches generated code, then
 walks the generated frame-pointer chain from there. A stack overflow is
-caught by the guard-page handler, which records the faulting frame pointer and
-stack pointer before escaping; the host walks the chain from the frame
-pointer. The faulting program counter is not part of an overflow's point:
+caught by the guard-page handler. The two return addresses must be captured
+before escaping, while the interrupted stack still owns its frames; merely
+retaining a pointer into mapped stack memory does not preserve them. The
+handler reads immutable code-location tables without allocating or locking;
+reporting and file translation remain ordinary post-recovery work.
+The faulting program counter is not part of an overflow's point:
 which instruction of the innermost frame touches the guard first depends on
 where the guard falls within that frame (a callee's frame-record push, a
 store to one of its slots, or an x86_64 `call` pushing its return address),

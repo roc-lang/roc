@@ -144,26 +144,20 @@ pub const stack_overflow_longjmp_value: c_int = 2;
 /// return.
 pub const StackOverflowRecovery = struct {
     context: *anyopaque,
+    /// Runs on the fault path, before any escape. May only read live stack
+    /// records and immutable metadata, and write preallocated result storage.
+    capture: ?*const fn (*anyopaque, FaultFrame) void = null,
     escape: *const fn (*anyopaque) noreturn,
 };
 
 threadlocal var stack_overflow_recovery: ?*const StackOverflowRecovery = null;
 
-/// The frame pointer and stack pointer a stack overflow interrupted.
+/// The interrupted frame pointer and the lowest readable address on that
+/// stack. Reserving a frame can put SP below the usable stack.
 pub const FaultFrame = struct {
     fp: usize,
-    sp: usize,
+    low: usize,
 };
-
-threadlocal var overflow_frame: ?FaultFrame = null;
-
-/// The frame the last recovered stack overflow on this thread interrupted,
-/// once; null when the platform's fault context does not provide one.
-pub fn takeOverflowFrame() ?FaultFrame {
-    const frame = overflow_frame;
-    overflow_frame = null;
-    return frame;
-}
 
 fn faultFrame(cpu: anytype) ?FaultFrame {
     const sp: usize = if (comptime builtin.cpu.arch == .x86_64)
@@ -172,7 +166,11 @@ fn faultFrame(cpu: anytype) ?FaultFrame {
         @intCast(cpu.sp)
     else
         return null;
-    return .{ .fp = cpu.getFp(), .sp = sp };
+    const stack_low = if (comptime builtin.os.tag == .windows)
+        @intFromPtr(std.os.windows.teb().NtTib.StackLimit)
+    else
+        (thread_stack_bounds orelse return null).low;
+    return .{ .fp = cpu.getFp(), .low = @max(sp, stack_low) };
 }
 
 fn posixFaultFrame(context: ?*anyopaque) ?FaultFrame {
@@ -604,9 +602,10 @@ fn handleExceptionWindows(exception_info: *EXCEPTION_POINTERS) callconv(.winapi)
 
     if (is_stack_overflow) {
         if (takeStackOverflowRecovery()) |recovery| {
-            if (comptime std.debug.cpu_context.Native != noreturn) {
-                overflow_frame = faultFrame(std.debug.cpu_context.fromWindowsContext(@ptrCast(@alignCast(exception_info.ContextRecord))));
-            }
+            if (comptime std.debug.cpu_context.Native != noreturn) if (recovery.capture) |capture| {
+                if (faultFrame(std.debug.cpu_context.fromWindowsContext(@ptrCast(@alignCast(exception_info.ContextRecord))))) |frame|
+                    capture(recovery.context, frame);
+            };
             recovery.escape(recovery.context);
         }
         if (stack_overflow_callback) |callback| callback();
@@ -637,7 +636,9 @@ fn handleSegvSignal(_: posix.SIG, info: *const posix.siginfo_t, context: ?*anyop
     switch (memory_fault.classifyFault(fault_addr, stack_pointer, thread_stack_bounds)) {
         .stack_overflow => {
             if (takeStackOverflowRecovery()) |recovery| {
-                overflow_frame = posixFaultFrame(context);
+                if (recovery.capture) |capture| {
+                    if (posixFaultFrame(context)) |frame| capture(recovery.context, frame);
+                }
                 if (comptime is_darwin) {
                     if (redirectDarwinContextToEscape(context, recovery)) return;
                 }
