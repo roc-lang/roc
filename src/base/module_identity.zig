@@ -30,6 +30,7 @@
 const std = @import("std");
 const Sha256 = @import("sha256.zig").Sha256;
 const SourceDigest = @import("SourceDigest.zig");
+const byte_encoding = @import("byte_encoding.zig");
 
 /// The deep content hash of a module: SHA-256 of the module name, the digest
 /// of its source bytes, and the sorted, deduplicated identity hashes of its
@@ -102,12 +103,10 @@ pub fn computeDeep(
     return hasher.finalResult();
 }
 
-/// Integer equality over two 32-byte identity hashes (a single 256-bit
-/// compare—no byte-wise string comparison).
+/// Equality over two 32-byte identity hashes, as words rather than a
+/// byte-wise string comparison.
 pub fn eql(a: *const Hash, b: *const Hash) bool {
-    const a_bits: u256 = @bitCast(a.*);
-    const b_bits: u256 = @bitCast(b.*);
-    return a_bits == b_bits;
+    return byte_encoding.digestsEql(a, b);
 }
 
 fn hashLessThan(_: void, a: Hash, b: Hash) bool {

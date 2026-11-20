@@ -44,6 +44,6 @@ test "issue 11131: a chain of record updates lowers without growing the native c
     defer std.testing.allocator.free(app_body);
     try harness.expectLowersToLirWithOptions(app_body, .{
         .inline_mode = .wrappers,
-        .spec_constr_clone_inlining = .iterator_fusion,
+        .spec_constr_clone_inlining = .no_calls,
     });
 }

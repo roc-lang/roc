@@ -470,6 +470,79 @@ convert_all : List(a) -> List(b) where [a.to_b : a -> b, b.is_valid : b -> Bool]
 
 See [Where Clauses](types#where-clauses) in the types page for more on the syntax.
 
+### Tags a Required Method Can Return {#tags-a-required-method-can-return}
+
+When a method in a `where` clause has a [tag union](tag-unions) in its return type, the tag union
+says which tags a type's method is allowed to return:
+
+```roc
+describe : a -> Str where [a.parse : a -> [BadNum, Fine]]
+describe = |x|
+    match x.parse() {
+        Fine => "ok"
+        BadNum => "bad number"
+    }
+```
+
+Here `parse` can only return `BadNum` or `Fine`, so the `match` doesn't need a catch-all branch.
+In exchange, `describe` only accepts types whose `parse` method returns those tags. Passing a
+value whose `parse` returns `[BadNum, Fine, TooBig]` gives an error at compile time.
+
+Ending the tag union with `..` accepts those types too. It means a type's method may return more
+tags than the ones listed:
+
+```roc
+describe : a -> Str where [a.parse : a -> [BadNum, Fine, ..]]
+describe = |x|
+    match x.parse() {
+        Fine => "ok"
+        BadNum => "bad number"
+        _ => "something else"
+    }
+```
+
+Now `parse` can return `BadNum`, `Fine`, or tags `describe` knows nothing about, so the `match`
+needs the catch-all branch. Leaving it out gives an [exhaustiveness](pattern-matching#exhaustiveness)
+error.
+
+`..` means the same thing wherever the tag union appears in the method's return type, including
+inside another type. This is how a required method that returns a [`Try`](errors#try) says
+whether a type's method may fail in other ways:
+
+```roc
+load : a -> Str where [a.fetch : a -> Try(Str, [NotFound, ..])]
+load = |x|
+    match x.fetch() {
+        Ok(contents) => contents
+        Err(NotFound) => "not found"
+        Err(_) => "something else went wrong"
+    }
+```
+
+A named `..others` works the same way as `..`, and lets you refer to the other tags elsewhere
+in the annotation, for example to return them:
+
+```roc
+parse_twice : a -> [BadNum, Fine, ..others] where [a.parse : a -> [BadNum, Fine, ..others]]
+```
+
+This is different from a function's own return type, where writing `..` gives a warning that
+it's redundant. That's because a function produces its own return value, so it already decides
+which tags are in it. A method listed in a `where` clause is produced by whichever type the
+function is called with, so the `..` is how the function says how much it's willing to accept.
+
+Without `..`, the function knows every tag the method can return, so it can also use the
+method's result as part of a bigger tag union of its own:
+
+```roc
+parse_or_skip : a, Bool -> [BadNum, Fine, Skipped] where [a.parse : a -> [BadNum, Fine]]
+parse_or_skip = |x, skip| if skip Skipped else x.parse()
+```
+
+That works when the tag union is the method's whole return type. When it's inside another type,
+like the error type of a `Try`, [take the `Try` apart with `?`](errors#more-errors) instead:
+`Ok(x.fetch()?)`.
+
 ### Calling Methods on Type Variables
 
 Some methods don't take a value of the type as an argument; for example, a method which creates a

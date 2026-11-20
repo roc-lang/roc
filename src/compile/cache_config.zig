@@ -426,10 +426,20 @@ pub const Constants = struct {
     ///      and generalized local scopes record whether their scheme holds an
     ///      uncommitted tag tail.
     /// 199: combines the 198 entry with the 194 entry above.
-    /// 200: combines the two independent 199 entries.
-    /// 201: unary `!` canonicalizes to a call to `Bool.not`, combined with the
-    ///      200 entry.
-    pub const CACHE_VERSION = 201;
+    /// 200: two independent entries. Checked bindings and stored constant
+    ///      types carry no iterator representation fields; and, separately,
+    ///      a combination of the two independent 199 entries.
+    /// 201: unary `!` canonicalizes to a call to `Bool.not`, on top of the 200
+    ///      entry that combines the 199 entries.
+    /// 202: combines the 201 entry with the 200 entry that removes iterator
+    ///      representation fields.
+    /// 203: hoist-root selection judges every closed expression by whether
+    ///      its type holds a function, and a payload-free tag is no root.
+    /// 204: combines the 203 entry with checked envelope versions 51 and 52
+    ///      (compile-time roots the checked-value writer completes when they
+    ///      read only constants it completes, and builtin-conflicting import
+    ///      bindings rejected).
+    pub const CACHE_VERSION = 204;
 };
 
 /// Configuration for the Roc cache system.

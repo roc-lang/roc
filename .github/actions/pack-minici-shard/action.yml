@@ -1,0 +1,69 @@
+name: 'Pack a MiniCI shard build artifact'
+description: >-
+  Pack and upload the build artifact of one MiniCI shard of this host: the
+  part of the `build-ci` cache, install prefix and packages that the shard's
+  `zig build` commands read (see src/build/minici_pack.zig). Run after
+  `zig build build-minici-pack`, once per slot. A slot past this host's last
+  shard does nothing, and a host with more shards than slots fails the step.
+inputs:
+  slot:
+    description: 'Which of this host''s shards to pack, from 0, in the order of `shards` in src/build/minici.zig'
+    required: true
+  slots:
+    description: 'How many slots the calling job packs'
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    # zstd on all cores, instead of upload-artifact's single-threaded zip
+    # deflate, which was the bottleneck (~40-50 MB/s of input). The upload
+    # below stores the already-compressed file as-is (`compression-level: 0`).
+    # Streaming tar into zstd also avoids writing an uncompressed tar next to
+    # it. zstd is preinstalled on all three runner images.
+    #
+    # Windows runners' tar cannot recreate symlinks on extraction, and the
+    # build cache holds some (a versioned shared library such as the glibc
+    # test stub is emitted as `libc.so` -> `libc.so.6` -> `libc.so.6.0.0`),
+    # so there the artifact stores each link's target file instead.
+    #
+    # The previous slot's archive is deleted first: packing is the disk
+    # high-water mark of the build job, so only one archive exists at a time.
+    - name: Pack
+      id: pack
+      shell: bash
+      env:
+        SLOT: ${{ inputs.slot }}
+        SLOTS: ${{ inputs.slots }}
+      run: |
+        set -euo pipefail
+        rm -f minici-build-*.tar.zst minici-build-list.txt
+        shard="$(./zig-out/bin/minici-pack shard "${MINICI_HOST:?}" "$SLOT" "$SLOTS")"
+        echo "shard=$shard" >> "$GITHUB_OUTPUT"
+        if [ -z "$shard" ]; then
+          echo "This host has no MiniCI shard in slot $SLOT."
+          exit 0
+        fi
+        ./zig-out/bin/minici-pack list "$shard" zig minici-build-list.txt
+        # Written by the build job; see `minici-build-runner-image` in ci_manager.yml.
+        echo .zig-cache/minici-build-runner-image >> minici-build-list.txt
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          tar --dereference -cf - -T minici-build-list.txt | zstd -T0 -3 -q -o "minici-build-$shard.tar.zst"
+        else
+          tar -cf - -T minici-build-list.txt | zstd -T0 -3 -q -o "minici-build-$shard.tar.zst"
+        fi
+        df -h "$GITHUB_WORKSPACE" || true
+        # `wc -c` over `du`: apparent size, comparable across filesystems and
+        # to the uploaded artifact size the log reports later.
+        bytes="$(wc -c < "minici-build-$shard.tar.zst")"
+        awk -v b="$bytes" -v s="$shard" 'BEGIN { printf "minici-build-%s.tar.zst %.1f MB (%d bytes)\n", s, b/1048576, b }'
+
+    - name: Upload
+      if: steps.pack.outputs.shard != ''
+      uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
+      with:
+        name: minici-build-${{ steps.pack.outputs.shard }}
+        path: minici-build-${{ steps.pack.outputs.shard }}.tar.zst
+        if-no-files-found: error
+        retention-days: 1
+        overwrite: true
+        compression-level: 0

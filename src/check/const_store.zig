@@ -1,6 +1,7 @@
 //! Checked compile-time constant store.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
 const collections = @import("collections");
@@ -99,20 +100,6 @@ pub const CaptureId = checked_ids.CaptureId;
 /// circular file import (`checked_artifact.zig` itself imports this file).
 pub const Primitive = @import("checked_artifact.zig").CheckedPrimitive;
 
-/// Checker-authored identities for the public iterator representation.
-pub const IteratorTopology = struct {
-    len_field: names.RecordFieldNameId,
-    step_field: names.RecordFieldNameId,
-    ok_tag: names.TagNameId,
-    err_tag: names.TagNameId,
-    unknown_tag: names.TagNameId,
-    done_tag: names.TagNameId,
-    one_tag: names.TagNameId,
-    skip_tag: names.TagNameId,
-    item_field: names.RecordFieldNameId,
-    rest_field: names.RecordFieldNameId,
-};
-
 /// Named type definition owner for stored monomorphic type evidence.
 pub const TypeDef = struct {
     /// Deep content identity of the declaring module (dense id in the owning
@@ -123,27 +110,7 @@ pub const TypeDef = struct {
     /// Declaring statement: within-module discriminator for same-named
     /// block-local declarations.
     source_decl: collections.OptionalU32 = .none,
-    /// Compiler-generated specialization identity for internal nominals minted
-    /// after checking while preserving the public declaration identity.
-    generated: ?names.TypeDigest = null,
-    iterator_representation: IteratorRepresentation = .none,
-    iterator_kind: IteratorKind = .none,
-    iterator_depth: u8 = 0,
-    iterator_topology: OptionalIteratorTopology = .none,
 };
-
-/// An optional `IteratorTopology` at its own size.
-pub const OptionalIteratorTopology = collections.OptionalStruct(IteratorTopology, "len_field");
-
-/// Target-independent Monotype iterator tier preserved across constant storage.
-pub const IteratorRepresentation = enum(u8) {
-    none,
-    minted,
-    forced_dynamic,
-};
-
-/// Producer or adapter that minted a stored iterator representation.
-pub const IteratorKind = static_dispatch.IteratorKind;
 
 /// How much of a stored named type's backing type later stages may inspect.
 pub const TypeBackingUse = enum {
@@ -650,13 +617,19 @@ pub const ConstString = struct {
 };
 
 /// Packed list with little-endian scalar leaves in semantic field order.
-/// Product bytes omit padding. `blobData(bytes).len == len * byteWidth()`.
+/// Product bytes omit padding. A discriminant-only tag union, one whose
+/// every payload is zero-sized, is a leaf as wide as its discriminant,
+/// holding the index of the item's tag among the union's tags in byte-wise
+/// name order, the order that assigns discriminants; its payloads have no
+/// bytes, and a union of one tag has no leaf.
+/// `blobData(bytes).len == len * byteWidth()`.
 pub const ConstPackedList = struct {
     bytes: ConstBlobDataId,
     len: u32,
-    /// Null for products; the stored checked type supplies their field structure.
+    /// Null for products and discriminant-only tag unions; the stored checked
+    /// type supplies their field structure, tags and zero-sized payloads.
     element: ?ConstPackedScalar,
-    /// Sum of scalar leaf widths in checked field order, excluding all padding.
+    /// Sum of leaf widths in checked field order, excluding all padding.
     product_width: u32 = 0,
 
     /// Canonical byte width of one item, excluding product padding.
@@ -666,7 +639,7 @@ pub const ConstPackedList = struct {
 };
 
 /// A list's items, stored either as child nodes or packed fixed-product
-/// bytes.
+/// bytes, discriminant-only tag unions among a product's leaves.
 pub const ConstListItems = union(enum) {
     nodes: []const ConstNodeId,
     packed_bytes: ConstPackedList,
@@ -796,8 +769,8 @@ pub const StoredConstType = union(enum) {
 pub const ConstNamedType = @FieldType(ConstType, "named");
 
 comptime {
-    std.debug.assert(@sizeOf(TypeDef) == 88);
-    std.debug.assert(@sizeOf(ConstNamedType) == 148);
+    std.debug.assert(@sizeOf(TypeDef) == 12);
+    std.debug.assert(@sizeOf(ConstNamedType) == 72);
     std.debug.assert(@sizeOf(TypeField) == 20);
 }
 
@@ -903,24 +876,136 @@ pub const ConstTypeStore = struct {
         return self.declared_field_pool.items()[range.start .. range.start + range.len];
     }
 
+    /// What one writer has copied so far from one source store into one
+    /// target store: for each of the source's types and of the names its
+    /// types use, the copy in the target. A type or name the source refers
+    /// to again is not copied again; the reference reads its copy here. The
+    /// tables are indexed by the source's own ids and grow with it, so one
+    /// translation serves one source and one target for as long as both
+    /// only grow.
+    pub const Translation = struct {
+        allocator: Allocator,
+        types: Column(ConstTypeId) = .{},
+        record_field_names: Column(names.RecordFieldNameId) = .{},
+        tag_names: Column(names.TagNameId) = .{},
+        type_names: Column(names.TypeNameId) = .{},
+        module_identities: Column(names.ModuleIdentityId) = .{},
+
+        /// The target's id for each source id copied so far.
+        fn Column(comptime Id: type) type {
+            return struct {
+                entries: std.ArrayList(collections.OptionalId(Id)) = .empty,
+
+                fn get(self: *const @This(), source: Id) ?Id {
+                    const index = @backingInt(source);
+                    return if (index < self.entries.items.len) self.entries.items[index].get() else null;
+                }
+
+                fn put(self: *@This(), allocator: Allocator, source: Id, target: Id) Allocator.Error!void {
+                    const index = @backingInt(source);
+                    if (index >= self.entries.items.len) try self.entries.appendNTimes(allocator, .none, index + 1 - self.entries.items.len);
+                    self.entries.items[index] = .some(target);
+                }
+            };
+        }
+
+        pub fn init(allocator: Allocator) Translation {
+            return .{ .allocator = allocator };
+        }
+
+        pub fn deinit(self: *Translation) void {
+            self.types.entries.deinit(self.allocator);
+            self.record_field_names.entries.deinit(self.allocator);
+            self.tag_names.entries.deinit(self.allocator);
+            self.type_names.entries.deinit(self.allocator);
+            self.module_identities.entries.deinit(self.allocator);
+        }
+
+        /// Forget every type whose copy is the target's node `first` or a
+        /// later one: a copy that failed part way leaves those nodes
+        /// unfinished.
+        fn forgetTypesFrom(self: *Translation, first: usize) void {
+            for (self.types.entries.items) |*entry| {
+                const target = entry.get() orelse continue;
+                if (@backingInt(target) >= first) entry.* = .none;
+            }
+        }
+    };
+
+    /// The copy in this store of `source`'s type `ty`, made now unless
+    /// `translation` already holds it, with the names `source_names` gives
+    /// its labels and types interned in `target_names`. `translation` is
+    /// this store's and `source`'s (`Translation`).
     pub fn cloneTypeFromTranslated(
         self: *ConstTypeStore,
         source: *const ConstTypeStore,
         source_names: *const names.NameStore,
         target_names: *names.NameStore,
+        translation: *Translation,
         ty: ConstTypeId,
     ) Allocator.Error!ConstTypeId {
-        var map = collections.DenseMap(ConstTypeId, ConstTypeId).init(self.allocator);
-        defer map.deinit();
-        return try self.cloneTypeFromInner(source, .{
+        const first_new = self.typeCount();
+        errdefer translation.forgetTypesFrom(first_new);
+        const copy = try self.cloneTypeFromInner(source, .{
             .source = source_names,
             .target = target_names,
-        }, ty, &map);
+            .known = translation,
+        }, ty);
+        if (builtin.mode == .debug and !try self.isCopyOf(self.allocator, target_names, copy, source, source_names, ty)) {
+            base.invariant("a stored constant type's copy differs from the type it was copied from", .{});
+        }
+        return copy;
+    }
+
+    /// Whether this store's type `copy` is the type `source` holds as `ty`,
+    /// read through each store's own names: copying each alone into an
+    /// empty store, with one name store between the two, gives the same
+    /// tables.
+    fn isCopyOf(
+        self: *const ConstTypeStore,
+        allocator: Allocator,
+        self_names: *const names.NameStore,
+        copy: ConstTypeId,
+        source: *const ConstTypeStore,
+        source_names: *const names.NameStore,
+        ty: ConstTypeId,
+    ) Allocator.Error!bool {
+        var shared_names = names.NameStore.init(allocator);
+        defer shared_names.deinit();
+        var expected = ConstTypeStore.init(allocator);
+        defer expected.deinit();
+        var actual = ConstTypeStore.init(allocator);
+        defer actual.deinit();
+        var expected_translation = Translation.init(allocator);
+        defer expected_translation.deinit();
+        var actual_translation = Translation.init(allocator);
+        defer actual_translation.deinit();
+        const expected_root = try expected.cloneTypeFromInner(source, .{ .source = source_names, .target = &shared_names, .known = &expected_translation }, ty);
+        const actual_root = try actual.cloneTypeFromInner(self, .{ .source = self_names, .target = &shared_names, .known = &actual_translation }, copy);
+        return expected_root == actual_root and
+            poolsEql(StoredConstType, &expected.types, &actual.types) and
+            poolsEql(ConstNamedType, &expected.named_pool, &actual.named_pool) and
+            poolsEql(names.TypeDigest, &expected.erased_pool, &actual.erased_pool) and
+            poolsEql(ConstTypeId, &expected.type_pool, &actual.type_pool) and
+            poolsEql(TypeField, &expected.field_pool, &actual.field_pool) and
+            poolsEql(TypeTag, &expected.tag_pool, &actual.tag_pool) and
+            poolsEql(TypeDeclaredField, &expected.declared_field_pool, &actual.declared_field_pool);
+    }
+
+    fn poolsEql(comptime T: type, left: *const collections.SafeList(T), right: *const collections.SafeList(T)) bool {
+        const left_items = left.items();
+        const right_items = right.items();
+        if (left_items.len != right_items.len) return false;
+        for (left_items, right_items) |a, b| {
+            if (!std.meta.eql(a, b)) return false;
+        }
+        return true;
     }
 
     const NameTranslation = struct {
         source: *const names.NameStore,
         target: *names.NameStore,
+        known: *Translation,
     };
 
     /// One step of cloning a type node, in the order a direct walk takes
@@ -963,16 +1048,16 @@ pub const ConstTypeStore = struct {
     fn cloneTypeFromInner(
         self: *ConstTypeStore,
         source: *const ConstTypeStore,
-        name_translation: ?NameTranslation,
+        name_translation: NameTranslation,
         root: ConstTypeId,
-        map: *collections.DenseMap(ConstTypeId, ConstTypeId),
     ) Allocator.Error!ConstTypeId {
+        const known = name_translation.known;
         var frames = std.ArrayList(CloneFrame).empty;
         defer {
             for (frames.items) |*frame| frame.deinit(self.allocator);
             frames.deinit(self.allocator);
         }
-        const result = try self.startClone(source, root, map, &frames);
+        const result = try self.startClone(source, root, known, &frames);
         while (frames.items.len > 0) {
             const top = frames.items.len - 1;
             const frame = &frames.items[top];
@@ -982,7 +1067,7 @@ pub const ConstTypeStore = struct {
                 switch (op) {
                     .child => |child| {
                         try frame.types.ensureUnusedCapacity(self.allocator, 1);
-                        const cloned = try self.startClone(source, child, map, &frames);
+                        const cloned = try self.startClone(source, child, known, &frames);
                         frames.items[top].types.appendAssumeCapacity(cloned);
                     },
                     .field_name => |name| try frame.field_names.append(self.allocator, try translateRecordFieldName(name_translation, name)),
@@ -1006,13 +1091,13 @@ pub const ConstTypeStore = struct {
         self: *ConstTypeStore,
         source: *const ConstTypeStore,
         ty: ConstTypeId,
-        map: *collections.DenseMap(ConstTypeId, ConstTypeId),
+        known: *Translation,
         frames: *std.ArrayList(CloneFrame),
     ) Allocator.Error!ConstTypeId {
-        if (map.get(ty)) |existing| return existing;
+        if (known.types.get(ty)) |existing| return existing;
 
         const out = try self.reserve();
-        try map.put(ty, out);
+        try known.types.put(known.allocator, ty, out);
 
         var frame = CloneFrame{ .source_ty = ty, .out = out };
         errdefer frame.deinit(self.allocator);
@@ -1150,47 +1235,51 @@ pub const ConstTypeStore = struct {
         try self.fill(frame.out, cloned);
     }
 
-    fn translateRecordFieldName(name_translation: ?NameTranslation, id: names.RecordFieldNameId) Allocator.Error!names.RecordFieldNameId {
-        const translation = name_translation orelse return id;
-        return translation.target.internRecordFieldLabel(translation.source.recordFieldLabelText(id));
+    fn translateRecordFieldName(translation: NameTranslation, id: names.RecordFieldNameId) Allocator.Error!names.RecordFieldNameId {
+        const known = &translation.known.record_field_names;
+        if (known.get(id)) |existing| return existing;
+        const translated = try translation.target.internRecordFieldLabel(translation.source.recordFieldLabelText(id));
+        try known.put(translation.known.allocator, id, translated);
+        return translated;
     }
 
-    fn translateTagName(name_translation: ?NameTranslation, id: names.TagNameId) Allocator.Error!names.TagNameId {
-        const translation = name_translation orelse return id;
-        return translation.target.internTagLabel(translation.source.tagLabelText(id));
+    fn translateTagName(translation: NameTranslation, id: names.TagNameId) Allocator.Error!names.TagNameId {
+        const known = &translation.known.tag_names;
+        if (known.get(id)) |existing| return existing;
+        const translated = try translation.target.internTagLabel(translation.source.tagLabelText(id));
+        try known.put(translation.known.allocator, id, translated);
+        return translated;
     }
 
-    fn translateFieldDefault(name_translation: ?NameTranslation, default: ?TypeFieldDefault) Allocator.Error!?TypeFieldDefault {
+    fn translateTypeName(translation: NameTranslation, id: names.TypeNameId) Allocator.Error!names.TypeNameId {
+        const known = &translation.known.type_names;
+        if (known.get(id)) |existing| return existing;
+        const translated = try translation.target.internTypeName(translation.source.typeNameText(id));
+        try known.put(translation.known.allocator, id, translated);
+        return translated;
+    }
+
+    fn translateModuleIdentity(translation: NameTranslation, id: names.ModuleIdentityId) Allocator.Error!names.ModuleIdentityId {
+        const known = &translation.known.module_identities;
+        if (known.get(id)) |existing| return existing;
+        const translated = try translation.target.internModuleIdentity(translation.source.moduleIdentityBytes(id));
+        try known.put(translation.known.allocator, id, translated);
+        return translated;
+    }
+
+    fn translateFieldDefault(translation: NameTranslation, default: ?TypeFieldDefault) Allocator.Error!?TypeFieldDefault {
         const field_default = default orelse return null;
-        const translation = name_translation orelse return field_default;
         return .{
-            .module = try translation.target.internModuleIdentity(translation.source.moduleIdentityBytes(field_default.module)),
+            .module = try translateModuleIdentity(translation, field_default.module),
             .expr_node = field_default.expr_node,
         };
     }
 
-    fn translateTypeDef(name_translation: ?NameTranslation, def: TypeDef) Allocator.Error!TypeDef {
-        const translation = name_translation orelse return def;
+    fn translateTypeDef(translation: NameTranslation, def: TypeDef) Allocator.Error!TypeDef {
         return .{
-            .module = try translation.target.internModuleIdentity(translation.source.moduleIdentityBytes(def.module)),
-            .type_name = try translation.target.internTypeName(translation.source.typeNameText(def.type_name)),
+            .module = try translateModuleIdentity(translation, def.module),
+            .type_name = try translateTypeName(translation, def.type_name),
             .source_decl = def.source_decl,
-            .generated = def.generated,
-            .iterator_representation = def.iterator_representation,
-            .iterator_kind = def.iterator_kind,
-            .iterator_depth = def.iterator_depth,
-            .iterator_topology = .of(if (def.iterator_topology.get()) |topology| .{
-                .len_field = try translateRecordFieldName(name_translation, topology.len_field),
-                .step_field = try translateRecordFieldName(name_translation, topology.step_field),
-                .ok_tag = try translateTagName(name_translation, topology.ok_tag),
-                .err_tag = try translateTagName(name_translation, topology.err_tag),
-                .unknown_tag = try translateTagName(name_translation, topology.unknown_tag),
-                .done_tag = try translateTagName(name_translation, topology.done_tag),
-                .one_tag = try translateTagName(name_translation, topology.one_tag),
-                .skip_tag = try translateTagName(name_translation, topology.skip_tag),
-                .item_field = try translateRecordFieldName(name_translation, topology.item_field),
-                .rest_field = try translateRecordFieldName(name_translation, topology.rest_field),
-            } else null),
         };
     }
 
@@ -2224,6 +2313,101 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     var corrupt_range = loaded_fn;
     corrupt_range.evidence_frames = &corrupt_range_frames;
     try std.testing.expect(!try ConstStore.evidenceFramesValid(std.testing.allocator, corrupt_range));
+}
+
+test "ConstTypeStore: one translation copies each shared type once and the copies survive serialization" {
+    const gpa = std.testing.allocator;
+    const CompactWriter = @import("collections").CompactWriter;
+
+    // A program's types: a row type that a list, a recursive named type and
+    // a tuple of the two all reach.
+    var source_names = names.NameStore.init(gpa);
+    defer source_names.deinit();
+    var source = ConstTypeStore.init(gpa);
+    defer source.deinit();
+    const count_ty = try source.append(.{ .primitive = .u64 });
+    const row = try source.append(.{ .record = try source.appendFieldSpan(&.{
+        .{ .name = try source_names.internRecordFieldLabel("count"), .ty = count_ty, .default = .none },
+        .{ .name = try source_names.internRecordFieldLabel("total"), .ty = count_ty, .default = .none },
+    }) });
+    const rows = try source.append(.{ .list = row });
+    const tree = try source.reserve();
+    const subtrees = try source.append(.{ .list = tree });
+    const leaf = try source_names.internTagLabel("Leaf");
+    const node = try source_names.internTagLabel("Node");
+    const tree_backing = try source.append(.{ .tag_union = try source.appendTagSpan(&.{
+        .{ .name = leaf, .checked_name = leaf, .payloads = try source.appendTypeSpan(&.{row}) },
+        .{ .name = node, .checked_name = node, .payloads = try source.appendTypeSpan(&.{subtrees}) },
+    }) });
+    const declaring_module: [32]u8 = @splat(0x2A);
+    try source.fill(tree, .{ .named = .{
+        .named_type = .{ .module = .{} },
+        .def = .{ .module = try source_names.internModuleIdentity(&declaring_module), .type_name = try source_names.internTypeName("Tree") },
+        .kind = .nominal,
+        .args = .{},
+        .backing = .some(.{ .ty = tree_backing, .use = .inspectable }),
+    } });
+    const pair = try source.append(.{ .tuple = try source.appendTypeSpan(&.{ rows, tree }) });
+
+    // The module's store names things by its own ids.
+    var target_names = names.NameStore.init(gpa);
+    defer target_names.deinit();
+    _ = try target_names.internRecordFieldLabel("unrelated");
+    _ = try target_names.internTagLabel("Unrelated");
+    var store = ConstStore.init(gpa);
+    defer store.deinit();
+
+    // One writer's translation: every root, however many times it or a type
+    // it shares is stored, adds each of the program's types once.
+    var translation = ConstTypeStore.Translation.init(gpa);
+    defer translation.deinit();
+    const roots = [_]ConstTypeId{ rows, tree, pair, row, rows, pair };
+    var copies: [roots.len]ConstTypeId = undefined;
+    for (roots, &copies) |root, *copy| {
+        copy.* = try store.type_store.cloneTypeFromTranslated(&source, &source_names, &target_names, &translation, root);
+    }
+    try std.testing.expectEqual(source.typeCount(), store.type_store.typeCount());
+    try std.testing.expectEqual(copies[0], copies[4]);
+    try std.testing.expectEqual(copies[2], copies[5]);
+    try std.testing.expectEqual(copies[3], store.type_store.get(copies[0]).list);
+    const pair_items = store.type_store.typeSpan(store.type_store.get(copies[2]).tuple);
+    try std.testing.expectEqualSlices(ConstTypeId, &.{ copies[0], copies[1] }, pair_items);
+    const row_fields = store.type_store.fieldSpan(store.type_store.get(copies[3]).record);
+    try std.testing.expectEqualStrings("count", target_names.recordFieldLabelText(row_fields[0].name));
+    try std.testing.expectEqualStrings("total", target_names.recordFieldLabelText(row_fields[1].name));
+
+    // A translation per root copies what the roots share once per root.
+    var unshared = ConstTypeStore.init(gpa);
+    defer unshared.deinit();
+    var unshared_names = names.NameStore.init(gpa);
+    defer unshared_names.deinit();
+    for (roots) |root| {
+        var own = ConstTypeStore.Translation.init(gpa);
+        defer own.deinit();
+        _ = try unshared.cloneTypeFromTranslated(&source, &source_names, &unshared_names, &own, root);
+    }
+    try std.testing.expect(unshared.typeCount() > store.type_store.typeCount());
+
+    // Serialize → aligned buffer → deserialize.
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    var writer = CompactWriter.init();
+    const hdr = try writer.appendAlloc(aa, ConstStore.Serialized);
+    try hdr.serialize(&store, aa, &writer);
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+    const ser: *const ConstStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var loaded = ser.deserialize(@intFromPtr(buffer.ptr), gpa);
+    defer loaded.deinit();
+
+    // Every stored type reads back as the program's type, shared or not.
+    for (roots, copies) |root, copy| {
+        try std.testing.expect(try loaded.type_store.isCopyOf(gpa, &target_names, copy, &source, &source_names, root));
+    }
+    try std.testing.expect(!try loaded.type_store.isCopyOf(gpa, &target_names, copies[0], &source, &source_names, tree));
+    try std.testing.expect(!try loaded.type_store.isCopyOf(gpa, &target_names, copies[1], &source, &source_names, pair));
 }
 
 test "ConstStore: exact function capture back-edge survives serialization" {

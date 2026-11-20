@@ -70,9 +70,6 @@ pub const image_options: backend.StaticDataImage.Options = .{
 const CallableTail = struct {
     header_offset: usize,
     capture_size: usize,
-    source_state: usize,
-    copied_state: usize,
-    state_size: usize,
     extra_bytes: usize,
 };
 
@@ -83,19 +80,12 @@ fn callableTail(export_: *const backend.StaticDataExport) CallableTail {
     const size_offset = Interpreter.static_callable_payload_offset + @offsetOf(callable.Payload, "capture_size");
     const capture_size = std.mem.readInt(usize, export_.bytes[size_offset..][0..@sizeOf(usize)], .little);
     if (capture_size > export_.bytes.len - capture_start) invariant("static callable capture exceeded its allocation");
-    const source_state = std.mem.alignForward(usize, capture_start + capture_size, callable.capture_alignment);
-    const state_size = export_.bytes.len - @min(source_state, export_.bytes.len);
-    if (state_size > builtins.boxed_sequence.state_capacity) invariant("static callable has an invalid private suffix");
     const header_offset = std.mem.alignForward(usize, export_.bytes.len, @alignOf(Interpreter.StaticCallableHeader));
     const header_end = header_offset + @sizeOf(Interpreter.StaticCallableHeader);
-    const copied_state = std.mem.alignForward(usize, header_end, callable.capture_alignment);
     return .{
         .header_offset = header_offset,
         .capture_size = header_end - capture_start,
-        .source_state = source_state,
-        .copied_state = copied_state,
-        .state_size = state_size,
-        .extra_bytes = (if (state_size == 0) header_end else copied_state + state_size) - export_.bytes.len,
+        .extra_bytes = header_end - export_.bytes.len,
     };
 }
 
@@ -113,8 +103,7 @@ pub fn resolveFunction(_: ?*anyopaque, relocation: backend.StaticDataRelocation)
     return Interpreter.staticErasedCallableTrampolineAddress();
 }
 
-/// Put each frozen callable's owner inside its capture. A private sequence view
-/// follows that capture; copy its relocated bytes after the new owner trailer.
+/// Put each frozen callable's owner inside its capture.
 pub fn writeCallableHeaders(exports: []const backend.StaticDataExport, image: *const backend.StaticDataImage, owner: *const Interpreter.StaticCallableOwner) void {
     for (exports) |export_| {
         const symbol = image.symbolAddress(export_.symbol_name) orelse invariant("interpreter image omitted a committed export");
@@ -133,9 +122,6 @@ pub fn writeCallableHeaders(exports: []const backend.StaticDataExport, image: *c
             };
             const data: [*]u8 = @ptrFromInt(allocation);
             builtins.erased_callable.payloadPtr(data + Interpreter.static_callable_payload_offset).capture_size = tail.capture_size;
-            if (tail.state_size != 0) {
-                @memcpy((data + tail.copied_state)[0..tail.state_size], (data + tail.source_state)[0..tail.state_size]);
-            }
         }
     }
 }

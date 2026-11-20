@@ -59,9 +59,9 @@ pub const EntryWrapperId = enum(u32) { _ };
 pub const ArtifactRef = extern struct {
     bytes: [32]u8 = @as([32]u8, @splat(0)),
 
-    /// Integer equality over the digest: a single 256-bit compare.
+    /// Equality over the digest's bytes.
     pub fn eql(a: ArtifactRef, b: ArtifactRef) bool {
-        return @as(u256, @bitCast(a.bytes)) == @as(u256, @bitCast(b.bytes));
+        return base.byte_encoding.digestsEql(&a.bytes, &b.bytes);
     }
 };
 

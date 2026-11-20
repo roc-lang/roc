@@ -43,17 +43,11 @@ jobs:
         with:
           # Zig stores fetched packages in the `p/` subdir of the global cache.
           # Caching just that under a stable build.zig.zon-hash key keeps deps
-          # present across runs: it is read every run, so it stays warm and is
-          # not evicted by the setup action's churnier per-run cache. A cold runner then no
-          # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
-          #
-          # Note this step is currently the ONLY working cache. The setup
-          # action also caches build artifacts, but `.zig-cache` exceeds its
-          # 2048 MiB cache-size-limit on every platform, so the action clears
-          # the directory in its post step and saves nothing -- every run then
-          # starts from a cold build cache. See the "Report .zig-cache
-          # composition" step in ci_manager.yml; sizing the limit is a
-          # follow-up.
+          # present across runs, so a cold runner does not re-download deps
+          # from GitHub and hit HttpConnectionClosing. Build outputs are not
+          # cached across runs (`use-cache: false` above); MiniCI's reach the
+          # runners that need them as build artifacts (see the `minici-build`
+          # action).
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
@@ -123,17 +117,11 @@ jobs:
         with:
           # Zig stores fetched packages in the `p/` subdir of the global cache.
           # Caching just that under a stable build.zig.zon-hash key keeps deps
-          # present across runs: it is read every run, so it stays warm and is
-          # not evicted by the setup action's churnier per-run cache. A cold runner then no
-          # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
-          #
-          # Note this step is currently the ONLY working cache. The setup
-          # action also caches build artifacts, but `.zig-cache` exceeds its
-          # 2048 MiB cache-size-limit on every platform, so the action clears
-          # the directory in its post step and saves nothing -- every run then
-          # starts from a cold build cache. See the "Report .zig-cache
-          # composition" step in ci_manager.yml; sizing the limit is a
-          # follow-up.
+          # present across runs, so a cold runner does not re-download deps
+          # from GitHub and hit HttpConnectionClosing. Build outputs are not
+          # cached across runs (`use-cache: false` above); MiniCI's reach the
+          # runners that need them as build artifacts (see the `minici-build`
+          # action).
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
@@ -178,91 +166,151 @@ jobs:
       # run-test-dylib and run-test-archive are MiniCI phases, so PR CI runs
       # them on these same three OSes; they are not repeated here.
 
-  # MiniCI on the hosts PR CI never uses. src/build/minici.zig's `workflows`
-  # table declares that this file runs the secondary lane, which is every
-  # MiniCI job whose result can differ by host, so a job added to MiniCI runs
-  # here with no edit to this file. `--minici-verify-workflows` (run on every
-  # PR) checks that this file still runs that lane exactly once and runs no
-  # MiniCI job by hand.
-  minici-other-hosts:
+  # MiniCI on the hosts PR CI never uses, built and sharded like PR CI: one
+  # `build-ci` per host, uploaded as an artifact, then one job per shard that
+  # restores it and runs its slice of the secondary lane (every MiniCI job
+  # whose result can differ by host) without compiling anything `build-ci`
+  # built. Which jobs each shard runs is defined in src/build/minici.zig
+  # (`shards`), and `--minici-verify-workflows` (run on every PR) checks that
+  # this file names every shard of these hosts exactly once and runs no MiniCI
+  # job by hand. The three build jobs share one step list, as do the three
+  # shard jobs; host differences are `if:` conditions on their steps.
+  minici-build-linux-arm:
     needs: check-once
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15-intel, ubuntu-24.04-arm, windows-2022]
-    steps:
+    name: minici-build (ubuntu-24.04-arm)
+    runs-on: ubuntu-24.04-arm
+    # The `Host` in src/build/minici.zig whose shards this build serves; the
+    # `minici-build` action packs one artifact for each of them.
+    env:
+      MINICI_HOST: linux_arm
+    steps: &other_hosts_build_steps
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
-      - name: Enlarge pagefile (Windows)
-        if: runner.os == 'Windows'
-        uses: ./.github/actions/enlarge-windows-pagefile
-      - name: Enlarge swap (Linux)
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/enlarge-linux-swap
-      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
-        with:
-          version: 0.17.1
-          use-cache: false
-
-      - uses: ./.github/actions/setup-rust
-
-      - name: Cache Zig dependency packages
-        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
-        with:
-          # See `zig-tests`.
-          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
-          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
-          restore-keys: |
-            zig-deps-${{ runner.os }}-${{ runner.arch }}-
 
       # temp fix, see https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/CI/near/542085291
       - name: delete llvm-config
-        if: matrix.os == 'ubuntu-24.04-arm'
+        if: runner.os == 'Linux' && runner.arch == 'ARM64'
         run: |
           sudo rm /usr/lib/llvm-18/bin/llvm-config
 
       # arm64 Linux is the one host where `run-coverage-parser` runs kcov, and
-      # `build-ci` builds kcov from source against these libraries.
+      # `build-ci` builds kcov from source against these libraries. The shards
+      # install them too: kcov loads them at run time, and the restored cache
+      # records their headers as inputs.
       - name: Install kcov dependencies
-        if: matrix.os == 'ubuntu-24.04-arm'
+        if: runner.os == 'Linux' && runner.arch == 'ARM64'
         run: |
           sudo apt-get update
           sudo apt-get install -y libdw-dev libcurl4-openssl-dev
 
-      # The embedded lld-link resolves /defaultlib via the LIB env and roc's
-      # linker locates the Windows SDK/MSVC libpaths at runtime.
-      - name: Setup MSVC (Windows)
-        if: runner.os == 'Windows'
-        uses: TheMrMilchmann/setup-msvc-dev@79dac248aac9d0059f86eae9d8b5bfab4e95e97c # ratchet:TheMrMilchmann/setup-msvc-dev@v4.0.0
+      # Two jobs on arm64: hosted arm64 runners lose network mid-`build-ci` at
+      # full parallelism.
+      - uses: ./.github/actions/minici-build
         with:
-          arch: x64
+          jobs: ${{ runner.arch == 'ARM64' && '-j2' || '' }}
 
-      # See "Build eval runner first (Windows)" in ci_manager.yml: building it
-      # alone keeps its LLVM link from overlapping the eval unit tests' link in
-      # `build-ci`.
-      - name: Build eval runner first (Windows)
-        if: runner.os == 'Windows'
-        uses: ./.github/actions/flaky-retry
+  minici-build-macos-intel:
+    needs: check-once
+    name: minici-build (macos-15-intel)
+    runs-on: macos-15-intel
+    env:
+      MINICI_HOST: macos_intel
+    steps: *other_hosts_build_steps
+
+  minici-build-windows-2022:
+    needs: check-once
+    name: minici-build (windows-2022)
+    runs-on: windows-2022
+    env:
+      MINICI_HOST: windows_2022
+    steps: *other_hosts_build_steps
+
+  minici-linux-arm:
+    needs: minici-build-linux-arm
+    name: minici (${{ matrix.minici_shard }})
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - minici_shard: linux-arm-core
+          - minici_shard: linux-arm-eval
+          - minici_shard: linux-arm-harness
+          - minici_shard: linux-arm-strategy
+    steps: &other_hosts_shard_steps
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+
+      # See the same steps in `minici-build-linux-arm`.
+      - name: delete llvm-config
+        if: runner.os == 'Linux' && runner.arch == 'ARM64'
+        run: |
+          sudo rm /usr/lib/llvm-18/bin/llvm-config
+
+      - name: Install kcov dependencies
+        if: runner.os == 'Linux' && runner.arch == 'ARM64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdw-dev libcurl4-openssl-dev
+
+      - uses: ./.github/actions/minici-shard
         with:
-          command: zig build build-test-eval-runner
-          retry_count: 3
+          shard: ${{ matrix.minici_shard }}
 
-      - name: Run MiniCI
-        run: zig build minici -- --minici-lane secondary
+  minici-macos-intel:
+    needs: minici-build-macos-intel
+    name: minici (${{ matrix.minici_shard }})
+    runs-on: macos-15-intel
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - minici_shard: macos-intel-core
+          - minici_shard: macos-intel-eval
+          - minici_shard: macos-intel-harness
+          - minici_shard: macos-intel-strategy
+    steps: *other_hosts_shard_steps
 
-      - name: Upload MiniCI report and logs
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
-        with:
-          name: minici-nightly-${{ matrix.os }}
-          path: zig-out/minici/
+  minici-windows-2022:
+    needs: minici-build-windows-2022
+    name: minici (${{ matrix.minici_shard }})
+    runs-on: windows-2022
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - minici_shard: windows-2022-core
+          - minici_shard: windows-2022-eval
+          - minici_shard: windows-2022-harness
+          - minici_shard: windows-2022-strategy
+    steps: *other_hosts_shard_steps
 
   # Nightly-only work on every OS. MiniCI is not repeated here: PR CI runs it
-  # on macos-15, ubuntu-24.04 and windows-2025, and `minici-other-hosts` runs it
-  # on the other legs. This job keeps the ReleaseFast build and test run,
-  # snapshots in `--debug` mode, the Debug `-Dfuzz` `run-test-zig` aggregate,
-  # static-link checks, and eval coverage.
+  # on macos-15, ubuntu-24.04 and windows-2025, and the `minici-*` jobs above run
+  # it on the other legs. This job keeps the ReleaseFast build and test run and
+  # the static-link checks; `zig-tests-debug` below keeps snapshots in
+  # `--debug` mode, the Debug `-Dfuzz` `run-test-zig` aggregate, and eval
+  # coverage. They are separate jobs because each one alone already takes
+  # hours on a hosted runner, and together they exceed the 6-hour job limit.
+  #
+  # This job builds only what it runs: `roc` and the `run-test-zig` binaries.
+  # The default `zig build` step is twice as many compiles in ReleaseFast: it
+  # adds every test platform host for every cross target, the `repro-*`
+  # executables, the eval, host-effects and strategy-differential runners, and
+  # the web artifacts, none of which this job runs. `zig-valgrind` still builds
+  # that whole default step in ReleaseFast on x86_64 Linux, and PR CI's
+  # `build-ci` builds those artifacts in Debug on every PR OS.
+  #
+  # Windows runners have 4 cores and 16 GB of RAM, and every compile that
+  # contains the whole compiler (`roc`, the `repro-*` executables, the larger
+  # test binaries) peaks at several GB, some well over 8 GB. At Zig's default of
+  # one job per core, four of them overlap: without the enlarged pagefile that
+  # fails with OutOfMemory, and with it the runner pages so heavily that the
+  # build takes hours and the runner stops answering GitHub. `-j2` caps the
+  # overlap at two compiles on both Windows jobs.
   zig-tests:
     needs: check-once
     runs-on: ${{ matrix.os }}
@@ -287,67 +335,68 @@ jobs:
             zig_test_timeout_flag: ''
           - os: ubuntu-24.04-arm
             cpu_flag: ''
-            target_flag: ''  # Native build: kcov coverage only runs on arm64 Linux (see Eval Code Coverage below)
+            target_flag: ''
             release_jobs_flag: -j2  # Avoid hosted ARM runner disconnects under ReleaseFast parallelism.
             zig_test_timeout_flag: ''
           - os: windows-2022
             cpu_flag: ''
             target_flag: ''
-            release_jobs_flag: ''
+            release_jobs_flag: -j2  # See the memory note above.
             zig_test_timeout_flag: --test-timeout 5m
           - os: windows-2025
             cpu_flag: ''
             target_flag: ''
-            release_jobs_flag: ''
+            release_jobs_flag: -j2  # See the memory note above.
             zig_test_timeout_flag: --test-timeout 5m
 
     steps:
-      - name: Checkout
+      - &zig_tests_checkout
+        name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
-      - name: Enlarge pagefile (Windows)
+      - &zig_tests_enlarge_pagefile
+        name: Enlarge pagefile (Windows)
         if: runner.os == 'Windows'
         uses: ./.github/actions/enlarge-windows-pagefile
-      - name: Enlarge swap (Linux)
+      - &zig_tests_enlarge_swap
+        name: Enlarge swap (Linux)
         if: runner.os == 'Linux'
         uses: ./.github/actions/enlarge-linux-swap
-      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
+      - &zig_tests_setup_zig
+        uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.17.1
           use-cache: false
 
-      - name: Cache Zig dependency packages
+      - &zig_tests_cache_deps
+        name: Cache Zig dependency packages
         uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
         with:
           # Zig stores fetched packages in the `p/` subdir of the global cache.
           # Caching just that under a stable build.zig.zon-hash key keeps deps
-          # present across runs: it is read every run, so it stays warm and is
-          # not evicted by the setup action's churnier per-run cache. A cold runner then no
-          # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
-          #
-          # Note this step is currently the ONLY working cache. The setup
-          # action also caches build artifacts, but `.zig-cache` exceeds its
-          # 2048 MiB cache-size-limit on every platform, so the action clears
-          # the directory in its post step and saves nothing -- every run then
-          # starts from a cold build cache. See the "Report .zig-cache
-          # composition" step in ci_manager.yml; sizing the limit is a
-          # follow-up.
+          # present across runs, so a cold runner does not re-download deps
+          # from GitHub and hit HttpConnectionClosing. Build outputs are not
+          # cached across runs (`use-cache: false` above); MiniCI's reach the
+          # runners that need them as build artifacts (see the `minici-build`
+          # action).
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
             zig-deps-${{ runner.os }}-${{ runner.arch }}-
       # temp fix, see https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/CI/near/542085291
-      - name: delete llvm-config
+      - &zig_tests_delete_llvm_config
+        name: delete llvm-config
         if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
         run: |
           sudo rm /usr/lib/llvm-18/bin/llvm-config
 
-      - name: build roc + repro executables
+      - name: build roc + release test binaries
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build ${{ matrix.release_jobs_flag }} -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}
+          command: zig build ${{ matrix.release_jobs_flag }} roc build-test-zig -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}
           retry_count: 3
 
-      - name: Setup MSVC (Windows)
+      - &zig_tests_setup_msvc
+        name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
         uses: TheMrMilchmann/setup-msvc-dev@79dac248aac9d0059f86eae9d8b5bfab4e95e97c # ratchet:TheMrMilchmann/setup-msvc-dev@v4.0.0
         with:
@@ -364,18 +413,11 @@ jobs:
         run: |
           zig-out\bin\roc.exe check ./CONTRIBUTING/profiling/bench_repeated_check.roc
 
-      - name: zig snapshot tests
-        run: zig build run-check-snapshots ${{ matrix.target_flag }} -- --debug
-
-      # 1) in debug mode
-      - name: build and execute tests, build repro executables
-        run: zig build ${{ matrix.zig_test_timeout_flag }} run-test-zig -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }}
-
-      # 2) in release mode
-      - name: Build and execute tests, build repro executables. All in release mode.
+      - name: execute tests in release mode
         run: zig build ${{ matrix.release_jobs_flag }} ${{ matrix.zig_test_timeout_flag }} run-test-zig -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}
 
-      - name: Check for snapshot changes
+      - &zig_tests_check_snapshot_changes
+        name: Check for snapshot changes
         run: |
           git diff --exit-code test/snapshots
 
@@ -412,9 +454,58 @@ jobs:
               exit 1
           }
 
+  zig-tests-debug:
+    needs: check-once
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            target_flag: ''
+            debug_jobs_flag: ''
+            zig_test_timeout_flag: ''
+          - os: macos-15
+            target_flag: ''
+            debug_jobs_flag: ''
+            zig_test_timeout_flag: ''
+          - os: ubuntu-24.04
+            target_flag: -Dtarget=x86_64-linux-musl
+            debug_jobs_flag: ''
+            zig_test_timeout_flag: ''
+          - os: ubuntu-24.04-arm
+            target_flag: ''  # Native build: kcov coverage only runs on arm64 Linux (see Eval Code Coverage below)
+            debug_jobs_flag: ''
+            zig_test_timeout_flag: ''
+          - os: windows-2022
+            target_flag: ''
+            debug_jobs_flag: -j2  # Debug builds on Windows use LLVM too; see the note on `zig-tests`.
+            zig_test_timeout_flag: --test-timeout 5m
+          - os: windows-2025
+            target_flag: ''
+            debug_jobs_flag: -j2  # Debug builds on Windows use LLVM too; see the note on `zig-tests`.
+            zig_test_timeout_flag: --test-timeout 5m
+
+    steps:
+      - *zig_tests_checkout
+      - *zig_tests_enlarge_pagefile
+      - *zig_tests_enlarge_swap
+      - *zig_tests_setup_zig
+      - *zig_tests_cache_deps
+      - *zig_tests_delete_llvm_config
+      - *zig_tests_setup_msvc
+
+      - name: zig snapshot tests
+        run: zig build ${{ matrix.debug_jobs_flag }} run-check-snapshots ${{ matrix.target_flag }} -- --debug
+
+      - name: build and execute tests, build repro executables
+        run: zig build ${{ matrix.debug_jobs_flag }} ${{ matrix.zig_test_timeout_flag }} run-test-zig -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }}
+
+      - *zig_tests_check_snapshot_changes
+
       # Eval code coverage - run on ARM64 Linux (native build); parser coverage
-      # is the MiniCI job `run-coverage-parser`, which `minici-other-hosts` runs
-      # there. x86_64 coverage stays disabled: Zig's x86_64 backend emitted
+      # is the MiniCI job `run-coverage-parser`, which the `linux-arm-harness`
+      # shard runs there. x86_64 coverage stays disabled: Zig's x86_64 backend emitted
       # .debug_line sections that libdw could not parse (observed on Zig
       # 0.15.2). That has not yet been re-verified on Zig 0.17; enabling
       # x86_64 coverage needs that re-check first (see build.zig's coverage
@@ -448,17 +539,11 @@ jobs:
         with:
           # Zig stores fetched packages in the `p/` subdir of the global cache.
           # Caching just that under a stable build.zig.zon-hash key keeps deps
-          # present across runs: it is read every run, so it stays warm and is
-          # not evicted by the setup action's churnier per-run cache. A cold runner then no
-          # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
-          #
-          # Note this step is currently the ONLY working cache. The setup
-          # action also caches build artifacts, but `.zig-cache` exceeds its
-          # 2048 MiB cache-size-limit on every platform, so the action clears
-          # the directory in its post step and saves nothing -- every run then
-          # starts from a cold build cache. See the "Report .zig-cache
-          # composition" step in ci_manager.yml; sizing the limit is a
-          # follow-up.
+          # present across runs, so a cold runner does not re-download deps
+          # from GitHub and hit HttpConnectionClosing. Build outputs are not
+          # cached across runs (`use-cache: false` above); MiniCI's reach the
+          # runners that need them as build artifacts (see the `minici-build`
+          # action).
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
@@ -479,7 +564,10 @@ jobs:
           # Keep large ReleaseFast Zig compiler processes from overlapping and
           # exhausting the hosted runner's memory. This lane builds several
           # artifacts that individually peak at multiple GiB under valgrind.
-          command: git clean -fdx -e .zig-cache && zig build -j1 -Dvalgrind=true -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
+          # Test platform hosts live in the build cache; `roc` below reads
+          # test/str and test/int hosts from the checkout, so
+          # `update-test-fixtures` publishes the hosts this build produced.
+          command: git clean -fdx -e .zig-cache && zig build -j1 -Dvalgrind=true -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456 install update-test-fixtures
           retry_count: 3
 
       - name: install valgrind
@@ -528,17 +616,11 @@ jobs:
         with:
           # Zig stores fetched packages in the `p/` subdir of the global cache.
           # Caching just that under a stable build.zig.zon-hash key keeps deps
-          # present across runs: it is read every run, so it stays warm and is
-          # not evicted by the setup action's churnier per-run cache. A cold runner then no
-          # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
-          #
-          # Note this step is currently the ONLY working cache. The setup
-          # action also caches build artifacts, but `.zig-cache` exceeds its
-          # 2048 MiB cache-size-limit on every platform, so the action clears
-          # the directory in its post step and saves nothing -- every run then
-          # starts from a cold build cache. See the "Report .zig-cache
-          # composition" step in ci_manager.yml; sizing the limit is a
-          # follow-up.
+          # present across runs, so a cold runner does not re-download deps
+          # from GitHub and hit HttpConnectionClosing. Build outputs are not
+          # cached across runs (`use-cache: false` above); MiniCI's reach the
+          # runners that need them as build artifacts (see the `minici-build`
+          # action).
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |

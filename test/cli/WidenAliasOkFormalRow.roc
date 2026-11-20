@@ -1,17 +1,17 @@
-# An alias whose formal sits in the `Try`'s OK position. Per-use opening is
-# withheld from that position, so `x.status()` has the closed ok row the where
-# clause writes. The ok row is within the row coercion's reach (a tag payload
-# of `Try`'s backing), so the body's value relates to the annotated result
-# through a widening copy and crosses into it through a row coercion
-# (design.md "Row Subsumption"): the body use widens the ok row rather than
-# rejecting it, and the two ok rows are one row on every backend (design.md
-# "Row Joins").
+# An alias whose formal sits in the `Try`'s OK position. A `where` method's
+# rows in the arguments of `Try` are generated as written, and no coercion
+# reaches an argument of a named type, so `x.status()` has exactly the ok row
+# the where clause writes. The body rebuilds the ok value at the annotated
+# result's wider row with `map_ok`.
 WidenAliasOkFormalRow := {}
 
 OkRes(a) : Try(a, [IoErr])
 
 describe : a -> OkRes([Red, Green, Blue]) where [a.status : a -> OkRes([Red, Green])]
-describe = |x| x.status()
+describe = |x| x.status().map_ok(|color| match color {
+    Red => Red
+    Green => Green
+})
 
 closed_value : OkRes([Red, Green])
 closed_value = Ok(Red)
@@ -21,4 +21,10 @@ Job := [Pending].{
     status = |_| closed_value
 }
 
+Fallible := [Fallible].{
+    status : Fallible -> OkRes([Red, Green])
+    status = |_| Err(IoErr)
+}
+
 expect describe(Job.Pending) == Ok(Red)
+expect describe(Fallible.Fallible) == Err(IoErr)

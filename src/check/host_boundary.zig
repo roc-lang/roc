@@ -1,13 +1,11 @@
 //! Read-only validation of host-visible callable values.
 //!
-//! A function, `Iter`, or `Stream` the host passes or receives must be the
-//! immediate payload of a `Box`: a boxed function is a callable the host may
-//! invoke, and a boxed sequence is an opaque handle. Any other `Box` payload is
-//! held by the host as one allocation, and every function a `Box` holds is an
-//! erased callable, so functions anywhere inside such a payload are accepted
-//! and their signatures are not host-visible. Sequences have their handle
-//! representation only as an immediate `Box` payload, so a held payload still
-//! needs each `Iter` and `Stream` directly boxed. Scoped type views preserve
+//! A function the host passes or receives must be the immediate payload of a
+//! `Box`, which makes it a callable the host may invoke. Any other `Box` payload
+//! is held by the host as one allocation of a statically known size, and every
+//! function a `Box` holds is an erased callable, so functions anywhere inside
+//! such a payload, including the step function of an `Iter` or `Stream`, are
+//! accepted and their signatures are not host-visible. Scoped type views preserve
 //! every occurrence's position through generic declarations without mutating
 //! the solver. Paths are retained as parent links and rendered only on failure.
 
@@ -17,11 +15,9 @@ const base = @import("base");
 const TypeView = @import("type_view.zig");
 
 /// Builtin identities whose payload visibility differs from a user nominal.
-pub const Builtin = enum { box, list, iter, stream, other };
-/// The value that needs its own immediate Box.
-pub const Kind = enum { function, iter, stream };
-/// A rejected occurrence and its allocator-owned source-level path.
-pub const Violation = struct { kind: Kind, path: []u8 };
+pub const Builtin = enum { box, list, other };
+/// A rejected unboxed function and its allocator-owned source-level path.
+pub const Violation = struct { path: []u8 };
 const Position = enum {
     /// The root of a host-visible declaration's type.
     signature,
@@ -89,7 +85,6 @@ pub fn findViolation(
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
                     switch (key.position) {
                         .value => return .{
-                            .kind = .function,
                             .path = try renderPath(allocator, nodes.items, cursor, context),
                         },
                         // The enclosing Box erases this function, and the host
@@ -103,15 +98,6 @@ pub fn findViolation(
                 },
                 .nominal_type => |nominal| {
                     const builtin = context.builtin(nominal);
-                    if (builtin == .iter or builtin == .stream) {
-                        if (key.position != .box_payload) return .{
-                            .kind = if (builtin == .iter) .iter else .stream,
-                            .path = try renderPath(allocator, nodes.items, cursor, context),
-                        };
-                        // The handle's state, including its item type and step
-                        // closure, is private to Roc.
-                        continue;
-                    }
                     const args = view.sliceNominalArgs(nominal);
                     if (builtin == .box or builtin == .list) {
                         for (args) |arg| try append(allocator, &nodes, cursor, arg, if (builtin == .box) .box_payload else key.position.part(), .payload);

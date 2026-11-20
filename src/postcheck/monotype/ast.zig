@@ -405,16 +405,9 @@ comptime {
     if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(FnTemplate) == 464);
 }
 
-/// Monotype function-specialization metadata.
-pub const SignatureRelation = enum(u8) {
-    independent_roots,
-    exact_graph,
-};
-
-/// A specialized Monotype function and its producer-authored signature relation.
+/// A specialized Monotype function.
 pub const Fn = struct {
     source: FnTemplate,
-    signature_relation: SignatureRelation = .independent_roots,
 };
 
 /// Direct function slot in a Monotype program.
@@ -1287,10 +1280,6 @@ pub fn procCalleeForSlot(slot: FnSlot) ProcCallee {
 pub const CallProc = struct {
     callee: ProcCallee,
     args: Span(ExprId),
-    /// Checker-authored identity for compiler-owned iterator calls.
-    /// This remains exact even when control-flow joins choose a different
-    /// monomorphic iterator representation for the call result.
-    iterator_procedure: ?static_dispatch.IteratorProcedureId = null,
     /// Explicit operands for the callee's lifted captures, keyed by `CaptureId`
     /// and sorted to match that callee's canonically-sorted capture slots. Empty
     /// before Monotype lifting has resolved direct call targets.
@@ -2144,12 +2133,6 @@ pub const ProgramView = struct {
         const raw = @backingInt(id);
         if (raw >= self.fns.len) Common.invariant("Monotype function id referenced a missing specialization");
         return self.fns[raw].source;
-    }
-
-    pub fn fnSignatureRelation(self: ProgramView, id: FnId) SignatureRelation {
-        const raw = @backingInt(id);
-        if (raw >= self.fns.len) Common.invariant("Monotype function id referenced a missing specialization");
-        return self.fns[raw].signature_relation;
     }
 
     pub fn constFnEvidence(self: ProgramView, spans: ConstEvidenceSpans) check.ConstStore.ConstFnEvidenceVector {
