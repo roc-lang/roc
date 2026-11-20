@@ -160,6 +160,9 @@ pub const ModuleUnit = struct {
     root: bool,
     /// The name each module of the link gives its workers and nominal types.
     names: *const types.ModuleNames,
+    /// Resolved platform-header slots of this library unit. An empty slice
+    /// means the selected platform binds none; null means no supplied plan.
+    hosted_bindings: ?[]const checked.UnitHostedBinding = null,
     /// Whether this is a test unit (`roc test`): every inline expect it
     /// lowers gets a unit-local expect site, whether or not the unit lowers
     /// any test root (design.md "Unit-Image Test Execution").
@@ -5258,6 +5261,22 @@ fn seedSourceFiles(program: *Program) Allocator.Error!void {
 /// in scope; otherwise every declaration in a stable order.
 fn initHosted(program: *Program) Allocator.Error!void {
     const allocator = program.allocator;
+    if (program.moduleUnit()) |unit| if (unit.hosted_bindings) |bindings| {
+        const root = program.moduleByKey(program.input.modules.root.module.key.digest());
+        for (root.view.hosted_procs.procs.items()) |proc| {
+            try program.hosted.put(allocator, .{ .module = root.index, .template = proc.template.template }, .{
+                .symbol = root.nameStore().externalSymbolNameText(proc.external_symbol_name),
+                .dispatch_index = null,
+            });
+        }
+        for (bindings) |binding| {
+            program.hosted.getPtr(.{ .module = root.index, .template = binding.template }).?.* = .{
+                .symbol = binding.symbol,
+                .dispatch_index = binding.dispatch_index,
+            };
+        }
+        return;
+    };
     const DefKey = struct { module: ModuleIndex, def: u32 };
     var by_def: std.AutoHashMapUnmanaged(DefKey, TemplateKey) = .empty;
     defer by_def.deinit(allocator);

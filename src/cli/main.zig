@@ -10629,12 +10629,13 @@ fn buildBoxyLibraryObjects(
         if (policy.test_units and !unit_policy.test_units and dev_diagnostics.isSet(.trace_boxy_work)) {
             std.debug.print("boxy-work: ordinary unit serves tests for {s} (no expect nodes or test roots)\n", .{artifact.moduleEnvConst().module_name});
         }
+        const hosted_bindings = try build_env.coordinator.?.libraryHostedBindings(artifact, ctx.arena);
         task.* = .{
             .gpa = ctx.gpa,
             .io = ctx.io.std_io,
             .policy = unit_policy,
             .artifact = artifact,
-            .platform = boxyUnitPlatform(artifact, platform),
+            .hosted_bindings = hosted_bindings,
             .views = try build_env.collectImportedArtifactViews(ctx.gpa, artifact),
             .target = target,
             .interfaces = interfaces,
@@ -11006,7 +11007,7 @@ const BoxyUnitTask = struct {
     io: std.Io,
     policy: BoxyUnitPolicy,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    platform: ?check.CheckedArtifact.ImportedModuleView,
+    hosted_bindings: ?[]const check.CheckedArtifact.UnitHostedBinding,
     views: []check.CheckedArtifact.ImportedModuleView,
     target: RocTarget,
     interfaces: *postcheck.Boxy.Lower.ExportInterfaces,
@@ -11072,7 +11073,7 @@ const BoxyUnitTask = struct {
         const key_started = lir.CheckedPipeline.Timing.startDetail(self.timing);
         if (lir.CheckedPipeline.Timing.detailOf(self.timing) != null) self.queue_wait_ns = @intCast(@max(0, key_started - self.ready_ns));
         try self.digests.ensurePrepared(self.artifact);
-        self.key = try boxyObjectKey(self.gpa, self.digests, self.artifact, self.platform, self.policy, self.target, &.{}, false);
+        self.key = try compile.boxy_unit.libraryKey(self.gpa, self.digests, self.artifact, self.hosted_bindings, @tagName(self.policy.opt), inlineExpectModeForOpt(self.policy.opt) == .run, self.target, self.policy.test_units, self.policy.wasm_stack_checks);
         if (lir.CheckedPipeline.Timing.detailOf(self.timing)) |timing| self.key_ns = timing.elapsedSince(key_started);
         self.trace("keyed");
         if (self.build_env.boxyObjectWithKey(self.artifact, self.key)) |known| {
@@ -11086,13 +11087,12 @@ const BoxyUnitTask = struct {
 
     fn build(self: *BoxyUnitTask) CliMainError!compile.boxy_unit.Built {
         var config = checkedRuntimeLoweringConfig(.linked_output, self.policy.opt, .boxy, self.target);
-        config.target.boxy_unit = .{ .imports = self.interfaces, .root = false, .names = &self.digests.names, .expect_sites = self.policy.test_units };
+        config.target.boxy_unit = .{ .imports = self.interfaces, .root = false, .names = &self.digests.names, .expect_sites = self.policy.test_units, .hosted_bindings = self.hosted_bindings };
         config.target.timing = self.timing;
         config.target.post_check_executor = self.executor;
         const built = try compile.boxy_unit.restoreOrBuild(.{
             .gpa = self.gpa,
             .artifact = self.artifact,
-            .platform = self.platform,
             .views = self.views,
             .target = self.target,
             .config = config.target,

@@ -506,12 +506,10 @@ fn recordStatementDecl(
         },
         .import => |i| blk: {
             const module_name = try self.importModulePathIdent(i.target);
+            const binding_tok = i.alias_tok orelse i.target.lastToken();
             try self.decl_index.addImport(.{
                 .module_name = module_name,
-                .module_binding = if (i.target.hasNestedTypes()) null else binding_blk: {
-                    if (i.alias_tok) |alias_tok| break :binding_blk self.tok_buf.resolveIdentifier(alias_tok);
-                    break :binding_blk self.tok_buf.resolveIdentifier(i.target.module_name_tok);
-                },
+                .file_binding = if (self.decl_index.scopes.items[@backingInt(scope_idx)].kind == .module) self.tok_buf.resolveIdentifier(binding_tok) else null,
                 .qualifier = if (i.target.qualifier_tok) |qualifier_tok| self.tok_buf.resolveIdentifier(qualifier_tok) else null,
                 .origin = @fromBackingInt(@intCast(@backingInt(i.target.origin))),
                 .base = @fromBackingInt(@intCast(@backingInt(i.target.base))),
@@ -523,10 +521,7 @@ fn recordStatementDecl(
                 .scope = scope_idx,
                 .statement = @backingInt(statement_idx),
                 .kind = .import,
-                .name_tok = .some(i.alias_tok orelse if (i.target.nested_start_tok) |nested_start|
-                    nested_start + i.target.nested_len - 1
-                else
-                    i.target.module_name_tok),
+                .name_tok = .some(binding_tok),
                 .pattern = .none,
                 .anno = .none,
                 .region = .{ .start = i.region.start, .end = i.region.end },

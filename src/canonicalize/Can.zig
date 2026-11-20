@@ -6506,13 +6506,8 @@ fn hostedEntryFuncIdent(self: *Self, entry: AST.SymbolMapEntry) std.mem.Allocato
 
     var text = std.ArrayList(u8).empty;
     defer text.deinit(self.env.gpa);
-    var tok = module_tok + 1;
-    while (tok <= entry.func) : (tok += 1) {
-        const segment = self.parse_ir.tokens.resolveIdentifier(tok) orelse return null;
-        if (text.items.len != 0) try text.append(self.env.gpa, '.');
-        try text.appendSlice(self.env.gpa, self.env.getIdent(segment));
-    }
-    return try self.env.insertIdent(Ident.for_text(text.items));
+    const path = try entry.functionPath(self.parse_ir, self.env.gpa, &text) orelse return null;
+    return try self.env.insertIdent(Ident.for_text(path));
 }
 
 /// Platform provides maps linker symbol strings to platform functions:

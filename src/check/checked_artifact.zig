@@ -20080,6 +20080,13 @@ pub const HostedBinding = struct {
     external_symbol_name: canonical.ExternalSymbolNameId,
 };
 
+/// One resolved platform-header slot of an independent module unit.
+pub const UnitHostedBinding = struct {
+    template: canonical.CheckedProcedureTemplateId,
+    dispatch_index: u32,
+    symbol: []const u8,
+};
+
 /// Exact platform-header bindings from external symbols to checked hosted defs.
 pub const HostedBindingTable = struct {
     bindings: collections.SafeList(HostedBinding) = .{},
