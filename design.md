@@ -14511,10 +14511,12 @@ A value binding's open row closes when its module finishes checking (Value
 Rows: Uses Share One Row), which decides the requirements still pending on
 it against the plain type. An open row holding requirements that no use can
 supply a type for is decided against the plain type too: at a definition's
-generalization boundary, an open row of the definition's rank that no binding
-of the boundary reaches (the row of an argument a body passes,
-`is_red(Fn(|x| x + 1))` inside `check`), and when the module finishes, an open
-row no scheme quantified (in an `expect`). Such a row is bounded rather than
+generalization boundary, a row the boundary owns after rank adjustment and
+that none of its bindings reach (`is_red(Fn(|x| x + 1))` inside `check`), and
+when the module finishes, an open row no scheme quantified (in an `expect`).
+A local `on = |p| field(p) == On` does not decide the result of a captured
+`field`: that row escapes through `field`, and the enclosing function may
+still match it against `Unset`. A row that is decided is bounded rather than
 closed (Polarity's bounded row): nothing extends it or makes its value a
 nominal type, its requirements leave it as they are decided, and it stays a
 variable that later stages close as they close every unreached row, so its
