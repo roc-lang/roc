@@ -24329,6 +24329,10 @@ recorded (`Store.escapes`): the older class is the group's environment, in
 the paper's terms a type free in the context, and nothing it reaches can be
 quantified.
 
+Every group claims the previously unowned callable state in its signatures,
+even if it stays monomorphic: a caller that forwards a monomorphic callee's
+slot must share it with the callee, not quantify it.
+
 When a group finishes, after its own boundaries are erased, its scheme is
 computed. The group stays monomorphic (an empty scheme) when it holds a
 monomorphic root (a root, a literal root, a layout request's function, or a
