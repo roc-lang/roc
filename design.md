@@ -24314,10 +24314,17 @@ polymorphically recursive.
 Ownership is explicit. Every type variable class has an owner
 (`Type.Store.owners`): the binding group whose solving created it, numbered
 from `first_group_owner`. Variables created before any group is solved
-(registered function types and local types) are `unowned` until a group's
-solving relates them; a lazy leaf's parts belong to the leaf's owner,
-whichever group expands it; variables created after solving belong to
-`global_owner`. A link gives the joined class the older owner. While a group
+(registered function types and local types) start `unowned`. A group's
+solving begins by claiming every unowned class its functions' registered
+types reach, their capture slots included (`claimFunctionTypes`). A later
+group that names a function of a monomorphic group relates that function's
+own type, which is part of the later group's environment; were it still
+unowned (its own group's solving may relate it only to other unowned
+variables, such as the function's argument locals), the later group would
+take it as its own and quantify it. Any other unowned variable belongs to
+the first group whose solving relates it; a lazy leaf's parts belong to the
+leaf's owner, whichever group expands it; variables created after solving
+belong to `global_owner`. A link gives the joined class the older owner. While a group
 is solved, every link that joins a class it owns to an older class is
 recorded (`Store.escapes`): the older class is the group's environment, in
 the paper's terms a type free in the context, and nothing it reaches can be
@@ -28138,8 +28145,11 @@ no layout shape is treated as evidence that a variant is active.
 
 Certification tracks field claims over the full committed layout ownership-slot
 domain. Scalar and padding slots require no RC claims, regardless
-of their indices. The required claim set is derived once per queried layout from
-its committed refcounted slots. A field read that holds no unit and has claimed
+of their indices. A read of a scalar, whether a struct field or a tag
+payload, needs only its container's inline representation, so it stays valid
+after every refcounted slot of the container has been claimed. The required
+claim set is derived once per queried layout from its committed refcounted
+slots. A field read that holds no unit and has claimed
 nothing of its own is a view of its parent struct's slots, so a claim through
 it is a claim of the parent's slots offset by its first slot, and a read
 through it of a slot already claimed is a read after a take unless the view's

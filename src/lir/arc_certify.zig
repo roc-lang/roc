@@ -6296,7 +6296,13 @@ const Certifier = struct {
             info.payload_taken = false;
             return;
         }
-        const source_value = try self.requireLive(state, source);
+        // A scalar payload of a tag union sits in the union's inline bytes,
+        // which stay readable after every stored unit has left, as a
+        // struct's scalar fields do.
+        const source_value = if (!self.isRc(target) and self.isInlineAggregateRepresentation(source))
+            try self.requireAggregateRepresentation(state, source)
+        else
+            try self.requireLive(state, source);
         // Reading a variant's payload proves the container holds that variant
         // on this path; anything else is already undefined.
         if (tag_discriminant) |discriminant| {
@@ -10349,6 +10355,54 @@ fn buildUnionReadAfterTake(f: *CertifyTest, union_shell: []const u32, read_paylo
     const release_union = try f.decrefStmt(taken_union, union_layout, read_view);
     const body = try takeFieldStmt(f, taken_union, outer, 0, release_union);
     _ = try f.addProc(&.{outer}, body, .i64);
+}
+
+/// `tag = [Z, P(Str, I64)]` as a parameter whose `P` payload's `Str` is
+/// taken and released, after which its `I64` sibling is read: `scalar` as
+/// that sibling, or, when `reread`, the `Str` again.
+fn buildUnionPayloadReadAfterTake(f: *CertifyTest, reread: bool) Allocator.Error!void {
+    const payload_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = .str },
+        .{ .index = 1, .layout = .i64 },
+    });
+    const tag_layout = try f.layouts.putTagUnion(&.{ try f.layouts.ensureZstLayout(), payload_layout });
+    const tag = try f.local(tag_layout);
+    const taken = try f.local(.str);
+    const again = try f.local(.str);
+    const scalar = try f.local(.i64);
+    var next = try f.ret(scalar);
+    if (reread) next = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = again,
+        .op = .tagPayload(tag, 0, 1, 1),
+        .next = next,
+    } }, .test_fixture);
+    next = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = scalar,
+        .op = .tagPayload(tag, 1, 1, 1),
+        .next = next,
+    } }, .test_fixture);
+    next = try f.decrefStmt(taken, .str, next);
+    next = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = taken,
+        .op = .tagPayload(tag, 0, 1, 1),
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{ .take_kind = .take }),
+        .next = next,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{tag}, next, .i64);
+}
+
+test "certify accepts a scalar payload read of a tag union after its refcounted sibling was taken" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildUnionPayloadReadAfterTake(&f, false);
+    try f.certify();
+}
+
+test "certify flags a refcounted payload read of a tag union after that payload was taken" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildUnionPayloadReadAfterTake(&f, true);
+    try testing.expectError(error.Certification, f.certify());
 }
 
 test "certify accepts a discriminant read of a taken tag union whose shell names its slot" {

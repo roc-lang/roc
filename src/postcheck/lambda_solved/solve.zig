@@ -900,6 +900,7 @@ const Solver = struct {
         for (0..groups.count()) |group_index| {
             const group = groups.group(group_index);
             self.beginGroup(@intCast(group_index));
+            if (self.generalizing) try self.claimFunctionTypes(@intCast(group_index), group);
             if (self.body_order == .binding_groups_reversed) {
                 var index = group.len;
                 while (index > 0) {
@@ -980,6 +981,27 @@ const Solver = struct {
         if (self.generalizing) {
             self.program.types.escape_watch = groupOwner(group);
             self.program.types.escapes.clearRetainingCapacity();
+        }
+    }
+
+    /// Give `group` every class its functions' registered types reach that
+    /// no group owns yet: a function's type, and through its own lambda set
+    /// its capture slots, belong to the function's group. Every later group
+    /// relates them as part of its environment, whether or not this group's
+    /// solving relates them first. A leaf is claimed unexpanded, so its parts
+    /// belong to this group whichever group expands it.
+    fn claimFunctionTypes(self: *Solver, group: u32, fns: []const Lifted.FnId) Allocator.Error!void {
+        const types = &self.program.types;
+        const owner = groupOwner(group);
+        self.gen_stack.clearRetainingCapacity();
+        for (fns) |fn_id| try self.gen_stack.append(self.allocator, self.program.fn_tys.items[@backingInt(fn_id)]);
+        while (self.gen_stack.pop()) |next| {
+            const root = types.rootCompressed(next);
+            if (types.owners.items[@backingInt(root)] != Type.unowned) continue;
+            types.owners.items[@backingInt(root)] = owner;
+            self.gen_children.clearRetainingCapacity();
+            try self.appendGeneralizationChildren(root);
+            try self.gen_stack.appendSlice(self.allocator, self.gen_children.items);
         }
     }
 
@@ -7940,6 +7962,57 @@ test "lambda solved traverses deep sequential and nested expressions without nat
     try solver.solve();
     try std.testing.expectEqual(solver.expr_done.bit_length, solver.expr_done.count());
     try std.testing.expectEqual(solver.inferredExpr(unit), solver.inferredExpr(body));
+}
+
+test "issue 13197: a monomorphic group's function type stays its group's when a later group relates it" {
+    // design.md "Lambda Set Generalization": `shared_a` shares its body
+    // expression with another function, so its group is monomorphic, and
+    // nothing in that group relates its argument's callable slot.
+    // `pass` relates it to its own argument; `use` then calls `shared_a`
+    // directly before instantiating `pass`. That argument type is
+    // `shared_a`'s, an older class to `pass`, never a node of its scheme.
+    const allocator = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(allocator);
+    var lifted_owned = true;
+    errdefer if (lifted_owned) lifted.deinit();
+    var symbols: Common.SymbolGen = .{};
+    const int = try lifted.types.add(.{ .primitive = .i64 });
+    const callback = try lifted.types.add(.{ .func = .{ .args = try lifted.types.addSpan(&.{int}), .ret = int } });
+    const pair = try lifted.types.add(.{ .tuple = try lifted.types.addSpan(&.{ int, int }) });
+    // Only type flow is under test; no execution reads this value.
+    const shared = try lifted.addExpr(.{ .ty = int, .data = .uninitialized });
+
+    const ignored = try lifted.addLocal(symbols.fresh(), callback);
+    const shared_a = try lifted.addFn(.{ .symbol = symbols.fresh(), .args = try lifted.addTypedLocalSpan(&.{.{ .local = ignored, .ty = callback }}), .captures = .empty(), .body = .{ .roc = shared }, .ret = int });
+    _ = try lifted.addFn(.{ .symbol = symbols.fresh(), .args = .empty(), .captures = .empty(), .body = .{ .roc = shared }, .ret = int });
+
+    const passed = try lifted.addLocal(symbols.fresh(), callback);
+    const pass_arg = try lifted.addExpr(.{ .ty = callback, .data = .{ .local = passed } });
+    const pass_body = try lifted.addExpr(.{ .ty = int, .data = .{ .call_proc = .{ .callee = .{ .lifted = shared_a }, .args = try lifted.addExprSpan(&.{pass_arg}) } } });
+    const pass = try lifted.addFn(.{ .symbol = symbols.fresh(), .args = try lifted.addTypedLocalSpan(&.{.{ .local = passed, .ty = callback }}), .captures = .empty(), .body = .{ .roc = pass_body }, .ret = int });
+
+    const used = try lifted.addLocal(symbols.fresh(), callback);
+    const direct_arg = try lifted.addExpr(.{ .ty = callback, .data = .{ .local = used } });
+    const direct = try lifted.addExpr(.{ .ty = int, .data = .{ .call_proc = .{ .callee = .{ .lifted = shared_a }, .args = try lifted.addExprSpan(&.{direct_arg}) } } });
+    const through_arg = try lifted.addExpr(.{ .ty = callback, .data = .{ .local = used } });
+    const through = try lifted.addExpr(.{ .ty = int, .data = .{ .call_proc = .{ .callee = .{ .lifted = pass }, .args = try lifted.addExprSpan(&.{through_arg}) } } });
+    const use_body = try lifted.addExpr(.{ .ty = pair, .data = .{ .tuple = try lifted.addExprSpan(&.{ direct, through }) } });
+    _ = try lifted.addFn(.{ .symbol = symbols.fresh(), .args = try lifted.addTypedLocalSpan(&.{.{ .local = used, .ty = callback }}), .captures = .empty(), .body = .{ .roc = use_body }, .ret = pair });
+
+    var program = Ast.Program.init(allocator, lifted);
+    lifted_owned = false;
+    lifted = undefined;
+    defer program.deinit();
+    program.binding_groups = try program.lifted.bindingGroups(allocator);
+    var solver = try solveProgram(allocator, &program, .binding_groups, null, null);
+    defer solver.deinit();
+
+    const shared_group = program.poly.fn_groups.items[@backingInt(shared_a)];
+    const pass_group = program.poly.fn_groups.items[@backingInt(pass)];
+    try std.testing.expect(program.binding_groups.shares_exprs[shared_group]);
+    try std.testing.expect(program.poly.schemes.items[pass_group].isGeneric());
+    const shared_fn = program.types.rootContentCompressed(program.fn_tys.items[@backingInt(shared_a)]).func;
+    try std.testing.expectEqual(Solver.groupOwner(shared_group), program.types.ownerOf(program.types.spanItem(shared_fn.args, 0)));
 }
 
 test "lambda solved compact record updates relate only unchanged field representations" {
