@@ -912,7 +912,7 @@ pub const Builder = struct {
         // the committed layout puts recursion boxes in its fields instead.
         const product = switch (self.program.store.get(payload_ty)) {
             .record, .tuple => true,
-            else => false,
+            .primitive, .empty_record, .tag_union, .list, .box, .nominal, .function, .variable => false,
         };
         if (only and self.holdsRefcounted(target) and (product or try self.program.layouts.alwaysInlineComponent(payload_ty))) {
             if (self.store.localDyn(target)) |dyn| {
@@ -947,7 +947,7 @@ pub const Builder = struct {
         defer self.allocator.free(components);
         // A ProductShape permits residual releases as well as takes. It is
         // valid only when every described field owns precisely its logical
-        // value. A descriptor projection transparently opens a recursion box;
+        // value. A descriptor-driven field read transparently opens a recursion box;
         // the payload alone cannot take or release that box's ownership unit.
         for (components) |component| {
             if (!try self.program.layouts.alwaysInlineComponent(component)) {
