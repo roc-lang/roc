@@ -41,6 +41,8 @@ pub const Layouts = struct {
     member_vars: collections.DenseMapUnmanaged(TypeId, []const TypeId) = .empty,
     /// `onSizeCycle`'s answer for each type asked about.
     size_cycles: collections.DenseMapUnmanaged(TypeId, bool) = .empty,
+    /// Whether all inline paths end before a cycle or a substitution.
+    bounded_inline: collections.DenseMapUnmanaged(TypeId, bool) = .empty,
 
     const Committed = struct { idx: layout.Idx, digest: ?layout.GraphDigest };
 
@@ -77,6 +79,7 @@ pub const Layouts = struct {
         while (vars.next()) |slice| self.allocator.free(slice.*);
         self.member_vars.deinit(self.allocator);
         self.size_cycles.deinit(self.allocator);
+        self.bounded_inline.deinit(self.allocator);
     }
 
     /// The components `ty`'s descriptor composes from: those it stores
@@ -164,6 +167,53 @@ pub const Layouts = struct {
             }
         }
         return false;
+    }
+
+    /// Whether the type's inline size is bounded independently of all
+    /// substitutions. Such a type cannot be a node on a recursive size
+    /// cycle in any instantiation, even if it contains generic lists.
+    pub fn alwaysInlineComponent(self: *Layouts, ty: TypeId) Allocator.Error!bool {
+        if (self.inlineBound(ty)) |bound| return bound;
+        const Frame = struct { ty: TypeId, end: usize };
+        var frames: std.ArrayList(Frame) = .empty;
+        defer frames.deinit(self.allocator);
+        var edges: std.ArrayList(InlineEdge) = .empty;
+        defer edges.deinit(self.allocator);
+        var current = ty;
+        descend: while (true) {
+            const start = edges.items.len;
+            // An edge back to an active frame closes a size cycle. Every
+            // active ancestor then has an unbounded inline path.
+            try self.bounded_inline.put(self.allocator, current, false);
+            try frames.append(self.allocator, .{ .ty = current, .end = start });
+            try self.inlineEdges(current, &edges);
+            while (frames.getLastOrNull()) |frame| {
+                while (edges.items.len > frame.end) {
+                    const edge = edges.pop().?;
+                    if (!edge.placesInline()) continue;
+                    if (self.inlineBound(edge.child)) |bound| {
+                        if (!bound) return false;
+                    } else {
+                        current = edge.child;
+                        continue :descend;
+                    }
+                }
+                self.bounded_inline.getPtr(frame.ty).?.* = true;
+                _ = frames.pop();
+            }
+            return true;
+        }
+    }
+
+    fn inlineBound(self: *Layouts, ty: TypeId) ?bool {
+        return switch (self.store.get(ty)) {
+            .primitive, .empty_record, .list, .box, .function => true,
+            .variable => false,
+            .record => |r| if (r.ext != .none) false else self.bounded_inline.get(ty),
+            .tag_union => |u| if (u.ext != null) false else self.bounded_inline.get(ty),
+            .nominal => |n| if (!n.has_backing) false else self.bounded_inline.get(ty),
+            .tuple => self.bounded_inline.get(ty),
+        };
     }
 
     /// Whether `parent` stores `edge.child` in a recursion box: a struct

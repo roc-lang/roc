@@ -26406,17 +26406,23 @@ every unrolled occurrence, which matches the typing rule below that nested
 modes are uniform through an owning rc.
 
 A dynamic local normally carries one opaque owned unit. For a closed-row
-record or tuple, Boxy lowering also emits its checked product shape:
+record or tuple whose logical fields account for all its stored ownership,
+Boxy lowering also emits its checked product shape:
 the fields' layouts and descriptor locals. This is ownership data,
 not a memory layout: field addresses and representation sizes still come
 from runtime descriptors. A dynamic field occupies one ownership slot;
 a concrete struct field expands into its concrete slots. An open row or an
-unknown type has no enumerated product shape and remains opaque.
+unknown type has no enumerated product shape and remains opaque. The same
+applies when a substitution can put a recursion box around a field: projecting
+the logical payload does not transfer the box. The parent descriptor must
+remain responsible for its release. Type arguments reached only through a
+list, explicit box, or callable do not affect inline size.
 
 A dynamic tag union has no enumerated shape, but each of its payload reads
 names the variant it reads: the read sits under the arm that matched the tag,
 or follows the constructor that built it. Boxy lowering, which knows the tag's
-payload count from its checked type, reads the only payload of a tag, into a
+payload count from its checked type, reads the only payload of a tag that is
+known to be stored inline, into a
 local whose layout can hold refcounted data, as an `assign_ref`
 `tag_payload_struct` of the dynamic union into independent frame storage
 (backends copy it with the union's descriptor as `dyn.tag_payload_addr` of

@@ -851,13 +851,19 @@ pub const Builder = struct {
     /// Payload `payload_index` of the active tag of the dynamic tag union
     /// `union_value`, the tag at position `variant` among its union's tags, into
     /// `target`; `only` is set when that payload is its tag's only one. A
-    /// tag's only payload that can hold refcounted data is the whole active
-    /// variant, so it is read as an ownership-complete tag payload read of
+    /// tag's only inline payload that can hold refcounted data is the whole
+    /// active variant, so it is read as an ownership-complete tag payload read of
     /// the union (`tag_payload_struct`) into independent frame storage: ARC can
     /// move the union's unit into it and take its fields. Any other payload
     /// is a component address borrowed from the union.
-    pub fn readDynamicTagPayloadInto(self: *Builder, target: LocalId, union_value: LocalId, desc: LocalId, variant: usize, payload_index: u32, only: bool) Allocator.Error!void {
-        if (only and self.holdsRefcounted(target)) {
+    pub fn readDynamicTagPayloadInto(self: *Builder, target: LocalId, union_value: LocalId, desc: LocalId, variant: usize, payload_index: u32, only: bool, payload_ty: TypeId) Allocator.Error!void {
+        // A structural product payload stays inline even on a size cycle:
+        // the committed layout puts recursion boxes in its fields instead.
+        const product = switch (self.program.store.get(payload_ty)) {
+            .record, .tuple => true,
+            else => false,
+        };
+        if (only and self.holdsRefcounted(target) and (product or try self.program.layouts.alwaysInlineComponent(payload_ty))) {
             if (self.store.localDyn(target)) |dyn| {
                 if (dyn.storage == .view) self.store.getLocalPtr(target).dyn_storage = .frame;
             }
@@ -888,6 +894,16 @@ pub const Builder = struct {
         }
         const components = try self.structComponentTypes(structural);
         defer self.allocator.free(components);
+        // A ProductShape permits residual releases as well as takes. It is
+        // valid only when every described field owns precisely its logical
+        // value. A descriptor projection transparently opens a recursion box;
+        // the payload alone cannot take or release that box's ownership unit.
+        for (components) |component| {
+            if (!try self.program.layouts.alwaysInlineComponent(component)) {
+                try self.product_shapes.put(self.allocator, ty, .none);
+                return .none;
+            }
+        }
         const shape = try self.productShapeFields(0, components);
         try self.product_shapes.put(self.allocator, ty, shape);
         return shape;
@@ -10783,7 +10799,7 @@ pub const Builder = struct {
         const payload_types = store.span(tags[variant].payloads);
         for (args, payload_types, 0..) |arg, payload_ty, index| {
             const local = try self.localOf(payload_ty, .view);
-            try self.readDynamicTagPayloadInto(local, value, desc, variant, @intCast(index), payload_types.len == 1);
+            try self.readDynamicTagPayloadInto(local, value, desc, variant, @intCast(index), payload_types.len == 1, payload_ty);
             try pending.append(self.allocator, .{ .pattern = arg, .value = local, .ty = payload_ty });
         }
     }
@@ -11562,7 +11578,7 @@ pub const Builder = struct {
             const payloads = self.program.store.span(tags[variant].payloads);
             const payload_ty = payloads[index];
             const local = try self.localOf(payload_ty, .view);
-            try self.readDynamicTagPayloadInto(local, value, try self.descOf(ty), variant, index, payloads.len == 1);
+            try self.readDynamicTagPayloadInto(local, value, try self.descOf(ty), variant, index, payloads.len == 1, payload_ty);
             return .{ .value = local, .ty = payload_ty };
         }
         const variant = try self.closedVariant(ty, name);
