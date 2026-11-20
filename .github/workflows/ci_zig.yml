@@ -179,6 +179,10 @@ jobs:
     needs: check-once
     name: minici-build (ubuntu-24.04-arm)
     runs-on: ubuntu-24.04-arm
+    # The `Host` in src/build/minici.zig whose shards this build serves; the
+    # `minici-build` action packs one artifact for each of them.
+    env:
+      MINICI_HOST: linux_arm
     steps: &other_hosts_build_steps
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
@@ -209,12 +213,16 @@ jobs:
     needs: check-once
     name: minici-build (macos-15-intel)
     runs-on: macos-15-intel
+    env:
+      MINICI_HOST: macos_intel
     steps: *other_hosts_build_steps
 
   minici-build-windows-2022:
     needs: check-once
     name: minici-build (windows-2022)
     runs-on: windows-2022
+    env:
+      MINICI_HOST: windows_2022
     steps: *other_hosts_build_steps
 
   minici-linux-arm:

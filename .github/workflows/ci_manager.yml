@@ -308,6 +308,10 @@ jobs:
     name: minici-build (ubuntu-24.04)
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    # The `Host` in src/build/minici.zig whose shards this build serves; the
+    # `minici-build` action packs one artifact for each of them.
+    env:
+      MINICI_HOST: linux
     steps: &minici_build_steps
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
@@ -325,6 +329,8 @@ jobs:
     # The Zig 0.17 build takes about 110 to 120 minutes here, so 120 leaves no
     # margin.
     timeout-minutes: 180
+    env:
+      MINICI_HOST: macos
     steps: *minici_build_steps
 
   minici-build-windows:
@@ -336,6 +342,8 @@ jobs:
     # The Zig 0.17 build takes about 110 to 120 minutes here (the eval runner
     # alone about 35), so 120 leaves no margin; windows-eval has the same headroom.
     timeout-minutes: 180
+    env:
+      MINICI_HOST: windows
     steps: *minici_build_steps
 
   # Each shard runs the MiniCI jobs that src/build/minici.zig assigns to its
