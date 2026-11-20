@@ -7152,6 +7152,13 @@ before classifying calls or scheduling roots. That forwarding is a changed
 pairing column and survives a pairing-cache hit; borrowing the unbound
 platform's forwarding would incorrectly demand a computed callable.
 
+If a local scheme variable has a method constraint mentioning a platform
+requirement, pairing can give the variable itself a new checked root. The
+body, the scheme slot that binds it, and the use-site substitution and
+evidence must name the same image, including after a pairing-cache hit.
+Slot order is unchanged: pairing changes the meaning of a slot, not the
+worker's calling convention.
+
 ### Type Content Keys
 
 A type content key is the content identity of a type: alpha-invariant over
@@ -9944,6 +9951,8 @@ subjects with transparent aliases expanded at every depth, since Monotype
 erases them, while nominal types keep their declaration identity; subjects
 spelled through two aliases of one record therefore share a role. Phase A
 deduplicates by that contract identity instead of comparing graph shapes.
+Container encoders prepare the checker's role slots directly. Two slots can
+acquire the same specialized shape without either obligation disappearing.
 Freezing installs the selected role in a content-addressed prepared-call index.
 A subject-bearing entry uses the cached full Monotype digest of Phase A's
 related shape cell as its bucket,
