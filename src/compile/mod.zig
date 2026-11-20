@@ -255,6 +255,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11294_test.zig"));
     std.testing.refAllDecls(@import("test/shared_expect_lowering_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11289_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_13249_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11300_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12041_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12060_test.zig"));
@@ -290,6 +291,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11526_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11527_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11908_test.zig"));
+    std.testing.refAllDecls(@import("test/packed_tag_lists_test.zig"));
     std.testing.refAllDecls(@import("test/optimized_literal_roots_test.zig"));
     std.testing.refAllDecls(@import("test/demand_driven_ctfe_test.zig"));
     std.testing.refAllDecls(@import("test/value_form_roots_test.zig"));

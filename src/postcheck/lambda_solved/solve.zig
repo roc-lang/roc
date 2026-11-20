@@ -903,7 +903,7 @@ const Solver = struct {
             // A sharing solve finishes groups too: when it joins no row, its
             // solution is the program's (`solveProgram`).
             // Expansion creates types the group's erasure must see.
-            if (self.generalizing) try self.expandSignatureLeaves(group);
+            if (self.generalizing) try self.prepareGroupSignatures(group);
             try self.finishBindingGroup(group);
             if (self.generalizing) try self.generalizeGroup(@intCast(group_index), group);
         }
@@ -1230,7 +1230,7 @@ const Solver = struct {
             if (types.owners.items[@backingInt(root)] < owner) continue;
             if (self.gen_env.contains(root)) continue;
             const content = types.get(root);
-            // `expandSignatureLeaves` left only callable-free leaves.
+            // `prepareGroupSignatures` left only callable-free leaves.
             if (content == .mono) {
                 std.debug.assert(self.isCallableFree(content.mono.id));
                 continue;
@@ -1306,8 +1306,10 @@ const Solver = struct {
     /// so the scheme holds none: a copy must reproduce the ties a leaf's
     /// expansion makes, and finalization would give an untouched one a clone
     /// every untouched leaf shares. This runs before the group's boundaries
-    /// are erased, so erasure sees the expanded types.
-    fn expandSignatureLeaves(self: *Solver, fns: []const Lifted.FnId) Allocator.Error!void {
+    /// are erased, so erasure sees the expanded types. Claim unowned classes
+    /// here, even for groups that won't generalize: a monomorphic callee's
+    /// signature is part of its callers' environment, not theirs to copy.
+    fn prepareGroupSignatures(self: *Solver, fns: []const Lifted.FnId) Allocator.Error!void {
         const types = &self.program.types;
         var visited = self.solved_set_pool.acquire();
         defer self.solved_set_pool.release(&visited);
@@ -1329,6 +1331,9 @@ const Solver = struct {
             }
             if (content == .mono) continue;
             if ((try visited.getOrPut(root)).found_existing) continue;
+            if (types.owners.items[@backingInt(root)] == Type.unowned) {
+                types.owners.items[@backingInt(root)] = types.current_owner;
+            }
             self.gen_children.clearRetainingCapacity();
             try self.appendGeneralizationChildren(root);
             try self.gen_stack.appendSlice(self.allocator, self.gen_children.items);
@@ -4233,6 +4238,7 @@ const Solver = struct {
         const leaf = leaf_content.mono;
         const id = leaf.id;
         if (!self.leafOriginIs(other, id) and !self.leafOriginIs(other_root, id)) return false;
+        if (self.joinedStructuralOriginIntoNominal(id, other_root)) return false;
         if (self.reaches_cycle.isSet(@backingInt(id)) and
             leaf.ctx == Type.no_leaf_context and !self.leaf_arg_scopes.contains(leaf_root) and
             !try self.monoProvenUninhabited(id))
@@ -4246,6 +4252,30 @@ const Solver = struct {
         if (self.reaches_cycle.isSet(@backingInt(id))) return false;
         if (try self.monoProvenUninhabited(id)) return false;
         return true;
+    }
+
+    /// Whether `root`'s class is nominal while `id` is a structural Monotype.
+    /// A structural instance joins a nominal class only through
+    /// `link_structural_to_inspectable_named`, which lifts it into that
+    /// nominal type: the class is then an instance of the nominal type, though
+    /// its structural vars keep their `leaf_origins` entry. A leaf of the
+    /// structural Monotype linked there would resolve to the nominal type, and
+    /// when the leaf is that nominal's own backing the backing would resolve
+    /// to the nominal type itself.
+    fn joinedStructuralOriginIntoNominal(self: *const Solver, id: MonoType.TypeId, root: Type.TypeVarId) bool {
+        switch (self.lifted.types.get(id)) {
+            .named => return false,
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => {},
+        }
+        return switch (self.program.types.get(root)) {
+            .named => |named| named.kind != .alias,
+            .mono => |mono| switch (self.lifted.types.get(mono.id)) {
+                .named => |named| named.kind != .alias,
+                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => false,
+            },
+            .link => unreachable, // callers pass a class root
+            .unbound, .primitive, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .hole => false,
+        };
     }
 
     /// Prove that a materialized instance has exactly its source shape and

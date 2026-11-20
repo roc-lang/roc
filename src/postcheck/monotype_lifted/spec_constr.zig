@@ -2907,7 +2907,12 @@ const Pass = struct {
                     .local => |local| try appendPrefixRead(arena, reads, &seen, local),
                     // A compile-time constant reads nothing at run time.
                     .comptime_value => {},
-                    .uninitialized, .return_, .lambda, .def_ref, .fn_def => fixed = true,
+                    .uninitialized, .lambda, .def_ref, .fn_def => fixed = true,
+                    .return_ => {
+                        // The return stays put, but its operand can read bindings in a preceding run.
+                        fixed = true;
+                        try Ast.appendChildren(arena, program, expr_id, &children);
+                    },
                     .uninitialized_payload => |payload| {
                         fixed = true;
                         try appendPrefixRead(arena, reads, &seen, payload.condition);

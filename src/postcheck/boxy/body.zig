@@ -2199,7 +2199,7 @@ pub const Builder = struct {
         const extern_params = try self.allocator.alloc(LocalId, params.len);
         defer self.allocator.free(extern_params);
         for (params, param_types, extern_args, extern_params) |param, param_ty, *arg, *extern_param| {
-            const abi = try self.hostAbiLayout(param_ty);
+            const abi = try self.program.layouts.hostAbiLayout(param_ty);
             extern_param.* = try self.closedLocal(abi);
             if (try self.closed(param_ty)) {
                 arg.* = param;
@@ -2208,7 +2208,7 @@ pub const Builder = struct {
             arg.* = try self.closedLocal(abi);
             try self.emitDyn(arg.*, .{ .copy = .{ .src = param, .desc = try self.descOf(param_ty) } });
         }
-        const ret_abi = try self.hostAbiLayout(ret_ty);
+        const ret_abi = try self.program.layouts.hostAbiLayout(ret_ty);
         const extern_proc = try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
             .identity = self.program.programLocalIdentity("boxy.hosted_extern", @backingInt(self.worker_id)),
@@ -2227,109 +2227,6 @@ pub const Builder = struct {
             try self.pushValue(value);
         }
         try self.step(.ret);
-    }
-
-    /// The layout a hosted declaration's type `root` has at the host: its
-    /// committed layout where it is closed, and where a `Box` holds one of
-    /// the declaration's variables, the opaque box `RocBox(RocUnknown)`
-    /// (design.md "Host ABI"). The worker's own values of such a box are
-    /// dynamic locals, and each crossing copies between the two, so a local
-    /// of the opaque box is never the last owner of its allocation.
-    fn hostAbiLayout(self: *Builder, root: TypeId) Allocator.Error!layout.Idx {
-        const store = &self.program.store;
-        const layouts = &self.program.result.layouts;
-        var done: collections.DenseMapUnmanaged(TypeId, layout.Idx) = .empty;
-        defer done.deinit(self.allocator);
-        const Frame = struct { ty: TypeId, expanded: bool };
-        var stack: std.ArrayList(Frame) = .empty;
-        defer stack.deinit(self.allocator);
-        var children: std.ArrayList(TypeId) = .empty;
-        defer children.deinit(self.allocator);
-        try stack.append(self.allocator, .{ .ty = root, .expanded = false });
-        while (stack.pop()) |frame| {
-            if (done.contains(frame.ty)) continue;
-            if (try self.closed(frame.ty)) {
-                try done.put(self.allocator, frame.ty, try self.program.layouts.layoutOf(frame.ty));
-                continue;
-            }
-            children.clearRetainingCapacity();
-            switch (store.get(frame.ty)) {
-                .box => |payload| if (!try self.closed(payload)) {
-                    try done.put(self.allocator, frame.ty, try layouts.insertBox(.opaque_ptr));
-                    continue;
-                } else try children.append(self.allocator, payload),
-                .nominal => try children.append(self.allocator, try self.program.converter().backing(frame.ty)),
-                .tuple => |items| try children.appendSlice(self.allocator, store.span(items)),
-                .record => |record| {
-                    if (record.ext != .none) invariant("a hosted declaration's record row is closed, as checking requires");
-                    const storage = try self.program.layouts.recordStorage(record);
-                    defer self.allocator.free(storage);
-                    try children.appendSlice(self.allocator, storage);
-                },
-                .tag_union => |tag_union| {
-                    if (tag_union.ext != null) invariant("a hosted declaration's tag row is closed, as checking requires");
-                    const tags = try self.allocator.dupe(types.Tag, store.tagSpan(tag_union.tags));
-                    defer self.allocator.free(tags);
-                    for (tags) |tag| {
-                        const payloads = try self.allocator.dupe(TypeId, store.span(tag.payloads));
-                        defer self.allocator.free(payloads);
-                        if (try self.program.layouts.tagPayload(payloads)) |payload| try children.append(self.allocator, payload);
-                    }
-                },
-                .variable => invariant("a hosted declaration's variable appears only inside a Box, as checking requires"),
-                .list => invariant("a hosted declaration's variable inside a List is outside a Box, which checking rejects"),
-                .function, .primitive, .empty_record => unreachable, // closed
-            }
-            if (!frame.expanded) {
-                try stack.append(self.allocator, .{ .ty = frame.ty, .expanded = true });
-                for (children.items) |child| if (!done.contains(child)) try stack.append(self.allocator, .{ .ty = child, .expanded = false });
-                continue;
-            }
-            const child_layouts = try self.allocator.alloc(layout.Idx, children.items.len);
-            defer self.allocator.free(child_layouts);
-            for (children.items, child_layouts) |child, *child_layout| child_layout.* = done.get(child).?;
-            const built: layout.Idx = switch (store.get(frame.ty)) {
-                .box => try layouts.insertBox(child_layouts[0]),
-                .nominal => child_layouts[0],
-                .record => |record| blk: {
-                    const fields = try self.allocator.alloc(layout.StructField, child_layouts.len);
-                    defer self.allocator.free(fields);
-                    const declared = record.declared.get() orelse {
-                        for (fields, child_layouts, 0..) |*field, child_layout, index| field.* = .{ .index = @intCast(index), .layout = child_layout };
-                        break :blk try layouts.putStructFields(fields);
-                    };
-                    for (fields, store.declaredSlots(declared)) |*field, slot| {
-                        field.* = .{ .index = slot, .layout = child_layouts[slot], .is_padding = slot >= record.fields.len };
-                    }
-                    break :blk try layouts.putNominalStructFields(fields);
-                },
-                .tuple => blk: {
-                    const fields = try self.allocator.alloc(layout.StructField, child_layouts.len);
-                    defer self.allocator.free(fields);
-                    for (fields, child_layouts, 0..) |*field, child_layout, index| field.* = .{ .index = @intCast(index), .layout = child_layout };
-                    break :blk try layouts.putStructFields(fields);
-                },
-                .tag_union => |tag_union| blk: {
-                    const tags = try self.allocator.dupe(types.Tag, store.tagSpan(tag_union.tags));
-                    defer self.allocator.free(tags);
-                    const variants = try self.allocator.alloc(layout.Idx, tags.len);
-                    defer self.allocator.free(variants);
-                    var next: usize = 0;
-                    for (tags, variants) |tag, *variant| {
-                        if (tag.payloads.len == 0) {
-                            variant.* = .zst;
-                        } else {
-                            variant.* = child_layouts[next];
-                            next += 1;
-                        }
-                    }
-                    break :blk try layouts.putTagUnion(variants);
-                },
-                .primitive, .empty_record, .list, .function, .variable => unreachable, // only the composite kinds above expand
-            };
-            try done.put(self.allocator, frame.ty, built);
-        }
-        return done.get(root).?;
     }
 
     /// Whether any local of this procedure lives in the dynamic frame region.

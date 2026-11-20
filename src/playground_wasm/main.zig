@@ -1007,6 +1007,7 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
         1,
         .{
             .module_env_storage = .{ .static_builtin = builtin_module.env },
+            .builtin_artifact = .this_module,
             .hoisted_roots = .none,
             .io = @as(std.Io, undefined),
             .compile_time_finalizer = eval.CompileTimeFinalization.finalizerWithOptions(&ctfe_options),
@@ -1034,6 +1035,7 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
         0,
         .{
             .module_env_storage = .{ .checked_source = checked_module.module_env },
+            .builtin_artifact = .{ .imported = builtin_artifact.key.digest() },
             .hoisted_roots = .none,
             .io = @as(std.Io, undefined),
             .imports = &publish_imports,

@@ -3485,15 +3485,6 @@ fn selectRequestRepresentation(graph: *InstGraph, declared_node: NodeId, produce
     }
 }
 
-/// A procedure template's checked result row, once it is known closed.
-const ClosedResultRow = struct {
-    /// The checked row itself: the function result's own row, or the error
-    /// argument row of a `Builtin.Try` result.
-    row: checked.CheckedTypeId,
-    /// Whether the row sits inside a `Builtin.Try` result.
-    behind_try: bool,
-};
-
 /// Whether a checked tag row is closed for result-row widening. This is
 /// `CheckedTypePayload.variableSealsToRowDefault`. A rigid tail is
 /// parametric—the caller supplies the row—and is therefore not closed.
@@ -3514,30 +3505,19 @@ fn checkedResultRowIsClosed(view: ModuleView, root: checked.CheckedTypeId) bool 
     Common.invariant("checked result row extension chain was cyclic");
 }
 
-/// The template's checked result row when it is closed, so a request at a
+/// Whether the template's checked result is a closed row, so a request at a
 /// row that includes it widens that row and the template is specialized at
 /// the request's row (design.md "Closed Result Rows At Template Boundaries").
-fn closedResultRowOrNull(view: ModuleView, checked_fn_root: checked.CheckedTypeId) ?ClosedResultRow {
+fn hasClosedResultRow(view: ModuleView, checked_fn_root: checked.CheckedTypeId) bool {
     const function = switch (resolvedPayload(view, checked_fn_root).payload) {
         .function => |function| function,
-        .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
+        .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return false,
     };
     const ret = resolvedPayload(view, function.ret);
-    switch (ret.payload) {
-        .nominal => |nominal| {
-            if (nominal.builtin != .try_) return null;
-            if (nominal.args.len != 2) {
-                Common.invariant("Builtin.Try checked type did not have exactly two type arguments");
-            }
-            if (!checkedResultRowIsClosed(view, nominal.args[1])) return null;
-            return .{ .row = nominal.args[1], .behind_try = true };
-        },
-        .tag_union, .empty_tag_union => {
-            if (!checkedResultRowIsClosed(view, ret.root)) return null;
-            return .{ .row = ret.root, .behind_try = false };
-        },
-        .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record => return null,
-    }
+    return switch (ret.payload) {
+        .tag_union, .empty_tag_union => checkedResultRowIsClosed(view, ret.root),
+        .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record => false,
+    };
 }
 
 /// A checked function type's request-determined result row variable, or
@@ -3549,10 +3529,9 @@ const RequestDeterminedResultRow = union(enum) {
 
 /// The variable a function type's result row ends in, when nothing else in
 /// the type reaches it and it carries no constraint that closing a row does
-/// not discharge: the function's direct result row or the error row of its
-/// `Try` result, the positions `closedResultRowOrNull` reads. The variable
-/// may be flex or rigid, with or without a row default, and may be the whole
-/// row. Such a variable is determined by the function's result alone, so a
+/// not discharge: the function's direct result row, the position
+/// `hasClosedResultRow` reads. The variable may be flex or rigid, with or
+/// without a row default, and may be the whole row. Such a variable is determined by the function's result alone, so a
 /// template that quantifies it is specialized at whatever row its request's
 /// result holds there (design.md "Closed Result Rows At Template
 /// Boundaries"). The type reaches the variable only through the chain of
@@ -3576,7 +3555,6 @@ fn requestDeterminedResultRowVariable(
     try others.appendSlice(allocator, function.args);
 
     var current = function.ret;
-    var behind_try = false;
     const variable = while (true) {
         if (chain.items.len >= view.types.typeCount()) {
             Common.invariant("checked result row chain was cyclic");
@@ -3587,16 +3565,6 @@ fn requestDeterminedResultRowVariable(
             .alias => |alias| {
                 try others.appendSlice(allocator, alias.args);
                 current = alias.backing;
-            },
-            .nominal => |nominal| {
-                if (behind_try or nominal.builtin != .try_) return null;
-                if (nominal.args.len != 2) {
-                    Common.invariant("Builtin.Try checked type did not have exactly two type arguments");
-                }
-                behind_try = true;
-                try others.append(allocator, nominal.args[0]);
-                try others.appendSlice(allocator, nominal.padding_field_types);
-                current = nominal.args[1];
             },
             .tag_union => |tag_union| {
                 for (0..tag_union.tags.len()) |tag_index| {
@@ -3609,7 +3577,7 @@ fn requestDeterminedResultRowVariable(
                 if (row_variable.constraints.len() != 0 and !row_variable.row_default_discharges_constraints) return null;
                 break current;
             },
-            .pending, .field_kind, .err, .record, .tuple, .function, .empty_record, .empty_tag_union => return null,
+            .pending, .field_kind, .err, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => return null,
         }
     };
 
@@ -3728,8 +3696,7 @@ fn requestRowIncludesClosedRow(
 }
 
 /// The row a result node presents for widening: a bare tag row itself; a
-/// nominal's structural backing row, through which a `Try`'s error argument
-/// is one tag's payload; null for anything else.
+/// nominal's structural backing row; null for anything else.
 fn resultRowNodeOrNull(graph: *InstGraph, node: NodeId) Allocator.Error!?NodeId {
     return switch ((try graph.content(node))) {
         .tag_union, .empty_tag_union => node,
@@ -3747,8 +3714,8 @@ fn resultRowNodeOrNull(graph: *InstGraph, node: NodeId) Allocator.Error!?NodeId 
 const ResultRowWidening = union(enum) {
     /// The function's own result row.
     result: RequestNodePair,
-    /// The error row of a `Try` result: one payload of one tag of the rows
-    /// the two results present (`resultRowNodeOrNull`).
+    /// A row under the result's own: one payload of one tag of the rows the
+    /// two results present (`resultRowNodeOrNull`).
     payload: struct {
         name: names.TagNameId,
         index: usize,
@@ -3764,24 +3731,20 @@ const ResultRowWidening = union(enum) {
     }
 };
 
-/// Recognize the one result cell a request may widen past the template's
-/// closed row: the function's own result row, or the error row of its `Try`
-/// result, the positions polarity opens per use (design.md "Polarity").
-/// `declared_row` is the checker's own answer for this template; the graph
-/// may present either side as a bare row or as the `Try` nominal, so both
-/// are read as rows and the error row is the payload the two rows share at
-/// one label. Every other component relates exactly, through the ordinary
-/// relation that follows the widening. Nothing is related here.
+/// Recognize the one result cell a request may widen past the closed result
+/// row of a template (`hasClosedResultRow`): the function's own result row,
+/// or a payload row the two results share at one label. The graph may present
+/// either side as a bare row or as a nominal, so both are read as rows. Every
+/// other component relates exactly, through the ordinary relation that
+/// follows the widening. Nothing is related here.
 fn resultRowWideningOrNull(
     graph: *InstGraph,
-    declared_row: ClosedResultRow,
     public_ret: NodeId,
     request_ret: NodeId,
 ) Allocator.Error!?ResultRowWidening {
     const public_row = (try resultRowNodeOrNull(graph, public_ret)) orelse return null;
     const request_row = (try resultRowNodeOrNull(graph, request_ret)) orelse return null;
-    if (!declared_row.behind_try and
-        (try graph.content(public_row)) == .tag_union and
+    if ((try graph.content(public_row)) == .tag_union and
         try requestRowIncludesClosedRow(graph, public_row, request_row))
     {
         return .{ .result = .{ .public = public_row, .request = request_row } };
@@ -3805,17 +3768,17 @@ fn resultRowWideningOrNull(
     return null;
 }
 
-/// Widen a template's closed result row to a request whose row includes it,
-/// so the template is specialized at the request's row (design.md "Closed
-/// Result Rows At Template Boundaries"). A request at the template's own row
-/// widens nothing. The caller relates the two interfaces afterwards.
+/// Widen the closed result row of a template (`hasClosedResultRow`) to a
+/// request whose row includes it, so the template is specialized at the
+/// request's row (design.md "Closed Result Rows At Template Boundaries"). A
+/// request at the template's own row widens nothing. The caller relates the
+/// two interfaces afterwards.
 fn widenClosedResultRow(
     graph: *InstGraph,
-    declared_row: ClosedResultRow,
     public_ret: NodeId,
     request_ret: NodeId,
 ) Allocator.Error!void {
-    const widening = (try resultRowWideningOrNull(graph, declared_row, public_ret, request_ret)) orelse return;
+    const widening = (try resultRowWideningOrNull(graph, public_ret, request_ret)) orelse return;
     const pair = widening.pair();
     if ((try graph.content(pair.public)) != .empty_tag_union) {
         try graph.widenClosedTagRow(pair.public, pair.request);
@@ -3823,7 +3786,7 @@ fn widenClosedResultRow(
     }
     // The empty row's node stands for every empty row in the graph, so the
     // position that holds it is pointed at the request's row instead: the
-    // tag payload, and the `Try` argument that names the same row.
+    // tag payload, and a named type's argument that names the same row.
     const payload = switch (widening) {
         .payload => |payload| payload,
         .result => Common.invariant("a function result widened from an empty row"),
@@ -3846,7 +3809,7 @@ fn widenClosedResultRowToRequest(
     public_fn: NodeId,
     request_fn: NodeId,
 ) Allocator.Error!void {
-    const declared_row = closedResultRowOrNull(view, checked_fn_ty) orelse return;
+    if (!hasClosedResultRow(view, checked_fn_ty)) return;
     if (graph.sameClass(public_fn, request_fn)) return;
     // Only a directly function-shaped pair is inspected here. Reading a
     // function interface through a named backing is the caller's ordinary
@@ -3857,7 +3820,7 @@ fn widenClosedResultRowToRequest(
     if (public.args.len != request.args.len) {
         Common.compilerBug("result-row widening request changed arity from its checked interface");
     }
-    try widenClosedResultRow(graph, declared_row, public.ret, request.ret);
+    try widenClosedResultRow(graph, public.ret, request.ret);
 }
 
 /// Rendered length `hostedExternAbiViolationMessage` never exceeds.
@@ -6940,7 +6903,7 @@ const Builder = struct {
     ) Allocator.Error!bool {
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
-        if (closedResultRowOrNull(view, template.checked_fn_root) != null) return true;
+        if (hasClosedResultRow(view, template.checked_fn_root)) return true;
         return switch (try self.requestDeterminedResultRow(view, template.checked_fn_root)) {
             .none => false,
             .variable => true,
@@ -33384,8 +33347,8 @@ const BodyContext = struct {
             self.builder.countBodyDiagnostic("direct_call_request_reuses");
             if (task.expected_ret_node) |expected| {
                 const fn_nodes = try self.graph.functionNodes(request.fn_node);
-                if (closedResultRowOrNull(self.view, task.source_fn_ty)) |declared_row| {
-                    try widenClosedResultRow(self.graph, declared_row, fn_nodes.ret, expected);
+                if (hasClosedResultRow(self.view, task.source_fn_ty)) {
+                    try widenClosedResultRow(self.graph, fn_nodes.ret, expected);
                 }
                 _ = try checkedMonoRequestNode(self.graph, fn_nodes.ret, expected, .exact);
             }
@@ -33504,9 +33467,9 @@ const BodyContext = struct {
                 // row widens the callee's row: a procedure is specialized at
                 // the row its result flows into, so a function value's row,
                 // which every call shares, is never widened.
-                if (!task.callee_value) if (closedResultRowOrNull(caller.view, task.source_fn_ty)) |declared_row| {
-                    try widenClosedResultRow(self.graph, declared_row, task.ret_node, expected);
-                };
+                if (!task.callee_value and hasClosedResultRow(caller.view, task.source_fn_ty)) {
+                    try widenClosedResultRow(self.graph, task.ret_node, expected);
+                }
                 request_ret = try checkedMonoRequestNode(self.graph, task.ret_node, expected, .exact);
             }
         }
@@ -33605,8 +33568,8 @@ const BodyContext = struct {
             if (try self.graph.containsGeneratedPrivate(expected)) {
                 request_ret = expected;
             } else {
-                if (closedResultRowOrNull(caller.view, plan.callable_ty)) |declared_row| {
-                    try widenClosedResultRow(self.graph, declared_row, task.ret_node, expected);
+                if (hasClosedResultRow(caller.view, plan.callable_ty)) {
+                    try widenClosedResultRow(self.graph, task.ret_node, expected);
                 }
                 request_ret = try checkedMonoRequestNode(self.graph, task.ret_node, expected, .exact);
             }
@@ -39482,7 +39445,7 @@ const BodyContext = struct {
         const target = call.directTarget(self.view) orelse return false;
         if (self.directCallTargetIsLocalProc(target)) return false;
         const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.sourceFnTy(self.view));
-        const declared_row = closedResultRowOrNull(self.view, source_fn_ty) orelse return false;
+        if (!hasClosedResultRow(self.view, source_fn_ty)) return false;
         const proc: checked.ProcedureUseTemplate = switch (self.finalDirectTarget(target).record.ref) {
             .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |proc| proc,
             .platform_required_proc => |required| required.procedure,
@@ -39491,7 +39454,7 @@ const BodyContext = struct {
         };
         if (!try self.builder.templateTakesWiderResultRow(self.builder.templateRefForProcedureUse(proc))) return false;
         const call_ret_node = try self.instNode(checkedExpr(self.view, call_expr).ty);
-        return (try resultRowWideningOrNull(self.graph, declared_row, call_ret_node, expected_node)) != null;
+        return (try resultRowWideningOrNull(self.graph, call_ret_node, expected_node)) != null;
     }
 
     /// Whether a row coercion's value is lowered at the coercion's row rather
@@ -57747,6 +57710,7 @@ const BodyContext = struct {
             callable_node,
             shape_node,
         );
+        if (kind == .encoder) _ = try self.prepareEncoderContainerRoles(expr, callable_node);
         var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         _ = try self.prepareCustomCodecCallsAtNode(expr, kind, shape_node, callable_node, &seen);
@@ -59917,8 +59881,12 @@ const BodyContext = struct {
         };
     }
 
+    /// The parts of a builtin `Try(ok, [Missing])`, the optional record field
+    /// form. Any other nominal, however its backing is shaped, is an ordinary
+    /// tag union to its codec.
     fn missingTryInfo(self: *BodyContext, try_ty: Type.TypeId) Allocator.Error!?TryInfo {
         if (self.frozenCustomCodecCallForShape(.parser, try_ty) != null) return null;
+        if (!self.typeIsBuiltinTry(try_ty)) return null;
         const info = self.tryInfoOptional(try_ty) orelse return null;
         return if (self.typeIsExactUnitTagUnion(info.err_ty, "Missing")) info else null;
     }
@@ -60479,7 +60447,7 @@ const BodyContext = struct {
         });
         defer self.codec_contract_expansion_stack.shrinkRetainingCapacity(ancestry_len);
 
-        var added_relation = false;
+        var added_relation = if (kind == .encoder) try self.prepareEncoderContainerRoles(boundary_expr, boundary_callable_node) else false;
         if (kind == .parser) {
             var invalid_value_seen = collections.DenseMap(NodeId, void).init(self.allocator);
             defer invalid_value_seen.deinit();
@@ -61354,11 +61322,7 @@ const BodyContext = struct {
         return found;
     }
 
-    fn requiredGeneratedCodecTarget(
-        self: *BodyContext,
-        method_name: []const u8,
-        subject_node: ?NodeId,
-    ) Allocator.Error!struct {
+    const RequiredCodecTarget = struct {
         lookup: MethodLookup,
         method_name: []const u8,
         method_role: u32,
@@ -61366,12 +61330,22 @@ const BodyContext = struct {
         callable_node: NodeId,
         contract: EvidenceContract,
         anchor: CheckedCodecContractAnchor,
-    } {
+    };
+
+    fn requiredGeneratedCodecTarget(
+        self: *BodyContext,
+        method_name: []const u8,
+        subject_node: ?NodeId,
+    ) Allocator.Error!RequiredCodecTarget {
         const call = (try self.generatedCodecCall(method_name, subject_node)) orelse
             base.invariant(
                 "postcheck invariant violated: checked generated codec contract was missing required method call {s} (subject: {s})",
                 .{ method_name, if (subject_node == null) "none" else "present" },
             );
+        return self.requiredCodecTargetForCall(call);
+    }
+
+    fn requiredCodecTargetForCall(self: *BodyContext, call: InstantiatedGeneratedCodecCall) Allocator.Error!RequiredCodecTarget {
         const lookup = switch (call.resolution) {
             .callable => try self.generatedCodecCallLookup(call),
             .structural => Common.invariant("generated codec format call resolved to a structural derivation"),
@@ -61699,22 +61673,58 @@ const BodyContext = struct {
         return true;
     }
 
-    fn prepareEncodeContainerCodecCall(
+    /// Distinct checked roles can acquire the same shape during specialization.
+    /// Prepare each obligation by index; freeze checks that coincident shapes
+    /// have equivalent prepared targets.
+    fn prepareEncoderContainerRoles(self: *BodyContext, boundary_expr: DraftExprId, boundary_callable_node: NodeId) Allocator.Error!bool {
+        const active = self.active_codec_contract orelse Common.invariant("encoder preparation had no checked contract");
+        const derivation = active.view.static_dispatch_plans.generated_codec_derivations.items()[@backingInt(active.derivation)];
+        const kinds = std.StaticStringMap(EncodeContainerKind).initComptime(.{
+            .{ "encode_list", .list }, .{ "encode_dict", .dict },   .{ "encode_record", .record },
+            .{ "encode_tag", .tag },   .{ "encode_tuple", .tuple },
+        });
+        var added = false;
+        for (active.method_call_slots) |slot| {
+            const kind = kinds.get(active.view.names.methodNameText(slot.method)) orelse continue;
+            const call = self.activeCodecCalls()[slot.call_index];
+            const subject = call.subject_node orelse Common.invariant("container encoder role had no subject");
+            if (@import("builtin").mode == .debug) {
+                for (self.activeCodecCallsMut()) |*occurrence| {
+                    if (occurrence.checked.method == slot.method and occurrence.checked.method_role == slot.method_role)
+                        occurrence.debug_consumed = true;
+                }
+            }
+            const exact = try self.requiredCodecTargetForCall(call);
+            if (self.preparedRequiredCodecCallExists(boundary_expr, .encoder, exact)) continue;
+            // Emission consumes the public shape, not a declaration's structural
+            // body. Set's format call consumes the list of its elements.
+            var shape = if (derivation.body_shape_ty != derivation.shape_ty and call.checked.subject_ty.get() == derivation.body_shape_ty)
+                active.shape_node
+            else
+                subject;
+            if (kind == .list) {
+                const content = try self.graph.content(shape);
+                if (content == .named and content.named.builtin_owner.get() == .set)
+                    shape = try self.graph.newNode(.{ .list = content.named.args[0] });
+            }
+            try self.prepareEncoderContainerRole(boundary_expr, shape, boundary_callable_node, exact);
+            added = true;
+        }
+        return added;
+    }
+
+    fn prepareEncoderContainerRole(
         self: *BodyContext,
         boundary_expr: DraftExprId,
         shape_node: NodeId,
-        contract_subject_node: NodeId,
         boundary_callable_node: NodeId,
-        method_name: []const u8,
-    ) Allocator.Error!bool {
+        exact: RequiredCodecTarget,
+    ) Allocator.Error!void {
         const boundary = try self.graph.functionNodes(boundary_callable_node);
         if (boundary.args.len != 1) Common.invariant("structural encoder constructor did not have one encoding argument");
         const runtime = try self.graph.functionNodes(boundary.ret);
         if (runtime.args.len != 2) Common.invariant("structural encoder runtime did not have value and state arguments");
         const state_node = runtime.args[1];
-        const exact = try self.requiredGeneratedCodecTarget(method_name, contract_subject_node);
-        if (self.preparedRequiredCodecCallExists(boundary_expr, .encoder, exact)) return false;
-
         const target_node = exact.callable_node;
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len < 1) Common.invariant("container encoder target had no state argument");
@@ -61722,7 +61732,6 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
         try self.appendPreparedRequiredCodecCall(boundary_expr, .encoder, shape_node, exact);
-        return true;
     }
 
     /// The shapes a derived codec reads out of a builtin keyed container: a
@@ -61773,6 +61782,13 @@ const BodyContext = struct {
             },
             .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return false,
         }
+    }
+
+    fn typeIsBuiltinTry(self: *BodyContext, ty: Type.TypeId) bool {
+        return switch (self.typeStore().get(ty)) {
+            .named => |named| self.builder.isBuiltinTryDef(self.nameStore(), named.def),
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => false,
+        };
     }
 
     fn graphNodeIsBuiltinTry(self: *BodyContext, node: NodeId) Allocator.Error!bool {
@@ -63058,11 +63074,10 @@ const BodyContext = struct {
             .named => |named| if (named.builtin_owner.get()) |owner| switch (owner) {
                 .set => {
                     if (named.args.len != 1) Common.invariant("builtin Set graph node had an unexpected arity");
-                    const list_node = try self.graph.newNode(.{ .list = named.args[0] });
                     var added = if (kind == .parser)
-                        try self.prepareParseListFormatCodecCalls(boundary_expr, list_node, shape_node, boundary_callable_node)
+                        try self.prepareParseListFormatCodecCalls(boundary_expr, try self.graph.newNode(.{ .list = named.args[0] }), shape_node, boundary_callable_node)
                     else
-                        try self.prepareEncodeContainerCodecCall(boundary_expr, list_node, shape_node, boundary_callable_node, "encode_list");
+                        false;
                     added = try self.prepareSetCollectionCodecCall(
                         boundary_expr,
                         kind,
@@ -63077,7 +63092,7 @@ const BodyContext = struct {
                     var added = if (kind == .parser)
                         try self.prepareParseDictFormatCodecCalls(boundary_expr, shape_node, shape_node, boundary_callable_node)
                     else
-                        try self.prepareEncodeContainerCodecCall(boundary_expr, shape_node, shape_node, boundary_callable_node, "encode_dict");
+                        false;
                     added = try self.prepareDictKeyCodecCalls(
                         boundary_expr,
                         kind,
@@ -63132,14 +63147,6 @@ const BodyContext = struct {
                         contract_subject_node,
                         boundary_callable_node,
                     ) or added;
-                } else {
-                    added = try self.prepareEncodeContainerCodecCall(
-                        boundary_expr,
-                        shape_node,
-                        contract_subject_node,
-                        boundary_callable_node,
-                        "encode_list",
-                    ) or added;
                 }
                 added = try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, elem, boundary_callable_node, seen) or added;
             },
@@ -63152,14 +63159,6 @@ const BodyContext = struct {
                         contract_subject_node,
                         boundary_callable_node,
                     ) or added;
-                } else {
-                    added = try self.prepareEncodeContainerCodecCall(
-                        boundary_expr,
-                        shape_node,
-                        contract_subject_node,
-                        boundary_callable_node,
-                        "encode_tuple",
-                    ) or added;
                 }
                 for (items) |item| {
                     added = try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, item, boundary_callable_node, seen) or added;
@@ -63171,15 +63170,6 @@ const BodyContext = struct {
                     .zst, .hole, .empty_record => &.{},
                     .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .named, .empty_tag_union, .erased => Common.invariant("record codec preparation reached a non-record shape"),
                 };
-                if (kind == .encoder) {
-                    added = try self.prepareEncodeContainerCodecCall(
-                        boundary_expr,
-                        shape_node,
-                        contract_subject_node,
-                        boundary_callable_node,
-                        "encode_record",
-                    ) or added;
-                }
                 if (kind == .parser) {
                     added = try self.prepareParserMissingFieldCodecCall(
                         boundary_expr,
@@ -63245,15 +63235,6 @@ const BodyContext = struct {
                 }
             },
             .tag_union => {
-                if (kind == .encoder) {
-                    added = try self.prepareEncodeContainerCodecCall(
-                        boundary_expr,
-                        shape_node,
-                        contract_subject_node,
-                        boundary_callable_node,
-                        "encode_tag",
-                    ) or added;
-                }
                 if (kind == .parser) {
                     added = try self.prepareParseTagUnionCodecCall(
                         boundary_expr,
@@ -63274,7 +63255,11 @@ const BodyContext = struct {
         return added;
     }
 
+    /// The parts of a builtin `Try(ok, [Null])`, the format's nullable form.
+    /// Any other nominal, however its backing is shaped, is an ordinary tag
+    /// union to its codec.
     fn tryNullInfo(self: *BodyContext, ty: Type.TypeId) ?TryNullInfo {
+        if (!self.typeIsBuiltinTry(ty)) return null;
         const backing_ty = namedBackingType(self.typeStore(), ty) orelse return null;
         const ok_tag = self.monoTagByTextOptional(backing_ty, "Ok") orelse return null;
         const err_tag = self.monoTagByTextOptional(backing_ty, "Err") orelse return null;

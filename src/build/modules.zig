@@ -384,7 +384,7 @@ pub const ModuleType = enum {
             },
             .lir_core => .{
                 .root = "src/lir/core.zig",
-                .deps = &.{ .base, .collections, .layout, .types, .can, .check },
+                .deps = &.{ .base, .builtins, .collections, .layout, .types, .can, .check },
                 .tests = .{ .unit = .{ .aggregators = &.{"lir core declarations are referenced"} } },
             },
             // Shared by the post-check lowerers; it imports nothing from the

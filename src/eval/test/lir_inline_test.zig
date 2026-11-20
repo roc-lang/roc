@@ -13934,6 +13934,73 @@ test "tail-call lowering loops a boxy self-call whose resolved ABI needs no retu
     try std.testing.expect(found_walk);
 }
 
+fn expectBoundedCountLoop(strategy: base.SpecializationStrategy, comptime ok_inside: bool) TestError!void {
+    const allocator = std.testing.allocator;
+    const record = "{ value: i, values }";
+    const start = "loop(0.U64, [1.U64])";
+    const source =
+        \\count = |limit| {
+        \\    loop = |i, values| {
+        \\        if i == limit {
+        \\
+    ++ (if (ok_inside) "            Ok(" ++ record ++ ")\n" else "            " ++ record ++ "\n") ++
+        \\        } else if i < 50000 {
+        \\            loop(i + 1, values)
+        \\        } else {
+        \\            loop(i + 1, values)
+        \\        }
+        \\    }
+        \\
+    ++ (if (ok_inside) "    " ++ start ++ "\n" else "    Ok(" ++ start ++ ")\n") ++
+        \\}
+        \\main : Bool
+        \\main = count(3.U64) == Ok({ value: 3, values: [1] })
+    ;
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .specialization_strategy = strategy });
+    defer lowered.deinit(allocator);
+    const result = &lowered.lowered.lir_result;
+    const counts = try procsNamed(allocator, result, "count");
+    defer allocator.free(counts);
+    try std.testing.expectEqual(@as(usize, 1), counts.len);
+    // The local loop has no stable debug name; it is count's only direct callee.
+    const callees = try collectAssignCallProcs(allocator, &lowered.lowered, counts[0]);
+    defer allocator.free(callees);
+    try std.testing.expectEqual(@as(usize, 1), callees.len);
+    const loop = callees[0];
+    const body = result.store.getProcSpecImmediate(loop).body.get().?;
+    var walk = try lir.BodyClone.ReachableStmts.init(&result.store, body);
+    defer walk.deinit();
+    var ordinary_self_calls: usize = 0;
+    var has_tail_transfer = false;
+    while (try walk.next()) |id| {
+        const stmt = result.store.getCFStmt(id);
+        if (stmt == .assign_call) {
+            const call = stmt.assign_call;
+            if (call.proc == loop) {
+                if (result.store.stmtRowOrDefault(call.extra).replaces_frame) {
+                    has_tail_transfer = true;
+                } else ordinary_self_calls += 1;
+            }
+        } else if (stmt == .join and try containsJumpTo(&result.store, stmt.join.body, stmt.join.id)) {
+            has_tail_transfer = true;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 0), ordinary_self_calls);
+    try std.testing.expect(has_tail_transfer);
+}
+
+test "issue 13228: boxy tail calls when the base case returns Ok of a record" {
+    try expectBoundedCountLoop(.boxy, true);
+}
+
+test "issue 13228: specialized count loop uses bounded stack" {
+    try expectBoundedCountLoop(.lss, true);
+}
+
+test "issue 13228: boxy count loop uses bounded stack with Ok outside" {
+    try expectBoundedCountLoop(.boxy, false);
+}
+
 test "tail-call lowering preserves owning argument permutations" {
     const allocator = std.testing.allocator;
     const source =
@@ -14230,7 +14297,7 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_gate_source);
     try std.testing.expectEqual(@as(usize, 11), stats.functions);
     try std.testing.expectEqual(@as(usize, 12), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 522), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 519), stats.expressions);
     try std.testing.expectEqual(@as(usize, 110), stats.locals);
     try std.testing.expectEqual(@as(u64, 16), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
@@ -14357,7 +14424,7 @@ test "stored parser restore lowers a shape with an optional field" {
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_optional_gate_source);
     try std.testing.expectEqual(@as(usize, 11), stats.functions);
     try std.testing.expectEqual(@as(usize, 12), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 660), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 657), stats.expressions);
     try std.testing.expectEqual(@as(usize, 130), stats.locals);
     try std.testing.expectEqual(@as(u64, 16), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
@@ -14490,11 +14557,12 @@ test "row coercion: a closed tag row joins a wider row in both strategies" {
     , &.{ .{ 0, 2 }, .{ 1, 3 } });
 }
 
-test "row coercion: a Try error row joins inside the nominal in both strategies" {
-    // The coercion crosses the `Try` nominal into its `Err` payload: `[E2, E3]`
-    // joins `[E1, E2, E3]` while the `Ok` payload is unchanged.
+test "row coercion: an error row in a payload joins while the ok payload is unchanged" {
+    // The coercion reaches the `Err` payload of the result row: `[E2, E3]`
+    // joins `[E1, E2, E3]` while the `Ok` payload is unchanged. A row in an
+    // argument of a named type such as `Try` is outside the coercion's reach.
     try expectRowCoercionResults(
-        \\widen : Try(U8, [E2, E3]) -> Try(U8, [E1, E2, E3])
+        \\widen : [Ok(U8), Err([E2, E3])] -> [Ok(U8), Err([E1, E2, E3])]
         \\widen = |x| x
         \\
         \\main : U64 -> U64
@@ -14601,7 +14669,7 @@ test "row coercion: a generic payload crosses the join" {
     // `widen` is generic in its `Ok` payload and is used at Str and U64, so
     // `.boxy` lowers it once with a descriptor-carried payload.
     try expectRowCoercionResults(
-        \\widen : Try(a, [E2, E3]) -> Try(a, [E1, E2, E3])
+        \\widen : [Ok(a), Err([E2, E3])] -> [Ok(a), Err([E1, E2, E3])]
         \\widen = |x| x
         \\
         \\main : U64 -> U64
