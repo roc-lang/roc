@@ -7844,8 +7844,8 @@ does not depend on whether the pattern contains a binder or whether any binder i
 later referenced. The checker records the complete checked source pattern and
 right-hand side as a deferred validation candidate, together with the prospective
 maximal expression root that can own its evaluation. The candidate retains a
-dedicated validation root until post-solve pruning proves that the expression
-owner or a concrete live-binder extraction was actually kept. This prevents a
+dedicated validation candidate until request eligibility establishes that the
+published expression owner or a live-binder extraction will run. This prevents a
 non-concrete or otherwise rejected prospective owner from losing the validation,
 while a kept owner prevents the right-hand side from evaluating twice.
 
@@ -8045,7 +8045,12 @@ unannotated data root with a reachable callable slot remains specialization-owne
 because an explicit consumer relation may still determine types inside that
 callable graph; it cannot cross Monotype's relation-freeze boundary as a
 context-free compile-time request. Data roots with no reachable callable slots
-continue to use the ordinary concreteness proof.
+continue to use the ordinary concreteness proof. A selected data root that
+already proved its stored value free of callable slots carries that proof;
+it still needs resolved record field kinds. Without a producer proof, a
+nominal backing contributes its own callable slots and those of the arguments
+it actually stores, not those of unused parameters. This summary belongs to
+the declaration, so instances need no copied backing.
 
 Runtime lowering restores a selected hoisted root by checked expression id. While
 lowering the synthetic compile-time wrapper for that same root, lowering must

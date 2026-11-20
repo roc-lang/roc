@@ -439,7 +439,9 @@ pub const Constants = struct {
     ///      (compile-time roots the checked-value writer completes when they
     ///      read only constants it completes, and builtin-conflicting import
     ///      bindings rejected).
-    pub const CACHE_VERSION = 204;
+    /// 205: selected data hoists carry their callable-slot proof and validation
+    /// candidates survive until request eligibility is known.
+    pub const CACHE_VERSION = 205;
 };
 
 /// Configuration for the Roc cache system.
