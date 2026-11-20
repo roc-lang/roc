@@ -1100,6 +1100,7 @@ pub fn Compiler(comptime Ctx: type) type {
         /// lirLocalForOcc(step: Step, ty, parent: ?LirLocal) LirLocal
         /// lirLocalDiscriminant/lirLocalU64() LirLocal
         /// isZstLirLocal(LirLocal) bool
+        /// defineZst(target, next) CFStmtId
         /// readDiscriminant(target, source, next) CFStmtId
         /// readField(target, ty, source, index, next) CFStmtId
         /// readTagPayload(target, ty, source, variant, index, single, next) CFStmtId
@@ -1645,7 +1646,10 @@ pub fn Compiler(comptime Ctx: type) type {
                         },
                         .value => {
                             const target = locals.value.?;
-                            if (self.ctx.isZstLirLocal(target)) continue;
+                            if (self.ctx.isZstLirLocal(target)) {
+                                current = try self.ctx.defineZst(target, current);
+                                continue;
+                            }
                             const parent = self.valueLocal(env, entry.parent);
                             current = switch (entry.step) {
                                 .root => current, // pre-seeded scrutinee
