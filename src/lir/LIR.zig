@@ -1538,7 +1538,9 @@ pub const DynOp = union(enum) {
     /// `base_desc` describes, by the update plan `plan` (an `opaque_ptr`
     /// local; `boxy_runtime.desc.update_value_flag`): each field the plan
     /// gives a value takes that one of `values`, and every other field the
-    /// base's field the plan names. `base` and `values` are consumed.
+    /// base's field the plan names. The operation consumes the base before
+    /// it returns and moves the replacements into the result. Supply their
+    /// ownership before entry: a replacement may borrow from the base.
     record_update: struct { base: LocalId, base_desc: LocalId, desc: LocalId, plan: LocalId, values: LocalSpan },
     /// Build the variant whose discriminant is `discriminant` of the tag
     /// union `desc` describes from `payloads`.

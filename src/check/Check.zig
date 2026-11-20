@@ -6982,8 +6982,14 @@ fn withdrawUnavailableConditionWarnings(self: *Self) Allocator.Error!void {
     defer outcomes.deinit(self.gpa);
     var kept: usize = 0;
     for (items, 0..) |item, i| {
-        if (item == .comptime_condition and item.comptime_condition.kind != .match_scrutinee and
-            try self.conditionOutcome(item.comptime_condition.expr, &outcomes) == .unavailable) continue;
+        if (item == .comptime_condition) {
+            const condition = item.comptime_condition;
+            const boolean = condition.kind != .match_scrutinee or bool_scrutinee: {
+                const nominal = self.resolvedNominalOrNull(ModuleEnv.varFrom(condition.expr)) orelse break :bool_scrutinee false;
+                break :bool_scrutinee self.nominalIsBuiltinBoolType(nominal);
+            };
+            if (boolean and try self.conditionOutcome(condition.expr, &outcomes) == .unavailable) continue;
+        }
         items[kept] = item;
         if (i < self.problem_owners.items.len) self.problem_owners.items[kept] = self.problem_owners.items[i];
         kept += 1;
@@ -19986,6 +19992,7 @@ fn selectAmbiguityConstraint(
                         has_excluded_origin = true;
                     },
                     .method_call, .desugared_binop, .desugared_unaryop => {
+                        if (self.staticDispatchConstraintIsInactive(c)) continue;
                         if (first_constraint == null) first_constraint = c;
                     },
                 }
@@ -20741,6 +20748,32 @@ fn applyCreationAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
         try self.ambiguity_verdict_vars.put(resolved.var_, {});
     }
     if (self.ambiguity_verdict_vars.count() == 0) return;
+
+    var settled: SettledValueCauses = .{};
+    defer settled.deinit(self.gpa);
+    if (self.erroneous_value_exprs.count() != 0) {
+        try self.indexSettledLookups(&settled);
+        var receivers = self.ambiguity_verdict_vars.keyIterator();
+        while (receivers.next()) |receiver| {
+            const range = contentConstraintRange(self.types.resolveVar(receiver.*).desc.content).?;
+            for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
+                switch (constraint.origin) {
+                    .method_call, .desugared_binop, .desugared_unaryop => {},
+                    .from_literal, .where_clause => continue,
+                }
+                if (self.staticDispatchConstraintIsInactive(constraint)) continue;
+                const site = constraintIntroExpr(constraint) orelse continue;
+                if (self.cir.store.getExpr(site) == .e_runtime_error) continue;
+                if (!try self.relationIsVoid(.of(.operands, site, 0), &settled)) continue;
+                // Retire the particular use, not its receiver or every
+                // obligation on the shared type variable. Evaluating the
+                // receiver still selects a branch and runs its effects.
+                try self.markStaticDispatchRejected(constraint);
+                const diagnostic = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{ .region = self.cir.store.getExprRegion(site) } });
+                try self.replaceRejectedOperationWithRuntimeError(site, diagnostic);
+            }
+        }
+    }
 
     // Walk expressions in node order; flag any whose own type var is a
     // verdict receiver. Dedup by resolved var id (using the set shared with
@@ -42579,9 +42612,7 @@ fn withdrawProblemsOfVoidRelations(self: *Self) Allocator.Error!void {
 
     var settled: SettledValueCauses = .{};
     defer settled.deinit(self.gpa);
-    for (self.value_lookup_tracking.items) |entry| {
-        try settled.lookup_patterns.put(self.gpa, entry.expr_idx, entry.pattern_idx);
-    }
+    try self.indexSettledLookups(&settled);
     var kept: usize = 0;
     for (items, self.problem_owners.items) |item, owner| {
         if (try self.relationIsVoid(owner, &settled)) continue;
@@ -42590,6 +42621,12 @@ fn withdrawProblemsOfVoidRelations(self: *Self) Allocator.Error!void {
         kept += 1;
     }
     self.truncateProblems(kept);
+}
+
+fn indexSettledLookups(self: *const Self, settled: *SettledValueCauses) Allocator.Error!void {
+    for (self.value_lookup_tracking.items) |entry| {
+        try settled.lookup_patterns.put(self.gpa, entry.expr_idx, entry.pattern_idx);
+    }
 }
 
 /// Whether a relation read a value that is erroneous to it at the settled
@@ -42680,12 +42717,19 @@ fn settledValueCause(self: *Self, root: CIR.Expr.Idx, settled: *SettledValueCaus
                 cause.through_name = ErroneousCause.merge(cause.through_name, binder_cause);
             }
         }
+        var from_values: SettledValueCause = .{};
         for (sources.values) |source| {
             const source_cause = settled.causes.get(source).?;
-            if (source_cause.any) |source_any| cause.any = ErroneousCause.merge(cause.any, source_any);
+            if (sources.all_rejected and source_cause.any == null) {
+                from_values = .{};
+                break;
+            }
+            if (source_cause.any) |source_any| from_values.any = ErroneousCause.merge(from_values.any, source_any);
             const through_name = if (sources.is_name) source_cause.any else source_cause.through_name;
-            if (through_name) |named| cause.through_name = ErroneousCause.merge(cause.through_name, named);
+            if (through_name) |named| from_values.through_name = ErroneousCause.merge(from_values.through_name, named);
         }
+        if (from_values.any) |any| cause.any = ErroneousCause.merge(cause.any, any);
+        if (from_values.through_name) |named| cause.through_name = ErroneousCause.merge(cause.through_name, named);
         try settled.causes.put(self.gpa, visit.expr, cause);
     }
     return settled.causes.get(root).?;
@@ -42693,6 +42737,7 @@ fn settledValueCause(self: *Self, root: CIR.Expr.Idx, settled: *SettledValueCaus
 
 const SettledCauseSources = struct {
     values: []const CIR.Expr.Idx,
+    all_rejected: bool = false,
     /// Whether `values` is a local name's source value.
     is_name: bool,
     /// A local name's binder that records no source value.
@@ -42722,7 +42767,16 @@ fn settledCauseSources(
     }
     const none: SettledCauseSources = .{ .values = &.{}, .is_name = false, .unlinked_pattern = null };
     if (self.relation_operands.get(expr_idx)) |operands| {
-        if (!operands.evaluates_operands) return none;
+        if (!operands.evaluates_operands) {
+            const expr = self.cir.store.getExpr(expr_idx);
+            if (expr == .e_match and expr.e_match.is_try_suffix) {
+                scratch.clearRetainingCapacity();
+                try scratch.append(self.gpa, expr.e_match.cond);
+                return .{ .values = scratch.items, .is_name = true, .unlinked_pattern = null };
+            }
+            if ((expr != .e_if or expr.e_if.origin != .source) and expr != .e_match) return none;
+            return .{ .values = self.relationOperandValues(operands), .is_name = true, .unlinked_pattern = null, .all_rejected = true };
+        }
         return .{ .values = self.relationOperandValues(operands), .is_name = false, .unlinked_pattern = null };
     }
     // A construction owns no relation, so its operands are read from the
@@ -42730,6 +42784,7 @@ fn settledCauseSources(
     scratch.clearRetainingCapacity();
     const store = &self.cir.store;
     switch (store.getExpr(expr_idx)) {
+        .e_block => |block| try scratch.append(self.gpa, block.final_expr),
         .e_tuple => |tuple| try scratch.appendSlice(self.gpa, store.sliceExpr(tuple.elems)),
         .e_tag => |tag| try scratch.appendSlice(self.gpa, store.sliceExpr(tag.args)),
         .e_nominal => |nominal| try scratch.append(self.gpa, nominal.backing_expr),
@@ -42760,7 +42815,6 @@ fn settledCauseSources(
         .e_call,
         .e_record,
         .e_empty_record,
-        .e_block,
         .e_zero_argument_tag,
         .e_closure,
         .e_lambda,

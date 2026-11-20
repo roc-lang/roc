@@ -10895,7 +10895,8 @@ expression that binds a local or inlines a body is therefore lowered more than
 once per lowering of its owning body, and debug builds assert this for every
 single-use body. That proof follows the
 unique call's owning functions through the selected inline plan. If an owning
-wrapper has multiple direct inline sites or also survives as a function value,
+wrapper has multiple direct inline sites or is referenced as a function value
+(one reference can feed several indirect calls even with no direct calls),
 the nested single-use body remains a procedure; a non-inlined owner establishes
 a single procedure-body boundary. Bodies with procedure-relative returns or
 loop control not owned by a loop inside the body remain procedures. A
@@ -16036,7 +16037,9 @@ kinds and treats a default identity as construction-only information:
   declaration. The default identity otherwise survives exactly on the
   unmatched field admitted by width absorption, where construction actually
   omitted the field and lowering must materialize the default. The checker
-  records that omission decision as `(record expression, field name,
+  settles the omission against the record that supplied the absorbing tail,
+  not the enclosing expression that initiated unification. It records the
+  resulting construction plan as `(record expression, field name,
   default identity)` in the checked body; postcheck consumes this explicit
   construction plan instead of trying to recover it from a row that later
   value unification may normalize to `required`.
@@ -28009,6 +28012,11 @@ result carries count 2 into the mutation's runtime uniqueness check. Field
 takes remove the retain by letting the read consume the dying container's
 stored unit for that field, dismantling the container instead of releasing it
 whole.
+
+Certification distinguishes borrowing a field from spending its unit.
+When a projected record has spent its retained copy, its original unit can
+still be held in its parent's exact slot. A read may observe that unit
+without claiming it; another live slot in the same parent proves nothing.
 
 A container qualifies for dismantling when all of the following hold:
 

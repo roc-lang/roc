@@ -56,7 +56,19 @@ test "error recovery: late rejected try payload has no receiver" {
         \\}
     );
     defer env.deinit();
-    try std.testing.expectEqual(@as(usize, 1), try env.typeProblemCount());
+    try env.assertTypeErrorTitles(&.{"Type Mismatch"});
+}
+
+test "error recovery: a valid sibling or annotation still supplies a receiver" {
+    const sources = .{
+        "run = |b| (if b unknown else [1.U64]).no_such()",
+        "run = |b| {\n v : U64\n v = if b unknown else unknown\n v.no_such()\n}",
+    };
+    inline for (sources) |source| {
+        var env = try TestEnv.init("Test", source);
+        defer env.deinit();
+        try env.assertTypeErrorTitles(&.{"Missing Method"});
+    }
 }
 
 test "error recovery: short circuit warnings respect the evaluated operand" {

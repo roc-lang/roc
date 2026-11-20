@@ -2964,15 +2964,13 @@ const Inserter = struct {
                         const operands = try self.dynOperands(op);
                         const transferred = step.transfer_positions.of(u32, &self.arc_plans.positions);
                         if (op == .record_update) {
-                            // The helper moves the replacements into the result, but
-                            // releases the base inside the operation. Its owned unit
-                            // must already exist when the helper starts.
+                            // The helper releases the base before it returns.
+                            // That release may also be the last reference to a
+                            // borrowed replacement projected from the base.
+                            // Supply only the units the ARC plan did not transfer.
                             const cause: RcCause = .{ .stmt = at, .reason = .stored_in_aggregate };
-                            std.debug.assert(operands[0] == op.record_update.base);
-                            next = try self.retainLocalsFrom(operands, 1, transferred, cause, next);
                             const update = try self.addWithNext(stmt, next, origin);
-                            if (transferred.len != 0 and transferred[0] == 0) break :blk update;
-                            break :blk try self.retainLocalIfRc(op.record_update.base, cause, update);
+                            break :blk try self.retainLocalsExceptPositions(operands, transferred, cause, update);
                         }
                         if (op == .closure and op.closure.reuse != null) {
                             // The capture record is retained after the
@@ -7788,21 +7786,10 @@ const Inserter = struct {
         cause: RcCause,
         next: LIR.CFStmtId,
     ) ResourceError!LIR.CFStmtId {
-        return self.retainLocalsFrom(locals, 0, skip_positions, cause, next);
-    }
-
-    fn retainLocalsFrom(
-        self: *Inserter,
-        locals: anytype,
-        first: usize,
-        skip_positions: []const u32,
-        cause: RcCause,
-        next: LIR.CFStmtId,
-    ) ResourceError!LIR.CFStmtId {
         var current = next;
         var skip_index = skip_positions.len;
         var i = locals.len;
-        while (i > first) {
+        while (i > 0) {
             i -= 1;
             if (skip_index > 0 and @as(usize, skip_positions[skip_index - 1]) == i) {
                 skip_index -= 1;
@@ -20529,8 +20516,8 @@ test "ARC supplies a borrowed record update base before the update" {
     const record_desc = try d.desc();
     const plan = try d.desc();
     const parent = try d.value(parent_desc, .param);
-    const replacement = try d.f.local(.str);
     const base = try d.value(record_desc, .view);
+    const replacement = try d.value(record_desc, .view);
     const updated = try d.value(record_desc, .frame);
     const equal = try d.f.local(.bool);
 
@@ -20546,19 +20533,45 @@ test "ARC supplies a borrowed record update base before the update" {
         .plan = plan,
         .values = try d.f.span(&.{replacement}),
     } }, compare);
-    const read = try d.op(base, .{ .field_addr = .{ .base = parent, .desc = parent_desc, .field_index = .{ .immediate = 0 } } }, update);
-    const proc = try d.proc(&.{ parent_desc, record_desc, plan, parent, replacement }, read, .bool, null);
+    const project = try d.op(replacement, .{ .field_addr = .{ .base = base, .desc = record_desc, .field_index = .{ .immediate = 0 } } }, update);
+    const read = try d.op(base, .{ .field_addr = .{ .base = parent, .desc = parent_desc, .field_index = .{ .immediate = 0 } } }, project);
+    const proc = try d.proc(&.{ parent_desc, record_desc, plan, parent }, read, .bool, null);
     try d.run(&.{proc});
 
     var cursor = d.f.store.getProcSpecImmediate(proc).body.get().?;
     var supplied = false;
+    var supplied_field = false;
     while (true) {
         const stmt = d.f.store.getCFStmtImmediate(cursor).*;
         if (stmt == .incref and stmt.incref.value == base) supplied = true;
+        if (stmt == .incref and stmt.incref.value == replacement) supplied_field = true;
         if (stmt == .dyn and d.f.store.stmtRow(stmt.dyn.data) == .record_update) break;
         cursor = body_clone.linearNextOrNull(stmt) orelse return error.ExpectedRecordUpdate;
     }
     try testing.expectEqual(true, supplied);
+    try testing.expectEqual(true, supplied_field);
+}
+
+test "ARC transfers an owned last-use dynamic record to its update" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const desc = try d.desc();
+    const plan = try d.desc();
+    const original = try d.value(desc, .frame);
+    const updated = try d.value(desc, .result);
+    const component = try d.f.local(.str);
+    const ret = try d.f.ret(updated);
+    const update = try d.op(updated, .{ .record_update = .{
+        .base = original,
+        .base_desc = desc,
+        .desc = desc,
+        .plan = plan,
+        .values = try d.f.span(&.{}),
+    } }, ret);
+    const make = try d.op(original, .{ .record = .{ .desc = desc, .fields = try d.f.span(&.{component}) } }, update);
+    const proc = try d.proc(&.{ desc, plan, component }, make, d.dynamic, updated);
+    try d.run(&.{proc});
+    try d.f.expectRc(original, 0, 0, 0);
 }
 
 test "ARC dyn eq and inspect borrow their operand" {

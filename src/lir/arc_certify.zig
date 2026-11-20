@@ -6925,8 +6925,8 @@ const Certifier = struct {
                     // The old record isn't held in the result: the operation
                     // releases it. Unlike a stored operand, it cannot run
                     // a temporary deficit to be restored by a trailing retain.
-                    const base = op.record_update.base;
-                    if (self.isRc(base)) try self.consumeUnit(state, state.valueOf(base), base);
+                    const original = op.record_update.base;
+                    if (self.isRc(original)) try self.consumeUnit(state, state.valueOf(original), original);
                     try self.applyAggregate(state, target.?, self.dyn_operands.items[1..]);
                 } else try self.applyAggregate(state, target.?, self.dyn_operands.items);
             },
@@ -8916,10 +8916,18 @@ test "certify rejects dismantling a payload view in a join after its only unit w
 }
 
 test "certify a field borrow after dismantling one of a projected record's two units" {
+    try checkProjectedRecordBorrow(false);
+}
+
+test "certify rejects the same borrow after the parent slot was also spent" {
+    try checkProjectedRecordBorrow(true);
+}
+
+fn checkProjectedRecordBorrow(spend_parent: bool) !void {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
     const record_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = .str }});
-    const parent_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = record_layout }});
+    const parent_layout = try f.layouts.putStructFields(&.{ .{ .index = 0, .layout = record_layout }, .{ .index = 1, .layout = .str } });
     const parent = try f.local(parent_layout);
     const record = try f.local(record_layout);
     const spent = try f.local(.str);
@@ -8929,7 +8937,11 @@ test "certify a field borrow after dismantling one of a projected record's two u
     // A take out of the parent supplies the original record; retaining it
     // supplies a second unit. Releasing one via its sole field does not
     // invalidate a borrow from the record that is still owed a release.
-    var body = try f.decrefStmt(record, record_layout, try f.ret(length));
+    // Leave a distinct live unit in the parent: being live is not evidence
+    // that the parent still owns the record's slot.
+    const sibling = try f.local(.str);
+    var body = try takeFieldStmt(&f, sibling, parent, 1, try f.decrefStmt(sibling, .str, try f.ret(length)));
+    if (!spend_parent) body = try f.decrefStmt(record, record_layout, body);
     body = try f.store.addCFStmt(.{ .assign_low_level = .{
         .target = length,
         .op = .str_count_utf8_bytes,
@@ -8938,12 +8950,17 @@ test "certify a field borrow after dismantling one of a projected record's two u
         .next = body,
     } }, .test_fixture);
     body = try fieldReadStmt(&f, borrowed, record, 0, body);
+    if (spend_parent) body = try f.decrefStmt(record, record_layout, body);
     body = try takeFieldStmt(&f, spent, record, 0, try f.decrefStmt(spent, .str, body));
     body = try f.increfStmt(record, record_layout, body);
     body = try takeFieldStmt(&f, record, parent, 0, body);
     _ = try f.addProc(&.{parent}, body, .u64);
     errdefer std.debug.print("{s}\n", .{f.diag.message()});
-    try f.certify();
+    if (spend_parent) {
+        try testing.expectError(error.Certification, f.certify());
+        try testing.expect(std.mem.find(u8, f.diag.message(), "stored unit was taken") != null or
+            std.mem.find(u8, f.diag.message(), "use of dead refcounted local") != null);
+    } else try f.certify();
 }
 
 /// A payload taken from a tag borrows the tag's stored unit until it is
