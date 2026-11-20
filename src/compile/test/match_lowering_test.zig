@@ -17,6 +17,76 @@ const expectLowersToLir = harness.expectLowersToLir;
 const expectDeterministicLir = harness.expectDeterministicLir;
 const expectLirInspection = harness.expectLirInspection;
 
+test "issue 13268: Boxy match defines the zero-sized payload it passes through" {
+    try harness.expectLirInspectionWithOptions(
+        \\map_ok : Try(Bool, [Bad]) -> Try(Str, [Bad])
+        \\map_ok = |result| match result {
+        \\    Ok(x) => Ok(if x "one" else "many")
+        \\    Err(e) => Err(e)
+        \\}
+        \\main! = |args| {
+        \\    n = args.len()
+        \\    echo!(Str.inspect(map_ok(if n == 0 Err(Bad) else Ok(n == 1))))
+        \\    Ok({})
+        \\}
+    , .{ .specialization_strategy = .boxy }, checkMapOkOperands);
+}
+
+fn markDefined(defined: []bool, local: lir.LIR.LocalId) void {
+    defined[@backingInt(local)] = true;
+}
+
+test "issue 13268: a zero-sized payload used twice is defined before binding" {
+    try harness.expectLirInspectionWithOptions(
+        \\map_ok : Try(Bool, [Bad]) -> Try(Bool, ([Bad], [Bad]))
+        \\map_ok = |result| match result {
+        \\    Ok(x) => Ok(x)
+        \\    Err(e) => Err((e, e))
+        \\}
+        \\main! = |args| {
+        \\    echo!(Str.inspect(map_ok(if args.is_empty() Err(Bad) else Ok(True))))
+        \\    Ok({})
+        \\}
+    , .{ .specialization_strategy = .boxy }, checkMapOkOperands);
+}
+
+fn checkMapOkOperands(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    const gpa = std.testing.allocator;
+    for (store.getProcSpecs(), 0..) |proc, index| {
+        const id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
+        const name = store.procDebugName(id) orelse continue;
+        if (!std.mem.eql(u8, name, "map_ok") and !std.mem.endsWith(u8, name, ".map_ok")) continue;
+
+        // Inspect only this procedure, not other matches in reachable builtins.
+        // A valid lowering may eliminate the payload read altogether.
+        const defined = try gpa.alloc(bool, store.localCount());
+        defer gpa.free(defined);
+        @memset(defined, false);
+        const reads = try gpa.alloc(u32, store.localCount());
+        defer gpa.free(reads);
+        @memset(reads, 0);
+        const args = store.getLocalSpan(proc.args);
+        for (0..args.len) |i| markDefined(defined, collections.GuardedList.at(args, i));
+        var walk = try lir.BodyClone.ReachableStmts.init(store, proc.body.get().?);
+        defer walk.deinit();
+        while (try walk.next()) |stmt_id| {
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt != .init_uninitialized) lir.BodyClone.forEachStmtDef(store, stmt, defined, markDefined);
+            lir.BodyClone.countStmtReads(store, reads, stmt);
+        }
+        for (reads, defined, 0..) |count, has_def, i| {
+            if (count == 0 or has_def) continue;
+            var dump = std.Io.Writer.Allocating.init(gpa);
+            defer dump.deinit();
+            try lir.DebugPrint.writeProc(gpa, store, layouts, id, &dump.writer);
+            std.debug.print("{s} reads l{d} without a definition:\n{s}", .{ name, i, dump.written() });
+            return error.TestUnexpectedResult;
+        }
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
 const six_tag_match_app =
     \\Color := [Red, Green, Blue, Yellow, Purple, Orange]
     \\

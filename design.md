@@ -7652,8 +7652,11 @@ valid in its type.
 
 A platform requirement's for-clause alias names an abstract type inside the
 platform; its actual type is inferred from the app's required values. An app
-declaration with the same name has no special meaning. The platform checks
-against one shared rigid identity. App checking substitutes one fresh,
+declaration with the same name has no special meaning. The platform binds one
+shared rigid identity before generating ordinary declaration templates, so
+instantiating a chain of aliases cannot copy an unbound placeholder. The
+requirement signatures themselves can refer to those templates and are checked
+afterward. App checking substitutes one fresh,
 outermost-rank inference variable per binder, shared across all requirements,
 so definition generalization cannot give sibling requirements different types.
 Each platform alias's explicit `(origin module, source declaration)` key and
@@ -14327,6 +14330,9 @@ result afterward. Such translation occurs outside the spec boundary; custom
 payload validation translates domain errors before returning the format error.
 Checking establishes this through ordinary nominal-argument unification.
 Both lowerers preserve all four parameters in generated spec identities.
+In particular, when the checked format method decodes a nominal's backing,
+the spec and the method result both name that backing. The enclosing parser,
+not the format method, constructs the public nominal.
 
 ### Derived Dict Parser Duplicate Keys
 

@@ -1971,6 +1971,46 @@ fn sameNestedSourceSite(
         lhs.site == rhs.site;
 }
 
+test "issue 13264 derived Try parser direct calls agree with their Monotype definitions" {
+    // The nominal Try and its backing union share a layout, so evaluating the
+    // round trip cannot detect a disagreement about the decoded value's type.
+    const allocator = std.testing.allocator;
+    var lowered = try lowerMonotypeModuleWithOptions(allocator,
+        \\expect {
+        \\    v : Try(U64, [C])
+        \\    v = Ok(1.U64)
+        \\    r : Try(Try(U64, [C]), [InvalidJson(Str)])
+        \\    r = Json.parse(Json.to_str(v))
+        \\    r == Ok(v)
+        \\}
+        \\
+        \\main = 0
+    , .{ .root_selection = .test_expects });
+    defer lowered.deinit(allocator);
+
+    const view = lowered.mono.view();
+    try std.testing.expectEqual(@as(usize, 1), view.roots.len);
+    var checked_calls: usize = 0;
+    for (view.exprs, 0..) |expr, expr_index| {
+        if (expr.data != .call_proc) continue;
+        const call = expr.data.call_proc;
+        // Demand-shaped calls deliberately keep the caller's types.
+        if (call.demand_shaped) continue;
+        for (view.defs, 0..) |def, def_index| {
+            if (def.fn_id.get() != call.callee.func.local) continue;
+            checked_calls += 1;
+            if (!try lowered.mono.types.typeEql(view.names, expr.ty, def.ret)) {
+                std.debug.print("call_proc expr {d} has type {d}, but callee def {d} returns type {d}\n", .{
+                    expr_index, @backingInt(expr.ty), def_index, @backingInt(def.ret),
+                });
+                return error.TestExpectedEqual;
+            }
+            break;
+        }
+    }
+    try std.testing.expect(checked_calls != 0);
+}
+
 test "issue 10121 optional JSON record encoder has linear Monotype function growth" {
     // Repro for https://github.com/roc-lang/roc/issues/10121: generated
     // functions should grow at most linearly with the encoded record shape.

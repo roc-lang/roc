@@ -62200,14 +62200,16 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[0], encoding_node);
         try relateRequestComponent(self.graph, target.args[2], state_node);
         const target_result = try self.graphParserResultNodes(target.ret);
-        try relateRequestComponent(self.graph, target_result.value, shape_node);
+        // The format method decodes its checked subject; the enclosing parser
+        // constructs the public nominal outside this call.
+        try relateRequestComponent(self.graph, target_result.value, contract_subject_node);
         try relateRequestComponent(self.graph, target_result.rest, outer_result.rest);
         try relateRequestComponent(self.graph, target_result.err, outer_result.err);
 
         const private_spec = try self.cloneGraphNamedWithGeneratedBacking(
             target.args[1],
-            &.{ shape_node, encoding_node, state_node, target_result.err },
-            try self.generatedParseTagUnionSpecBackingNode(shape_node),
+            &.{ target_result.value, encoding_node, state_node, target_result.err },
+            try self.generatedParseTagUnionSpecBackingNode(target_result.value),
         );
         const request_node = try functionRequestNode(
             self.graph,

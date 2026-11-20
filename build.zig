@@ -6,6 +6,7 @@ const modules = @import("src/build/modules.zig");
 const zig_test_suites = @import("src/build/zig_test_suites.zig");
 const glibc_stub_build = @import("src/build/glibc_stub.zig");
 const ci_steps = @import("src/build/ci_steps.zig");
+const cache_roots = @import("src/build/cache_roots.zig");
 const roc_target = @import("src/target/mod.zig");
 const TestFixturePlan = @import("src/build/test_fixtures.zig").Plan;
 const isImmutableNixStorePath = @import("src/build/nix_path.zig").isImmutableStorePath;
@@ -4844,6 +4845,13 @@ pub fn build(b: *std.Build) void {
     });
 
     test_suites.register(.{
+        .step_suffix = "checked-root-graph",
+        .description = "Run checked root graph Zig tests over source-built programs",
+        .compile = compiler_suites_test,
+        .namespace = "eval.test.checked_root_graph_test.",
+    });
+
+    test_suites.register(.{
         .step_suffix = "lir-inline",
         .description = "Run LIR inline Zig tests",
         .compile = compiler_suites_test,
@@ -5546,6 +5554,22 @@ pub fn build(b: *std.Build) void {
 
     // After every suite is registered, so each report precedes the separator.
     tests_summary.finish();
+
+    // CI packs each MiniCI shard's build artifact with this tool, right after
+    // `build-ci` (see src/build/minici_pack.zig). It records where `build-ci`
+    // left every cache entry, so it comes after every other step is defined.
+    const minici_pack_exe = b.addExecutable(.{
+        .name = "minici-pack",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/minici_pack.zig"),
+            .target = hostToolTarget(b, .debug),
+            .optimize = .debug,
+        }),
+    });
+    minici_pack_exe.root_module.addImport("build_options", roc_modules.build_options);
+    minici_pack_exe.root_module.addImport("roc_target", roc_modules.roc_target);
+    minici_pack_exe.root_module.addImport("cache_roots", cache_roots.addOptions(b).createModule());
+    b.step("build-minici-pack", "Build the tool that lists what each MiniCI shard's build artifact carries").dependOn(&b.addInstallArtifact(minici_pack_exe, .{}).step);
 
     // Last, so that every top-level step exists -- including the ones created
     // inside addMainExe.

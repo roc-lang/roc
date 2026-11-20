@@ -15598,6 +15598,15 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         }
     }
 
+    // Ordinary declaration templates can refer to the platform's abstract
+    // types. Give each binder its shared identity before any template can
+    // instantiate a still-flexible placeholder.
+    if (self.cir.for_clause_aliases.len() != 0) {
+        try env.var_pool.pushRank();
+        defer env.var_pool.popRank();
+        try self.bindPlatformAbstractTypes(&env);
+    }
+
     // First pass: generate types for each type declaration
     // Note that any types generated will be generalized
     for (0..self.cir.all_statements.span.len) |stmt_offset| {
@@ -21722,88 +21731,32 @@ fn isHostSymbolContinue(byte: u8) bool {
     return isHostSymbolStart(byte) or std.ascii.isDigit(byte);
 }
 
-/// Process the requires_types annotations for platform modules, like:
-///
-///   { [Model : model] for main : { init : model, ... } }
-///
-/// For each required type, we first process the introduced alias variables:
-///   { [Model : model] for main : { init : model, ... } }
-///     ^^^^^^^^^^^^^^
-/// Here, we create `model` as a *rigid* var, and a type alias `Model` pointing to
-/// that exact rigid var.
-///
-/// We create this variable at the `.outermost` rank, so that every places
-/// that references this var gets the same instance
-///
-/// Then, we generate the type for the actual required type
-///   { [Model : model] for main : { init : model, ... } }
-///                                ^^^^^^^^^^^^^^^^^^^^^^
-///
-/// Note on scoping: Type scopes are defined in czer. So in the example above,
-///   { [Model : model] for main : { init : model, ... } }
-///             a^^^^^                     b^^^^^
-/// So `a` get the node CIR.TypeAnno.rigid_var{ .. }
-/// So `b` get the node CIR.TypeAnno.rigid_var_lookup{ .ref = <a_id> }
-/// Then, any reference to `b` replaced with `a` in `generateAnnoTypeInPlace`.
+/// In `[Model : model] for main`, the header's `model` and every use of
+/// `Model` share one rigid variable, including through ordinary type aliases.
+fn bindPlatformAbstractTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    std.debug.assert(env.rank() == .outermost);
+
+    for (self.cir.for_clause_aliases.items()) |binder| {
+        const alias = self.cir.store.getStatement(binder.alias_stmt_idx).s_alias_decl;
+        const stmt_var = ModuleEnv.varFrom(binder.alias_stmt_idx);
+        const rhs_var = ModuleEnv.varFrom(alias.anno);
+        std.debug.assert(self.cir.store.getTypeAnno(alias.anno) == .rigid_var);
+        std.debug.assert(self.cir.store.getTypeHeader(alias.header).args.span.len == 0);
+        try self.setVarRank(stmt_var, env);
+        try self.setVarRank(rhs_var, env);
+        try self.unifyWith(rhs_var, .{ .rigid = Rigid.init(binder.rigid_name) }, env);
+        try self.predeclareAliasDecl(stmt_var, alias, env);
+    }
+}
+
+/// Requirement signatures can refer to ordinary declarations, so check them
+/// after those declarations, using the binders already installed above.
 fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Ensure we are generalized
-    // This is because we do not want the type checking we do here to be let-polymorphic
     std.debug.assert(env.rank() == .outermost);
-
-    const requires_types_slice = self.cir.requires_types.items();
-    for (requires_types_slice) |required_type| {
-
-        // First, processes the required type aliases
-        //   { [Model : model] for main : { init : model, ... } }
-        //     ^^^^^^^^^^^^^^
-        const required_type_aliases_slice = self.cir.for_clause_aliases.sliceRange(required_type.type_aliases);
-        for (required_type_aliases_slice) |type_alias| {
-            const stmt = self.cir.store.getStatement(type_alias.alias_stmt_idx);
-            const stmt_var = ModuleEnv.varFrom(type_alias.alias_stmt_idx);
-
-            // We should only ever have alias decls here
-            std.debug.assert(stmt == .s_alias_decl);
-            const alias = stmt.s_alias_decl;
-
-            // Assert that this alias header is well formed
-            const alias_lhs = self.cir.store.getTypeHeader(alias.header);
-            std.debug.assert(alias_lhs.name.eql(alias_lhs.relative_name));
-            std.debug.assert(alias_lhs.args.span.len == 0);
-
-            // Assert that this alias body is well formed
-            const alias_rhs_var = ModuleEnv.varFrom(alias.anno);
-            const alias_rhs = self.cir.store.getTypeAnno(alias.anno);
-            std.debug.assert(alias_rhs == .rigid_var);
-
-            // Set ranks to generalized
-            try self.setVarRank(stmt_var, env);
-            try self.setVarRank(alias_rhs_var, env);
-
-            // Set the rhs of the expr to be a rigid var
-            try self.unifyWith(alias_rhs_var, .{
-                .rigid = Rigid.init(type_alias.rigid_name),
-            }, env);
-
-            const stmt_content = self.types.resolveVar(stmt_var).desc.content;
-            if (stmt_content != .alias) {
-                try self.unifyWithTargetRank(
-                    stmt_var,
-                    try self.types.mkAliasWithSourceDeclAndBuiltinOrigin(
-                        .{ .ident_idx = alias_lhs.relative_name },
-                        alias_rhs_var,
-                        &.{},
-                        0,
-                        self.aliasOriginModule(),
-                        @backingInt(type_alias.alias_stmt_idx),
-                        self.cir.module_role == .builtin,
-                    ),
-                    env,
-                );
-            }
-        }
+    for (self.cir.requires_types.items()) |required_type| {
 
         // Then, generate the type for the actual required type
         //   { [Model : model] for main : { init : model, ... } }
@@ -28917,9 +28870,14 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
                         // variable - each place that references it should reference
                         // the same var.
                         if (self.isForClauseAliasStatement(local.decl_idx)) {
-                            // The annotation joins a variable every reference shares.
+                            // The alias occurrence belongs to this template's rank;
+                            // only its abstract backing belongs to the platform.
+                            // Unifying the two wrappers would change the binder's
+                            // rank when generating a generalized declaration.
                             self.annotation_generation_is_retainable = false;
-                            _ = try self.unify(anno_var, ModuleEnv.varFrom(local.decl_idx), env);
+                            const binder = self.types.resolveVar(ModuleEnv.varFrom(local.decl_idx));
+                            std.debug.assert(binder.desc.content == .alias);
+                            try self.unifyWith(anno_var, binder.desc.content, env);
                             return anno_gen_done;
                         }
                         frame.state = .lookup_awaiting_decl;

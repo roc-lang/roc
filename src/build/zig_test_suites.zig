@@ -30,6 +30,7 @@ pub const suites = [_]Suite{
     .{ .suffix = "watch-cli", .coverage = .minici },
     .{ .suffix = "minici", .coverage = .minici },
     .{ .suffix = "fx-platform", .coverage = .minici },
+    .{ .suffix = "checked-root-graph", .coverage = .minici },
     .{ .suffix = "lir-inline", .coverage = .minici },
     .{ .suffix = "trmc-lir", .coverage = .minici },
     .{ .suffix = "build-helpers", .coverage = .minici },
