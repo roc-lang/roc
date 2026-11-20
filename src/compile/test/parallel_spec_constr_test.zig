@@ -70,17 +70,3 @@ test "SpecConstr staged workers project loop results deterministically" {
         \\}
     , .{ .inline_mode = .wrappers }, &.{.unused_loop_results});
 }
-
-test "SpecConstr staged workers fuse iterator-only bodies deterministically" {
-    // No general pattern discovery or loop-result projection is enabled in
-    // none mode. The runtime bound keeps checker-stamped iterator work live.
-    try harness.expectSpecConstrParallelismDeterministicLir(
-        \\main! : List(Str) => Try({}, [Exit(I8), ..])
-        \\main! = |args| {
-        \\    offset = List.len(args)
-        \\    total = 0.U64.until(offset).map(|n| n + offset).fold(0.U64, |sum, n| sum + n)
-        \\    echo!(Str.inspect(total))
-        \\    Ok({})
-        \\}
-    , .{ .inline_mode = .none }, &.{.iterator_fusion});
-}

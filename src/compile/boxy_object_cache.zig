@@ -23,7 +23,7 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 25;
+pub const format_version: u32 = 26;
 
 const magic = "RBXO";
 

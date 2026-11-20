@@ -610,10 +610,10 @@ fn typeHoldsFunction(
                     .builtin => |builtin_nominal| switch (checked.builtinRuntimeEncoding(builtin_nominal)) {
                         // A tag-union parse spec is encoded as a function.
                         .parse_tag_union_spec => return true,
-                        .primitive, .bool_tag_union, .try_nominal, .list, .box, .dict, .set, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
-                        .iterator => {
+                        .primitive, .bool_tag_union, .try_nominal, .list, .box, .fields, .field => {},
+                        .declared_backing => {
                             const declaration = item.types.builtinNominalDeclaration(builtin_nominal) orelse
-                                base.invariant("compile-time finalization invariant violated: a module has no declaration for the builtin iterator", .{});
+                                base.invariant("compile-time finalization invariant violated: a module has no declaration for a builtin with a declared backing", .{});
                             try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = declaration.backing });
                         },
                     },

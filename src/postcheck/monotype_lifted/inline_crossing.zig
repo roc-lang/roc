@@ -163,6 +163,8 @@ const LoopKey = struct { body: u32, loop: u32 };
 
 const SlotKey = struct { body: u32, local: Ast.LocalId };
 
+const ConstructionKey = struct { builder: u32, built: Ast.FnId };
+
 /// The program-wide data every query reads. Built once, before any clone or
 /// discovery task runs, and read-only afterwards, so tasks on any thread
 /// share it.
@@ -197,6 +199,9 @@ pub const Index = struct {
     references: []u32,
     /// The body holding the first of those references.
     first_referrer: []u32,
+    /// Each pair of an original function and a function its source body
+    /// builds a value of with `fn_ref`.
+    constructions: std.AutoHashMapUnmanaged(ConstructionKey, void) = .empty,
     /// Whether each function always inlines as a wrapper (`WrapperBody`)
     /// that lies on no call cycle and passes none of its calls a value it
     /// builds where the callee consumes it.
@@ -246,6 +251,7 @@ pub const Index = struct {
         gpa.free(self.on_cycle);
         gpa.free(self.references);
         gpa.free(self.first_referrer);
+        self.constructions.deinit(gpa);
         gpa.free(self.wrapper);
         gpa.destroy(self);
     }
@@ -309,6 +315,13 @@ pub const Index = struct {
         if (raw >= self.references.len) Common.invariant("inline crossing was asked about a function created after it was indexed");
         if (self.references[raw] == 0) return null;
         return @fromBackingInt(self.first_referrer[raw]);
+    }
+
+    /// Whether the source body of the original function `builder` builds a
+    /// value of `built` with `fn_ref`.
+    pub fn constructs(self: *const Index, builder: Ast.FnId, built: Ast.FnId) bool {
+        if (!self.isOriginal(builder)) Common.invariant("inline crossing was asked about a function created after it was indexed");
+        return self.constructions.contains(.{ .builder = @backingInt(builder), .built = built });
     }
 
     const IndexTask = union(enum) {
@@ -600,9 +613,12 @@ pub const Index = struct {
                                 self.noteReference(@backingInt(callee), @intCast(index));
                             }
                         },
-                        .fn_ref => |r| if (@backingInt(r.fn_id) < n) {
-                            try edges[index].append(gpa, @backingInt(r.fn_id));
-                            self.noteReference(@backingInt(r.fn_id), @intCast(index));
+                        .fn_ref => |r| {
+                            try self.constructions.put(gpa, .{ .builder = @intCast(index), .built = r.fn_id }, {});
+                            if (@backingInt(r.fn_id) < n) {
+                                try edges[index].append(gpa, @backingInt(r.fn_id));
+                                self.noteReference(@backingInt(r.fn_id), @intCast(index));
+                            }
                         },
                         .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
                     }

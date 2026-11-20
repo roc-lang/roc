@@ -342,7 +342,7 @@ With multiple lines
 							(e-runtime-error (tag "erroneous_value_expr")))))
 				(field (name "e")
 					(e-call (constraint-fn-var 346)
-						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18874") (target-def "18874"))
+						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "19210") (target-def "19210"))
 						(e-runtime-error (tag "erroneous_value_expr")))))))
 	(d-let
 		(p-assign (ident "x"))

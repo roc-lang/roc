@@ -100,20 +100,6 @@ pub const CaptureId = checked_ids.CaptureId;
 /// circular file import (`checked_artifact.zig` itself imports this file).
 pub const Primitive = @import("checked_artifact.zig").CheckedPrimitive;
 
-/// Checker-authored identities for the public iterator representation.
-pub const IteratorTopology = struct {
-    len_field: names.RecordFieldNameId,
-    step_field: names.RecordFieldNameId,
-    ok_tag: names.TagNameId,
-    err_tag: names.TagNameId,
-    unknown_tag: names.TagNameId,
-    done_tag: names.TagNameId,
-    one_tag: names.TagNameId,
-    skip_tag: names.TagNameId,
-    item_field: names.RecordFieldNameId,
-    rest_field: names.RecordFieldNameId,
-};
-
 /// Named type definition owner for stored monomorphic type evidence.
 pub const TypeDef = struct {
     /// Deep content identity of the declaring module (dense id in the owning
@@ -124,27 +110,7 @@ pub const TypeDef = struct {
     /// Declaring statement: within-module discriminator for same-named
     /// block-local declarations.
     source_decl: collections.OptionalU32 = .none,
-    /// Compiler-generated specialization identity for internal nominals minted
-    /// after checking while preserving the public declaration identity.
-    generated: ?names.TypeDigest = null,
-    iterator_representation: IteratorRepresentation = .none,
-    iterator_kind: IteratorKind = .none,
-    iterator_depth: u8 = 0,
-    iterator_topology: OptionalIteratorTopology = .none,
 };
-
-/// An optional `IteratorTopology` at its own size.
-pub const OptionalIteratorTopology = collections.OptionalStruct(IteratorTopology, "len_field");
-
-/// Target-independent Monotype iterator tier preserved across constant storage.
-pub const IteratorRepresentation = enum(u8) {
-    none,
-    minted,
-    forced_dynamic,
-};
-
-/// Producer or adapter that minted a stored iterator representation.
-pub const IteratorKind = static_dispatch.IteratorKind;
 
 /// How much of a stored named type's backing type later stages may inspect.
 pub const TypeBackingUse = enum {
@@ -803,8 +769,8 @@ pub const StoredConstType = union(enum) {
 pub const ConstNamedType = @FieldType(ConstType, "named");
 
 comptime {
-    std.debug.assert(@sizeOf(TypeDef) == 88);
-    std.debug.assert(@sizeOf(ConstNamedType) == 148);
+    std.debug.assert(@sizeOf(TypeDef) == 12);
+    std.debug.assert(@sizeOf(ConstNamedType) == 72);
     std.debug.assert(@sizeOf(TypeField) == 20);
 }
 
@@ -1314,22 +1280,6 @@ pub const ConstTypeStore = struct {
             .module = try translateModuleIdentity(translation, def.module),
             .type_name = try translateTypeName(translation, def.type_name),
             .source_decl = def.source_decl,
-            .generated = def.generated,
-            .iterator_representation = def.iterator_representation,
-            .iterator_kind = def.iterator_kind,
-            .iterator_depth = def.iterator_depth,
-            .iterator_topology = .of(if (def.iterator_topology.get()) |topology| .{
-                .len_field = try translateRecordFieldName(translation, topology.len_field),
-                .step_field = try translateRecordFieldName(translation, topology.step_field),
-                .ok_tag = try translateTagName(translation, topology.ok_tag),
-                .err_tag = try translateTagName(translation, topology.err_tag),
-                .unknown_tag = try translateTagName(translation, topology.unknown_tag),
-                .done_tag = try translateTagName(translation, topology.done_tag),
-                .one_tag = try translateTagName(translation, topology.one_tag),
-                .skip_tag = try translateTagName(translation, topology.skip_tag),
-                .item_field = try translateRecordFieldName(translation, topology.item_field),
-                .rest_field = try translateRecordFieldName(translation, topology.rest_field),
-            } else null),
         };
     }
 
