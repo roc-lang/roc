@@ -14266,7 +14266,7 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_gate_source);
     try std.testing.expectEqual(@as(usize, 11), stats.functions);
     try std.testing.expectEqual(@as(usize, 12), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 522), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 519), stats.expressions);
     try std.testing.expectEqual(@as(usize, 110), stats.locals);
     try std.testing.expectEqual(@as(u64, 16), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
@@ -14393,7 +14393,7 @@ test "stored parser restore lowers a shape with an optional field" {
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_optional_gate_source);
     try std.testing.expectEqual(@as(usize, 11), stats.functions);
     try std.testing.expectEqual(@as(usize, 12), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 660), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 657), stats.expressions);
     try std.testing.expectEqual(@as(usize, 130), stats.locals);
     try std.testing.expectEqual(@as(u64, 16), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
@@ -14526,11 +14526,12 @@ test "row coercion: a closed tag row joins a wider row in both strategies" {
     , &.{ .{ 0, 2 }, .{ 1, 3 } });
 }
 
-test "row coercion: a Try error row joins inside the nominal in both strategies" {
-    // The coercion crosses the `Try` nominal into its `Err` payload: `[E2, E3]`
-    // joins `[E1, E2, E3]` while the `Ok` payload is unchanged.
+test "row coercion: an error row in a payload joins while the ok payload is unchanged" {
+    // The coercion reaches the `Err` payload of the result row: `[E2, E3]`
+    // joins `[E1, E2, E3]` while the `Ok` payload is unchanged. A row in an
+    // argument of a named type such as `Try` is outside the coercion's reach.
     try expectRowCoercionResults(
-        \\widen : Try(U8, [E2, E3]) -> Try(U8, [E1, E2, E3])
+        \\widen : [Ok(U8), Err([E2, E3])] -> [Ok(U8), Err([E1, E2, E3])]
         \\widen = |x| x
         \\
         \\main : U64 -> U64
@@ -14637,7 +14638,7 @@ test "row coercion: a generic payload crosses the join" {
     // `widen` is generic in its `Ok` payload and is used at Str and U64, so
     // `.boxy` lowers it once with a descriptor-carried payload.
     try expectRowCoercionResults(
-        \\widen : Try(a, [E2, E3]) -> Try(a, [E1, E2, E3])
+        \\widen : [Ok(a), Err([E2, E3])] -> [Ok(a), Err([E1, E2, E3])]
         \\widen = |x| x
         \\
         \\main : U64 -> U64

@@ -101,7 +101,7 @@ test "nominal views exhaustive boundary returns actual blockers only and permits
     var shared = Reader.SharedDependencies.init(testing.allocator, &f.store);
     defer shared.deinit();
     var finality = FinalityFixture{ .final = true };
-    var cache = exhaustive.NominalOpenCache.initShared(testing.allocator, .{ .graphs = &shared, .owner = &finality, .isFinal = FinalityFixture.isFinal });
+    var cache = exhaustive.NominalOpenCache.initShared(testing.allocator, .{ .graphs = &shared, .owner = &finality, .isFinal = FinalityFixture.isFinal }, null);
     defer cache.deinit();
     const idents = try builtinIdents(&f, &cache);
     const before = f.store.len();
@@ -178,7 +178,7 @@ test "nominal views share a final declaration's dependency graph across reads" {
                 .graphs = &shared,
                 .owner = &finality,
                 .isFinal = FinalityFixture.isFinal,
-            });
+            }, null);
             defer cache.deinit();
             const idents = try builtinIdents(&f, &cache);
             blockers.clearRetainingCapacity();
@@ -578,4 +578,41 @@ test "nominal views blocker dependency proof includes hidden alias arguments and
     defer reader.deinit();
     const children = try tupleChildren(&reader, (try reader.openNominalBacking(app)).?);
     for (children) |child| try testing.expect(try reader.hasSourceDependencies(child));
+}
+
+test "nominal views answer the opening of a root's application once" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const a = try f.rigid("a");
+    const actual = try f.store.fresh();
+    const nominal = try f.declaration("Wrapper", &.{a}, try f.tuple(&.{a}));
+    const app = try f.application(nominal, &.{actual});
+    const holder = try f.store.freshFromContent(.{ .structure = .{ .nominal_type = app } });
+    const other_holder = try f.store.freshFromContent(.{ .structure = .{ .nominal_type = app } });
+    var reader = Reader.init(testing.allocator, &f.store);
+    defer reader.deinit();
+    const opened = (try reader.openNominalBackingOf(holder, app)).?;
+    try testing.expectEqual(actual, (try tupleChildren(&reader, opened))[0]);
+    // The remembered answer, a fresh opening and another root that holds the
+    // same application all name one view.
+    try testing.expectEqual(opened, (try reader.openNominalBackingOf(holder, app)).?);
+    try testing.expectEqual(opened, (try reader.openNominalBacking(app)).?);
+    try testing.expectEqual(opened, (try reader.openNominalBackingOf(other_holder, app)).?);
+}
+
+test "nominal views open every application of an argument-less declaration to one view" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const backing = try f.tuple(&.{try f.store.freshFromContent(.{ .structure = .empty_record })});
+    const nominal = try f.declaration("Plain", &.{}, backing);
+    const first = try f.application(nominal, &.{});
+    const second = try f.application(nominal, &.{});
+    var reader = Reader.init(testing.allocator, &f.store);
+    defer reader.deinit();
+    const opened = (try reader.openNominalBacking(first)).?;
+    try testing.expectEqual(@as(usize, 1), (try tupleChildren(&reader, opened)).len);
+    // The remembered answer and a separately built application of the same
+    // declaration name one view.
+    try testing.expectEqual(opened, (try reader.openNominalBacking(first)).?);
+    try testing.expectEqual(opened, (try reader.openNominalBacking(second)).?);
 }

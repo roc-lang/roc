@@ -26,10 +26,17 @@ vars_base: u32,
 tags_base: u32,
 fields_base: u32,
 nodes: std.ArrayList(Node) = .empty,
-node_index: std.AutoHashMapUnmanaged(NodeKey, Var) = .empty,
-environments: std.ArrayList(Environment) = .empty,
+scopes: std.ArrayList(Scope) = .empty,
 environment_index: std.HashMapUnmanaged(Environment, u32, EnvironmentContext, std.hash_map.default_max_load_percentage) = .empty,
 dependencies: collections.DenseMapUnmanaged(types.NominalDecl.Idx, *Dependencies) = .empty,
+/// The backing of the nominal type each root holds, by root, as
+/// `openNominalBackingOf` answered it: `no_view` for an invalid declaration.
+opened: collections.DenseMapUnmanaged(Var, Var) = .empty,
+/// The backing of each valid declaration that takes no arguments, as
+/// `openNominalBacking` answered it, by the declaration key its applications
+/// carry (`nominalDeclarationKey`): every application of such a declaration opens to the
+/// same view.
+argless_backings: std.AutoHashMapUnmanaged(u64, Var) = .empty,
 /// Where the graphs of final declarations live across readers, if anywhere.
 shared: ?Shared = null,
 argument_scratch: std.ArrayList(Var) = .empty,
@@ -55,9 +62,19 @@ const FieldSlice = struct {
     }
 };
 
-const NodeKey = struct { root: Var, environment: u32 };
-const Node = struct { key: NodeKey, descriptor: ?types.Descriptor = null };
+/// A template root in a scope: `dependency` is the root's node in the
+/// scope's declaration graph.
+const Node = struct { scope: u32, dependency: u32, descriptor: ?types.Descriptor = null };
 const Environment = struct { declaration: types.NominalDecl.Idx, args: []const Var };
+/// An interned environment, its declaration's graph, and its views.
+const Scope = struct {
+    environment: Environment,
+    dependencies: *const Dependencies,
+    /// The view of each template root in this scope, indexed by the root's
+    /// dependency node and `no_view` until the root is first viewed here.
+    /// Empty until the scope's first view.
+    views: []Var = &.{},
+};
 const EnvironmentContext = struct {
     pub fn hash(_: @This(), env: Environment) u64 {
         var h = std.hash.Wyhash.init(0);
@@ -75,19 +92,60 @@ pub const Resolved = struct { var_: Var, desc: types.Descriptor };
 /// through template edges.
 /// Masking irrelevant arguments is essential for finite closed-argument resets
 /// in otherwise recursive declarations; it is not decided by guessing from arity or groundness.
+///
+/// The graph also records what a projection needs of each template root, so a
+/// view finds its children by position and never looks a variable up: the
+/// declaration's backing is node zero, and every node lists its children in
+/// the order `projectContent` views them.
 const Dependencies = struct {
-    indices: std.AutoHashMapUnmanaged(Var, u32) = .empty,
     nodes: std.ArrayList(DependencyNode) = .empty,
 };
 const DependencyNode = struct {
     root: Var,
+    /// The first formal this root stands for, whose actual replaces it.
+    formal: ?u32 = null,
     formals: []bool,
     /// Structural substitution dependencies, excluding private unknowns'
     /// application ownership. Only these edges can expose a source variable.
     source_formals: []bool,
+    /// The nodes of the root's children, in projection order.
+    children: []const u32 = &.{},
     parents: std.ArrayList(u32) = .empty,
 };
+/// A declaration formal, resolved once per graph.
+const Formal = struct {
+    root: Var,
+    rigid_name: ?@FieldType(types.Rigid, "name"),
+
+    fn init(resolved: types.ResolvedVarDesc) Formal {
+        return .{
+            .root = resolved.var_,
+            .rigid_name = if (resolved.desc.content == .rigid) resolved.desc.content.rigid.name else null,
+        };
+    }
+
+    fn matches(self: Formal, value: types.ResolvedVarDesc) bool {
+        if (value.var_ == self.root) return true;
+        const name = self.rigid_name orelse return false;
+        return value.desc.content == .rigid and value.desc.content.rigid.name.eql(name);
+    }
+};
+/// State of one `computeDependencies` run. Its scratch lives in the reader's
+/// arena, whichever allocator owns the graph.
+const DependencyBuilder = struct {
+    /// The graph's owner.
+    alloc: Allocator,
+    scratch: Allocator,
+    deps: *Dependencies,
+    formal_count: usize,
+    /// Each root's node.
+    indices: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+    /// The children of the node being expanded.
+    children: std.ArrayList(u32) = .empty,
+};
 const absent_argument: Var = @fromBackingInt(std.math.maxInt(u32));
+/// No view ID takes the all-ones value (see `view`).
+const no_view: Var = @fromBackingInt(std.math.maxInt(u32));
 
 /// Formal-dependency graphs that outlive a reader. A declaration's graph is a
 /// function of its formals and backing template alone, so once the template
@@ -140,11 +198,12 @@ pub fn initShared(gpa: Allocator, source: *const types.Store, shared: Shared) Se
 
 pub fn deinit(self: *Self) void {
     std.debug.assert(self.source.len() == self.source_len);
-    self.node_index.deinit(self.gpa);
     self.environment_index.deinit(self.gpa);
     self.dependencies.deinit(self.gpa);
+    self.opened.deinit(self.gpa);
+    self.argless_backings.deinit(self.gpa);
     self.nodes.deinit(self.gpa);
-    self.environments.deinit(self.gpa);
+    self.scopes.deinit(self.gpa);
     self.argument_scratch.deinit(self.gpa);
     self.vars.deinit(self.gpa);
     self.tags.deinit(self.gpa);
@@ -174,10 +233,9 @@ pub fn hasSourceDependencies(self: *const Self, view_id: Var) Allocator.Error!bo
     var current = view_id;
     while (true) {
         const node = self.nodes.items[@backingInt(current) - self.source_len];
-        const env = self.environments.items[node.key.environment];
-        const deps = self.dependencies.get(env.declaration).?;
-        const required = deps.nodes.items[deps.indices.get(node.key.root).?].source_formals;
-        for (env.args, required) |actual, needed| {
+        const scope = self.scopes.items[node.scope];
+        const required = scope.dependencies.nodes.items[node.dependency].source_formals;
+        for (scope.environment.args, required) |actual, needed| {
             if (!needed) continue;
             std.debug.assert(actual != absent_argument);
             if (self.sourceVar(actual) != null) return true;
@@ -203,8 +261,12 @@ pub fn resolveVar(self: *Self, view_id: Var) Allocator.Error!Resolved {
     const index = @backingInt(view_id) - self.source_len;
     const node = self.nodes.items[index];
     if (node.descriptor) |descriptor| return .{ .var_ = view_id, .desc = descriptor };
-    var descriptor = self.source.resolveVar(node.key.root).desc;
-    descriptor.content = try self.projectContent(descriptor.content, node.key.environment);
+    const dependencies = self.scopes.items[node.scope].dependencies;
+    const template = dependencies.nodes.items[node.dependency];
+    var descriptor = self.source.resolveVar(template.root).desc;
+    var projection: Projection = .{ .dependencies = dependencies, .scope = node.scope, .children = template.children };
+    descriptor.content = try self.projectContent(descriptor.content, &projection);
+    std.debug.assert(projection.next == projection.children.len);
     // Projecting children can grow nodes; never retain a pointer into it.
     self.nodes.items[index].descriptor = descriptor;
     return .{ .var_ = view_id, .desc = descriptor };
@@ -213,100 +275,164 @@ pub fn resolveVar(self: *Self, view_id: Var) Allocator.Error!Resolved {
 /// Actuals are already in their caller's scope. Substitution returns them
 /// directly and never interprets their rigid names in the callee's scope.
 pub fn openNominalBacking(self: *Self, nominal: types.NominalType) Allocator.Error!?Var {
+    const argless = self.sliceNominalArgs(nominal).len == 0;
+    if (argless) {
+        if (self.argless_backings.get(nominalDeclarationKey(nominal))) |backing| {
+            if (std.debug.runtime_safety) std.debug.assert(try self.openDeclaredBacking(nominal) == backing);
+            return backing;
+        }
+    }
+    const backing = (try self.openDeclaredBacking(nominal)) orelse return null;
+    if (argless) try self.argless_backings.put(self.gpa, nominalDeclarationKey(nominal), backing);
+    return backing;
+}
+
+/// The declaration key of an application: its origin module and declaring
+/// statement, which name one declaration of the source store.
+pub fn nominalDeclarationKey(nominal: types.NominalType) u64 {
+    return (@as(u64, @backingInt(nominal.origin_module)) << 32) | nominal.statement();
+}
+
+/// The view of the backing of `nominal`'s declaration under its arguments, or
+/// null for an invalid declaration.
+fn openDeclaredBacking(self: *Self, nominal: types.NominalType) Allocator.Error!?Var {
     const declaration = self.source.lookupNominalDecl(nominal) orelse
         @panic("type view referenced a missing nominal declaration");
     const decl = self.source.getNominalDecl(declaration);
     if (!decl.isValid()) return null;
-    try self.ensureDependencies(declaration);
     const args = self.sliceNominalArgs(nominal);
     std.debug.assert(args.len == decl.formals.count);
+    return try self.viewBacking(declaration, args);
+}
+
+/// The view of a valid declaration's backing under `args`.
+fn viewBacking(self: *Self, declaration: types.NominalDecl.Idx, args: []const Var) Allocator.Error!Var {
+    const dependencies = try self.ensureDependencies(declaration);
     try self.argument_scratch.resize(self.gpa, args.len);
     const canonical = self.argument_scratch.items;
     for (args, canonical) |arg, *dest| dest.* = self.root(arg);
-    const environment = try self.internEnvironment(.{ .declaration = declaration, .args = canonical });
-    return try self.view(decl.backing, environment);
+    const scope = try self.internScope(.{ .declaration = declaration, .args = canonical }, dependencies);
+    return try self.view(dependencies, backing_dependency, scope);
 }
 
-fn internEnvironment(self: *Self, environment: Environment) Allocator.Error!u32 {
+/// `openNominalBacking` for the nominal type that `nominal_root` holds,
+/// answered once per root: a root's content is fixed for the reader's life,
+/// and opening the same application always yields the same view.
+pub fn openNominalBackingOf(self: *Self, nominal_root: Var, nominal: types.NominalType) Allocator.Error!?Var {
+    if (std.debug.runtime_safety) std.debug.assert(self.root(nominal_root) == nominal_root);
+    if (self.opened.get(nominal_root)) |backing| {
+        if (std.debug.runtime_safety) {
+            const reopened = try self.openNominalBacking(nominal);
+            std.debug.assert((reopened orelse no_view) == backing);
+        }
+        return if (backing == no_view) null else backing;
+    }
+    const backing = try self.openNominalBacking(nominal);
+    try self.opened.put(self.gpa, nominal_root, backing orelse no_view);
+    return backing;
+}
+
+fn internScope(self: *Self, environment: Environment, dependencies: *const Dependencies) Allocator.Error!u32 {
     if (self.environment_index.get(environment)) |existing| return existing;
     const owned = Environment{
         .declaration = environment.declaration,
         .args = try self.arena.allocator().dupe(Var, environment.args),
     };
-    const index: u32 = @intCast(self.environments.items.len);
-    try self.environments.append(self.gpa, owned);
-    errdefer _ = self.environments.pop();
+    const index: u32 = @intCast(self.scopes.items.len);
+    try self.scopes.append(self.gpa, .{ .environment = owned, .dependencies = dependencies });
+    errdefer _ = self.scopes.pop();
     try self.environment_index.putNoClobber(self.gpa, owned, index);
     return index;
 }
 
-fn view(self: *Self, source_var: Var, environment: u32) Allocator.Error!Var {
-    std.debug.assert(@backingInt(source_var) < self.source_len);
-    const resolved = self.source.resolveVar(source_var);
-    const env = self.environments.items[environment];
-    const decl = self.source.getNominalDecl(env.declaration);
-    for (self.source.sliceVars(decl.formals), env.args) |formal, actual| {
-        const f = self.source.resolveVar(formal);
-        if (matchesFormal(resolved, f)) {
-            std.debug.assert(actual != absent_argument);
-            return actual;
-        }
+/// The view of the template root at `dependency` of `dependencies`, the graph
+/// of `scope`'s declaration, in that scope.
+fn view(self: *Self, dependencies: *const Dependencies, dependency: u32, scope: u32) Allocator.Error!Var {
+    const template = &dependencies.nodes.items[dependency];
+    const environment = self.scopes.items[scope].environment;
+    if (template.formal) |formal| {
+        const actual = environment.args[formal];
+        std.debug.assert(actual != absent_argument);
+        return actual;
     }
-    const deps = self.dependencies.get(env.declaration).?;
-    const required = deps.nodes.items[deps.indices.get(resolved.var_).?].formals;
-    var normalized = environment;
-    for (env.args, required) |actual, needed| {
+    var normalized = scope;
+    for (environment.args, template.formals) |actual, needed| {
         if (!needed and actual != absent_argument) {
-            try self.argument_scratch.resize(self.gpa, env.args.len);
-            for (env.args, required, self.argument_scratch.items) |arg, used, *dest| {
+            try self.argument_scratch.resize(self.gpa, environment.args.len);
+            for (environment.args, template.formals, self.argument_scratch.items) |arg, used, *dest| {
                 dest.* = if (used) arg else absent_argument;
             }
-            normalized = try self.internEnvironment(.{ .declaration = env.declaration, .args = self.argument_scratch.items });
+            normalized = try self.internScope(.{ .declaration = environment.declaration, .args = self.argument_scratch.items }, dependencies);
             break;
         }
     }
-    const key = NodeKey{ .root = resolved.var_, .environment = normalized };
-    if (self.node_index.get(key)) |existing| return existing;
+    // Interning can grow scopes; take the pointer only now.
+    const views = &self.scopes.items[normalized].views;
+    if (views.*.len == 0) {
+        const fresh = try self.arena.allocator().alloc(Var, dependencies.nodes.items.len);
+        @memset(fresh, no_view);
+        views.* = fresh;
+    }
+    const slot = &views.*[dependency];
+    if (slot.* != no_view) return slot.*;
     const index = try addOffset(self.source_len, @intCast(self.nodes.items.len));
     // All-ones Var is RecordField.Presence's absent-presence sentinel.
     if (index == std.math.maxInt(u32)) return error.OutOfMemory;
     const result: Var = @fromBackingInt(index);
-    try self.nodes.append(self.gpa, .{ .key = key });
-    errdefer _ = self.nodes.pop();
-    try self.node_index.putNoClobber(self.gpa, key, result);
+    try self.nodes.append(self.gpa, .{ .scope = normalized, .dependency = dependency });
+    slot.* = result;
     return result;
 }
 
-fn matchesFormal(value: types.ResolvedVarDesc, formal: types.ResolvedVarDesc) bool {
-    return value.var_ == formal.var_ or
-        (value.desc.content == .rigid and formal.desc.content == .rigid and
-            value.desc.content.rigid.name.eql(formal.desc.content.rigid.name));
+/// The children of one template root, viewed in the order its dependency
+/// node lists them.
+const Projection = struct {
+    dependencies: *const Dependencies,
+    scope: u32,
+    children: []const u32,
+    next: usize = 0,
+};
+
+/// The view of `projection`'s next child, which is `source_var`.
+fn viewChild(self: *Self, projection: *Projection, source_var: Var) Allocator.Error!Var {
+    const dependency = projection.children[projection.next];
+    projection.next += 1;
+    if (std.debug.runtime_safety) {
+        std.debug.assert(projection.dependencies.nodes.items[dependency].root == self.source.resolveVar(source_var).var_);
+    }
+    return self.view(projection.dependencies, dependency, projection.scope);
 }
 
-fn dependencyNode(self: *Self, alloc: Allocator, deps: *Dependencies, var_: Var, formal_count: usize) Allocator.Error!u32 {
+/// The declaration's backing is the first node of its graph.
+const backing_dependency: u32 = 0;
+
+fn dependencyNode(self: *Self, builder: *DependencyBuilder, var_: Var) Allocator.Error!u32 {
     const root_var = self.source.resolveVar(var_).var_;
-    if (deps.indices.get(root_var)) |index| return index;
-    const index: u32 = @intCast(deps.nodes.items.len);
-    const required = try alloc.alloc(bool, formal_count);
+    const entry = try builder.indices.getOrPut(builder.scratch, root_var);
+    if (entry.found_existing) return entry.value_ptr.*;
+    const index: u32 = @intCast(builder.deps.nodes.items.len);
+    entry.value_ptr.* = index;
+    const required = try builder.alloc.alloc(bool, builder.formal_count);
     @memset(required, false);
-    const source_required = try alloc.alloc(bool, formal_count);
+    const source_required = try builder.alloc.alloc(bool, builder.formal_count);
     @memset(source_required, false);
-    try deps.nodes.append(alloc, .{ .root = root_var, .formals = required, .source_formals = source_required });
-    try deps.indices.put(alloc, root_var, index);
+    try builder.deps.nodes.append(builder.alloc, .{ .root = root_var, .formals = required, .source_formals = source_required });
     return index;
 }
 
-fn dependencyEdge(self: *Self, alloc: Allocator, deps: *Dependencies, parent: u32, child: Var, count: usize) Allocator.Error!void {
-    const index = try self.dependencyNode(alloc, deps, child, count);
-    try deps.nodes.items[index].parents.append(alloc, parent);
+/// Record `child` as the next child of `parent`, the node being expanded.
+fn dependencyEdge(self: *Self, builder: *DependencyBuilder, parent: u32, child: Var) Allocator.Error!void {
+    const index = try self.dependencyNode(builder, child);
+    try builder.deps.nodes.items[index].parents.append(builder.alloc, parent);
+    try builder.children.append(builder.scratch, index);
 }
 
-fn dependencyVars(self: *Self, alloc: Allocator, deps: *Dependencies, parent: u32, range: Var.SafeList.Range, count: usize) Allocator.Error!void {
-    for (self.source.sliceVars(range)) |child| try self.dependencyEdge(alloc, deps, parent, child, count);
+fn dependencyVars(self: *Self, builder: *DependencyBuilder, parent: u32, range: Var.SafeList.Range) Allocator.Error!void {
+    for (self.source.sliceVars(range)) |child| try self.dependencyEdge(builder, parent, child);
 }
 
-fn ensureDependencies(self: *Self, declaration: types.NominalDecl.Idx) Allocator.Error!void {
-    if (self.dependencies.contains(declaration)) return;
+fn ensureDependencies(self: *Self, declaration: types.NominalDecl.Idx) Allocator.Error!*const Dependencies {
+    if (self.dependencies.get(declaration)) |existing| return existing;
     if (self.shared) |shared| {
         if (shared.isFinal(shared.owner, declaration)) {
             const graphs = shared.graphs;
@@ -316,36 +442,45 @@ fn ensureDependencies(self: *Self, declaration: types.NominalDecl.Idx) Allocator
                 break :computed deps;
             };
             try self.dependencies.put(self.gpa, declaration, deps);
-            return;
+            return deps;
         }
     }
     const deps = try self.computeDependencies(self.arena.allocator(), declaration);
     try self.dependencies.put(self.gpa, declaration, deps);
+    return deps;
 }
 
 fn computeDependencies(self: *Self, alloc: Allocator, declaration: types.NominalDecl.Idx) Allocator.Error!*Dependencies {
     const deps = try alloc.create(Dependencies);
     deps.* = .{};
     const decl = self.source.getNominalDecl(declaration);
-    const formals = self.source.sliceVars(decl.formals);
-    _ = try self.dependencyNode(alloc, deps, decl.backing, formals.len);
+    const formal_vars = self.source.sliceVars(decl.formals);
+    const scratch = self.arena.allocator();
+    const formals = try scratch.alloc(Formal, formal_vars.len);
+    for (formal_vars, formals) |formal, *dest| dest.* = .init(self.source.resolveVar(formal));
+    var builder: DependencyBuilder = .{ .alloc = alloc, .scratch = scratch, .deps = deps, .formal_count = formals.len };
+    const backing = try self.dependencyNode(&builder, decl.backing);
+    std.debug.assert(backing == backing_dependency);
     var pending: std.ArrayList(u32) = .empty;
     defer pending.deinit(self.gpa);
     var offset: u32 = 0;
     while (offset < deps.nodes.items.len) : (offset += 1) {
         const resolved = self.source.resolveVar(deps.nodes.items[offset].root);
-        var substituted = false;
+        var substituted: ?u32 = null;
         for (formals, 0..) |formal, formal_index| {
-            if (matchesFormal(resolved, self.source.resolveVar(formal))) {
+            if (formal.matches(resolved)) {
                 deps.nodes.items[offset].formals[formal_index] = true;
                 deps.nodes.items[offset].source_formals[formal_index] = true;
-                substituted = true;
+                if (substituted == null) substituted = @intCast(formal_index);
             }
         }
-        if (substituted) {
+        if (substituted != null) {
+            deps.nodes.items[offset].formal = substituted;
             try pending.append(self.gpa, offset);
             continue;
         }
+        // Children are recorded in the order `projectContent` views them.
+        builder.children.clearRetainingCapacity();
         switch (resolved.desc.content) {
             .flex, .rigid => {
                 // Unknowns belong to an application, not just their template
@@ -355,31 +490,32 @@ fn computeDependencies(self: *Self, alloc: Allocator, declaration: types.Nominal
                 try pending.append(self.gpa, offset);
             },
             .field_presence, .err => {},
-            .alias => |alias| try self.dependencyVars(alloc, deps, offset, alias.vars.nonempty, formals.len),
+            .alias => |alias| try self.dependencyVars(&builder, offset, alias.vars.nonempty),
             .structure => |flat| switch (flat) {
                 .empty_record, .empty_tag_union => {},
-                .tuple => |tuple| try self.dependencyVars(alloc, deps, offset, tuple.elems, formals.len),
-                .nominal_type => |nominal| try self.dependencyVars(alloc, deps, offset, nominal.args, formals.len),
+                .tuple => |tuple| try self.dependencyVars(&builder, offset, tuple.elems),
+                .nominal_type => |nominal| try self.dependencyVars(&builder, offset, nominal.args),
                 .record => |record| {
-                    try self.dependencyEdge(alloc, deps, offset, record.ext, formals.len);
                     for (self.source.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
-                        try self.dependencyEdge(alloc, deps, offset, presence.typeVar(), formals.len);
-                        if (presence.presenceVar()) |p| try self.dependencyEdge(alloc, deps, offset, p, formals.len);
+                        try self.dependencyEdge(&builder, offset, presence.typeVar());
+                        if (presence.presenceVar()) |p| try self.dependencyEdge(&builder, offset, p);
                     }
+                    try self.dependencyEdge(&builder, offset, record.ext);
                 },
                 .tag_union => |tag_union| {
-                    try self.dependencyEdge(alloc, deps, offset, tag_union.ext, formals.len);
                     for (self.source.getTagsSlice(tag_union.tags).items(.args)) |args| {
-                        try self.dependencyVars(alloc, deps, offset, args, formals.len);
+                        try self.dependencyVars(&builder, offset, args);
                     }
+                    try self.dependencyEdge(&builder, offset, tag_union.ext);
                 },
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    try self.dependencyVars(alloc, deps, offset, func.args, formals.len);
-                    try self.dependencyVars(alloc, deps, offset, func.effect_deps, formals.len);
-                    try self.dependencyEdge(alloc, deps, offset, func.ret, formals.len);
+                    try self.dependencyVars(&builder, offset, func.args);
+                    try self.dependencyEdge(&builder, offset, func.ret);
+                    try self.dependencyVars(&builder, offset, func.effect_deps);
                 },
             },
         }
+        deps.nodes.items[offset].children = try alloc.dupe(u32, builder.children.items);
     }
     // Monotone dependency sets converge on cyclic templates as well as DAGs.
     // Each node is queued only when its finite dependency set grows.
@@ -406,10 +542,10 @@ fn computeDependencies(self: *Self, alloc: Allocator, declaration: types.Nominal
     return deps;
 }
 
-fn projectVars(self: *Self, range: Var.SafeList.Range, environment: u32) Allocator.Error!Var.SafeList.Range {
+fn projectVars(self: *Self, range: Var.SafeList.Range, projection: *Projection) Allocator.Error!Var.SafeList.Range {
     const source = self.source.sliceVars(range);
     const projected = try self.arena.allocator().alloc(Var, source.len);
-    for (source, projected) |var_, *dest| dest.* = try self.view(var_, environment);
+    for (source, projected) |var_, *dest| dest.* = try self.viewChild(projection, var_);
     const start = try addOffset(@intCast(self.vars.items.len), self.vars_base);
     try self.vars.append(self.gpa, projected);
     return .{ .start = @fromBackingInt(start), .count = @intCast(source.len) };
@@ -419,31 +555,31 @@ fn addOffset(index: u32, offset: u32) Allocator.Error!u32 {
     return std.math.add(u32, index, offset) catch error.OutOfMemory;
 }
 
-fn projectContent(self: *Self, content: types.Content, environment: u32) Allocator.Error!types.Content {
+fn projectContent(self: *Self, content: types.Content, projection: *Projection) Allocator.Error!types.Content {
     return switch (content) {
         // Constraints are not traversed here. Source spans preserve their
         // empty/nonempty distinction for unknown-payload classification.
         .flex, .rigid, .field_presence, .err => content,
         .alias => |alias| blk: {
             var projected = alias;
-            projected.vars.nonempty = try self.projectVars(alias.vars.nonempty, environment);
+            projected.vars.nonempty = try self.projectVars(alias.vars.nonempty, projection);
             break :blk .{ .alias = projected };
         },
         .structure => |flat| .{ .structure = switch (flat) {
             .empty_record, .empty_tag_union => flat,
             .nominal_type => |nominal| blk: {
                 var projected = nominal;
-                projected.args = try self.projectVars(nominal.args, environment);
+                projected.args = try self.projectVars(nominal.args, projection);
                 break :blk .{ .nominal_type = projected };
             },
-            .tuple => |tuple| .{ .tuple = .{ .elems = try self.projectVars(tuple.elems, environment) } },
+            .tuple => |tuple| .{ .tuple = .{ .elems = try self.projectVars(tuple.elems, projection) } },
             .record => |record| blk: {
                 const source = self.source.getRecordFieldsSlice(record.fields);
                 const projected = try self.arena.allocator().alloc(types.RecordField.Presence, record.fields.count);
                 for (source.items(.presence), projected) |presence, *dest| {
-                    const value = try self.view(presence.typeVar(), environment);
+                    const value = try self.viewChild(projection, presence.typeVar());
                     dest.* = if (presence.presenceVar()) |p|
-                        .unknown(try self.view(p, environment), value)
+                        .unknown(try self.viewChild(projection, p), value)
                     else
                         .required(value);
                 }
@@ -452,26 +588,26 @@ fn projectContent(self: *Self, content: types.Content, environment: u32) Allocat
                     .count = record.fields.count,
                 };
                 try self.fields.append(self.gpa, .{ .name = source.items(.name), .presence = projected });
-                break :blk .{ .record = .{ .fields = fields, .ext = try self.view(record.ext, environment) } };
+                break :blk .{ .record = .{ .fields = fields, .ext = try self.viewChild(projection, record.ext) } };
             },
             .tag_union => |tag_union| blk: {
                 const source = self.source.getTagsSlice(tag_union.tags);
                 const projected = try self.arena.allocator().alloc(Var.SafeList.Range, tag_union.tags.count);
                 for (source.items(.args), projected) |args, *dest| {
-                    dest.* = try self.projectVars(args, environment);
+                    dest.* = try self.projectVars(args, projection);
                 }
                 const tags: types.Tag.SafeMultiList.Range = .{
                     .start = @fromBackingInt(try addOffset(@intCast(self.tags.items.len), self.tags_base)),
                     .count = tag_union.tags.count,
                 };
                 try self.tags.append(self.gpa, .{ .name = source.items(.name), .args = projected });
-                break :blk .{ .tag_union = .{ .tags = tags, .ext = try self.view(tag_union.ext, environment) } };
+                break :blk .{ .tag_union = .{ .tags = tags, .ext = try self.viewChild(projection, tag_union.ext) } };
             },
             inline .fn_pure, .fn_effectful, .fn_unbound => |func, tag| blk: {
                 const projected: @TypeOf(func) = .{
-                    .args = try self.projectVars(func.args, environment),
-                    .ret = try self.view(func.ret, environment),
-                    .effect_deps = try self.projectVars(func.effect_deps, environment),
+                    .args = try self.projectVars(func.args, projection),
+                    .ret = try self.viewChild(projection, func.ret),
+                    .effect_deps = try self.projectVars(func.effect_deps, projection),
                 };
                 break :blk @unionInit(@TypeOf(flat), @tagName(tag), projected);
             },

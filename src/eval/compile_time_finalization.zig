@@ -5446,10 +5446,7 @@ fn guardProducerSlot(lir_result: *const lir.Program.Result, meaning: ?lir.LIR.Fa
 }
 
 fn moduleKeyBytesEqual(a: [32]u8, b: [32]u8) bool {
-    for (a, b) |left, right| {
-        if (left != right) return false;
-    }
-    return true;
+    return base.byte_encoding.digestsEql(&a, &b);
 }
 
 /// The checked module a program lowered whose artifact key is `key`.
@@ -7066,7 +7063,7 @@ const DevProgram = struct {
     /// it runs: such a program has a view of every one.
     fn sourceFileOf(self: *const DevProgram, identity: [32]u8) u32 {
         for (0..self.lir_store.sourceFileCount()) |file| {
-            if (@as(u256, @bitCast(self.lir_store.sourceFileModuleIdentity(@intCast(file)))) == @as(u256, @bitCast(identity))) return @intCast(file);
+            if (base.byte_encoding.digestsEql(&self.lir_store.sourceFileModuleIdentity(@intCast(file)), &identity)) return @intCast(file);
         }
         finalizationInvariant("a loaded object's module is not in its program's source file table");
     }
@@ -8152,8 +8149,8 @@ const ComptimeFailureSite = struct {
 /// Whether source file `file` is `module`'s: an object names its modules'
 /// files as its link names them (`ModuleNames`), a whole program by content.
 fn fileIsModule(file: base.SourceFileEntry, module: *const checked.CheckedModuleArtifact) bool {
-    if (@as(u256, @bitCast(file.module_identity)) == @as(u256, @bitCast(module.module_identity.stable_hash))) return true;
-    return @as(u256, @bitCast(file.module_identity)) == @as(u256, @bitCast(ModuleNames.stableName(checked.importedView(module))));
+    if (base.byte_encoding.digestsEql(&file.module_identity, &module.module_identity.stable_hash)) return true;
+    return base.byte_encoding.digestsEql(&file.module_identity, &ModuleNames.stableName(checked.importedView(module)));
 }
 
 fn comptimeFailureSiteFrom(

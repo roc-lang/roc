@@ -382,7 +382,7 @@ test "Monotype generated-private selection cannot become ordinary or reopen fini
     const request_selection = sourceSliceBetween(
         lower_source,
         "fn selectRequestRepresentation(",
-        "const ClosedResultRow = struct",
+        "fn checkedResultRowIsClosed(",
     );
     try expectContains(request_selection, "containsFinishedMono(public_node)");
     try expectContains(request_selection, "containsFinishedMono(private_node)");

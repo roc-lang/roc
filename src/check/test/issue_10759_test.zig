@@ -34,9 +34,9 @@ test "issue 10759: an open record row can be inspected" {
     try test_env.assertNoErrors();
 }
 
-test "issue 10759: unresolved ordinary value passed to inspect remains polymorphic" {
-    // A row tail has an explicit contextual close-to-empty default, but an
-    // ordinary value position does not. Keep rejecting the latter.
+test "issue 10759: a value whose whole type is unresolved can be inspected" {
+    // Nothing pins `a`'s type and it carries no method requirement, so it is
+    // not a polymorphic-value error; no value of that type is ever rendered.
     const source =
         \\make : {} -> a
         \\make = |_| crash "no value"
@@ -47,13 +47,12 @@ test "issue 10759: unresolved ordinary value passed to inspect remains polymorph
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("Polymorphic Value");
+    try test_env.assertNoErrors();
 }
 
-test "issue 10759: a variable shared by a row tail and value remains polymorphic" {
-    // Traversing the tag union sees `a` first as a row tail, where it has a
-    // contextual close-to-empty default. The tuple's second element is an
-    // ordinary occurrence of the same variable and must still be rejected.
+test "issue 10759: a variable shared by a row tail and a value can be inspected" {
+    // `a` occurs both as the tag union's row tail and as the tuple's second
+    // element. It carries no method requirement in either position.
     const source =
         \\make : {} -> ([Tag, ..a], a)
         \\make = |_| crash "no value"
@@ -64,5 +63,5 @@ test "issue 10759: a variable shared by a row tail and value remains polymorphic
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("Polymorphic Value");
+    try test_env.assertNoErrors();
 }
