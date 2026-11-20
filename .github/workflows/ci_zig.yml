@@ -288,6 +288,14 @@ jobs:
   # coverage. They are separate jobs because each one alone already takes
   # hours on a hosted runner, and together they exceed the 6-hour job limit.
   #
+  # This job builds only what it runs: `roc` and the `run-test-zig` binaries.
+  # The default `zig build` step is twice as many compiles in ReleaseFast: it
+  # adds every test platform host for every cross target, the `repro-*`
+  # executables, the eval, host-effects and strategy-differential runners, and
+  # the web artifacts, none of which this job runs. `zig-valgrind` still builds
+  # that whole default step in ReleaseFast on x86_64 Linux, and PR CI's
+  # `build-ci` builds those artifacts in Debug on every PR OS.
+  #
   # Windows runners have 4 cores and 16 GB of RAM, and every compile that
   # contains the whole compiler (`roc`, the `repro-*` executables, the larger
   # test binaries) peaks at several GB, some well over 8 GB. At Zig's default of
@@ -373,10 +381,10 @@ jobs:
         run: |
           sudo rm /usr/lib/llvm-18/bin/llvm-config
 
-      - name: build roc + repro executables
+      - name: build roc + release test binaries
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build ${{ matrix.release_jobs_flag }} -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}
+          command: zig build ${{ matrix.release_jobs_flag }} roc build-test-zig -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}
           retry_count: 3
 
       - &zig_tests_setup_msvc
@@ -397,7 +405,7 @@ jobs:
         run: |
           zig-out\bin\roc.exe check ./CONTRIBUTING/profiling/bench_repeated_check.roc
 
-      - name: Build and execute tests, build repro executables. All in release mode.
+      - name: execute tests in release mode
         run: zig build ${{ matrix.release_jobs_flag }} ${{ matrix.zig_test_timeout_flag }} run-test-zig -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}
 
       - &zig_tests_check_snapshot_changes
