@@ -31,6 +31,8 @@ pub const ExecutableMemory = if (builtin.os.tag == .freestanding)
     void
 else
     @import("ExecutableMemory.zig").ExecutableMemory;
+/// Publishes newly written machine code to instruction fetch before it runs.
+pub const instruction_cache = @import("instruction_cache.zig");
 
 // LirCodeGen - LIR-based code generator parameterized by RocTarget
 pub const LirCodeGenMod = @import("LirCodeGen.zig");
@@ -91,4 +93,5 @@ test "backend module imports" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(@import("CallingConvention.zig"));
     std.testing.refAllDecls(@import("FrameBuilder.zig"));
+    std.testing.refAllDecls(@import("instruction_cache.zig"));
 }

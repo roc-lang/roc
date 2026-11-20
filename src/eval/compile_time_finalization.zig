@@ -1919,6 +1919,7 @@ const BoxyLinkedImages = struct {
         var binding_context = ImportContext{ .images = self, .provider = provider };
         var image = ImageLoader.load(self.allocator, view, .{ .context = &binding_context, .resolve = resolveImport }, &diagnostic) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
+            error.FlushInstructionCacheFailed => return error.FlushInstructionCacheFailed,
             error.UndefinedImport => finalizationInvariantFmt("a cached Boxy module's image imports {s}, which nothing loaded defines", .{diagnostic.name}),
             error.SiteOutOfRange => finalizationInvariantFmt("a cached Boxy module's image has a reference to '{s}' out of its field's reach", .{diagnostic.name}),
         };

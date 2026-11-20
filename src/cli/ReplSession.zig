@@ -1353,6 +1353,7 @@ pub fn programFailureKind(err: eval.Inspected.Error) ProgramFailureKind {
         error.UnwindRegistrationFailed,
         error.VirtualAllocFailed,
         error.VirtualProtectFailed,
+        error.FlushInstructionCacheFailed,
         error.WasmExecFailed,
         error.WouldBlock,
         error.WriteFailed,
