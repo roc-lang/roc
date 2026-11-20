@@ -461,121 +461,136 @@ pub const MethodRegistry = struct {
         const idents = module.identStoreConst();
         const module_name = try names.internModuleName(module_env.module_name);
 
-        for (module.methodDefEntries()) |entry| {
-            const method_ident = module_env.lookupMethodIdentForMethodOwnerConst(entry.key.ownerIdent(), entry.key.methodIdent()) orelse {
-                base.invariant(
-                    "checked static dispatch registry invariant violated: method def for owner {d} method {d} has no method ident",
-                    .{ @backingInt(entry.key.owner), entry.key.method_ident_bits },
-                );
-            };
-            const def_idx = entry.value.def_idx;
-            if (unsupportedGeneratedMethodBinding(module, entry.value)) continue;
-            const method_owner = try methodOwnerForRegistryEntry(module, names, entry.key.ownerIdent());
-            const method_key: MethodKey = .{
-                .owner = method_owner,
-                .method = try names.internMethodIdent(idents, entry.key.methodIdent()),
-            };
-            // A rejected declaration is still declared. Record the key with no
-            // target so dispatch resolution can tell it apart from a method no
-            // view declares, and resolve it to a checked error instead of
-            // hunting for a runtime target that cannot exist.
-            //
-            // A rejected `to_inspect` is never an inspect override: inspection
-            // renders its owner's values in the default form (design.md
-            // "Inspect Overrides"). This entry is that decision; inspection
-            // reads it through `inspectOverride`.
-            if (methodBindingIsRejectedDeclaration(module, entry.value)) {
-                try entries.append(allocator, .{
-                    .key = method_key,
-                    .target = null,
-                    .inspect_override = .none,
-                });
+        var remaining = module.methodDefEntries();
+        while (remaining.len != 0) {
+            // Canonicalization finalized this table in (owner statement, method)
+            // order. Resolve one owner for its entire group, including a rejection.
+            const stmt = remaining[0].key.owner;
+            var end: usize = 1;
+            while (end < remaining.len and remaining[end].key.owner == stmt) end += 1;
+            const group = remaining[0..end];
+            remaining = remaining[end..];
+            const method_owner: MethodOwner = if (builtinOwnerForRegistryEntry(module_env, stmt)) |owner|
+                .{ .builtin = owner }
+            else if (checked_types.nominalMethodOwner(module_env, stmt)) |key|
+                .{ .nominal = key }
+            else
                 continue;
-            }
-            var referenced_callable_var: ?Var = null;
-            var referenced_callable_ty: ?CheckedTypeId = null;
-            var alias: ?MethodAlias = null;
-            const target_kind: MethodTargetKind = if (generatedStructuralTargetForMethodBinding(module, entry.value)) |generated|
-                .{ .structural = generated }
-            else if (local_templates.entryForDef(def_idx)) |template_entry| blk: {
-                switch (template_entry.kind) {
-                    .structural => |kind| break :blk .{ .structural = kind },
-                    .callable => {
-                        const template = template_entry.template;
-                        const export_name = try names.internExportIdent(idents, method_ident);
-                        const proc_base = try names.internProcBase(.{
-                            .module_name = module_name,
-                            .export_name = .some(export_name),
-                            .kind = .checked_source,
-                            .ordinal = @backingInt(def_idx),
-                            .source_def_idx = .some(@backingInt(def_idx)),
-                        });
-                        break :blk .{ .procedure = .{
-                            .proc = .{ .artifact = template.artifact, .proc_base = proc_base },
-                            .template = template,
-                            .runtime_target = procedureRuntimeTargetForDef(module, def_idx),
-                        } };
-                    },
-                }
-            } else if (promotedProcedureTargetForMethodBinding(module, local_templates, entry.value)) |promoted| blk: {
-                referenced_callable_var = promoted.callable_var;
-                break :blk promoted.kind;
-            } else if (localProcedureTargetForMethodBinding(module, module_index, entry.key.owner, entry.value)) |local|
-                .{ .local_proc = local }
-            else if (try referencedMethodTarget(module, referenced_targets, entry.value)) |referenced| switch (referenced) {
-                // A method bound to a rejected binding is a rejected
-                // declaration, exactly like one whose own value checking
-                // rejected.
-                .rejected => {
+            for (group) |entry| {
+                const method_ident = module_env.lookupMethodIdentForMethodOwnerConst(entry.key.ownerIdent(), entry.key.methodIdent()) orelse {
+                    base.invariant(
+                        "checked static dispatch registry invariant violated: method def for owner {d} method {d} has no method ident",
+                        .{ @backingInt(entry.key.owner), entry.key.method_ident_bits },
+                    );
+                };
+                const def_idx = entry.value.def_idx;
+                if (unsupportedGeneratedMethodBinding(module, entry.value)) continue;
+                const method_key: MethodKey = .{
+                    .owner = method_owner,
+                    .method = try names.internMethodIdent(idents, entry.key.methodIdent()),
+                };
+                // A rejected declaration is still declared. Record the key with no
+                // target so dispatch resolution can tell it apart from a method no
+                // view declares, and resolve it to a checked error instead of
+                // hunting for a runtime target that cannot exist.
+                //
+                // A rejected `to_inspect` is never an inspect override: inspection
+                // renders its owner's values in the default form (design.md
+                // "Inspect Overrides"). This entry is that decision; inspection
+                // reads it through `inspectOverride`.
+                if (methodBindingIsRejectedDeclaration(module, entry.value)) {
                     try entries.append(allocator, .{
                         .key = method_key,
                         .target = null,
                         .inspect_override = .none,
                     });
                     continue;
-                },
-                .target => |target| blk: {
-                    switch (target.callable) {
-                        .template_root => |root| referenced_callable_ty = root,
-                        .source => |source| referenced_callable_var = source,
-                        .binding => {},
+                }
+                var referenced_callable_var: ?Var = null;
+                var referenced_callable_ty: ?CheckedTypeId = null;
+                var alias: ?MethodAlias = null;
+                const target_kind: MethodTargetKind = if (generatedStructuralTargetForMethodBinding(module, entry.value)) |generated|
+                    .{ .structural = generated }
+                else if (local_templates.entryForDef(def_idx)) |template_entry| blk: {
+                    switch (template_entry.kind) {
+                        .structural => |kind| break :blk .{ .structural = kind },
+                        .callable => {
+                            const template = template_entry.template;
+                            const export_name = try names.internExportIdent(idents, method_ident);
+                            const proc_base = try names.internProcBase(.{
+                                .module_name = module_name,
+                                .export_name = .some(export_name),
+                                .kind = .checked_source,
+                                .ordinal = @backingInt(def_idx),
+                                .source_def_idx = .some(@backingInt(def_idx)),
+                            });
+                            break :blk .{ .procedure = .{
+                                .proc = .{ .artifact = template.artifact, .proc_base = proc_base },
+                                .template = template,
+                                .runtime_target = procedureRuntimeTargetForDef(module, def_idx),
+                            } };
+                        },
                     }
-                    if (std.meta.activeTag(target.kind) == .procedure) {
-                        alias = methodAliasForBinding(module, owner_artifact, module_index, entry.value);
-                    }
-                    break :blk target.kind;
-                },
-            } else
-                // Associated values that resolve to neither a callable nor an
-                // explicitly structural declaration are checked field access,
-                // not static-dispatch resolutions.
-                continue;
-            const callable_ty = referenced_callable_ty orelse try checked_types.publishMethodCallableType(
-                allocator,
-                module,
-                names,
-                referenced_callable_var orelse methodTargetCallableVar(module, def_idx, entry.value, target_kind),
-            );
+                } else if (promotedProcedureTargetForMethodBinding(module, local_templates, entry.value)) |promoted| blk: {
+                    referenced_callable_var = promoted.callable_var;
+                    break :blk promoted.kind;
+                } else if (localProcedureTargetForMethodBinding(module, module_index, entry.key.owner, entry.value)) |local|
+                    .{ .local_proc = local }
+                else if (try referencedMethodTarget(module, referenced_targets, entry.value)) |referenced| switch (referenced) {
+                    // A method bound to a rejected binding is a rejected
+                    // declaration, exactly like one whose own value checking
+                    // rejected.
+                    .rejected => {
+                        try entries.append(allocator, .{
+                            .key = method_key,
+                            .target = null,
+                            .inspect_override = .none,
+                        });
+                        continue;
+                    },
+                    .target => |target| blk: {
+                        switch (target.callable) {
+                            .template_root => |root| referenced_callable_ty = root,
+                            .source => |source| referenced_callable_var = source,
+                            .binding => {},
+                        }
+                        if (std.meta.activeTag(target.kind) == .procedure) {
+                            alias = methodAliasForBinding(module, owner_artifact, module_index, entry.value);
+                        }
+                        break :blk target.kind;
+                    },
+                } else
+                    // Associated values that resolve to neither a callable nor an
+                    // explicitly structural declaration are checked field access,
+                    // not static-dispatch resolutions.
+                    continue;
+                const callable_ty = referenced_callable_ty orelse try checked_types.publishMethodCallableType(
+                    allocator,
+                    module,
+                    names,
+                    referenced_callable_var orelse methodTargetCallableVar(module, def_idx, entry.value, target_kind),
+                );
 
-            try entries.append(allocator, .{
-                .key = method_key,
-                .target = .{
-                    .module_idx = module_idx,
-                    .def_idx = def_idx,
-                    .kind = target_kind,
-                    .callable_ty = callable_ty,
-                    .alias = alias,
-                },
-                // Inspection calls an override from rendering workers and
-                // generic code that never hold a local procedure's declaration
-                // context, so only a procedure or a stored top-level value
-                // can be one.
-                .inspect_override = .of(if (entry.key.methodIdent().eql(module_env.idents.to_inspect) and
-                    (std.meta.activeTag(target_kind) == .procedure or std.meta.activeTag(target_kind) == .callable_binding))
-                    try inspectOverrideCallableType(allocator, module, names, checked_types, method_owner, def_idx)
-                else
-                    null),
-            });
+                try entries.append(allocator, .{
+                    .key = method_key,
+                    .target = .{
+                        .module_idx = module_idx,
+                        .def_idx = def_idx,
+                        .kind = target_kind,
+                        .callable_ty = callable_ty,
+                        .alias = alias,
+                    },
+                    // Inspection calls an override from rendering workers and
+                    // generic code that never hold a local procedure's declaration
+                    // context, so only a procedure or a stored top-level value
+                    // can be one.
+                    .inspect_override = .of(if (entry.key.methodIdent().eql(module_env.idents.to_inspect) and
+                        (std.meta.activeTag(target_kind) == .procedure or std.meta.activeTag(target_kind) == .callable_binding))
+                        try inspectOverrideCallableType(allocator, module, names, checked_types, method_owner, def_idx)
+                    else
+                        null),
+                });
+            }
         }
 
         finalizeMethodRegistryEntries(entries.items);
@@ -782,35 +797,6 @@ fn promotedProcedureTarget(
         } },
         .callable_var = module.exprType(expr),
     };
-}
-
-fn methodOwnerForRegistryEntry(
-    module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-    owner: ModuleEnv.MethodOwner,
-) Allocator.Error!MethodOwner {
-    const owner_env = module.moduleEnvConst();
-    if (builtinOwnerForRegistryEntry(owner_env, owner.owner)) |builtin_owner| {
-        return .{ .builtin = builtin_owner };
-    }
-
-    const identity_hash = owner_env.contentIdentityHash() orelse {
-        base.invariant(
-            "checked static dispatch registry invariant violated: module '{s}' has no content identity",
-            .{owner_env.module_name},
-        );
-    };
-    const stmt_tag = std.meta.activeTag(owner_env.store.getStatement(owner.owner));
-    if (stmt_tag != .s_nominal_decl and stmt_tag != .s_alias_decl) {
-        base.invariant(
-            "checked static dispatch registry invariant violated: method owner statement {d} is not a type declaration",
-            .{@backingInt(owner.owner)},
-        );
-    }
-    return .{ .nominal = .{
-        .module = try names.internModuleIdentity(identity_hash),
-        .source_decl = @backingInt(owner.owner),
-    } };
 }
 
 fn builtinOwnerForRegistryEntry(
