@@ -489,7 +489,7 @@ jobs:
           retry_count: 3
 
       - name: Test native instruction-cache publication
-        run: zig test src/machine_code_shim/instruction_cache.zig -O ReleaseSafe
+        run: zig test src/backend/dev/instruction_cache.zig -O ReleaseSafe
 
       - name: Test foreground app interrupts
         run: python3 ci/test_run_sigint.py ./zig-out/bin/roc
