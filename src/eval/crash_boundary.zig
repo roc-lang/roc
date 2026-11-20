@@ -55,6 +55,7 @@ pub fn CrashBoundary(comptime Env: type, comptime catches_stack_overflow: bool) 
                 if (sj == 0) {
                     self.recovery = .{
                         .context = @ptrCast(self.env),
+                        .capture = if (@hasDecl(Env, "captureOverflowPoint")) &captureOverflow else null,
                         .escape = &escapeStackOverflow,
                     };
                     self.prev_recovery = signal_handler.setStackOverflowRecovery(&self.recovery);
@@ -90,6 +91,11 @@ pub fn CrashBoundary(comptime Env: type, comptime catches_stack_overflow: bool) 
             var guarded: Guarded = .{ .boundary = self, .context = context };
             try base.eval_stack.run(Guarded, &guarded, Guarded.body);
             return guarded.jumped;
+        }
+
+        fn captureOverflow(context: *anyopaque, frame: signal_handler.FaultFrame) void {
+            const env: *Env = @ptrCast(@alignCast(context));
+            env.captureOverflowPoint(frame);
         }
 
         fn escapeStackOverflow(context: *anyopaque) noreturn {
