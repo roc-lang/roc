@@ -18584,6 +18584,11 @@ test "RC field takes through a nested complete projection whose outer read repea
 }
 
 test "RC complete projection after a rebind of its root keeps its own read" {
+    try checkProjectionAfterRebind(false);
+    try checkProjectionAfterRebind(true);
+}
+
+fn checkProjectionAfterRebind(direct_assignment: bool) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
 
@@ -18617,7 +18622,10 @@ test "RC complete projection after a rebind of its root keeps its own read" {
     const make_result = try f.assignStruct(result, &.{ changed, tag }, ret);
     const read_tag = try f.assignRefField(tag, second_view, 1, make_result);
     const project_again = try f.assignRefField(second_view, wrapper, 0, read_tag);
-    const rebind = try f.setLocal(wrapper, next_wrapper, .replace_existing, project_again);
+    const rebind = if (direct_assignment)
+        try f.assignRefLocal(wrapper, next_wrapper, project_again)
+    else
+        try f.setLocal(wrapper, next_wrapper, .replace_existing, project_again);
     const make_next_wrapper = try f.assignStruct(next_wrapper, &.{next_inner}, rebind);
     const make_next_inner = try f.assignStruct(next_inner, &.{ next_list, next_scalar }, make_next_wrapper);
     const assign_next_scalar = try f.assignI64(next_scalar, 1, make_next_inner);

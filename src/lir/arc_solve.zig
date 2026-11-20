@@ -229,6 +229,9 @@ pub const Solution = struct {
     /// unit into the join body at every jump; their releases belong to the
     /// body, so emission must not end their lifetime from use scans alone.
     join_param: std.bit_set.DynamicBitSetUnmanaged,
+    /// Bindings for which the structural lift cannot name one definition.
+    /// Their incoming transfers are statement facts, never local-wide aliases.
+    multiple_definitions: std.bit_set.DynamicBitSetUnmanaged,
     /// Bit set => the local is a join parameter whose initial value may be
     /// uninitialized. These locals are released only after an explicit
     /// initialized-payload refinement.
@@ -304,6 +307,7 @@ pub const Solution = struct {
         self.allocator.free(self.switch_count_by_proc);
         self.allocator.free(self.switch_index_by_stmt);
         self.join_param.deinit(self.allocator);
+        self.multiple_definitions.deinit(self.allocator);
         self.maybe_uninitialized_join_param.deinit(self.allocator);
         self.maybe_uninitialized_condition.deinit(self.allocator);
         self.maybe_uninitialized_condition_mask.deinit(self.allocator);
@@ -1293,6 +1297,8 @@ pub fn solveWithOptions(
         errdefer maybe_uninitialized_condition_mask.deinit(allocator);
         var join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
         errdefer join_param.deinit(allocator);
+        var multiple_definitions = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+        errdefer multiple_definitions.deinit(allocator);
         var maybe_uninitialized_join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
         errdefer maybe_uninitialized_join_param.deinit(allocator);
         for (leader, 0..) |*entry, index| entry.* = @intCast(index);
@@ -1315,6 +1321,7 @@ pub fn solveWithOptions(
             }
             if (solver.alias_source[arc_index].get()) |source| alias_source[local_index] = .some(domain.localAt(source));
             if (solver.join_param.isSet(arc_index)) join_param.set(local_index);
+            if (solver.defs[arc_index] == .multi) multiple_definitions.set(local_index);
             if (solver.maybe_uninitialized_join_param.isSet(arc_index)) {
                 maybe_uninitialized_join_param.set(local_index);
                 maybe_uninitialized_condition.set(local_index, solver.maybe_uninitialized_condition.get(arc_index));
@@ -1360,6 +1367,7 @@ pub fn solveWithOptions(
             .switch_count_by_proc = solver.switch_count_by_proc,
             .switch_index_by_stmt = solver.switch_index_by_stmt,
             .join_param = join_param,
+            .multiple_definitions = multiple_definitions,
             .maybe_uninitialized_join_param = maybe_uninitialized_join_param,
             .maybe_uninitialized_condition = maybe_uninitialized_condition,
             .maybe_uninitialized_condition_mask = maybe_uninitialized_condition_mask,
