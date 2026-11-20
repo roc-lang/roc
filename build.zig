@@ -1586,15 +1586,27 @@ const TestPlatformSteps = struct {
 
 /// Fixture platforms that reuse another platform's host targets. The prepared
 /// fixture trees receive private copies, so the checkout is never modified.
-const fixture_target_aliases = [_]TestFixturePlan.Alias{
-    .{ .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/static-lib-platform/targets" },
-    .{ .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/field_default_root_order/platform/targets" },
-    .{ .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/target_config_not_constant/platform/targets" },
-    .{ .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/issue_12554_reserved_low_memory/platform/targets" },
-    .{ .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/target_config_unknown_field/platform/targets" },
-    .{ .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/stack_first_maximum_memory_too_large/platform/targets" },
+const FixtureTargetAlias = struct {
+    source: []const u8,
+    destination: []const u8,
+    has_checked_in_inputs: bool = true,
+    /// The targets the destination's tests build for. `.test_host` covers
+    /// every target with the OS and architecture of the `roc` under test,
+    /// which is all a default `roc build` or `roc run` can select.
+    reach: enum { every_target, test_host } = .test_host,
+    /// Targets a test names explicitly with `--target`.
+    explicit_targets: []const []const u8 = &.{},
+};
+
+const fixture_target_aliases = [_]FixtureTargetAlias{
+    .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/static-lib-platform/targets" },
+    .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/field_default_root_order/platform/targets" },
+    .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/target_config_not_constant/platform/targets" },
+    .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/issue_12554_reserved_low_memory/platform/targets" },
+    .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/target_config_unknown_field/platform/targets" },
+    .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/stack_first_maximum_memory_too_large/platform/targets" },
     .{ .source = "test/fx/platform/targets", .destination = "test/hosted_nominal_return/platform/targets" },
-    .{ .has_checked_in_inputs = false, .source = "test/dylib/platform/targets", .destination = "test/missing-host-symbol/platform/targets" },
+    .{ .has_checked_in_inputs = false, .source = "test/dylib/platform/targets", .destination = "test/missing-host-symbol/platform/targets", .explicit_targets = &.{"x64musl"} },
     .{ .source = "test/fx/platform/targets", .destination = "test/cli/issue_9864_static_dispatch_package_nominal/platform/targets" },
     .{ .source = "test/str/platform/targets", .destination = "test/cli/issue_11693_nominal_boxing/targets" },
     .{ .source = "test/str/platform/targets", .destination = "test/cli/issue_11220_required_main_host_entry/platform/targets" },
@@ -1602,14 +1614,30 @@ const fixture_target_aliases = [_]TestFixturePlan.Alias{
     .{ .source = "test/fx/platform/targets", .destination = "test/cli/issue_10379_custom_encoder_field_state/platform/targets" },
 };
 
-fn selectFixtureTargetAliases(b: *std.Build, platform_filter: ?[]const u8) []const TestFixturePlan.Alias {
-    const filter = platform_filter orelse return &fixture_target_aliases;
-    var selected: std.ArrayList(TestFixturePlan.Alias) = .empty;
-    const filtered_source = b.fmt("test/{s}/platform/targets", .{filter});
-    for (fixture_target_aliases) |alias| {
-        if (std.mem.eql(u8, alias.source, "test/wasm/platform/targets") or std.mem.eql(u8, alias.source, filtered_source)) {
-            selected.append(b.allocator, alias) catch @panic("OOM");
+fn selectFixtureTargetAliases(b: *std.Build, target: ResolvedTarget, platform_filter: ?[]const u8) []const TestFixturePlan.Alias {
+    var host_targets: std.ArrayList([]const u8) = .empty;
+    for (std.enums.values(roc_target.RocTarget)) |candidate| {
+        if (candidate.toOsTag() == target.result.os.tag and candidate.toCpuArch() == target.result.cpu.arch) {
+            host_targets.append(b.allocator, candidate.toName()) catch @panic("OOM");
         }
+    }
+
+    var selected: std.ArrayList(TestFixturePlan.Alias) = .empty;
+    const filtered_source = if (platform_filter) |filter| b.fmt("test/{s}/platform/targets", .{filter}) else null;
+    for (fixture_target_aliases) |alias| {
+        if (filtered_source) |source| {
+            if (!std.mem.eql(u8, alias.source, "test/wasm/platform/targets") and !std.mem.eql(u8, alias.source, source)) continue;
+        }
+        const targets: ?[]const []const u8 = switch (alias.reach) {
+            .every_target => null,
+            .test_host => std.mem.concat(b.allocator, []const u8, &.{ host_targets.items, alias.explicit_targets }) catch @panic("OOM"),
+        };
+        selected.append(b.allocator, .{
+            .source = alias.source,
+            .destination = alias.destination,
+            .has_checked_in_inputs = alias.has_checked_in_inputs,
+            .targets = targets,
+        }) catch @panic("OOM");
     }
     return selected.items;
 }
@@ -2180,7 +2208,7 @@ pub fn build(b: *std.Build) void {
     const trace_eval = b.option(bool, "trace-eval", "Enable detailed evaluation tracing for debugging") orelse false;
     const trace_refcount = b.option(bool, "trace-refcount", "Enable detailed refcount tracing for debugging memory issues") orelse false;
     const platform_filter = b.option([]const u8, "platform", "Filter which test platform to build (e.g., fx, str, int, fx-open)");
-    test_fixtures.aliases = selectFixtureTargetAliases(b, platform_filter);
+    test_fixtures.aliases = selectFixtureTargetAliases(b, target, platform_filter);
     const trace_build = b.option(bool, "trace-build", "Enable detailed build pipeline tracing") orelse false;
     const debug_gpa = b.option(bool, "debug-gpa", "Use the leak-checking DebugAllocator for the roc binary even when libc is linked (default: off, so libc's malloc and its ASan/Valgrind/LD_PRELOAD tooling are used)") orelse false;
     const linker_warnings = b.option(bool, "linker-warnings", "Surface all embedded LLD linker warnings (default: off; suppressed with -w)") orelse false;

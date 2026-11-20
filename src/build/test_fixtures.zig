@@ -20,6 +20,21 @@ pub const Plan = struct {
         destination: []const u8,
         /// False when the source directory holds only generated hosts and is absent from the checkout.
         has_checked_in_inputs: bool = true,
+        /// The `targets/<name>` directories the destination receives, or null
+        /// for all of them. Consumers that only build for the machine running
+        /// the tests name those targets, so the tree holds no copies of cross
+        /// targets' hosts and C runtimes that nothing reads.
+        targets: ?[]const []const u8 = null,
+
+        /// Whether `relative`, a path under `source`, lies in a target directory this alias copies.
+        fn covers(self: Alias, relative: []const u8) bool {
+            const names = self.targets orelse return true;
+            const end = std.mem.indexOfScalar(u8, relative, '/') orelse relative.len;
+            for (names) |name| {
+                if (std.mem.eql(u8, name, relative[0..end])) return true;
+            }
+            return false;
+        }
     };
 
     b: *std.Build,
@@ -61,8 +76,8 @@ pub const Plan = struct {
         const files = self.b.addWriteFiles();
         _ = files.addCopyDirectory(self.b.path(dir), dir, .{ .exclude_extensions = &generated_extensions });
         for (self.aliases) |alias| {
-            if (!alias.has_checked_in_inputs or !isUnder(alias.destination, dir)) continue;
-            _ = files.addCopyDirectory(self.b.path(alias.source), alias.destination, .{ .exclude_extensions = &generated_extensions });
+            if (!isUnder(alias.destination, dir)) continue;
+            self.addCheckedInAliasInputs(files, alias);
         }
         self.addGenerated(files, deps, dir);
         return files.getDirectory();
@@ -94,7 +109,8 @@ pub const Plan = struct {
                 if (!isUnder(alias.destination, dir)) continue;
                 if (normalized.len > alias.source.len and
                     std.mem.startsWith(u8, normalized, alias.source) and
-                    normalized[alias.source.len] == '/')
+                    normalized[alias.source.len] == '/' and
+                    alias.covers(normalized[alias.source.len + 1 ..]))
                 {
                     _ = files.addCopyFile(item.source, b.fmt("{s}/{s}", .{ alias.destination, normalized[alias.source.len + 1 ..] }));
                 }
@@ -124,12 +140,29 @@ pub const Plan = struct {
         self.b.step("update-test-fixtures", "Copy generated test hosts into the checkout for manual use").dependOn(&publication.step);
     }
 
+    /// Copies the checked-in inputs of the target directories `alias` covers.
+    fn addCheckedInAliasInputs(self: *Plan, files: *Step.WriteFile, alias: Alias) void {
+        if (!alias.has_checked_in_inputs) return;
+        const b = self.b;
+        const names = alias.targets orelse {
+            _ = files.addCopyDirectory(b.path(alias.source), alias.destination, .{ .exclude_extensions = &generated_extensions });
+            return;
+        };
+        for (names) |name| {
+            const source = b.pathJoin(&.{ alias.source, name });
+            // A target whose inputs are all generated has no checked-in directory.
+            const absolute = b.root.joinString(b.allocator, source) catch @panic("OOM");
+            std.Io.Dir.cwd().access(b.graph.io, absolute, .{}) catch |err| {
+                if (err == error.FileNotFound) continue;
+                std.debug.panic("unable to read {s}: {t}", .{ source, err });
+            };
+            _ = files.addCopyDirectory(b.path(source), b.fmt("{s}/{s}", .{ alias.destination, name }), .{ .exclude_extensions = &generated_extensions });
+        }
+    }
+
     fn addStaticInputs(self: *Plan, files: *Step.WriteFile) void {
         _ = files.addCopyDirectory(self.b.path("test"), "test", .{ .exclude_extensions = &generated_extensions });
-        for (self.aliases) |alias| {
-            if (!alias.has_checked_in_inputs) continue;
-            _ = files.addCopyDirectory(self.b.path(alias.source), alias.destination, .{ .exclude_extensions = &generated_extensions });
-        }
+        for (self.aliases) |alias| self.addCheckedInAliasInputs(files, alias);
         inline for (.{ "src", "vendor" }) |dir| {
             _ = files.addCopyDirectory(self.b.path(dir), dir, .{});
         }
