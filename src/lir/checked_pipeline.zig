@@ -31,6 +31,7 @@ pub const LiteralDemand = postcheck.LiteralDemand;
 const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
 const DebugPrint = @import("debug_print.zig");
+const PassDump = @import("pass_dump.zig");
 const LIR = core.LIR;
 const CheckedArithmetic = core.CheckedArithmetic;
 const LirImage = @import("lir_image.zig");
@@ -2257,6 +2258,8 @@ fn finishLoweredOutput(
     frozen: *?LirProgram.FrozenStaticData,
 ) LowerResourceError!LoweredProgram {
     verifyArithmeticBoundary(&lowered.lir_result.store);
+    PassDump.beginRun();
+    PassDump.program(&lowered.lir_result, "lowered");
     var lir_passes_timing_scope = PipelineStageScope.begin(target.timing, .lir_passes);
     defer lir_passes_timing_scope.end();
     var local_pass_metrics: LirPassParallelMetrics = .{};
@@ -2288,7 +2291,9 @@ fn finishLoweredOutput(
     // merge join under either strategy, whose header switches on the flag.
     if (target.fuse_tag_cases) {
         try segment.flush(allocator, &lowered.lir_result, pass_target, pass_timing);
+        PassDump.program(&lowered.lir_result, "after_trmc_segment");
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .tag_fusion, pass_timing);
+        PassDump.program(&lowered.lir_result, "after_tag_fusion");
     }
     // Every mode: a join parameter nothing reads still keeps its written
     // value alive past any consuming call on the entry path. Scalarization
@@ -2306,15 +2311,19 @@ fn finishLoweredOutput(
         // Loop append promotion reads the bodies of the procedures a loop
         // calls, so it runs after every procedure's earlier phases committed.
         try segment.flushGuarded(allocator, &lowered.lir_result, pass_target, pass_timing, if (guarded_reads) |*set| set else null);
+        PassDump.program(&lowered.lir_result, "after_scalarize_prune");
     }
     if (target.promote_loop_appends.enabled()) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .loop_append, pass_timing);
+        PassDump.program(&lowered.lir_result, "after_loop_append");
     }
     if (target.prove_ranges) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .range, pass_timing);
+        PassDump.program(&lowered.lir_result, "after_range");
     }
     if (target.reuse_boxes) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .box_reuse, pass_timing);
+        PassDump.program(&lowered.lir_result, "after_box_reuse");
     }
     // No procedure-local rewrite runs after this, and the steps below append
     // and replace rows without recording body chunks.
@@ -2322,13 +2331,16 @@ fn finishLoweredOutput(
     var return_slot_scope = PassStepScope.begin(target.timing, .return_slot);
     try ReturnSlot.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     return_slot_scope.end();
+    PassDump.program(&lowered.lir_result, "after_return_slot");
     var str_append_scope = PassStepScope.begin(target.timing, .str_append);
     try StrAppend.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     str_append_scope.end();
+    PassDump.program(&lowered.lir_result, "after_str_append");
     if (target.tag_reachability) {
         var tag_reachability_scope = PassStepScope.begin(target.timing, .tag_reachability);
         try TagReachability.run(&lowered.lir_result);
         tag_reachability_scope.end();
+        PassDump.program(&lowered.lir_result, "after_tag_reachability");
     }
     var reachable_scope = PassStepScope.begin(target.timing, .reachable_procs_before_arc);
     if (frozen.*) |*data| {

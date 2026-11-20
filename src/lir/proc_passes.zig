@@ -21,6 +21,7 @@ const BoxReuse = @import("box_reuse.zig");
 const TagCaseFusion = @import("tag_case_fusion.zig");
 const BranchExpectation = @import("branch_expectation.zig");
 const KnownTagJump = @import("known_tag_jump.zig");
+const PassDump = @import("pass_dump.zig");
 
 const Allocator = std.mem.Allocator;
 const LIR = core.LIR;
@@ -221,7 +222,15 @@ const TaskContext = struct {
             // if it would rewrite anything.
             if (!admitted and (builtin.mode != .debug or changed)) continue;
             const started: i96 = if (self.timing) |active| active.now() else 0;
+            const dump_pre: ?[]u8 = if (PassDump.enabled()) PassDump.procText(std.heap.page_allocator, &shard, self.layouts, self.proc) else null;
             try self.runPhase(&shard, phase, &next_join, scratch_allocator, lane);
+            if (dump_pre) |pre| {
+                defer std.heap.page_allocator.free(pre);
+                if (PassDump.procText(std.heap.page_allocator, &shard, self.layouts, self.proc)) |post| {
+                    defer std.heap.page_allocator.free(post);
+                    PassDump.phase(@tagName(phase), self.proc, pre, post);
+                }
+            }
             if (self.timing) |active| active.lanes[lane_id].ns[@backingInt(phase)] +|= active.since(started);
             self.ran |= phaseMask(phase);
             const now_changed = shard.procRewriteChanged();
