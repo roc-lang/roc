@@ -28667,9 +28667,14 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
                         // variable - each place that references it should reference
                         // the same var.
                         if (self.isForClauseAliasStatement(local.decl_idx)) {
-                            // The annotation joins a variable every reference shares.
+                            // The alias occurrence belongs to this template's rank;
+                            // only its abstract backing belongs to the platform.
+                            // Unifying the two wrappers would change the binder's
+                            // rank when generating a generalized declaration.
                             self.annotation_generation_is_retainable = false;
-                            _ = try self.unify(anno_var, ModuleEnv.varFrom(local.decl_idx), env);
+                            const binder = self.types.resolveVar(ModuleEnv.varFrom(local.decl_idx));
+                            std.debug.assert(binder.desc.content == .alias);
+                            try self.unifyWith(anno_var, binder.desc.content, env);
                             return anno_gen_done;
                         }
                         frame.state = .lookup_awaiting_decl;
