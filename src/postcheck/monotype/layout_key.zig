@@ -27,7 +27,7 @@ const GuardedList = collections.GuardedList;
 /// decides), holds a tag row (a row is joined where values flow, so its
 /// layout is the program's too; design.md "Row Joins"), is recursive, or is
 /// a nominal type whose layout is not its backing's: one with no runtime
-/// backing, an iterator, or a record that declares its own field order.
+/// backing, or a record that declares its own field order.
 pub fn layoutRepresentative(
     allocator: Allocator,
     store: *Type.Store,
@@ -232,8 +232,8 @@ const Builder = struct {
         if (named.builtin_owner.get()) |owner| switch (owner) {
             .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return .itself,
             // These representations follow their arguments' structure.
-            .iter, .stream, .parse_tag_union_spec, .fields, .field => return .none,
-            .list, .box, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
+            .parse_tag_union_spec, .fields, .field => return .none,
+            .iter, .stream, .list, .box, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
         };
         if (named.declared_order.len != 0) return .none;
         const backing = named.backing.get() orelse return .none;

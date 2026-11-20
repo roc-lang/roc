@@ -976,6 +976,66 @@ test "imported type-module tag through an alias target names the alias" {
     try testing.expect(imported_env.store.getStatement(target_stmt) == .s_alias_decl);
 }
 
+test "issue 13262: qualified type lookup rejects a private sibling alias" {
+    const allocator = testing.allocator;
+    const ctx = CoreCtx.testing(allocator, allocator);
+    var builtins = try BuiltinTestContext.init(allocator);
+    defer builtins.deinit();
+
+    const shape_source =
+        \\Shape := {}.{
+        \\    Details := {}.{ Member : U8 }
+        \\    Public : Details
+        \\}
+        \\Hidden : Shape.Details
+    ;
+    var shape = try ModuleEnv.init(allocator, shape_source);
+    defer shape.deinit();
+    try shape.initCIRFields("Shape");
+    const shape_ast = try parse.file(allocator, &shape.common);
+    defer shape_ast.deinit();
+    var shape_can = try Can.initModule(ctx, &shape, shape_ast, builtins.canInitContext());
+    defer shape_can.deinit();
+    try shape_can.canonicalizeFile();
+    try testing.expect(shape.module_kind == .type_module);
+    const shape_diags = try shape.getDiagnostics();
+    defer allocator.free(shape_diags);
+    try testing.expectEqual(@as(usize, 0), shape_diags.len);
+    for ([_][]const u8{ "Hidden", "Shape.Hidden" }) |key| {
+        if (shape.common.findIdent(key)) |ident| {
+            try testing.expect(shape.getExposedTypeNodeIndexById(ident) == null);
+        }
+    }
+
+    const importer_source =
+        \\import Shape
+        \\Allowed : Shape.Public.Member
+        \\Selected : Shape.Hidden
+        \\Indirect : Shape.Hidden.Member
+    ;
+    var importer = try ModuleEnv.init(allocator, importer_source);
+    defer importer.deinit();
+    try importer.initCIRFields("Importer");
+    const importer_ast = try parse.file(allocator, &importer.common);
+    defer importer_ast.deinit();
+    var importer_can = try Can.initModule(ctx, &importer, importer_ast, builtins.canInitContext());
+    defer importer_can.deinit();
+    try importer_can.canonicalizeFile();
+    try ImportResolution.resolveDeferredImports(&importer, .{ .imports = .{ .explicit = &.{
+        .{ .import_name = "Shape", .resolution = .{ .available = .{ .module_env = &shape } } },
+    } } });
+
+    const diagnostics = try importer.getDiagnostics();
+    defer allocator.free(diagnostics);
+    try testing.expectEqual(@as(usize, 2), diagnostics.len);
+    for (diagnostics, [_][]const u8{ "Hidden", "Hidden.Member" }) |diagnostic, missing| {
+        try testing.expect(diagnostic == .type_not_exposed);
+        const diag = diagnostic.type_not_exposed;
+        try testing.expectEqualStrings("Shape", importer.getIdent(diag.module_name));
+        try testing.expectEqualStrings(missing, importer.getIdent(diag.type_name));
+    }
+}
+
 test "imported nested associated types resolve by qualified export key" {
     var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
     defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));

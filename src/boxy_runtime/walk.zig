@@ -785,9 +785,7 @@ const InspectCtx = struct {
             .record => .{ .record = named },
             .tuple => .{ .tuple = named },
             .tag_union => if (d.flags.presence_slot) .{ .presence_slot = named } else .{ .tag_union = named },
-            // Boxed sequences and functions share the erased allocation but
-            // only sequences carry a separate record view.
-            .erased_callable => if (d.child) |child_desc| .{ .box = .at(child_desc, if (child_desc.flags.sequence) builtins.boxed_sequence.recordPtr(value.word().?) else value.ptr, null) } else .function,
+            .erased_callable => if (d.child) |child_desc| .{ .box = .at(child_desc, value.ptr, null) } else .function,
             .nominal => .{ .nominal = .{
                 .override = if (override(d, .to_inspect) != null) named else null,
                 .backing = if (d.flags.inspect_opaque) null else .at(d.child.?, value.ptr, named.childNames()),

@@ -471,8 +471,12 @@ fn expectSameType(left: *const Artifact, left_type: ConstStore.ConstTypeId, righ
     defer left_store.deinit();
     var right_store = ConstStore.ConstTypeStore.init(allocator);
     defer right_store.deinit();
-    const left_id = try left_store.cloneTypeFromTranslated(&left.const_store.type_store, &left.canonical_names, &names, left_type);
-    const right_id = try right_store.cloneTypeFromTranslated(&right.const_store.type_store, &right.canonical_names, &names, right_type);
+    var left_translation = ConstStore.ConstTypeStore.Translation.init(allocator);
+    defer left_translation.deinit();
+    var right_translation = ConstStore.ConstTypeStore.Translation.init(allocator);
+    defer right_translation.deinit();
+    const left_id = try left_store.cloneTypeFromTranslated(&left.const_store.type_store, &left.canonical_names, &names, &left_translation, left_type);
+    const right_id = try right_store.cloneTypeFromTranslated(&right.const_store.type_store, &right.canonical_names, &names, &right_translation, right_type);
     try std.testing.expectEqual(left_id, right_id);
     try std.testing.expectEqualDeep(left_store.types.items(), right_store.types.items());
     try std.testing.expectEqualDeep(left_store.named_pool.items(), right_store.named_pool.items());
@@ -652,6 +656,43 @@ test "a literal at a custom type, interpolation, an update, an optional field, a
         seen += 1;
     }
     try std.testing.expectEqual(@as(usize, 18), seen);
+}
+
+test "constants of one type that one writer stores share one stored type" {
+    if (is_freestanding) return error.SkipZigTest;
+    var checked = try checkApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\first : { name : Str, sizes : List(U64) }
+        \\first = { name: "a", sizes: [1, 2] }
+        \\second : { name : Str, sizes : List(U64) }
+        \\second = { name: "b", sizes: [3] }
+        \\other : List(Str)
+        \\other = ["c"]
+        \\main! = |_args| {
+        \\    Echo.line!(Str.inspect(first))
+        \\    Echo.line!(Str.inspect(second))
+        \\    Echo.line!(Str.inspect(other))
+        \\    Ok({})
+        \\}
+    , &.{}, .boxy, .write);
+    defer checked.deinit();
+    try checked.expectErrors(false);
+    const app = checked.app();
+    var first_type: ?ConstStore.ConstTypeId = null;
+    var second_type: ?ConstStore.ConstTypeId = null;
+    var other_type: ?ConstStore.ConstTypeId = null;
+    for (app.compile_time_roots.roots.items()) |root| {
+        const name = rootName(app, root) orelse continue;
+        const slot = if (std.mem.eql(u8, name, "first")) &first_type else if (std.mem.eql(u8, name, "second")) &second_type else if (std.mem.eql(u8, name, "other")) &other_type else continue;
+        try std.testing.expectEqual(check.CheckedArtifact.CompileTimeRootCompletion.write_value, root.completion);
+        slot.* = try storedRootType(app, root);
+    }
+    // The two records are one type of the writer's program, so the module's
+    // type table holds it once and both constants name that copy.
+    try std.testing.expectEqual(first_type.?, second_type.?);
+    try std.testing.expect(first_type.? != other_type.?);
+    try expectSameType(app, first_type.?, app, second_type.?);
 }
 
 test "a literal checking rejects is evaluated and reported" {

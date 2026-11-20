@@ -1352,8 +1352,7 @@ const Unifier = struct {
             try self.processSharedTagsAfterChildren(.{
                 .pair = pair,
                 .shared_tags_range = shared,
-                .mb_a_extended_tags = null,
-                .mb_b_extended_tags = null,
+                .both_extended = null,
                 .ext = a_row.ext,
                 .marked_copies_start = no_marked_copies,
                 .marked_copies_end = no_marked_copies,
@@ -1361,7 +1360,7 @@ const Unifier = struct {
             return .related;
         }
         try self.enterGuardedPair(a_var, b_var);
-        try self.unifySharedTags(pair, shared, null, null, a_row.ext, no_marked_copies);
+        try self.unifySharedTags(pair, shared, null, a_row.ext, no_marked_copies);
         return .{ .relate_exts = .{ .a = a_row.ext, .b = b_row.ext } };
     }
 
@@ -2618,21 +2617,55 @@ const Unifier = struct {
         try self.mergeRowAppendedFrom(.record, post.pair, range_start, post.mb_a_extended_fields, post.mb_b_extended_fields, post.ext);
     }
 
+    /// Append the merged row's tags in name order: the shared tags, and when
+    /// both sides extend, each side's own tags merged among them. The
+    /// partition left each of the three groups in name order.
     fn processSharedTagsAfterChildren(self: *Self, post: SharedTagsAfterChildren) Error!void {
         const range_start: u32 = @intCast(self.types_store.tags.len());
+        const shared = self.scratch.in_both_tags.sliceRange(post.shared_tags_range);
 
-        for (self.scratch.in_both_tags.sliceRange(post.shared_tags_range)) |tags| {
-            // A tag both rows hold is pattern-only exactly when both rows
-            // hold it only because match patterns asked for it (design.md
-            // "Pattern-Only Tags").
-            _ = try self.types_store.appendTags(&[_]Tag{.{
-                .name = tags.b.name,
-                .args = tags.b.args,
-                .pattern_only = tags.a.pattern_only and tags.b.pattern_only,
-            }});
+        if (post.both_extended) |extended| {
+            const only_in_a = self.scratch.only_in_a_tags.sliceRange(extended.only_in_a);
+            const only_in_b = self.scratch.only_in_b_tags.sliceRange(extended.only_in_b);
+            var shared_i: usize = 0;
+            var a_i: usize = 0;
+            var b_i: usize = 0;
+            while (true) {
+                // The least name still to write. A name both rows hold is
+                // written before a repeat of it that only one side holds.
+                var group: ?enum { in_both, only_in_a, only_in_b } = null;
+                var least: Tag = undefined;
+                if (shared_i < shared.len) {
+                    group = .in_both;
+                    least = shared[shared_i].b;
+                }
+                if (a_i < only_in_a.len and (group == null or Tag.orderByName(self.ident_store, only_in_a[a_i], least) == .lt)) {
+                    group = .only_in_a;
+                    least = only_in_a[a_i];
+                }
+                if (b_i < only_in_b.len and (group == null or Tag.orderByName(self.ident_store, only_in_b[b_i], least) == .lt)) {
+                    group = .only_in_b;
+                }
+                switch (group orelse break) {
+                    .in_both => {
+                        try self.appendSharedTag(shared[shared_i]);
+                        shared_i += 1;
+                    },
+                    .only_in_a => {
+                        _ = try self.types_store.appendTags(only_in_a[a_i..][0..1]);
+                        a_i += 1;
+                    },
+                    .only_in_b => {
+                        _ = try self.types_store.appendTags(only_in_b[b_i..][0..1]);
+                        b_i += 1;
+                    },
+                }
+            }
+        } else {
+            for (shared) |tags| try self.appendSharedTag(tags);
         }
 
-        try self.mergeRowAppendedFrom(.tag_union, post.pair, range_start, post.mb_a_extended_tags, post.mb_b_extended_tags, post.ext);
+        try self.mergeRowAppendedFrom(.tag_union, post.pair, range_start, null, null, post.ext);
 
         // The merged row now holds its own entry for each of these tags, and
         // the part that held it before keeps its own.
@@ -2641,6 +2674,18 @@ const Unifier = struct {
         for (copies) |copy| {
             self.types_store.pattern_only_tag_copies.appendAssumeCapacity(.{ .part = copy.part, .root = post.pair.a, .name = copy.name });
         }
+    }
+
+    /// Append the merged tag for a tag both rows hold.
+    fn appendSharedTag(self: *Self, tags: TwoTags) std.mem.Allocator.Error!void {
+        // A tag both rows hold is pattern-only exactly when both rows hold it
+        // only because match patterns asked for it (design.md "Pattern-Only
+        // Tags").
+        _ = try self.types_store.appendTags(&[_]Tag{.{
+            .name = tags.b.name,
+            .args = tags.b.args,
+            .pattern_only = tags.a.pattern_only and tags.b.pattern_only,
+        }});
     }
 
     /// Note every pattern-only tag among `tags`, which `part` holds, as one
@@ -4368,7 +4413,6 @@ const Unifier = struct {
                     .of(vars),
                     partitioned.in_both,
                     null,
-                    null,
                     a_gathered_tags.ext,
                     marked_copies_start,
                 );
@@ -4387,7 +4431,6 @@ const Unifier = struct {
                     .of(vars),
                     partitioned.in_both,
                     null,
-                    null,
                     only_in_a_var,
                     marked_copies_start,
                 );
@@ -4405,7 +4448,6 @@ const Unifier = struct {
                 try self.unifySharedTags(
                     .of(vars),
                     partitioned.in_both,
-                    null,
                     null,
                     only_in_b_var,
                     marked_copies_start,
@@ -4444,8 +4486,10 @@ const Unifier = struct {
                 try self.unifySharedTags(
                     .of(vars),
                     partitioned.in_both,
-                    partitioned.only_in_a,
-                    partitioned.only_in_b,
+                    .{
+                        .only_in_a = partitioned.only_in_a,
+                        .only_in_b = partitioned.only_in_b,
+                    },
                     new_ext_var,
                     marked_copies_start,
                 );
@@ -4463,8 +4507,7 @@ const Unifier = struct {
         self: *Self,
         pair: MergePair,
         shared_tags_range: TwoTags.SafeList.Range, // Into scratch.in_both_tags
-        mb_a_extended_tags: ?Tag.SafeList.Range, // Into scratch.only_in_a_tags
-        mb_b_extended_tags: ?Tag.SafeList.Range, // Into scratch.only_in_b_tags
+        both_extended: ?BothExtendedTags,
         ext: Var,
         marked_copies_start: u32, // Into scratch.marked_tag_copies
     ) Error!void {
@@ -4474,8 +4517,7 @@ const Unifier = struct {
         try self.pushWorkFrame(.{ .shared_tags_after_children = .{
             .pair = pair,
             .shared_tags_range = shared_tags_range,
-            .mb_a_extended_tags = mb_a_extended_tags,
-            .mb_b_extended_tags = mb_b_extended_tags,
+            .both_extended = both_extended,
             .ext = ext,
             .marked_copies_start = marked_copies_start,
             .marked_copies_end = @intCast(self.scratch.marked_tag_copies.items.len),
@@ -5144,11 +5186,17 @@ const SharedFieldsAfterChildren = struct {
     did_field_error_flag: u32,
 };
 
+/// The tags only one side of a both-extending tag relation holds, each side's
+/// in name order (`Unifier.PartitionedRow`).
+const BothExtendedTags = struct {
+    only_in_a: Tag.SafeList.Range,
+    only_in_b: Tag.SafeList.Range,
+};
+
 const SharedTagsAfterChildren = struct {
     pair: MergePair,
     shared_tags_range: TwoTags.SafeList.Range,
-    mb_a_extended_tags: ?Tag.SafeList.Range,
-    mb_b_extended_tags: ?Tag.SafeList.Range,
+    both_extended: ?BothExtendedTags,
     ext: Var,
     /// Into scratch.marked_tag_copies
     marked_copies_start: u32,
@@ -5395,10 +5443,9 @@ pub const RejectedRoots = struct {
 ///    high
 ///
 /// NOTE: Record fields and tags are merged in sorted order during gathering
-/// (via mergeSortedExtension). However, unification itself creates new tag
-/// unions that may not be sorted, so partitionRow still performs a final sort.
-/// To fully eliminate these sorts, we would need to ensure unifySharedTags also
-/// produces sorted output.
+/// (via mergeSortedExtension). A tag union's own tags are always stored in
+/// name order, but unification can create records whose own fields are not,
+/// so partitionRow still confirms the order before partitioning.
 pub const Scratch = struct {
     const Self = @This();
 

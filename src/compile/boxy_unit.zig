@@ -41,9 +41,6 @@ pub fn requiresTestUnit(artifact: *const Artifact) bool {
 pub const Unit = struct {
     gpa: Allocator,
     artifact: *const Artifact,
-    /// The platform module whose hosted section binds the hosted functions
-    /// the module declares, when it declares any.
-    platform: ?ImportedView,
     /// The module's imports.
     views: []const ImportedView,
     target: roc_target.RocTarget,
@@ -245,6 +242,42 @@ pub fn objectKeyInput(gpa: Allocator, digests: *boxy_interface.Digests, artifact
         .expect_sites = expect_sites,
         .wasm_stack_checks = wasm_stack_checks,
     };
+}
+
+/// A library unit's code and cache key consume the very same resolved slots.
+/// Neither the command nor an unrelated hosted module belongs in its key.
+pub fn libraryKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *const Artifact, bindings: ?[]const check.CheckedArtifact.UnitHostedBinding, opt: []const u8, inline_expects: bool, target: roc_target.RocTarget, expect_sites: bool, wasm_stack_checks: bool) Allocator.Error!object_cache.Key {
+    var input = try objectKeyInput(gpa, digests, artifact, null, opt, inline_expects, target, &.{}, false, expect_sites, wasm_stack_checks);
+    if (bindings) |slots| {
+        var h = base.Sha256.init(.{});
+        h.update("roc.boxy.unit-hosted-bindings.v1");
+        for (slots) |slot| {
+            for ([_]u32{ @backingInt(slot.template), slot.dispatch_index, @intCast(slot.symbol.len) }) |n| {
+                var bytes: [4]u8 = undefined;
+                std.mem.writeInt(u32, &bytes, n, .little);
+                h.update(&bytes);
+            }
+            h.update(slot.symbol);
+        }
+        input.hosted_bindings = h.finalResult();
+    }
+    return object_cache.key(input);
+}
+
+/// Project the library ABI from a completed platform for clients that
+/// supply checked artifacts rather than source discovery.
+pub fn checkedHostedBindings(arena: Allocator, artifact: *const Artifact, platform: ImportedView) Allocator.Error![]const check.CheckedArtifact.UnitHostedBinding {
+    var slots: std.ArrayList(check.CheckedArtifact.UnitHostedBinding) = .empty;
+    for (platform.hosted_bindings.bindings.items(), 0..) |binding, i| {
+        if (!std.mem.eql(u8, &binding.target_checked_module.bytes, &artifact.key.bytes)) continue;
+        const template = artifact.checked_procedure_templates.lookupByDef(binding.target_def) orelse unreachable; // a checked hosted binding targets a procedure
+        try slots.append(arena, .{
+            .template = template.template,
+            .dispatch_index = @intCast(i),
+            .symbol = platform.canonical_names.externalSymbolNameText(binding.external_symbol_name),
+        });
+    }
+    return slots.items;
 }
 
 /// Restore `key`'s entry, a unit compiled for `target`, from the per-module
@@ -733,18 +766,9 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     const gpa = unit.gpa;
     const trace_clock: ?std.Io = if (dev_diagnostics.isSet(.trace_boxy_work)) (if (unit.config.timing) |timing| timing.std_io else null) else null;
     const build_started_ns: i96 = if (trace_clock) |io| std.Io.Timestamp.now(io, .awake).nanoseconds else 0;
-    var views: std.ArrayList(ImportedView) = .empty;
-    defer views.deinit(gpa);
-    try views.appendSlice(gpa, unit.views);
-    if (unit.platform) |platform_view| {
-        const present = for (unit.views) |view| {
-            if (std.meta.eql(view.key, platform_view.key)) break true;
-        } else false;
-        if (!present) try views.append(gpa, platform_view);
-    }
     const modules: lir.CheckedPipeline.CheckedModuleSet = .{
         .root = check.CheckedArtifact.loweringViewWithRelations(unit.artifact, &.{}),
-        .imports = views.items,
+        .imports = unit.views,
     };
     std.debug.assert(unit.test_unit == (if (unit.config.boxy_unit) |module_unit| module_unit.expect_sites else false));
     // A test unit lowers its module's top-level expects as roots too.
@@ -766,7 +790,7 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     if (trace_clock) |io| std.debug.print("boxy-work: lowered {s} ({d} procs, {d} ms)\n", .{ module_name, lowered.lir_result.store.procSpecCount(), @divTrunc(std.Io.Timestamp.now(io, .awake).nanoseconds - build_started_ns, std.time.ns_per_ms) }) else if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: lowered {s} ({d} procs)\n", .{ module_name, lowered.lir_result.store.procSpecCount() });
 
     const static_data_started = PipelineTiming.startDetail(unit.config.timing);
-    const static_data = try static_data_exports.buildStaticData(gpa, .{ .root = modules.root, .imports = views.items }, &lowered, unit.target, .{});
+    const static_data = try static_data_exports.buildStaticData(gpa, .{ .root = modules.root, .imports = unit.views }, &lowered, unit.target, .{});
     defer static_data_exports.deinitStaticData(gpa, static_data);
     PipelineTiming.finishUnitStep(unit.config.timing, static_data_started, .static_data);
 

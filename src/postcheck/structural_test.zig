@@ -382,7 +382,7 @@ test "Monotype generated-private selection cannot become ordinary or reopen fini
     const request_selection = sourceSliceBetween(
         lower_source,
         "fn selectRequestRepresentation(",
-        "const ClosedResultRow = struct",
+        "fn checkedResultRowIsClosed(",
     );
     try expectContains(request_selection, "containsFinishedMono(public_node)");
     try expectContains(request_selection, "containsFinishedMono(private_node)");
@@ -439,33 +439,6 @@ test "Monotype draft local identity stays graph-native" {
     try expectContains(identity, "rhs_data.ty.toGraphNode(self.graph)");
     try expectContains(identity, "self.graph.sameClass(lhs_node, rhs_node)");
     try expectNotContains(identity, "activeTypeFromCell");
-}
-
-test "Monotype iterator result completion stays out of relation replay and retains public request lookups" {
-    const lower_source = @embedFile("monotype/lower.zig");
-    const dispatch_result = sourceSliceBetween(
-        lower_source,
-        "fn stepDispatchResult(",
-        "fn stepCallResult(",
-    );
-    try expectContains(dispatch_result, "if (task.phase == .expression_lowering)");
-    try expectContains(dispatch_result, "lowerAndCompleteIteratorMethodResultAtNode(");
-
-    const completion = sourceSliceBetween(
-        lower_source,
-        "fn completeDeferredIteratorResult(",
-        "fn constUseMonoType(",
-    );
-    try expectContains(completion, "try updateTemplateSpecInterfaceLookups(");
-    try expectContains(completion, "completed_source.evidence_digest.bytes");
-    try expectNotContains(completion, "unregisterTemplateSpec");
-
-    const template_spec = sourceSliceBetween(
-        lower_source,
-        "const DraftTemplateSpec = struct",
-        "const DraftConstUseProvenance",
-    );
-    try expectContains(template_spec, "lookup_request_fn_node: solve.MaybeNodeId");
 }
 
 test "Monotype direct uninhabited calls lower argument through graph cell" {
@@ -550,7 +523,7 @@ test "Monotype gates divergent relations and crash dispatches before type instan
     const after_closed_arm = crash_dispatch[parametric_arm_index..];
     try expectNotContains(before_closed_arm, "plan.callable_ty");
     try expectNotContains(after_closed_arm, "plan.callable_ty");
-    const closed_procedure_arm = sourceSliceBetween(crash_dispatch, ".procedure => {", ".intrinsic, .graph_participating => {},");
+    const closed_procedure_arm = sourceSliceBetween(crash_dispatch, ".procedure => {", ".intrinsic => {},");
     try expectContains(closed_procedure_arm, "self.closedCallRepresentation(plan.callable_ty, true)");
     const crash_reason = sourceSliceBetween(
         lower_source,
@@ -789,8 +762,6 @@ test "Monotype open specialization lookup covers the complete function interface
         try expectContains(lookup_source, "source_ctx.runtimeDemandGuardFrameAddresses()");
         try expectContains(lookup_source, "if (!selection.add(raw_spec, exact_interface))");
         try expectContains(lookup_source, "if (selection.selected()) |raw_spec|");
-        try expectContains(lookup_source, "try source_ctx.graph.unifyRecursiveFunctionInterface(");
-        try expectContains(lookup_source, "spec.initial_request_arg_classes");
         try expectNotContains(lookup_source, "functionInterfaceAnchor");
     }
     try expectContains(template_source, "template_spec_lookup.openPairs(lookup_prefix)");
@@ -1754,30 +1725,6 @@ test "const restoration has one implementation per shape" {
 test "post-check invariant helper is failure-only" {
     const fn_info = @typeInfo(@TypeOf(Common.invariant)).@"fn";
     try std.testing.expect(fn_info.return_type.? == noreturn);
-}
-
-test "hoist-preserving iterator producers are reachable through their method names" {
-    // The checker pre-filters hoist classification on
-    // `hoist_preserving_method_names` before resolving a receiver, so every
-    // producer that answers "preserves hoistable source input" must be
-    // reachable through one of those names; one that is not would silently
-    // stop having its receiver hoisted. This lives here because the type
-    // checker's own sources may not compare strings.
-    const registry = check.StaticDispatchRegistry;
-    for (registry.iterator_procedure_names) |entry| {
-        if (!entry[1].preservesHoistableSourceInput()) continue;
-        const qualified_name = entry[0];
-        const start = if (std.mem.findScalarLast(u8, qualified_name, '.')) |dot| dot + 1 else 0;
-        const method = qualified_name[start..];
-        var reachable = false;
-        for (registry.hoist_preserving_method_names) |candidate| {
-            if (std.mem.eql(u8, method, candidate)) reachable = true;
-        }
-        if (!reachable) {
-            std.debug.print("unreachable hoist-preserving producer: {s}\n", .{qualified_name});
-        }
-        try std.testing.expect(reachable);
-    }
 }
 
 test "value rules have one definition site" {

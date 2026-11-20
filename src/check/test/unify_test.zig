@@ -2681,6 +2681,33 @@ test "unify - tag unions that store the same tags out of name order merge into a
     try std.testing.expectEqualStrings("B", env.module_env.getIdentStore().getText(types.getTagAt(merged.tags, 1).name));
 }
 
+test "unify - tag unions that each hold a tag the other lacks merge into one row in name order" {
+    // The merged row holds the shared tag and each side's own tags. Its order
+    // is the tags' name order, whichever operand comes first and wherever each
+    // side's own tags fall among the shared ones.
+    for ([_]bool{ false, true }) |b_first| {
+        var env = try TestEnv.init(std.testing.allocator);
+        defer env.deinit();
+        const types = &env.module_env.types;
+
+        const a_row = try env.mkTagUnionOpen(&[_]Tag{ try env.mkTag("B", &[_]Var{}), try env.mkTag("D", &[_]Var{}) });
+        const a = try types.freshFromContent(a_row.content);
+        const b_row = try env.mkTagUnionOpen(&[_]Tag{ try env.mkTag("A", &[_]Var{}), try env.mkTag("B", &[_]Var{}), try env.mkTag("C", &[_]Var{}) });
+        const b = try types.freshFromContent(b_row.content);
+
+        const result = if (b_first) try env.unify(b, a) else try env.unify(a, b);
+
+        try std.testing.expectEqual(.unified, result);
+        try std.testing.expectEqual(types.resolveVar(a).var_, types.resolveVar(b).var_);
+        const merged = types.resolveVar(a).desc.content.structure.tag_union;
+        const expected = [_][]const u8{ "A", "B", "C", "D" };
+        try std.testing.expectEqual(@as(u32, expected.len), merged.tags.count);
+        for (expected, 0..) |name, index| {
+            try std.testing.expectEqualStrings(name, env.module_env.getIdentStore().getText(types.getTagAt(merged.tags, @intCast(index)).name));
+        }
+    }
+}
+
 test "unify - tag unions with the same tags commit an uncommitted tag tail that meets a committed one" {
     for (0..2) |order| {
         var env = try TestEnv.init(std.testing.allocator);

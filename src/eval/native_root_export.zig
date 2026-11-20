@@ -200,12 +200,7 @@ const Builder = struct {
                 }
                 invariant("native callable did not match an explicit finite variant");
             },
-            .erased_fn => |set_id| try self.erased(job, set_id, null),
-            .boxed_sequence => |sequence| {
-                const step = self.graph.program.const_plans.items[@backingInt(sequence.recordPlans(self.graph.program.const_plans.items)[1])];
-                if (step != .erased_fn) invariant("boxed sequence export has no erased step plan");
-                try self.erased(job, step.erased_fn, sequence);
-            },
+            .erased_fn => |set_id| try self.erased(job, set_id),
         }
     }
 
@@ -238,7 +233,7 @@ const Builder = struct {
         while (true) switch (self.graph.program.const_plans.items[@backingInt(current)]) {
             .scalar => return true,
             .named => |named| current = named.backing,
-            .pending, .layout_only, .zst, .str, .list, .box, .boxed_sequence, .tuple, .record, .tag_union, .fn_value, .erased_fn, .boxy_fn => return false,
+            .pending, .layout_only, .zst, .str, .list, .box, .tuple, .record, .tag_union, .fn_value, .erased_fn, .boxy_fn => return false,
         };
     }
 
@@ -344,7 +339,7 @@ const Builder = struct {
         } else invariant("native callable capture plan had non-struct multiple captures");
     }
 
-    fn erased(self: *Builder, job: Job, set_id: Program.ErasedFnsId, sequence: ?Program.BoxedSequencePlan) Error!void {
+    fn erased(self: *Builder, job: Job, set_id: Program.ErasedFnsId) Error!void {
         const address = job.source.read(usize);
         if (address == 0) invariant("native erased callable had a null payload");
         const resolved = try self.callables.resolve(self.callables.context, @ptrFromInt(address));
@@ -356,8 +351,7 @@ const Builder = struct {
             const prefix = self.graph.program.erased_capture_prefix;
             const capture_offset = builtins.erased_callable.capture_offset + prefix;
             const capture_size = prefix + self.graph.size(entry.capture_layout);
-            const state_offset = std.mem.alignForward(usize, builtins.erased_callable.payloadSize(capture_size), builtins.erased_callable.capture_alignment);
-            const allocation_size = if (sequence) |seq| state_offset + self.graph.size(seq.view_layout) else builtins.erased_callable.payloadSize(capture_size);
+            const allocation_size = builtins.erased_callable.payloadSize(capture_size);
             const result = try self.graph.reserveAllocation(.{
                 .address = address,
                 .plan = job.plan,
@@ -396,17 +390,6 @@ const Builder = struct {
             }
             try self.graph.writeWord(result.dest.offsetBy(3 * word_size), capture_size);
             try self.captures(entry.captures, entry.capture_layout, .{ .ptr = resolved.capture_ptr }, result.dest.offsetBy(capture_offset));
-            if (sequence) |seq| {
-                const layouts = &self.graph.program.layouts;
-                const record = layouts.getLayout(seq.view_layout).getStruct().idx;
-                const length_offset = layouts.getStructFieldOffsetByOriginalIndex(record, 0);
-                const step_offset = layouts.getStructFieldOffsetByOriginalIndex(record, 1);
-                const length_layout = layouts.getStructFieldLayoutByOriginalIndex(record, 0);
-                try self.enqueue(seq.recordPlans(self.graph.program.const_plans.items)[0], length_layout, .{
-                    .ptr = builtins.boxed_sequence.recordPtr(@ptrFromInt(address)) + length_offset,
-                }, result.dest.offsetBy(state_offset + length_offset), .value);
-                try self.graph.relocate(result.dest.offsetBy(state_offset + step_offset), result.dest);
-            }
             return;
         }
         invariant("native erased callable did not match an explicit entry");

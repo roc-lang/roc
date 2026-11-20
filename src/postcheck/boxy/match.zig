@@ -552,6 +552,14 @@ pub const Ctx = struct {
         return self.b.store.getLocal(local).layout_idx == .zst;
     }
 
+    pub fn defineZst(self: Ctx, target: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        return try self.b.store.addCFStmt(.{ .assign_struct = .{
+            .target = target,
+            .fields = LIR.LocalSpan.empty(),
+            .next = next,
+        } }, self.b.origin(.source));
+    }
+
     pub fn readDiscriminant(self: Ctx, disc: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.b.store.addCFStmt(.{ .assign_ref = .{ .target = disc, .op = LIR.RefOp.discriminant(source), .next = next } }, self.b.origin(.source));
     }

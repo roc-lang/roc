@@ -8,9 +8,9 @@ heartbeat() {
     done
 }
 
-build_only=0
-if [[ "${1:-}" == "--build-only" ]]; then
-    build_only=1
+build_ci=0
+if [[ "${1:-}" == "--build-ci" ]]; then
+    build_ci=1
     shift
 fi
 
@@ -23,13 +23,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-zig build "$@"
-if [[ "$build_only" -eq 1 ]]; then
-    printf 'Skipping MiniCI in this Nix leg; the regular Zig target matrix covers it for: %s\n' "$*"
+if [[ "$build_ci" -eq 0 ]]; then
+    zig build "$@"
     exit 0
 fi
 
-# Every MiniCI job whose result can differ by host, as declared for this file
-# in the `workflows` table in src/build/minici.zig. MiniCI forwards the
-# trailing arguments to each child `zig build`.
-zig build minici -- --minici-lane secondary "$@"
+# Everything MiniCI runs, built with the dev shell's own Zig (built from
+# source by Nix) and the libraries the flake provides, kcov's among them, with
+# MiniCI's own build options (`minici_build_args` in src/build/minici.zig).
+# The tests themselves run on this host in ci_zig.yml's MiniCI shards.
+zig build build-ci -Dembed-builtin-unit=true "$@"

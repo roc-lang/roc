@@ -3,11 +3,12 @@ app [run!] { pf: platform "./platform/main.roc" }
 import pf.Host
 
 # Regression test for issue 12854: under `--specialize=no` a `for` loop over a
-# list advances its iterator by repacking the step thunk's allocation in place,
-# so the loop allocates nothing per element. Both lengths depend on the hosted
-# input so compile-time evaluation cannot remove the loops, and the allocation
-# counts of the short and the long loop must agree: whatever a loop allocates
-# to start, it allocates nothing more per element.
+# list allocates its first step closure, and every later step repacks the
+# allocation of the step before it, so the loop allocates nothing per element.
+# Both lengths depend on the hosted input so compile-time evaluation cannot
+# remove the loops, and the allocation counts of the short and the long loop
+# must agree: whatever a loop allocates to start, it allocates nothing more per
+# element.
 run! : Str => Str
 run! = |input| {
     seed = Str.count_utf8_bytes(input)

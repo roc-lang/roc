@@ -136,7 +136,7 @@ fn countStaticListReads(result: *const lir.Program.Result) usize {
 }
 
 test "issue 11527: a dev build does not rebuild a small uniform compile-time list constant at every use" {
-    try expectConstantListNotRebuilt(.{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .iterator_fusion });
+    try expectConstantListNotRebuilt(.{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .no_calls });
 }
 
 test "issue 11527: an optimized build does not rebuild a small uniform compile-time list constant at every use" {

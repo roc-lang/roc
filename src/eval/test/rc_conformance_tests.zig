@@ -59,7 +59,7 @@ const Exemption = struct {
 /// Static data has a constant refcount, which no op can move.
 const cases = [_]Case{
     .{
-        .name = "boxed sequence packing and unpacking preserve shared captures",
+        .name = "boxing, unboxing and reboxing an iterator preserve shared captures",
         .source =
         \\{
         \\    text = Str.concat("an iterator capture that cannot fit in a small string", "!")

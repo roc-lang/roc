@@ -10629,12 +10629,13 @@ fn buildBoxyLibraryObjects(
         if (policy.test_units and !unit_policy.test_units and dev_diagnostics.isSet(.trace_boxy_work)) {
             std.debug.print("boxy-work: ordinary unit serves tests for {s} (no expect nodes or test roots)\n", .{artifact.moduleEnvConst().module_name});
         }
+        const hosted_bindings = try build_env.coordinator.?.libraryHostedBindings(artifact, ctx.arena);
         task.* = .{
             .gpa = ctx.gpa,
             .io = ctx.io.std_io,
             .policy = unit_policy,
             .artifact = artifact,
-            .platform = boxyUnitPlatform(artifact, platform),
+            .hosted_bindings = hosted_bindings,
             .views = try build_env.collectImportedArtifactViews(ctx.gpa, artifact),
             .target = target,
             .interfaces = interfaces,
@@ -11006,7 +11007,7 @@ const BoxyUnitTask = struct {
     io: std.Io,
     policy: BoxyUnitPolicy,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    platform: ?check.CheckedArtifact.ImportedModuleView,
+    hosted_bindings: ?[]const check.CheckedArtifact.UnitHostedBinding,
     views: []check.CheckedArtifact.ImportedModuleView,
     target: RocTarget,
     interfaces: *postcheck.Boxy.Lower.ExportInterfaces,
@@ -11072,7 +11073,7 @@ const BoxyUnitTask = struct {
         const key_started = lir.CheckedPipeline.Timing.startDetail(self.timing);
         if (lir.CheckedPipeline.Timing.detailOf(self.timing) != null) self.queue_wait_ns = @intCast(@max(0, key_started - self.ready_ns));
         try self.digests.ensurePrepared(self.artifact);
-        self.key = try boxyObjectKey(self.gpa, self.digests, self.artifact, self.platform, self.policy, self.target, &.{}, false);
+        self.key = try compile.boxy_unit.libraryKey(self.gpa, self.digests, self.artifact, self.hosted_bindings, @tagName(self.policy.opt), inlineExpectModeForOpt(self.policy.opt) == .run, self.target, self.policy.test_units, self.policy.wasm_stack_checks);
         if (lir.CheckedPipeline.Timing.detailOf(self.timing)) |timing| self.key_ns = timing.elapsedSince(key_started);
         self.trace("keyed");
         if (self.build_env.boxyObjectWithKey(self.artifact, self.key)) |known| {
@@ -11086,13 +11087,12 @@ const BoxyUnitTask = struct {
 
     fn build(self: *BoxyUnitTask) CliMainError!compile.boxy_unit.Built {
         var config = checkedRuntimeLoweringConfig(.linked_output, self.policy.opt, .boxy, self.target);
-        config.target.boxy_unit = .{ .imports = self.interfaces, .root = false, .names = &self.digests.names, .expect_sites = self.policy.test_units };
+        config.target.boxy_unit = .{ .imports = self.interfaces, .root = false, .names = &self.digests.names, .expect_sites = self.policy.test_units, .hosted_bindings = self.hosted_bindings };
         config.target.timing = self.timing;
         config.target.post_check_executor = self.executor;
         const built = try compile.boxy_unit.restoreOrBuild(.{
             .gpa = self.gpa,
             .artifact = self.artifact,
-            .platform = self.platform,
             .views = self.views,
             .target = self.target,
             .config = config.target,
@@ -13998,7 +13998,7 @@ test "post-check optimization scope per opt level" {
     try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.none, postCheckInlineModeForOpt(.interpreter));
     try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.all_calls, specConstrCloneInliningForOpt(.speed));
     try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.all_calls, specConstrCloneInliningForOpt(.size));
-    try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.iterator_fusion, specConstrCloneInliningForOpt(.dev));
+    try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.no_calls, specConstrCloneInliningForOpt(.dev));
 }
 
 test "only optimized builds emit thread-confined count updates" {
@@ -19215,7 +19215,6 @@ fn recordLoweringDetail(reporter: *progress.Reporter, snapshot: lir.CheckedPipel
 fn passStepLabel(step: lir.CheckedPipeline.PassStep) []const u8 {
     return switch (step) {
         .erased_owner => "Erased Owner",
-        .single_use_inline => "Single-Use Inline",
         .return_slot => "Return Slot",
         .str_append => "Str Append",
         .tag_reachability => "Tag Reachability",
@@ -19292,7 +19291,7 @@ fn recordLirPassDetail(reporter: *progress.Reporter, snapshot: lir.CheckedPipeli
                 after_len += 1;
                 after_total +|= ns;
             },
-            .erased_owner, .single_use_inline, .return_slot, .str_append, .tag_reachability, .reachable_procs_before_arc => {
+            .erased_owner, .return_slot, .str_append, .tag_reachability, .reachable_procs_before_arc => {
                 before[before_len] = .{ .name = passStepLabel(step), .ns = ns };
                 before_len += 1;
             },
@@ -19502,7 +19501,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [42]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [41]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -19532,7 +19531,6 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [42]
         .{ .name = "Argument class snapshot nodes", .count = graph.argument_class_members_snapshotted },
         .{ .name = "Structural backing visited slots", .count = graph.structural_backing_scan_slots },
         .{ .name = "Generated-private guard returns", .count = graph.generated_private_guard_returns },
-        .{ .name = "Generated-iterator index lookups", .count = graph.generated_iterator_lookups },
         .{ .name = "Completion queries", .count = graph.completion_queries },
         .{ .name = "Completion pair entries", .count = graph.completion_pair_entries },
         .{ .name = "Completion pair expansions", .count = graph.completion_pair_expansions },
@@ -19550,7 +19548,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [42]
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Interface summary hits", .count = diagnostics.specialization.interface_summary_hits },
@@ -19565,7 +19563,6 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]p
         .{ .name = "Dispatch expressions", .count = body.dispatch_expressions },
         .{ .name = "Deferred template requests", .count = body.deferred_template_requests },
         .{ .name = "Caller-owned template bodies lowered", .count = body.caller_owned_template_bodies_lowered },
-        .{ .name = "Eager iterator template bodies lowered", .count = body.eager_iterator_template_bodies_lowered },
         .{ .name = "Deferred template reuses", .count = body.deferred_template_reuses },
         .{ .name = "Deferred template bodies lowered", .count = body.deferred_template_bodies_lowered },
         .{ .name = "Lowered template bodies discarded", .count = body.lowered_template_bodies_discarded },
@@ -19582,7 +19579,7 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]p
     };
 }
 
-fn solvedLirParallelCounters(parallel: lir.CheckedPipeline.SolvedLirParallelMetrics) [14]progress.Counter {
+fn solvedLirParallelCounters(parallel: lir.CheckedPipeline.SolvedLirParallelMetrics) [15]progress.Counter {
     return .{
         .{ .name = "Tasks submitted", .count = parallel.tasks_submitted },
         .{ .name = "Tasks committed", .count = parallel.tasks_committed },
@@ -19598,6 +19595,7 @@ fn solvedLirParallelCounters(parallel: lir.CheckedPipeline.SolvedLirParallelMetr
         .{ .name = "Worker match tasks committed", .count = parallel.worker_match_tasks_committed },
         .{ .name = "Worker literal tasks committed", .count = parallel.worker_literal_tasks_committed },
         .{ .name = "Worker loop tasks committed", .count = parallel.worker_loop_tasks_committed },
+        .{ .name = "Worker further-instance tasks committed", .count = parallel.worker_instance_tasks_committed },
     };
 }
 
@@ -19621,7 +19619,6 @@ fn specConstrParallelCounters(parallel: lir.CheckedPipeline.SpecConstrParallelMe
         const name = comptime switch (phase) {
             .discovery => "Pattern discovery",
             .unused_loop_results => "Loop-result projection",
-            .iterator_fusion => "Iterator fusion",
         };
         rows[10 + 2 * index] = .{ .name = name ++ " tasks", .count = parallel.committed_by_phase[index] };
         rows[11 + 2 * index] = .{ .name = name ++ " changes", .count = parallel.changed_by_phase[index] };
@@ -19641,8 +19638,8 @@ test "post-check diagnostics preserve labeled SpecConstr counts" {
         .bodies_committed = 8,
         .expressions_committed = 9,
         .peak_retained_shards = 10,
-        .committed_by_phase = .{ 11, 13, 15 },
-        .changed_by_phase = .{ 12, 14, 16 },
+        .committed_by_phase = .{ 11, 13 },
+        .changed_by_phase = .{ 12, 14 },
     });
     const names = [_][]const u8{
         "Tasks submitted",
@@ -19659,8 +19656,6 @@ test "post-check diagnostics preserve labeled SpecConstr counts" {
         "Pattern discovery changes",
         "Loop-result projection tasks",
         "Loop-result projection changes",
-        "Iterator fusion tasks",
-        "Iterator fusion changes",
     };
     for (rows, names, 1..) |row, name, count| {
         try std.testing.expectEqualStrings(name, row.name);
@@ -19768,7 +19763,6 @@ fn lirPassParallelCounters(parallel: lir.CheckedPipeline.LirPassParallelMetrics)
         const name = comptime switch (phase) {
             .branch_expectation => "Branch expectation",
             .trmc => "TRMC",
-            .forwarding_join => "Forwarding joins",
             .tag_fusion => "Tag-case fusion",
             .prune_join_params => "Join parameter pruning",
             .scalarize => "Join scalarization",
@@ -19872,6 +19866,7 @@ test "post-check diagnostics preserve labeled Solved-LIR counts" {
         .worker_match_tasks_committed = 12,
         .worker_literal_tasks_committed = 13,
         .worker_loop_tasks_committed = 14,
+        .worker_instance_tasks_committed = 15,
     });
     const names = [_][]const u8{
         "Tasks submitted",
@@ -19888,6 +19883,7 @@ test "post-check diagnostics preserve labeled Solved-LIR counts" {
         "Worker match tasks committed",
         "Worker literal tasks committed",
         "Worker loop tasks committed",
+        "Worker further-instance tasks committed",
     };
     try std.testing.expectEqual(@typeInfo(lir.CheckedPipeline.SolvedLirParallelMetrics).@"struct".field_names.len, rows.len);
     for (rows, names, 1..) |row, name, count| {
@@ -19906,8 +19902,8 @@ test "post-check diagnostics preserve labeled LIR pass counts" {
         .prepared_statement_rows = 100,
         .appended_statements = 30,
         .peak_retained_shards = 8,
-        .committed_by_phase = .{ 1, 2, 3, 4, 5, 6, 7, 8, 9 },
-        .changed_by_phase = .{ 0, 1, 2, 3, 4, 5, 6, 7, 8 },
+        .committed_by_phase = .{ 1, 2, 3, 4, 5, 6, 7, 8 },
+        .changed_by_phase = .{ 0, 1, 2, 3, 4, 5, 6, 7 },
     });
     try std.testing.expectEqualStrings("Tasks submitted", rows[0].name);
     try std.testing.expectEqual(@as(u64, 10), rows[0].count);
@@ -19916,7 +19912,6 @@ test "post-check diagnostics preserve labeled LIR pass counts" {
     const phase_names = .{
         "Branch expectation",
         "TRMC",
-        "Forwarding joins",
         "Tag-case fusion",
         "Join parameter pruning",
         "Join scalarization",
@@ -19941,11 +19936,9 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.graph.nodes_created = 201;
     diagnostics.graph.generated_private_nodes_visited = 202;
     diagnostics.graph.generated_private_guard_returns = 204;
-    diagnostics.graph.generated_iterator_lookups = 206;
     diagnostics.graph.nominal_backing_tombstone_deletions = 203;
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
-    diagnostics.body.eager_iterator_template_bodies_lowered = 304;
     diagnostics.body.deferred_template_reuses = 305;
     diagnostics.body.nested_closures_prepared = 302;
 
@@ -19965,20 +19958,16 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqualStrings("Generated-private containment queries", graph[15].name);
     try std.testing.expectEqualStrings("Generated-private guard returns", graph[26].name);
     try std.testing.expectEqual(@as(u64, 204), graph[26].count);
-    try std.testing.expectEqualStrings("Generated-iterator index lookups", graph[27].name);
-    try std.testing.expectEqual(@as(u64, 206), graph[27].count);
 
     const body = monotypeBodyCounters(diagnostics);
     try std.testing.expectEqualStrings("Type instantiation scopes", body[3].name);
     try std.testing.expectEqual(@as(u64, 303), body[3].count);
     try std.testing.expectEqualStrings("Checked node cache hits", body[5].name);
     try std.testing.expectEqual(@as(u64, 301), body[5].count);
-    try std.testing.expectEqualStrings("Eager iterator template bodies lowered", body[12].name);
-    try std.testing.expectEqual(@as(u64, 304), body[12].count);
-    try std.testing.expectEqualStrings("Deferred template reuses", body[13].name);
-    try std.testing.expectEqual(@as(u64, 305), body[13].count);
-    try std.testing.expectEqualStrings("Nested closures prepared", body[22].name);
-    try std.testing.expectEqual(@as(u64, 302), body[22].count);
+    try std.testing.expectEqualStrings("Deferred template reuses", body[12].name);
+    try std.testing.expectEqual(@as(u64, 305), body[12].count);
+    try std.testing.expectEqualStrings("Nested closures prepared", body[21].name);
+    try std.testing.expectEqual(@as(u64, 302), body[21].count);
 
     const parallel = monotypeParallelCounters(.{
         .worker_work_ns = 401,

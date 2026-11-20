@@ -1304,8 +1304,19 @@ fn hostedHostReleaseStoredBoxed() callconv(.c) void {
     }
 }
 
-fn hostedHostReleaseBoxedSequence(boxed: ?[*]u8) callconv(.c) void {
-    builtins.erased_callable.decref(boxed, g_roc_ops.?);
+/// The backing record of `Iter(U8)` and `Stream(U8)`: the length hint
+/// `Try(U64, [Unknown])`, then the erased step callable.
+const HostIterRecord = extern struct {
+    len_if_known: extern struct { payload: u64, discriminant: u8 },
+    step: ?[*]u8,
+};
+
+fn hostIterRecordDropPayload(payload: ?[*]u8) callconv(.c) void {
+    builtins.erased_callable.decref(capturePtrAs(HostIterRecord, payload).step, builtins.in_process_host.ops());
+}
+
+fn hostedHostReleaseBoxedIterOrStream(boxed: ?[*]u8) callconv(.c) void {
+    builtins.dev_wrappers.roc_builtins_box_decref_with(boxed, @alignOf(HostIterRecord), &hostIterRecordDropPayload);
 }
 
 fn hostedHostRoundtripBoxed(boxed: ?[*]u8) callconv(.c) ?[*]u8 {
@@ -1429,8 +1440,8 @@ comptime {
     @export(&hostedHostCallBoxedTransition, .{ .name = "roc_host_call_boxed_transition", .visibility = .hidden });
     @export(&hostedHostGetGreeting, .{ .name = "roc_host_get_greeting", .visibility = .hidden });
     @export(&hostedHostReleaseStoredBoxed, .{ .name = "roc_host_release_stored_boxed", .visibility = .hidden });
-    @export(&hostedHostReleaseBoxedSequence, .{ .name = "roc_host_release_boxed_iter", .visibility = .hidden });
-    @export(&hostedHostReleaseBoxedSequence, .{ .name = "roc_host_release_boxed_stream", .visibility = .hidden });
+    @export(&hostedHostReleaseBoxedIterOrStream, .{ .name = "roc_host_release_boxed_iter", .visibility = .hidden });
+    @export(&hostedHostReleaseBoxedIterOrStream, .{ .name = "roc_host_release_boxed_stream", .visibility = .hidden });
     @export(&hostedHostResetBoxedDropReport, .{ .name = "roc_host_reset_boxed_drop_report", .visibility = .hidden });
     @export(&hostedHostRoundtripBoxed, .{ .name = "roc_host_roundtrip_boxed", .visibility = .hidden });
     @export(&hostedHostBoxedTransition, .{ .name = "roc_host_boxed_transition", .visibility = .hidden });

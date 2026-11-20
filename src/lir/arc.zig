@@ -15433,7 +15433,10 @@ test "RC borrow: read-only sublist materializes a borrowed view" {
     const result = try f.local(.i64);
     const ret = try f.ret(result);
     const result_assign = try f.assignI64(result, 1, ret);
-    const use_slice = try f.expectStmt(slice, result_assign);
+    // The lender is read after the slice's last read, so the borrow keeps it
+    // live no longer than its own uses do.
+    const use_list = try f.expectStmt(list, result_assign);
+    const use_slice = try f.expectStmt(slice, use_list);
     const sublist = try f.store.addCFStmt(.{ .assign_low_level = .{
         .target = slice,
         .op = .list_sublist,
@@ -15452,6 +15455,41 @@ test "RC borrow: read-only sublist materializes a borrowed view" {
     try testing.expect(std.meta.eql(emitted.op.rcEffect(), f.store.stmtRow(emitted.rc_effect)));
     try f.expectRc(slice, 0, 0, 0);
     try f.expectRc(list, 0, 1, 0);
+}
+
+test "RC sublist read after its lender's last read consumes a retained lender" {
+    // Issue 13020: a borrowed view would keep the lender, and every item it
+    // holds, live until the view's last read, past the lender's own last
+    // use. The slice takes a retained unit instead, so an emptied window
+    // releases its source and the lender is released at its own last read.
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const range = try f.local(.i64);
+    const slice = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const use_slice = try f.expectStmt(slice, result_assign);
+    const use_list = try f.expectStmt(list, use_slice);
+    const sublist = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = slice,
+        .op = .list_sublist,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.list_sublist.rcEffect()),
+        .args = try f.span(&.{ list, range }),
+        .next = use_list,
+    } }, .test_fixture);
+    const range_assign = try f.assignI64(range, 0, sublist);
+    const body = try f.assignList(list, &.{}, range_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+
+    const emitted = f.reachableLowLevelAssign(slice);
+    try testing.expectEqual(LIR.LowLevel.list_sublist, emitted.op);
+    try testing.expect(std.meta.eql(emitted.op.rcEffect(), f.store.stmtRow(emitted.rc_effect)));
+    try f.expectRc(slice, 0, 1, 0);
+    try f.expectRc(list, 1, 1, 0);
 }
 
 test "RC sublist of a dying unique argument passed to a non-inlined callee consumes the lender" {

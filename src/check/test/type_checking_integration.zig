@@ -57,7 +57,7 @@ const MethodRegistryTestModuleIndex = struct {
 /// The source's only associated value is a record, which is not a
 /// reference, so publication resolves it to no method target.
 const MethodRegistryTestReferencedTargets = struct {
-    pub fn methodBindingTarget(_: *@This(), _: ModuleEnv.MethodBinding, _: can.CIR.Expr.Idx, _: static_dispatch.MethodOwner) error{OutOfMemory}!?static_dispatch.ReferencedMethodTarget {
+    pub fn methodBindingTarget(_: *@This(), _: ModuleEnv.MethodBinding, _: can.CIR.Expr.Idx) error{OutOfMemory}!?static_dispatch.ReferencedMethodTarget {
         return null;
     }
 };
@@ -10974,15 +10974,24 @@ test "check type - polarity - nested widening is rejected even against an open i
     );
 }
 
-test "check type - polarity - a where-method result's closed ok row is widened into the annotated result" {
-    // Per-use opening is withheld from a `Try`'s ok row, so `x.m()` has the
-    // closed ok row the where clause writes. That row is within the row
-    // coercion's reach (a tag payload of `Try`'s backing), so the body's value
-    // relates to the annotated result through a widening copy and crosses
-    // into it through a row coercion (design.md "Row Subsumption").
+test "check type - polarity - a where-method result's closed ok row is not widened into the annotated result" {
+    // A where-method's rows in the arguments of `Try` are generated as
+    // written, and no coercion reaches an argument of a named type, so
+    // `x.m()` does not fit a result whose ok row lists another tag.
     const source =
         \\describe : a -> Try([Some(Str), None], [E1]) where [a.m : a -> Try([Some(Str)], [E1])]
         \\describe = |x| x.m()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - polarity - a where-method result's closed ok row is rebuilt into the annotated result" {
+    // Rebuilding the ok value constructs it at the result's row.
+    const source =
+        \\describe : a -> Try([Some(Str), None], [E1]) where [a.m : a -> Try([Some(Str)], [E1])]
+        \\describe = |x| x.m().map_ok(|Some(s)| Some(s))
         \\
         \\closed_try : Try([Some(Str)], [E1])
         \\closed_try = Ok(Some("cv"))
@@ -15260,9 +15269,10 @@ test "check type - declaration body - bare re-export of a parameterized type has
 
 test "check type - declaration body - bare imported parameterized alias has too few args" {
     var lib = try TestEnv.init("BareLib",
-        \\Pair(a) : (a, a)
+        \\BareLib := [].{ Pair(a) : (a, a) }
     );
     defer lib.deinit();
+    try lib.assertNoErrors();
     var env = try TestEnv.initWithImport("BareMain",
         \\import BareLib
         \\

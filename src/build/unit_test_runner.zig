@@ -34,6 +34,11 @@ pub fn isDeathTestChild() bool {
     return default_test_runner.isDeathTestChild();
 }
 
+/// The directory a test writes scratch files under (`src/cli/test/util.zig`).
+pub fn rocTestScratchRoot() []const u8 {
+    return default_test_runner.scratchRoot();
+}
+
 /// Delegate test discovery, execution, and reporting to Zig's stock runner.
 pub fn main(init: std.process.Init.Minimal) void {
     default_test_runner.main(init);

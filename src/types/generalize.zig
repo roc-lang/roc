@@ -180,6 +180,9 @@ pub const Generalizer = struct {
     rank_frames: std.ArrayList(RankFrame),
     /// Settled child ranks, consumed by the frame that requested them.
     pending_ranks: std.ArrayList(Rank),
+    /// When a walk starts in an enclosing scope, an all-generalized set of
+    /// children contributes no live rank. It cannot quantify the container.
+    empty_child_rank: Rank = .generalized,
     /// The uncommitted record tails the last `adjust` left at the rank it
     /// generalizes (design.md "Uncommitted Record Tails"). The caller commits
     /// those its binding may not quantify before `quantify`; the rest are
@@ -337,7 +340,7 @@ pub const Generalizer = struct {
         // Process from lowest to highest rank so that lower ranks are finalized first,
         // ensuring we have accurate rank information when processing higher ranks.
         for (self.tmp_vars.items) |ranked| {
-            _ = try self.adjustRank(ranked.desc_idx, ranked.rank);
+            try self.adjustPooledRank(ranked, rank_to_generalize);
         }
 
         self.debugAssertQueuedDescriptors();
@@ -385,7 +388,7 @@ pub const Generalizer = struct {
                 self.store.clearGeneralizationMarks(ranked.desc_idx);
             };
             for (self.tmp_vars.items) |ranked| {
-                _ = try self.adjustRank(ranked.desc_idx, ranked.rank);
+                try self.adjustPooledRank(ranked, rank_to_generalize);
             }
         } else {
             self.debugAssertQueuedDescriptors();
@@ -424,6 +427,11 @@ pub const Generalizer = struct {
         var_pool.ranks.items[rank_to_generalize_int].clearRetainingCapacity();
     }
     // adjust rank //
+
+    fn adjustPooledRank(self: *Self, ranked: RankedVar, boundary: Rank) std.mem.Allocator.Error!void {
+        self.empty_child_rank = if (ranked.rank == boundary) .generalized else ranked.rank;
+        _ = try self.adjustRank(ranked.desc_idx, ranked.rank);
+    }
 
     /// Adjusts type variable ranks to prepare for generalization.
     ///
@@ -650,8 +658,9 @@ pub const Generalizer = struct {
     /// Record a frame's finished rank and hand it to the frame that
     /// requested its class.
     fn settleRank(self: *Self, desc_idx: DescStoreIdx, new_rank: Rank) std.mem.Allocator.Error!void {
-        try self.store.setDescRank(desc_idx, new_rank);
-        try self.pending_ranks.append(self.gpa, new_rank);
+        const rank = if (new_rank == .generalized) self.empty_child_rank else new_rank;
+        try self.store.setDescRank(desc_idx, rank);
+        try self.pending_ranks.append(self.gpa, rank);
     }
 
     fn stepOverArgs(self: *Self, frame: *OverArgsFrame, group_rank: Rank) std.mem.Allocator.Error!bool {
@@ -1020,6 +1029,32 @@ test "pushRank - a scope inside one at the deepest rank shares that rank until i
 test "Rank - the scope inside the deepest rank is the deepest rank" {
     try std.testing.expectEqual(Rank.deepest, Rank.deepest.innerScope());
     try std.testing.expectEqual(@as(Rank, @fromBackingInt(2)), Rank.outermost.innerScope());
+}
+
+test "issue 13204 - structural rank adjustment does not quantify an escaped container" {
+    const gpa = std.testing.allocator;
+    var store = try TypesStore.initCapacity(gpa, 16, 8);
+    defer store.deinit();
+    var pool = try VarPool.init(gpa);
+    defer pool.deinit();
+    try pool.pushRank();
+    try pool.pushRank();
+    var gen = try Generalizer.init(gpa, &store);
+    defer gen.deinit(gpa);
+
+    // Both containers have the same child. Only one container belongs to
+    // the boundary; the other's slot is shared with an enclosing scope.
+    const child = try store.freshFromContentWithRank(.{ .flex = types.Flex.init() }, .generalized);
+    const tuple: types.Content = .{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{child}) } } };
+    const escaped = try store.freshFromContentWithRank(tuple, .outermost);
+    const owned = try store.freshFromContentWithRank(tuple, pool.current_rank);
+    try pool.addVarToRank(escaped, .outermost);
+    try pool.addVarToRank(escaped, pool.current_rank);
+    try pool.addVarToRank(owned, pool.current_rank);
+
+    try gen.generalize(&pool, pool.current_rank);
+    try std.testing.expectEqual(Rank.outermost, store.resolveVar(escaped).desc.rank);
+    try std.testing.expectEqual(Rank.generalized, store.resolveVar(owned).desc.rank);
 }
 
 test "generalize - effect cycles inherit the enclosing traversal rank" {
