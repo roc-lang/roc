@@ -18457,7 +18457,7 @@ test "RC complete projection after a rebind of its root keeps its own read" {
     try checkProjectionAfterRebind(true);
 }
 
-fn checkProjectionAfterRebind(direct_assignment: bool) !void {
+fn checkProjectionAfterRebind(direct_assignment: bool) (Allocator.Error || error{TestUnexpectedResult})!void {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
 
