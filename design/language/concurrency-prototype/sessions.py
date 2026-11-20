@@ -125,10 +125,12 @@ class Sessions:
         self.no_close_on_leave = False  # a port whose holders all left is never released
         self.no_close_abandoned = False  # an abandoned receive leaves its channel or inbox open
         self.no_capture_holders = False  # an entry's captures do not make it a holder
+        self.no_release_cells = False  # a cell that no live task holds keeps its state
+        self.released = []  # (cell object id, the holder whose leaving released it)
 
     def register(self, kind, r, target, holder):
-        """Track holders for heap object r (a shared variable's cell): it is
-        a port whose release does nothing."""
+        """Track holders for heap object r (a shared variable's cell): a
+        port whose release drops the cell's state."""
         p = Port(kind, target, {holder} if self.track and holder is not None else set())
         self.ports[r.id] = p
         return p
@@ -296,17 +298,39 @@ class Sessions:
         if not self.no_capture_holders:
             self.transfer(clo, {task})
 
-    def leave(self, t):
-        """Task t finished. A live port that no live task holds any more is held
-        only by crashed frames, so it is released."""
+    def leave(self, t, kinds=None):
+        """Task t finished (or the host, at the end of a run, for `kinds`). A
+        live port that no live task holds any more is released. A channel end,
+        post, inbox or permit is then held only by crashed frames. A cell may
+        also be held by the states of other cells that no live task holds: a
+        cycle, which releasing the cell's state breaks."""
         for rid, p in self.ports.items():
-            if t not in p.holders:
+            if t not in p.holders or (kinds is not None and p.kind not in kinds):
                 continue
             p.holders.discard(t)
-            if p.holders or p.done or self.heap.objs[rid].freed or self.no_close_on_leave:
+            if p.holders or p.done or self.heap.objs[rid].freed:
+                continue
+            if self.no_release_cells if p.kind == "shared" else self.no_close_on_leave:
                 continue
             if self.release_port(p):
-                self.stats["ports released after a crash"] += 1
+                if p.kind == "shared":
+                    self.stats["cells released"] += 1
+                    self.stats["cells released at the end of the run" if t == HOST else
+                               "cells released when a child task finished" if t.parent is not None else
+                               "cells released when the root finished"] += 1
+                    self.released.append((rid, t))
+                else:
+                    self.stats["ports released after a crash"] += 1
+
+    def release_cells(self):
+        """The end of a None build, whose one stack holds every cell it can
+        still use until the program ends: release every cell still live."""
+        if self.no_release_cells:
+            return
+        for rid, p in list(self.ports.items()):
+            if p.kind == "shared" and not p.done and not self.heap.objs[rid].freed and self.release_port(p):
+                self.stats["cells released"] += 1
+                self.released.append((rid, None))
 
     def abandon(self, target):
         """A task parked at a receive (channel or inbox) was cancelled or
@@ -361,7 +385,14 @@ class Sessions:
         elif k == "permit":
             self.release(x)
         elif k == "shared":
-            return False
+            # Freed already (its state went with it), or no live task holds
+            # it: drop its state, which breaks any cycle through it.
+            o = self.heap.objs[x.rid]
+            if o.freed:
+                return False
+            x.released = True
+            v, o.fields[0] = o.fields[0], 0
+            self.heap.drop(v)
         return True
 
     def freed(self, rid, o):

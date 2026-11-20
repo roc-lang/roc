@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from engines import NoneEngine, ProgramCrash, StackEngine, UnwindEngine
 from heap import Heap
 from runtime import CANCELLED, CRASHED, DONE, PENDING, WAITS, Runtime, Violation
+from sessions import HOST
 
 
 def _read(heap, i):
@@ -374,6 +375,7 @@ def run_tasks(lowering, engine_kind, policy, concurrency="Tasks", max_steps=2000
         host.complete(host.ops[0])
     host.drained()
     rt.check_quiescent()
+    rt.sessions.leave(HOST, kinds=("shared",))  # the run is over: the host keeps no cell
     live = heap.verify(rt.leaked + rt.sessions.held())
     return Run(host.result, host.effects, heap.stats, getattr(eng, "stats", Counter()), rt.stats, host.stats,
                leaked_live=live)
@@ -412,12 +414,14 @@ def run_none(prog):
                    extra={"supervised": c.supervised, "on demand": eng.stats["entries run on demand"]})
     result = ("done", heap.data(v))
     heap.drop(v)
+    eng.sessions.release_cells()
     heap.verify([])
     lost = eng.sessions.unreturned()
     if lost:
         raise Violation(f"S9: semaphore cells missing permits (id, free, permits): {lost}")
     return Run(result, host.effects, heap.stats, Counter({"steps": eng.steps}), Counter(), Counter(),
-               extra={"on demand": eng.stats["entries run on demand"]})
+               extra={"on demand": eng.stats["entries run on demand"],
+                      "cells released": eng.stats["cells released"]})
 
 
 class ServiceHost(Host):

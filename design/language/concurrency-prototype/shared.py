@@ -65,10 +65,12 @@ class PureCrash(Exception):
 
 
 class Cell:
-    __slots__ = ("cid", "poisoned", "waiters", "version", "port")
+    __slots__ = ("cid", "poisoned", "waiters", "version", "port", "rid", "released")
 
     def __init__(self, cid):
         self.cid = cid
+        self.rid = None  # the heap object holding the state
+        self.released = False  # no live task held it, so its state was dropped (V9)
         self.poisoned = False
         self.waiters = []  # tasks parked at a step whose footprint has this cell
         self.version = 0  # commits so far (a None build waits for it to change)
@@ -100,6 +102,7 @@ class Shared:
         self.no_poison = False  # a deferred step that crashes poisons nothing
         self.no_wake = False  # a commit readies no waiter
         self.no_pass_on = False  # a waiter readied by a probe that ends without storing readies no other
+        self.no_store_holders = False  # a stored state's cells do not gain the cell's holders
         # An alternative to the wake rule below, for bench/shared_vs_actor.py.
         # A step is a pure function of its cells' values and its arguments,
         # so a waiter whose cells hold the values it waited on would wait
@@ -124,12 +127,19 @@ class Shared:
     def cell(self, r):
         return self.cells[self.heap.obj(r).tag]
 
+    def state(self, r):
+        """The state of cell r. A released cell is one that no live task held,
+        so no task can reach it (V9)."""
+        assert not self.cell(r).released, "V9: a task reached a cell that was released"
+        return self.heap.obj(r).fields[0]
+
     # ------------------------------------------------------------ operations
     def new(self, v, holder=None):
         c = Cell(len(self.cells) + 1)
         self.cells[c.cid] = c
         self.stats["shared variables"] += 1
         r = self.heap.alloc("shared", c.cid, [v])
+        c.rid = r.id
         c.port = self.sessions.register("shared", r, c, holder)
         return r
 
@@ -141,7 +151,7 @@ class Shared:
         if c.poisoned:
             heap.drop(r)
             return ("crash", heap.alloc("str", POISONED, []), [])
-        v = heap.obj(r).fields[0]
+        v = self.state(r)
         heap.dup(v)
         heap.drop(r)
         return ("ready", v)
@@ -156,7 +166,7 @@ class Shared:
             return ("crash", heap.alloc("str", POISONED, []), [])
         vals = []
         for r in st.cells:
-            v = heap.obj(r).fields[0]
+            v = self.state(r)
             heap.dup(v)
             vals.append(v)
         for a in st.args:
@@ -184,16 +194,18 @@ class Shared:
         r, new = fields[0], fields[1:]
         self.stats["commits"] += 1
         for ref, c, v in zip(st.cells, cs, new):
+            self.state(ref)
             o = heap.obj(ref)
             old, o.fields[0] = o.fields[0], v
-            self.sessions.transfer(v, c.port.holders)
+            if not self.no_store_holders:
+                self.sessions.transfer(v, c.port.holders)
             heap.drop(old)
             c.version += 1
             self.ready_waiters(c)
         return ("ready", r)
 
     def values(self, st):
-        return tuple(self.heap.data(self.heap.obj(r).fields[0]) for r in st.cells)
+        return tuple(self.heap.data(self.state(r)) for r in st.cells)
 
     def unchanged(self, st, at):
         mode = "both" if self.skip_unchanged is True else self.skip_unchanged
@@ -208,7 +220,7 @@ class Shared:
             return True
         vals = []
         for r in st.cells:
-            v = heap.obj(r).fields[0]
+            v = self.state(r)
             heap.dup(v)
             vals.append(v)
         for a in st.args:

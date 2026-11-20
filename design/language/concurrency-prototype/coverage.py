@@ -229,13 +229,15 @@ MATRIX = {
            "every generated program; a wait nothing can end is the same deadlock in every build",
            ["SharedVariables.test_a_wait_ends_when_another_task_commits",
             "SharedVariables.test_a_wait_nothing_can_end_is_a_deadlock_in_every_build", FUZZ]),
-    "V9": ("Generated declarations and types: the rule with lambda sets is exact against a counting heap "
-           "(accepted types never leak, rejected ones have a leaking witness); the checker's rule without "
-           "them is sound and rejects more only for functions in states; checking each declaration once "
-           "with summaries agrees with checking expanded types; dropping the function rule or the "
-           "parameter requirements is caught",
-           ["NoCycles.test_the_rule_is_exact_sound_and_modular_on_generated_types",
-            "NoCycles.test_examples", "NoCycles.test_each_part_of_the_rule_is_needed"]),
+    "V9": ("Cells whose states hold handles, their own included, and jobs that capture their own queue: "
+           "every heap is verified exact after every run, so a surviving cycle is a reported leak; a "
+           "released cell is never reached again (asserted at every use); releases happen when a child "
+           "task finishes, when the root finishes and at the end of a None build; never releasing, and "
+           "not passing a cell's holders to the cells stored in it, are both caught",
+           ["CellRelease.test_jobs_that_capture_their_own_queue",
+            "CellRelease.test_a_cycle_made_in_a_task_is_released_when_it_finishes",
+            "CellRelease.test_a_stored_cell_gains_the_holders_of_the_cell_that_holds_it",
+            "CellRelease.test_generated_programs_that_form_cycles"]),
 }
 
 # Rows the prototype does not establish yet.

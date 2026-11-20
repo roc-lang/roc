@@ -1004,7 +1004,7 @@ slower, wordier or weaker than it could be, roughly in order of importance.
 3. **Waiters on unrelated keys are probed.** In `cached!`, every store to the
    dictionary probes the waiters for every other key. Holding one handle per
    key inside an outer handle (`Shared(Dict(k, Shared(Entry(v))))`) avoids it,
-   and the no-cycles rule allows it, but nothing points programmers there.
+   and a state may hold handles, but nothing points programmers there.
 4. **No fairness.** Most-recent-first waking can starve an old waiter under
    steady contention: a philosopher, a writer, a pool borrower. A program that
    needs fairness can take a ticket in one update and wait for its turn in

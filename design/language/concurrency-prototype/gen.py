@@ -22,8 +22,12 @@ at once), shared variables (workers that capture one or two and run atomic
 steps on them: increments, peeks, takes that wait for a nonzero value, moves
 between two variables, reads; takes paired with a deferred or errdeferred
 give, with work, crashes and cancellation in between; deferred steps that
-crash and poison), branches, matches and crashes. Nothing is a handwritten
-scenario.
+crash and poison), cells whose states hold handles to cells, their own
+included, and jobs that capture cells (workers and jobs that link, push
+jobs, pop and run the newest item, clear, and make cells of their own: the
+shapes that form reference cycles through states, which the runtime breaks
+when no live task holds a cell), branches, matches and crashes. Nothing is a
+handwritten scenario.
 
 Types:
     I  Int            S  Str           T  Try(Int, Str)
@@ -33,6 +37,7 @@ Types:
     QO Out(Req)        QI In(Req)      where Req = Out(Grant), Grant = Out(Stream)
     PO Post(Int)       IB Inbox(Int)   SEM a semaphore cell
     SV Shared(Int)
+    SN Shared(Node)    where Node = [Nil, Cons(Item, Node)], Item = [H(Shared(Node)), J(() => Int)]
 """
 
 from __future__ import annotations
@@ -53,21 +58,44 @@ STEP_PROCS = parse(r"""
   (let z (eq a 0))
   (if z (block (ret (tag Wait))) (block (ret (tag Set a (sub a 1) (add b 1))))))
 (proc gs_bad (n) pure (crash "a deferred step crashed"))
+(proc gs_cons (s x) pure (ret (tag Set 0 (tag Cons x s))))
+(proc gs_clear (s) pure (ret (tag Set 0 (tag Nil))))
+(proc gs_pop (s) pure
+  (match s
+    (Nil () (block (ret (tag Keep (tag Empty)))))
+    (Cons (x rest) (block (ret (tag Set (tag Got x) rest))))))
+""")
+
+# Run a popped item: a job is called; a handle's cell has its newest item
+# popped and dropped, so a cell released too early is used (V9).
+NODE_PROCS = parse(r"""
+(proc sn_run (p) eff
+  (match p
+    (Empty () (block (let z (int 0)) (ret z)))
+    (Got (x) (block
+      (match x
+        (H (h) (block
+          (let q (step gs_pop (h)))
+          (match q
+            (Empty () (block (let z (int 0)) (ret z)))
+            (Got (y) (block (let o (int 1)) (ret o))))))
+        (J (f) (block (let r (callc! f)) (ret r))))))))
 """)
 
 TYPES = ["I", "S", "T", "L", "P", "Q", "TL", "C", "CT"]
 
 
 class Gen:
-    def __init__(self, rng, crash_rate=0.04):
+    def __init__(self, rng, crash_rate=0.04, links=False):
         self.rng = rng
+        self.links = links  # cells that hold cells and jobs, which can form cycles
         self.crash_rate = crash_rate
         self.procs = {}
         self.n = 0
         self.funcs = []  # (name, param types, return type)
         self.features = set()
         self.sessions = rng.random() < 0.5  # half the programs use no channels, so G4 still sees many
-        self.shared = rng.random() < 0.4
+        self.shared = rng.random() < 0.4 or links
 
     def fresh(self, base="v"):
         self.n += 1
@@ -557,6 +585,9 @@ class Gen:
         self.features.add("shared")
         for name, pr in STEP_PROCS.items():
             self.procs.setdefault(name, pr)
+        if self.links and rng.random() < 0.6:
+            self.node_cells(out, env, depth)
+            return
         c = self.pick(env, "SV")
         if c is None or rng.random() < 0.5:
             k = self.let(out, env, "I", ("int", rng.randint(0, 2)))
@@ -618,6 +649,72 @@ class Gen:
         body = Block(out, ("ret", self.need(out, env, "I", depth + 1)))
         self.procs[name] = Proc(name, cs, body, True)
         return name
+
+    def node_cells(self, out, env, depth):
+        """Cells whose states hold items: handles to cells, their own included,
+        and jobs that capture cells. Workers capturing some of them run side by
+        side; then maybe one more use here."""
+        rng = self.rng
+        self.features.add("cell links")
+        for name, pr in NODE_PROCS.items():
+            self.procs.setdefault(name, pr)
+        cells = [v for v, t in env.items() if t == "SN"]
+        while not cells or (len(cells) < 3 and rng.random() < 0.4):
+            cells.append(self.new_node_cell(out, env))
+        made = []
+        for _ in range(rng.randint(1, 3)):
+            caps = rng.sample(cells, rng.randint(1, len(cells)))
+            made.append(self.let(out, env, "C", ("clo", self.node_proc(depth, len(caps), "snw"), caps)))
+        self.run_closures(out, env, depth, made)
+        if rng.random() < 0.4:
+            self.node_op(out, env, list(cells), depth)
+
+    def new_node_cell(self, out, env):
+        nil = self.let(out, env, "NL", ("tag", "Nil", []))
+        return self.let(out, env, "SN", ("shared", nil))
+
+    def node_proc(self, depth, ncells, base):
+        """A worker or a job over some cells: a few uses of them, and maybe
+        other work."""
+        rng = self.rng
+        name = self.fresh(base)
+        cs = [self.fresh("c") for _ in range(ncells)]
+        params = list(cs)
+        env, out = {}, []
+        for _ in range(rng.randint(1, 3)):
+            self.node_op(out, env, cs, depth)
+        for _ in range(rng.randint(0, 1)):
+            self.statement(out, env, depth + 1, name)
+        body = Block(out, ("ret", self.need(out, env, "I", depth + 1)))
+        self.procs[name] = Proc(name, params, body, True)
+        return name
+
+    def node_op(self, out, env, cs, depth):
+        """One use of the cells in cs, which a new cell made here joins."""
+        rng = self.rng
+        a = rng.choice(cs)
+        r = rng.random()
+        if r < 0.12:
+            cs.append(self.new_node_cell(out, env))
+            self.features.add("cell made in a task")
+        elif r < 0.42:
+            b = rng.choice(cs)
+            i = self.let(out, env, "NI", ("tag", "H", [b]))
+            self.let(out, env, "I", ("step", "gs_cons", [a], [i]))
+            self.features.add("cell holds its own handle" if b == a else "cell holds a handle")
+        elif r < 0.64 and depth < 4:
+            caps = rng.sample(cs, rng.randint(1, min(2, len(cs))))
+            f = self.let(out, env, "C", ("clo", self.node_proc(depth + 1, len(caps), "snj"), caps))
+            i = self.let(out, env, "NI", ("tag", "J", [f]))
+            self.let(out, env, "I", ("step", "gs_cons", [a], [i]))
+            self.features.add("job captures its own cell" if a in caps else "job captures a cell")
+        elif r < 0.86:
+            p = self.let(out, env, "NP", ("step", "gs_pop", [a], []))
+            self.let(out, env, "I", ("call", "sn_run", [p]))
+            self.features.add("item popped and run")
+        else:
+            self.let(out, env, "I", ("step", "gs_clear", [a], []))
+            self.features.add("cell cleared")
 
     def crash_call(self, out, env, depth):
         """Crash inside a call, so the caller's live values are in a running frame."""
@@ -806,7 +903,7 @@ class Gen:
         return self.procs
 
 
-def gen_program(seed, crash_rate=0.04):
-    g = Gen(random.Random(seed), crash_rate)
+def gen_program(seed, crash_rate=0.04, links=False):
+    g = Gen(random.Random(seed), crash_rate, links)
     procs = g.program()
     return procs, g.features

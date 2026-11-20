@@ -1,4 +1,7 @@
-"""The no-cycles rule for shared state (concurrency-shared-variables.md, V9).
+"""Type rules against cycles through shared state: the alternative that
+concurrency-shared-variables.md rejects. The RFC instead releases a cell's
+state when no live task holds it (V9; sessions.py, shared.py). This model
+measures what the rules would have rejected.
 
 Reference counting cannot free a cycle, and before `Shared(s)` Roc had none:
 values are immutable, so no value can come to hold itself. A cell can: an

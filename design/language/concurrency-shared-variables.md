@@ -5,7 +5,7 @@
 | Status | Draft. Not adopted; nothing here is part of `design.md`. |
 | Scope | The builtin `Shared(s)` type and its functions (`new!`, `update!`, `finally!`, `on_failure!`), atomic updates, waiting, cleanup on cancellation and crash, poisoning, their runtime representation and lowering, and the changes they make to the companion RFCs |
 | Companions | [Suspendable Effects and Platform-Scheduled Concurrency](concurrency-explicit-suspension.md): the task tree, plans, concurrent loops and crashes this RFC builds on. [Sessions, Channels and Shared Resources](concurrency-sessions.md): if this RFC is adopted, it replaces that RFC's mailboxes and its shared-resource libraries; channels remain for streaming |
-| Prototype | [`concurrency-prototype/`](concurrency-prototype/): `shared.py`, `shared_model.py`, `cycles.py`, the libraries in `library.py`, and the `SharedVariables`, `SharedConveniences`, `SharedModel` and `NoCycles` tests. See "What the prototype shows" |
+| Prototype | [`concurrency-prototype/`](concurrency-prototype/): `shared.py`, `shared_model.py`, the holder sets in `sessions.py`, the libraries in `library.py`, and the `SharedVariables`, `SharedConveniences`, `SharedModel` and `CellRelease` tests; `cycles.py` and `NoCycles` measure the rejected type rules. See "What the prototype shows" |
 
 ## Summary
 
@@ -49,9 +49,11 @@ shared state is never left half-updated. A cleanup that crashes poisons the
 state, so a broken cleanup obligation becomes a crash at its next use instead
 of a silent leak.
 
-Two type rules keep reference counting complete: a state cannot hold a
-function, and no type can reach its own handle through a state. So cells never
-form a cycle, and each is freed when its last handle is.
+A state can hold any value, functions and its own handle included.
+Reference counting frees a cell when its last handle is gone. Cells that hold
+each other keep their counts above zero, so the runtime also records which
+tasks hold each handle. When none of them is still running, it drops the
+cell's state, which breaks the cycle.
 
 All names (`Shared`, `update!`, `Set`, `Keep`, `Wait`, `finally!`,
 `on_failure!`, `get!`, `modify!`) are placeholders.
@@ -129,10 +131,11 @@ A handle is not a reference in that sense:
 6. A crash never leaves shared state half-written, and a broken cleanup
    obligation is loud.
 7. No new syntax, no new kind of name and no references: one builtin opaque
-   type and its functions, and one inferred requirement on the types a state
-   holds. No effect polymorphism, no non-escaping types, no implicit
-   conversions.
-8. No reference cycles, which Roc's reference counting cannot free.
+   type and its functions. No new type rules, no effect polymorphism, no
+   non-escaping types, no implicit conversions.
+8. Every cell is freed, including cells in a reference cycle, which Roc's
+   reference counting alone cannot free. No type rule limits what a state
+   holds.
 9. The same meaning under `None`, `Tasks` and `ParallelTasks`, up to
    scheduling.
 
@@ -341,25 +344,34 @@ start equal. Copying a handle copies the handle, not the state.
 
 ### What a state can hold
 
-Reference counting cannot free a cycle, and before `Shared` Roc had none: an
-immutable value cannot come to hold itself. A state can, if an update stores a
-value that reaches the same handle. Two type rules prevent it:
-
-- **A state holds no function**, anywhere inside it, including inside the
-  state of another handle it holds. A function's type does not say what it
-  captures, so any function in a state could capture that state's own handle.
-- **No type reaches its own handle through a state.** This is an error:
+Anything: numbers, records, lists, functions, and handles, the state's own
+handle included. A crawler keeps its pending jobs in shared state, and each
+job captures the queue so that it can add the links it finds:
 
 ```roc
-Node : [Nil, Next(Shared(Node))]
+crawl! = |queue, url| {
+    links = Http.get!(url).links
+    queue.modify!(|jobs| jobs.concat(links.map(|link| || crawl!(queue, link))))
+}
 ```
 
-A `Node` could be stored in the state its own `Next` points to.
+A pending job and its queue hold each other: a reference cycle, which
+reference counting alone cannot free. The cycle breaks in normal use, when a
+worker takes the job out, but a program can also abandon the queue with jobs
+still in it. So a cell is freed in one of two ways:
 
-Handles inside states are fine when they cannot lead back. A registry of
-sessions, `Shared(Dict(Str, Shared(Session)))`, is valid as long as `Session`
-holds no function and no `Shared(Dict(Str, Shared(Session)))`. A queue of jobs,
-`Shared(List(() => {}))`, is not valid, even if no job captures anything.
+- **When its last handle is gone**, like any value. This covers every state
+  that does not reach its own handle.
+- **When no running task can use it any more.** The runtime knows which tasks
+  hold each handle. When the last of them finishes, it drops the cell's state,
+  and whatever the state held, the cycle included, is freed.
+
+So a cycle that a program abandons is freed at the latest when the tasks that
+used it have finished. Work done in its own task, such as one request, is
+freed when that task ends. A cycle abandoned inside a task that runs for the
+whole program, such as a server's loop in `main!`, stays until that task
+ends. A long-running loop that keeps making cycles of cells and dropping them
+should clear their states first, or run each iteration in a task.
 
 ### Crashes
 
@@ -498,15 +510,9 @@ Shared.modify! : Shared(s), (s -> s) => {}
 - The update and cleanup functions are pure. That is the whole of the
   atomicity rule, and the type checker already enforces it.
 - `get!` and `modify!` are defined with `update!` and add no semantics.
-- **No cycles.** For every `Shared(s)` the program forms:
-  1. No function type is reachable from `s` through records, tag unions,
-     lists, the contents of opaque types, and the state types of handles.
-  2. `Shared(s)` is not reachable from `s` through the same constructs.
-
-  A reference cycle between cells needs a path from a state back to its own
-  handle. That path runs through types, which rule 2 forbids, or through a
-  function's captures, which rule 1 forbids. See "No cycles" below for how the
-  checker applies the rules.
+- **No rule on what a state holds.** `s` can be any type, functions and
+  handles included. The runtime frees cells that form reference cycles; see
+  "Releasing cells".
 - Hosted function signatures cannot mention `Shared` in the first version.
 
 ### `update!`
@@ -555,32 +561,50 @@ and drops it as usual. It has taken nothing.
 A cleanup can never wait: `s -> s` has no `Wait`. An update's pending `Wait`
 holds no entry, so a task parked in `Wait` has nothing of the update to undo.
 
-### No cycles
+### Releasing cells
 
-The checker applies the two rules once per declaration, as it checks a
-declaration's other properties, and never to expanded types:
+Immutable values cannot form a cycle, so every reference cycle passes through
+at least one cell. The runtime frees cycles by releasing cells. A cell is a
+port in the sense of the sessions RFC: the runtime records its holders, the
+tasks that may hold a reference to it, and acts when none is left.
 
-- **Declarations.** A type declaration is checked with its parameters as
-  leaves. Each earlier declaration it uses is replaced by a summary: whether
-  its values hold a function, which of its parameters its values hold, and
-  which parameters end up inside a state. A type can reach itself only
-  through a recursive declaration, or a recursive tag union the solver infers
-  (checked where it is inferred), so every cycle is seen where it is declared.
-- **Requirements.** A parameter that ends up inside a state passes the rules
-  on to its arguments. `Box(a) : { h : Shared(a) }` is valid; `S : [Nil,
-  N(Box(S))]` is an error at `S`, and so is `Box(() => {})` wherever it is
-  written. Generic code that calls `Shared.new!` on a value of type `a` gets
-  the same requirement on `a`, inferred and passed on to its callers like a
-  static dispatch requirement.
-- **Phantom parameters.** A parameter that a declaration's values never hold,
-  and that no state of it holds, places no requirement. Its arguments are
-  still types the program writes, and are checked like any other.
+- `Shared.new!` makes a cell held by the current task.
+- A cell gains holders as ports do (sessions RFC, "Holders"): when a value
+  crosses to another task (at an entry's start, a send or a post, or a child's
+  result), every cell reachable from it gains that task.
+- **A store passes holders on.** When an update stores a new state, every cell
+  reachable from the state gains the stored cell's holders. The walk continues
+  into the states of the cells it reaches, as the sessions RFC's walk
+  continues into a channel's buffer. So a task that can reach a cell through
+  other cells' states is one of that cell's holders.
+- A task leaves every holder set when it finishes.
 
-The rules need no lambda sets, and could not use them: `.boxy` builds never
-compute lambda sets, and a program's validity cannot depend on how it is
-lowered. That is why rule 1 is conservative. Without lambda sets, the checker
-cannot tell a function that captures nothing from one that captures the
-handle.
+When a live cell has no holders left, no running task can reach it, and no
+task started later can either, since only a holder can pass a handle on. The
+runtime then **releases** the cell: it drops the cell's state and leaves the
+cell empty. Dropping the state releases what the state held. If that led back
+to the cell, the cycle unwinds and reference counting frees the rest. A
+released cell is never updated again (V9).
+
+Holder sets over-approximate: a task stays a holder until it finishes, even
+after it drops its handle. So release is not the usual way cells are freed. A
+cell whose state does not lead back to it is freed by its count when its last
+handle goes, as any value is. Release matters for cycles, and for cells left
+in a crashed task's frames, which the sessions RFC already releases this way.
+
+- **`None` builds** track no holders. Their one stack can use every cell until
+  the program ends, so the runtime releases every cell still live when it
+  does.
+- **The walk** is generated from the stored value's type, like the per-type
+  helpers the compiler already generates, and visits nothing for a type that
+  cannot contain a handle. Deadlock detection needs the same holder sets
+  ("Deadlocks and liveness"), so release adds no tracking, only the drop.
+- **`ParallelTasks`.** A cell's lock also guards its holder set, so a task
+  finishing on one thread and an update storing on another do not race.
+- **Release is a runtime action.** The runtime drops the state with the
+  type's generated drop helper, as it drops a channel's buffered message when
+  the channel's `In` end is released. Backends still follow only the explicit
+  `incref` and `decref` statements in LIR.
 
 ### Poisoning
 
@@ -592,7 +616,8 @@ they crash too.
 ### Runtime
 
 A handle points to a reference-counted cell holding the state, a poisoned
-flag, a list of waiters, and in `ParallelTasks` builds a lock word.
+flag, a list of waiters, in `Tasks` and `ParallelTasks` builds a holder set
+(see "Releasing cells"), and in `ParallelTasks` builds a lock word.
 
 | Build | Acquiring a cell | Waiters |
 |---|---|---|
@@ -660,8 +685,9 @@ by tasks on several threads. Storing a value into a cell is an atomicity seed,
 like a hosted argument in the companion RFC's C6, and cells always use atomic
 counts. In `None` and `Tasks` builds, nothing changes.
 
-Because of the no-cycles rules, cells form no cycles, and reference counting
-frees every cell once the last handle to it is gone (V9).
+Reference counting frees a cell once the last handle to it is gone. A cell
+on a reference cycle is freed when the runtime releases it (see "Releasing
+cells"), so every cell is freed (V9).
 
 ### Deadlocks and liveness
 
@@ -684,6 +710,9 @@ waited-on cell can run, the waiters crash with the deadlock message.
 - **R6** gains waits on shared state, which can form cycles.
 - **C2** counts `update!` as a declared suspension point.
 - **C6** gains cell stores as seeds.
+- **Sessions RFC.** Cells join the ports whose holders are tracked ("Holders"),
+  a store joins the crossings, and releasing a cell drops its state. S4
+  covers cells.
 - **G5 and G7 are unchanged.** Shared state can outlive the loop that created
   it, but no task does. Poisoning turns a crash into later crashes; no code
   can observe it.
@@ -700,7 +729,7 @@ waited-on cell can run, the waiters crash with the deadlock message.
 | V6 | **Poisoning.** After a cleanup crashes, every update of its handle crashes, and so does every task waiting on it | Language guarantee | Tests |
 | V7 | **No lost wakeups.** A waiter registers before it releases its cell, so a store that follows the release always probes it. A waiter that a probe readies and that ends without storing, including by cancellation, probes on, so a waiter whose function would not wait is never left parked | Runtime invariant | Model (readying every waiter); tests and differential runs (readying the first) |
 | V8 | **Sequential equivalence.** C9 holds for programs that use `Shared`: a `None` build's `Wait` runs loop entries on demand, and is a deadlock only where the input-order schedule deadlocks | Language guarantee | Differential |
-| V9 | **No cycles.** No state holds a function, and no type reaches its own handle through a state, so cells form no reference cycles and each is freed when its last handle is | Language guarantee | Typing rules; a typed model against a counting heap |
+| V9 | **Every cell is freed.** A cell is freed when its last handle goes, or, when its remaining references are only in the states of cells that no running task holds or in crashed frames, when its last holder finishes and the runtime releases it. A released cell is never updated again | Runtime invariant | Exact heap accounting after every run of generated programs whose states hold handles and jobs; an assertion at every use of a cell; mutations |
 
 ## Drawbacks
 
@@ -734,14 +763,16 @@ waited-on cell can run, the waiters crash with the deadlock message.
   time the lock is held.
 - **Code runs during cancellation.** Cleanups are pure, but they are still Roc
   code running in a dropped task.
-- **States cannot hold functions.** A job queue or a table of callbacks in
-  shared state is a type error, even when no function in it captures a
-  handle, because the checker cannot see captures. Among generated types that
-  could never form a cycle, the rule rejected about one in ten; real programs
-  will differ.
-- **A new kind of inferred requirement.** Generic code that puts a type
-  variable inside a state passes a requirement on to its callers, and error
-  messages must explain it.
+- **A cycle can outlive its use.** An abandoned cycle of cells is freed when
+  the last task that held any of them finishes, not when the program drops
+  its last handle. In a task that runs for the whole program, such as a
+  server's loop in `main!`, cycles that the loop keeps making and dropping
+  accumulate until it ends. A `None` build frees them only when the program
+  exits. See open decision (e).
+- **Stores walk their state.** To pass holders on, every store walks the parts
+  of the new state that can hold a handle. Deadlock detection already needs
+  this walk, but a large state full of handles makes every store O(n), even
+  if open decision (f) makes changing it in place cheap.
 - **Poison outside a supervised scope** crashes every restart until the limit,
   by design.
 
@@ -761,9 +792,12 @@ waited-on cell can run, the waiters crash with the deadlock message.
 | Running the first eligible waiter's update at the `Set` and handing it the result, as the sessions RFC's semaphore cell hands over a permit | Commits an update on behalf of a task that has not run. If that task is cancelled first, its update stays committed and the `finally!` after it never runs, so a permit is lost. The semaphore cell can give a permit back; a pure update has no inverse |
 | Probing the oldest waiter first, for fairness | A `None` build runs only the most recent waiter, so a `Tasks` build that served the oldest could not follow the input-order schedule, and C9 fails. The fuzzer found such a program |
 | Waking one waiter without probing, which passes the wake on if it waits again | Each `Set` by the woken waiter starts the chain again, so a semaphore still dispatches every waiter on every release |
-| Deciding cycles from lambda sets, which show what each function captures | Exact, as the prototype shows, and it would allow functions in states. But only `.lss` builds compute lambda sets, and a program's validity cannot depend on how it is lowered |
-| Checking each instantiation of a generic type when it is specialized | `.boxy` builds compile each generic function once and never specialize. Summaries and requirements give the same answer once per declaration, and the prototype checks that they agree |
-| A cycle collector for cells | Roc has no tracing collector, and cells would be the one thing that needed one |
+| Type rules against cycles: a state holds no function, and no type reaches its own handle through a state (this RFC's earlier draft) | Sound, and checkable once per declaration. But the checker cannot see captures, so the rules rejected about one in ten acyclic state types in the prototype's model, every one for a function in a state. They add an inferred requirement to generic code, and they still reject cycles that break in normal use, such as a crawler's jobs that capture their queue |
+| Deciding cycles from lambda sets, which show what each function captures | Exact, as the prototype shows. But only `.lss` builds compute lambda sets, and a program's validity cannot depend on how it is lowered |
+| Capture summaries: function types record which handle types their captures reach, inferred as rows | Removes the type rules' false rejections of functions, but adds a component to every function type, polymorphism over it, and a default for function fields in declarations. A generic queue type still rejects jobs that capture another queue of the same type, and real cycles such as the crawler's stay errors |
+| Reachability tracked per value, as in reachability types | Inferred by unification, it merges every level of a recursive type, so it still rejects every recursive state the type rules reject. It accepts more only where two cells of one type never meet, so a line elsewhere that puts them in one list becomes an error. Subset constraints give up principal types, and ordering cells by creation rejects a registry of sessions created after it. Signatures would name values, and real cycles stay errors |
+| A cycle collector for cells, such as trial deletion | A second mechanism, whose timing depends on the collector. Holder sets already exist for ports and deadlock detection, and release through them follows the task tree |
+| Weak handles | The programmer must decide which handle is weak, and a weak handle can find its state gone |
 | Allowing functions in states, but not closures that capture handles | A function's type does not say what it captures, so the checker cannot enforce it |
 | A `match` with no case for a state means `Wait` | A forgotten case would become a hang instead of a compile error |
 | Optimistic retries, as in software transactional memory | Pure updates make retries safe, but long updates would redo work and could starve under contention. A lock fits because an update touches one known cell |
@@ -781,6 +815,9 @@ waited-on cell can run, the waiters crash with the deadlock message.
 | Rust `Mutex` | Poisoning when a thread panics while holding the lock. Here only a crashing cleanup poisons, since an update that crashes stores nothing |
 | Zig `errdefer` | Cleanup only on an error exit, as `on_failure!` |
 | Erlang/OTP supervisors | Restart from known state. Where a handle is created decides which restarts reset it |
+| Bacon and Rajan, *Concurrent Cycle Collection in Reference Counted Systems* (ECOOP 2001); Nim's ORC | Reference counting plus a cycle collector, restricted to types that can form cycles. Here no collector runs: holder sets say when the task tree can no longer reach a cell |
+| Tofte and Talpin, *Region-Based Memory Management* (1997) | Memory tied to a scope. Release ties a cycle's memory to the tasks that used it |
+| Scala 3 capture checking; reachability types (Wei, Bao, Jia, Tan and Rompf, POPL 2024) | Type systems that know what a closure captures or what a value reaches. See the alternatives table |
 
 ## What the prototype shows
 
@@ -805,7 +842,7 @@ exercise the lock order.
 and `on_failure!`, the same pool with `finally!`, and the circuit breaker.
 
 **Tests** (`SharedVariables`, 17 tests, `SharedConveniences`, `SharedModel`
-and `NoCycles`):
+and `CellRelease`):
 
 - Every permit comes back under every schedule and when the root is cancelled
   at any suspension point, and at most one job holds the permit at once.
@@ -845,6 +882,15 @@ and `NoCycles`):
   protocol. It finds no deadlock, lost wakeup or lost update, and catches
   locking two-cell steps in each thread's own order (V4), registering a waiter
   after unlocking (V7), and dropping the locks (V2).
+- A crawler whose jobs capture their own queue gives 7 under every schedule
+  and in a `None` build. The queue it abandons with a job still in it is
+  released when `main` finishes, and nothing leaks.
+- Two tasks that each make two cells holding each other's handles release
+  one cell of each pair when they finish, which frees the other.
+- A task that stores a cell it made into a cell `main` holds, then ends,
+  leaves that cell usable by `main`. Not passing a cell's holders on to the
+  cells stored in it releases it too early, and the assertion at every use
+  catches it.
 
 **Fuzzing.** 2,000 generated programs, 628 of them using shared state
 (permits with `finally!` or `on_failure!`, crashing cleanups, increments,
@@ -895,45 +941,60 @@ fuzzed programs: 1,964 compared against the input-order schedule (C9),
 15,924 cancelled at a suspension point, 5,028 probes, and 336 wakes passed on
 by a readied waiter that was dropped before it ran.
 
-**No cycles** (`cycles.py`). The prototype's IR is untyped, so the rule has a
-model of its own. It generates type declarations, in a library group and a
-program group, each possibly recursive and generic, and closed types over
-them, by composing records, tag unions, lists, handles, function types and
-declared types at random. Function types carry their lambda sets, which a Roc
-type would not show. For each type it decides three ways:
+**Releasing cells** (`CellRelease`, and `check.py` with `links`). The
+generator also composes cells whose states hold items: handles to cells,
+their own included, and jobs that capture cells. Workers and jobs, side by
+side, link cells, push jobs, pop the newest item and run it (a popped
+handle's cell is updated), clear states and make cells of their own. So
+states form cycles, and programs abandon them at random. Every run's heap is
+verified exact, so a cycle that survived would be reported as a leak, and
+every use of a cell asserts that it was not released.
 
-- **With lambda sets**, where a function reaches its captures: no handle lies
-  on a cycle of the type graph.
-- **The checker's rules**, without lambda sets, on the expanded type.
-- **The checker's rules per declaration**, with summaries and requirements,
-  as "No cycles" describes.
+Over 2,000 such programs (1,341 with linked cells), each run under every
+schedule, both lowerings, a `None` build and cancellation at suspension
+points, every check passed:
 
-It runs random programs over each accepted type on a heap that counts
-references: they make values, store new states that may hold any handle the
-program has, the cell's own included, read states back and drop handles. When
-the program ends, any cell reference counting cannot free is a leak. For each
-rejected type it builds a witness: a cell whose state reaches its own handle
-along the cycle.
+| | Count |
+|---|---|
+| Runs | 63,506 |
+| Cells released when a child task finished | 79,876 |
+| Cells released when the root finished | 9,750 |
+| Cells released at the end of a `None` build | 2,059 |
+| Leaks, and cells used after release | 0 |
 
-Over 100,000 generated types:
+The default programs, which form no cycles, give the same counts as before
+(63,924 runs, 15,924 cancelled at a suspension point) and release 368 cells.
+Without a cycle, a live cell that no task holds can only be one left in a
+crashed frame.
+
+Never releasing leaks on the fourth generated program. Not passing a cell's
+holders on at a store releases a cell too early on the 56th, and the
+assertion catches it. Not making a task a holder of what its entry captures
+is not caught: a task that captures a handle runs inside a task that holds
+it, which outlives it.
+
+**The rejected type rules** (`cycles.py`). The IR is untyped, so the type
+rules have a model of their own. It generates type declarations, possibly
+recursive and generic, and closed types over them, by composing records, tag
+unions, lists, handles, function types and declared types at random.
+Function types carry their lambda sets, which a Roc type would not show. It
+decides each type with lambda sets (exact), by the rules on the expanded
+type, and by the rules once per declaration with summaries and requirements,
+and runs random programs over accepted types on a heap that counts
+references. Over 100,000 generated types:
 
 | | Types | Result |
 |---|---|---|
 | Accepted with lambda sets | 87,114 | 348,456 random programs, 1,518,146 cells, no leak |
 | Rejected with lambda sets | 12,886 | Every witness leaks; 3,436 random programs leak too |
-| Accepted by the checker's rules | 78,755 | Each also accepted with lambda sets |
-| Rejected by the checker's rules only | 8,359 | Every one for a function in a state |
+| Accepted by the type rules | 78,755 | Each also accepted with lambda sets |
+| Rejected by the type rules only | 8,359 | Every one for a function in a state |
 | Per declaration against expanded types | 100,000 | The same answer for every type |
 
-So the rule with lambda sets is exact, the checker's rules are sound, and
-checking each declaration once suffices. Dropping rule 1 accepts types whose
-cells form a cycle through captures. Dropping the requirements on parameters
-accepts uses that put a function or a cycle inside a state. The tests catch
-both. Building the model found three things the checker must do: count a
-declared type's arguments as types the program writes, even for a parameter
-the declaration ignores; give a phantom parameter no requirement; and keep
-the requirement of a parameter that appears only inside a function's captured
-state.
+The rules are sound, and checking each declaration once suffices. But they
+reject about one in ten acyclic state types, and every cyclic one, including
+cycles that break in normal use. Release needs neither the rules nor this
+model.
 
 ## Decisions left to review
 
@@ -953,11 +1014,13 @@ Names are placeholders. The prototype settled six earlier questions:
   proposal needed equality for, leaves dispatches quadratic. Handing a result
   to a waiter at the `Set` loses permits when the waiter is cancelled. See
   "Runtime" and the alternatives table.
-- **The no-cycles rule for generic code.** Checked once per declaration, with
-  summaries of earlier declarations and requirements on parameters, and an
-  inferred requirement on type variables in generic code. It agrees with
-  checking every expanded type on 100,000 generated types. It cannot use
-  lambda sets, so states hold no functions.
+- **Cycles through states.** Released through holder sets, so no type rule
+  limits what a state holds. The type rules were sound, but rejected about
+  one in ten acyclic state types in the prototype's model, every one for a
+  function in a state. They added an inferred requirement to generic code,
+  and still rejected cycles that break in normal use, such as a crawler's
+  jobs that capture their queue. Inferring captures or reachability would
+  remove the first cost but not the others. See the alternatives table.
 - **Conveniences.** `get!` and `modify!` are in, defined with `update!`.
   `get!` also makes reading and then acting separately easier to write, so
   the read-then-write warning covers it.
@@ -978,14 +1041,20 @@ Still open:
   keeps old states alive; or let a library declare that its waiters are
   interchangeable, so that a probe that finds one waiter waiting stops. The
   real runtime should measure whether either is worth it.
-- **(d) Channel ends in states.** An end reaches the values in its channel's
-  buffer, so the rules should treat it as holding its message type. The
-  sessions RFC's ends also have holder sets, which this model does not
-  include. Not prototyped.
-- **(e) Whether functions in states are worth a finer rule.** Job queues and
-  callback tables are the cases rule 1 rejects. If real programs need them in
-  shared state, a finer rule needs to know captures, and so would have to
-  work without lambda sets in `.boxy` builds.
+- **(d) Channel ends in states.** Releasing a cell drops any channel end in
+  its state, which closes it for the other side, as the sessions RFC's
+  release of a port does. A store should pass the cell's holders on to the
+  ends in the state, and the walk should continue from an `In` end into its
+  buffer. The prototype's walk does both, but no test puts an end in a
+  state.
+- **(e) Cycles in long-lived tasks.** Release frees an abandoned cycle when
+  the last task that held it finishes. A task that runs for the whole program
+  and keeps making and dropping cycles accumulates them, and so does a `None`
+  build until it exits. Releasing sooner would need to know when a task no
+  longer holds a handle, which no count says for a cycle. Whether real
+  programs do this, and whether a debug diagnostic that reports cells freed
+  by release, with where each was made, is enough, needs programs written
+  against the real runtime.
 - **(f) Changing a large state in place.** In step 3 of `update!`, `f`
   borrows the state, so the cell still holds it if `f` crashes, and an update
   that crashes changes nothing. But `f` then never holds the only reference.
@@ -1024,12 +1093,11 @@ Still open:
 1. **Prototype.** Done; see "What the prototype shows".
 2. **Builtins.** `Shared(s)`, its four functions and the two shorthands, with
    their types.
-3. **Checker.** The no-cycles rules, per declaration with summaries, the
-   inferred requirement on type variables, and the three warnings.
+3. **Checker.** The three warnings.
 4. **Post-check IR.** Explicit updates, cleanup pushes and pops, certified
    (V3, V5).
-5. **Runtime.** Cells, locking per build, waiters, cleanup stacks, poisoning
-   and holder sets, checked against the model (V4, V7).
+5. **Runtime.** Cells, locking per build, waiters, cleanup stacks, poisoning,
+   and holder sets with release, checked against the model (V4, V7, V9).
 6. **Reference counting.** Cell stores as atomicity seeds in `ParallelTasks`
    builds.
 7. **Documentation.** A langref section beside "Variables (with `var`)".

@@ -2169,8 +2169,126 @@ class SharedConveniences(unittest.TestCase):
         self.assertGreaterEqual(r.runtime["waits"], 1)
 
 
+class CellRelease(unittest.TestCase):
+    """Cycles through states (V9): a cell that no live task holds has its state
+    dropped, which breaks any cycle through it. Every run's heap is verified
+    exact afterwards, so a cycle that survives is a leak the heap reports."""
+
+    LIB = """
+    (proc cons (s x) pure (ret (tag Set 0 (tag Cons x s))))
+    (proc pop (s) pure
+      (match s
+        (Nil () (block (ret (tag Keep (tag Empty)))))
+        (Cons (x rest) (block (ret (tag Set (tag Got x) rest))))))
+    """
+
+    # A crawler: each job pushes two more onto the queue it captured, so a
+    # pending job and its queue form a cycle. Two workers pop and run jobs
+    # until the queue is empty. Then main pushes one more job and returns,
+    # abandoning the queue with that cycle in it.
+    CRAWLER = """
+    (proc crawl (q d) eff
+      (let more (lt 0 d))
+      (if more
+        (block
+          (let e (sub d 1))
+          (do (step cons (q) (clo crawl q e)))
+          (do (step cons (q) (clo crawl q e)))
+          (let one (int 1)) (ret one))
+        (block (let one (int 1)) (ret one))))
+    (proc work (q n) eff
+      (let p (step pop (q)))
+      (match p
+        (Empty () (block (ret n)))
+        (Got (f) (block (let k (callc! f)) (tail work q (add n k))))))
+    (proc main () eff
+      (let q (shared (tag Nil)))
+      (let two (int 2))
+      (do (step cons (q) (clo crawl q two)))
+      (let r (call both! (clo work q 0) (clo work q 0)))
+      (do (step cons (q) (clo crawl q two)))
+      (let a (field r 0)) (let b (field r 1))
+      (ret (add a b)))
+    """
+
+    # Two tasks each make two cells that hold each other's handles, and end.
+    PAIRS = """
+    (proc pair () eff
+      (let a (shared (tag Nil))) (let b (shared (tag Nil)))
+      (do (step cons (a) b)) (do (step cons (b) a))
+      (let z (int 0)) (ret z))
+    (proc main () eff
+      (let r (call both! (clo pair) (clo pair)))
+      (let z (int 0)) (ret z))
+    """
+
+    # A task stores a cell it made into a cell main holds, and ends; main then
+    # takes the cell out and updates it.
+    STASH = """
+    (proc stash (a) eff
+      (let x (shared (tag Nil)))
+      (do (step cons (a) x))
+      (let z (int 0)) (ret z))
+    (proc main () eff
+      (let a (shared (tag Nil)))
+      (let r (call all! (list (clo stash a))))
+      (let p (step pop (a)))
+      (match p
+        (Empty () (block (let z (int 0)) (ret z)))
+        (Got (x) (block (do (step pop (x))) (let o (int 1)) (ret o)))))
+    """
+
+    def build(self, src):
+        return build(library.SOURCE + self.LIB + src)[1]
+
+    def test_jobs_that_capture_their_own_queue(self):
+        lows = self.build(self.CRAWLER)
+        self.assertEqual(everywhere(lows), {("done", 7)})
+        none = run_none(lows["lss"].prog)
+        self.assertEqual(none.result, ("done", 7))
+        # The abandoned queue is released when main finishes, or at the end of
+        # a None build, and everything it held is freed.
+        self.assertEqual(tasks(lows, PausePolicy()).runtime["cells released when the root finished"], 1)
+        self.assertEqual(none.extra["cells released"], 1)
+
+    def test_a_cycle_made_in_a_task_is_released_when_it_finishes(self):
+        lows = self.build(self.PAIRS)
+        self.assertEqual(everywhere(lows), {("done", 0)})
+        r = tasks(lows, PausePolicy())
+        self.assertEqual(r.runtime["cells released when a child task finished"], 2)
+        # Releasing one cell of each pair frees the other.
+        self.assertEqual(r.runtime["cells released"], 2)
+        self.assertEqual(run_none(lows["lss"].prog).result, ("done", 0))
+
+    def test_a_stored_cell_gains_the_holders_of_the_cell_that_holds_it(self):
+        lows = self.build(self.STASH)
+        self.assertEqual(everywhere(lows), {("done", 1)})
+        # Without that, the cell is released when the task that made it ends,
+        # though main can still reach it through its own cell.
+        with switches(shared={"no_store_holders": True}):
+            with self.assertRaisesRegex(AssertionError, "V9"):
+                tasks(lows, PausePolicy())
+
+    def test_generated_programs_that_form_cycles(self):
+        stats = Counter()
+        for seed in range(1, 61):
+            check_program(seed, stats, cancel_sites=2, links=True)
+        for f in ("cell holds its own handle", "job captures its own cell", "cell made in a task",
+                  "item popped and run", "cell cleared"):
+            self.assertGreater(stats["feature " + f], 5, f)
+        self.assertGreater(stats["cells released when a child task finished"], 100)
+        self.assertGreater(stats["cells released when the root finished"], 10)
+        self.assertGreater(stats["None: cells released at the end"], 10)
+        # Never releasing leaks the cycles.
+        with switches(sessions={"no_release_cells": True}):
+            with self.assertRaisesRegex(HeapError, "leaked"):
+                for seed in range(1, 61):
+                    check_program(seed, Counter(), cancel_sites=1, links=True)
+
+
 class NoCycles(unittest.TestCase):
-    """The no-cycles rule on state types (cycles.py; V9)."""
+    """The rejected alternative to releasing cells: type rules that keep states
+    from forming cycles (cycles.py). Kept to measure what the rules reject."""
 
     def setUp(self):
         import cycles

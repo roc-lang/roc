@@ -21,7 +21,10 @@ Per program:
            every run, with crashed native frames as the only leak (R5)
 
 Usage:
-    python3 check.py [count] [seed]
+    python3 check.py [count] [seed] [links]
+
+With `links`, every program uses shared state, and most use cells whose
+states hold handles and jobs, which form cycles the runtime must break (V9).
 """
 
 from __future__ import annotations
@@ -78,14 +81,15 @@ class Failure(Exception):
     pass
 
 
-def check_program(seed, stats, cancel_sites=6):
-    procs, features = gen_program(seed)
+def check_program(seed, stats, cancel_sites=6, links=False):
+    procs, features = gen_program(seed, links=links)
     arc, lows = build(procs)
     stats["programs"] += 1
     for f in features:
         stats["feature " + f] += 1
     none = run_none(arc.prog)
     stats["none " + none.result[0]] += 1
+    stats["None: cells released at the end"] += none.extra.get("cells released", 0)
     stats["session: None entries run on demand"] += none.extra.get("on demand", 0)
 
     def run(mode, eng, pol, conc="Tasks"):
@@ -96,6 +100,9 @@ def check_program(seed, stats, cancel_sites=6):
         stats["crashes"] += r.runtime.get("crashes", 0)
         stats["woken while running"] += r.runtime.get("woken_while_running", 0)
         stats["leaked objects verified"] += r.leaked_live
+        for k in ("cells released", "cells released when a child task finished",
+                  "cells released when the root finished", "cells released at the end of the run"):
+            stats[k] += r.runtime.get(k, 0)
         stats["R7 supervise! returned"] += r.runtime.get("R7 returned", 0)
         stats["R7 supervise! gave up"] += r.runtime.get("R7 gave up", 0)
         stats["deferred erased calls"] += r.engine.get("deferred_calls", 0) if eng == "unwind" else 0
@@ -205,9 +212,10 @@ def check_program(seed, stats, cancel_sites=6):
 def main(argv):
     count = int(argv[1]) if len(argv) > 1 else 300
     seed = int(argv[2]) if len(argv) > 2 else 1
+    links = len(argv) > 3 and argv[3] == "links"
     stats = Counter()
     for s in range(seed, seed + count):
-        check_program(s, stats)
+        check_program(s, stats, links=links)
     for k in sorted(stats):
         print(f"{k:<28} {stats[k]}")
     return 0
