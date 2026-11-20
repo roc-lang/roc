@@ -188,6 +188,14 @@ pub const Tests = union(enum) {
         /// build through `std.testing.refAllDecls`. A filtered run keeps them,
         /// so the inner tests the filter names still get compiled.
         aggregators: []const []const u8 = &.{},
+        /// The test binary's root file, when it is not the module's own root.
+        /// That file imports the module under the module's name. A module
+        /// built with `no_builtin` names one: a test binary takes its root
+        /// module's options for `std` as well, and all of `std` built without
+        /// builtin recognition expands every large copy inline (on 32-bit ARM
+        /// a 2 MB `std.Progress` buffer copy made instruction selection run
+        /// for hours).
+        root: ?[]const u8 = null,
     },
     /// The module is the spec list of a test runner that build.zig wires to
     /// `run-test-zig-module-<name>` itself.
@@ -512,7 +520,7 @@ pub const ModuleType = enum {
             // tested as it is built: with its stores kept as stores.
             .fast_memset => .{
                 .root = "src/fast_memset.zig",
-                .tests = .{ .unit = .{} },
+                .tests = .{ .unit = .{ .root = "src/fast_memset_test.zig" } },
                 .no_builtin = true,
             },
         };
@@ -793,13 +801,15 @@ pub const RocModules = struct {
 
         inline for (comptime std.enums.values(ModuleType)) |module_type| {
             if (comptime module_type.info().tests != .unit) continue;
+            const test_root = comptime module_type.info().tests.unit.root;
+            comptime std.debug.assert(!module_type.info().no_builtin or test_root != null);
             const module = self.getModule(module_type);
             const filter_injection = ensureAggregatorFilters(b, module_type, test_filters);
             forced_passes += filter_injection.forced_count;
             const test_step = b.addTest(.{
                 .name = b.fmt("{s}", .{@tagName(module_type)}),
                 .root_module = b.createModule(.{
-                    .root_source_file = module.root_source_file.?,
+                    .root_source_file = if (test_root) |root| b.path(root) else module.root_source_file.?,
                     .target = target,
                     .optimize = optimize,
                     // Zig 0.16 requires explicit link_libc on any compile unit that references
@@ -809,10 +819,10 @@ pub const RocModules = struct {
                     // modules import ctx/unbundle transitively. It's simpler (and has no
                     // practical cost for native-only tests) to enable link_libc uniformly.
                     .link_libc = true,
-                    .no_builtin = if (comptime module_type.info().no_builtin) true else null,
                 }),
                 .filters = filter_injection.filters,
             });
+            if (test_root != null) test_step.root_module.addImport(@tagName(module_type), module);
 
             // The eval module's host-call trampoline is implemented in assembly;
             // the test compile has its own root module, so it needs the file too.

@@ -1686,3 +1686,324 @@ test "check - issue 12521 - a hashed row tail that is also a value type is close
     defer test_env.deinit();
     try test_env.assertNoErrors();
 }
+
+// https://github.com/roc-lang/roc/issues/13244
+test "check - repro - issue 13244 - a match replaced by a runtime error still reports its missing patterns" {
+    const src =
+        \\f = {
+        \\    var $s = match B {
+        \\        C(_) => 0
+        \\    }
+        \\    $s = S($s)
+        \\    0
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertHasTypeError("Non Exhaustive Match");
+    try test_env.assertHasTypeError("Anonymous Recursion");
+}
+
+test "check - repro - issue 13244 - unmatchable pattern report reads a match replaced by a runtime error" {
+    const src =
+        \\f = {
+        \\    x : Try(U64, [])
+        \\    x = Ok(1)
+        \\    var $s = match x {
+        \\        Ok(_) => 0
+        \\        Err(_) => 1
+        \\    }
+        \\    $s = S($s)
+        \\    0
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertHasTypeError("Unmatchable Pattern");
+    try test_env.assertHasTypeError("Anonymous Recursion");
+}
+
+// https://github.com/roc-lang/roc/issues/13236
+test "check - repro - issue 13236 - a parameter sharing an unmatchable tag's payload keeps its own type" {
+    const src =
+        \\f = |n| match Oops {
+        \\    Oops => n
+        \\    Zero(p) => p
+        \\}
+        \\
+        \\x : U64
+        \\x = f(1.U64)
+        \\
+        \\y : Str
+        \\y = f("a")
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertTypeErrorTitles(&.{ "Unconditional Condition", "Unmatchable Pattern" });
+    try test_env.assertDefTypeOptions("f", "a -> a", .{ .allow_type_errors = true });
+}
+
+test "check - repro - issue 13236 - a local function sharing an unmatchable tag's payload keeps its own type" {
+    const src =
+        \\x : U64
+        \\x = {
+        \\    f = |n| match Oops {
+        \\        Oops => n
+        \\        Zero(p) => p
+        \\    }
+        \\    f(1.U64)
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try std.testing.expectEqual(@as(usize, 0), try test_env.typeProblemCount());
+    try test_env.assertHasTypeError("Unmatchable Pattern");
+}
+
+/// Every way to write a function whose body builds only `Ok`: unannotated, or
+/// with an error row that is a hole or a named variable, ignored or not.
+const issue_13237_signatures = [_][]const u8{
+    "",
+    "f : U64 -> Try(U64, _)\n",
+    "f : U64 -> Try(U64, _e)\n",
+    "f : U64 -> Try(U64, e)\n",
+};
+const issue_13237_bodies = [_][]const u8{
+    "f = |n| if n == 0 Ok(0.U64) else Ok(n)\n",
+    "f = |n| Ok(n)\n",
+};
+
+fn expectEveryOkOnlyFunctionAccepts(comptime uses: []const u8) TestEnv.TestEnvError!void {
+    inline for (issue_13237_signatures) |signature| {
+        inline for (issue_13237_bodies) |body| {
+            var test_env = try TestEnv.init("Test", signature ++ body ++ "\n" ++ uses);
+            defer test_env.deinit();
+            test_env.assertNoErrors() catch |err| {
+                std.debug.print("rejected:\n{s}{s}\n{s}\n", .{ signature, body, uses });
+                return err;
+            };
+        }
+    }
+}
+
+// https://github.com/roc-lang/roc/issues/13237
+test "check - repro - issue 13237 - an all-Ok function's result is used at a wider error row" {
+    try expectEveryOkOnlyFunctionAccepts(
+        \\x : Try(U64, [B])
+        \\x = f(1.U64)
+    );
+}
+
+test "check - repro - issue 13237 - an all-Ok function's result is forwarded into a wider error row" {
+    try expectEveryOkOnlyFunctionAccepts(
+        \\h : U64 -> Try(U64, [B])
+        \\h = |n| f(n)
+    );
+}
+
+test "check - repro - issue 13237 - an all-Ok function's result is unwrapped with ? inside a wider error row" {
+    try expectEveryOkOnlyFunctionAccepts(
+        \\h : U64 -> Try(U64, [B])
+        \\h = |n| {
+        \\    v = f(n)?
+        \\    if v == 7 Err(B) else Ok(v)
+        \\}
+    );
+}
+
+test "check - repro - issue 13237 - an all-Ok function's result is a local value with a wider error row" {
+    try expectEveryOkOnlyFunctionAccepts(
+        \\h : U64 -> Bool
+        \\h = |n| {
+        \\    x : Try(U64, [B])
+        \\    x = f(n)
+        \\    x == Ok(1.U64)
+        \\}
+    );
+}
+
+test "check - repro - issue 13237 - an all-Ok function's result joins a branch that builds an Err" {
+    try expectEveryOkOnlyFunctionAccepts(
+        \\h : U64 -> Bool
+        \\h = |n| {
+        \\    x = if n == 3 Err(B) else f(n)
+        \\    x == Ok(1.U64)
+        \\}
+    );
+}
+
+test "check - repro - issue 13237 - an Ok-only match on an all-Ok function's result is exhaustive" {
+    try expectEveryOkOnlyFunctionAccepts(
+        \\g : U64 -> U64
+        \\g = |n| match f(n) {
+        \\    Ok(v) => v
+        \\}
+    );
+}
+
+test "check - repro - issue 13237 - an Ok-only match on a local holding an all-Ok function's result is exhaustive" {
+    try expectEveryOkOnlyFunctionAccepts(
+        \\g : U64 -> U64
+        \\g = |n| {
+        \\    r = f(n)
+        \\    match r {
+        \\        Ok(v) => v
+        \\    }
+        \\}
+    );
+}
+
+test "check - repro - issue 13237 - each use of an all-Ok function decides its own error row" {
+    try expectEveryOkOnlyFunctionAccepts(
+        \\x : Try(U64, [B])
+        \\x = f(1.U64)
+        \\
+        \\y : Try(U64, [C(Str)])
+        \\y = f(2.U64)
+        \\
+        \\g : U64 -> U64
+        \\g = |n| match f(n) {
+        \\    Ok(v) => v
+        \\}
+    );
+}
+
+test "check - repro - issue 13237 - an all-Ok function keeps its error row generalized" {
+    inline for (issue_13237_bodies) |body| {
+        var test_env = try TestEnv.init("Test", "f : U64 -> Try(U64, _)\n" ++ body);
+        defer test_env.deinit();
+        try test_env.assertDefType("f", "U64 -> Try(U64, _a)");
+    }
+}
+
+test "check - repro - issue 13237 - an empty error row in the annotation stays empty" {
+    const signature = "f : U64 -> Try(U64, [])\nf = |n| if n == 0 Ok(0.U64) else Ok(n)\n\n";
+    {
+        var test_env = try TestEnv.init("Test", signature ++
+            \\x : Try(U64, [B])
+            \\x = f(1.U64)
+        );
+        defer test_env.deinit();
+        try test_env.assertOneTypeError("Type Mismatch");
+    }
+    {
+        var test_env = try TestEnv.init("Test", signature ++
+            \\g : U64 -> U64
+            \\g = |n| match f(n) {
+            \\    Ok(v) => v
+            \\}
+        );
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+    }
+}
+
+test "check - repro - issue 13237 - an early Err return keeps the error row" {
+    const signature =
+        \\f : U64 -> Try(U64, _)
+        \\f = |n| {
+        \\    if n == 9 {
+        \\        return Err(Nine)
+        \\    }
+        \\    if n == 0 Ok(0.U64) else Ok(n)
+        \\}
+        \\
+        \\
+    ;
+    {
+        var test_env = try TestEnv.init("Test", signature ++
+            \\x : Try(U64, [Nine, B])
+            \\x = f(1.U64)
+        );
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+    }
+    {
+        var test_env = try TestEnv.init("Test", signature ++
+            \\g : U64 -> U64
+            \\g = |n| match f(n) {
+            \\    Ok(v) => v
+            \\}
+        );
+        defer test_env.deinit();
+        try test_env.assertOneTypeError("Non Exhaustive Match");
+    }
+}
+
+test "check - repro - issue 13237 - an Ok-only match on a parameter needs an Err branch" {
+    inline for ([_][]const u8{ "err", "_err", "_" }) |error_row| {
+        var test_env = try TestEnv.init("Test", "g : Try(I64, " ++ error_row ++ ") -> I64\n" ++
+            \\g = |t| match t {
+            \\    Ok(v) => v
+            \\}
+        );
+        defer test_env.deinit();
+        try test_env.assertOneTypeError("Non Exhaustive Match");
+    }
+}
+
+test "check - repro - issue 13237 - an Ok-only destructure of a parameter needs an Err branch" {
+    var test_env = try TestEnv.init("Test",
+        \\g : Try(I64, err) -> I64
+        \\g = |t| {
+        \\    Ok(v) = t
+        \\    v
+        \\}
+    );
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Non Exhaustive Destructure");
+}
+
+test "check - repro - issue 13237 - an Err branch on an all-Ok function's result leaves the error row undecided" {
+    var test_env = try TestEnv.init("Test",
+        \\f : U64 -> Try(U64, e)
+        \\f = |n| Ok(n)
+        \\
+        \\g : U64 -> U64
+        \\g = |n| match f(n) {
+        \\    Ok(v) => v
+        \\    Err(_) => 0
+        \\}
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - issue 13237 - a top-level value's undecided error payload closes when the module finishes" {
+    var test_env = try TestEnv.init("Test",
+        \\x : Try(I64, _)
+        \\x = Ok(42)
+        \\
+        \\expect x == Ok(42)
+    );
+    defer test_env.deinit();
+    try test_env.assertDefType("x", "Try(I64, [])");
+}
+
+test "check - repro - issue 13237 - a top-level value's payload a use decides is not closed" {
+    var test_env = try TestEnv.init("Test",
+        \\x : Try(I64, _)
+        \\x = Ok(42)
+        \\
+        \\y : Try(I64, [B])
+        \\y = x
+    );
+    defer test_env.deinit();
+    try test_env.assertDefType("x", "Try(I64, [B])");
+}
+
+test "check - repro - issue 13237 - a named and an ignored payload variable behave the same" {
+    inline for ([_][]const u8{ "payload", "_payload" }) |name| {
+        var test_env = try TestEnv.init("Test", "g : [Something, Other(" ++ name ++ ")] -> I64\n" ++
+            \\g = |x| match x {
+            \\    Something => 1
+            \\}
+        );
+        defer test_env.deinit();
+        try test_env.assertOneTypeError("Non Exhaustive Match");
+    }
+}

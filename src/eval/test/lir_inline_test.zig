@@ -13274,6 +13274,7 @@ test "issue 10354 undefined identifier in expression does not panic monotype low
         error.UnwindRegistrationFailed,
         error.VirtualAllocFailed,
         error.VirtualProtectFailed,
+        error.FlushInstructionCacheFailed,
         error.WasmExecFailed,
         error.WouldBlock,
         error.WriteFailed,

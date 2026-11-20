@@ -519,7 +519,7 @@ test "exhaustive - direct Try.Ok match only needs Ok" {
     try test_env.assertLastDefType("Str");
 }
 
-test "unmatchable - Err pattern first on inferred wildcard error type is unreachable" {
+test "exhaustive - an Err pattern on an inferred wildcard error type leaves the payload undecided" {
     const source =
         \\x : Try(I64, _)
         \\x = Ok(42)
@@ -532,7 +532,7 @@ test "unmatchable - Err pattern first on inferred wildcard error type is unreach
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("Unmatchable Pattern");
+    try test_env.assertNoErrors();
 }
 
 test "exhaustive - structural tag with inferred wildcard payload is not required" {
@@ -1471,22 +1471,9 @@ test "non-exhaustive - a list of boxes of an empty type requires Err" {
     try expectErrBranchRequired("List(Box([]))");
 }
 
-// The `_` of an absent constructor's payload closes to `[]` through a `Box`
-// exactly as through the user wrapper `MyBox(a) := [B(a)]`, so a value built
-// with only `Ok` cannot later be used where the box holds a type with values.
-// Writing the payload type keeps every one of these programs valid.
-
-/// Checks `body`, with `W` standing for the wrapper, once for `Box` and once
-/// for the user twin, expecting the same single type error from both.
-fn expectBoxAndTwinTypeMismatch(comptime body: []const u8) TestEnv.TestEnvError!void {
-    inline for (.{ .{ "", "Box" }, .{ my_box, "MyBox" } }) |wrapper| {
-        const source = wrapper[0] ++ comptime replaceWrapper(body, wrapper[1]);
-        var test_env = try TestEnv.init("Test", source);
-        defer test_env.deinit();
-
-        try test_env.assertOneTypeError("Type Mismatch");
-    }
-}
+// A free `_` in a `Box` payload is decided exactly as one in the payload of the
+// user wrapper `MyBox(a) := [B(a)]`: a use decides it, and a top-level value no
+// use decides closes it to `[]` when the module finishes.
 
 /// Checks `body`, with `W` standing for the wrapper, once for `Box` and once
 /// for the user twin, expecting both to be accepted.
@@ -1551,14 +1538,23 @@ fn withPayload(comptime body: []const u8, comptime payload: []const u8) []const 
     return result ++ body[start..];
 }
 
-test "type mismatch - an absent Err payload's Box(_) closes to Box([]) like a user wrapper's" {
-    try expectBoxAndTwinTypeMismatch(comptime withPayload(absent_payload_top_level, "_"));
-    try expectBoxAndTwinTypeMismatch(comptime withPayload(absent_payload_local, "_"));
-    try expectBoxAndTwinTypeMismatch(comptime withPayload(absent_payload_if_branches, "_"));
+test "a use decides an Err payload's Box(_) like a user wrapper's" {
+    try expectBoxAndTwinAccepted(comptime withPayload(absent_payload_top_level, "_"));
+    try expectBoxAndTwinAccepted(comptime withPayload(absent_payload_local, "_"));
+    try expectBoxAndTwinAccepted(comptime withPayload(absent_payload_if_branches, "_"));
 }
 
-test "a Box of a written payload type with values is unaffected by absent-payload closing" {
+test "a Box of a written payload type with values is accepted like a user wrapper's" {
     try expectBoxAndTwinAccepted(comptime withPayload(absent_payload_top_level, "U8"));
     try expectBoxAndTwinAccepted(comptime withPayload(absent_payload_local, "U8"));
     try expectBoxAndTwinAccepted(comptime withPayload(absent_payload_if_branches, "U8"));
+}
+
+test "a top-level value's undecided Box(_) Err payload closes to Box([]) like a user wrapper's" {
+    inline for (.{ .{ "", "Box" }, .{ my_box, "MyBox" } }) |wrapper| {
+        var test_env = try TestEnv.init("Test", wrapper[0] ++ "x : Try(Str, " ++ wrapper[1] ++ "(_))\nx = Ok(\"a\")\n");
+        defer test_env.deinit();
+
+        try test_env.assertDefType("x", "Try(Str, " ++ wrapper[1] ++ "([]))");
+    }
 }

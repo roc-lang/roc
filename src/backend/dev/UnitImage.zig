@@ -825,7 +825,7 @@ pub fn buildObjects(allocator: Allocator, parsed: []const Object, options: Build
                     const kind = reloc.kind.siteKind();
                     if (reloc.offset + kindWidth(kind) > site_section.size) return error.InvalidObject;
                     const site_offset = site_place.offset + reloc.offset;
-                    const point = targetPoint(target, kind, reloc.addend, object.x86_64);
+                    const point = targetPoint(target, kind, reloc.addend + reloc.pc_trailing, object.x86_64);
                     try sites.noteEdge(site_place, site_offset, target, symbol, point, &resolution.import);
                     try sites.add(site_place, site_offset, kind, target, symbol.name, symbol.bind == .weak, reloc.addend, point, &resolution.import);
                 },
@@ -1531,6 +1531,9 @@ pub const Reloc = struct {
     /// Index into the object's symbols.
     symbol: u32,
     addend: i64,
+    /// Bytes after a PC-relative field that the input relocation accounts
+    /// for. Part of the PC bias for atom lookup, not an offset into the atom.
+    pc_trailing: u8 = 0,
 };
 
 /// An input object in the form `buildObjects` consumes, whatever format it
@@ -1877,7 +1880,6 @@ fn parseMachO(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildE
             // `SIGNED_n` kind's field is followed by `n` more instruction
             // bytes the assembler already subtracted from it.
             const x86_pcrel = x86_64 and (r_type == X86_64_RELOC_SIGNED or r_type == X86_64_RELOC_BRANCH or r_type == X86_64_RELOC_SIGNED_1 or r_type == X86_64_RELOC_SIGNED_2 or r_type == X86_64_RELOC_SIGNED_4);
-            const x86_trailing: i64 = if (r_type == X86_64_RELOC_SIGNED_1) 1 else if (r_type == X86_64_RELOC_SIGNED_2) 2 else if (r_type == X86_64_RELOC_SIGNED_4) 4 else 0;
             const kind: RelocKind = if (r_type == ARM64_RELOC_UNSIGNED)
                 (if (r_pcrel) return error.UnsupportedRelocation else switch (r_length) {
                     3 => .abs64,
@@ -1917,18 +1919,28 @@ fn parseMachO(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildE
                 };
                 if (addend_before != null and (kind == .abs64 or kind == .abs32)) return error.InvalidObject;
             } else {
-                // The field holds the target's address in the object's
-                // address space: as is for an absolute word, relative to
-                // the end of the instruction for an x86_64 displacement.
+                // Rebase the encoded displacement, not the effective address:
+                // next-RIP's bias (4 + trailing bytes) is the same before and
+                // after placement, so it cancels out of the field addend.
                 if (kind != .abs64 and kind != .abs32 and !x86_pcrel) return error.UnsupportedRelocation;
                 if (r_symbolnum == 0 or r_symbolnum > raw.items.len) return error.InvalidObject;
                 if (addend_before != null) return error.InvalidObject;
                 symbol = nsyms + r_symbolnum - 1;
                 const field_address: i64 = @intCast(section.addr + r_address);
-                const address: i64 = if (kind == .abs64) @bitCast(readU64(field, 0)) else if (kind == .abs32) readU32(field, 0) else @as(i64, @as(i32, @bitCast(readU32(field, 0)))) + field_address + 4 + x86_trailing;
-                addend = address - @as(i64, @intCast(raw.items[r_symbolnum - 1].addr)) - (if (x86_pcrel) @as(i64, 4) else 0);
+                const value: i64 = if (kind == .abs64) @bitCast(readU64(field, 0)) else if (kind == .abs32) readU32(field, 0) else @as(i64, @as(i32, @bitCast(readU32(field, 0)))) + field_address;
+                addend = value - @as(i64, @intCast(raw.items[r_symbolnum - 1].addr));
             }
-            try relocs.append(arena, .{ .section = @intCast(section_index), .offset = r_address, .kind = kind, .symbol = symbol, .addend = addend });
+            const trailing: u8 = if (!x86_pcrel)
+                0
+            else if (r_type == X86_64_RELOC_SIGNED_1)
+                1
+            else if (r_type == X86_64_RELOC_SIGNED_2)
+                2
+            else if (r_type == X86_64_RELOC_SIGNED_4)
+                4
+            else
+                0;
+            try relocs.append(arena, .{ .section = @intCast(section_index), .offset = r_address, .kind = kind, .symbol = symbol, .addend = addend, .pc_trailing = trailing });
         }
         if (pending_addend != null) return error.InvalidObject;
     }
@@ -3323,6 +3335,68 @@ test "an x86_64 Mach-O object becomes an image with its field addends" {
     try std.testing.expectEqual(@backingInt(SiteKind.abs64), local[1].kind);
     try std.testing.expectEqual(@as(i64, 5), local[1].addend);
     try std.testing.expectEqual(@backingInt(Region.block), local[1].target_region);
+}
+
+test "issue 13221: local Mach-O SIGNED relocations preserve the effective address" {
+    const allocator = std.testing.allocator;
+    // Compare the same constant against immediate operands of widths 1, 2,
+    // and 4. RIP is the end of the instruction, not the end of the field.
+    const text = [_]u8{
+        0x80, 0x3d, 0, 0, 0, 0, 0, // cmp byte
+        0x66, 0x81, 0x3d, 0, 0, 0, 0, 0, 0, // cmp word
+        0x81, 0x3d, 0, 0, 0, 0, 0, 0, 0, 0, // cmp dword
+        0xc3,
+    };
+    const object = try TestMachObject.encodeX86_64(allocator, &.{
+        .{ .segname = "__TEXT", .sectname = "__text", .bytes = &text, .flags = S_ATTR_PURE_INSTRUCTIONS },
+        .{ .segname = "__TEXT", .sectname = "__const", .bytes = "padding!data", .@"align" = 3 },
+    }, &.{
+        .{ .name = "_entry", .section = 1, .value = 0, .external = true },
+    }, &.{
+        // The encoder adds the target section base (32) to each local
+        // field. Supply the offset of "data" (8) minus next-RIP.
+        .{ .section = 1, .offset = 2, .symbol = 2, .type = X86_64_RELOC_SIGNED_1, .pcrel = true, .external = false, .addend = 8 - 7 },
+        .{ .section = 1, .offset = 10, .symbol = 2, .type = X86_64_RELOC_SIGNED_2, .pcrel = true, .external = false, .addend = 8 - 16 },
+        .{ .section = 1, .offset = 18, .symbol = 2, .type = X86_64_RELOC_SIGNED_4, .pcrel = true, .external = false, .addend = 8 - 26 },
+    });
+    defer allocator.free(object);
+    const image = try build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .whole });
+    defer allocator.free(image);
+    const view = try View.init(image);
+    try std.testing.expectEqualStrings("data", view.block()[40..44]);
+
+    // Decode the CPU's effective address independently in both the fixture
+    // and the result. The first section_64 starts after the object and segment headers.
+    const input_text = object[readU32(object, 32 + 72 + 48)..];
+    for ([_][]const u8{ input_text, view.block() }) |code| {
+        for ([_]usize{ 2, 10, 18 }, [_]i32{ 7, 16, 26 }) |field, next_ip| {
+            try std.testing.expectEqual(@as(i32, 40), next_ip + std.mem.readInt(i32, code[field..][0..4], .little));
+        }
+    }
+}
+
+test "issue 13221: a local Mach-O SIGNED_1 retains the atom at the effective address" {
+    const allocator = std.testing.allocator;
+    // The writable section roots the second text atom at its very first
+    // byte. Using the end of the field would root the first atom instead.
+    const object = try TestMachObject.encodeX86_64(allocator, &.{
+        .{ .segname = "__DATA", .sectname = "__data", .bytes = &.{ 0x80, 0x3d, 0, 0, 0, 0, 0 } },
+        .{ .segname = "__TEXT", .sectname = "__text", .bytes = &@as([9]u8, @splat(0xc3)), .flags = S_ATTR_PURE_INSTRUCTIONS },
+    }, &.{
+        .{ .name = "_first", .section = 2, .value = 0 },
+        .{ .name = "_second", .section = 2, .value = 8 },
+    }, &.{
+        .{ .section = 1, .offset = 2, .symbol = 2, .type = X86_64_RELOC_SIGNED_1, .pcrel = true, .external = false, .addend = 8 - 7 },
+    });
+    defer allocator.free(object);
+    const image = try build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .{ .symbols = .{ .edges = &.{}, .data_starts = &.{} } } });
+    defer allocator.free(image);
+    const view = try View.init(image);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 8 }, view.atoms());
+    try std.testing.expectEqualSlices(u32, &.{1}, view.roots());
+    const site = view.localSites()[0];
+    try std.testing.expectEqual(@as(u32, 1), site.target);
+    try std.testing.expectEqual(@as(i64, 8 - 5), site.addend);
 }
 
 test "an image-relative site holds the value it is given" {

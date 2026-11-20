@@ -926,6 +926,7 @@ pub const CompileTimeFinalizer = struct {
         UnwindRegistrationFailed,
         VirtualAllocFailed,
         VirtualProtectFailed,
+        FlushInstructionCacheFailed,
     };
 
     context: ?*anyopaque = null,
@@ -10446,10 +10447,7 @@ fn testFreshCheckedKeyInfo(allocator: Allocator, names: *const canonical.Canonic
     return try digester.keyInfo(root);
 }
 
-const EmptyTagCheckedOutputTestError = @import("test/TestEnv.zig").TestEnvError || error{
-    ExpectedFlexIdentity,
-    ExpectedFunctionPayload,
-};
+const EmptyTagCheckedOutputTestError = @import("test/TestEnv.zig").TestEnvError;
 
 test "checked row defaults apply only to unconstrained type variables" {
     const no_constraints = types.StaticDispatchConstraint.SafeList.Range.empty();
@@ -10506,55 +10504,6 @@ fn withEmptyTagCheckedOutputForTest(
         .direct = &.{},
         .available = &.{},
     }, &store, mutable_types, explicit_empty);
-}
-
-test "checked output preserves shared defaulted empty-tag identity" {
-    const allocator = std.testing.allocator;
-    try withEmptyTagCheckedOutputForTest(allocator, struct {
-        fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, type_store: *types.Store, _: Var) EmptyTagCheckedOutputTestError!void {
-            const identity = try type_store.fresh();
-            try type_store.setVarToEmptyTagUnionDefault(identity);
-            const alias = try type_store.freshRedirect(identity);
-            try type_store.canonicalizeAndSeal(module.identStoreConst());
-            var active = try CheckedSourceTypeRoots.init(allocator, module);
-            defer active.deinit();
-            const test_keys = try attachTestSealedTypes(allocator, module, names, imports, store);
-            defer test_keys.destroy();
-            const first = try appendCheckedTypeRoot(allocator, module, store, &active, identity);
-            const second = try appendCheckedTypeRoot(allocator, module, store, &active, alias);
-            try std.testing.expectEqual(first, second);
-            const first_payload = store.payload(first);
-            if (first_payload != .flex) return error.ExpectedFlexIdentity;
-            const variable = first_payload.flex;
-            try std.testing.expectEqual(RowDefault.empty_tag_union, variable.row_default.?);
-        }
-    }.inspect);
-}
-
-test "checked output preserves distinct defaulted empty-tag identities" {
-    const allocator = std.testing.allocator;
-    try withEmptyTagCheckedOutputForTest(allocator, struct {
-        fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, type_store: *types.Store, _: Var) EmptyTagCheckedOutputTestError!void {
-            const first_identity = try type_store.fresh();
-            const second_identity = try type_store.fresh();
-            try type_store.setVarToEmptyTagUnionDefault(first_identity);
-            try type_store.setVarToEmptyTagUnionDefault(second_identity);
-            try type_store.canonicalizeAndSeal(module.identStoreConst());
-            var active = try CheckedSourceTypeRoots.init(allocator, module);
-            defer active.deinit();
-            const test_keys = try attachTestSealedTypes(allocator, module, names, imports, store);
-            defer test_keys.destroy();
-            const first = try appendCheckedTypeRoot(allocator, module, store, &active, first_identity);
-            const second = try appendCheckedTypeRoot(allocator, module, store, &active, second_identity);
-            try std.testing.expect(first != second);
-            for ([_]CheckedTypeId{ first, second }) |root| {
-                const payload = store.payload(root);
-                if (payload != .flex) return error.ExpectedFlexIdentity;
-                const variable = payload.flex;
-                try std.testing.expectEqual(RowDefault.empty_tag_union, variable.row_default.?);
-            }
-        }
-    }.inspect);
 }
 
 test "checked output keeps proven closed empty tag union explicit" {
@@ -10615,7 +10564,7 @@ test "independent closed function graphs share one key and add no synthesized ro
     }.inspect);
 }
 
-test "checker marks exhaustiveness-defaulted empty payload provenance" {
+test "an exhaustive match commits a free payload variable to the empty tag union" {
     const TestEnv = @import("test/TestEnv.zig");
     const source =
         \\x : Try(I64, _)
@@ -10641,34 +10590,6 @@ test "checker marks exhaustiveness-defaulted empty payload provenance" {
     try std.testing.expectEqual(@as(usize, 2), args.len);
     const err_desc = test_env.module_env.types.resolveVar(args[1]).desc;
     try std.testing.expectEqual(types.Content{ .structure = .empty_tag_union }, err_desc.content);
-    try std.testing.expect(err_desc.flags.empty_tag_union_is_default);
-}
-
-test "checked output retains defaulted identity inside parent function digest" {
-    const allocator = std.testing.allocator;
-    try withEmptyTagCheckedOutputForTest(allocator, struct {
-        fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, type_store: *types.Store, _: Var) EmptyTagCheckedOutputTestError!void {
-            const identity = try type_store.fresh();
-            try type_store.setVarToEmptyTagUnionDefault(identity);
-            const function_content = try type_store.mkFuncPure(&.{identity}, identity);
-            const function_var = try type_store.freshFromContent(function_content);
-            try type_store.canonicalizeAndSeal(module.identStoreConst());
-            var active = try CheckedSourceTypeRoots.init(allocator, module);
-            defer active.deinit();
-            const test_keys = try attachTestSealedTypes(allocator, module, names, imports, store);
-            defer test_keys.destroy();
-            const root = try appendCheckedTypeRoot(allocator, module, store, &active, function_var);
-            const root_payload = store.payload(root);
-            if (root_payload != .function) return error.ExpectedFunctionPayload;
-            const function = root_payload.function;
-            try std.testing.expectEqual(@as(usize, 1), function.args.len);
-            try std.testing.expectEqual(function.args[0], function.ret);
-            const return_payload = store.payload(function.ret);
-            if (return_payload != .flex) return error.ExpectedFlexIdentity;
-            const variable = return_payload.flex;
-            try std.testing.expectEqual(RowDefault.empty_tag_union, variable.row_default.?);
-        }
-    }.inspect);
 }
 
 /// Empty per-artifact tables for building `ImportedModuleView`s in tests.
@@ -11257,6 +11178,8 @@ pub const ExprDivergence = body_analyses.ExprDivergence;
 pub const exprDivergence = body_analyses.exprDivergence;
 /// See `body_analyses.assertExprNeverDiverges`.
 pub const assertExprNeverDiverges = body_analyses.assertExprNeverDiverges;
+/// See `body_analyses.exprEvaluationHasNoEffect`.
+pub const exprEvaluationHasNoEffect = body_analyses.exprEvaluationHasNoEffect;
 /// The body facts a checked module owns (`body_analyses.BodyAnalyses`).
 pub const BodyAnalyses = body_analyses.BodyAnalyses;
 /// The CIR-only index of a checked module's bodies.

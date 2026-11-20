@@ -49,6 +49,7 @@ const TestError = std.mem.Allocator.Error || Interpreter.Error || @import("llvm_
     UnwindRegistrationFailed,
     VirtualAllocFailed,
     VirtualProtectFailed,
+    FlushInstructionCacheFailed,
     HostedFunctionTypeMismatch,
     UnsupportedTarget,
     WasmExecFailed,

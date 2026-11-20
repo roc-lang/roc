@@ -576,21 +576,14 @@ pub const Ctx = struct {
         return try self.b.endBackward(start, next);
     }
 
-    pub fn readTagPayload(self: Ctx, dest: LIR.LocalId, _: types.TypeId, source: LIR.LocalId, variant: layout.VariantIndex, index: u32, single: bool, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+    pub fn readTagPayload(self: Ctx, dest: LIR.LocalId, payload_ty: types.TypeId, source: LIR.LocalId, variant: layout.VariantIndex, index: u32, single: bool, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         const union_ty = try self.b.structuralType(self.occType(source));
         const start = try self.b.beginBackward();
         if (try self.b.closed(union_ty)) {
-            const committed = self.b.program.result.layouts.getLayout(try self.b.program.layouts.layoutOf(union_ty));
-            if (committed.tag != .tag_union) {
-                // A union without storage has only zero-sized payloads.
-                if (self.b.store.getLocal(dest).layout_idx != .zst) invariant("a storage-free union has a payload with storage");
-                try self.b.emitLinear(.{ .assign_struct = .{ .target = dest, .fields = LIR.LocalSpan.empty(), .next = undefined } });
-            } else {
-                const payloads = self.store().span((try self.unionTags(union_ty))[variant].payloads);
-                try self.b.readTagPayloadInto(dest, source, union_ty, variant, payloads, index);
-            }
+            const payloads = self.store().span((try self.unionTags(union_ty))[variant].payloads);
+            try self.b.readTagPayloadInto(dest, source, union_ty, variant, payloads, index);
         } else {
-            try self.b.readDynamicTagPayloadInto(dest, source, try self.b.descOf(union_ty), variant, index, single);
+            try self.b.readDynamicTagPayloadInto(dest, source, try self.b.descOf(union_ty), variant, index, single, payload_ty);
         }
         return try self.b.endBackward(start, next);
     }

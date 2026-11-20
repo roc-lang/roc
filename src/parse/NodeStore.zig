@@ -1731,9 +1731,17 @@ pub fn patternIdentToken(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) 
 }
 
 /// The argument count of a lambda expression, or null for any other
-/// expression, read without rebuilding the expression.
+/// expression, read without rebuilding the expression. Grouping parentheses
+/// are transparent: a one-item tuple, such as `(|x| x)`, is its item, matching
+/// how canonicalization lowers it. This is the single syntactic definition of
+/// a declaration body being a lambda.
 pub fn exprLambdaArity(store: *const NodeStore, expr_idx: AST.Expr.Idx) ?u32 {
-    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
+    var node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
+    while (store.nodes.fieldItem(.tag, node_idx) == .tuple) {
+        const items = store.nodes.fieldItem(.data, node_idx);
+        if (items.rhs != 1) return null;
+        node_idx = @fromBackingInt(@intCast(store.extra_data.items[items.lhs]));
+    }
     if (store.nodes.fieldItem(.tag, node_idx) != .lambda) return null;
     return store.nodes.fieldItem(.data, node_idx).rhs;
 }

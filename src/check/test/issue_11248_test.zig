@@ -1,7 +1,6 @@
 //! Regression tests for https://github.com/roc-lang/roc/issues/11248.
-//! A `?` returns an `Err` the body tail never mentions, so the tags a lambda
-//! constructs cannot be read off that tail alone: the payload of an inferred
-//! `Err` row must stay open for the `?` to widen.
+//! A `?` returns an `Err` the body tail never mentions, so an inferred `Err`
+//! row holds the tags every `?` and early return contributes.
 
 const TestEnv = @import("./TestEnv.zig");
 
@@ -92,12 +91,12 @@ test "issue 11248 an explicit early return keeps the inferred error row open" {
     try test_env.assertDefType("with_suffix", "Str, Bool -> Try(Str, [Empty])");
 }
 
-test "issue 11248 an all-Ok body with no early return still closes the error payload" {
+test "issue 11248 an all-Ok body with no early return leaves the error payload generalized" {
     const src =
         \\only_ok : Str, Bool -> Try(Str, _)
         \\only_ok = |s, add| if add { Ok(s) } else { Ok("other") }
     ;
     var test_env = try TestEnv.init("Test", src);
     defer test_env.deinit();
-    try test_env.assertDefType("only_ok", "Str, Bool -> Try(Str, [])");
+    try test_env.assertDefType("only_ok", "Str, Bool -> Try(Str, _a)");
 }

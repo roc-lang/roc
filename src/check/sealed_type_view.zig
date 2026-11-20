@@ -149,7 +149,7 @@ pub const SealedTypeView = struct {
     /// `payload` reads it as the empty tag union it is.
     pub fn uncommittedTagTail(self: SealedTypeView, var_: Var) bool {
         const resolved = self.typeStore().resolveVar(var_);
-        if (!resolved.desc.flags.uncommitted_tag_tail or resolved.desc.flags.empty_tag_union_is_default) return false;
+        if (!resolved.desc.flags.uncommitted_tag_tail) return false;
         return switch (resolved.desc.content) {
             .structure => |flat| flat == .empty_tag_union,
             .flex, .rigid, .alias, .field_presence, .err => false,
@@ -239,7 +239,7 @@ pub const SealedTypeView = struct {
         const type_store = self.typeStore();
         const desc_idx = type_store.resolveDescIdx(var_);
         const word = type_store.wordAt(desc_idx);
-        const tag: std.meta.Tag(CheckedTypePayload) = if (word.flags().empty_tag_union_is_default) .flex else switch (word.kind) {
+        const tag: std.meta.Tag(CheckedTypePayload) = switch (word.kind) {
             .err => .err,
             .field_presence => .field_kind,
             .flex => .flex,
@@ -277,10 +277,7 @@ pub const SealedTypeView = struct {
             if (type_store.resolveVarWord(var_).var_ != var_) invariant("checked type {d} names a solver variable that is not its class's representative", .{@backingInt(var_)});
             if (!self.facts(var_).reached) invariant("checked type {d} names a solver variable publication never reached", .{@backingInt(var_)});
         }
-        // The checker marks an otherwise-unresolved identity it closed to
-        // `[]`; it renders as a variable carrying `[]` only as its row default.
         const flags = word.flags();
-        if (flags.empty_tag_union_is_default) return .{ .flex = .{ .row_default = .empty_tag_union } };
         switch (word.kind) {
             .err => return .err,
             .field_presence => return .{ .field_kind = switch (type_store.fieldPresenceAt(desc_idx)) {
@@ -641,7 +638,7 @@ const ReachWalker = struct {
         if (!var_facts.reached) {
             var_facts.reached = true;
             if (self.newly_reached) |list| try list.append(allocator, resolved.var_);
-            if (!resolved.word.flags().empty_tag_union_is_default) try self.pending.append(allocator, resolved.var_);
+            try self.pending.append(allocator, resolved.var_);
         }
         switch (tail orelse return) {
             .empty_record => var_facts.record_tail = true,

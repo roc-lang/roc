@@ -105,10 +105,6 @@ pub const VarMap = std.hash_map.HashMap(Var, Var, std.hash_map.AutoContext(Var),
 /// descriptor's word packs them by kind (`Descriptor.FlagBits`): a new flag
 /// must find room there.
 pub const DescriptorFlags = packed struct(u16) {
-    /// The checker closed this otherwise-unresolved variable to `[]` after
-    /// proving that no runtime constructor can inhabit it. The checked output
-    /// preserves the variable identity and carries `[]` only as its row default.
-    empty_tag_union_is_default: bool = false,
     /// Checking rejected a static-dispatch obligation whose constraint function
     /// type is this equivalence class. The marker rides the class rather than a
     /// raw variable index, so every site whose constraint callable unified into
@@ -190,7 +186,7 @@ pub const DescriptorFlags = packed struct(u16) {
     /// "Uncommitted Tag Tails"). Copies carry it; a merge keeps it unless the
     /// other side is an empty tag union without it.
     uncommitted_tag_tail: bool = false,
-    _padding: u1 = 0,
+    _padding: u2 = 0,
 
     /// The flags a copy of this class carries: those that describe its type.
     /// The others record what happened to this class itself—a rejection, a
@@ -201,7 +197,6 @@ pub const DescriptorFlags = packed struct(u16) {
     /// fresh instance (design.md "Concrete dispatch replay").
     pub fn copied(self: DescriptorFlags) DescriptorFlags {
         return .{
-            .empty_tag_union_is_default = self.empty_tag_union_is_default,
             .nominal_backing_structure = self.nominal_backing_structure,
             .host_fixed_row = self.host_fixed_row,
             .uncommitted_record_tail = self.uncommitted_record_tail,
@@ -230,7 +225,6 @@ pub const DescriptorFlags = packed struct(u16) {
     pub fn forKind(self: DescriptorFlags, kind: ContentKind) DescriptorFlags {
         var flags = self;
         if (kind == .flex) {
-            flags.empty_tag_union_is_default = false;
             flags.host_fixed_row = false;
             flags.compared_plain = false;
             flags.annotation_tag_union = false;
@@ -251,11 +245,11 @@ pub const DescriptorFlags = packed struct(u16) {
     }
 
     /// Whether any flag meaningful only on structure is set: an empty tag
-    /// union's defaulting and tail marks, a host-boundary row, a compared
-    /// plain commitment, or an annotated tag union. A stored word holds them
-    /// on every kind but a flex (`Descriptor.FlagBits`).
+    /// union's tail mark, a host-boundary row, a compared plain commitment, or
+    /// an annotated tag union. A stored word holds them on every kind but a
+    /// flex (`Descriptor.FlagBits`).
     pub fn nonFlexOnly(self: DescriptorFlags) bool {
-        return self.empty_tag_union_is_default or self.host_fixed_row or self.compared_plain or
+        return self.host_fixed_row or self.compared_plain or
             self.annotation_tag_union or self.uncommitted_tag_tail;
     }
 };
@@ -367,11 +361,11 @@ pub const Descriptor = struct {
 
         /// The bits every kind but a flex has.
         pub const OtherBits = packed struct(u5) {
-            empty_tag_union_is_default: bool = false,
             host_fixed_row: bool = false,
             compared_plain: bool = false,
             annotation_tag_union: bool = false,
             uncommitted_tag_tail: bool = false,
+            _padding: u1 = 0,
         };
 
         /// `flags` and a flex's `literal` packed for a word of kind `kind`.
@@ -393,7 +387,6 @@ pub const Descriptor = struct {
                     .record_pattern_tail = flags.record_pattern_tail,
                     .literal = literal,
                 }) else @bitCast(OtherBits{
-                    .empty_tag_union_is_default = flags.empty_tag_union_is_default,
                     .host_fixed_row = flags.host_fixed_row,
                     .compared_plain = flags.compared_plain,
                     .annotation_tag_union = flags.annotation_tag_union,
@@ -420,7 +413,6 @@ pub const Descriptor = struct {
                 flags.record_pattern_tail = flex.record_pattern_tail;
             } else {
                 const other = self.otherBits();
-                flags.empty_tag_union_is_default = other.empty_tag_union_is_default;
                 flags.host_fixed_row = other.host_fixed_row;
                 flags.compared_plain = other.compared_plain;
                 flags.annotation_tag_union = other.annotation_tag_union;
@@ -2055,7 +2047,7 @@ fn flagDomain(comptime flag: std.meta.FieldEnum(DescriptorFlags)) FlagDomain {
     return switch (flag) {
         .frozen, .static_dispatch_rejected, .default_decided, .nominal_backing_structure, .bounded_row_ext, .deferred_callable, .annotation_tag_ext => .every_kind,
         .uncommitted_record_tail, .uncommitted_copy, .record_pattern_tail => .flex_only,
-        .empty_tag_union_is_default, .host_fixed_row, .compared_plain, .annotation_tag_union, .uncommitted_tag_tail => .non_flex_only,
+        .host_fixed_row, .compared_plain, .annotation_tag_union, .uncommitted_tag_tail => .non_flex_only,
         ._padding => unreachable, // the padding is no flag
     };
 }
@@ -2125,7 +2117,7 @@ test "a write's flags keep only those the new kind holds" {
         if (kind == .flex) continue;
         const on_kind = flags.forKind(kind);
         try std.testing.expect(!on_kind.flexOnly());
-        try std.testing.expect(on_kind.empty_tag_union_is_default and on_kind.host_fixed_row and on_kind.compared_plain and
+        try std.testing.expect(on_kind.host_fixed_row and on_kind.compared_plain and
             on_kind.annotation_tag_union and on_kind.uncommitted_tag_tail);
     }
 }

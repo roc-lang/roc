@@ -12,6 +12,7 @@ const install = @import("install.zig");
 const linker = @import("linker.zig");
 const RocTarget = @import("target.zig").RocTarget;
 const ResolutionConfig = @import("compile").package_resolution.Config;
+const AnsiStreams = @import("CliCtx.zig").AnsiStreams;
 
 const bytes_per_mb = 1024 * 1024;
 
@@ -43,6 +44,14 @@ pub const CliArgs = union(enum) {
     help: []const u8,
     licenses,
     problem: ArgProblem,
+
+    /// Ordinary commands detect their own destinations; watch children use the parent's.
+    pub fn watchReplayAnsi(self: CliArgs) ?AnsiStreams {
+        return switch (self) {
+            inline .check, .test_cmd, .build => |args| if (args.watch_inputs_file != null) args.watch_ansi else null,
+            .run, .docs, .deps, .help, .problem, .fmt, .bundle, .unbundle, .repl, .glue, .version, .bump, .install, .loc, .experimental_lsp, .licenses => null,
+        };
+    }
 
     pub fn deinit(self: CliArgs, alloc: mem.Allocator) void {
         const tag = std.meta.activeTag(self);
@@ -188,6 +197,7 @@ pub const CheckArgs = struct {
     verbose: bool = false, // enable verbose output
     watch: bool = false, // rerun check when source inputs change
     watch_inputs_file: ?[]const u8 = null, // internal: write watch input paths and byte states here
+    watch_ansi: AnsiStreams = .{},
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
     root_source_url: ?[]const u8 = null, // internal: bundle URL provenance when the source was a URL or installed shorthand
@@ -218,6 +228,7 @@ pub const BuildArgs = struct {
     no_cache: bool = false, // disable compilation caching
     watch: bool = false, // rebuild when source inputs change
     watch_inputs_file: ?[]const u8 = null, // internal: write watch input paths and byte states here
+    watch_ansi: AnsiStreams = .{},
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
     wasm_memory: ?usize = null, // initial memory size for WASM targets (default: sized from data segments plus the stack)
     wasm_stack_size: ?usize = null, // stack size for WASM targets (default: 8MB)
@@ -247,6 +258,7 @@ pub const TestArgs = struct {
     no_cache: bool = false, // disable compilation caching, force re-run all tests
     watch: bool = false, // rerun tests when source inputs change
     watch_inputs_file: ?[]const u8 = null, // internal: write watch input paths and byte states here
+    watch_ansi: AnsiStreams = .{},
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
     root_source_url: ?[]const u8 = null, // internal: bundle URL provenance when the source was a URL or installed shorthand
@@ -737,8 +749,12 @@ const target_flag: Flag = .{
         },
 };
 
-/// Internal: names the file a watched command writes its input paths and byte states to.
-const watch_inputs_file_flag: Flag = .{ .name = "--watch-inputs-file", .form = .attached, .field = "watch_inputs_file" };
+/// Internal protocol for commands whose output the watcher captures and replays.
+const watch_child_flags = [_]Flag{
+    .{ .name = "--watch-inputs-file", .form = .attached, .field = "watch_inputs_file" },
+    .{ .name = "--watch-ansi-stdout", .field = "watch_ansi.stdout" },
+    .{ .name = "--watch-ansi-stderr", .field = "watch_ansi.stderr" },
+};
 
 fn jobsFlag(comptime help: []const u8) Flag {
     return .{ .name = "--jobs", .short = "-j", .form = .attached, .field = "max_threads", .value_name = "<N>", .valid = "a positive integer", .help = help };
@@ -817,7 +833,7 @@ const commands = [_]Command{
         .summary = "Build a binary from the given .roc file, but don't run it",
         .usage = " [OPTIONS] [ROC_FILE]",
         .arguments = "  [ROC_FILE] The .roc file to build [default: " ++ default_roc_file ++ "]",
-        .flags = &.{
+        .flags = &(watch_child_flags ++ [_]Flag{
             .{ .name = "--output", .form = .attached, .field = "output", .value_name = "<output>", .help = "The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)" },
             .{ .name = "--opt", .form = .attached, .field = "opt", .value_name = "<opt>", .help = "Build mode:" },
             specialize_flag,
@@ -829,11 +845,10 @@ const commands = [_]Command{
             .{ .name = "--timings", .field = "timings", .help = "Show how long each compilation phase took (shown automatically when a build is slow)" },
             .{ .name = "--no-cache", .field = "no_cache", .help = "Disable compilation caching" },
             .{ .name = "--watch", .field = "watch", .help = "Rebuild when source inputs change" },
-            watch_inputs_file_flag,
             jobs_flag,
             .{ .name = "--wasm-memory", .form = .attached, .field = "wasm_memory", .value_name = "<bytes>", .valid = "a positive integer number of bytes", .help = "Initial memory size for WASM targets in bytes (default: sized from data segments plus the stack)" },
             .{ .name = "--wasm-stack-size", .form = .attached, .field = "wasm_stack_size", .value_name = "<bytes>", .valid = "a positive integer number of bytes", .help = std.fmt.comptimePrint("Stack size for WASM targets in bytes (default: {d} = {d}MB)", .{ linker.DEFAULT_WASM_STACK_SIZE, linker.DEFAULT_WASM_STACK_SIZE / bytes_per_mb }) },
-        },
+        }),
         .resolve = .limits_and_replace_deps,
         .min_column = 37,
         .positionals = &.{.{ .field = "path" }},
@@ -889,7 +904,7 @@ const commands = [_]Command{
         ,
         .usage = " [OPTIONS] [ROC_FILE]",
         .arguments = "  [ROC_FILE] The .roc file to test [default: " ++ default_roc_file ++ "]",
-        .flags = &.{
+        .flags = &(watch_child_flags ++ [_]Flag{
             .{ .name = "--opt", .form = .attached, .field = "opt", .value_name = "<opt>", .help = "Execution mode:" },
             specialize_flag,
             .{ .name = "--main", .form = .attached, .field = "main", .value_name = "<main>", .help = "The .roc file of the main app/package module to resolve dependencies from" },
@@ -897,9 +912,8 @@ const commands = [_]Command{
             .{ .name = "--timings", .field = "timings", .help = "Show how long each compilation and test phase took" },
             .{ .name = "--no-cache", .field = "no_cache", .help = "Disable compilation caching, force re-run all tests" },
             .{ .name = "--watch", .field = "watch", .help = "Re-run when source inputs change" },
-            watch_inputs_file_flag,
             jobs_flag,
-        },
+        }),
         .resolve = .limits_and_replace_deps,
         .min_column = 38,
         .positionals = &.{.{ .field = "path" }},
@@ -969,7 +983,7 @@ const commands = [_]Command{
         .summary = "Check the code for problems, but don't build or run it",
         .usage = " [OPTIONS] [ROC_FILE]",
         .arguments = "  [ROC_FILE]  The .roc file to check [default: " ++ default_roc_file ++ "]",
-        .flags = &.{
+        .flags = &(watch_child_flags ++ [_]Flag{
             .{ .name = "--opt", .form = .attached, .field = "opt" },
             .{ .name = "--specialize", .form = .attached, .field = "specialization_strategy" },
             .{ .name = "--main", .form = .attached, .field = "main", .value_name = "<main>", .help = "The .roc file of the main app/package module to resolve dependencies from" },
@@ -978,9 +992,8 @@ const commands = [_]Command{
             .{ .name = "--no-cache", .field = "no_cache", .help = "Disable caching" },
             .{ .name = "--verbose", .field = "verbose", .help = "Enable verbose output including cache statistics" },
             .{ .name = "--watch", .field = "watch", .help = "Re-run when source inputs change" },
-            watch_inputs_file_flag,
             jobs_flag,
-        },
+        }),
         .resolve = .limits_and_replace_deps,
         .positionals = &.{.{ .field = "path" }},
         .derived = &.{ "root_source_url", "main_source_url" },

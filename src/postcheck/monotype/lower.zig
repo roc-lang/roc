@@ -2316,6 +2316,11 @@ const SpecEvidenceTarget = struct {
     callable_contracts: []const SpecEvidence = &.{},
 };
 
+/// The local-method target edges of stored evidence that materialized
+/// without a declaration context; the body restoring the stored function
+/// resolves them (`BodyContext.resolveStoredLocalEdges`).
+const StoredLocalEdges = std.ArrayList(*SpecEvidenceTarget);
+
 /// Whether materialized evidence selects a local procedure, as a target or
 /// anywhere in a target's nested evidence and callable contracts.
 fn specEvidenceSelectsLocalProc(entry: SpecEvidence) bool {
@@ -27200,8 +27205,13 @@ const BodyContext = struct {
     }
 
     /// The declaring template's evidence chain a restored stored function
-    /// retained after its own head frame.
-    fn storedDeclaringEvidence(self: *BodyContext, owner: names.ProcTemplate) Allocator.Error!EvidenceChain {
+    /// retained after its own head frame. Materializing it appends its
+    /// local-method edges to `local_edges`.
+    fn storedDeclaringEvidence(
+        self: *BodyContext,
+        owner: names.ProcTemplate,
+        local_edges: *StoredLocalEdges,
+    ) Allocator.Error!EvidenceChain {
         if (self.restored_declaring_evidence) |restored| {
             if (!names.procedureTemplateRefEql(restored.owner, owner)) {
                 Common.invariant("restored function reached local procedures declared by two other templates");
@@ -27218,7 +27228,7 @@ const BodyContext = struct {
             Common.invariant("stored function omitted the declaring template's evidence for a local procedure it reaches");
         }
         var cursor: usize = fn_value.evidence_frames[first].roots_start;
-        const chain = try self.materializeEvidenceFrames(restored.store_view, fn_value, owner, first, fn_value.evidence_frames.len, &cursor);
+        const chain = try self.materializeEvidenceFrames(restored.store_view, fn_value, owner, first, fn_value.evidence_frames.len, &cursor, local_edges);
         if (cursor != fn_value.evidence.nodes.len) {
             Common.invariant("stored declaring evidence contained unreferenced nodes");
         }
@@ -35839,9 +35849,11 @@ const BodyContext = struct {
     /// A divergent expression evaluates its operands in source order, each
     /// for its effect, up to the operand whose evaluation diverges; a
     /// dispatch that cannot run (`DispatchCrashReason`) evaluates all of its
-    /// operands and then crashes. Every operand before the divergence point
-    /// is observable, so none is skipped. Only the operands up to and
-    /// including the first divergent one are listed: nothing after it runs.
+    /// operands and then crashes. An operand whose evaluation has no effect
+    /// (`operandEvaluationHasNoEffect`) is skipped; every other operand
+    /// before the divergence point is observable and evaluates. Only the
+    /// operands up to and including the first divergent one are listed:
+    /// nothing after it runs.
     const OperandSequenceTask = struct {
         /// The operand expressions in evaluation order. Owned.
         operands: []const ExprSite,
@@ -35869,12 +35881,22 @@ const BodyContext = struct {
     }
 
     /// The operands of a divergent expression whose evaluation diverges at
-    /// one of them: every operand up to and including the first divergent
-    /// one, in evaluation order.
-    fn divergentOperandsStep(self: *BodyContext, operands: []const CIR.Expr.Idx, ty: Type.TypeId) Allocator.Error!LowerStep {
-        const refs = try self.exprRefsOf(operands);
-        defer self.allocator.free(refs);
-        return try self.divergentOperandRefsStep(refs, ty);
+    /// one of them: `head`, when present, then `rest`, in evaluation order,
+    /// walked up to and including the first divergent one. Nothing after it
+    /// is read.
+    fn divergentOperandsStep(self: *BodyContext, head: ?CIR.Expr.Idx, rest: []const CIR.Expr.Idx, ty: Type.TypeId) Allocator.Error!LowerStep {
+        const head_len: usize = @intFromBool(head != null);
+        const len = for (0..head_len + rest.len) |index| {
+            const operand = if (index < head_len) head.? else rest[index - head_len];
+            if (try self.checkedExprDivergesInLoweredRuntime(ExprSite.read(operand))) break index + 1;
+        } else Common.invariant("checked expression was marked divergent but no divergent operand was found");
+        const operands = try self.allocator.alloc(ExprSite, len);
+        for (operands, 0..) |*operand, index| operand.* = ExprSite.read(if (index < head_len) head.? else rest[index - head_len]);
+        return requestLowerTask(self, .{ .operand_sequence = .{
+            .operands = operands,
+            .ty = ty,
+            .tail = .diverges,
+        } });
     }
 
     /// Body expressions as their parents read them. Owned.
@@ -35938,9 +35960,12 @@ const BodyContext = struct {
                 .uninhabited => |scrutinee| return try self.finishOperandSequence(task, try self.zeroBranchMatch(scrutinee, task.ty)),
             }
         }
-        if (task.index < task.operands.len) {
+        while (task.index < task.operands.len) {
             const operand = task.operands[task.index];
             task.index += 1;
+            // An operand whose evaluation has no effect is never lowered: no
+            // value, type, or specialization is requested for it.
+            if (self.operandEvaluationHasNoEffect(operand)) continue;
             return requestLowerTask(self, .{ .discarded = .{ .expr = operand } });
         }
         return switch (task.tail) {
@@ -35953,6 +35978,16 @@ const BodyContext = struct {
                 .ty = task.ty,
                 .data = .{ .checked_error = try self.addStringLiteral("runtime error") },
             })),
+        };
+    }
+
+    /// Whether an operand of an operand sequence evaluates with no effect
+    /// (`exprEvaluationHasNoEffect`): a read of a name, a literal, or a
+    /// closure.
+    fn operandEvaluationHasNoEffect(self: *BodyContext, operand: ExprSite) bool {
+        return switch (operand.kind()) {
+            .read => checked.exprEvaluationHasNoEffect(std.meta.activeTag(self.view.bodies.expr(operand.node()).data)),
+            .coerced_value, .hoisted_root, .hoisted_result, .literal_guard, .literal_value, .literal_conversion => false,
         };
     }
 
@@ -35988,14 +36023,8 @@ const BodyContext = struct {
                 task.finish = .{ .expect_err = checked_expr.source_region };
                 return requestLowerTask(self, .{ .inspected = .{ .expr = ExprSite.read(expect_err.expr), .expect_err_snippet = expect_err.snippet } });
             },
-            .list, .tuple => |items| return try self.divergentOperandsStep(items, ty),
-            .str => |parts| {
-                var operands: std.ArrayList(CIR.Expr.Idx) = .empty;
-                defer operands.deinit(self.allocator);
-                if (parts.first) |first| try operands.append(self.allocator, first);
-                try operands.appendSlice(self.allocator, parts.rest);
-                return try self.divergentOperandsStep(operands.items, ty);
-            },
+            .list, .tuple => |items| return try self.divergentOperandsStep(null, items, ty),
+            .str => |parts| return try self.divergentOperandsStep(parts.first, parts.rest, ty),
             .block => |block| return requestLowerTask(self, .{ .block = try self.boxLowerTask(BlockTask, .{
                 .statements = block.statements,
                 .final_expr = ExprSite.read(block.final_expr),
@@ -36011,24 +36040,18 @@ const BodyContext = struct {
                 task.finish = .expr_as_data;
                 return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = .{ .sealed = ty } } });
             },
-            .call => |call| {
-                var operands: std.ArrayList(CIR.Expr.Idx) = .empty;
-                defer operands.deinit(self.allocator);
-                try operands.append(self.allocator, call.func);
-                try operands.appendSlice(self.allocator, call.args);
-                return try self.divergentOperandsStep(operands.items, ty);
-            },
+            .call => |call| return try self.divergentOperandsStep(call.func, call.args, ty),
             .record => |record| {
                 var operands: std.ArrayList(CIR.Expr.Idx) = .empty;
                 defer operands.deinit(self.allocator);
                 if (record.ext) |ext| try operands.append(self.allocator, ext);
                 for (record.fields) |field| try operands.append(self.allocator, self.view.bodies.recordFieldValue(field));
-                return try self.divergentOperandsStep(operands.items, ty);
+                return try self.divergentOperandsStep(null, operands.items, ty);
             },
-            .tag => |tag| return try self.divergentOperandsStep(tag.args, ty),
+            .tag => |tag| return try self.divergentOperandsStep(null, tag.args, ty),
             .nominal => |nominal| return self.divergentEffectStep(ExprSite.read(nominal.backing_expr), ty),
             .row_coerce => |coerce| return self.divergentEffectStep(coerce.value, ty),
-            .binop => |binop| return try self.divergentOperandsStep(&.{ binop.lhs, binop.rhs }, ty),
+            .binop => |binop| return try self.divergentOperandsStep(binop.lhs, &.{binop.rhs}, ty),
             .unary_minus,
             .dbg,
             => |child| return self.divergentEffectStep(ExprSite.read(child), ty),
@@ -36037,13 +36060,13 @@ const BodyContext = struct {
             else
                 Common.invariant("omitted checked expect reached divergent runtime lowering"),
             .field_access => |field| return self.divergentEffectStep(ExprSite.read(field.receiver), ty),
-            .structural_eq => |eq| return try self.divergentOperandsStep(&.{ eq.lhs, eq.rhs }, ty),
-            .structural_hash => |hash| return try self.divergentOperandsStep(&.{ hash.value, hash.hasher }, ty),
+            .structural_eq => |eq| return try self.divergentOperandsStep(eq.lhs, &.{eq.rhs}, ty),
+            .structural_hash => |hash| return try self.divergentOperandsStep(hash.value, &.{hash.hasher}, ty),
             .tuple_access => |access| return self.divergentEffectStep(ExprSite.read(access.tuple), ty),
             .for_ => |for_| return self.divergentEffectStep(ExprSite.read(for_.expr), ty),
             .run_low_level => |low_level| {
                 for (low_level.args) |arg| {
-                    if (try self.checkedExprDivergesInLoweredRuntime(ExprSite.read(arg))) return try self.divergentOperandsStep(low_level.args, ty);
+                    if (try self.checkedExprDivergesInLoweredRuntime(ExprSite.read(arg))) return try self.divergentOperandsStep(null, low_level.args, ty);
                 }
                 if (low_level.op != .crash) {
                     Common.invariant("checked low-level expression was marked divergent but no divergent argument was found");
@@ -50004,7 +50027,6 @@ const BodyContext = struct {
         if (fn_value.evidence_frames.len == 0 or fn_value.evidence_frame_head == null) {
             Common.invariant("stored checked function did not contain an explicit evidence root frame");
         }
-        const retained_evidence = try self.materializeConstFnEvidence(store_view, fn_value);
         _ = self.builder.moduleForConstFnDef(fn_value.fn_def);
         const checked_template = templateForConstFnDef(fn_value.fn_def);
         // The recording owner template lives in its OWN module (for a
@@ -50020,7 +50042,6 @@ const BodyContext = struct {
                 .node => try self.builder.constFnDefToMono(fn_value.fn_def),
             },
             request,
-            retained_evidence,
             static_data_const_locator,
         );
         const request_fn_node = switch (request) {
@@ -50033,7 +50054,6 @@ const BodyContext = struct {
             try self.builder.constFnDefToMono(fn_value.fn_def),
             fn_value.source_fn_ty,
             fn_value.source_fn_key,
-            retained_evidence,
             request_fn_node,
         );
         return try self.addExprWithTypeCell(
@@ -50044,11 +50064,14 @@ const BodyContext = struct {
 
     /// Restore a compile-time function value's template into a draft target.
     ///
-    /// The two call sites take their source function type and key from
-    /// different places: one from the stored `ConstFn`, one from the
-    /// `FnTemplate` being specialized. Both travel as explicit arguments
-    /// rather than being read off whichever record the caller happened to
-    /// hold, because that choice is the caller's and not this function's.
+    /// The source function type and key travel as explicit arguments rather
+    /// than being read off the stored `ConstFn`, because that choice is the
+    /// caller's and not this function's.
+    ///
+    /// A nested function restores in its own body, in two steps: the body
+    /// first establishes the stored owner, the evidence topology, and the
+    /// restored lexical scope, then resolves the evidence's local-method
+    /// edges against them (`resolveStoredLocalEdges`).
     fn restoreConstFnTemplateAt(
         self: *BodyContext,
         store_view: ModuleView,
@@ -50056,9 +50079,10 @@ const BodyContext = struct {
         fn_def: Ast.FnDef,
         source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
-        retained_evidence: EvidenceChain,
         request_fn_node: NodeId,
     ) Allocator.Error!DraftFnTarget {
+        var local_edges: StoredLocalEdges = .empty;
+        defer local_edges.deinit(self.allocator);
         return switch (fn_def) {
             .nested => |nested| {
                 const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
@@ -50071,13 +50095,14 @@ const BodyContext = struct {
                     self.draft,
                 );
                 fn_ctx.in_default_expr = constFnDefIsDefaultRoot(fn_value.fn_def);
-                fn_ctx.evidence = retained_evidence;
                 fn_ctx.inheritFrozenEmissionContext(self);
                 defer fn_ctx.deinit();
-                try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
+                fn_ctx.evidence = try fn_ctx.materializeConstFnEvidence(store_view, fn_value, &local_edges);
                 fn_ctx.current_fn_key = nested.context_fn_key;
                 const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(store_view, fn_value, nested, nested.context_fn_key);
                 defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
+                try fn_ctx.resolveStoredLocalEdges(local_edges.items);
+                try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
                 const restored_owner_scope = try fn_ctx.enterRestoredConstFnOwner();
                 defer restored_owner_scope.leave();
                 try fn_ctx.restoreConstFnOwner(store_view, fn_value);
@@ -50097,6 +50122,10 @@ const BodyContext = struct {
                 );
             },
             .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => blk: {
+                // A template restores in the requesting body, whose
+                // declaration contexts are the ones its evidence reaches.
+                const retained_evidence = try self.materializeConstFnEvidence(store_view, fn_value, &local_edges);
+                try self.resolveStoredLocalEdges(local_edges.items);
                 const template_ref = templateForConstFnDef(fn_value.fn_def);
                 const template_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
                 const template = template_view.templates.get(template_ref.template);
@@ -50123,16 +50152,21 @@ const BodyContext = struct {
         fn_value: check.ConstStore.ConstFn,
         fn_def: Ast.FnDef,
         request: ConstFnRequest,
-        retained_evidence: EvidenceChain,
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
+        // Restoration runs in the restored function's own body, in two
+        // steps. First the body establishes the stored owner, the evidence
+        // topology, the capture bindings, and the restored lexical scope.
+        // Then it resolves the evidence's local-method edges against that
+        // owner and scope, before anything reads the evidence.
         const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
         var fn_ctx = try BodyContext.init(self.allocator, self.builder, fn_view, ownerTemplateForConstFnDef(fn_value.fn_def), self.graph, self.draft);
         fn_ctx.in_default_expr = constFnDefIsDefaultRoot(fn_value.fn_def);
-        fn_ctx.evidence = retained_evidence;
         fn_ctx.inheritFrozenEmissionContext(self);
         defer fn_ctx.deinit();
-        try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
+        var local_edges: StoredLocalEdges = .empty;
+        defer local_edges.deinit(self.allocator);
+        fn_ctx.evidence = try fn_ctx.materializeConstFnEvidence(store_view, fn_value, &local_edges);
         const capture_nested = switch (fn_def) {
             .nested => |nested| nested,
             .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => Common.invariant("capturing stored function had no nested function identity"),
@@ -50169,6 +50203,8 @@ const BodyContext = struct {
 
         const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(store_view, fn_value, capture_nested, fn_ctx.current_fn_key);
         defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
+        try fn_ctx.resolveStoredLocalEdges(local_edges.items);
+        try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
 
         const request_fn_node = switch (request) {
             .sealed => |ty| try fn_ctx.activeNodeFromType(ty),
@@ -54043,9 +54079,15 @@ const BodyContext = struct {
         return (try self.runEvidence(.{ .callable_dispatch_result = .{ .checked_ret_ty = checked_ret_ty, .maybe_plan = null, .callable_plan = callable_plan, .expected_ret_node = expected_ret_node, .phase = phase } })).nodeValue();
     }
 
-    /// Restore the evidence of `fn_value`, a function in `store_view`'s
-    /// `ConstStore`.
-    fn materializeConstFnEvidence(self: *BodyContext, store_view: ModuleView, fn_value: check.ConstStore.ConstFn) Allocator.Error!EvidenceChain {
+    /// Restore the evidence topology of `fn_value`, a function in
+    /// `store_view`'s `ConstStore`: its frames and every vector entry. Its
+    /// local-method edges are appended to `local_edges`, unresolved.
+    fn materializeConstFnEvidence(
+        self: *BodyContext,
+        store_view: ModuleView,
+        fn_value: check.ConstStore.ConstFn,
+        local_edges: *StoredLocalEdges,
+    ) Allocator.Error!EvidenceChain {
         const frames = fn_value.evidence_frames;
         const head = fn_value.evidence_frame_head orelse
             Common.invariant("stored function evidence did not declare a head frame");
@@ -54055,7 +54097,7 @@ const BodyContext = struct {
         const owner = ownerTemplateForConstFnDef(fn_value.fn_def);
         const owner_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(owner));
         var cursor: usize = 0;
-        const head_chain = try self.materializeEvidenceFrames(store_view, fn_value, owner, 0, head + 1, &cursor);
+        const head_chain = try self.materializeEvidenceFrames(store_view, fn_value, owner, 0, head + 1, &cursor, local_edges);
         const own_end = if (head + 1 < frames.len) frames[head + 1].roots_start else fn_value.evidence.nodes.len;
         if (cursor != own_end) {
             Common.invariant("stored function evidence contained unreferenced nodes");
@@ -54122,6 +54164,7 @@ const BodyContext = struct {
         first: usize,
         end: usize,
         cursor: *usize,
+        local_edges: *StoredLocalEdges,
     ) Allocator.Error!EvidenceChain {
         const frames = fn_value.evidence_frames;
         const owner_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(owner));
@@ -54131,7 +54174,7 @@ const BodyContext = struct {
             if (frame.roots_start != cursor.*) {
                 Common.invariant("stored function evidence frame roots were not contiguous");
             }
-            const vector = try self.materializeConstFnEvidenceVector(store_view, fn_value.evidence, cursor, frame.roots_len);
+            const vector = try self.materializeConstFnEvidenceVector(store_view, fn_value.evidence, cursor, frame.roots_len, local_edges);
             const scope: LexicalDispatchScope = switch (frame.scope()) {
                 .root => .root,
                 .generalized => |scope_id| .{ .generalized = @fromBackingInt(@intCast(scope_id)) },
@@ -54289,12 +54332,14 @@ const BodyContext = struct {
     ///
     /// `store_view` is the module whose `ConstStore` holds the evidence, or
     /// null for evidence that never names a codec edge by content alone.
+    /// Every local-method target edge is appended to `local_edges`.
     fn materializeConstFnEvidenceVector(
         self: anytype,
         store_view: ?ModuleView,
         evidence: check.ConstStore.ConstFnEvidenceVector,
         cursor: *usize,
         count: u32,
+        local_edges: *StoredLocalEdges,
     ) Allocator.Error![]const SpecEvidence {
         const arena = self.builder.evidence_arena.allocator();
         var frames = std.ArrayList(StoredEvidenceFrame).empty;
@@ -54313,7 +54358,7 @@ const BodyContext = struct {
                         if (cursor.* - nested.nested_start != nested.subtree_len) {
                             Common.invariant("stored function nested evidence length differed from its subtree");
                         }
-                        try self.finishStoredEvidenceTarget(nested.materialized, nested.stored, .{ .resolved = finished.out });
+                        try self.finishStoredEvidenceTarget(nested.materialized, nested.stored, .{ .resolved = finished.out }, local_edges);
                         parent.out[parent.next] = .{ .target = nested.materialized };
                         if (nested.stored.callable_contracts != 0) {
                             parent.pending = .{ .contracts = nested.materialized };
@@ -54357,7 +54402,7 @@ const BodyContext = struct {
                             continue;
                         },
                         .from_callable => {
-                            try self.finishStoredEvidenceTarget(materialized, target, .synthesize);
+                            try self.finishStoredEvidenceTarget(materialized, target, .synthesize, local_edges);
                             contracts_target = materialized;
                             break :blk .{ .target = materialized };
                         },
@@ -54432,11 +54477,16 @@ const BodyContext = struct {
         }
     }
 
+    /// Materialize one stored target edge. A local-method edge's declaration
+    /// context belongs to the restored function, which establishes its owner,
+    /// captures, and lexical scope only after its evidence topology exists, so
+    /// the edge is appended to `local_edges` for `resolveStoredLocalEdges`.
     fn finishStoredEvidenceTarget(
         self: *BodyContext,
         materialized: *SpecEvidenceTarget,
         target: check.ConstStore.ConstFnTargetEvidence,
         nested: NestedSpecEvidence,
+        local_edges: *StoredLocalEdges,
     ) Allocator.Error!void {
         materialized.* = .{
             .view = self.builder.moduleForDigest(target.view),
@@ -54445,23 +54495,38 @@ const BodyContext = struct {
                 .view = self.builder.moduleForDigest(instantiation.view),
                 .callable_ty = instantiation.callable_ty,
             } else null,
-            .local_proc_context = switch (target.method.kind) {
-                .local_proc => |local| blk_context: {
-                    const context_view = self.builder.moduleForDigest(target.view);
-                    const context_id = try self.localProcContextId(context_view, local.binder, local.expr);
-                    _ = self.validateLocalProcContext(
-                        context_id,
-                        self.builder.moduleForDigest(target.view).key.bytes,
-                        local.binder,
-                        local.expr,
-                        local.context_anchor,
-                    );
-                    break :blk_context context_id;
-                },
-                .procedure, .structural, .callable_binding => null,
-            },
+            .local_proc_context = null,
             .nested = nested,
         };
+        switch (target.method.kind) {
+            .local_proc => try local_edges.append(self.allocator, materialized),
+            .procedure, .structural, .callable_binding => {},
+        }
+    }
+
+    /// Resolve the local-method edges of stored evidence against this body's
+    /// declaration contexts. The body restoring the stored function calls
+    /// this once its evidence chain, captures, and restored lexical scope are
+    /// in place: resolving a restored declaration reads the declaring
+    /// template's lexical evidence chain. Each declaration's context is
+    /// created once per restoring body and shared by every edge naming it.
+    fn resolveStoredLocalEdges(self: *BodyContext, edges: []const *SpecEvidenceTarget) Allocator.Error!void {
+        for (edges) |edge| {
+            const local = switch (edge.target.kind) {
+                .local_proc => |local| local,
+                .procedure, .structural, .callable_binding => unreachable, // finishStoredEvidenceTarget appends only local-method edges
+            };
+            std.debug.assert(edge.local_proc_context == null);
+            const context_id = try self.localProcContextId(edge.view, local.binder, local.expr);
+            _ = self.validateLocalProcContext(
+                context_id,
+                edge.view.key.bytes,
+                local.binder,
+                local.expr,
+                local.context_anchor,
+            );
+            edge.local_proc_context = context_id;
+        }
     }
 
     /// Select the producer-authored edge before materializing any evidence.
@@ -56570,7 +56635,10 @@ const BodyContext = struct {
         plan: static_dispatch.StaticDispatchCallPlan,
     ) Allocator.Error!void {
         if (fn_value.evidence_frames.len != 0) {
-            self.evidence = try self.materializeConstFnEvidence(store_view, fn_value);
+            var local_edges: StoredLocalEdges = .empty;
+            defer local_edges.deinit(self.allocator);
+            self.evidence = try self.materializeConstFnEvidence(store_view, fn_value, &local_edges);
+            try self.resolveStoredLocalEdges(local_edges.items);
             try self.replayStoredEvidenceRelations(self.evidence);
             return;
         }
@@ -68021,8 +68089,10 @@ const BodyContext = struct {
             .context_anchor = context_anchor,
             .method = context_anchor != null,
         };
+        var declaring_local_edges: StoredLocalEdges = .empty;
+        defer declaring_local_edges.deinit(self.allocator);
+        const declared = try self.restoredLocalProcDeclaration(view, expr, &declaring_local_edges);
         const context_id: DraftLocalProcContextId = @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.local_proc_contexts.items.len))));
-        const declared = try self.restoredLocalProcDeclaration(view, expr);
         if (!names.procedureTemplateRefEql(declared.owner, self.owner_template)) {
             self.may_see_other_template_local_procs = true;
         }
@@ -68040,6 +68110,9 @@ const BodyContext = struct {
             return err;
         };
         try self.putLocalProcContext(address, context_id);
+        // The declaring chain's own local-method edges resolve once this
+        // declaration's context is visible, so an edge naming it shares it.
+        try self.resolveStoredLocalEdges(declaring_local_edges.items);
         return context_id;
     }
 
@@ -68053,11 +68126,13 @@ const BodyContext = struct {
     /// names the template that declares it. That is this body's own template
     /// unless the restored function reached the procedure through a
     /// declaration context another template handed it, whose chain the stored
-    /// function retained after its own.
+    /// function retained after its own. Materializing that chain appends its
+    /// local-method edges to `declaring_local_edges`.
     fn restoredLocalProcDeclaration(
         self: *BodyContext,
         view: ModuleView,
         expr: CIR.Expr.Idx,
+        declaring_local_edges: *StoredLocalEdges,
     ) Allocator.Error!RestoredLocalProcDeclaration {
         var site: ?checked.NestedProcSite = null;
         for (view.nested_proc_sites.sites.items()) |candidate| {
@@ -68092,7 +68167,7 @@ const BodyContext = struct {
         const chain = if (names.procedureTemplateRefEql(owner, self.owner_template))
             self.evidence
         else
-            try self.storedDeclaringEvidence(owner);
+            try self.storedDeclaringEvidence(owner, declaring_local_edges);
         return .{
             .owner = owner,
             .evidence = chain.atScope(.{

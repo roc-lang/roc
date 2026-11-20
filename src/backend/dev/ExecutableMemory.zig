@@ -10,6 +10,7 @@ const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const coff = @import("object/coff.zig");
 const host_isa = @import("isa.zig").host;
+const instruction_cache = @import("instruction_cache.zig");
 
 // std.os.windows.VirtualAlloc / VirtualFree / VirtualProtect were removed in Zig 0.16.
 // Declare the thin extern bindings we need locally; only referenced on Windows.
@@ -189,13 +190,13 @@ pub const ExecutableMemory = struct {
 
     /// Allocate executable memory and copy the given code into it.
     /// The code bytes should already have any relocations applied.
-    pub fn init(code: []const u8) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, UnsupportedPlatform, UnwindRegistrationFailed })!Self {
+    pub fn init(code: []const u8) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, FlushInstructionCacheFailed, UnsupportedPlatform, UnwindRegistrationFailed })!Self {
         return initWithEntryOffset(code, 0);
     }
 
     /// Allocate executable memory with a specific entry offset.
     /// Use this when procedures are compiled before the main expression.
-    pub fn initWithEntryOffset(code: []const u8, entry_offset: usize) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, UnsupportedPlatform, UnwindRegistrationFailed })!Self {
+    pub fn initWithEntryOffset(code: []const u8, entry_offset: usize) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, FlushInstructionCacheFailed, UnsupportedPlatform, UnwindRegistrationFailed })!Self {
         return initWithEntryOffsetAndUnwindInfo(code, entry_offset, &.{});
     }
 
@@ -203,7 +204,7 @@ pub const ExecutableMemory = struct {
         code: []const u8,
         entry_offset: usize,
         functions: []const coff.FunctionInfo,
-    ) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, UnsupportedPlatform, UnwindRegistrationFailed })!Self {
+    ) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, FlushInstructionCacheFailed, UnsupportedPlatform, UnwindRegistrationFailed })!Self {
         if (code.len == 0) {
             return error.EmptyCode;
         }
@@ -262,14 +263,14 @@ pub const ExecutableMemory = struct {
     }
 
     /// Mark a writable allocation returned by `initWritable` executable.
-    pub fn finishWrite(self: *Self) error{ MprotectFailed, VirtualProtectFailed, UnsupportedPlatform }!void {
+    pub fn finishWrite(self: *Self) error{ MprotectFailed, VirtualProtectFailed, FlushInstructionCacheFailed, UnsupportedPlatform }!void {
         try protectExecutable(self.memory);
     }
 
     /// Mark the first `executable_len` bytes of a writable allocation
     /// returned by `initWritable` executable, and leave the page-aligned rest
     /// writable data.
-    pub fn finishWriteExecutablePrefix(self: *Self, executable_len: usize) error{ MprotectFailed, VirtualProtectFailed, UnsupportedPlatform }!void {
+    pub fn finishWriteExecutablePrefix(self: *Self, executable_len: usize) error{ MprotectFailed, VirtualProtectFailed, FlushInstructionCacheFailed, UnsupportedPlatform }!void {
         std.debug.assert(std.mem.isAligned(executable_len, std.heap.page_size_min) and executable_len <= self.memory.len);
         try protectExecutable(self.memory[0..executable_len]);
     }
@@ -400,14 +401,17 @@ fn allocateMemory(size: usize) (Allocator.Error || error{ MmapFailed, VirtualAll
     }
 }
 
-/// Make the memory executable
-fn protectExecutable(memory: []align(std.heap.page_size_min) u8) error{ MprotectFailed, VirtualProtectFailed, UnsupportedPlatform }!void {
+/// Publish the instructions written into `memory` to instruction fetch, then
+/// make it executable and read-only.
+fn protectExecutable(memory: []align(std.heap.page_size_min) u8) error{ MprotectFailed, VirtualProtectFailed, FlushInstructionCacheFailed, UnsupportedPlatform }!void {
     switch (comptime classifyMemoryOs(builtin.os.tag)) {
         .posix => {
+            try instruction_cache.flush(memory);
             const prot: std.posix.PROT = .{ .READ = true, .EXEC = true };
             if (std.c.mprotect(@ptrCast(memory.ptr), memory.len, prot) != 0) return error.MprotectFailed;
         },
         .windows => {
+            try instruction_cache.flush(memory);
             var old_protect: win32.DWORD = undefined;
             if (win32.VirtualProtect(
                 memory.ptr,

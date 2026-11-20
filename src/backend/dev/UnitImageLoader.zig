@@ -27,6 +27,7 @@ const builtin = @import("builtin");
 const dev_diagnostics = @import("base").dev_diagnostics;
 const UnitImage = @import("UnitImage.zig");
 const PerfMap = @import("PerfMap.zig");
+const instruction_cache = @import("instruction_cache.zig");
 
 const page_size = std.heap.page_size_min;
 const stub_size: usize = 16;
@@ -45,8 +46,6 @@ const win32 = struct {
     extern "kernel32" fn VirtualAlloc(address: ?*anyopaque, size: usize, allocation_type: DWORD, protect: DWORD) callconv(.winapi) ?*anyopaque;
     extern "kernel32" fn VirtualFree(address: *anyopaque, size: usize, free_type: DWORD) callconv(.winapi) BOOL;
     extern "kernel32" fn VirtualProtect(address: *anyopaque, size: usize, new_protect: DWORD, old_protect: *DWORD) callconv(.winapi) BOOL;
-    extern "kernel32" fn GetCurrentProcess() callconv(.winapi) *anyopaque;
-    extern "kernel32" fn FlushInstructionCache(process: *anyopaque, address: ?*const anyopaque, size: usize) callconv(.winapi) BOOL;
     extern "ntdll" fn RtlAddFunctionTable(table: *anyopaque, count: u32, base_address: u64) callconv(.winapi) u8;
     extern "ntdll" fn RtlDeleteFunctionTable(table: *anyopaque) callconv(.winapi) u8;
 };
@@ -76,7 +75,7 @@ pub const LoadError = error{
     /// A site's value does not fit its field even through a stub;
     /// `Diagnostic.name` names its import, or is empty for a local site.
     SiteOutOfRange,
-};
+} || instruction_cache.Error;
 
 /// What a failed load was about.
 pub const Diagnostic = struct {
@@ -244,6 +243,7 @@ pub fn load(gpa: std.mem.Allocator, view: UnitImage.View, resolver: Resolver, di
         }
     }
 
+    try instruction_cache.flush(memory[0..exec_len]);
     if (windows) {
         // A unit with no code has no executable pages, and VirtualProtect
         // rejects a zero length (ERROR_INVALID_PARAMETER) where mprotect
@@ -251,7 +251,6 @@ pub fn load(gpa: std.mem.Allocator, view: UnitImage.View, resolver: Resolver, di
         if (exec_len != 0) {
             var old: win32.DWORD = undefined;
             if (win32.VirtualProtect(memory.ptr, exec_len, win32.PAGE_EXECUTE_READ, &old) == 0) return error.OutOfMemory;
-            _ = win32.FlushInstructionCache(win32.GetCurrentProcess(), memory.ptr, exec_len);
         }
         if (view.pdata().len != 0) {
             const entry_size: usize = if (arm64) 8 else 12;
@@ -260,7 +259,6 @@ pub fn load(gpa: std.mem.Allocator, view: UnitImage.View, resolver: Resolver, di
             loaded.function_table = table;
         }
     } else {
-        if (arm64) flushInstructionCache(memory[0..exec_len]);
         const executable: std.posix.PROT = .{ .READ = true, .EXEC = true };
         if (std.c.mprotect(@ptrCast(memory.ptr), exec_len, executable) != 0) return error.OutOfMemory;
     }
@@ -304,14 +302,6 @@ fn writeStub(bytes: *[stub_size]u8, target: usize) void {
     std.mem.writeInt(u64, bytes[6..14], target, .little);
     bytes[14..16].* = .{ 0xcc, 0xcc };
 }
-
-/// Publish newly written instructions before they run, through compiler-rt's
-/// cache maintenance for the host.
-fn flushInstructionCache(memory: []const u8) void {
-    __clear_cache(memory.ptr, memory.ptr + memory.len);
-}
-
-extern fn __clear_cache(start: [*]const u8, end: [*]const u8) callconv(.c) void;
 
 /// An address below this binary's code, a preference for where the image
 /// lands so its calls into the compiler reach it directly. The kernel may
