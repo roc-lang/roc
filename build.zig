@@ -5465,31 +5465,31 @@ pub fn build(b: *std.Build) void {
         }
     }
 
-    const names: []const []const u8 = &.{
-        "tokenize",
-        "parse",
-        "format",
-        "canonicalize",
-        "typecheck",
-        "build",
-        "build-errors",
-    };
-    for (names) |name| {
-        add_fuzz_target(
-            b,
-            fuzz,
-            build_afl,
-            use_system_afl,
-            no_bin,
-            run_args,
-            target,
-            optimize,
-            roc_modules,
-            compiled_builtins_module,
-            write_compiled_builtins,
-            flag_enable_tracy,
-            name,
-        );
+    addFuzzRepro(
+        b,
+        no_bin,
+        run_args,
+        target,
+        roc_modules,
+        compiled_builtins_module,
+        write_compiled_builtins,
+        flag_enable_tracy,
+    );
+    if (fuzz) {
+        for (fuzz_target_names) |name| {
+            addAflFuzzTarget(
+                b,
+                no_bin,
+                build_afl,
+                use_system_afl,
+                target,
+                roc_modules,
+                compiled_builtins_module,
+                write_compiled_builtins,
+                flag_enable_tracy,
+                name,
+            );
+        }
     }
 
     test_fixtures.addUpdateStep(&.{build_test_hosts_step});
@@ -5500,6 +5500,70 @@ pub fn build(b: *std.Build) void {
     // Last, so that every top-level step exists -- including the ones created
     // inside addMainExe.
     assertGranularTestStepsAreIsolated(b);
+    boundCompileMemory(b);
+}
+
+/// Upper bounds, in GiB, on the peak memory of the compile steps large enough
+/// to exhaust a CI runner when several of them compile at once. Each is the
+/// largest peak measured on aarch64 macOS, in Debug or ReleaseFast with a cold
+/// cache, plus a quarter for other hosts and targets. Zig's build runner never
+/// runs bounded steps whose bounds add up to more than the machine's memory,
+/// and it fails a step whose peak exceeds its bound, so a step that outgrows
+/// its bound here needs a larger one.
+const compile_memory_bounds = [_]struct { name: []const u8, gib: u64 }{
+    .{ .name = "roc", .gib = 12 },
+    .{ .name = "compile", .gib = 10 },
+    .{ .name = "cli_test", .gib = 10 },
+    .{ .name = "parallel_lsp_integration_runner", .gib = 10 },
+    .{ .name = "snapshot", .gib = 9 },
+    .{ .name = "snapshot_tool_test", .gib = 9 },
+    .{ .name = "glue", .gib = 9 },
+    .{ .name = "repro", .gib = 7 },
+    .{ .name = "lsp", .gib = 7 },
+    .{ .name = "lir_inline_test", .gib = 7 },
+    .{ .name = "builtin_doc_test", .gib = 7 },
+    .{ .name = "builtin_compiler", .gib = 6 },
+    .{ .name = "eval", .gib = 6 },
+    .{ .name = "rc_conformance_test", .gib = 5 },
+    .{ .name = "backend", .gib = 5 },
+    .{ .name = "check", .gib = 5 },
+    .{ .name = "lir", .gib = 4 },
+    .{ .name = "postcheck", .gib = 3 },
+};
+
+/// Gives every compile step named in `compile_memory_bounds` its bound. A
+/// bound is capped at the machine's memory: a process's resident memory can
+/// never exceed that, and the build runner refuses to start a step whose bound
+/// does, so a capped step still runs, just never beside another bounded step.
+fn boundCompileMemory(b: *std.Build) void {
+    const machine_memory = std.process.totalSystemMemory() catch |err| switch (err) {
+        // The build runner then has no memory to divide among steps either.
+        error.UnknownTotalSystemMemory => return,
+    };
+    var visited: std.AutoHashMapUnmanaged(*Step, void) = .empty;
+    defer visited.deinit(b.allocator);
+    for (b.top_level_steps.values()) |tls| boundCompileMemoryUnder(b, &tls.step, &visited, machine_memory);
+}
+
+fn boundCompileMemoryUnder(
+    b: *std.Build,
+    step: *Step,
+    visited: *std.AutoHashMapUnmanaged(*Step, void),
+    machine_memory: u64,
+) void {
+    const gop = visited.getOrPut(b.allocator, step) catch @panic("OOM");
+    if (gop.found_existing) return;
+
+    if (step.tag == .compile) {
+        const compile: *Step.Compile = @fieldParentPtr("step", step);
+        for (compile_memory_bounds) |bound| {
+            if (!std.mem.eql(u8, compile.name, bound.name)) continue;
+            step.max_rss = @min(bound.gib << 30, machine_memory);
+            break;
+        }
+    }
+
+    for (step.dependencies.items) |dep| boundCompileMemoryUnder(b, dep, visited, machine_memory);
 }
 
 /// Configure-time guard: a public `run-test-zig-*` step must pull exactly the
@@ -5595,78 +5659,134 @@ fn collectTestRuns(
     for (step.dependencies.items) |dep| collectTestRuns(b, dep, visited, found, found_len);
 }
 
-fn add_fuzz_target(
+/// Every fuzz target, named as its `test/fuzzing/fuzz-<name>.zig` file is and
+/// as `test/fuzzing/targets.zig` declares it.
+const fuzz_target_names = [_][]const u8{
+    "tokenize",
+    "parse",
+    "format",
+    "canonicalize",
+    "typecheck",
+    "build",
+    "build-errors",
+};
+
+/// The mode fuzz targets are compiled in, both for AFL++ and in the repro
+/// executable. macOS uses Debug to work around instrumentation bugs there
+/// without giving up performance on Linux.
+fn fuzzOptimize(target: ResolvedTarget) OptimizeMode {
+    return if (target.result.os.tag == .macos) .debug else .safe;
+}
+
+fn addFuzzTargetImports(
     b: *std.Build,
-    fuzz: bool,
-    build_afl: bool,
-    use_system_afl: bool,
+    compile_step: *Step.Compile,
+    target: ResolvedTarget,
+    roc_modules: modules.RocModules,
+    compiled_builtins_module: *std.Build.Module,
+    write_compiled_builtins: *Step.WriteFile,
+    tracy: ?[]const u8,
+) void {
+    roc_modules.addAll(compile_step);
+    compile_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    compile_step.step.dependOn(&write_compiled_builtins.step);
+    add_tracy(b, roc_modules.build_options, compile_step, target, false, tracy);
+}
+
+/// One executable, `repro`, that runs a single input through any fuzz target:
+/// `repro <target> [--verbose] [input]`. `run-repro-<target>` runs it for one
+/// target.
+fn addFuzzRepro(
+    b: *std.Build,
     no_bin: bool,
     run_args: []const []const u8,
     target: ResolvedTarget,
-    optimize: OptimizeMode,
+    roc_modules: modules.RocModules,
+    compiled_builtins_module: *std.Build.Module,
+    write_compiled_builtins: *Step.WriteFile,
+    tracy: ?[]const u8,
+) void {
+    const build_repro_step = b.step("build-repro", "Build the fuzz reproduction executable for every fuzz target");
+    const repro_exe = b.addExecutable(.{
+        .name = "repro",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/fuzzing/fuzz-repro.zig"),
+            .target = target,
+            .optimize = fuzzOptimize(target),
+            .link_libc = true,
+        }),
+    });
+    configureBackend(repro_exe, target);
+    addFuzzTargetImports(b, repro_exe, target, roc_modules, compiled_builtins_module, write_compiled_builtins, tracy);
+
+    if (no_bin) {
+        build_repro_step.dependOn(&repro_exe.step);
+        b.getInstallStep().dependOn(&repro_exe.step);
+    } else {
+        const install = &b.addInstallArtifact(repro_exe, .{}).step;
+        build_repro_step.dependOn(install);
+        b.getInstallStep().dependOn(install);
+    }
+    for (fuzz_target_names) |name| {
+        const run_repro_step = b.step(b.fmt("run-repro-{s}", .{name}), b.fmt("Run fuzz reproduction for {s}", .{name}));
+        run_repro_step.dependOn(build_repro_step);
+        if (no_bin) continue;
+        const run = b.addRunArtifact(repro_exe);
+        run.addArg(name);
+        if (run_args.len != 0) run.addArgs(run_args);
+        run.addPassthruArgs();
+        run_repro_step.dependOn(&run.step);
+    }
+}
+
+/// The AFL++ fuzz executable `fuzz-<name>`, instrumented for coverage. With
+/// `-Dno-bin`, only its object is analyzed.
+fn addAflFuzzTarget(
+    b: *std.Build,
+    no_bin: bool,
+    build_afl: bool,
+    use_system_afl: bool,
+    target: ResolvedTarget,
     roc_modules: modules.RocModules,
     compiled_builtins_module: *std.Build.Module,
     write_compiled_builtins: *Step.WriteFile,
     tracy: ?[]const u8,
     name: []const u8,
 ) void {
-    // We always include the repro scripts (no dependencies).
-    // We only include the fuzzing scripts if `-Dfuzz` is set.
-    const root_source_file = b.path(b.fmt("test/fuzzing/fuzz-{s}.zig", .{name}));
+    const fuzz_options = b.addOptions();
+    fuzz_options.addOption([]const u8, "target", name);
     const fuzz_obj = b.addObject(.{
         .name = b.fmt("{s}_obj", .{name}),
         .root_module = b.createModule(.{
-            .root_source_file = root_source_file,
+            .root_source_file = b.path("test/fuzzing/fuzz-afl.zig"),
             .target = target,
-            // Work around instrumentation bugs on mac without giving up perf on linux.
-            .optimize = if (target.result.os.tag == .macos) .debug else .safe,
+            .optimize = fuzzOptimize(target),
         }),
     });
     configureBackend(fuzz_obj, target);
     // Required for fuzzing.
     fuzz_obj.root_module.link_libc = true;
     fuzz_obj.root_module.stack_check = false;
-    // Enable coverage instrumentation for AFL++ when building fuzz targets.
-    if (fuzz and build_afl) {
-        fuzz_obj.sanitize_coverage_trace_pc_guard = true;
+    fuzz_obj.sanitize_coverage_trace_pc_guard = true;
+    fuzz_obj.root_module.addOptions("fuzz_options", fuzz_options);
+    addFuzzTargetImports(b, fuzz_obj, target, roc_modules, compiled_builtins_module, write_compiled_builtins, tracy);
+
+    if (no_bin) {
+        b.getInstallStep().dependOn(&fuzz_obj.step);
+        return;
     }
+    if (!build_afl) return;
 
-    roc_modules.addAll(fuzz_obj);
-    fuzz_obj.root_module.addImport("compiled_builtins", compiled_builtins_module);
-    fuzz_obj.step.dependOn(&write_compiled_builtins.step);
-    add_tracy(b, roc_modules.build_options, fuzz_obj, target, false, tracy);
+    const fuzz_step = b.step(b.fmt("build-fuzz-{s}", .{name}), b.fmt("Build fuzz executable for {s}", .{name}));
+    b.default_step.dependOn(fuzz_step);
 
-    const name_exe = b.fmt("fuzz-{s}", .{name});
-    const name_repro = b.fmt("repro-{s}", .{name});
-    const build_repro_step = b.step(b.fmt("build-repro-{s}", .{name}), b.fmt("Build fuzz reproduction for {s}", .{name}));
-    const run_repro_step = b.step(b.fmt("run-repro-{s}", .{name}), b.fmt("Run fuzz reproduction for {s}", .{name}));
-    const repro_exe = b.addExecutable(.{
-        .name = name_repro,
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("test/fuzzing/fuzz-repro.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        }),
-    });
-    configureBackend(repro_exe, target);
-    repro_exe.root_module.addImport("fuzz_test", fuzz_obj.root_module);
-    repro_exe.root_module.addImport("build_options", roc_modules.build_options);
-
-    _ = install_and_run(b, no_bin, repro_exe, null, build_repro_step, run_repro_step, run_args);
-
-    if (fuzz and build_afl and !no_bin) {
-        const fuzz_step = b.step(b.fmt("build-fuzz-{s}", .{name}), b.fmt("Build fuzz executable for {s}", .{name}));
-        b.default_step.dependOn(fuzz_step);
-
-        const fuzz_exe = if (target.result.os.tag == .macos)
-            addMacosAflFuzzExe(b, target, .safe, use_system_afl, fuzz_obj) orelse return
-        else
-            addAflFuzzExe(b, target, .safe, use_system_afl, fuzz_obj) orelse return;
-        const install_fuzz = b.addInstallBinFile(fuzz_exe, name_exe);
-        fuzz_step.dependOn(&install_fuzz.step);
-        b.getInstallStep().dependOn(&install_fuzz.step);
-    }
+    const fuzz_exe = if (target.result.os.tag == .macos)
+        addMacosAflFuzzExe(b, target, .safe, use_system_afl, fuzz_obj) orelse return
+    else
+        addAflFuzzExe(b, target, .safe, use_system_afl, fuzz_obj) orelse return;
+    const install_fuzz = b.addInstallBinFile(fuzz_exe, b.fmt("fuzz-{s}", .{name}));
+    fuzz_step.dependOn(&install_fuzz.step);
+    b.getInstallStep().dependOn(&install_fuzz.step);
 }
 
 fn addAflFuzzExe(

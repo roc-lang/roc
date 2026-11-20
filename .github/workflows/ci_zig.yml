@@ -29,10 +29,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
-      - name: Enlarge swap (Linux)
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/enlarge-linux-swap
-
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.17.1
@@ -107,12 +103,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
-      - name: Enlarge pagefile (Windows)
-        if: runner.os == 'Windows'
-        uses: ./.github/actions/enlarge-windows-pagefile
-      - name: Enlarge swap (Linux)
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/enlarge-linux-swap
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.17.1
@@ -194,12 +184,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
-      - name: Enlarge pagefile (Windows)
-        if: runner.os == 'Windows'
-        uses: ./.github/actions/enlarge-windows-pagefile
-      - name: Enlarge swap (Linux)
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/enlarge-linux-swap
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.17.1
@@ -260,56 +244,27 @@ jobs:
 
   # Nightly-only work on every OS. MiniCI is not repeated here: PR CI runs it
   # on macos-15, ubuntu-24.04 and windows-2025, and `minici-other-hosts` runs it
-  # on the other legs. This job keeps the ReleaseFast build and test run,
-  # snapshots in `--debug` mode, the Debug `-Dfuzz` `run-test-zig` aggregate,
-  # static-link checks, and eval coverage.
+  # on the other legs. This job keeps snapshots in `--debug` mode, the Debug
+  # `run-test-zig` aggregate, and eval coverage; `zig-tests-release` runs the
+  # same aggregate at ReleaseFast.
   zig-tests:
     needs: check-once
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [macos-15-intel, macos-15, ubuntu-24.04, ubuntu-24.04-arm, windows-2022, windows-2025]
         include:
-          - os: macos-15-intel
-            cpu_flag: ''
-            target_flag: ''
-            release_jobs_flag: ''
-            zig_test_timeout_flag: ''
-          - os: macos-15
-            cpu_flag: ''
-            target_flag: ''
-            release_jobs_flag: ''
-            zig_test_timeout_flag: ''
           - os: ubuntu-24.04
-            cpu_flag: ""
             target_flag: -Dtarget=x86_64-linux-musl
-            release_jobs_flag: ''
-            zig_test_timeout_flag: ''
-          - os: ubuntu-24.04-arm
-            cpu_flag: ''
-            target_flag: ''  # Native build: kcov coverage only runs on arm64 Linux (see Eval Code Coverage below)
-            release_jobs_flag: -j2  # Avoid hosted ARM runner disconnects under ReleaseFast parallelism.
-            zig_test_timeout_flag: ''
           - os: windows-2022
-            cpu_flag: ''
-            target_flag: ''
-            release_jobs_flag: ''
             zig_test_timeout_flag: --test-timeout 5m
           - os: windows-2025
-            cpu_flag: ''
-            target_flag: ''
-            release_jobs_flag: ''
             zig_test_timeout_flag: --test-timeout 5m
 
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
-      - name: Enlarge pagefile (Windows)
-        if: runner.os == 'Windows'
-        uses: ./.github/actions/enlarge-windows-pagefile
-      - name: Enlarge swap (Linux)
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/enlarge-linux-swap
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.17.1
@@ -335,23 +290,102 @@ jobs:
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
             zig-deps-${{ runner.os }}-${{ runner.arch }}-
-      # temp fix, see https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/CI/near/542085291
-      - name: delete llvm-config
-        if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
-        run: |
-          sudo rm /usr/lib/llvm-18/bin/llvm-config
-
-      - name: build roc + repro executables
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: zig build ${{ matrix.release_jobs_flag }} -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}
-          retry_count: 3
 
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
         uses: TheMrMilchmann/setup-msvc-dev@79dac248aac9d0059f86eae9d8b5bfab4e95e97c # ratchet:TheMrMilchmann/setup-msvc-dev@v4.0.0
         with:
-          arch: ${{ matrix.os == 'windows-11-arm' && 'arm64' || 'x64' }}
+          arch: x64
+
+      - name: zig snapshot tests
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build run-check-snapshots ${{ matrix.target_flag }} -- --debug
+          retry_count: 3
+
+      - name: Build and execute tests
+        run: zig build ${{ matrix.zig_test_timeout_flag }} run-test-zig ${{ matrix.target_flag }}
+
+      - name: Check for snapshot changes
+        run: |
+          git diff --exit-code test/snapshots
+
+      # Eval code coverage - run on ARM64 Linux (native build); parser coverage
+      # is the MiniCI job `run-coverage-parser`, which `minici-other-hosts` runs
+      # there. x86_64 coverage stays disabled: Zig's x86_64 backend emitted
+      # .debug_line sections that libdw could not parse (observed on Zig
+      # 0.15.2). That has not yet been re-verified on Zig 0.17; enabling
+      # x86_64 coverage needs that re-check first (see build.zig's coverage
+      # notes).
+      - name: Install kcov dependencies
+        if: matrix.os == 'ubuntu-24.04-arm'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdw-dev libcurl4-openssl-dev
+
+      - name: Eval Code Coverage
+        if: matrix.os == 'ubuntu-24.04-arm'
+        run: zig build run-coverage-eval
+
+  # The ReleaseFast half of `zig-tests`, in its own job so that no runner
+  # compiles the whole test graph twice: the shipped `roc` build, checks that it
+  # runs and links only system libraries, and the `run-test-zig` aggregate at
+  # ReleaseFast.
+  zig-tests-release:
+    needs: check-once
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15-intel, macos-15, ubuntu-24.04, ubuntu-24.04-arm, windows-2022, windows-2025]
+        include:
+          - os: ubuntu-24.04
+            target_flag: -Dtarget=x86_64-linux-musl
+          - os: windows-2022
+            zig_test_timeout_flag: --test-timeout 5m
+          - os: windows-2025
+            zig_test_timeout_flag: --test-timeout 5m
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
+        with:
+          version: 0.17.1
+          use-cache: false
+
+      - name: Cache Zig dependency packages
+        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
+        with:
+          # Zig stores fetched packages in the `p/` subdir of the global cache.
+          # Caching just that under a stable build.zig.zon-hash key keeps deps
+          # present across runs: it is read every run, so it stays warm and is
+          # not evicted by the setup action's churnier per-run cache. A cold runner then no
+          # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
+          #
+          # Note this step is currently the ONLY working cache. The setup
+          # action also caches build artifacts, but `.zig-cache` exceeds its
+          # 2048 MiB cache-size-limit on every platform, so the action clears
+          # the directory in its post step and saves nothing -- every run then
+          # starts from a cold build cache. See the "Report .zig-cache
+          # composition" step in ci_manager.yml; sizing the limit is a
+          # follow-up.
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: TheMrMilchmann/setup-msvc-dev@79dac248aac9d0059f86eae9d8b5bfab4e95e97c # ratchet:TheMrMilchmann/setup-msvc-dev@v4.0.0
+        with:
+          arch: x64
+
+      - name: Build roc
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build roc -Doptimize=ReleaseFast ${{ matrix.target_flag }}
+          retry_count: 3
 
       - name: roc executable minimal check (Unix)
         if: runner.os != 'Windows'
@@ -363,21 +397,6 @@ jobs:
         shell: pwsh
         run: |
           zig-out\bin\roc.exe check ./CONTRIBUTING/profiling/bench_repeated_check.roc
-
-      - name: zig snapshot tests
-        run: zig build run-check-snapshots ${{ matrix.target_flag }} -- --debug
-
-      # 1) in debug mode
-      - name: build and execute tests, build repro executables
-        run: zig build ${{ matrix.zig_test_timeout_flag }} run-test-zig -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }}
-
-      # 2) in release mode
-      - name: Build and execute tests, build repro executables. All in release mode.
-        run: zig build ${{ matrix.release_jobs_flag }} ${{ matrix.zig_test_timeout_flag }} run-test-zig -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}
-
-      - name: Check for snapshot changes
-        run: |
-          git diff --exit-code test/snapshots
 
       - name: check if statically linked (ubuntu)
         if: startsWith(matrix.os, 'ubuntu')
@@ -412,22 +431,8 @@ jobs:
               exit 1
           }
 
-      # Eval code coverage - run on ARM64 Linux (native build); parser coverage
-      # is the MiniCI job `run-coverage-parser`, which `minici-other-hosts` runs
-      # there. x86_64 coverage stays disabled: Zig's x86_64 backend emitted
-      # .debug_line sections that libdw could not parse (observed on Zig
-      # 0.15.2). That has not yet been re-verified on Zig 0.17; enabling
-      # x86_64 coverage needs that re-check first (see build.zig's coverage
-      # notes).
-      - name: Install kcov dependencies
-        if: matrix.os == 'ubuntu-24.04-arm'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libdw-dev libcurl4-openssl-dev
-
-      - name: Eval Code Coverage
-        if: matrix.os == 'ubuntu-24.04-arm'
-        run: zig build run-coverage-eval
+      - name: Build and execute tests in release mode
+        run: zig build ${{ matrix.zig_test_timeout_flag }} run-test-zig -Doptimize=ReleaseFast ${{ matrix.target_flag }}
 
   zig-valgrind:
     needs: check-once
@@ -435,9 +440,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
-      - name: Enlarge swap (Linux)
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/enlarge-linux-swap
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.17.1
@@ -464,22 +466,10 @@ jobs:
           restore-keys: |
             zig-deps-${{ runner.os }}-${{ runner.arch }}-
 
-      - name: build roc + repro executables for valgrind
+      - name: build roc and the snapshot tool for valgrind
         uses: ./.github/actions/flaky-retry
         with:
-          # `-e .zig-cache` is load-bearing: `git clean -x` removes ignored
-          # files, so without it this deletes the `p/` package dir that the
-          # cache step above restored one step earlier -- forcing a full
-          # re-download of every dependency and producing exactly the
-          # HttpConnectionClosing flake that this flaky-retry wrapper then
-          # absorbs. Keeping the rest of `.zig-cache` is safe: Zig keys cache
-          # entries on the full build configuration, so the valgrind build
-          # (-Dvalgrind=true, musl target, ReleaseFast) hashes to different
-          # entries than any other job's and cannot pick up stale artifacts.
-          # Keep large ReleaseFast Zig compiler processes from overlapping and
-          # exhausting the hosted runner's memory. This lane builds several
-          # artifacts that individually peak at multiple GiB under valgrind.
-          command: git clean -fdx -e .zig-cache && zig build -j1 -Dvalgrind=true -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
+          command: zig build roc build-snapshot-tool -Dvalgrind=true -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
           retry_count: 3
 
       - name: install valgrind
@@ -495,6 +485,8 @@ jobs:
           ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/int/app.roc
 
       - name: valgrind snapshots
+        env:
+          SNAPSHOT_BIN: ./zig-out/bin/snapshot
         run: |
           ./ci/valgrind_snapshots.sh
 
@@ -515,9 +507,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
-      - name: Enlarge swap (Linux)
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/enlarge-linux-swap
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.17.1
