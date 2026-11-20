@@ -88,6 +88,14 @@ pub const LocateError = error{
     NotACacheEntry,
 };
 
+/// The directory a path the build runner formatted for an Options module
+/// names. `std.Build.Cache.Path.formatEscapeString` writes a directory with
+/// no path of its own and no sub path, which is how the build runner
+/// registers the current directory, as the empty string.
+pub fn formattedDirectory(formatted: []const u8) []const u8 {
+    return if (formatted.len == 0) "." else formatted;
+}
+
 /// The rest of `path` below the directory `dir`, or null when `path` is not
 /// inside `dir`. Both are absolute and resolved.
 pub fn below(path: []const u8, dir: []const u8) ?[]const u8 {
@@ -361,6 +369,11 @@ const TestCache = struct {
         return digest;
     }
 };
+
+test "the current directory, formatted empty, is `.`" {
+    try std.testing.expectEqualStrings(".", formattedDirectory(""));
+    try std.testing.expectEqualStrings("/work/.zig-cache", formattedDirectory("/work/.zig-cache"));
+}
 
 test "an entry's manifest is the one whose final digest names it" {
     var fixture: TestCache = undefined;

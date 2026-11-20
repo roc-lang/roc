@@ -37,7 +37,7 @@ runs:
       run: |
         set -euo pipefail
         rm -f minici-build-*.tar.zst minici-build-list.txt
-        shard="$(./zig-out/bin/minici-pack shard "$SLOT" "$SLOTS")"
+        shard="$(./zig-out/bin/minici-pack shard "${MINICI_HOST:?}" "$SLOT" "$SLOTS")"
         echo "shard=$shard" >> "$GITHUB_OUTPUT"
         if [ -z "$shard" ]; then
           echo "This host has no MiniCI shard in slot $SLOT."

@@ -45,10 +45,10 @@ const outputs: [cache_roots.output_count][]const u8 = outputs: {
 
 const usage =
     \\Usage:
-    \\  minici-pack shard <slot> <slots>
-    \\      Print the name of the slot-th (from 0) shard on this host that
-    \\      restores a build artifact, or nothing past the last one. Fails when
-    \\      this host has more such shards than <slots>.
+    \\  minici-pack shard <host> <slot> <slots>
+    \\      Print the name of the slot-th (from 0) shard of <host> (a
+    \\      `minici.Host` name) that restores a build artifact, or nothing past
+    \\      the last one. Fails when the host has more such shards than <slots>.
     \\  minici-pack list <shard> <zig> <list-file>
     \\      Write the paths the shard's artifact carries to <list-file>, one per
     \\      line, relative to the build root. Run it from the build root after
@@ -66,10 +66,9 @@ fn usageError() noreturn {
     std.process.exit(2);
 }
 
-/// The shards on this host whose jobs need `build-ci`, in `minici.shards`
+/// The shards of `host` whose jobs need `build-ci`, in `minici.shards`
 /// order.
-fn hostShards(arena: std.mem.Allocator) ![]const minici.Shard {
-    const host = minici.Host.current orelse fail("CI runs no MiniCI shards on this host", .{});
+fn hostShards(arena: std.mem.Allocator, host: minici.Host) ![]const minici.Shard {
     var list: std.ArrayList(minici.Shard) = .empty;
     for (minici.shards) |shard| {
         if (shard.host == host and shard.lane.needsBuildCi()) try list.append(arena, shard);
@@ -138,21 +137,17 @@ fn pathBytes(io: Io, path: []const u8) !u64 {
 
 fn writeList(arena: std.mem.Allocator, io: Io, shard_name: []const u8, zig_exe: []const u8, list_path: []const u8) !void {
     const shard = minici.shardByName(shard_name) orelse fail("unknown MiniCI shard `{s}`", .{shard_name});
-    var on_host = false;
-    for (try hostShards(arena)) |host_shard| {
-        if (std.mem.eql(u8, host_shard.name, shard.name)) on_host = true;
-    }
-    if (!on_host) fail("shard `{s}` does not restore a build artifact on this host", .{shard.name});
+    if (!shard.lane.needsBuildCi()) fail("shard `{s}` restores no build artifact", .{shard.name});
 
     const layout: cache_closure.Layout = .{
         .prefixes = .{
-            .cwd = try realPath(arena, io, cache_roots.cwd),
-            .zig_lib = try realPath(arena, io, cache_roots.zig_lib),
-            .local_cache = try realPath(arena, io, cache_roots.local_cache),
-            .global_cache = try realPath(arena, io, cache_roots.global_cache),
-            .build_root = try realPath(arena, io, cache_roots.build_root),
+            .cwd = try realPath(arena, io, cache_closure.formattedDirectory(cache_roots.cwd)),
+            .zig_lib = try realPath(arena, io, cache_closure.formattedDirectory(cache_roots.zig_lib)),
+            .local_cache = try realPath(arena, io, cache_closure.formattedDirectory(cache_roots.local_cache)),
+            .global_cache = try realPath(arena, io, cache_closure.formattedDirectory(cache_roots.global_cache)),
+            .build_root = try realPath(arena, io, cache_closure.formattedDirectory(cache_roots.build_root)),
         },
-        .install_prefix = try realPath(arena, io, cache_roots.install_prefix),
+        .install_prefix = try realPath(arena, io, cache_closure.formattedDirectory(cache_roots.install_prefix)),
     };
     const build_root = layout.prefixes.build_root;
     if (!std.mem.eql(u8, try realPath(arena, io, "."), build_root)) {
@@ -261,10 +256,11 @@ pub fn main(init: std.process.Init) !void {
     if (args.len < 2) usageError();
     const command: []const u8 = args[1];
 
-    if (std.mem.eql(u8, command, "shard") and args.len == 4) {
-        const slot = std.fmt.parseInt(usize, args[2], 10) catch usageError();
-        const slots = std.fmt.parseInt(usize, args[3], 10) catch usageError();
-        const shards = try hostShards(arena);
+    if (std.mem.eql(u8, command, "shard") and args.len == 5) {
+        const host = std.meta.stringToEnum(minici.Host, args[2]) orelse fail("unknown MiniCI host `{s}`", .{args[2]});
+        const slot = std.fmt.parseInt(usize, args[3], 10) catch usageError();
+        const slots = std.fmt.parseInt(usize, args[4], 10) catch usageError();
+        const shards = try hostShards(arena, host);
         if (shards.len > slots) fail("this host has {d} shards that restore a build artifact, more than the {d} slots CI packs", .{ shards.len, slots });
         if (slot < shards.len) {
             var stdout_buffer: [256]u8 = undefined;
