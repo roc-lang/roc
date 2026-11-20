@@ -46,7 +46,7 @@ fn runNativeBackendHostSelfTest(
     output_basename: []const u8,
     self_test_flag: []const u8,
 ) FxPlatformTestError!std.process.RunResult {
-    var tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = util.tmpDir(testing.io);
     defer tmp_dir.cleanup();
 
     const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
@@ -124,7 +124,7 @@ fn buildAndRunDevBackendApp(
     /// Arguments `roc build` takes after `--opt=dev`.
     extra_args: []const []const u8,
 ) FxPlatformTestError!std.process.RunResult {
-    var tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = util.tmpDir(testing.io);
     defer tmp_dir.cleanup();
 
     const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
@@ -591,7 +591,7 @@ test "Linux executable builds use static PIE with platform-owned and default sta
     };
     const allocator = testing.allocator;
     const io = testing.io;
-    var tmp = testing.tmpDir(.{});
+    var tmp = util.tmpDir(testing.io);
     defer tmp.cleanup();
     try tmp.dir.writeFile(io, .{ .sub_path = "default.roc", .data =
         \\main! = |_args| {
@@ -666,7 +666,7 @@ test "Linux executable builds use static PIE with platform-owned and default sta
 test "macOS and Windows executable builds retain ASLR flags and pointer fixups" {
     const allocator = testing.allocator;
     const io = testing.io;
-    var tmp = testing.tmpDir(.{});
+    var tmp = util.tmpDir(testing.io);
     defer tmp.cleanup();
     // Runtime indexing keeps absolute pointers to long strings in the image:
     // testing only a header flag would miss a broken relocation table.
@@ -1269,7 +1269,7 @@ fn runWithReplacedUrlPlatform(opt_args: []const []const u8) FxPlatformTestError!
     // bundle fails with a download error.
     const platform_url = "http://127.0.0.1:9/fx/0.0.1/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst";
 
-    var tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = util.tmpDir(testing.io);
     defer tmp_dir.cleanup();
     try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "main.roc",
@@ -1906,14 +1906,23 @@ test "fx platform inline expect fails in dev backend binary" {
     // backend to silently skip the assertion.
     const allocator = testing.allocator;
 
+    var tmp_dir = util.tmpDir(testing.io);
+    defer tmp_dir.cleanup();
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const output_path = try std.fs.path.join(allocator, &.{ tmp_path, "issue8517" });
+    defer allocator.free(output_path);
+    const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
+    defer allocator.free(output_arg);
+
     // Build with dev backend to produce a native binary
-    const build_result = try util.runRoc(std.testing.io, allocator, &.{ "build", "--opt=dev" }, "test/fx/issue8517.roc");
+    const build_result = try util.runRoc(std.testing.io, allocator, &.{ "build", "--opt=dev", output_arg }, "test/fx/issue8517.roc");
     defer allocator.free(build_result.stdout);
     defer allocator.free(build_result.stderr);
     try util.checkSuccess(build_result);
 
     // Run the built binary
-    const run_result = try util.runChildWithTimeout(std.testing.io, allocator, &[_][]const u8{"./issue8517"}, .{
+    const run_result = try util.runChildWithTimeout(std.testing.io, allocator, &[_][]const u8{output_path}, .{
         .max_output_bytes = 10 * 1024 * 1024,
     });
     defer allocator.free(run_result.stdout);
@@ -2044,7 +2053,7 @@ test "fx platform valid nested where-clause static dispatch builds" {
     // checked where-clause dispatch evidence to build when the contract is valid.
     const allocator = testing.allocator;
 
-    var tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = util.tmpDir(testing.io);
     defer tmp_dir.cleanup();
 
     const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
@@ -2387,7 +2396,7 @@ test "default app resolves a sibling type module imported with exposing" {
     // while sibling imports resolve against the file's original directory. Here
     // the sibling `FooBar.roc` is a type module whose associated value `square`
     // is brought into scope via `exposing` and then called.
-    var tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = util.tmpDir(testing.io);
     defer tmp_dir.cleanup();
 
     try tmp_dir.dir.writeFile(std.testing.io, .{
@@ -2444,7 +2453,7 @@ test "default app resolves a sibling type module imported with exposing" {
 test "slash-qualified imports resolve local, root, parent, nested, and package targets" {
     const allocator = testing.allocator;
 
-    var tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = util.tmpDir(testing.io);
     defer tmp_dir.cleanup();
     const cache_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(cache_path);
@@ -2530,7 +2539,7 @@ test "imports reject package-root escape and physical source aliases" {
     try util.checkFailure(private_result);
     try testing.expect(std.mem.find(u8, private_result.stderr, "package module is private") != null);
 
-    var escape_tmp = testing.tmpDir(.{});
+    var escape_tmp = util.tmpDir(testing.io);
     defer escape_tmp.cleanup();
     try escape_tmp.dir.createDir(std.testing.io, "pkg", .default_dir);
     try escape_tmp.dir.writeFile(std.testing.io, .{
@@ -2551,7 +2560,7 @@ test "imports reject package-root escape and physical source aliases" {
     try util.checkFailure(escape_result);
     try testing.expect(std.mem.find(u8, escape_result.stderr, "import escapes package root") != null);
 
-    var case_tmp = testing.tmpDir(.{});
+    var case_tmp = util.tmpDir(testing.io);
     defer case_tmp.cleanup();
     try case_tmp.dir.createDir(std.testing.io, "Dir", .default_dir);
     try case_tmp.dir.writeFile(std.testing.io, .{
@@ -2577,7 +2586,7 @@ test "imports reject package-root escape and physical source aliases" {
 
     if (comptime @import("builtin").os.tag == .windows) return;
 
-    var outside_tmp = testing.tmpDir(.{});
+    var outside_tmp = util.tmpDir(testing.io);
     defer outside_tmp.cleanup();
     try outside_tmp.dir.createDir(std.testing.io, "pkg", .default_dir);
     try outside_tmp.dir.writeFile(std.testing.io, .{
@@ -2603,7 +2612,7 @@ test "imports reject package-root escape and physical source aliases" {
     try util.checkFailure(outside_result);
     try testing.expect(std.mem.find(u8, outside_result.stderr, "resolves outside") != null);
 
-    var alias_tmp = testing.tmpDir(.{});
+    var alias_tmp = util.tmpDir(testing.io);
     defer alias_tmp.cleanup();
     try alias_tmp.dir.writeFile(std.testing.io, .{
         .sub_path = "main.roc",
@@ -2630,7 +2639,7 @@ test "imports reject package-root escape and physical source aliases" {
     try testing.expect(std.mem.find(u8, alias_result.stderr, "import source alias") != null);
     try testing.expect(std.mem.find(u8, alias_result.stderr, "same source file") != null);
 
-    var root_alias_tmp = testing.tmpDir(.{});
+    var root_alias_tmp = util.tmpDir(testing.io);
     defer root_alias_tmp.cleanup();
     try root_alias_tmp.dir.writeFile(std.testing.io, .{
         .sub_path = "main.roc",
@@ -2687,7 +2696,7 @@ fn runComptimeDemandApp(
 test "a build evaluates every package constant, with or without a cache" {
     const allocator = testing.allocator;
 
-    var tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = util.tmpDir(testing.io);
     defer tmp_dir.cleanup();
     const cache_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(cache_path);
@@ -2712,7 +2721,7 @@ test "a build evaluates every package constant, with or without a cache" {
 test "builds of different apps observe every constant of a package they share a cache for" {
     const allocator = testing.allocator;
 
-    var tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = util.tmpDir(testing.io);
     defer tmp_dir.cleanup();
     const cache_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(cache_path);
@@ -2758,7 +2767,7 @@ test "builds of different apps observe every constant of a package they share a 
 test "roc test passes against the object cache a roc check wrote" {
     const allocator = testing.allocator;
 
-    var tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = util.tmpDir(testing.io);
     defer tmp_dir.cleanup();
     const cache_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(cache_path);
@@ -2797,7 +2806,7 @@ test "roc test passes against the object cache a roc check wrote" {
 test "roc build of an app succeeds against the cache a roc check of another app sharing its package wrote" {
     const allocator = testing.allocator;
 
-    var tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = util.tmpDir(testing.io);
     defer tmp_dir.cleanup();
     const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
@@ -2890,7 +2899,7 @@ fn buildAndRunComptimeDemandPackApp(
 test "an app linking an object-cache entry observes every compile-time root" {
     const allocator = testing.allocator;
 
-    var tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = util.tmpDir(testing.io);
     defer tmp_dir.cleanup();
     const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);

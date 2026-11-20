@@ -1,10 +1,9 @@
 app [main!] { pf: platform "./static-lib-platform/main.roc" }
 
 # Noiter twin of iter_for_static_lib_app.roc: the same sums computed by
-# `for` over plain list literals, with no minted iterator adapters. Its
+# `for` over plain list literals, with no iterator adapters. Its
 # `--opt=size` wasm size is the baseline; the iter build's size minus this is
-# the minted-adapter "premium" that CI tracks (and that the optional fusion
-# pass exists to drive toward zero).
+# the iterator-adapter "premium" that CI tracks.
 main! : U64 => Str
 main! = |_seed| {
     var $append_sum = 0.U64

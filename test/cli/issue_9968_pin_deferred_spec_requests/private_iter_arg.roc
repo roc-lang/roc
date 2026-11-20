@@ -1,8 +1,8 @@
 # Phantom-row matrix variant for issue 9968: the phantom `to_action` record
 # row exists only in the callee's annotation, while the request's argument is
-# a minted iterator. The deferred request therefore carries generated-private
-# representation evidence, and its phantom row must still be pinned to the
-# callee's checked root before the requester's graph seals.
+# an iterator adapter chain, whose type holds callables. Its phantom row must
+# still be pinned to the callee's checked root before the requester's graph
+# seals.
 app [main!] {
 	pf: platform "../../fx/platform/main.roc",
 	repro: "./cli_repro_pkg/main.roc",

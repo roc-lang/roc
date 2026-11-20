@@ -111,15 +111,6 @@ pub const Stmt = Mono.Stmt;
 pub const Fn = struct {
     symbol: Common.Symbol,
     source: ?Mono.FnTemplate = null,
-    /// Exact producer-authored Monotype signature graph. This is present only
-    /// while the lifted function still has that signature; transformations
-    /// that synthesize a different ABI clear it explicitly.
-    signature: collections.OptionalId(Type.TypeId) = .none,
-    /// The iterator-fusion pass normalized this function from explicit
-    /// checker-stamped iterator producers. Later structural LIR passes consume
-    /// this provenance directly instead of rediscovering iterator intent from
-    /// procedure names or body shape.
-    iterator_fusion_scope: bool = false,
     /// Digest of the SpecConstr call pattern this function was cloned for, or
     /// null for a function that is not a call-pattern clone. Clones share
     /// their source's checked template, so this is what keeps two clones of
@@ -138,7 +129,7 @@ pub const Fn = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(Fn) == 576);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(Fn) == 572);
 }
 
 /// What a lifted function body contains, recorded by whoever emitted its
@@ -155,10 +146,6 @@ pub const FnShapes = packed struct(u8) {
     /// A tag, record, tuple, nominal, list, closure or compile-time value
     /// construction: the only sources of a known-shaped call argument.
     constructs_value: bool = false,
-    /// A direct call to an iterator procedure.
-    iterator_call: bool = false,
-    /// A direct call to an iterator procedure that produces an iterator value.
-    iterator_producer: bool = false,
     /// A loop.
     loop: bool = false,
     /// A loop whose result is a tuple of at least two values.
@@ -167,6 +154,7 @@ pub const FnShapes = packed struct(u8) {
     self_call: bool = false,
     /// A `return` expression.
     contains_return: bool = false,
+    _: u2 = 0,
 
     pub fn merged(self: FnShapes, other: FnShapes) FnShapes {
         return @bitCast(@as(u8, @bitCast(self)) | @as(u8, @bitCast(other)));
@@ -1103,10 +1091,6 @@ pub const Program = struct {
         switch (expr.data) {
             .call_proc => |call| {
                 self.shapes.direct_call = true;
-                if (call.iterator_procedure) |procedure| {
-                    self.shapes.iterator_call = true;
-                    if (procedure.producesIteratorValue()) self.shapes.iterator_producer = true;
-                }
                 // The lifter records a call before and after it rewrites the
                 // callee to a lifted function; only the lifted form can name
                 // the owner.
@@ -1352,7 +1336,6 @@ pub const Program = struct {
         } else {
             writeIdentityBytes(hasher, "source");
         }
-        writeIdentityBytes(hasher, if (fn_.iterator_fusion_scope) "iterator-fusion" else "plain");
         return true;
     }
 
@@ -1581,37 +1564,18 @@ pub const Program = struct {
     }
 
     /// The binding groups of this program (`BindingGroups`). Reads only the
-    /// explicit function references and locals of the bodies, so a pass that
-    /// changes which functions or locals a body names must run before this
-    /// is taken.
+    /// explicit function references of the bodies, so a pass that changes
+    /// which functions a body references must run before this is taken.
     pub fn bindingGroups(self: *const Program, allocator: std.mem.Allocator) std.mem.Allocator.Error!BindingGroups {
         const fn_count = self.fnCount();
         if (fn_count == 0) return .empty;
         if (fn_count >= std.math.maxInt(u32)) return error.OutOfMemory;
 
-        // Every function each function references, in one flat list, and
-        // the back edges from each capturing function to the functions that
-        // name it with capture operands.
-        var named = std.ArrayList(u32).empty;
-        defer named.deinit(allocator);
-        const named_starts = try allocator.alloc(u32, fn_count + 1);
-        defer allocator.free(named_starts);
-        var back_edges = std.ArrayList(BindingGroups.Edge).empty;
-        defer back_edges.deinit(allocator);
-        // The functions that name a common local, linked both ways.
-        const local_owners = try allocator.alloc(u32, self.localCount());
-        defer allocator.free(local_owners);
-        @memset(local_owners, LocalLinks.no_fn);
-        const local_linked = try allocator.alloc(u32, self.localCount());
-        defer allocator.free(local_linked);
-        @memset(local_linked, LocalLinks.no_fn);
-        var links: LocalLinks = .{
-            .allocator = allocator,
-            .owners = local_owners,
-            .linked = local_linked,
-            .named = &named,
-            .back_edges = &back_edges,
-        };
+        // Every function each function references, in one flat list.
+        var edges = std.ArrayList(u32).empty;
+        defer edges.deinit(allocator);
+        const edge_starts = try allocator.alloc(u32, fn_count + 1);
+        defer allocator.free(edge_starts);
         // The function whose body first reached each expression, and the
         // functions whose bodies share an expression with another's.
         const no_fn = std.math.maxInt(u32);
@@ -1625,22 +1589,15 @@ pub const Program = struct {
         var pending = std.ArrayList(ExprChild).empty;
         defer pending.deinit(allocator);
         for (0..fn_count) |raw| {
-            named_starts[raw] = std.math.cast(u32, named.items.len) orelse return error.OutOfMemory;
+            edge_starts[raw] = std.math.cast(u32, edges.items.len) orelse return error.OutOfMemory;
             const fn_id: FnId = @fromBackingInt(@intCast(raw));
-            const fn_ = self.getFn(fn_id);
-            links.fn_index = @intCast(raw);
-            try visitSignatureLocals(self, fn_, &links);
-            switch (fn_.body) {
+            switch (self.getFn(fn_id).body) {
                 .roc => |body_expr| try pending.append(allocator, .{ .expr = body_expr }),
                 .hosted => {},
             }
             while (pending.pop()) |child| switch (child) {
-                .stmt => |stmt_id| {
-                    try visitStmtLocals(allocator, self, stmt_id, &links);
-                    try appendStmtChildren(allocator, self, stmt_id, &pending);
-                },
+                .stmt => |stmt_id| try appendStmtChildren(allocator, self, stmt_id, &pending),
                 .expr => |expr_id| {
-                    try visitExprLocals(allocator, self, expr_id, &links);
                     const first = &expr_fns[@backingInt(expr_id)];
                     if (first.* == no_fn) {
                         first.* = @intCast(raw);
@@ -1649,45 +1606,16 @@ pub const Program = struct {
                         sharing.set(raw);
                     }
                     const data = self.getExpr(expr_id).data;
-                    if (data == .fn_ref) {
-                        const callee = @backingInt(data.fn_ref.fn_id);
-                        try named.append(allocator, callee);
-                        if (data.fn_ref.captures.len != 0) try back_edges.append(allocator, .{ .from = callee, .to = @intCast(raw) });
-                    }
+                    if (data == .fn_ref) try edges.append(allocator, @backingInt(data.fn_ref.fn_id));
                     if (data == .call_proc) switch (data.call_proc.callee) {
-                        .lifted => |lifted_callee| {
-                            const callee = @backingInt(lifted_callee);
-                            try named.append(allocator, callee);
-                            if (data.call_proc.captures.len != 0) try back_edges.append(allocator, .{ .from = callee, .to = @intCast(raw) });
-                        },
+                        .lifted => |callee| try edges.append(allocator, @backingInt(callee)),
                         .func => Common.invariant("unlifted call target reached Monotype Lifted binding groups"),
                     };
                     try appendChildren(allocator, self, expr_id, &pending);
                 },
             };
         }
-        named_starts[fn_count] = std.math.cast(u32, named.items.len) orelse return error.OutOfMemory;
-
-        const edge_starts = try allocator.alloc(u32, fn_count + 1);
-        defer allocator.free(edge_starts);
-        @memset(edge_starts, 0);
-        for (0..fn_count) |raw| edge_starts[raw + 1] = named_starts[raw + 1] - named_starts[raw];
-        for (back_edges.items) |edge| edge_starts[edge.from + 1] += 1;
-        for (0..fn_count) |raw| edge_starts[raw + 1] += edge_starts[raw];
-        var edges = std.ArrayList(u32).empty;
-        defer edges.deinit(allocator);
-        try edges.resize(allocator, edge_starts[fn_count]);
-        const fill = try allocator.alloc(u32, fn_count);
-        defer allocator.free(fill);
-        for (0..fn_count) |raw| {
-            const names_of = named.items[named_starts[raw]..named_starts[raw + 1]];
-            @memcpy(edges.items[edge_starts[raw]..][0..names_of.len], names_of);
-            fill[raw] = edge_starts[raw] + @as(u32, @intCast(names_of.len));
-        }
-        for (back_edges.items) |edge| {
-            edges.items[fill[edge.from]] = edge.to;
-            fill[edge.from] += 1;
-        }
+        edge_starts[fn_count] = std.math.cast(u32, edges.items.len) orelse return error.OutOfMemory;
 
         const fns = try allocator.alloc(FnId, fn_count);
         errdefer allocator.free(fns);
@@ -1775,7 +1703,8 @@ pub const Program = struct {
 
     /// A local that functions of two binding groups both name—as an
     /// argument, a capture slot, a binder, or a read in a body—or null when
-    /// each local is named within one group, as `bindingGroups` arranges.
+    /// each local is named within one group, as giving every function its
+    /// own capture slots (`own_captures.zig`) arranges.
     /// Lambda solving gives each local one type, so a later group relating
     /// it would relate a scheme node of the group that generalized it
     /// (design.md "Lambda Set Generalization").
@@ -1830,7 +1759,6 @@ pub const Program = struct {
         writeIdentityBytes(&hasher, "roc.lifted.fn-layout-keyed-source.v1");
         writeFnDefDigest(&hasher, &self.names, template.fn_def, template.site_identity);
         hasher.update(&template.evidence_digest.bytes);
-        writeIdentityBytes(&hasher, if (fn_.iterator_fusion_scope) "iterator-fusion" else "plain");
         return hasher.finalResult();
     }
 
@@ -2670,35 +2598,6 @@ fn visitExprLocals(allocator: std.mem.Allocator, program: *const Program, expr_i
     }
 }
 
-/// Links the functions that name a common local into one binding group, for
-/// `bindingGroups`: each later function naming a local gets an edge to and
-/// from the function that named it first.
-const LocalLinks = struct {
-    const no_fn = std.math.maxInt(u32);
-
-    allocator: std.mem.Allocator,
-    /// The function that first named each local.
-    owners: []u32,
-    /// The last function linked to each local's owner through it, so a
-    /// function adds the edges for a local once.
-    linked: []u32,
-    fn_index: u32 = 0,
-    named: *std.ArrayList(u32),
-    back_edges: *std.ArrayList(BindingGroups.Edge),
-
-    pub fn bindLocal(self: *LocalLinks, local: LocalId) std.mem.Allocator.Error!void {
-        const index = @backingInt(local);
-        const owner = self.owners[index];
-        if (owner == no_fn) {
-            self.owners[index] = self.fn_index;
-        } else if (owner != self.fn_index and self.linked[index] != self.fn_index) {
-            self.linked[index] = self.fn_index;
-            try self.named.append(self.allocator, owner);
-            try self.back_edges.append(self.allocator, .{ .from = owner, .to = self.fn_index });
-        }
-    }
-};
-
 /// The binding group, and its function, that first named each local, for
 /// `localSharedAcrossGroups`.
 const LocalClaims = struct {
@@ -2727,14 +2626,12 @@ const LocalClaims = struct {
 
 /// The strongly connected components of the lifted-function reference graph,
 /// whose edges are the functions a body names (`fn_ref` and direct
-/// `call_proc`), plus one edge back from a capturing function to every
-/// function that names it with capture operands, plus edges both ways
-/// between functions that name a common local. Capture operands read locals
-/// of the naming function's scope, and a lifted closure's capture slots are
-/// the very locals its enclosing body binds, which a rewritten encloser may
-/// no longer name the closure with; the local edges keep such a closure in
-/// its encloser's group. So no group's types depend on locals another group
-/// names. Every lifted function belongs to exactly one group. Groups are listed callee-first: a group follows every
+/// `call_proc`). A capture operand is supplied by the reference that names
+/// the function, like an argument, and the function's body reads capture
+/// slots of its own (`own_captures.zig`), so a closure joins the group of a
+/// function whose locals it captures only when it also names that function.
+/// Every lifted function belongs to
+/// exactly one group. Groups are listed callee-first: a group follows every
 /// group its functions reference, so the functions of one group reference
 /// each other or earlier groups only. Within a group, functions are in
 /// ascending `FnId` order.
@@ -2748,9 +2645,6 @@ pub const BindingGroups = struct {
     shares_exprs: []bool = &.{},
 
     pub const empty: BindingGroups = .{};
-
-    /// An edge of the reference graph, from one function to another.
-    const Edge = struct { from: u32, to: u32 };
 
     pub fn deinit(self: *BindingGroups, allocator: std.mem.Allocator) void {
         allocator.free(self.fns);
@@ -2878,7 +2772,7 @@ fn testSourceDigestKey(comptime byte: u8) names.TypeDigest {
 }
 
 /// One lifted function carrying `source`, with no body of its own: the source
-/// digest reads the template, the clone pattern, and the fusion scope only.
+/// digest reads the template and the clone pattern only.
 fn addSourceDigestFn(
     program: *Program,
     symbols: *Common.SymbolGen,
@@ -3109,7 +3003,7 @@ test "binding groups are the reference graph's components, callee-first" {
     try std.testing.expectEqualSlices(FnId, &.{fn_ids[4]}, groups.group(3));
 }
 
-test "issue 13197: a closure its encloser no longer names stays in the encloser's group" {
+test "issue 13197: a closure its encloser no longer names shares no local with it" {
     var symbols: Common.SymbolGen = .{};
     var program = testLiftedProgram(std.testing.allocator);
     defer program.deinit();
@@ -3146,13 +3040,17 @@ test "issue 13197: a closure its encloser no longer names stays in the encloser'
     });
     program.next_symbol = symbols.next;
 
+    // Lambda Solved's first step gives the closure capture slots of its own,
+    // so the closure needs no group with an encloser that no longer names it.
+    try @import("own_captures.zig").run(&program);
     var groups = try program.bindingGroups(std.testing.allocator);
     defer groups.deinit(std.testing.allocator);
-    // Lambda solving gives the shared local one type, which a later group
-    // must never relate after the first group generalized it.
-    try std.testing.expectEqual(@as(usize, 2), groups.count());
-    try std.testing.expectEqualSlices(FnId, &.{ encloser, closure }, groups.group(0));
-    try std.testing.expectEqualSlices(FnId, &.{unrelated}, groups.group(1));
+    // Lambda solving gives a local one type, which a later group must never
+    // relate after the first group generalized it.
+    try std.testing.expectEqual(@as(usize, 3), groups.count());
+    try std.testing.expectEqualSlices(FnId, &.{encloser}, groups.group(0));
+    try std.testing.expectEqualSlices(FnId, &.{closure}, groups.group(1));
+    try std.testing.expectEqualSlices(FnId, &.{unrelated}, groups.group(2));
     try std.testing.expectEqual(@as(?SharedLocal, null), try program.localSharedAcrossGroups(std.testing.allocator, groups));
 }
 

@@ -132,22 +132,20 @@ fn expectFoldCollapsedToCallFreeIndexLoop(
     defer allocator.free(seen_stmts);
     @memset(seen_stmts, false);
 
-    // The collapsed loop's home depends on the clone scope: `.all_calls`
-    // inlines the wrapper `sum_list` and the `List.fold` its known step
-    // reaches into `main`, while `.iterator_fusion` collapses `List.fold`'s
-    // own specialization in place and leaves `sum_list` as a wrapper the
-    // inline plan then dissolves. Any procedure may hold it.
+    // `.all_calls` inlines the wrapper `sum_list` and the `List.fold` its
+    // known step reaches into `main`, so the collapsed loop may sit in any
+    // procedure.
     var collapsed_fold_procs: usize = 0;
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         const scan = try ProcScan.scan(store, proc_id, seen_stmts);
-        // Without the collapse, folding never reads an element by index: it
-        // pulls elements through the step-closure protocol instead.
+        // `List.fold` reads each element by index, so the procedure holding
+        // its loop is one that reads elements.
         if (!scan.reads_list_elements) continue;
         collapsed_fold_procs += 1;
-        // With the collapse, the folding procedure is a self-contained index
-        // loop of low-level operations; a per-element out-of-line call is
-        // exactly the overhead the collapse exists to remove.
+        // The folding procedure is a self-contained index loop of low-level
+        // operations; a per-element out-of-line call is exactly the overhead
+        // the collapse exists to remove.
         try std.testing.expectEqual(@as(usize, 0), scan.call_count);
     }
     try std.testing.expect(collapsed_fold_procs > 0);
@@ -164,11 +162,36 @@ const fold_app_body =
     \\}
 ;
 
-test "issue 10991: dev pipeline collapses List.fold to a call-free index loop" {
+/// `.no_calls` inlines no call, so `List.fold` stays its own procedure: an
+/// index loop over the list that reads each element and steps no iterator.
+/// It is the one procedure that reads an element by index, and the fold's
+/// step function, small enough to inline, leaves it no call.
+fn expectFoldIsOneCallFreeIndexLoop(
+    store: *const lir.LirStore,
+    _: *const layout.Store,
+) harness.LowerToLirHarnessError!void {
+    const allocator = std.testing.allocator;
+    const seen_stmts = try allocator.alloc(bool, store.cfStmtCount());
+    defer allocator.free(seen_stmts);
+    @memset(seen_stmts, false);
+
+    var reading_procs: usize = 0;
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
+        const scan = try ProcScan.scan(store, proc_id, seen_stmts);
+        if (!scan.reads_list_elements) continue;
+        reading_procs += 1;
+        try std.testing.expectEqualStrings("Builtin.List.fold", store.procDebugName(proc_id) orelse "");
+        try std.testing.expectEqual(@as(usize, 0), scan.call_count);
+    }
+    try std.testing.expectEqual(@as(usize, 1), reading_procs);
+}
+
+test "issue 10991: dev pipeline folds List.fold as one call-free index loop" {
     try harness.expectLirInspectionWithOptions(
         fold_app_body,
-        .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .iterator_fusion },
-        expectFoldCollapsedToCallFreeIndexLoop,
+        .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .no_calls },
+        expectFoldIsOneCallFreeIndexLoop,
     );
 }
 
@@ -219,6 +242,6 @@ test "issue 10991: loop-carried borrow of a claimed payload certifies under the 
         \\    Ok({})
         \\}
     ,
-        .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .iterator_fusion },
+        .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .no_calls },
     );
 }

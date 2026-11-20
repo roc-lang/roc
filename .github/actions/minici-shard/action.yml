@@ -1,6 +1,6 @@
 name: 'Run a MiniCI shard'
 description: >-
-  Restore the build artifact the `minici-build` action uploaded on this host,
+  Restore the build artifact the `minici-build` action uploaded for this shard,
   run one MiniCI shard (see `shards` in src/build/minici.zig) without compiling
   what `build-ci` already built, and upload its report and logs. Run after
   checkout.
@@ -34,15 +34,17 @@ runs:
     - name: Download MiniCI build artifact
       uses: actions/download-artifact@v8.0.1 # ratchet:actions/download-artifact@v8.0.1
       with:
-        name: minici-build-${{ runner.os }}-${{ runner.arch }}
+        name: minici-build-${{ inputs.shard }}
         path: .
 
     - name: Unpack MiniCI build artifact
       shell: bash
+      env:
+        MINICI_SHARD: ${{ inputs.shard }}
       run: |
         set -euo pipefail
-        zstd -dc minici-build.tar.zst | tar -xf -
-        rm minici-build.tar.zst
+        zstd -dc "minici-build-$MINICI_SHARD.tar.zst" | tar -xf -
+        rm "minici-build-$MINICI_SHARD.tar.zst"
 
     # Every file here is new to this machine: the sources come from a fresh
     # checkout and the cache from the archive above, so nothing has the inode
@@ -84,17 +86,20 @@ runs:
 
     # A composite step names its shell, so the run step comes in the shells a
     # workflow `run:` step defaults to: PowerShell on Windows, bash elsewhere.
+    # The same configuration options as the jobs MiniCI runs
+    # (`configurationArgs` in src/build/minici.zig), so this command reuses
+    # the configuration and steps the artifact carries for them.
     - name: Run MiniCI
       if: runner.os != 'Windows'
       shell: bash
-      run: zig build minici -- --minici-skip-build --minici-build-runner-image "$MINICI_BUILD_RUNNER_IMAGE" --minici-shard "$MINICI_SHARD"
+      run: zig build minici --color off -Dembed-builtin-unit=true -- --minici-skip-build --minici-build-runner-image "$MINICI_BUILD_RUNNER_IMAGE" --minici-shard "$MINICI_SHARD"
       env:
         MINICI_SHARD: ${{ inputs.shard }}
 
     - name: Run MiniCI (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
-      run: zig build minici -- --minici-skip-build --minici-build-runner-image "$env:MINICI_BUILD_RUNNER_IMAGE" --minici-shard "$env:MINICI_SHARD"
+      run: zig build minici --color off -Dembed-builtin-unit=true -- --minici-skip-build --minici-build-runner-image "$env:MINICI_BUILD_RUNNER_IMAGE" --minici-shard "$env:MINICI_SHARD"
       env:
         MINICI_SHARD: ${{ inputs.shard }}
 

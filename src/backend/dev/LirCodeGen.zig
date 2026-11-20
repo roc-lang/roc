@@ -2013,33 +2013,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const args = self.store.getLocalSpan(ll.args);
 
             switch (ll.op) {
-                .boxed_sequence_pack => {
-                    const record = GuardedList.at(args, 0);
-                    const size = self.getLayoutSize(self.localLayout(record));
-                    const slot = try self.ensureOnStack(try self.emitValueLocal(record), size);
-                    const offset = try self.ensureInGeneralReg(try self.emitValueLocal(GuardedList.at(args, 1)));
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    defer builder.deinit();
-                    try builder.addLeaArg(frame_ptr, slot);
-                    try builder.addImmArg(size);
-                    try builder.addRegArg(offset);
-                    try self.callBuiltin(&builder, .boxed_sequence_pack);
-                    self.codegen.freeGeneral(offset);
-                    return self.scalarRetReg();
-                },
-                .boxed_sequence_unpack => {
-                    const step = try self.ensureInGeneralReg(try self.emitValueLocal(GuardedList.at(args, 0)));
-                    const size = self.getLayoutSize(ll.ret_layout);
-                    const slot = self.codegen.allocStackSlot(size);
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    defer builder.deinit();
-                    try builder.addLeaArg(frame_ptr, slot);
-                    try builder.addRegArg(step);
-                    try builder.addImmArg(size);
-                    try self.callBuiltin(&builder, .boxed_sequence_unpack);
-                    self.codegen.freeGeneral(step);
-                    return self.stackLocationForLayout(ll.ret_layout, slot);
-                },
                 .num_plus, .num_minus, .num_times => unreachable, // source-policy markers that LIR lowering commits through CheckedArithmetic.lowerOp
                 .list_prefetched => unreachable, // LIR lowering splits this into an alias and `list_prefetch`
                 // A hint only; this backend emits no code for it.
@@ -18536,7 +18509,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn boxyListOp(op: lir.LowLevel) ?BoxyListOp {
             return switch (op) {
                 .dec_mul_saturated => null,
-                .boxed_sequence_pack, .boxed_sequence_unpack => null,
                 .list_capacity => .capacity,
                 .list_slack_unique => .slack_unique,
                 .list_owned_unique => .owned_unique,
@@ -18584,7 +18556,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             switch (assign.op) {
                 .dec_mul_saturated => {},
-                .boxed_sequence_pack, .boxed_sequence_unpack => unreachable, // these operations never carry a list element descriptor
                 .list_prefetch => return,
                 .list_len => {
                     const reg = try self.allocTempGeneral();

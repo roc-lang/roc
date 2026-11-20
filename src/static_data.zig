@@ -380,7 +380,6 @@ const StaticInitializerMachine = struct {
                         break :blk value;
                     },
                     .callable => |function| try self.freezeCallable(function.proc, if (values.len == 0) null else values[0], function.on_drop, definition.layout_idx),
-                    .boxed_sequence => |offset| try self.freezeSequence(values[0], offset, definition.layout_idx),
                     .product, .list, .box, .tag => try self.assembleStored(definition.layout_idx, switch (parts.kind) {
                         .product => .product,
                         .list => |capacity| .{ .list = .{
@@ -389,7 +388,7 @@ const StaticInitializerMachine = struct {
                         } },
                         .box => .{ .box = self.layouts().builtinBoxAbi(definition.layout_idx).elem_layout_idx orelse .zst },
                         .tag => |variant| .{ .tag = .{ .variant = variant, .payload_layout = self.tagPayloadLayout(definition.layout_idx, variant) } },
-                        .word, .callable, .boxed_sequence => unreachable, // the outer switch handles these constructions separately
+                        .word, .callable => unreachable, // the outer switch handles these constructions separately
                     }, values),
                 };
                 self.static_active[raw] = false;
@@ -568,7 +567,7 @@ const StaticInitializerMachine = struct {
             .list => |list| {
                 const elem_plan = switch (plans[@backingInt(request.plan)]) {
                     .list => |elem| elem,
-                    .pending, .layout_only, .zst, .scalar, .str, .box, .boxed_sequence, .tuple, .record, .tag_union, .named, .fn_value, .erased_fn, .boxy_fn => staticDataInvariant("stored list had a non-list const plan"),
+                    .pending, .layout_only, .zst, .scalar, .str, .box, .tuple, .record, .tag_union, .named, .fn_value, .erased_fn, .boxy_fn => staticDataInvariant("stored list had a non-list const plan"),
                 };
                 switch (list.items) {
                     .empty => return try self.rememberStored(key, try self.storedListValue(request.layout_idx, 0, list.capacity, null)),
@@ -585,7 +584,6 @@ const StaticInitializerMachine = struct {
             .box => |payload| {
                 const payload_plan = switch (plans[@backingInt(request.plan)]) {
                     .box => |boxed| boxed,
-                    .boxed_sequence => staticDataInvariant("a boxed sequence's callable must be restored by its producer"),
                     .pending, .layout_only, .zst, .scalar, .str, .list, .tuple, .record, .tag_union, .named, .fn_value, .erased_fn, .boxy_fn => staticDataInvariant("stored box had a non-box const plan"),
                 };
                 if (self.layoutValue(request.layout_idx).tag == .box_of_zst) return try self.rememberStored(key, try self.newValue(request.layout_idx));
@@ -598,7 +596,7 @@ const StaticInitializerMachine = struct {
             .tuple, .record => |items| {
                 const item_plans = switch (plans[@backingInt(request.plan)]) {
                     .tuple, .record => |item_plans| item_plans,
-                    .pending, .layout_only, .zst, .scalar, .str, .list, .box, .boxed_sequence, .tag_union, .named, .fn_value, .erased_fn, .boxy_fn => staticDataInvariant("stored product had a non-product const plan"),
+                    .pending, .layout_only, .zst, .scalar, .str, .list, .box, .tag_union, .named, .fn_value, .erased_fn, .boxy_fn => staticDataInvariant("stored product had a non-product const plan"),
                 };
                 if (item_plans.len != items.len) staticDataInvariant("stored product arity differed from its const plan");
                 const base_layout = self.aggregateBaseLayout(request.layout_idx);
@@ -613,7 +611,7 @@ const StaticInitializerMachine = struct {
             .tag => |tag| {
                 const variants = switch (plans[@backingInt(request.plan)]) {
                     .tag_union => |variants| variants,
-                    .pending, .layout_only, .zst, .scalar, .str, .list, .box, .boxed_sequence, .tuple, .record, .named, .fn_value, .erased_fn, .boxy_fn => staticDataInvariant("stored tag had a non-tag-union const plan"),
+                    .pending, .layout_only, .zst, .scalar, .str, .list, .box, .tuple, .record, .named, .fn_value, .erased_fn, .boxy_fn => staticDataInvariant("stored tag had a non-tag-union const plan"),
                 };
                 const variant = for (variants) |candidate| {
                     if (std.mem.eql(u8, candidate.name, tag.tag_name)) break candidate;
@@ -657,7 +655,7 @@ const StaticInitializerMachine = struct {
                     request.plan = named.backing;
                     changed = true;
                 },
-                .pending, .layout_only, .zst, .scalar, .str, .list, .box, .boxed_sequence, .tuple, .record, .tag_union, .fn_value, .erased_fn, .boxy_fn => {},
+                .pending, .layout_only, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag_union, .fn_value, .erased_fn, .boxy_fn => {},
             }
             if (!changed) return request;
         }
@@ -1550,12 +1548,6 @@ const StaticInitializerMachine = struct {
     ) MaterializationError!*SymbolicValue {
         const args = self.store().getLocalSpan(args_span);
         const target = self.layoutValue(target_layout);
-        if (op == .boxed_sequence_pack) {
-            if (args.len != 2) staticDataInvariant("boxed sequence construction has two operands");
-            const record = local(locals, GuardedList.at(args, 0));
-            const offset = local(locals, GuardedList.at(args, 1));
-            return self.freezeSequence(record, std.mem.readInt(u32, offset.bytes[0..4], .little), target_layout);
-        }
         // A restored list with spare capacity is the reservation it was
         // evaluated with (`constListWithSpareCapacity`), which here becomes
         // the capacity its descriptor records.
@@ -1607,46 +1599,6 @@ const StaticInitializerMachine = struct {
         );
         const arg = try self.cloneValueAs(local(locals, GuardedList.at(args, 0)), elem_layout);
         try self.copyInto(allocation.payload, 0, arg, abi.elem_size);
-        return self.pointerValue(target_layout, allocation.id, 0);
-    }
-
-    fn freezeSequence(self: *StaticInitializerMachine, record: *const SymbolicValue, step_offset: u32, target_layout: layout.Idx) MaterializationError!*SymbolicValue {
-        if (record.relocations.items.len != 1 or record.relocations.items[0].offset != step_offset) {
-            staticDataInvariant("a builtin sequence record must contain only its step pointer");
-        }
-        const step = record.relocations.items[0];
-        const source = switch (step.target) {
-            .allocation => |id| blk: {
-                if (step.addend != 0) staticDataInvariant("a sequence step must name an allocation's payload");
-                break :blk self.allocations.items[@backingInt(id)].payload;
-            },
-            .frozen_symbol => |id| blk: {
-                const symbol = self.lowered.frozen_static_data.?.exports[@backingInt(id)];
-                const start = symbol.symbol_offset + @as(usize, @intCast(step.addend));
-                if (start > symbol.bytes.len) staticDataInvariant("a frozen sequence step exceeds its allocation");
-                break :blk (try self.readFrozenRange(id, target_layout, start, symbol.bytes.len - start)).*;
-            },
-            .procedure, .rc_helper => staticDataInvariant("a sequence step must be an erased allocation"),
-        };
-        const size_at = 3 * self.word_size;
-        const capture_size: usize = switch (self.word_size) {
-            4 => std.mem.readInt(u32, source.bytes[size_at..][0..4], .little),
-            8 => @intCast(std.mem.readInt(u64, source.bytes[size_at..][0..8], .little)),
-            else => unreachable, // the target's pointer width is 4 or 8
-        };
-        const live_size = builtins.erased_callable.payloadSizeFor(self.word_size, capture_size);
-        if (live_size > source.bytes.len) staticDataInvariant("a frozen sequence step omitted its captures");
-        const state_offset = std.mem.alignForward(usize, live_size, builtins.erased_callable.capture_alignment);
-        const allocation = try self.addAllocation(target_layout, state_offset + record.bytes.len, builtins.erased_callable.payload_alignment, false, null);
-        @memcpy(allocation.payload.bytes[0..live_size], source.bytes[0..live_size]);
-        for (source.relocations.items) |relocation| {
-            if (relocation.offset < live_size) try allocation.payload.relocations.append(self.allocator(), relocation);
-        }
-        @memcpy(allocation.payload.bytes[state_offset..][0..record.bytes.len], record.bytes);
-        try allocation.payload.relocations.append(self.allocator(), .{
-            .offset = @intCast(state_offset + step_offset),
-            .target = .{ .allocation = allocation.id },
-        });
         return self.pointerValue(target_layout, allocation.id, 0);
     }
 

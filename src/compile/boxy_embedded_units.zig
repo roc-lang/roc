@@ -42,7 +42,7 @@ const object_cache = @import("boxy_object_cache.zig");
 const Allocator = std.mem.Allocator;
 
 /// The table format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 4;
+pub const format_version: u32 = 5;
 
 const magic = "RBXE";
 

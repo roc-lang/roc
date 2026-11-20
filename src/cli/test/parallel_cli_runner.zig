@@ -817,7 +817,7 @@ const CustomCase = enum {
     glue_recursive_slot_box,
     glue_generic_callable_arg,
     glue_hosted_erased_generic_callback,
-    glue_boxed_sequences,
+    glue_boxed_iter_stream,
     glue_boxed_app_type,
     glue_generic_nominal_shapes,
     glue_opaque_ownership,
@@ -2339,12 +2339,11 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "generic self tail call with a runtime-described result runs as a loop (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--no-cache", "--specialize=no" }, .roc_file = "test/echo/boxy_generic_tail_recursion.roc", .stdout_exact = "3,s,none" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: generated iterator identity is independent of checked provenance and value uses (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/generated_iterator_identity.roc", .stdout_exact = "[98, 100]\n[0, 2]\n4\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: generated iterator identity is independent of checked provenance and value uses (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/generated_iterator_identity.roc", .stdout_exact = "[98, 100]\n[0, 2]\n4\n" } } },
-    // Forced-dynamic iterators viewed through public `Iter`/`Stream` types:
-    // erased calls convert at their ABI, public views receive the erased
-    // step evidence, and scalarized joins keep owned erased calls certifiable.
-    .{ .id = 0, .suite = .echo, .name = "echo platform: forced-dynamic iterators cross closure and return boundaries (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/forced_dynamic_iterator_boundaries.roc", .stdout_exact = "13 6 13 13 13" } } },
-    .{ .id = 0, .suite = .echo, .name = "echo platform: forced-dynamic iterators cross closure and return boundaries (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/forced_dynamic_iterator_boundaries.roc", .stdout_exact = "13 6 13 13 13" } } },
-    .{ .id = 0, .suite = .echo, .name = "echo platform: forced-dynamic iterators cross closure and return boundaries (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/echo/forced_dynamic_iterator_boundaries.roc", .stdout_exact = "13 6 13 13 13" } } },
+    // Iterators and streams grown by recursion, whose chains form
+    // self-containing lambda sets, cross closure and return boundaries.
+    .{ .id = 0, .suite = .echo, .name = "echo platform: iterators grown by recursion cross closure and return boundaries (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/recursively_grown_iterator_boundaries.roc", .stdout_exact = "13 6 13 13 13" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: iterators grown by recursion cross closure and return boundaries (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/recursively_grown_iterator_boundaries.roc", .stdout_exact = "13 6 13 13 13" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: iterators grown by recursion cross closure and return boundaries (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/echo/recursively_grown_iterator_boundaries.roc", .stdout_exact = "13 6 13 13 13" } } },
     // A default-platform executable links no host, so nothing outside the
     // compiler's own objects can define a compiler-rt helper: a 128-bit
     // integer to float conversion has to reach the builtins on every backend.
@@ -2847,7 +2846,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue regression: recursive-slot boxed edges wrap by-value types and compile", .body = .{ .custom = .glue_recursive_slot_box } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: function stored in a generic type is an erased callable in every generator", .body = .{ .custom = .glue_generic_callable_arg } },
     .{ .id = 0, .suite = .glue, .name = "issue 11505: hosted Box of a generic function is an erased callable in every generator", .body = .{ .custom = .glue_hosted_erased_generic_callback } },
-    .{ .id = 0, .suite = .glue, .name = "issue 12887: boxed sequences are opaque owning handles in every generator", .body = .{ .custom = .glue_boxed_sequences } },
+    .{ .id = 0, .suite = .glue, .name = "issue 12887: Box(Iter) and Box(Stream) are boxes of their backing record in every generator", .body = .{ .custom = .glue_boxed_iter_stream } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: a heap payload holding the app's type by value is opaque in every generator", .body = .{ .custom = .glue_boxed_app_type } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: each instantiation of a generic nominal is its own type in every generator", .body = .{ .custom = .glue_generic_nominal_shapes } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: a value holding an opaque Roc value has no host release in any generator", .body = .{ .custom = .glue_opaque_ownership } },
@@ -3991,8 +3990,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 9968: concrete-phantom control keeps working", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_9968_pin_deferred_spec_requests/concrete_phantom.roc", .exit = .not_panic, .contains = &.{.{ .stream = .stdout, .text = "concrete file=alpha files=beta" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation unified" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9968: phantom tag row pins deferred spec request", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_9968_pin_deferred_spec_requests/phantom_tag.roc", .exit = .not_panic, .contains = &.{.{ .stream = .stdout, .text = "tag file=alpha files=beta" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation unified" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9968: phantom nested nominal pins deferred spec request", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_9968_pin_deferred_spec_requests/phantom_nominal.roc", .exit = .not_panic, .contains = &.{.{ .stream = .stdout, .text = "nominal file=alpha files=beta" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation unified" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 9968: phantom row pins a deferred spec request carrying a minted iterator (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_9968_pin_deferred_spec_requests/private_iter_arg.roc", .exit = .not_panic, .contains = &.{.{ .stream = .stdout, .text = "private file=x-alpha files=beta" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation unified" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 9968: phantom row pins a deferred spec request carrying a minted iterator (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue_9968_pin_deferred_spec_requests/private_iter_arg.roc", .exit = .not_panic, .contains = &.{.{ .stream = .stdout, .text = "private file=x-alpha files=beta" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation unified" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 9968: phantom row pins a deferred spec request carrying an iterator argument (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_9968_pin_deferred_spec_requests/private_iter_arg.roc", .exit = .not_panic, .contains = &.{.{ .stream = .stdout, .text = "private file=x-alpha files=beta" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation unified" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 9968: phantom row pins a deferred spec request carrying an iterator argument (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue_9968_pin_deferred_spec_requests/private_iter_arg.roc", .exit = .not_panic, .contains = &.{.{ .stream = .stdout, .text = "private file=x-alpha files=beta" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation unified" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9934: imported module's hoisted const root id does not collide with the requesting expect's root id", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/issue_9934_cross_module_root/Main.roc", .exit = .not_panic, .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "unbound pattern binder" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11532: imported destructure with a closure payload checks successfully", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_11532_imported_destructure_closure/main.roc", .exit = .{ .code = 2 }, .contains = &.{.{ .stream = .stderr, .text = "module header deprecated" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "Segmentation fault" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9717: spec-constr record cloning reaches target validation on LLVM speed backend", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/Issue9717SpecConstrSpanInvalidation.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "missing files directory" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "SIGSEGV" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -5012,14 +5011,14 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11047: Iter.custom threaded iterator state does not allocate per item (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=yes" }, .roc_file = "test/alloc-count/app_iter_custom.roc", .contains = &.{.{ .stream = .stderr, .text = "iter custom items: 128 1024, threaded sums: 8128 523776" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     // Specialized for the same reason as the dev case above.
     .{ .id = 0, .suite = .subcommands, .name = "issue 11047: Iter.custom threaded iterator state does not allocate per item (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache", "--specialize=yes" }, .roc_file = "test/alloc-count/app_iter_custom.roc", .contains = &.{.{ .stream = .stderr, .text = "iter custom items: 128 1024, threaded sums: 8128 523776" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a list allocates nothing per element under --specialize=no (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_list_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "totals: 64 1024, loop allocations: 0 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a list allocates nothing per element under --specialize=no (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_list_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "totals: 64 1024, loop allocations: 0 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a list allocates nothing per element under --specialize=no (size)", .backend = .size, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_list_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "totals: 64 1024, loop allocations: 0 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a list allocates nothing per element under --specialize=no (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_list_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "totals: 64 1024, loop allocations: 0 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a chain of iterator adapters allocates nothing per element under --specialize=no (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_chain_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "sums: 2246 30086, allocations: 0 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a chain of iterator adapters allocates nothing per element under --specialize=no (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_chain_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "sums: 2246 30086, allocations: 0 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a chain of iterator adapters allocates nothing per element under --specialize=no (size)", .backend = .size, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_chain_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "sums: 2246 30086, allocations: 0 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a chain of iterator adapters allocates nothing per element under --specialize=no (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_chain_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "sums: 2246 30086, allocations: 0 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a list allocates one step closure per loop, not per element, under --specialize=no (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_list_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "totals: 64 1024, loop allocations: 1 1" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a list allocates one step closure per loop, not per element, under --specialize=no (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_list_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "totals: 64 1024, loop allocations: 1 1" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a list allocates one step closure per loop, not per element, under --specialize=no (size)", .backend = .size, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_list_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "totals: 64 1024, loop allocations: 1 1" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a list allocates one step closure per loop, not per element, under --specialize=no (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_list_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "totals: 64 1024, loop allocations: 1 1" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a chain of iterator adapters allocates at most one closure per stage per element under --specialize=no (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_chain_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "sum: 60537, allocations per element: 2r0 2r0 2r0 1r0 0r0, within one per stage: yes" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a chain of iterator adapters allocates at most one closure per stage per element under --specialize=no (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_chain_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "sum: 60537, allocations per element: 2r0 2r0 2r0 1r0 0r0, within one per stage: yes" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a chain of iterator adapters allocates at most one closure per stage per element under --specialize=no (size)", .backend = .size, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_chain_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "sum: 60537, allocations per element: 2r0 2r0 2r0 1r0 0r0, within one per stage: yes" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12854: a for loop over a chain of iterator adapters allocates at most one closure per stage per element under --specialize=no (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/alloc-count/app_for_chain_boxy.roc", .contains = &.{.{ .stream = .stderr, .text = "sum: 60537, allocations per element: 2r0 2r0 2r0 1r0 0r0, within one per stage: yes" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     // Specialized: the `for` loop itself allocates nothing under `.boxy`, but
     // stepping the `Str.iter_utf8` and `List.iter_rev` iterator values packs a
     // fresh closure each step (design.md "Iterator `for`"), and the derived
@@ -5054,7 +5053,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12632: boxy roc build dev passes a capturing function from main to a host-stored boxed closure", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache", "--specialize=no" }, .roc_file = "test/postcheck/issue_12632_capturing_main_function_to_host_box/app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "target slot has no corresponding host root" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12632: boxy roc build dev evaluates a constant whose boxed closure reads a later constant", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache", "--specialize=no" }, .roc_file = "test/postcheck/issue_12632_capturing_main_function_to_host_box/app_member_reads_later_root.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "target slot has no corresponding host root" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build dev builds a platform whose rejected provided export crashes when called", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache", "--target=x64musl" }, .roc_file = "test/postcheck/boxy_rejected_provided_export/app.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stdout, .text = "successfully building" }, .{ .stream = .stderr, .text = "type mismatch" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12744: boxy roc build dev gives a platform's call of an app binding the binding's derived codec evidence", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache", "--target=x64musl", "--specialize=no", "--output=zig-out/issue_12744_platform_derived_codec.a" }, .roc_file = "test/cli/issue_12744_platform_derived_codec/app.roc" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12744: boxy roc build dev gives a platform's call of an app binding the binding's derived codec evidence", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache", "--target=x64musl", "--specialize=no", "--output=issue_12744_platform_derived_codec.a" }, .roc_file = "test/cli/issue_12744_platform_derived_codec/app.roc" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12744: a platform calls and stores an app binding that parses a record (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12744_platform_record_codec.roc", .exit = .success, .stdout_exact = "3\n4\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12744: a platform calls and stores an app binding that parses a record (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12744_platform_record_codec.roc", .exit = .success, .stdout_exact = "3\n4\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12744: a platform calls and stores an app binding that parses a record (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12744_platform_record_codec.roc", .exit = .success, .stdout_exact = "3\n4\n" } } },
@@ -6270,6 +6269,14 @@ var project_root_path: []const u8 = "";
 /// object-cache entry the first wrote and must behave the same. Custom cases,
 /// which manage their own caches and check what a cache served, are skipped.
 var shared_object_store: ?[]const u8 = null;
+/// `--scratch-root=<dir>`: every file a case writes lives under this absolute
+/// directory, because the working directory is the read-only fixture tree.
+var scratch_root: []const u8 = "";
+
+/// Where `util` reserves scratch directories.
+pub fn rocTestScratchRoot() []const u8 {
+    return scratch_root;
+}
 
 /// The cache root a case's processes use.
 fn caseCacheRoot(dirs: util.TestProcessDirs) []const u8 {
@@ -6969,12 +6976,23 @@ fn runRocInEnv(
 ) CliRunnerError!std.process.RunResult {
     const argv = try buildRocArgv(allocator, args, roc_file, file_path_mode, app_args);
     return util.runChildWithTimeout(io, allocator, argv, .{
-        .cwd = project_root_path,
+        .cwd = rocCommandCwd(env, args, file_path_mode),
         .env_map = &env.env_map,
         .max_output_bytes = 10 * 1024 * 1024,
         .stdin = stdin,
         .timeout_ms = timeout_ms,
     });
+}
+
+/// The fixture tree is read-only, and `roc build` and `roc docs` write their
+/// default and relative outputs into the working directory, so those commands
+/// run in the case's work directory. Every argument they get is absolute
+/// unless the case resolves its file relative to the fixture tree, which then
+/// must stay the working directory.
+fn rocCommandCwd(env: *const CaseEnv, args: []const []const u8, file_path_mode: FilePathMode) []const u8 {
+    if (file_path_mode == .relative or args.len == 0) return project_root_path;
+    if (std.mem.eql(u8, args[0], "build") or std.mem.eql(u8, args[0], "docs")) return env.dirs.work_dir;
+    return project_root_path;
 }
 
 fn runRawInEnv(
@@ -7445,7 +7463,7 @@ fn runCustomCase(
         .glue_recursive_slot_box => customGlueRecursiveSlotBox(io, allocator, &env, &timer, timeout_ms),
         .glue_generic_callable_arg => customGlueGenericCallableArg(io, allocator, &env, &timer, timeout_ms),
         .glue_hosted_erased_generic_callback => customGlueHostedErasedGenericCallback(io, allocator, &env, &timer, timeout_ms),
-        .glue_boxed_sequences => customGlueBoxedSequences(io, allocator, &env, &timer, timeout_ms),
+        .glue_boxed_iter_stream => customGlueBoxedIterStream(io, allocator, &env, &timer, timeout_ms),
         .glue_boxed_app_type => customGlueBoxedAppType(io, allocator, &env, &timer, timeout_ms),
         .glue_generic_nominal_shapes => customGlueGenericNominalShapes(io, allocator, &env, &timer, timeout_ms),
         .glue_opaque_ownership => customGlueOpaqueOwnership(io, allocator, &env, &timer, timeout_ms),
@@ -20529,30 +20547,52 @@ fn customGlueHostedErasedGenericCallback(io: std.Io, allocator: Allocator, env: 
     });
 }
 
-fn customGlueBoxedSequences(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
-    return checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/boxed-sequences/main.roc", .{
+fn customGlueBoxedIterStream(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // A boxed Iter or Stream is an ordinary box: a pointer to its backing
+    // record, which holds the length hint (a `Try` whose `Ok` payload is a
+    // `U64`) and then the step, an erased callable. No step-result type is
+    // reflected, because the step is erased.
+    return checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/boxed-iter-stream/main.roc", .{
         .zig = &.{
-            "pub extern fn roc_iter(arg0: RocErasedCallable) callconv(.c) RocErasedCallable;",
-            "pub extern fn roc_stream(arg0: RocErasedCallable) callconv(.c) RocErasedCallable;",
-            "pub extern fn roc_hold_iter(arg0: RocErasedCallable) callconv(.c) void;",
-            "pub extern fn roc_hold_stream(arg0: RocErasedCallable) callconv(.c) void;",
-            "@\"inner\": RocErasedCallable",
+            "pub extern fn roc_iter(arg0: *Iter) callconv(.c) *Iter;",
+            "pub extern fn roc_stream(arg0: *Stream) callconv(.c) *Stream;",
+            "pub extern fn roc_hold_iter(arg0: *Iter) callconv(.c) void;",
+            "pub extern fn roc_hold_stream(arg0: *Stream) callconv(.c) void;",
+            "@\"inner\": *Iter",
+            "pub const Iter = if (@sizeOf(usize) == 4) extern struct {\n    @\"len_if_known\": Try,\n    @\"step\": RocErasedCallable,\n",
+            "} else extern struct {\n    @\"len_if_known\": Try,\n    @\"step\": RocErasedCallable,\n",
+            "pub const Stream = if (@sizeOf(usize) == 4) extern struct {\n    @\"len_if_known\": Try,\n    @\"step!\": RocErasedCallable,\n",
+            "if (@sizeOf(Iter) != 24) @compileError(\"Iter size mismatch\");",
+            "if (@sizeOf(Stream) != 24) @compileError(\"Stream size mismatch\");",
+            "pub fn payload_ok(self: *const @This()) u64 {",
         },
         .c = &.{
-            "extern RocErasedCallable roc_iter(RocErasedCallable arg0);",
-            "extern RocErasedCallable roc_stream(RocErasedCallable arg0);",
-            "extern void roc_hold_iter(RocErasedCallable arg0);",
-            "extern void roc_hold_stream(RocErasedCallable arg0);",
-            "RocErasedCallable inner;",
+            "extern Iter* roc_iter(Iter* arg0);",
+            "extern Stream* roc_stream(Stream* arg0);",
+            "extern void roc_hold_iter(Iter* arg0);",
+            "extern void roc_hold_stream(Stream* arg0);",
+            "Iter* inner;",
+            "struct Iter {\n    Try len_if_known;\n    RocErasedCallable step;\n};",
+            "struct Stream {\n    Try len_if_known;\n    RocErasedCallable step_bang;\n};",
+            "ROC_STATIC_ASSERT(sizeof(Iter) == 24, \"Iter size mismatch\");",
+            "ROC_STATIC_ASSERT(offsetof(Iter, len_if_known) == 0, \"Iter.len_if_known offset mismatch\");",
+            "ROC_STATIC_ASSERT(offsetof(Iter, step) == 16, \"Iter.step offset mismatch\");",
+            "ROC_STATIC_ASSERT(offsetof(Stream, len_if_known) == 0, \"Stream.len_if_known offset mismatch\");",
+            "ROC_STATIC_ASSERT(offsetof(Stream, step_bang) == 16, \"Stream.step_bang offset mismatch\");",
+            "    uint64_t ok;",
         },
         .rust = &.{
-            "pub fn roc_iter(arg0: RocErasedCallable) -> RocErasedCallable;",
-            "pub fn roc_stream(arg0: RocErasedCallable) -> RocErasedCallable;",
-            "pub fn roc_hold_iter(arg0: RocErasedCallable);",
-            "pub fn roc_hold_stream(arg0: RocErasedCallable);",
-            "pub inner: RocErasedCallable",
+            "pub fn roc_iter(arg0: *mut Iter) -> *mut Iter;",
+            "pub fn roc_stream(arg0: *mut Stream) -> *mut Stream;",
+            "pub fn roc_hold_iter(arg0: *mut Iter);",
+            "pub fn roc_hold_stream(arg0: *mut Stream);",
+            "pub inner: *mut Iter",
+            "pub struct Iter {\n    pub len_if_known: Try,\n    pub step: RocErasedCallable,\n}",
+            "pub struct Stream {\n    pub len_if_known: Try,\n    pub step_bang: RocErasedCallable,\n}",
+            "const _: () = assert!(core::mem::size_of::<Iter>() == 24, \"Iter size mismatch\");",
+            "pub ok: core::mem::ManuallyDrop<u64>,",
         },
-        .absent = &.{ "len_if_known", "IterStep", "StreamStep" },
+        .absent = &.{ "IterStep", "StreamStep" },
     });
 }
 
@@ -22263,6 +22303,7 @@ fn printUsage() void {
         \\  --cross-target <name> Build platform cases for this target without running them
         \\  --glue-roc <path>    Roc binary to use for glue generation (default: <roc_binary>)
         \\  --glue-opt <opt>     Glue execution mode: default, dev, size, or speed
+        \\  --scratch-root=<dir> Absolute directory for every file the cases write (required)
         \\  --verbose            Show PASS results with timing
         \\
     , .{});
@@ -22375,6 +22416,15 @@ fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) CliRunn
                 return error.InvalidArgs;
             }
             cross_target = value;
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--scratch-root=")) {
+            const value = arg["--scratch-root=".len..];
+            if (!std.fs.path.isAbsolute(value)) {
+                std.debug.print("--scratch-root needs an absolute path\n", .{});
+                return error.InvalidArgs;
+            }
+            scratch_root = value;
             continue;
         }
         if (std.mem.startsWith(u8, arg, "--shared-object-store=")) {
@@ -22577,7 +22627,7 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
         return;
     }
 
-    if (args.positional.len < 1) {
+    if (args.positional.len < 1 or scratch_root.len == 0) {
         printUsage();
         std.process.exit(1);
     }

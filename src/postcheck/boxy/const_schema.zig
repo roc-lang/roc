@@ -146,12 +146,7 @@ const PlanWalk = struct {
             .box => |payload| {
                 // A box of a function is the function's erased callable.
                 if (store.get(payload) == .function) return .boxy_fn;
-                const payload_plan = (try self.component(payload)) orelse return null;
-                if (!store.isSequence(payload)) return .{ .box = payload_plan };
-                return .{ .boxed_sequence = .{
-                    .payload = payload_plan,
-                    .view_layout = try program.layouts.layoutOf(try program.layouts.converter.backing(payload)),
-                } };
+                return .{ .box = (try self.component(payload)) orelse return null };
             },
             .tuple => |items| {
                 while (frame.index < store.span(items).len) : (frame.index += 1) {

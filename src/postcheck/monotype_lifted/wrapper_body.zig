@@ -1,7 +1,9 @@
 //! Wrapper bodies: a function whose body does less work than a call to it
 //! costs. Such a body is one operation, a constant, or a single guard whose
 //! arms are each of those or a literal crash, and it reads nothing but its
-//! arguments. Inlining it at a call never grows the program, so every stage
+//! arguments. A direct call, a low-level operation and one indirect call of
+//! a callable read from an argument (or from a field or tuple item of one)
+//! are each one operation. Inlining it at a call never grows the program, so every stage
 //! that inlines direct calls admits it.
 
 const std = @import("std");
@@ -158,6 +160,7 @@ pub fn isInlineableWrapperBody(allocator: Allocator, program: *const Ast.Program
                 .bytes_lit,
                 => continue,
                 .call_proc,
+                .call_value,
                 .low_level,
                 .tag,
                 .nominal,
@@ -182,7 +185,6 @@ pub fn isInlineableWrapperBody(allocator: Allocator, program: *const Ast.Program
                 .return_,
                 .expect_err,
                 .literal_rejected,
-                .call_value,
                 .field_access,
                 .tuple_access,
                 .structural_eq,
@@ -209,6 +211,13 @@ pub fn isInlineableWrapperBody(allocator: Allocator, program: *const Ast.Program
         std.debug.assert(role == .body);
         switch (expr.data) {
             .call_proc, .low_level => {},
+            // One indirect call of a callable read from an argument: the
+            // callee is an argument, or a field or tuple item of one.
+            .call_value => |call| {
+                if (!isArgumentPath(program, call.callee)) return false;
+                const args = lifted.exprSpan(call.args);
+                for (0..args.len) |index| try stack.append(allocator, .{ .role = .operand, .expr = GuardedList.at(args, index) });
+            },
             .tag => |tag| {
                 const payloads = lifted.exprSpan(tag.payloads);
                 for (0..payloads.len) |index| try stack.append(allocator, .{ .role = .operand, .expr = GuardedList.at(payloads, index) });
@@ -224,10 +233,23 @@ pub fn isInlineableWrapperBody(allocator: Allocator, program: *const Ast.Program
                 if (lifted.stmtSpan(block.statements).len != 0) return false;
                 try stack.append(allocator, .{ .role = .body, .expr = block.final_expr });
             },
-            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
         }
     }
     return true;
+}
+
+/// Whether `root` is a local, or a field or tuple item read from one.
+fn isArgumentPath(program: *const Ast.Program, root: Ast.ExprId) bool {
+    var expr_id = root;
+    while (true) {
+        switch (program.getExpr(expr_id).data) {
+            .local => return true,
+            .field_access => |access| expr_id = access.receiver,
+            .tuple_access => |access| expr_id = access.tuple,
+            .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
+        }
+    }
 }
 
 /// Whether an expression is a crash with a literal message, possibly

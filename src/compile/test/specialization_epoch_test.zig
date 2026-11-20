@@ -11,9 +11,8 @@ const expectSolvedLirWorkerMetadataParallelismDeterministicLir =
 const expectSolvedLirCapturingBodyParallelismDeterministicLir =
     harness.expectSolvedLirCapturingBodyParallelismDeterministicLir;
 const expectSpecializationParallelismDeterministicLir = harness.expectSpecializationParallelismDeterministicLir;
-const expectEagerIteratorSpecializationParallelismDeterministicLir =
-    harness.expectEagerIteratorSpecializationParallelismDeterministicLir;
 const expectProcedureRootParallelismDeterministicLir = harness.expectProcedureRootParallelismDeterministicLir;
+const expectSolvedLirInstanceParallelismDeterministicLir = harness.expectSolvedLirInstanceParallelismDeterministicLir;
 
 test "solved-LIR parallel metrics reset and report exact batch accounting" {
     const app_body =
@@ -82,6 +81,62 @@ test "multiple ordinary specialization epochs lower deterministically in paralle
         \\    record = through({ label: "parallel" })
         \\    echo!(Str.inspect({ number, text, items, record }))
         \\    Ok({})
+        \\}
+    );
+}
+
+// Two callers specialize one callee whose result holds an iterator adapter
+// chain, each consuming it in a loop: the callee's specialization and the
+// adapters it reaches lower the same way whichever worker reaches them first.
+test "iterator-producing callees lower deterministically in parallel specialization" {
+    try expectSpecializationParallelismDeterministicLir(
+        \\make_iter : List(U64) -> [Ready(Iter(U64))]
+        \\make_iter = |items| Ready(items.iter().map(|item| item + 1))
+        \\
+        \\consume_a = |items| match make_iter(items) {
+        \\    Ready(iter) => {
+        \\        var $sum = 0.U64
+        \\        for x in iter {
+        \\            $sum = $sum + x
+        \\        }
+        \\        $sum
+        \\    }
+        \\}
+        \\
+        \\consume_b = |items| match make_iter(items) {
+        \\    Ready(iter) => {
+        \\        var $sum = 0.U64
+        \\        for x in iter {
+        \\            $sum = $sum + x
+        \\        }
+        \\        $sum
+        \\    }
+        \\}
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |_args| {
+        \\    total = consume_a([1, 2, 3]) + consume_b([1, 2, 3])
+        \\    if total == 18 { Ok({}) } else { Err(Exit(1)) }
+        \\}
+    );
+}
+
+// `make` and `apply` are generalized over their callbacks' lambda sets, and
+// each is called at more than one: their bodies lower once per instance, on
+// workers as well as serially, to the same LIR.
+test "further lambda-set instances lower deterministically on workers" {
+    try expectSolvedLirInstanceParallelismDeterministicLir(
+        \\apply = |f, v| f(v)
+        \\
+        \\make = |f| |x| f(x) + 1
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    n = args.len()
+        \\    a = make(|v| v * 2)
+        \\    b = make(|v| v - n)
+        \\    total = apply(a, 10) + apply(b, 10) + apply(|v| v + 1, n)
+        \\    if total > 0 { Ok({}) } else { Err(Exit(1)) }
         \\}
     );
 }
@@ -251,39 +306,6 @@ test "Solved-LIR boxed closures prepare erased procedures and capture layouts fo
         \\    d = Box.unbox(make_d(4))
         \\    total = a(0) + b(0) + c(0) + d(0)
         \\    if total == 10 { Ok({}) } else { Err(Exit(1)) }
-        \\}
-    );
-}
-
-test "iterator-producing callees complete in worker-owned specialization drafts" {
-    try expectEagerIteratorSpecializationParallelismDeterministicLir(
-        \\make_iter : List(U64) -> [Ready(Iter(U64))]
-        \\make_iter = |items| Ready(items.iter().map(|item| item + 1))
-        \\
-        \\consume_a = |items| match make_iter(items) {
-        \\    Ready(iter) => {
-        \\        var $sum = 0.U64
-        \\        for x in iter {
-        \\            $sum = $sum + x
-        \\        }
-        \\        $sum
-        \\    }
-        \\}
-        \\
-        \\consume_b = |items| match make_iter(items) {
-        \\    Ready(iter) => {
-        \\        var $sum = 0.U64
-        \\        for x in iter {
-        \\            $sum = $sum + x
-        \\        }
-        \\        $sum
-        \\    }
-        \\}
-        \\
-        \\main! : List(Str) => Try({}, [Exit(I8), ..])
-        \\main! = |_args| {
-        \\    total = consume_a([1, 2, 3]) + consume_b([1, 2, 3])
-        \\    if total == 18 { Ok({}) } else { Err(Exit(1)) }
         \\}
     );
 }

@@ -18,7 +18,6 @@ const ScalarizeJoins = @import("scalarize_joins.zig");
 const LoopAppendPromote = @import("loop_append_promote.zig");
 const RangeProve = @import("range_prove.zig");
 const BoxReuse = @import("box_reuse.zig");
-const ForwardingJoinInline = @import("forwarding_join_inline.zig");
 const TagCaseFusion = @import("tag_case_fusion.zig");
 const BranchExpectation = @import("branch_expectation.zig");
 const KnownTagJump = @import("known_tag_jump.zig");
@@ -32,7 +31,6 @@ const TaskExecutor = base.post_check_task_executor;
 pub const Phase = enum {
     branch_expectation,
     trmc,
-    forwarding_join,
     tag_fusion,
     prune_join_params,
     scalarize,
@@ -51,7 +49,7 @@ pub const phase_count = @typeInfo(Phase).@"enum".field_names.len;
 pub fn fusible(phase: Phase) bool {
     return switch (phase) {
         .branch_expectation, .trmc, .scalarize, .prune_join_params => true,
-        .forwarding_join, .tag_fusion, .loop_append, .range, .box_reuse => false,
+        .tag_fusion, .loop_append, .range, .box_reuse => false,
     };
 }
 
@@ -162,7 +160,6 @@ fn phaseMask(phase: Phase) u16 {
 /// The body a phase rewrites, or null when the phase has nothing to rewrite.
 fn phaseBody(store: *const LirStore, phase: Phase, proc: LIR.LirProcSpecId) ?LIR.CFStmtId {
     return switch (phase) {
-        .forwarding_join => ForwardingJoinInline.rewritableProcBody(store, proc),
         .tag_fusion => TagCaseFusion.rewritableProcBody(store, proc),
         .scalarize => ScalarizeJoins.rewritableProcBody(store, proc),
         .branch_expectation, .trmc, .prune_join_params, .loop_append, .range, .box_reuse => BodyClone.rewritableProcBody(store, proc),
@@ -243,22 +240,18 @@ const TaskContext = struct {
 
     fn runPhase(self: *TaskContext, shard: *LirStore, phase: Phase, next_join: *u32, scratch_allocator: Allocator, lane: *TaskExecutor.LaneState) Allocator.Error!void {
         const analysis = switch (phase) {
-            .forwarding_join, .tag_fusion, .loop_append, .range, .box_reuse => try laneScratch(BodyClone.AnalysisScratch, lane),
+            .tag_fusion, .loop_append, .range, .box_reuse => try laneScratch(BodyClone.AnalysisScratch, lane),
             .branch_expectation, .trmc, .prune_join_params, .scalarize => null,
         };
         switch (phase) {
             .branch_expectation => try BranchExpectation.runProc(shard, self.proc, scratch_allocator),
             .trmc => self.trmc_report = try Trmc.runProcWithScratch(shard, self.layouts, self.proc, try laneScratch(Trmc.LaneScratch, lane)),
-            .forwarding_join, .tag_fusion => {
+            .tag_fusion => {
                 var joins = BodyClone.JoinParamIndex.init(scratch_allocator);
                 defer joins.deinit();
                 joins.next_join_point = next_join.*;
-                if (phase == .forwarding_join) {
-                    try ForwardingJoinInline.runProcWithScratch(shard, self.layouts, self.proc, scratch_allocator, &joins, analysis.?);
-                } else {
-                    try TagCaseFusion.runProcWithScratch(shard, self.layouts, self.proc, scratch_allocator, &joins, analysis.?);
-                    try KnownTagJump.runProc(shard, self.proc, scratch_allocator, &joins);
-                }
+                try TagCaseFusion.runProcWithScratch(shard, self.layouts, self.proc, scratch_allocator, &joins, analysis.?);
+                try KnownTagJump.runProc(shard, self.proc, scratch_allocator, &joins);
                 next_join.* = joins.next_join_point;
             },
             .prune_join_params => try PruneJoinParams.runProc(shard, self.proc, scratch_allocator, self.guarded_reads),
@@ -363,7 +356,7 @@ pub fn runSegmentTimed(
     for (phases) |phase| switch (phase) {
         .trmc => try Trmc.prepareLayouts(store, layouts),
         .box_reuse => try BoxReuse.prepareLayouts(store, layouts),
-        .branch_expectation, .forwarding_join, .tag_fusion, .prune_join_params, .scalarize, .loop_append, .range => {},
+        .branch_expectation, .tag_fusion, .prune_join_params, .scalarize, .loop_append, .range => {},
     };
     var contexts = std.ArrayList(TaskContext).empty;
     defer {
@@ -405,7 +398,7 @@ pub fn runSegmentTimed(
     // fresh joins above this boundary; ordered commit rebases only those IDs.
     // A segment of several phases allocates none.
     const first_fresh_join = switch (phases[0]) {
-        .forwarding_join, .tag_fusion, .range => BodyClone.firstFreshJoinPoint(store),
+        .tag_fusion, .range => BodyClone.firstFreshJoinPoint(store),
         .branch_expectation, .trmc, .prune_join_params, .scalarize, .loop_append, .box_reuse => 0,
     };
     for (contexts.items) |*context| context.first_fresh_join = first_fresh_join;
@@ -539,7 +532,7 @@ fn shapesAdmit(shapes: LIR.ProcShapes, phase: Phase) bool {
         .branch_expectation => shapes.switch_stmt,
         .trmc => shapes.self_call,
         .loop_append => shapes.loop,
-        .forwarding_join, .prune_join_params => shapes.join_param,
+        .prune_join_params => shapes.join_param,
         .tag_fusion => shapes.join_param and shapes.switch_stmt,
         .scalarize => shapes.join_aggregate_param or shapes.struct_build or shapes.tag_build,
         .range => shapes.checked_arithmetic or shapes.checked_division or shapes.switch_stmt or shapes.unsigned_compare or shapes.simd_concat_shift,

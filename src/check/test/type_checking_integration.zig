@@ -57,7 +57,7 @@ const MethodRegistryTestModuleIndex = struct {
 /// The source's only associated value is a record, which is not a
 /// reference, so publication resolves it to no method target.
 const MethodRegistryTestReferencedTargets = struct {
-    pub fn methodBindingTarget(_: *@This(), _: ModuleEnv.MethodBinding, _: can.CIR.Expr.Idx, _: static_dispatch.MethodOwner) error{OutOfMemory}!?static_dispatch.ReferencedMethodTarget {
+    pub fn methodBindingTarget(_: *@This(), _: ModuleEnv.MethodBinding, _: can.CIR.Expr.Idx) error{OutOfMemory}!?static_dispatch.ReferencedMethodTarget {
         return null;
     }
 };
@@ -15269,9 +15269,10 @@ test "check type - declaration body - bare re-export of a parameterized type has
 
 test "check type - declaration body - bare imported parameterized alias has too few args" {
     var lib = try TestEnv.init("BareLib",
-        \\Pair(a) : (a, a)
+        \\BareLib := [].{ Pair(a) : (a, a) }
     );
     defer lib.deinit();
+    try lib.assertNoErrors();
     var env = try TestEnv.initWithImport("BareMain",
         \\import BareLib
         \\

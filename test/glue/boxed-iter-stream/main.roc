@@ -1,4 +1,4 @@
-platform "glue-boxed-sequences"
+platform "glue-boxed-iter-stream"
 	requires {}
 	exposes [Sequences]
 	packages {}
