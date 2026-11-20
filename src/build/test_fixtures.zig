@@ -29,7 +29,7 @@ pub const Plan = struct {
         /// Whether `relative`, a path under `source`, lies in a target directory this alias copies.
         fn covers(self: Alias, relative: []const u8) bool {
             const names = self.targets orelse return true;
-            const end = std.mem.indexOfScalar(u8, relative, '/') orelse relative.len;
+            const end = std.mem.findScalar(u8, relative, '/') orelse relative.len;
             for (names) |name| {
                 if (std.mem.eql(u8, name, relative[0..end])) return true;
             }
@@ -152,9 +152,9 @@ pub const Plan = struct {
             const source = b.pathJoin(&.{ alias.source, name });
             // A target whose inputs are all generated has no checked-in directory.
             const absolute = b.root.joinString(b.allocator, source) catch @panic("OOM");
-            std.Io.Dir.cwd().access(b.graph.io, absolute, .{}) catch |err| {
-                if (err == error.FileNotFound) continue;
-                std.debug.panic("unable to read {s}: {t}", .{ source, err });
+            std.Io.Dir.cwd().access(b.graph.io, absolute, .{}) catch |err| switch (err) {
+                error.FileNotFound => continue,
+                else => std.debug.panic("unable to read {s}: {t}", .{ source, err }),
             };
             _ = files.addCopyDirectory(b.path(source), b.fmt("{s}/{s}", .{ alias.destination, name }), .{ .exclude_extensions = &generated_extensions });
         }
