@@ -1541,8 +1541,8 @@ resolves after the expression, for instance) lets the expression cover its
 parts; pruning then rejects it as a data root, and its parts are evaluated
 at runtime with it. That outcome never changes what the program computes.
 
-`ROC_HOIST_ROOT_STATS` prints, for each module whose compile-time roots are
-published, how many roots hoisting selected, how many of those an evaluator
+`ROC_HOIST_ROOT_STATS` prints, for each module with compile-time roots, how
+many roots hoisting selected, how many of those an evaluator
 completes and the checked-value writer completes, and how many value-form
 expressions their bodies keep.
 
@@ -18403,7 +18403,7 @@ count whether to repack in place; a retain after it would let the packing
 overwrite the captures that later reads still view.
 
 An erased worker whose reuse argument is still unconsumed hands it on to a
-direct call when three facts hold: the callee is a local procedure only
+direct call when three conditions hold: the callee is a local procedure only
 direct calls reach (`Worker.direct`); the call is in result position, which
 is the body's root, a block's final expression, an `if` or `match` branch,
 or a part of a record, tuple, tag or nominal value in result position; and
@@ -21920,7 +21920,7 @@ a container, and one under a function or a representation-deciding builtin is
 an exact mention. Each declaration's reach of its formals is computed once per
 module, the first time a type names it, as the least fixed point over the
 declarations whose backings name one another. Builtin nominals keep their
-fixed argument rules, which state the same facts about their backings: an
+fixed argument rules, which state the same things about their backings: an
 argument of `Iter` or `Stream` is under a function, since their backing
 record's step function mentions it. A body that is
 not a checked Roc body (an intrinsic, an entry wrapper, a hosted procedure, or
@@ -26188,17 +26188,22 @@ generates constraints per statement:
   and demand their consumed inputs too. Read-only slices can still select the
   borrowing operation and keep their lender live. Parameter demands and these
   edges settle together with direct-call demands, including across wrappers.
-  A read-only slice of an owned lender that the slice is the last use of is
-  demanded as well, once signatures and borrowed returns have settled: the
-  lender's place (every member other than the slice and the borrows anchored
-  through it) has no read after the slice, and the consumed input is the
-  lender or a pure alias of it. The borrow would only stretch the whole
-  allocation, dropped items included, to the slice's last read, while the
-  transfer costs no refcount operation, so a unique list shrinks in place and
-  releases the items it drops at once. A demand moves the slice's readers out
-  of its lender's place and can leave another slice of that place the last
-  use, so these demands settle to a fixpoint; they never reach a parameter
-  signature, because the demand stops at a lender that is already owned.
+  A read-only slice that would outlive its owned lender is demanded as well,
+  once signatures and borrowed returns have settled: the slice, or a borrow
+  anchored through it, has a read at and after which the lender's place
+  (every member other than the slice and the borrows anchored through it) is
+  never read, and the consumed input is the lender or a pure alias of it. A
+  borrow there would stretch the lender's whole allocation, dropped items
+  included, past the lender's own last use, keeping the items it holds shared
+  and an emptied window's source alive. The demand transfers the lender's
+  unit into the slice, at no refcount cost when the slice is the lender's
+  last use and with one retain when the lender is read after it, so an
+  emptied list is released, a unique list shrinks in place and releases the
+  items it drops at once, and the lender is released at its own last use. A
+  demand moves the slice's readers out of its lender's place and can leave
+  another slice of that place outliving the rest of it, so these demands
+  settle to a fixpoint; they never reach a parameter signature, because the
+  demand stops at a lender that is already owned.
   Every post-ARC statement therefore contains
   the exact concrete operation and effect the backend executes. The variant
   mapping is static low-level-op data, and only ARC may select from it.

@@ -2772,13 +2772,16 @@ fn solveParameterModes(solver: *Solver) SolveError!void {
 
 /// A slice solved as a borrow keeps its lender's whole allocation live until
 /// the slice's last read, items it drops included. When the lender is an
-/// owned binding that the slice is the last use of, that extension is all
-/// the borrow buys: transferring the lender's unit into the slice costs no
-/// refcount operation, lets the consuming operation shrink a unique list in
-/// place and releases the items it drops at once. Each such slice is
-/// demanded. A demand removes the slice's readers from its lender's place,
-/// which can leave another slice of that place the last use in turn, so the
-/// demands are settled to a fixpoint.
+/// owned binding whose place is not read at or after some read of the slice,
+/// the borrow stretches the lender past its own last use, holding a buffer
+/// the slice may have dropped and the items it holds shared. Each such slice
+/// is demanded: the lender's unit (or, when the lender is read after the
+/// slice, one retain of it) moves into the consuming operation, which
+/// releases an emptied list, shrinks a unique list in place and releases the
+/// items it drops at once, and the lender is released at its own last use.
+/// A demand removes the slice's readers from its lender's place, which can
+/// leave another slice of that place outliving the rest of it in turn, so
+/// the demands are settled to a fixpoint.
 fn demandDeadLenderSlices(solver: *Solver, binding: *BindingResult) SolveError!void {
     if (solver.consuming_slices.items.len == 0) return;
     const allocator = solver.allocator;
@@ -2801,10 +2804,11 @@ fn demandDeadLenderSlices(solver: *Solver, binding: *BindingResult) SolveError!v
                 order = try UseOrder.initFromStore(allocator, solver.store, @as(LIR.LirProcSpecId, @fromBackingInt(slice.proc)));
                 order_proc = slice.proc;
             }
-            if (try placeUsedAfterSlice(solver, binding, places, &order.?, slice.stmt, lender, target)) continue;
+            if (!try sliceOutlivesLender(solver, binding, places, &order.?, slice.stmt, lender, target)) continue;
             // The demand flows exactly as the ownership-flow edges carry it:
             // into the consumed input and along its pure aliases to the
-            // lender, which is already owned, so no signature changes.
+            // lender, which is already owned, so no signature changes and a
+            // lender read after the slice is retained for it.
             solver.demand[target] = true;
             var cursor = solver.domain.indexOf(slice.flow.source).?;
             while (true) {
@@ -2831,9 +2835,11 @@ fn unitIsLenders(solver: *const Solver, source: LIR.LocalId, lender: u32) bool {
     return true;
 }
 
-/// Whether a member of the lender's place other than the slice and the
-/// borrows anchored through it is read after the slice.
-fn placeUsedAfterSlice(
+/// Whether the slice, or a borrow anchored through it, has a read (or its
+/// definition at `stmt`) after which no other member of the lender's place
+/// is read, so that the borrow would keep the lender live past its own last
+/// use.
+fn sliceOutlivesLender(
     solver: *const Solver,
     binding: *const BindingResult,
     places: EdgeRows,
@@ -2842,17 +2848,43 @@ fn placeUsedAfterSlice(
     lender: u32,
     slice: u32,
 ) SolveError!bool {
+    const allocator = solver.allocator;
+    var slice_members: std.ArrayList(u32) = .empty;
+    defer slice_members.deinit(allocator);
+    var lender_members: std.ArrayList(u32) = .empty;
+    defer lender_members.deinit(allocator);
     members: for (places.row(lender)) |member| {
+        std.debug.assert(binding.leader[member] == lender);
         var cursor = member;
         while (cursor != lender) {
-            if (cursor == slice) continue :members;
+            if (cursor == slice) {
+                try slice_members.append(allocator, member);
+                continue :members;
+            }
             cursor = switch (solver.defs[cursor]) {
                 .borrow_capable => |source| source,
                 .none, .multi, .fresh => solveInvariant("ARC borrowed binding had no lender link"),
             };
         }
-        std.debug.assert(binding.leader[member] == lender);
-        if (try order.usesAfter(@backingInt(stmt), @fromBackingInt(@intCast(solver.domain.localAt(member))))) return true;
+        try lender_members.append(allocator, member);
+    }
+    if (!try lenderReadAfter(solver, order, lender_members.items, @backingInt(stmt), false)) return true;
+    for (slice_members.items) |member| {
+        const local: LIR.LocalId = @fromBackingInt(@intCast(solver.domain.localAt(member)));
+        for (order.topology.reads_of.row(local)) |read| {
+            if (!try lenderReadAfter(solver, order, lender_members.items, read, true)) return true;
+        }
+    }
+    return false;
+}
+
+/// Whether a member of `lender_members` is read after the statement `from`,
+/// or, when `inclusive`, by `from` itself.
+fn lenderReadAfter(solver: *const Solver, order: *UseOrder, lender_members: []const u32, from: u32, inclusive: bool) SolveError!bool {
+    for (lender_members) |member| {
+        const local: LIR.LocalId = @fromBackingInt(@intCast(solver.domain.localAt(member)));
+        if (inclusive and order.reads(from, local)) return true;
+        if (try order.usesAfter(from, local)) return true;
     }
     return false;
 }
