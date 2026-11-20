@@ -41,6 +41,8 @@ examples expose" at the end.
 | Take the first result and cancel the rest | `Concurrent.race!` |
 | React to results as they arrive, stop early or add work | `for! x in plan { … }`, with `spawn` |
 | Bound how many run at once | `plan.limit(n)`, or a semaphore across loops |
+| Get a plan's results in input order | `plan.all!()`, `plan.all_ok!()` |
+| Keep an entry, like a deadline, from holding the loop open | `plan.background()` |
 | Let several tasks change one piece of state | `Shared(s)` and `update!` |
 | Wait until state changes | `update!` returning `Wait` |
 | Undo a change however a task ends | `finally!`, `on_failure!` |
@@ -81,7 +83,8 @@ mirror! = |urls, dir| {
 At most eight downloads run at once, and a new one starts as soon as one
 finishes. The body handles one arrival at a time, so the writes need no lock.
 The first error leaves the loop through `?`, which cancels the downloads still
-running.
+running. To collect the results in input order instead, the plan has
+methods: `downloads.concurrently().limit(8).all!()`.
 
 ### Reduce as results arrive
 
@@ -144,14 +147,13 @@ attempts still running. Library combinators like this are ordinary functions.
 search! = |shards, query, budget_ms| {
     var $hits = []
     var $heard = 0
-    queries = shards.map(|shard| || Answered(Shard.search!(shard, query)))
-    deadline = || { Sleep.millis!(budget_ms); Deadline }
-    for! arrival in queries.append(deadline).concurrently() {
+    queries = shards.map(|shard| || Answered(Shard.search!(shard, query))).concurrently()
+    deadline = [|| { Sleep.millis!(budget_ms); Deadline }].concurrently().background()
+    for! arrival in queries.concat(deadline) {
         match arrival {
             Answered(result) => {
                 $hits = $hits.concat(result ?? [])
                 $heard = $heard + 1
-                if $heard == shards.len() { break }
             }
             Deadline => break
         }
@@ -161,8 +163,8 @@ search! = |shards, query, budget_ms| {
 ```
 
 The answer is whatever arrived in time. The deadline is one more entry, tagged
-like the others. The loop has to `break` once every shard has answered,
-because otherwise it would wait for the timer too.
+like the others, and marked as background: once every shard has answered, the
+loop ends and cancels the timer instead of waiting for it.
 
 ## 2. Coordination primitives
 
@@ -867,41 +869,29 @@ obvious one.
 crawl! = |start, max_in_flight| {
     fetch = |url| || (url, Http.get_utf8!(url))
     var $seen = Set.single(start)
-    var $waiting = []
-    var $in_flight = 1
     var $pages = []
-    for! (url, result) in [fetch(start)].concurrently() {
-        $in_flight = $in_flight - 1
+    for! (url, result) in [fetch(start)].concurrently().limit(max_in_flight) {
         match result {
             Ok(html) => {
                 $pages = $pages.append(url)
                 for link in links(html) {
                     if !$seen.contains(link) {
                         $seen = $seen.insert(link)
-                        $waiting = $waiting.append(link)
+                        spawn fetch(link)
                     }
                 }
             }
             Err(_) => {}
-        }
-        while $in_flight < max_in_flight {
-            match $waiting {
-                [next, .. as rest] => {
-                    spawn fetch(next)
-                    $waiting = rest
-                    $in_flight = $in_flight + 1
-                }
-                [] => break
-            }
         }
     }
     $pages
 }
 ```
 
-The visited set, the frontier and the count in flight are `var`s in the loop
-body, which handles one arrival at a time. Nothing is shared and nothing is
-locked. The loop ends when the last fetch has arrived and nothing is waiting.
+The visited set is a `var` in the loop body, which handles one arrival at a
+time, so nothing is shared and nothing is locked. Every fetch the body spawns
+counts against the plan's limit and waits for room, so at most
+`max_in_flight` run at once. The loop ends when the last fetch has arrived.
 
 ### The others
 
@@ -994,53 +984,51 @@ slower, wordier or weaker than it could be, roughly in order of importance.
    operation.
 2. **Waking many tasks is serialized.** A barrier opening, a watched value
    changing, a log gaining an event, or a cache entry becoming ready all release
-   many waiters whose updates keep the state. Under the settled wake rule each
-   is readied only after the one before it has run and passed the wake on, so
-   releasing `n` waiters takes `n` dispatches one after another, and a
-   `ParallelTasks` build cannot release them in parallel. Readying at once every
-   waiter whose probe would `Keep`, together with the first that would `Set`,
-   would fix this at the cost of probing every waiter. It belongs with open
-   decision (c).
+   many waiters whose updates keep the state. Each is readied only after the
+   one before it has run and passed the wake on, so releasing `n` waiters takes
+   `n` dispatches one after another, and a `ParallelTasks` build cannot release
+   them in parallel. Readying at once every waiter whose probe would `Keep`,
+   together with the first that would `Set`, would fix this at the cost of
+   probing every waiter. The shared-state RFC lists it under open decision (c).
 3. **Waiters on unrelated keys are probed.** In `cached!`, every store to the
    dictionary probes the waiters for every other key. Holding one handle per
    key inside an outer handle (`Shared(Dict(k, Shared(Entry(v))))`) avoids it,
    and a state may hold handles, but nothing points programmers there.
-4. **No fairness.** Most-recent-first waking can starve an old waiter under
-   steady contention: a philosopher, a writer, a pool borrower. A program that
-   needs fairness can take a ticket in one update and wait for its turn in
-   another, but it must then use `on_failure!` to give the turn up if it is
-   cancelled. A `Fair` variant in the library would save every program from
-   writing that.
-5. **`spawn` ignores limits.** The crawler counts what it has in flight by
-   hand, because an entry added with `spawn` runs under no limit. A loop over a
-   limited plan that also spawns is easy to misread as bounded. `spawn` could
-   inherit the limit of the plan the loop runs over.
-6. **A limited `all!`.** `Concurrent.all!` takes a list, so it cannot be
-   limited, and getting a limited plan's results in input order takes a loop
-   that stores each result by index. `Concurrently.all! : Concurrently(a) =>
-   List(a)` would let any plan be collected in order.
-7. **One entry cannot be cancelled on its own.** The debouncer leaves a
+4. **One entry cannot be cancelled on its own.** The debouncer leaves a
    sleeping task for every event and ignores the stale ones, and graceful
    shutdown races each accept against the stop flag. Both work, and both cost
    a task or a race that a way to cancel one entry would save. Such a
    cancellation would need a name for an entry, which the loop deliberately
-   lacks.
-8. **Compensation cannot run on cancellation.** Cleanups are pure, so a saga
+   lacks. Background entries cover the commonest case, a deadline that should
+   not hold the loop open.
+5. **Compensation cannot run on cancellation.** Cleanups are pure, so a saga
    whose caller cancels it cannot undo the bookings it made. This follows from
    silent cancellation, which the main RFC chose deliberately. A saga must
    either run where nothing cancels it, or record each step durably so that a
    recovery task compensates later, as sagas do in practice.
-9. **One handle per update.** The philosophers and the replication record fit
+6. **One handle per update.** The philosophers and the replication record fit
    in one handle. A transfer between two accounts held in separate handles
    does not, so it must use a record of both, which is the shared-state RFC's
    `update2!` future possibility.
-10. **Supervision has no restart window or backoff.** OTP limits restarts per
-    period of time, and production supervisors wait between restarts.
-    `supervise!` counts restarts for its whole life. Both would be fields of
-    its configuration record.
-11. **Pure parallel computation is out of scope.** Sorting or transforming
-    large data in parallel, without effects, is the main RFC's future
-    deterministic parallelism, not something these features give.
+7. **Supervision has no restart window or backoff.** OTP limits restarts per
+   period of time, and production supervisors wait between restarts.
+   `supervise!` counts restarts for its whole life. Both would be fields of
+   its configuration record.
+8. **Pure parallel computation is out of scope.** Sorting or transforming
+   large data in parallel, without effects, is the main RFC's future
+   deterministic parallelism, not something these features give.
+
+Three earlier gaps are now closed in the RFCs, though the prototype has not
+caught up with them:
+
+- **Fairness.** `None` builds now pause a waiting task instead of running
+  others on top of it, so waking no longer has to follow one stack's order.
+  Waiters are probed oldest first.
+- **`spawn` and limits.** An entry spawned into a loop over a limited plan
+  counts against the limit, which is what lets the crawler above stay bounded
+  without counting by hand.
+- **A limited `all!`.** `plan.all!()` and `plan.all_ok!()` return any plan's
+  results in input order.
 
 Everything else reads like the sequential program. The concurrency is in a
 plan, a loop or an update, and the state is a value. Most examples in sections

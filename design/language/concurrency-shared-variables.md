@@ -256,7 +256,7 @@ permits.update!(|n| if n == 0 { Wait } else { Set(n - 1, {}) })
 ```
 
 When a permit is given back, the waiting tasks are not all woken to compete
-for it. The functions are pure, so the runtime can ask each one, most recent
+for it. The functions are pure, so the runtime can ask each one, oldest
 waiter first, what it would do with the new state, without storing anything.
 It wakes only the first that would not wait, which then runs its function for
 real. Ten tasks waiting for one permit cost one wakeup per
@@ -412,12 +412,12 @@ That is correct: the broken state lies outside the subtree being restarted.
 
 ### On platforms that do not schedule tasks
 
-In a `None` build, updates are ordinary calls. A `Wait` runs the concurrent
-loop entries that have not started, earliest in input order first, until the
-state changes, as a receive does in the sessions RFC. If none is left, nothing
-can ever change the state, and the task crashes with "deadlock: no task can
-ever change the shared state this task waits for". This matches the
-input-order schedule of the companion RFC's C9.
+A `None` build runs its own tasks on one thread (companion RFC, "On
+platforms that do not schedule tasks"). A `Wait` pauses the task, as on a task
+platform, and the next ready task runs. Waking follows the same rule
+everywhere. If no task can run, nothing can ever change the state, and the
+task crashes with "deadlock: no task can ever change the shared state this
+task waits for".
 
 ### Library patterns
 
@@ -592,9 +592,8 @@ cell whose state does not lead back to it is freed by its count when its last
 handle goes, as any value is. Release matters for cycles, and for cells left
 in a crashed task's frames, which the sessions RFC already releases this way.
 
-- **`None` builds** track no holders. Their one stack can use every cell until
-  the program ends, so the runtime releases every cell still live when it
-  does.
+- **`None` builds** track no holders. The runtime releases every cell still
+  live when the program ends.
 - **The walk** is generated from the stored value's type, like the per-type
   helpers the compiler already generates, and visits nothing for a type that
   cannot contain a handle. Deadlock detection needs the same holder sets
@@ -621,18 +620,18 @@ flag, a list of waiters, in `Tasks` and `ParallelTasks` builds a holder set
 
 | Build | Acquiring a cell | Waiters |
 |---|---|---|
-| `None` | Nothing to do | None: `Wait` runs loop entries on demand |
+| `None` | Nothing to do: one thread runs every task | A list per cell, as in `Tasks` builds |
 | `Tasks` | Nothing to do: the function is pure and cannot suspend, and resumes are serial (P10), so no other task can run during it | A list per cell |
 | `ParallelTasks` | Lock the cell | A list per cell, guarded by its lock |
 
 **Waking.** Waiters are kept in the order they began waiting. After a `Set`,
-while still holding the cell, the runtime probes them, most recent first: it
+while still holding the cell, the runtime probes them, oldest first: it
 calls each waiter's function on the new state and discards the result,
 storing nothing. It readies the first waiter whose function would not answer
-`Wait`, and stops. Most recent first is the order of a `None` build's one
-stack, where a task that began waiting later is above the earlier one and
-runs first, so C9 holds (V8). A waiter that waits again moves to the most
-recent place, as it stays on top of the stack in a `None` build. The readied waiter is marked as carrying the wake:
+`Wait`, and stops. Oldest first is fair: a waiter that could go ahead is
+never passed over for one that began waiting later. A readied waiter that
+waits again keeps its place. The readied waiter is marked as carrying the
+wake:
 
 - If it stores, its own `Set` probes the remaining waiters.
 - If it ends without storing, because it answers `Keep`, answers `Wait`
@@ -728,7 +727,7 @@ waited-on cell can run, the waiters crash with the deadlock message.
 | V5 | **Cleanups run exactly once:** a `finally!` cleanup on every exit from its body (return, cancellation, crash), an `on_failure!` cleanup on cancellation and crash only | Language guarantee | Certify push and pop; cancel at every suspension point; crash at every update |
 | V6 | **Poisoning.** After a cleanup crashes, every update of its handle crashes, and so does every task waiting on it | Language guarantee | Tests |
 | V7 | **No lost wakeups.** A waiter registers before it releases its cell, so a store that follows the release always probes it. A waiter that a probe readies and that ends without storing, including by cancellation, probes on, so a waiter whose function would not wait is never left parked | Runtime invariant | Model (readying every waiter); tests and differential runs (readying the first) |
-| V8 | **Sequential equivalence.** C9 holds for programs that use `Shared`: a `None` build's `Wait` runs loop entries on demand, and is a deadlock only where the input-order schedule deadlocks | Language guarantee | Differential |
+| V8 | **Sequential equivalence.** C9 holds for programs that use `Shared`: a `None` build's `Wait` pauses its task and runs the next ready one, as the coroutine schedule does, and is a deadlock only where that schedule deadlocks | Language guarantee | Differential |
 | V9 | **Every cell is freed.** A cell is freed when its last handle goes, or, when its remaining references are only in the states of cells that no running task holds or in crashed frames, when its last holder finishes and the runtime releases it. A released cell is never updated again | Runtime invariant | Exact heap accounting after every run of generated programs whose states hold handles and jobs; an assertion at every use of a cell; mutations |
 
 ## Drawbacks
@@ -751,11 +750,12 @@ waited-on cell can run, the waiters crash with the deadlock message.
 - **Changing a large state copies it.** The update borrows the state, so it
   never holds the only reference, and appending to a queue in a handle copies
   the whole queue. See open decision (f).
-- **No fairness among waiters.** The most recent waiter is probed first, so
-  under sustained contention an early waiter can wait indefinitely while
-  later ones are served. Readying every waiter promised nothing either: the
-  schedule chose. A fair order would break C9, because a `None` build can
-  only run the most recent waiter.
+- **Waking many waiters is serialized.** When a `Set` lets many waiters go
+  ahead without changing the state, as when a barrier opens or a watched value
+  changes, each is readied only after the one before it has run and passed
+  the wake on. Releasing `n` of them takes `n` dispatches one after another,
+  and a `ParallelTasks` build cannot run them at the same time. See open
+  decision (c).
 - **Stores run other tasks' functions.** After each `Set` on a cell with
   waiters, the storing task probes them, each inside a crash boundary. Under
   contention that is a quadratic number of pure calls, though a linear
@@ -790,7 +790,7 @@ waited-on cell can run, the waiters crash with the deadlock message.
 | Requiring equality on the state, and parking again a dispatched waiter whose state equals the one it waited on | Replaces running the function with a comparison, but the waiter is still dispatched to make it, so dispatches stay quadratic. It also restricts state types and keeps old states alive |
 | Readying only waiters whose state changed, compared at the `Set` | Never skips anything in the libraries: each `Set` that matters changes the state, and the waste comes from waiters that run after the first one took what the `Set` gave |
 | Running the first eligible waiter's update at the `Set` and handing it the result, as the sessions RFC's semaphore cell hands over a permit | Commits an update on behalf of a task that has not run. If that task is cancelled first, its update stays committed and the `finally!` after it never runs, so a permit is lost. The semaphore cell can give a permit back; a pure update has no inverse |
-| Probing the oldest waiter first, for fairness | A `None` build runs only the most recent waiter, so a `Tasks` build that served the oldest could not follow the input-order schedule, and C9 fails. The fuzzer found such a program |
+| Probing the most recent waiter first (this RFC's earlier rule) | Needed only while `None` builds ran every task on one plain stack, where only the most recent waiter can continue. Probing the oldest first broke C9 against that stack on a fuzzed program. With `None` builds that pause waiting tasks (companion RFC), the order is free, and most recent first lets an early waiter starve under steady contention |
 | Waking one waiter without probing, which passes the wake on if it waits again | Each `Set` by the woken waiter starts the chain again, so a semaphore still dispatches every waiter on every release |
 | Type rules against cycles: a state holds no function, and no type reaches its own handle through a state (this RFC's earlier draft) | Sound, and checkable once per declaration. But the checker cannot see captures, so the rules rejected about one in ten acyclic state types in the prototype's model, every one for a function in a state. They add an inferred requirement to generic code, and they still reject cycles that break in normal use, such as a crawler's jobs that capture their queue |
 | Deciding cycles from lambda sets, which show what each function captures | Exact, as the prototype shows. But only `.lss` builds compute lambda sets, and a program's validity cannot depend on how it is lowered |
@@ -911,11 +911,11 @@ pause schedule:
 | Semaphore, the runtime's semaphore cell (sessions RFC) | 30 | 120 | 187 | 0 | | |
 | Semaphore, `Shared`, every waiter readied | 30 | 526 | 652 | 0 | 495 | |
 | Semaphore, `Shared`, every waiter readied, equal states compared | 30 | 526 | 246 | 0 | 89 | |
-| Semaphore, `Shared`, most recent waiter that would not wait (the rule) | 30 | 120 | 681 | 0 | 89 | 435 |
+| Semaphore, `Shared`, most recent waiter that would not wait (the earlier rule) | 30 | 120 | 681 | 0 | 89 | 435 |
 | Pool, server task (sessions RFC) | 93 | 276 | 754 | 90 | | |
 | Pool, `Shared`, every waiter readied | 30 | 497 | 775 | 0 | 466 | |
 | Pool, `Shared`, every waiter readied, equal states compared | 30 | 497 | 397 | 0 | 88 | |
-| Pool, `Shared`, most recent waiter that would not wait (the rule) | 30 | 119 | 887 | 0 | 88 | 406 |
+| Pool, `Shared`, most recent waiter that would not wait (the earlier rule) | 30 | 119 | 887 | 0 | 88 | 406 |
 
 These are counts of operations in the Python prototype, not timings. A resume
 is one dispatch of a task by the host, including a readied waiter that runs
@@ -936,7 +936,11 @@ function by the storing task, whose result is discarded.
 - Under the input-order schedule, the server tasks deadlock, as they do in a
   `None` build; `Shared` does not.
 
-With the rule as the prototype's default, the suite passes, and so do 2,000
+These measurements and the fuzz run below use the earlier rule, most recent
+first. Oldest first readies one waiter per `Set` in the same way, so resumes
+should stay linear, but neither has been rerun with it.
+
+With the earlier rule as the prototype's default, the suite passes, and so do 2,000
 fuzzed programs: 1,964 compared against the input-order schedule (C9),
 15,924 cancelled at a suspension point, 5,028 probes, and 336 wakes passed on
 by a readied waiter that was dropped before it ran.
@@ -1006,10 +1010,13 @@ Names are placeholders. The prototype settled six earlier questions:
   closure passed to `finally!` or `on_failure!`.
 - **Updates over several handles.** Not needed by the semaphore, pool or
   breaker. One handle per update keeps locks from nesting.
-- **Waking waiters.** After a `Set`, the runtime probes the waiters, most
-  recent first, and readies the first whose function would not wait; a
-  readied waiter that ends without storing probes on. Probing the oldest
-  first broke C9 on a fuzzed program. Readying every waiter makes
+- **Waking waiters.** After a `Set`, the runtime probes the waiters, oldest
+  first, and readies the first whose function would not wait; a readied
+  waiter that ends without storing probes on. The prototype settled this with
+  most recent first, because its `None` builds ran on one plain stack, where
+  oldest first broke C9. With `None` builds that pause waiting tasks, the
+  order is free, and oldest first is fair; the prototype has not been rerun
+  with it. Readying every waiter makes
   dispatches quadratic under contention. Comparing states, which the earlier
   proposal needed equality for, leaves dispatches quadratic. Handing a result
   to a waiter at the `Set` loses permits when the waiter is cancelled. See
@@ -1040,7 +1047,11 @@ Still open:
   one it waited on, for state types that have equality, which saves calls but
   keeps old states alive; or let a library declare that its waiters are
   interchangeable, so that a probe that finds one waiter waiting stops. The
-  real runtime should measure whether either is worth it.
+  real runtime should measure whether either is worth it. Separately, waiters
+  that would `Keep` are released one at a time, each passing the wake on.
+  Readying at once every waiter whose probe would `Keep`, with the first that
+  would `Set`, would release them together, at the cost of probing every
+  waiter after each `Set`.
 - **(d) Channel ends in states.** Releasing a cell drops any channel end in
   its state, which closes it for the other side, as the sessions RFC's
   release of a port does. A store should pass the cell's holders on to the
