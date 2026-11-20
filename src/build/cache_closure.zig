@@ -74,6 +74,12 @@ pub const Layout = struct {
 pub const Location = union(enum) {
     /// Inside a cache entry of the local cache.
     entry: Entry,
+    /// In the local cache outside every entry directory, the path relative to
+    /// the local cache. Zig keeps some files there by their contents rather
+    /// than as a step's output, such as each module's generated `builtin.zig`
+    /// under `b`, so no manifest produced them and they are carried as they
+    /// are.
+    cached_file: []const u8,
     /// Under the install prefix; the path relative to the install prefix.
     installed: []const u8,
     /// Neither: the source checkout, the Zig installation or the global cache.
@@ -83,8 +89,9 @@ pub const Location = union(enum) {
 
 /// Why a path in the local cache names no entry.
 pub const LocateError = error{
-    /// A path in the local cache outside every entry, or in an entry
-    /// directory whose name is not a digest.
+    /// A path in an entry directory (`o` or `c`) that is not inside an entry
+    /// named by a digest, or, for `entryOf`, a path outside every entry
+    /// directory.
     NotACacheEntry,
 };
 
@@ -130,9 +137,20 @@ pub fn entryOf(rest: []const u8) LocateError!Entry {
     return .{ .kind = kind, .digest = digest[0..Cache.hex_digest_len].* };
 }
 
+/// Whether `rest`, a path relative to the local cache, is in a directory
+/// whose subdirectories are cache entries (`o` or `c`).
+fn inEntryDirectory(rest: []const u8) bool {
+    var components = std.mem.tokenizeAny(u8, rest, if (@import("builtin").os.tag == .windows) "/\\" else "/");
+    const dir = components.next() orelse return false;
+    return std.mem.eql(u8, dir, "o") or std.mem.eql(u8, dir, "c");
+}
+
 /// Where `path`, absolute and resolved, lives.
 pub fn locate(layout: Layout, path: []const u8) LocateError!Location {
-    if (below(path, layout.prefixes.local_cache)) |rest| return .{ .entry = try entryOf(rest) };
+    if (below(path, layout.prefixes.local_cache)) |rest| {
+        if (inEntryDirectory(rest)) return .{ .entry = try entryOf(rest) };
+        return .{ .cached_file = rest };
+    }
     if (below(path, layout.install_prefix)) |rest| return .{ .installed = rest };
     return .elsewhere;
 }
@@ -214,6 +232,9 @@ pub const Selection = struct {
     manifests: std.AutoArrayHashMapUnmanaged(HexDigest, void) = .empty,
     /// Installed files, relative to the install prefix.
     installed: std.StringArrayHashMapUnmanaged(void) = .empty,
+    /// Files in the local cache outside every entry, relative to the local
+    /// cache (see `Location.cached_file`).
+    cached_files: std.StringArrayHashMapUnmanaged(void) = .empty,
 };
 
 /// Why `select` could not follow a root entry to what it depends on.
@@ -280,6 +301,7 @@ pub fn select(
             switch (location) {
                 .entry => |input_entry| try pending.append(arena, input_entry),
                 .installed => |rest| try selection.installed.put(arena, rest, {}),
+                .cached_file => |rest| try selection.cached_files.put(arena, rest, {}),
                 .elsewhere => {},
             }
         }
@@ -432,6 +454,32 @@ test "select follows inputs into the entries and installed files they come from"
     try testing.expectEqualStrings("bin" ++ std.fs.path.sep_str ++ "exe", selection.installed.keys()[0]);
 }
 
+test "select carries the local-cache files outside entries that a manifest records" {
+    var fixture: TestCache = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const io = testing.io;
+    try fixture.tmp.dir.writeFile(io, .{ .sub_path = "source.zig", .data = "source" });
+    // The `builtin.zig` Zig generates for a module, kept under `b` by its
+    // contents rather than as a step's output.
+    const builtin_path = "local-cache/b/0123456789abcdef0123456789abcdef/builtin.zig";
+    try fixture.tmp.dir.createDirPath(io, "local-cache/b/0123456789abcdef0123456789abcdef");
+    try fixture.tmp.dir.writeFile(io, .{ .sub_path = builtin_path, .data = "builtin" });
+    const exe = try fixture.addStep("exe", &.{ "source.zig", builtin_path }, "exe");
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const index = try indexManifests(arena, io, fixture.manifest_dir);
+    var diagnostic: SelectDiagnostic = .{};
+    const selection = try select(arena, io, fixture.layout(), fixture.manifest_dir, &index, &.{.{ .kind = .o, .digest = exe }}, &diagnostic);
+
+    try testing.expectEqual(@as(usize, 1), selection.entries.count());
+    try testing.expectEqual(@as(usize, 1), selection.cached_files.count());
+    const sep = std.fs.path.sep_str;
+    try testing.expectEqualStrings("b" ++ sep ++ "0123456789abcdef0123456789abcdef" ++ sep ++ "builtin.zig", selection.cached_files.keys()[0]);
+}
+
 test "an input entry with no manifest is selected on its own" {
     var fixture: TestCache = undefined;
     try fixture.init();
@@ -495,6 +543,10 @@ test "locate tells cache entries, installed files and everything else apart" {
     try testing.expectEqualStrings("bin" ++ sep ++ "roc", (try locate(layout, root ++ sep ++ "zig-out" ++ sep ++ "bin" ++ sep ++ "roc")).installed);
     try testing.expectEqual(Location.elsewhere, try locate(layout, root ++ sep ++ "src" ++ sep ++ "main.zig"));
     try testing.expectEqual(Location.elsewhere, try locate(layout, root ++ sep ++ ".zig-cache-other" ++ sep ++ "o"));
-    try testing.expectError(error.NotACacheEntry, locate(layout, root ++ sep ++ ".zig-cache" ++ sep ++ "tmp" ++ sep ++ "x"));
+    try testing.expectEqualStrings(
+        "b" ++ sep ++ digest ++ sep ++ "builtin.zig",
+        (try locate(layout, root ++ sep ++ ".zig-cache" ++ sep ++ "b" ++ sep ++ digest ++ sep ++ "builtin.zig")).cached_file,
+    );
+    try testing.expectEqualStrings("z" ++ sep ++ digest, (try locate(layout, root ++ sep ++ ".zig-cache" ++ sep ++ "z" ++ sep ++ digest)).cached_file);
     try testing.expectError(error.NotACacheEntry, locate(layout, root ++ sep ++ ".zig-cache" ++ sep ++ "o" ++ sep ++ "short"));
 }

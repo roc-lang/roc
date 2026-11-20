@@ -215,6 +215,11 @@ fn writeList(arena: std.mem.Allocator, io: Io, shard_name: []const u8, zig_exe: 
         };
         try paths.append(arena, path);
     }
+    for (selection.cached_files.keys()) |cached_file| {
+        const rest = try arena.dupe(u8, cached_file);
+        std.mem.replaceScalar(u8, rest, '\\', '/');
+        try paths.append(arena, try std.fmt.allocPrint(arena, "{s}/{s}", .{ local_cache, rest }));
+    }
     for (selection.installed.keys()) |installed| {
         const rest = try arena.dupe(u8, installed);
         std.mem.replaceScalar(u8, rest, '\\', '/');
