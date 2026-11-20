@@ -15,15 +15,29 @@ const Allocator = std.mem.Allocator;
 pub const LineOffsets = struct {
     /// Byte offset at which each line starts. Empty for an empty source.
     offsets: []u32,
+    /// Every UTF-8 sequence in a line's text that is fewer UTF-16 code units
+    /// than bytes, in source order, so that converting an offset to a column
+    /// does not count the line up to it.
+    narrow_sequences: []NarrowSequence,
     allocator: Allocator,
     /// The text the offsets describe, needed to count UTF-16 columns.
     source: []const u8,
 
+    /// A UTF-8 sequence that is fewer UTF-16 code units than bytes.
+    const NarrowSequence = struct {
+        /// The source offset just past the sequence.
+        end: u32,
+        /// How many more bytes than UTF-16 code units this sequence and the
+        /// narrow sequences before it on its line hold together.
+        line_excess: u32,
+    };
+
     /// Build the table for `source`, which must outlive it.
     pub fn init(allocator: Allocator, source: []const u8) Allocator.Error!LineOffsets {
-        if (source.len == 0) return .{ .offsets = &.{}, .allocator = allocator, .source = source };
+        if (source.len == 0) return .{ .offsets = &.{}, .narrow_sequences = &.{}, .allocator = allocator, .source = source };
 
         const offsets = try allocator.alloc(u32, std.mem.countScalar(u8, source, '\n') + 1);
+        errdefer allocator.free(offsets);
         offsets[0] = 0;
         var line: usize = 1;
         var index: usize = 0;
@@ -33,31 +47,73 @@ pub const LineOffsets = struct {
             index = newline + 1;
         }
         std.debug.assert(line == offsets.len);
-        return .{ .offsets = offsets, .allocator = allocator, .source = source };
+
+        var narrow_sequences: std.ArrayList(NarrowSequence) = .empty;
+        errdefer narrow_sequences.deinit(allocator);
+        for (offsets, 0..) |line_start, line_index| {
+            // Sequences are read from the line's text alone, as a column
+            // counted within the line reads them.
+            const text = lineText(source, offsets, @intCast(line_index)).?;
+            var line_excess: u32 = 0;
+            var at: usize = 0;
+            while (at < text.len) {
+                if (text[at] < 0x80) {
+                    at += 1;
+                    continue;
+                }
+                const sequence = utf8SequenceAt(text, at);
+                at += sequence.len;
+                const codepoint = sequence.codepoint orelse continue;
+                const units: usize = if (codepoint <= 0xFFFF) 1 else 2;
+                line_excess += @intCast(sequence.len - units);
+                try narrow_sequences.append(allocator, .{
+                    .end = line_start + @as(u32, @intCast(at)),
+                    .line_excess = line_excess,
+                });
+            }
+        }
+
+        return .{
+            .offsets = offsets,
+            .narrow_sequences = try narrow_sequences.toOwnedSlice(allocator),
+            .allocator = allocator,
+            .source = source,
+        };
     }
 
     pub fn deinit(self: *const LineOffsets) void {
         self.allocator.free(self.offsets);
+        self.allocator.free(self.narrow_sequences);
     }
 
     /// Which line contains the given byte offset.
-    ///
-    /// Callers convert many offsets against one table—every occurrence of a
-    /// symbol, every foldable region—so this binary searches rather than
-    /// scanning from the top of the file for each one.
     pub fn lineAt(self: *const LineOffsets, offset: u32) u32 {
+        return lineContaining(self.offsets, offset);
+    }
+
+    /// The UTF-16 column of the point `column` bytes into `line`'s text, which
+    /// is at least that long.
+    ///
+    /// A sequence the column cuts short counts a unit per byte before the
+    /// column, as `byteOffsetToUtf16Column` counts it.
+    fn utf16Column(self: *const LineOffsets, line: u32, column: u32) u32 {
+        const line_start = self.offsets[line];
+        const target = line_start + column;
         var low: usize = 0;
-        var high: usize = self.offsets.len;
+        var high: usize = self.narrow_sequences.len;
         while (low < high) {
             const mid = low + (high - low) / 2;
-            if (self.offsets[mid] <= offset) {
+            if (self.narrow_sequences[mid].end <= target) {
                 low = mid + 1;
             } else {
                 high = mid;
             }
         }
-        // `low` is the first line starting after the offset.
-        return if (low > 0) @intCast(low - 1) else 0;
+        // `low` is the first narrow sequence ending past the column; one on an
+        // earlier line ends before this line starts.
+        if (low == 0) return column;
+        const last = self.narrow_sequences[low - 1];
+        return if (last.end > line_start) column - last.line_excess else column;
     }
 
     /// The byte offset of a line/character position, or null past the last
@@ -67,6 +123,22 @@ pub const LineOffsets = struct {
         return offsetOnLine(self.source, self.offsets, line, character, .clamp_to_line_end);
     }
 };
+
+/// Which line of a line-start table contains the given byte offset.
+pub fn lineContaining(line_starts: []const u32, offset: u32) u32 {
+    var low: usize = 0;
+    var high: usize = line_starts.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (line_starts[mid] <= offset) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    // `low` is the first line starting after the offset.
+    return if (low > 0) @intCast(low - 1) else 0;
+}
 
 /// Whether the text is plain ASCII, in which case UTF-8 bytes and UTF-16 code
 /// units count the same and no conversion is needed.
@@ -83,38 +155,13 @@ fn isAscii(text: []const u8) bool {
 /// agree until a line contains a character outside ASCII, after which every
 /// column to its right differs.
 pub fn byteOffsetToUtf16Column(line_text: []const u8, byte_offset: u32) u32 {
-    const column = @min(byte_offset, line_text.len);
-    if (isAscii(line_text[0..column])) return @intCast(column);
-    const counted = countUtf16Units(line_text, 0, column);
-    return counted.whole_units + counted.partial_units;
-}
+    const upto = line_text[0..@min(byte_offset, line_text.len)];
+    if (isAscii(upto)) return @intCast(upto.len);
 
-/// The UTF-16 code units of `line_text[from..to]`, where `from` is where a
-/// UTF-8 sequence starts.
-const Utf16Count = struct {
-    /// The units of the sequences that end at or before `to`.
-    whole_units: u32,
-    /// Where the last of those sequences ends: `to`, unless a sequence starts
-    /// before `to` and ends after it.
-    boundary: usize,
-    /// The units of the bytes from `boundary` to `to`, which begin a sequence
-    /// that `to` cuts short. Each byte counts as one, as the cut sequence is
-    /// not valid UTF-8 up to `to`.
-    partial_units: u32,
-};
-
-fn countUtf16Units(line_text: []const u8, from: usize, to: usize) Utf16Count {
-    std.debug.assert(from <= to and to <= line_text.len);
     var units: u32 = 0;
-    var index = from;
-    while (index < to) {
-        if (line_text[index] < 0x80) {
-            units += 1;
-            index += 1;
-            continue;
-        }
-        const sequence = utf8SequenceAt(line_text, index);
-        if (index + sequence.len > to) break;
+    var index: usize = 0;
+    while (index < upto.len) {
+        const sequence = utf8SequenceAt(upto, index);
         units += if (sequence.codepoint) |codepoint|
             (if (codepoint <= 0xFFFF) @as(u32, 1) else 2)
         else
@@ -122,7 +169,7 @@ fn countUtf16Units(line_text: []const u8, from: usize, to: usize) Utf16Count {
             @as(u32, @intCast(sequence.len));
         index += sequence.len;
     }
-    return .{ .whole_units = units, .boundary = index, .partial_units = @intCast(to - index) };
+    return units;
 }
 
 /// One UTF-8 sequence, as far as the bytes allow it to be read.
@@ -221,56 +268,20 @@ pub fn lineText(source: []const u8, line_starts: []const u32, line: u32) ?[]cons
 }
 
 /// Convert a byte offset into an LSP line/character position using cached line offsets.
+///
+/// Callers convert many offsets against one table—every occurrence of a
+/// symbol, every foldable region, every semantic token—so this costs a binary
+/// search over lines and one over narrow sequences, rather than a scan of the
+/// file or of the line for each offset.
 pub fn offsetToPosition(offset: u32, line_offsets: *const LineOffsets) document_symbol_handler.Position {
     const line = line_offsets.lineAt(offset);
     const text = lineText(line_offsets.source, line_offsets.offsets, line) orelse return .{
         .line = line,
         .character = 0,
     };
-    return .{
-        .line = line,
-        .character = byteOffsetToUtf16Column(text, offset - line_offsets.offsets[line]),
-    };
+    const column = @min(offset - line_offsets.offsets[line], text.len);
+    return .{ .line = line, .character = line_offsets.utf16Column(line, @intCast(column)) };
 }
-
-/// Converts byte offsets to LSP positions in nondecreasing order, counting the
-/// UTF-16 columns of each line once across all the offsets on it rather than
-/// from the line's start for each one.
-pub const PositionCursor = struct {
-    line_offsets: *const LineOffsets,
-    line: u32 = 0,
-    /// Where in `line`'s text the last whole UTF-8 sequence counted so far ends.
-    boundary: usize = 0,
-    /// The UTF-16 code units of `line`'s text before `boundary`.
-    units: u32 = 0,
-    /// The offset last converted, which the next one may not precede.
-    last_offset: u32 = 0,
-
-    pub fn init(line_offsets: *const LineOffsets) PositionCursor {
-        return .{ .line_offsets = line_offsets };
-    }
-
-    /// The position of `offset`, which is at or after the offset converted last.
-    pub fn positionOf(self: *PositionCursor, offset: u32) document_symbol_handler.Position {
-        std.debug.assert(offset >= self.last_offset);
-        self.last_offset = offset;
-        const line = self.line_offsets.lineAt(offset);
-        if (line != self.line) {
-            self.line = line;
-            self.boundary = 0;
-            self.units = 0;
-        }
-        const text = lineText(self.line_offsets.source, self.line_offsets.offsets, line) orelse return .{
-            .line = line,
-            .character = 0,
-        };
-        const column = @min(offset - self.line_offsets.offsets[line], text.len);
-        const counted = countUtf16Units(text, self.boundary, column);
-        self.units += counted.whole_units;
-        self.boundary = counted.boundary;
-        return .{ .line = line, .character = self.units + counted.partial_units };
-    }
-};
 
 /// What a column past the end of its line's text converts to.
 const PastLineEnd = enum { reject, clamp_to_line_end };

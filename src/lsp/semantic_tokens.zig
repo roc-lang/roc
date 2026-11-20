@@ -655,8 +655,6 @@ fn emitTokens(
 ) Allocator.Error!void {
     const tags = ast.tokens.tokens.items(.tag);
     const regions = ast.tokens.tokens.items(.region);
-    // Tokens come in source order, so their offsets never decrease.
-    var cursor = position.PositionCursor.init(info);
 
     for (tags, regions, 0..) |tag, region, token_index| {
         const class = classes[token_index];
@@ -692,7 +690,7 @@ fn emitTokens(
                     i += 1;
                     continue;
                 }
-                try appendSpan(allocator, out, &cursor, segment_start, i, semantic_type, 0);
+                try appendSpan(allocator, out, info, segment_start, i, semantic_type, 0);
                 i += 2;
                 if (source[i - 1] == 'u' and i < end and source[i] == '(') {
                     while (i < end and source[i] != ')') i += 1;
@@ -700,9 +698,9 @@ fn emitTokens(
                 }
                 segment_start = i;
             }
-            try appendSpan(allocator, out, &cursor, segment_start, end, semantic_type, 0);
+            try appendSpan(allocator, out, info, segment_start, end, semantic_type, 0);
         } else {
-            try appendSpan(allocator, out, &cursor, start, end, semantic_type, class.modifiers());
+            try appendSpan(allocator, out, info, start, end, semantic_type, class.modifiers());
         }
     }
 }
@@ -710,15 +708,15 @@ fn emitTokens(
 fn appendSpan(
     allocator: Allocator,
     out: *std.ArrayListUnmanaged(SemanticToken),
-    cursor: *position.PositionCursor,
+    info: *const LineOffsets,
     start: u32,
     end: u32,
     semantic_type: u32,
     modifiers: u32,
 ) Allocator.Error!void {
     if (start >= end) return;
-    const start_pos = cursor.positionOf(start);
-    const end_pos = cursor.positionOf(end);
+    const start_pos = position.offsetToPosition(start, info);
+    const end_pos = position.offsetToPosition(end, info);
     // LSP lengths are UTF-16 code units. A token that spans lines keeps its byte
     // length, which is what clients without multiline support clip anyway.
     const length = if (end_pos.line == start_pos.line and end_pos.character > start_pos.character)
