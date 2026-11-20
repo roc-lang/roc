@@ -228,6 +228,9 @@ const Reach = struct {
     }
 };
 
+/// The top-level step whose cache entries shard artifacts carry.
+const build_ci_step_name = "build-ci";
+
 fn joinNames(b: *std.Build, names: []const []const u8) []const u8 {
     return std.mem.join(b.allocator, "\n", names) catch @panic("OOM");
 }
@@ -244,9 +247,13 @@ fn joinNames(b: *std.Build, names: []const []const u8) []const u8 {
 ///   names of cached steps in both its graph and `build-ci`'s whose entry
 ///   no output names).
 ///
+/// The entries are those of `build-ci`, the step CI builds MiniCI with, which
+/// is looked up by name so that no other step's graph can stand in for it.
 /// Call it after every step is defined.
-pub fn addOptions(b: *std.Build, build_ci: *Step) *Step.Options {
+pub fn addOptions(b: *std.Build) *Step.Options {
     const gpa = b.allocator;
+    const build_ci = &(b.top_level_steps.get(build_ci_step_name) orelse
+        std.debug.panic("cache_roots.addOptions needs the `{s}` step", .{build_ci_step_name})).step;
     const options = b.addOptions();
     inline for (.{ "local_cache", "global_cache", "zig_lib", "cwd", "install_prefix" }) |base| {
         options.addOptionPathUntracked(base, .{ .relative = .{ .base = @field(std.Build.Configuration.LazyPath.Relative.Base, base) } });

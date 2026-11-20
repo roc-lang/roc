@@ -5511,7 +5511,7 @@ pub fn build(b: *std.Build) void {
     });
     minici_pack_exe.root_module.addImport("build_options", roc_modules.build_options);
     minici_pack_exe.root_module.addImport("roc_target", roc_modules.roc_target);
-    minici_pack_exe.root_module.addImport("cache_roots", cache_roots.addOptions(b, build_check_glue_abi_step).createModule());
+    minici_pack_exe.root_module.addImport("cache_roots", cache_roots.addOptions(b).createModule());
     b.step("build-minici-pack", "Build the tool that lists what each MiniCI shard's build artifact carries").dependOn(&b.addInstallArtifact(minici_pack_exe, .{}).step);
 
     // Last, so that every top-level step exists -- including the ones created
