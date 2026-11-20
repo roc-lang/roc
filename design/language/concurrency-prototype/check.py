@@ -109,7 +109,8 @@ def check_program(seed, stats, cancel_sites=6):
             stats["session: " + k] += r.runtime.get(k, 0)
         for k in ("shared variables", "steps run", "commits", "waits", "steps run again", "deferred steps",
                   "deferred steps run", "deferred steps run at drop", "errdefers dropped", "deferred steps crashed",
-                  "cells poisoned", "poisoned steps", "cancellations turned into crashes", "steps crashed"):
+                  "cells poisoned", "poisoned steps", "cancellations turned into crashes", "steps crashed",
+                  "probes", "probes that would wait", "wakes passed on at a drop"):
             stats["shared: " + k] += r.runtime.get(k, 0)
         return r
 

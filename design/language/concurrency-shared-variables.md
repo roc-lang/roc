@@ -19,7 +19,6 @@ functions, and no syntax:
 ```roc
 Shared.new! : s => Shared(s)
 Shared.update! : Shared(s), (s -> [Set(s, r), Keep(r), Wait]) => r
-    where [s.is_eq : s, s -> Bool]
 Shared.finally! : Shared(s), (s -> s), (() => a) => a
 Shared.on_failure! : Shared(s), (s -> s), (() => a) => a
 ```
@@ -33,8 +32,7 @@ Shared.on_failure! : Shared(s), (s -> s), (() => a) => a
    current state, atomically. `f` answers with a tag: `Set(new, r)` replaces
    the state and returns `r`, `Keep(r)` leaves it and returns `r`, and `Wait`
    abandons the update until another task changes the state, then runs `f`
-   again. The state type needs equality, so that a waiter is not resumed
-   when the state is back to the one it waited on. The `->` in `f`'s type is the atomicity boundary: a pure function
+   again. The `->` in `f`'s type is the atomicity boundary: a pure function
    cannot suspend or perform I/O, so nothing can happen in the middle of it.
 3. **Cleanup.** `permits.finally!(cleanup, body)` runs `body`, then applies
    `cleanup` to the state however `body` ends: by returning, by cancellation or
@@ -242,12 +240,12 @@ like this:
 permits.update!(|n| if n == 0 { Wait } else { Set(n - 1, {}) })
 ```
 
-When a permit is given back, every waiting task is readied. The first to run
-takes the permit, and the count is 0 again. The others are not resumed: the
-function is pure, so on the state it already answered `Wait` to, it would
-answer `Wait` again. This is why `update!` needs equality on the state type.
-Numbers, strings, lists, records and tag unions of those all have it; a state
-holding a function does not.
+When a permit is given back, the waiting tasks are not all woken to compete
+for it. The functions are pure, so the runtime can ask each one, most recent
+waiter first, what it would do with the new state, without storing anything.
+It wakes only the first that would not wait, which then runs its function for
+real. Ten tasks waiting for one permit cost one wakeup per
+release, not ten.
 
 When the function is a `match`, the case that waits is written out, so a
 forgotten case is a compile error, not a hang.
@@ -452,15 +450,12 @@ take_token! = |bucket| {
 ```roc
 Shared.new! : s => Shared(s)
 Shared.update! : Shared(s), (s -> [Set(s, r), Keep(r), Wait]) => r
-    where [s.is_eq : s, s -> Bool]
 Shared.finally! : Shared(s), (s -> s), (() => a) => a
 Shared.on_failure! : Shared(s), (s -> s), (() => a) => a
 ```
 
 - `Shared(s)` is a builtin opaque type. It has no other functions, no equality
   and no hashing. `Inspect` shows only `<Shared>`.
-- `update!` requires the state type to have equality (`is_eq`), for the
-  wake rule in "Runtime". The handle itself still has none.
 - Every function on it is effectful. `new!` is an effect because two calls
   create two distinct states. Binding, holding, passing or storing a handle is
   not an effect.
@@ -486,11 +481,8 @@ Shared.on_failure! : Shared(s), (s -> s), (() => a) => a
 5. On `Keep(r)`: release `h` and return `r`.
 6. On `Wait`: register the task as a waiter on `h` while still holding it,
    release `h` and park. When another task's update stores to `h`, or `h` is
-   poisoned, the waiter is readied. Before the runtime resumes it, it acquires
-   `h` and compares the state with the one the waiter's `f` answered `Wait`
-   to. If they are equal and `h` is not poisoned, the waiter registers again
-   while still holding `h`, and parks without being resumed. Otherwise it is
-   resumed and starts again at step 1.
+   poisoned, the waiter may be readied (see "Waking" under "Runtime"). A
+   readied waiter starts again at step 1.
 
 If `f` crashes, nothing is stored, `h` is released as part of the crash, and
 the task crashes at the call.
@@ -540,17 +532,32 @@ flag, a list of waiters, and in `ParallelTasks` builds a lock word.
 | `Tasks` | Nothing to do: the function is pure and cannot suspend, and resumes are serial (P10), so no other task can run during it | A list per cell |
 | `ParallelTasks` | Lock the cell | A list per cell, guarded by its lock |
 
-**Waking.** A `Set` readies every waiter on the cell. Each of them answered
-`Wait` to the state that the `Set` replaced, so the runtime keeps that state,
-with one reference per `Set` rather than per waiter, until the last waiter it
-readied has been compared. While a cell has waiters, an update's function
-therefore cannot reuse the old state in place, and a `Set` copies it. Before
-resuming a readied waiter, the runtime compares the cell's state with the kept
-state using the state type's `is_eq`, which the specialization of `update!`
-supplies, and parks the waiter again if they are equal. This is exact: on an
-equal state, the waiter's function would answer `Wait` again. Under
-contention, it is what keeps updates linear in the number of waiters rather
-than quadratic (see "What the prototype shows").
+**Waking.** Waiters are kept in the order they began waiting. After a `Set`,
+while still holding the cell, the runtime probes them, most recent first: it
+calls each waiter's function on the new state and discards the result,
+storing nothing. It readies the first waiter whose function would not answer
+`Wait`, and stops. Most recent first is the order of a `None` build's one
+stack, where a task that began waiting later is above the earlier one and
+runs first, so C9 holds (V8). A waiter that waits again moves to the most
+recent place, as it stays on top of the stack in a `None` build. The readied waiter is marked as carrying the wake:
+
+- If it stores, its own `Set` probes the remaining waiters.
+- If it ends without storing, because it answers `Keep`, answers `Wait`
+  again (another task changed the state first), crashes, or is cancelled
+  before it runs, the runtime probes on from there, so that the wake is never
+  lost with it.
+
+Probing is exact: a pure function given the same state and captures gives
+the same answer. It commits nothing on a waiter's behalf, so a waiter
+cancelled after it was readied has taken nothing. A probe that crashes counts
+as not waiting: the waiter is readied and crashes when it runs. Each probe
+runs inside a crash boundary in the storing task, and in `ParallelTasks`
+builds while the cell's lock is held.
+
+Under contention, this keeps task dispatches linear in the number of
+waiters. Readying every waiter instead dispatches each of them after every
+`Set`, and all but one answer `Wait` again (see "What the prototype shows").
+Poisoning still readies every waiter, so that each crashes.
 
 An update holds one lock and runs only pure code while holding it. A pure
 function cannot call `update!`, so locks never nest, and lock-order deadlock
@@ -622,7 +629,7 @@ waited-on cell can run, the waiters crash with the deadlock message.
 | V4 | **No lock deadlock.** An update holds one cell's lock, runs only pure code while holding it, and releases it before any suspension | Runtime invariant | Model |
 | V5 | **Cleanups run exactly once:** a `finally!` cleanup on every exit from its body (return, cancellation, crash), an `on_failure!` cleanup on cancellation and crash only | Language guarantee | Certify push and pop; cancel at every suspension point; crash at every update |
 | V6 | **Poisoning.** After a cleanup crashes, every update of its handle crashes, and so does every task waiting on it | Language guarantee | Tests |
-| V7 | **No lost wakeups.** A waiter registers before it releases its cell, so a store that follows the release always readies it. A readied waiter is parked again without resuming only when, with its cell held, the state equals the one it waited on, which is where its function would answer `Wait` again | Runtime invariant | Model; tests |
+| V7 | **No lost wakeups.** A waiter registers before it releases its cell, so a store that follows the release always probes it. A waiter that a probe readies and that ends without storing, including by cancellation, probes on, so a waiter whose function would not wait is never left parked | Runtime invariant | Model (readying every waiter); tests and differential runs (readying the first) |
 | V8 | **Sequential equivalence.** C9 holds for programs that use `Shared`: a `None` build's `Wait` runs loop entries on demand, and is a deadlock only where the input-order schedule deadlocks | Language guarantee | Differential |
 | V9 | **No cycles.** No state type reaches its own handle type, so cells are freed when their last handle is. Not yet prototyped: the prototype's IR is untyped | Language guarantee | Typing rules |
 
@@ -643,9 +650,16 @@ waited-on cell can run, the waiters crash with the deadlock message.
   every update.
 - **Contention.** Under `ParallelTasks`, one hot handle serializes every task
   that updates it, and a long update delays them all.
-- **State types need equality**, for the wake rule. A state holding a
-  function cannot be shared, and while a cell has waiters, each `Set` copies
-  the state and the runtime compares states before resuming waiters.
+- **No fairness among waiters.** The most recent waiter is probed first, so
+  under sustained contention an early waiter can wait indefinitely while
+  later ones are served. Readying every waiter promised nothing either: the
+  schedule chose. A fair order would break C9, because a `None` build can
+  only run the most recent waiter.
+- **Stores run other tasks' functions.** After each `Set` on a cell with
+  waiters, the storing task probes them, each inside a crash boundary. Under
+  contention that is a quadratic number of pure calls, though a linear
+  number of task dispatches, and in `ParallelTasks` builds it lengthens the
+  time the lock is held.
 - **Code runs during cancellation.** Cleanups are pure, but they are still Roc
   code running in a dropped task.
 - **The no-cycles rule** forbids some data structures, such as shared state
@@ -663,11 +677,12 @@ waited-on cell can run, the waiters crash with the deadlock message.
 | A separate `when!(condition, f)` for waiting | Two functions where one tag does, and the condition and the change could disagree |
 | `defer` and `errdefer` keywords | Keywords, and a choice between block scope and function scope. A closure's scope settles it |
 | Updates over several handles at once | The prototype supports them, locking cells in one global order, and the model checks that order. No library needed them; one record covers what they do. See "Future possibilities" |
-| Waking every waiter at each `Set`, with no equality on the state | Under contention, every waiter runs its function after every `Set`, and all but one wait again: updates run again grow with the square of the waiters. See "What the prototype shows" |
+| Readying every waiter at each `Set` | Under contention, every waiter is dispatched after every `Set`, and all but one answer `Wait` again: dispatches grow with the square of the waiters. See "What the prototype shows" |
+| Requiring equality on the state, and parking again a dispatched waiter whose state equals the one it waited on | Replaces running the function with a comparison, but the waiter is still dispatched to make it, so dispatches stay quadratic. It also restricts state types and keeps old states alive |
 | Readying only waiters whose state changed, compared at the `Set` | Never skips anything in the libraries: each `Set` that matters changes the state, and the waste comes from waiters that run after the first one took what the `Set` gave |
-| Running each waiter's function at the `Set` and handing it the result, as the sessions RFC's semaphore cell hands over a permit | Commits an update on behalf of a task that has not resumed. If that task is cancelled first, its update stays committed and the `finally!` after it never runs, so a permit is lost. The semaphore cell can give a permit back; a pure update has no inverse |
-| Waking one waiter, which passes the wake on if it waits again | Each `Set` by the woken waiter starts the chain again, so a semaphore still runs every waiter's function on every release |
-| Comparing states by identity instead of equality | Exact for numbers and for a state the `Set` returned unchanged, but a pool's state is a new record after every update, so the pool would keep the quadratic cost |
+| Running the first eligible waiter's update at the `Set` and handing it the result, as the sessions RFC's semaphore cell hands over a permit | Commits an update on behalf of a task that has not run. If that task is cancelled first, its update stays committed and the `finally!` after it never runs, so a permit is lost. The semaphore cell can give a permit back; a pure update has no inverse |
+| Probing the oldest waiter first, for fairness | A `None` build runs only the most recent waiter, so a `Tasks` build that served the oldest could not follow the input-order schedule, and C9 fails. The fuzzer found such a program |
+| Waking one waiter without probing, which passes the wake on if it waits again | Each `Set` by the woken waiter starts the chain again, so a semaphore still dispatches every waiter on every release |
 | A `match` with no case for a state means `Wait` | A forgotten case would become a hang instead of a compile error |
 | Optimistic retries, as in software transactional memory | Pure updates make retries safe, but long updates would redo work and could starve under contention. A lock fits because an update touches one known cell |
 | Handles that cannot escape their scope | Requires non-escaping closures in the type checker, and state shared across requests must escape anyway |
@@ -706,7 +721,7 @@ exercise the lock order.
 **Libraries** (`library.SHARED_SOURCE`): a semaphore, a pool with a lost count
 and `on_failure!`, the same pool with `finally!`, and the circuit breaker.
 
-**Tests** (`SharedVariables`, 16 tests, and `SharedModel`):
+**Tests** (`SharedVariables`, 17 tests, and `SharedModel`):
 
 - Every permit comes back under every schedule and when the root is cancelled
   at any suspension point, and at most one job holds the permit at once.
@@ -729,10 +744,14 @@ and `on_failure!`, the same pool with `finally!`, and the circuit breaker.
   calling through, probes and closes; a cancelled probe reopens it, and
   without its cleanup it stays `Probing`.
 - An update that crashes stores nothing.
-- 20 clients contend for one permit. A waiter whose count is back at 0 when
-  it would be resumed is parked again instead: 19 updates run again and 80
-  resumes. Resuming every readied waiter, the regression switch, gives 190
-  and 251.
+- 20 clients contend for one permit. Readying only the most recent waiter
+  that a probe finds would not wait takes 80 task resumes and runs 19
+  updates again;
+  readying every waiter, the regression switch, takes 251 and 190.
+- A waiter readied by a probe and cancelled by a race before it runs passes
+  the wake on: the other waiter gets the permit under every schedule. Every
+  client of the semaphore without a race holds the permit alone.
+  Without passing it on, some schedule deadlocks.
 - Static checks: unbalanced cleanups, impure update functions, and `Shared`
   operations in pure procedures are rejected.
 - `shared_model.py` explores every interleaving of the `ParallelTasks` lock
@@ -753,32 +772,45 @@ ran at a drop.
 runs 30 clients of a semaphore with one permit and of a pool of two, under the
 pause schedule:
 
-| Written as | Tasks spawned | Resumes | Allocations | Messages | Updates run again |
-|---|---|---|---|---|---|
-| Semaphore, server task (sessions RFC) | 93 | 276 | 721 | 90 | |
-| Semaphore, the runtime's semaphore cell (sessions RFC) | 30 | 120 | 187 | 0 | |
-| Semaphore, `Shared`, every waiter resumed | 30 | 526 | 652 | 0 | 435 |
-| Semaphore, `Shared`, compared at the `Set` | 30 | 526 | 652 | 0 | 435 |
-| Semaphore, `Shared`, compared before resuming (the rule) | 30 | 120 | 246 | 0 | 29 |
-| Pool, server task (sessions RFC) | 93 | 276 | 754 | 90 | |
-| Pool, `Shared`, every waiter resumed | 30 | 497 | 775 | 0 | 406 |
-| Pool, `Shared`, compared at the `Set` | 30 | 497 | 775 | 0 | 406 |
-| Pool, `Shared`, compared before resuming (the rule) | 30 | 119 | 397 | 0 | 28 |
+| Written as | Tasks spawned | Resumes | Allocations | Messages | Update functions run | Probes |
+|---|---|---|---|---|---|---|
+| Semaphore, server task (sessions RFC) | 93 | 276 | 721 | 90 | | |
+| Semaphore, the runtime's semaphore cell (sessions RFC) | 30 | 120 | 187 | 0 | | |
+| Semaphore, `Shared`, every waiter readied | 30 | 526 | 652 | 0 | 495 | |
+| Semaphore, `Shared`, every waiter readied, equal states compared | 30 | 526 | 246 | 0 | 89 | |
+| Semaphore, `Shared`, most recent waiter that would not wait (the rule) | 30 | 120 | 681 | 0 | 89 | 435 |
+| Pool, server task (sessions RFC) | 93 | 276 | 754 | 90 | | |
+| Pool, `Shared`, every waiter readied | 30 | 497 | 775 | 0 | 466 | |
+| Pool, `Shared`, every waiter readied, equal states compared | 30 | 497 | 397 | 0 | 88 | |
+| Pool, `Shared`, most recent waiter that would not wait (the rule) | 30 | 119 | 887 | 0 | 88 | 406 |
 
-These are counts of operations in the Python prototype, not timings.
-`Shared` needs no server task, no mailbox and no reply channel. Resuming every
-waiter after each `Set` costs about n² updates run again under contention: one
-client takes the permit, and every other one runs its function, finds none and
-waits again. Comparing at the `Set` saves nothing, because each `Set` changes
-the state. Comparing before resuming makes the cost linear, and the semaphore
-then matches the runtime's semaphore cell. With that rule, the default in the
-prototype, the suite and 2,000 fuzzed programs pass. Under the input-order
-schedule, the server tasks deadlock, as they do in a `None` build; `Shared`
-does not.
+These are counts of operations in the Python prototype, not timings. A resume
+is one dispatch of a task by the host, including a readied waiter that runs
+its function, answers `Wait` and parks again. A probe is a call of a waiter's
+function by the storing task, whose result is discarded.
+
+- `Shared` needs no server task, no mailbox and no reply channel.
+- Readying every waiter dispatches each of them after every `Set`, and all but
+  one wait again: about n² resumes under contention.
+- Comparing a dispatched waiter's state with the one it waited on saves
+  running its function, but not the dispatch. The second row of each library
+  is the earlier proposal to require equality on the state; it leaves resumes
+  unchanged.
+- Readying only the most recent waiter that a probe finds would not wait
+  makes resumes linear: the semaphore then matches the runtime's semaphore cell.
+  The cost moves to probes, pure calls that are still about n², and to the
+  allocations they make for the results they discard.
+- Under the input-order schedule, the server tasks deadlock, as they do in a
+  `None` build; `Shared` does not.
+
+With the rule as the prototype's default, the suite passes, and so do 2,000
+fuzzed programs: 1,964 compared against the input-order schedule (C9),
+15,924 cancelled at a suspension point, 5,028 probes, and 336 wakes passed on
+by a readied waiter that was dropped before it ran.
 
 ## Decisions left to review
 
-Names are placeholders. The prototype settled three earlier questions:
+Names are placeholders. The prototype settled four earlier questions:
 
 - **Cleanup that knows how its body ended.** Needed: the pool must not lend a
   connection whose user crashed. `on_failure!` is the second form.
@@ -786,6 +818,14 @@ Names are placeholders. The prototype settled three earlier questions:
   closure passed to `finally!` or `on_failure!`.
 - **Updates over several handles.** Not needed by the semaphore, pool or
   breaker. One handle per update keeps locks from nesting.
+- **Waking waiters.** After a `Set`, the runtime probes the waiters, most
+  recent first, and readies the first whose function would not wait; a
+  readied waiter that ends without storing probes on. Probing the oldest
+  first broke C9 on a fuzzed program. Readying every waiter makes
+  dispatches quadratic under contention. Comparing states, which the earlier
+  proposal needed equality for, leaves dispatches quadratic. Handing a result
+  to a waiter at the `Set` loses permits when the waiter is cancelled. See
+  "Runtime" and the alternatives table.
 
 Still open:
 
@@ -799,19 +839,13 @@ Still open:
 - **(c) How the checker states the no-cycles rule for polymorphic code:** as a
   constraint on `s` that callers inherit, or as a check when a state type is
   known. Not prototyped.
-- **(d) Skipping waiters whose state has not changed.** An update function
-  is pure, and its captures are fixed, so a waiter whose state equals the
-  state it waited on would answer `Wait` again. Skipping such waiters at the
-  `Set`, and again just before resuming one, makes contention linear: the
-  shared semaphore then matches the runtime's semaphore cell. The prototype
-  has this rule behind a switch (`Shared.skip_unchanged`), and the tests and
-  1,000 fuzzed programs pass with it on. A real runtime needs a way to tell
-  that the state is unchanged. Options: require equality of every state type
-  that an update can wait on; skip only for state types that have it; compare
-  by identity, which is exact for unboxed values and for a boxed value the
-  `Set` passed back unchanged, and otherwise only wakes a waiter that would
-  wait again; or wake waiters one at a time and have a waiter that waits
-  again pass the wake on.
+- **(d) The cost of probing.** Probes are still about n² pure calls under
+  contention, each inside a crash boundary and, under `ParallelTasks`, under
+  the cell's lock. Options to cut them: skip a waiter whose state equals the
+  one it waited on, for state types that have equality, which saves calls but
+  keeps old states alive; or let a library declare that its waiters are
+  interchangeable, so that a probe that finds one waiter waiting stops. The
+  real runtime should measure whether either is worth it.
 - **(e) Conveniences:** `get!` for `update!(|s| Keep(s))`, and `modify!` for
   `update!(|s| Set(g(s), {}))`. Each would make the common case shorter; `get!`
   also makes reading and then acting separately easier to write.

@@ -1744,7 +1744,13 @@ class SharedVariables(unittest.TestCase):
         lows = self.build(self.SEM)
         self.assertEqual(everywhere(lows), {("done", 1)})
         self.assertEqual(run_none(lows["lss"].prog).result, ("done", 1))
-        self.assertEqual(tasks(lows, PausePolicy()).host["most work at once"], 1)
+        # Without a race, no cancelled holder leaves aborted work running
+        # after it gives the permit back (Finding 9), so one job runs at once.
+        plain = self.build(self.contended(3))
+        for mk in ALL_POLICIES:
+            pol = mk()
+            r = run_tasks(plain["lss"], "unwind", pol, "ParallelTasks" if pol.parallel else "Tasks")
+            self.assertEqual(r.host["most work at once"], 1)
         for k in range(1, 9):
             for mode in ("lss", "boxy"):
                 r = tasks(lows, CancelAtPolicy(k), mode)
@@ -2074,23 +2080,54 @@ class SharedVariables(unittest.TestCase):
           (ret n))
         """
 
-    def test_a_waiter_whose_state_is_back_is_not_resumed(self):
-        # Decision (d). 20 clients contend for one permit. Each release readies
-        # every waiter; the first to run takes the permit, and the others find
-        # the count back at 0, which they waited on, and park again without
-        # resuming. Steps run again stay linear in the clients; readying and
-        # resuming every waiter makes them quadratic.
+    def test_a_store_readies_only_the_first_waiter_that_would_not_wait(self):
+        # The wake rule. 20 clients contend for one permit. At each release
+        # the runtime probes the waiters in order and readies only the first
+        # that would take it, so tasks are dispatched a linear number of times.
+        # Readying every waiter dispatches each of them after every release,
+        # and all but one wait again.
         lows = self.build(self.contended(20))
         self.assertEqual(everywhere(lows), {("done", 1)})
         r = tasks(lows, PausePolicy())
-        self.assertLessEqual(r.runtime["steps run again"], 20)
-        self.assertGreater(r.runtime["resumes skipped"], 100)
-        with switches(shared={"skip_unchanged": False}):
+        self.assertEqual((r.runtime["resumes"], r.runtime["steps run again"]), (80, 19))
+        with switches(shared={"wake_rule": "all"}):
             w = tasks(lows, PausePolicy())
             self.assertEqual(everywhere(lows), {("done", 1)})
-        self.assertEqual(w.result, ("done", 1))
-        self.assertGreater(w.runtime["steps run again"], 150)
-        self.assertGreater(w.runtime["resumes"], 2 * (r.runtime["resumes"] - r.runtime["resumes skipped"]))
+        self.assertEqual((w.runtime["resumes"], w.runtime["steps run again"]), (251, 190))
+
+    PASS_ON = """
+    (proc flag_wait (n) pure (let z (eq n 0)) (if z (block (ret (tag Wait))) (block (ret (tag Keep 0)))))
+    (proc flag_set (n) pure (ret (tag Set 0 1)))
+    (proc await_flag (flag) eff (let v (step flag_wait (flag))) (ret 0))
+    (proc job (k) eff (let a (host work k)) (ret a))
+    (proc client (s k) eff (let v (call sv_with_permit s (clo job k))) (ret v))
+    (proc raced (s flag) eff
+      (let d (host slow 0))
+      (let w (call race! (clo client s 7) (list (clo await_flag flag))))
+      (ret w))
+    (proc giver (s flag) eff
+      (let a (host slow 0))
+      (let b (host slow 0))
+      (do (step sv_give (s)))
+      (do (step flag_set (flag)))
+      (ret 0))
+    (proc main () eff
+      (let s (shared 0))
+      (let flag (shared 0))
+      (let r (call all! (list (clo client s 9) (clo raced s flag) (clo giver s flag))))
+      (let n (read s))
+      (ret n))
+    """
+
+    def test_a_readied_waiter_cancelled_before_it_runs_passes_the_wake_on(self):
+        # The giver releases the only permit, which readies the raced
+        # client, the most recent waiter, and then ends the race. Under some
+        # schedules the race cancels that client before it runs, and the
+        # other client must be readied instead.
+        lows = self.build(self.PASS_ON)
+        self.assertEqual(everywhere(lows), {("done", 1)})
+        with switches(shared={"no_pass_on": True}):
+            self.assertIn(("crashed", ("str", shared_mod.WAIT_DEADLOCK)), everywhere(lows))
 
     def test_a_shared_semaphore_needs_no_server_task(self):
         # The same three clients against the sessions RFC's semaphore task and

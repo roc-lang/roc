@@ -120,6 +120,7 @@ class Runtime:
     def attach(self, engine, prog):
         self.engine = engine
         self.shared = Shared(prog, self.heap, self.stats, self.sessions, self.report_wake)
+        self.shared.leak = self.leaked.extend
 
     # ------------------------------------------------------------------ ABI
     def start_root(self, closure):
@@ -547,18 +548,29 @@ class Runtime:
         ("crash", msg, []) if it crashed, which crashes the paused task."""
         require(self.deliverable(t), "R1", f"task {t.id} resumed at a step with no commit since it waited")
         st = t.wait_on
-        if self.shared.unchanged(st, "resume") and not any(self.shared.cell(r).poisoned for r in st.cells):
+        sh = self.shared
+        cells = [sh.cell(r) for r in st.cells]
+        # wake_rule "first": a waiter readied by a probe that ends without
+        # storing passes the wake on to the next waiter that would not wait.
+        baton, st.baton = st.baton and not sh.no_pass_on, False
+        if sh.unchanged(st, "resume") and not any(c.poisoned for c in cells):
             # skip_unchanged: a runtime makes this check before it resumes the task.
             self.stats["resumes skipped"] += 1
             self.wait_step(t, st)
+            if baton:
+                sh.pass_on(cells)
             return ("pending",)
         self.stats["steps run again"] += 1
-        r = self.shared.run(st)
+        r = sh.run(st)
         if r[0] == "wait":
             self.wait_step(t, st)
+            if baton:
+                sh.pass_on(cells)
             return ("pending",)
         t.waiting, t.wait_on = None, None
-        self.shared.release(st)
+        if baton and not sh.committed:
+            sh.pass_on(cells)
+        sh.release(st)
         if r[0] == "crash":
             self.leaked += r[2]
             return ("crash", r[1], [])
@@ -786,8 +798,13 @@ class Runtime:
                 x.granted.remove(t)
                 self.sessions.release(x)
         elif t.waiting == "shared":
-            self.shared.unpark(t, t.wait_on)
-            self.shared.release(t.wait_on)
+            st = t.wait_on
+            self.shared.unpark(t, st)
+            if st.baton and not self.shared.no_pass_on:  # readied by a probe but cancelled first: pass the wake on
+                st.baton = False
+                self.stats["wakes passed on at a drop"] += 1
+                self.shared.pass_on([self.shared.cell(r) for r in st.cells])
+            self.shared.release(st)
         t.waiting, t.wait_group, t.wait_on = None, None, None
         for g in t.groups:  # entries that never started
             for e in g.entries:

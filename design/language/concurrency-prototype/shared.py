@@ -79,33 +79,47 @@ class Step:
     """A step's operands, owned by whoever holds this: the op while it runs,
     a waiting task's wait state, or a defer stack entry."""
 
-    __slots__ = ("f", "cells", "args", "dirty", "on_error", "seen")
+    __slots__ = ("f", "cells", "args", "dirty", "on_error", "seen", "baton")
 
     def __init__(self, f, cells, args, on_error=False):
         self.f, self.cells, self.args = f, cells, args
         self.on_error = on_error  # an errdefer: runs only on cancellation or a crash
         self.dirty = False  # a commit to one of its cells since it began waiting
         self.seen = None  # skip_unchanged: the values it waited on
+        self.baton = False  # wake_rule "first": readied by a probe; passes the wake on unless it stores
 
 
 class Shared:
     def __init__(self, prog, heap, stats, sessions, wake):
         self.prog, self.heap, self.stats, self.sessions = prog, heap, stats, sessions
         self.wake = wake  # wake(task): a commit readies a waiter
+        self.leak = lambda values: None  # the runtime's: values a crashed probe leaked
         self.cells = {}
+        self.committed = False  # whether the last run stored
         # Mutation switches for the regression tests.
         self.no_poison = False  # a deferred step that crashes poisons nothing
         self.no_wake = False  # a commit readies no waiter
-        # The wake rule (concurrency-shared-variables.md, decision (d)). A step
-        # is a pure function of its cells' values and its arguments, so a
-        # waiter whose cells hold the values it waited on would wait again.
-        # "resume", the rule: a commit readies every waiter, and a readied
-        # waiter whose values are back to those it waited on parks again
-        # without resuming. False readies and resumes every waiter (the
-        # regression switch: n**2 steps run again under contention). "store"
-        # readies only waiters whose values changed, and "both" does both
-        # checks; bench/shared_vs_actor.py measures each.
-        self.skip_unchanged = "resume"
+        self.no_pass_on = False  # a waiter readied by a probe that ends without storing readies no other
+        # An alternative to the wake rule below, for bench/shared_vs_actor.py.
+        # A step is a pure function of its cells' values and its arguments,
+        # so a waiter whose cells hold the values it waited on would wait
+        # again. "resume": a dispatched waiter whose values are back to those
+        # it waited on parks again without running its function. "store": a
+        # commit readies only waiters whose values changed. "both" does both.
+        # None of these saves a dispatch under contention.
+        self.skip_unchanged = False
+        # Which waiters a store readies (concurrency-shared-variables.md,
+        # "Runtime"). "latest", the rule: the runtime probes the waiters,
+        # most recently waiting first, running each one's pure function
+        # without storing, and readies only the first that would not wait; a
+        # readied waiter that then ends without storing (it keeps, waits
+        # again, crashes or is cancelled first) probes on from there. That
+        # order is the one stack of a None build, where the latest waiter is
+        # on top (C9, V8). "first" probes oldest first instead, which a None
+        # build cannot match. "all": every waiter is readied and runs its
+        # function again when dispatched, which costs n**2 dispatches under
+        # contention.
+        self.wake_rule = "latest"
 
     def cell(self, r):
         return self.cells[self.heap.obj(r).tag]
@@ -159,11 +173,13 @@ class Shared:
             heap.dup(f)
         tag = o.tag
         heap.drop(out)
+        self.committed = False
         if tag == "Wait":
             self.stats["waits"] += 1
             return ("wait",)
         if tag == "Keep":
             return ("ready", fields[0])
+        self.committed = True
         assert tag == "Set" and len(fields) == len(st.cells) + 1, f"a step returned {tag}"
         r, new = fields[0], fields[1:]
         self.stats["commits"] += 1
@@ -183,8 +199,53 @@ class Shared:
         mode = "both" if self.skip_unchanged is True else self.skip_unchanged
         return mode in (at, "both") and st.seen == self.values(st)
 
+    def probe(self, st):
+        """wake_rule "first": run st's function on the current state without
+        storing anything. True if it would not wait (a crash counts: the
+        waiter is readied and crashes when it runs)."""
+        heap = self.heap
+        if any(self.cell(r).poisoned for r in st.cells):
+            return True
+        vals = []
+        for r in st.cells:
+            v = heap.obj(r).fields[0]
+            heap.dup(v)
+            vals.append(v)
+        for a in st.args:
+            heap.dup(a)
+        self.stats["probes"] += 1
+        try:
+            out = run_pure(self.prog, heap, st.f, vals + list(st.args))
+        except PureCrash as pc:
+            heap.drop(pc.msg)
+            self.leak(pc.leaked)
+            return True
+        waits = heap.obj(out).tag == "Wait"
+        heap.drop(out)
+        if waits:
+            self.stats["probes that would wait"] += 1
+        return not waits
+
+    def pass_on(self, cells):
+        """wake_rule "first": ready the first waiter on each cell (a Cell) that
+        would not wait."""
+        if self.no_wake:
+            return
+        for c in cells:
+            order = list(c.waiters) if self.wake_rule == "first" else list(reversed(c.waiters))
+            for w in order:
+                st = w.wait_on
+                if self.probe(st):
+                    st.dirty, st.baton = True, True
+                    self.unpark(w, st)
+                    self.wake(w)
+                    break
+
     def ready_waiters(self, c):
         if self.no_wake:
+            return
+        if self.wake_rule in ("first", "latest"):
+            self.pass_on([c])
             return
         ws, c.waiters = c.waiters, []
         for w in ws:

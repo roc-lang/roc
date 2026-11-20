@@ -309,22 +309,29 @@ So `.boxy` records should hold dynamic values inline after a header sized from t
 
 **Finding 16: a crash leaks different frames under `.lss` and `.boxy`.** `.boxy` defers a frame-replacing call through a closure and lets a waiter make it, so the call runs under the waiter's native frame. `.lss` makes the same call directly, and the waiter stays a record. When the callee crashes, R5 leaks the native frame and drops the record, so the two lowerings leak different values. Both heaps verify exactly. The fuzzer found this once in 2,000 programs (seed 296), and C8 now compares heap operations only in runs without a crash, as C1 and C10 already did. The RFC states C8 over traces.
 
-**Finding 17: `Shared` handles replace server tasks at a fraction of the cost.** `bench/shared_vs_actor.py` counts operations for each client of a semaphore with one permit and a pool of two. Under the pause schedule, with 30 clients:
+**Finding 17: `Shared` handles replace server tasks, if a store readies only one waiter that would not wait, the most recent.** `bench/shared_vs_actor.py` counts operations for 30 clients of a semaphore with one permit and of a pool of two, under the pause schedule. A resume is one dispatch of a task by the host, including a readied waiter that runs its update function, answers `Wait` and parks again; a probe is a call of a waiter's function by the storing task, whose result is discarded.
 
-| Written as | Spawns | Resumes | Allocations | Messages | Steps run again |
-|---|---|---|---|---|---|
-| Semaphore, server task | 93 | 276 | 721 | 90 | |
-| Semaphore cell | 30 | 120 | 187 | 0 | |
-| Semaphore, `Shared`, every waiter woken | 30 | 526 | 652 | 0 | 435 |
-| Semaphore, `Shared`, unchanged waiters skipped | 30 | 120 | 246 | 0 | 29 |
-| Pool, server task | 93 | 276 | 754 | 90 | |
-| Pool, `Shared`, every waiter woken | 30 | 497 | 775 | 0 | 406 |
-| Pool, `Shared`, unchanged waiters skipped | 30 | 119 | 397 | 0 | 28 |
+| Written as | Spawns | Resumes | Allocations | Messages | Update functions run | Probes | Comparisons |
+|---|---|---|---|---|---|---|---|
+| Semaphore, server task | 93 | 276 | 721 | 90 | | | |
+| Semaphore cell | 30 | 120 | 187 | 0 | | | |
+| Semaphore, `Shared`, every waiter readied | 30 | 526 | 652 | 0 | 495 | | |
+| Semaphore, `Shared`, every waiter readied, equal states compared | 30 | 526 | 246 | 0 | 89 | | 406 |
+| Semaphore, `Shared`, most recent waiter that would not wait | 30 | 120 | 681 | 0 | 89 | 435 | |
+| Pool, server task | 93 | 276 | 754 | 90 | | | |
+| Pool, `Shared`, every waiter readied | 30 | 497 | 775 | 0 | 466 | | |
+| Pool, `Shared`, every waiter readied, equal states compared | 30 | 497 | 397 | 0 | 88 | | 378 |
+| Pool, `Shared`, most recent waiter that would not wait | 30 | 119 | 887 | 0 | 88 | 406 | |
 
-- A `Shared` handle needs no server task, no mailbox and no reply channel: one task per client and no messages.
-- Waking every waiter at each store costs about n² updates run again under contention. One client takes the permit, and every other client runs its update, finds none, and waits again.
-- An update function is pure, so a waiter whose cell holds the value it waited on would return `Wait` again. Skipping such waiters, at the store and again before resuming one, makes the cost linear. The semaphore then matches the semaphore cell. This rule is `Shared.skip_unchanged`, off by default; with it on, the `SharedVariables` tests and 1,000 fuzzed programs pass. A real runtime needs equality on the state type, or identity for boxed values, to apply it: the RFC's decision (d).
+- A `Shared` handle needs no server task, no mailbox and no reply channel.
+- Readying every waiter at each store dispatches each of them after every store, and all but one wait again: about n² resumes under contention.
+- An earlier version of this finding proposed comparing a dispatched waiter's state with the one it waited on, which needs equality on the state type. The counts above show it saves running the function but not the dispatch: resumes are unchanged. That version reported resumes after subtracting the compared ones, which overstated the saving.
+- Probing the waiters and readying only the first whose function would not wait makes resumes linear, matching the semaphore cell, with no equality. The cost moves to probes, about n² pure calls by the storing tasks, and to the allocations their discarded results make. A readied waiter that ends without storing probes on; the regression test cancels one before it runs and shows that without this, some schedule deadlocks.
+- The probe order must be most recent first. Probing the oldest first, for fairness, broke C9 on the 344th fuzzed program: a `None` build runs only the waiter on top of its one stack, the most recent, so a `Tasks` build that served the oldest could not follow the input-order schedule. Readying every waiter left that choice to the schedule. Under sustained contention, the most-recent-first order can leave an early waiter waiting, which the RFC lists as a drawback.
+- Committing the first eligible waiter's update for it at the store, as the semaphore cell hands over a permit, is not an option: a waiter cancelled before it runs would leave its update committed with no `finally!` to undo it.
 - Under the input-order schedule, the server tasks deadlock, as they do in a `None` build (Finding 14). The `Shared` versions do not.
+
+The rule is `Shared.wake_rule = "latest"`, the default. Under it, 2,000 fuzzed programs pass every check, with 1,964 compared against the input-order schedule, 5,028 probes and 336 wakes passed on by a readied waiter dropped before it ran. `"first"`, `"all"` and `skip_unchanged` remain for the benchmark and the regression tests.
 
 **Finding 18: a `None` build runs loop entries on demand at a `Wait`.** In a `None` build, an update that returns `Wait` runs loop entries that have not started, earliest in input order, until a store changes its cell, as a receive does. With none left, it crashes as a deadlock. The `Shared` semaphore and pool therefore run on one stack, where the server-task versions deadlock. A `Wait` that crashed at once would make them fail there too.
 

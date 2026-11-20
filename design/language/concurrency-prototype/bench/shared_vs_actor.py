@@ -3,11 +3,12 @@ task that owns its state (concurrency-sessions.md, library.SOURCE), as the
 runtime's semaphore cell (sem/acquire), and as a shared variable
 (concurrency-shared-variables.md, library.SHARED_SOURCE).
 
-Counts, not times: tasks spawned, task resumes, heap allocations, messages,
-and for shared variables the steps run and the steps run again after a wait.
-"shared, store", "shared, resume" and "shared, both" are the same shared
-variable under alternative wake rules that skip a waiter whose state holds
-the value it waited on (Shared.skip_unchanged).
+Counts, not times: tasks spawned, task resumes (every dispatch of a task by
+the host, including a readied waiter that only runs its update function and
+parks again), heap allocations and messages; and for Shared, the update
+functions run by tasks, the probes the runtime runs for a waiter without
+storing, and the state comparisons that park a dispatched waiter again. The
+"shared" rows differ only in the wake rule; see CASES.
 The prototype interprets the IR, so its timings would say nothing about
 compiled code.
 
@@ -83,35 +84,38 @@ def pool_shared(n):
     """
 
 
-# The last element is the wake rule (Shared.skip_unchanged): False wakes
-# every waiter at each store; "store" readies only waiters whose state
-# changed; "resume" skips, just before resuming one, a waiter whose state is
-# back to what it waited on; "both" does both.
+# The last element is the wake rule: (Shared.wake_rule, Shared.skip_unchanged).
+#   all        a store readies every waiter, which runs its function again
+#              when it is dispatched
+#   all+cmp    the same, but a dispatched waiter whose state equals the one
+#              it waited on parks again without running its function
+#   latest     a store probes the waiters, most recent first, and readies only the first
+#              that would not wait; one that then does not store probes on
+#              (the rule; "first" probes oldest first, which a None build cannot match)
 CASES = [
-    ("semaphore", "server task", sem_actor, False),
-    ("semaphore", "semaphore cell", sem_cell, False),
-    ("semaphore", "shared variable", sem_shared, False),
-    ("semaphore", "shared, store", sem_shared, "store"),
-    ("semaphore", "shared, resume", sem_shared, "resume"),
-    ("semaphore", "shared, both", sem_shared, "both"),
-    ("pool", "server task", pool_actor, False),
-    ("pool", "shared variable", pool_shared, False),
-    ("pool", "shared, store", pool_shared, "store"),
-    ("pool", "shared, resume", pool_shared, "resume"),
-    ("pool", "shared, both", pool_shared, "both"),
+    ("semaphore", "server task", sem_actor, None),
+    ("semaphore", "semaphore cell", sem_cell, None),
+    ("semaphore", "shared, all", sem_shared, ("all", False)),
+    ("semaphore", "shared, all+cmp", sem_shared, ("all", "resume")),
+    ("semaphore", "shared, latest", sem_shared, ("latest", False)),
+    ("pool", "server task", pool_actor, None),
+    ("pool", "shared, all", pool_shared, ("all", False)),
+    ("pool", "shared, all+cmp", pool_shared, ("all", "resume")),
+    ("pool", "shared, latest", pool_shared, ("latest", False)),
 ]
 
 POLICIES = [("pause", PausePolicy, "Tasks"), ("input order", InputOrderPolicy, "Tasks"),
             ("random parallel", lambda: RandomPolicy(7, parallel=True), "ParallelTasks")]
 
 
-def measure(src, mk, conc, skip):
+def measure(src, mk, conc, rule):
     lows = build(library.SOURCE + library.SHARED_SOURCE + COMMON + src)[1]
     attach = runtime.Runtime.attach
 
     def attach_skip(self, engine, prog):
         attach(self, engine, prog)
-        self.shared.skip_unchanged = skip
+        if rule is not None:
+            self.shared.wake_rule, self.shared.skip_unchanged = rule
 
     runtime.Runtime.attach = attach_skip
     try:
@@ -126,21 +130,22 @@ def measure(src, mk, conc, skip):
     rt = r.runtime
     return {
         "spawns": rt.get("spawns", 0),
-        "resumes": rt.get("resumes", 0) - rt.get("resumes skipped", 0),
+        "resumes": rt.get("resumes", 0),
         "allocs": r.heap.get("alloc", 0),
         "messages": rt.get("messages", 0) + rt.get("posts", 0),
-        "steps": rt.get("steps run", 0),
-        "again": rt.get("steps run again", 0),
+        "f runs": rt.get("steps run", 0),
+        "probes": rt.get("probes", 0),
+        "compares": rt.get("resumes skipped", 0),
     }
 
 
 def main():
-    cols = ["spawns", "resumes", "allocs", "messages", "steps", "again"]
+    cols = ["spawns", "resumes", "allocs", "messages", "f runs", "probes", "compares"]
     print(f"{'library':<10} {'written as':<16} {'schedule':<16} {'clients':>7} " + " ".join(f"{c:>8}" for c in cols))
     for n in (3, 10, 30):
-        for lib, how, src, skip in CASES:
+        for lib, how, src, rule in CASES:
             for pname, mk, conc in POLICIES:
-                m = measure(src(n), mk, conc, skip)
+                m = measure(src(n), mk, conc, rule)
                 row = f"{lib:<10} {how:<16} {pname:<16} {n:>7} "
                 print(row + ("deadlock" if m is None else " ".join(f"{m[c]:>8}" for c in cols)))
         print()
