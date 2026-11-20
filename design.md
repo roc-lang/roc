@@ -6269,6 +6269,25 @@ earlier use may already have added tags to it. Each copy is unified
 with that image. A relation can pin a receiver, so the boundary runs
 another round after relating any use.
 
+Each use is related before anything generalizes its copies, so a use's
+copies are never part of a finished scheme when they meet the body's slots.
+Two rules keep it so. First, static dispatch is type-directed and outside the
+check order, so a definition can dispatch to an annotated method whose group
+has not been checked yet. Such a dispatch use waits, owned by the innermost
+group frame, and every generalization boundary of that frame first checks the
+unchecked group of each target its waiting uses name, in a nested frame, the
+way it checks an unannotated dispatch target's group; the target's body
+records the use against its own scheme, and the target's boundary relates
+it, while the using definition is still open. Second, a use of a binding
+whose group is on the group stack is related by that group's boundary, so
+its copies are pinned at that boundary's rank, as a deferred dispatch
+obligation's vars are pinned at the boundary that resolves it. Nothing
+nested inside the boundary generalizes them first: neither a local definition
+in the binding's own body nor a group checked at the boundary whose
+definitions refer back to the binding, as a method `get` that a function
+`overlay` dispatches to and that calls `overlay` by name does. The pinned copies generalize with the binding, as
+the shared structure of an unannotated dispatch cycle does.
+
 A rejected relation is a Type Mismatch at the use, naming the use's type
 and the definition's final one; the use becomes a runtime error and the
 definition keeps its scheme, as for any other rejected use. A body slot
@@ -24391,10 +24410,17 @@ proves; it is sound for these reasons:
 Ownership is explicit. Every type variable class has an owner
 (`Type.Store.owners`): the binding group whose solving created it, numbered
 from `first_group_owner`. Variables created before any group is solved
-(registered function types and local types) are `unowned` until a group's
-solving relates them; a lazy leaf's parts belong to the leaf's owner,
-whichever group expands it; variables created after solving belong to
-`global_owner`. A link gives the joined class the older owner. While a group
+(registered function types and local types) start `unowned`. A group's
+solving begins by claiming every unowned class its functions' registered
+types reach, their capture slots included (`claimFunctionTypes`). A later
+group that names a function of a monomorphic group relates that function's
+own type, which is part of the later group's environment; were it still
+unowned (its own group's solving may relate it only to other unowned
+variables, such as the function's argument locals), the later group would
+take it as its own and quantify it. Any other unowned variable belongs to
+the first group whose solving relates it; a lazy leaf's parts belong to the
+leaf's owner, whichever group expands it; variables created after solving
+belong to `global_owner`. A link gives the joined class the older owner. While a group
 is solved, every link that joins a class it owns to an older class is
 recorded (`Store.escapes`): the older class is the group's environment, in
 the paper's terms a type free in the context, and nothing it reaches can be
@@ -28270,8 +28296,11 @@ no layout shape is treated as evidence that a variant is active.
 
 Certification tracks field claims over the full committed layout ownership-slot
 domain. Scalar and padding slots require no RC claims, regardless
-of their indices. The required claim set is derived once per queried layout from
-its committed refcounted slots. A field read that holds no unit and has claimed
+of their indices. A read of a scalar, whether a struct field or a tag
+payload, needs only its container's inline representation, so it stays valid
+after every refcounted slot of the container has been claimed. The required
+claim set is derived once per queried layout from its committed refcounted
+slots. A field read that holds no unit and has claimed
 nothing of its own is a view of its parent struct's slots, so a claim through
 it is a claim of the parent's slots offset by its first slot, and a read
 through it of a slot already claimed is a read after a take unless the view's
