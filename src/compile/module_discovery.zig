@@ -100,7 +100,7 @@ pub fn extractPublicSurface(
             for (ast.decl_index.imports.items, 0..) |import, import_idx| {
                 if (import.origin != .local) continue;
                 if (import.nested_type_path != null) continue;
-                const binding = import.module_binding orelse continue;
+                const binding = import.file_binding orelse continue;
                 const entry = try module_imports.getOrPut(gpa, ast.env.getIdent(binding));
                 if (!entry.found_existing) entry.value_ptr.* = import_idx;
             }
@@ -294,6 +294,10 @@ pub fn extractImportsFromDeclIndex(
                 const entry = parse_ast.store.getSymbolMapEntry(entry_idx);
                 const module_token = entry.module orelse continue;
                 const module_ident = parse_ast.tokens.resolveIdentifier(module_token) orelse continue;
+                // An explicit module binding already supplied its source
+                // edge. The name in the hosted section can be an alias, not
+                // the name of a second sibling file.
+                if (parse_ast.decl_index.scopeDeclsNamed(file.scope, .import_alias, module_ident).count() != 0) continue;
                 try appendModuleName(gpa, &result, parse_ast.env.getIdent(module_ident), .importer, 0, false);
             }
         },
