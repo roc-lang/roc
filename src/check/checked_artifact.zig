@@ -4800,6 +4800,16 @@ const CheckedTypePublication = struct {
         return self.source_types.?.get(module, resolved);
     }
 
+    /// A dispatch owner is the published declaration, not just a statement that
+    /// introduced a name. Qualified value references have their own publication.
+    pub fn nominalMethodOwner(self: *const CheckedTypePublication, env: *const ModuleEnv, stmt: CIR.Statement.Idx) ?canonical.NominalTypeKey {
+        const declarations = &self.source_types.?.scratch.?.local_nominal_declarations;
+        if (declarations.ids.get(stmt)) |id| return self.store.nominalDeclarationById(id).nominal;
+        const statement = env.store.getStatement(stmt);
+        if (statement == .s_nominal_decl and !publishesLocalNominal(env, stmt, statement.s_nominal_decl.anno)) return null;
+        checkedArtifactInvariant("method owner statement {d} has no published nominal declaration", .{@backingInt(stmt)});
+    }
+
     /// A retained method contributes its exact callable type as a publication
     /// root, independently of executable-body reachability. This is an ordinary
     /// producer request, not recovery from a failed published-type lookup.
@@ -6492,8 +6502,7 @@ fn appendCheckedNominalDeclarationFromStatement(
     anno_idx: CIR.TypeAnno.Idx,
     _: bool,
 ) Allocator.Error!void {
-    if (anno_idx == .placeholder) return;
-    if (!localNominalDeclarationIsValid(module.moduleEnvConst(), statement_idx)) return;
+    if (!publishesLocalNominal(module.moduleEnvConst(), statement_idx, anno_idx)) return;
 
     const statement_root = try appendCheckedTypeRoot(
         allocator,
@@ -10963,8 +10972,7 @@ pub const LocalNominalDeclarationIds = struct {
         for (module_env.store.sliceStatements(module_env.all_statements)) |candidate| {
             const statement = module_env.store.getStatement(candidate);
             if (statement != .s_nominal_decl) continue;
-            if (statement.s_nominal_decl.anno == .placeholder) continue;
-            if (!localNominalDeclarationIsValid(module_env, candidate)) continue;
+            if (!publishesLocalNominal(module_env, candidate, statement.s_nominal_decl.anno)) continue;
             try ids.put(candidate, @fromBackingInt(@intCast(next_id)));
             next_id += 1;
         }
@@ -10980,6 +10988,10 @@ pub const LocalNominalDeclarationIds = struct {
             checkedArtifactInvariant("checked nominal declaration statement had no declaration id", .{});
     }
 };
+
+fn publishesLocalNominal(env: *const ModuleEnv, stmt: CIR.Statement.Idx, anno: CIR.TypeAnno.Idx) bool {
+    return anno != .placeholder and localNominalDeclarationIsValid(env, stmt);
+}
 
 /// Whether checking accepted the local nominal declaration at `statement_idx`.
 pub fn localNominalDeclarationIsValid(

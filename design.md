@@ -9460,6 +9460,9 @@ registry target as structural behavior.
 The method registry is an exact table keyed by `(MethodOwner, MethodNameId)`.
 It is not an owner-discovery mechanism. Post-check code may use it only after a
 concrete monomorphic dispatcher type has already determined the owner.
+A non-builtin owner is a published nominal declaration. A rejected owner has no
+dispatch entries; this does not suppress independently checked qualified values.
+A rejected method of an accepted owner still has an entry with no target.
 
 A type's methods are the functions declared in its own `.{ … }` block, so the
 module that declares a type is the only module whose registry holds that
