@@ -80,6 +80,11 @@ pub const Var = enum {
     /// range prover walks: its proof rounds and restarts, its loop guards,
     /// its loop-invariant assumptions, and its walks and sum refreshes.
     range_prove_stats,
+    /// Print, for every range-prover round that rewrites a check, the
+    /// procedure as the round found it (one statement per line, with
+    /// statement ids) and one line per rewrite, for translation validation
+    /// outside the compiler.
+    range_prove_dump,
     /// Print when `roc` starts a program it built and when it has released
     /// the build's state, so the order of the two is visible.
     trace_run_order,
@@ -114,6 +119,7 @@ pub const Var = enum {
             .storage_work => "ROC_STORAGE_WORK",
             .perf_map => "ROC_PERF_MAP",
             .range_prove_stats => "ROC_RANGE_PROVE_STATS",
+            .range_prove_dump => "ROC_RANGE_PROVE_DUMP",
             .trace_run_order => "ROC_TRACE_RUN_ORDER",
             .hoist_root_stats => "ROC_HOIST_ROOT_STATS",
         };

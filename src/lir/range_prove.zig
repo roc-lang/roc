@@ -2158,6 +2158,12 @@ const Pass = struct {
     /// Pending assumptions seeded so far this round.
     assumption_count: u8 = 0,
     rewrites: u32,
+    /// `ROC_RANGE_PROVE_DUMP`: the procedure a round walks, as it found it,
+    /// and the rewrites the round made (`RangeProveDump`).
+    dump_before: std.ArrayList(u8) = .empty,
+    dump_events: std.ArrayList(u8) = .empty,
+    dump_proc: u32 = 0,
+    dump_round: u32 = 0,
     // Debug-only certification state; unused (and empty) in release builds.
     proof_records: std.ArrayList(ProofRecord),
     proof_facts: std.ArrayList(Fact),
@@ -2342,6 +2348,8 @@ const Pass = struct {
     }
 
     fn deinit(self: *Pass) void {
+        self.dump_before.deinit(self.allocator);
+        self.dump_events.deinit(self.allocator);
         self.nodes.deinit(self.allocator);
         self.facts.deinit(self.allocator);
         self.no_overflow_facts.deinit(self.allocator);
@@ -6009,7 +6017,15 @@ const Pass = struct {
             if (try self.threadBoolJoins(proc.body.get().?) != 0) {
                 self.work.thread_rounds += 1;
             } else {
+                if (RangeProveDump.enabled()) {
+                    self.dump_proc = @backingInt(proc_id);
+                    self.dump_round = @intCast(self.work.rounds);
+                    self.dump_before.clearRetainingCapacity();
+                    self.dump_events.clearRetainingCapacity();
+                    try RangeProveDump.writeProc(self, proc);
+                }
                 try self.walkRegions(proc.body.get().?);
+                if (RangeProveDump.enabled()) RangeProveDump.flush(self);
                 try self.certifyRound(proc.body.get().?);
                 try self.persistLoopBounds();
                 self.resolvePendingInvariants();
@@ -7362,6 +7378,7 @@ const Pass = struct {
                 break;
             }
         }
+        try RangeProveDump.event(self, "switch", stmt, value, 0);
         const replacement = self.store.getCFStmt(survivor);
         self.store.getCFStmtPtr(stmt).* = replacement;
         self.rewrites += 1;
@@ -7446,6 +7463,7 @@ const Pass = struct {
                         // A node's window never rests on an assumption,
                         // so the count needs no verification round.
                         if (count >= 0 and count <= 16) {
+                            try RangeProveDump.event(self, "simd", stmt, count, 0);
                             var extra = s_extra;
                             extra.simd_concat_count = @intCast(count);
                             const row = try self.store.addStmtRow(LIR.LowLevelExtra, extra);
@@ -8189,6 +8207,7 @@ const Pass = struct {
         } else if (holds or fails) {
             try self.recordProof(stmt);
             const truth: u16 = if (holds) 1 else 0;
+            try RangeProveDump.event(self, "cmp", stmt, truth, 0);
             self.store.getCFStmtPtr(stmt).* = .{ .assign_tag = .{
                 .target = s.target,
                 .variant_index = truth,
@@ -8251,6 +8270,7 @@ const Pass = struct {
                 self.deferred_rewrites = true;
             } else if (proof.proven or always_overflows) {
                 const truth: u16 = @intFromBool(always_overflows);
+                try RangeProveDump.event(self, "ovf", stmt, truth, 0);
                 self.store.getCFStmtPtr(stmt).* = .{ .assign_tag = .{
                     .target = s.target,
                     .variant_index = truth,
@@ -8280,6 +8300,7 @@ const Pass = struct {
                 self.deferred_rewrites = true;
             } else if (CheckedArithmetic.provenForm(s.op)) |proven| {
                 try self.recordProof(stmt);
+                try RangeProveDump.event(self, "proven", stmt, 0, 0);
                 const rc_effect = try self.store.addRcEffect(proven.rcEffect());
                 const ptr = &self.store.getCFStmtPtr(stmt).assign_low_level;
                 ptr.op = proven;
@@ -8457,6 +8478,7 @@ const Pass = struct {
             return;
         }
         try self.recordProof(stmt);
+        try RangeProveDump.event(self, "div", stmt, 0, 0);
         const ptr = &self.store.getCFStmtPtr(stmt).assign_low_level;
         ptr.op = plain;
         ptr.rc_effect = try self.store.addRcEffect(plain.rcEffect());
@@ -8561,6 +8583,7 @@ const Pass = struct {
         const inner_entry = CheckedArithmetic.classify(inner.op) orelse return false;
         if (inner_entry.operation != entry.operation or inner_entry.mode != .crash_on_overflow) return false;
 
+        try RangeProveDump.event(self, "chain", stmt, @backingInt(chain.stmt), @backingInt(outer_literal_stmt));
         const wrapping_op = CheckedArithmetic.member(entry.operation, .wrap);
         const wrapping_effect = try self.store.addRcEffect(wrapping_op.rcEffect());
         self.store.getCFStmtPtr(chain.stmt).assign_low_level.op = wrapping_op;
@@ -8736,6 +8759,7 @@ const Pass = struct {
     fn rewriteAsArithmeticCrash(self: *Pass, stmt: CFStmtId, operation: CheckedArithmetic.Operation) ResourceError!void {
         const op = CheckedArithmetic.member(operation, .crash_on_overflow);
         const message = CheckedArithmetic.overflowMessage(op) orelse unreachable; // op is a family member, and overflowMessage covers every family member
+        try RangeProveDump.event(self, "crash", stmt, 0, 0);
         self.store.getCFStmtPtr(stmt).* = .{ .crash = .{
             .msg = .{ .literal = try self.store.insertString(message) },
         } };
@@ -8765,6 +8789,206 @@ const Pass = struct {
 /// Debug-only certification helpers, deliberately independent of the pass's
 /// own walk: dominance is answered by deleted-node reachability over a freshly
 /// built successor graph, and implication by a dense all-pairs closure.
+/// `ROC_RANGE_PROVE_DUMP` (developer diagnostics only): for every proof round
+/// that rewrites anything, the procedure as that round found it and the
+/// rewrites it made, in a line format the range-prove model
+/// reads (models/range-prove/FORMAT.md). One `std.debug.print` per round
+/// keeps rounds of procedures proved in parallel from interleaving.
+/// Writing a range-prove dump fails only when its writer or an allocation fails.
+const DumpWriteError = std.Io.Writer.Error || std.mem.Allocator.Error;
+
+const RangeProveDump = if (!dev_diagnostics.available) struct {
+    fn enabled() bool {
+        return false;
+    }
+    fn writeProc(_: *Pass, _: LIR.LirProcSpec) ResourceError!void {}
+    fn event(_: *Pass, _: []const u8, _: CFStmtId, _: i128, _: i128) ResourceError!void {}
+    fn flush(_: *Pass) void {}
+} else struct {
+    fn enabled() bool {
+        return dev_diagnostics.isSet(.range_prove_dump);
+    }
+
+    fn event(self: *Pass, kind: []const u8, stmt: CFStmtId, a: i128, b: i128) ResourceError!void {
+        if (!enabled()) return;
+        var w: std.Io.Writer.Allocating = .fromArrayList(self.allocator, &self.dump_events);
+        defer self.dump_events = w.toArrayList();
+        w.writer.print("E {s} {d} {d} {d}\n", .{ kind, @backingInt(stmt), a, b }) catch return error.OutOfMemory;
+    }
+
+    fn flush(self: *Pass) void {
+        if (self.dump_events.items.len == 0) return;
+        std.debug.print("RPD P {d} {d}\n{s}{s}RPD END\n", .{ self.dump_proc, self.dump_round, self.dump_before.items, self.dump_events.items });
+    }
+
+    fn layoutClass(self: *Pass, local: LocalId) []const u8 {
+        const idx = self.localLayout(local);
+        return switch (idx) {
+            .u8 => "u8",
+            .u16 => "u16",
+            .u32 => "u32",
+            .u64 => "u64",
+            .u128 => "u128",
+            .i8 => "i8",
+            .i16 => "i16",
+            .i32 => "i32",
+            .i64 => "i64",
+            .i128 => "i128",
+            .bool => "bool",
+            .str => "str",
+            .zst => "zst",
+            .f32, .f64, .dec, .opaque_ptr, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => "other",
+            _ => if (self.layouts.getLayout(idx).tag == .list) "list" else "other",
+        };
+    }
+
+    fn writeProc(self: *Pass, proc: LIR.LirProcSpec) ResourceError!void {
+        var w: std.Io.Writer.Allocating = .fromArrayList(self.allocator, &self.dump_before);
+        defer self.dump_before = w.toArrayList();
+        writeProcInner(self, proc, &w.writer) catch return error.OutOfMemory;
+    }
+
+    fn writeLocal(self: *Pass, out: *std.Io.Writer, local: LocalId) DumpWriteError!void {
+        try out.print(" l{d}:{s}", .{ @backingInt(local), layoutClass(self, local) });
+    }
+
+    fn writeSpan(self: *Pass, out: *std.Io.Writer, span: LIR.LocalSpan) DumpWriteError!void {
+        const items = self.store.getLocalSpan(span);
+        for (0..GuardedList.borrowLen(items)) |i| try writeLocal(self, out, GuardedList.at(items, i));
+    }
+
+    fn writeProcInner(self: *Pass, proc: LIR.LirProcSpec, out: *std.Io.Writer) DumpWriteError!void {
+        try out.writeAll("A");
+        try writeSpan(self, out, proc.args);
+        try out.print("\nB {d}\n", .{@backingInt(proc.body.get().?)});
+        var seen = std.AutoHashMap(u32, void).init(self.allocator);
+        defer seen.deinit();
+        var stack = std.ArrayList(CFStmtId).empty;
+        defer stack.deinit(self.allocator);
+        try stack.append(self.allocator, proc.body.get().?);
+        while (stack.pop()) |id| {
+            if ((try seen.getOrPut(@backingInt(id))).found_existing) continue;
+            const stmt = self.store.getCFStmtImmediate(id).*;
+            try out.print("S {d} ", .{@backingInt(id)});
+            switch (stmt) {
+                .assign_literal => |s| {
+                    try out.print("lit {d}", .{@backingInt(s.next)});
+                    try writeLocal(self, out, s.target);
+                    switch (s.value) {
+                        .i64_literal => |l| try out.print(" {d}", .{l.value}),
+                        .i128_literal => |row| try out.print(" {d}", .{self.store.stmtRow(row).value}),
+                        .bytes_literal => |lit| try out.print(" len={d}", .{lit.len}),
+                        .static_data => if (self.store.literalExtra(s.value).list_len) |len| try out.print(" len={d}", .{len}) else try out.writeAll(" x"),
+                        .f64_literal, .f32_literal, .dec_literal, .str_literal, .proc_ref => try out.writeAll(" x"),
+                    }
+                    try stack.append(self.allocator, s.next);
+                },
+                .assign_ref => |s| {
+                    try out.print("ref {d}", .{@backingInt(s.next)});
+                    try writeLocal(self, out, s.target);
+                    try out.print(" {s} l{d} {d} {d}", .{ @tagName(s.op.kind), @backingInt(s.op.source), s.op.index, s.op.variant_index });
+                    try stack.append(self.allocator, s.next);
+                },
+                .assign_low_level => |s| {
+                    try out.print("ll {d}", .{@backingInt(s.next)});
+                    try writeLocal(self, out, s.target);
+                    try out.print(" {s} {d}", .{ @tagName(s.op), @intFromBool(self.store.stmtRowOrDefault(s.extra).dyn_elem_desc) });
+                    try writeSpan(self, out, s.args);
+                    try stack.append(self.allocator, s.next);
+                },
+                .assign_struct => |s| {
+                    try out.print("struct {d}", .{@backingInt(s.next)});
+                    try writeLocal(self, out, s.target);
+                    try writeSpan(self, out, s.fields);
+                    try stack.append(self.allocator, s.next);
+                },
+                .assign_list => |s| {
+                    try out.print("list {d}", .{@backingInt(s.next)});
+                    try writeLocal(self, out, s.target);
+                    try writeSpan(self, out, s.elems);
+                    try stack.append(self.allocator, s.next);
+                },
+                .assign_tag => |s| {
+                    try out.print("tag {d}", .{@backingInt(s.next)});
+                    try writeLocal(self, out, s.target);
+                    try out.print(" {d} {d}", .{ s.variant_index, s.discriminant });
+                    if (s.payload) |payload| try writeLocal(self, out, payload);
+                    try stack.append(self.allocator, s.next);
+                },
+                .set_local => |s| {
+                    try out.print("set {d}", .{@backingInt(s.next)});
+                    try writeLocal(self, out, s.target);
+                    try writeLocal(self, out, s.value);
+                    try stack.append(self.allocator, s.next);
+                },
+                inline .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn => |s| {
+                    try out.print("havoc {d}", .{@backingInt(s.next)});
+                    try writeLocal(self, out, s.target);
+                    try stack.append(self.allocator, s.next);
+                },
+                inline .store_struct, .store_tag => |s| {
+                    try out.print("havoc {d}", .{@backingInt(s.next)});
+                    try writeLocal(self, out, s.dest);
+                    try stack.append(self.allocator, s.next);
+                },
+                .dyn => |s| {
+                    try out.print("havoc {d}", .{@backingInt(s.next)});
+                    if (s.target) |target| try writeLocal(self, out, target);
+                    try stack.append(self.allocator, s.next);
+                },
+                inline .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
+                    try out.print("nop {d}", .{@backingInt(s.next)});
+                    try stack.append(self.allocator, s.next);
+                },
+                .switch_stmt => |s| {
+                    try out.print("switch l{d} {d}", .{ @backingInt(s.cond), @backingInt(s.default_branch) });
+                    try stack.append(self.allocator, s.default_branch);
+                    const branches = self.store.getCFSwitchBranches(s.branches);
+                    for (0..GuardedList.borrowLen(branches)) |i| {
+                        const branch = GuardedList.at(branches, i);
+                        try out.print(" {d}:{d}", .{ branch.value, @backingInt(branch.body) });
+                        try stack.append(self.allocator, branch.body);
+                    }
+                },
+                .switch_initialized_payload => |s| {
+                    try out.print("branch {d} {d}", .{ @backingInt(s.initialized_branch), @backingInt(s.uninitialized_branch) });
+                    try stack.append(self.allocator, s.initialized_branch);
+                    try stack.append(self.allocator, s.uninitialized_branch);
+                },
+                .str_match => |s| {
+                    try out.print("branch {d} {d}", .{ @backingInt(s.on_match), @backingInt(s.on_miss) });
+                    try stack.append(self.allocator, s.on_match);
+                    try stack.append(self.allocator, s.on_miss);
+                },
+                .str_match_set => |s| {
+                    try out.print("branch {d}", .{@backingInt(s.on_miss)});
+                    try stack.append(self.allocator, s.on_miss);
+                    const arms = self.store.getStrMatchArms(s.arms);
+                    for (0..GuardedList.borrowLen(arms)) |i| {
+                        const arm = GuardedList.at(arms, i);
+                        try out.print(" {d}", .{@backingInt(arm.on_match)});
+                        try stack.append(self.allocator, arm.on_match);
+                    }
+                },
+                .join => |s| {
+                    try out.print("join j{d} {d} {d}", .{ @backingInt(s.id), @backingInt(s.body), @backingInt(s.remainder) });
+                    try writeSpan(self, out, s.params);
+                    try stack.append(self.allocator, s.body);
+                    try stack.append(self.allocator, s.remainder);
+                },
+                .jump => |s| try out.print("jump j{d}", .{@backingInt(s.target)}),
+                .ret => |s| {
+                    try out.writeAll("ret");
+                    try writeLocal(self, out, s.value);
+                },
+                .crash => try out.writeAll("crash"),
+                .expect_err, .runtime_error, .comptime_exhaustiveness_failed => try out.writeAll("stop"),
+            }
+            try out.writeAll("\n");
+        }
+    }
+};
+
 const RangeProveCertify = struct {
     const Graph = struct {
         allocator: Allocator,
