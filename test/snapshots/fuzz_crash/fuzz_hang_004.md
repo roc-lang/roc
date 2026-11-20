@@ -125,9 +125,9 @@ a = || {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(_b)"))
+		(patt (type "_b"))
 		(patt (type "() -> {}")))
 	(expressions
-		(expr (type "List(_b)"))
+		(expr (type "_b"))
 		(expr (type "() -> {}"))))
 ~~~
