@@ -4,6 +4,28 @@ const std = @import("std");
 const CIR = @import("can").CIR;
 const TestEnv = @import("./TestEnv.zig");
 
+// https://github.com/roc-lang/roc/issues/13263
+test "check - repro - issue 13263 - chained aliases preserve the platform abstract type" {
+    var env = try TestEnv.init("Platform",
+        \\platform ""
+        \\    requires { [Model : model] for main : model -> U64 }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "entry": entry }
+        \\
+        \\Inner : Model
+        \\Outer : Inner
+        \\
+        \\f : Outer -> Str
+        \\f = |x| x
+        \\
+        \\entry : U64 -> U64
+        \\entry = |n| n
+    );
+    defer env.deinit();
+    try env.assertOneTypeError("Type Mismatch");
+}
+
 // https://github.com/roc-lang/roc/issues/11938
 test "check - repro - issue 11938 - undeclared local annotation becomes a runtime error" {
     const src =
