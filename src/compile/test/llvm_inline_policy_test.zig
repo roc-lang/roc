@@ -18,7 +18,7 @@ test "LLVM keeps Dict.insert's expanded leaf helper always inline" {
     , .{
         // Leave ordinary helper calls for the LLVM backend to expand.
         .inline_mode = .none,
-        .spec_constr_clone_inlining = .iterator_fusion,
+        .spec_constr_clone_inlining = .no_calls,
     }, inspectDictInlining);
 }
 

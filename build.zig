@@ -1943,32 +1943,30 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
     .{ .app = "issue_12787_derived_parser_static_lib_app.roc", .options = &.{ "--opt=size", "--specialize=yes" }, .output = "issue_12787_derived_parser_specialized_static_lib_app.wasm", .run_args = &.{ "--expected", "ok 14 A 5|ok 14 B text|Missing field: tag|Invalid JSON|rejected before parsing: long enough for the heap" } },
     .{ .app = "str_interp_leading_literal_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "str_interp_leading_literal_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--min-allocs", "1", "--max-allocs", "2" } },
     .{ .app = "str_concat_unique_reuse_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "str_concat_unique_reuse_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--min-allocs", "1", "--max-allocs", "1" } },
-    // End-to-end cart gate for the minted-iterator `for`-loop drive. The
+    // End-to-end cart gate for `for` loops over iterator adapter chains. The
     // size build covers the LLVM cart path, and the dev build covers wasm
-    // composite loop-state rebinding for recursive generated iterators.
-    // "ok" means every inlined `for` over append/map/concat/chained minted
-    // chains ran to completion with correct sums (i.e. the drive advanced its
+    // composite loop-state rebinding for iterators that wrap iterators.
+    // "ok" means every inlined `for` over append/map/concat/chained adapter
+    // chains ran to completion with correct sums (i.e. the loop advanced its
     // inner iterators and terminated). `--assert-alloc-balanced` also catches
-    // a per-step allocate/free leak in the drive. The absolute-size ceiling
-    // catches a gross size blowup of the un-fused minted cart (~48 KB, premium
-    // ~18 KB over the noiter twin); the premium itself is read from the two
-    // printed sizes and is the fusion pass's target, not a hard gate pre-fusion.
+    // a per-step allocate/free leak in the loop. The absolute-size ceiling
+    // catches a gross size blowup of the iterator cart; the premium over the
+    // noiter twin is read from the two printed sizes, not a hard gate.
     .{ .app = "iter_for_static_lib_app.roc", .options = &.{"--opt=size"}, .output = "iter_for_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--max-bytes", "65536" } },
     .{ .app = "iter_for_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "iter_for_static_lib_app_dev.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced" } },
-    // Dev-mode recursive iterator construction must converge at the
-    // explicit forced-dynamic representation tier. With hidden defaultable
-    // evidence resolved at checked edges, the cart is ~723 KB.
+    // Dev-mode recursive iterator construction: a chain whose length is
+    // decided at run time forms a self-containing lambda set, which boxes.
     .{ .app = "iter_recursive_concat_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "iter_recursive_concat_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--max-bytes", "750000" } },
     // Static-data hoisting gate: a constant list literal consumed via
     // `.iter()` must materialize as static data and allocate nothing, so the
-    // whole minted chain (base list included) is zero-alloc on the cart path.
+    // whole chain (base list included) is zero-alloc on the cart path.
     // `--max-allocs 0` is a strictly stronger assertion than
-    // `--assert-alloc-balanced`. Minted chains are the specialized lowering's
-    // iterator representation, which `--opt=size` selects only when asked.
+    // `--assert-alloc-balanced`. `--specialize=yes` selects the specialized
+    // lowering, whose iterators are by-value records.
     .{ .app = "iter_list_hoist_static_lib_app.roc", .options = &.{ "--opt=size", "--specialize=yes" }, .output = "iter_list_hoist_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--max-allocs", "0" } },
     // Noiter twin: the same sums over plain list literals. The runner prints
     // each cart's byte size, so the iter build minus this baseline is the
-    // minted-adapter premium tracked in CI (the fusion pass's target).
+    // iterator-adapter premium tracked in CI.
     .{ .app = "iter_for_noiter_static_lib_app.roc", .options = &.{"--opt=size"}, .output = "iter_for_noiter_static_lib_app.wasm", .run_args = &.{ "--expected", "ok" } },
     .{ .app = "rc_cleanup_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "rc_cleanup_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--min-allocs", "1" } },
     .{ .app = "rc_cleanup_model_list_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "rc_cleanup_model_list_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--min-allocs", "2" } },

@@ -236,7 +236,9 @@ test "issue 13026: a body copied into two callers shares its loop" {
     try std.testing.expect(try prefixFunctionCount(app) > try prefixFunctionCount(baseline));
 }
 
-test "issue 13026: a body that drives an iterator is not split" {
+// An iterator loop is an ordinary loop: its tag-independent prefix is
+// shared like any other.
+test "issue 13026: a body that drives an iterator shares its loop like any other" {
     const app =
         \\helper : [A, B, C], List(U64) -> U64
         \\helper = |mode, xs| {
@@ -283,7 +285,7 @@ test "issue 13026: a body that drives an iterator is not split" {
         \\}
         \\
     ;
-    try std.testing.expectEqual(try prefixFunctionCount(baseline), try prefixFunctionCount(app));
+    try std.testing.expect(try prefixFunctionCount(app) > try prefixFunctionCount(baseline));
 }
 
 test "issue 13026: splitting is deterministic across schedules" {

@@ -65,6 +65,6 @@ test "issue 11310: a set fallback to its own field transfers the replacement str
     // Both dev options are required to preserve the failing call shape.
     try harness.expectAppPathLowersToLirWithOptions(app_path, .{
         .inline_mode = .wrappers,
-        .spec_constr_clone_inlining = .iterator_fusion,
+        .spec_constr_clone_inlining = .no_calls,
     });
 }

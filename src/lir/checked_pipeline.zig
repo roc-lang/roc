@@ -20,7 +20,6 @@ const RangeProve = @import("range_prove.zig");
 const ReturnSlot = @import("return_slot.zig");
 const ErasedOwner = @import("erased_owner.zig");
 const StrAppend = @import("str_append.zig");
-const SingleUseInline = @import("single_use_inline.zig");
 
 /// Completed compile-time scalar roots a forked continuation lowers as literals.
 pub const CompletedScalarValues = postcheck.ComptimeScalarValues.CompletedScalarValues;
@@ -162,7 +161,7 @@ pub const dev_inline_mode: InlineMode = .procedures;
 
 /// SpecConstr's clone-inlining scope for dev builds and compile-time
 /// evaluation.
-pub const dev_spec_constr_clone_inlining: SpecConstrCloneInlining = .iterator_fusion;
+pub const dev_spec_constr_clone_inlining: SpecConstrCloneInlining = .no_calls;
 
 /// Target settings and checked module state for the checked-to-LIR pipeline.
 pub const TargetConfig = struct {
@@ -211,7 +210,7 @@ pub const TargetConfig = struct {
     /// consumers drop them and the rest keep them and skip the analysis.
     immortal_string_literals: bool = false,
     /// Direct-call inlining scope for SpecConstr's value-aware clones.
-    /// Optimized builds use `.all_calls`; dev builds use `.iterator_fusion`
+    /// Optimized builds use `.all_calls`; dev builds use `.no_calls`
     /// so post-check time and emitted program size stay bounded. Consulted
     /// only when `inline_mode` is not `.none`, since that is what gates
     /// SpecConstr itself.
@@ -882,7 +881,6 @@ pub const stmt_kind_count = @typeInfo(std.meta.Tag(LIR.CFStmt)).@"enum".field_na
 pub const PassStep = enum {
     /// Resolving `.boxy` erased calls' ownership sources.
     erased_owner,
-    single_use_inline,
     return_slot,
     str_append,
     tag_reachability,
@@ -1203,8 +1201,8 @@ test "pipeline timing aggregates SpecConstr totals and preserves peaks" {
         .bodies_committed = 4,
         .expressions_committed = 30,
         .peak_retained_shards = 2,
-        .committed_by_phase = .{ 1, 2, 3 },
-        .changed_by_phase = .{ 1, 1, 2 },
+        .committed_by_phase = .{ 1, 2 },
+        .changed_by_phase = .{ 1, 1 },
     };
     timing.addSpecConstrParallel(first);
     var aggregate = Timing.init(std.testing.io);
@@ -1952,13 +1950,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsageWithOptions(allocator, &lifted, target.spec_constr_clone_inlining, spec_constr_options);
         spec_constr_timing_scope.end();
         break :blk usage;
-    } else blk: {
-        var spec_constr_timing_scope = PipelineStageScope.begin(target.timing, .spec_constr);
-        defer spec_constr_timing_scope.end();
-        try postcheck.MonotypeLifted.SpecConstr.runIteratorFusionWithOptions(allocator, &lifted, spec_constr_options);
-        spec_constr_timing_scope.end();
-        break :blk postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
-    };
+    } else postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
     defer procedure_usage.deinit();
     if (target.timing) |timing| timing.addSpecConstrParallel(spec_constr_metrics.?.*);
 
@@ -1980,18 +1972,14 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         timing.lss_steps_ns[@backingInt(LssStep.lambda_solve)].add(detail.solve_ns);
     }
     errdefer solved.deinit();
-    const specialized = try postcheck.LambdaSolved.Specialize.run(allocator, &solved);
     lambda_solve_timing_scope.end();
-    // Specialization gives some functions copies; the copies' uses are
-    // counted afresh over the specialized program.
-    if (specialized.cloned_fns != 0 and procedure_usage.items.len != 0) {
-        procedure_usage.deinit();
-        procedure_usage = try postcheck.MonotypeLifted.SpecConstr.collectProcedureUsage(allocator, &solved.lifted);
-    }
 
     var inline_plan_timing_scope = PipelineStageScope.begin(target.timing, .inline_plan);
     defer inline_plan_timing_scope.end();
-    const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved);
+    // Inline decisions are made per function at each instance of its group.
+    const spec_usage = try postcheck.LambdaSolved.Instances.procedureUsage(allocator, &solved, procedure_usage.items);
+    defer allocator.free(spec_usage);
+    const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, spec_usage, &solved);
     inline_plan_timing_scope.end();
 
     return .{
@@ -2284,8 +2272,7 @@ fn finishLoweredOutput(
     defer if (proc_pass_detail) |*detail| target.timing.?.addProcPasses(detail);
     const pass_timing: ?*ProcPasses.Timing = if (proc_pass_detail) |*detail| detail else null;
     // Consecutive fusible phases share one task per procedure
-    // (`PendingSegment`); each other phase, and each whole-program step,
-    // ends the segment before it.
+    // (`PendingSegment`); each other phase ends the segment before it.
     var segment: PendingSegment = .{};
     // Branch expectations are read off the lowered switches before any
     // rewrite reshapes them.
@@ -2294,18 +2281,11 @@ fn finishLoweredOutput(
     // calls and changes allocation sites, and ARC panics on pre-existing RC
     // statements (see src/lir/trmc.zig).
     segment.add(.trmc);
-    if (target.specialization_strategy == .lss and target.inline_mode == .none) {
-        try segment.flush(allocator, &lowered.lir_result, pass_target, pass_timing);
-        var single_use_scope = PassStepScope.begin(target.timing, .single_use_inline);
-        try SingleUseInline.run(&lowered.lir_result);
-        single_use_scope.end();
-        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .forwarding_join, pass_timing);
-    }
     // Every strategy and inline mode produces tag-valued joins whose body
-    // matches the tag at once: the iterator-fusion clone in `.none`, the
-    // checked wrappers substituted at their call sites in `.wrappers`, whose
-    // `Try` results the caller matches immediately, and a flag loop's merge
-    // join under either strategy, whose header switches on the flag.
+    // matches the tag at once: the checked wrappers substituted at their call
+    // sites in `.wrappers`, whose `Try` results the caller matches
+    // immediately, every inlined call that returns a tag, and a flag loop's
+    // merge join under either strategy, whose header switches on the flag.
     if (target.fuse_tag_cases) {
         try segment.flush(allocator, &lowered.lir_result, pass_target, pass_timing);
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .tag_fusion, pass_timing);
