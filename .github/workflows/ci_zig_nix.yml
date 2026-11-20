@@ -25,10 +25,8 @@ jobs:
           - os: ubuntu-24.04
             zig_build_flags: -Dtarget=x86_64-linux-musl
             nix_ci_mode: ''
-          # Two jobs: hosted arm64 runners lose network mid-`build-ci` at
-          # full parallelism.
           - os: ubuntu-24.04-arm
-            zig_build_flags: -j2
+            zig_build_flags: ''
             nix_ci_mode: --build-ci
 
     steps:

@@ -3,11 +3,6 @@ description: >-
   Run `build-ci` once and upload its outputs as the build artifact every MiniCI
   shard of this host restores (see the `minici-shard` action), so the shards
   run the tests without compiling them again. Run after checkout.
-inputs:
-  jobs:
-    description: 'A `-jN` limit on `build-ci` parallelism, or empty for one job per CPU'
-    required: false
-    default: ''
 runs:
   using: 'composite'
   steps:
@@ -68,7 +63,7 @@ runs:
     - name: Build MiniCI binaries
       uses: ./.github/actions/flaky-retry
       with:
-        command: zig build ${{ inputs.jobs }} build-ci -Dembed-builtin-unit=true
+        command: zig build build-ci -Dembed-builtin-unit=true
         retry_count: 3
 
     # zstd on all cores, instead of upload-artifact's single-threaded zip

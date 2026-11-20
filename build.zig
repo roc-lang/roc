@@ -5504,31 +5504,31 @@ pub fn build(b: *std.Build) void {
 }
 
 /// Upper bounds, in GiB, on the peak memory of the compile steps large enough
-/// to exhaust a CI runner when several of them compile at once. Each is the
-/// largest peak measured on aarch64 macOS, in Debug or ReleaseFast with a cold
-/// cache, plus a quarter for other hosts and targets. Zig's build runner never
-/// runs bounded steps whose bounds add up to more than the machine's memory,
-/// and it fails a step whose peak exceeds its bound, so a step that outgrows
-/// its bound here needs a larger one.
+/// to exhaust a CI runner when several of them compile at once. Each is half
+/// again the largest peak measured on aarch64 macOS, compiling one step at a
+/// time from a cold cache in Debug and in ReleaseFast, to cover other hosts and
+/// targets. Zig's build runner never runs bounded steps whose bounds add up to
+/// more than the machine's memory, and it fails a step whose peak exceeds its
+/// bound, so a step that outgrows its bound here needs a larger one.
 const compile_memory_bounds = [_]struct { name: []const u8, gib: u64 }{
-    .{ .name = "roc", .gib = 12 },
-    .{ .name = "compile", .gib = 10 },
-    .{ .name = "cli_test", .gib = 10 },
-    .{ .name = "parallel_lsp_integration_runner", .gib = 10 },
-    .{ .name = "snapshot", .gib = 9 },
-    .{ .name = "snapshot_tool_test", .gib = 9 },
-    .{ .name = "glue", .gib = 9 },
-    .{ .name = "repro", .gib = 7 },
-    .{ .name = "lsp", .gib = 7 },
-    .{ .name = "lir_inline_test", .gib = 7 },
-    .{ .name = "builtin_doc_test", .gib = 7 },
-    .{ .name = "builtin_compiler", .gib = 6 },
-    .{ .name = "eval", .gib = 6 },
-    .{ .name = "rc_conformance_test", .gib = 5 },
+    .{ .name = "eval", .gib = 17 },
+    .{ .name = "cli_test", .gib = 16 },
+    .{ .name = "parallel_lsp_integration_runner", .gib = 16 },
+    .{ .name = "roc", .gib = 14 },
+    .{ .name = "snapshot", .gib = 13 },
+    .{ .name = "snapshot_tool_test", .gib = 13 },
+    .{ .name = "compile", .gib = 12 },
+    .{ .name = "glue", .gib = 12 },
+    .{ .name = "lsp", .gib = 12 },
+    .{ .name = "lir_inline_test", .gib = 12 },
+    .{ .name = "builtin_doc_test", .gib = 12 },
+    .{ .name = "builtin_compiler", .gib = 12 },
+    .{ .name = "repro", .gib = 11 },
+    .{ .name = "rc_conformance_test", .gib = 11 },
+    .{ .name = "lir", .gib = 7 },
+    .{ .name = "postcheck", .gib = 6 },
+    .{ .name = "check", .gib = 6 },
     .{ .name = "backend", .gib = 5 },
-    .{ .name = "check", .gib = 5 },
-    .{ .name = "lir", .gib = 4 },
-    .{ .name = "postcheck", .gib = 3 },
 };
 
 /// Gives every compile step named in `compile_memory_bounds` its bound. A
