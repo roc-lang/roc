@@ -15743,6 +15743,60 @@ test "methods on open rows - the requirement is written on the row variable for 
     });
 }
 
+test "methods on open rows - a captured callback result can gain tags after local function generalization" {
+    var test_env = try TestEnv.init("Test",
+        \\check = |field| {
+        \\    on = |p| field(p) == On
+        \\    match field({}) {
+        \\        Unset => on({})
+        \\        _ => False
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "methods on open rows - a captured record's method is selected by its enclosing binding" {
+    var test_env = try TestEnv.init("Test",
+        \\Named := { name : Str }.{
+        \\    ok : Named -> Bool
+        \\    ok = |_| True
+        \\}
+        \\check = |get| {
+        \\    ask = |p| {
+        \\        r = get(p)
+        \\        _ = r.name
+        \\        r.ok()
+        \\    }
+        \\    named : Named
+        \\    named = get({})
+        \\    (ask({}), named.name)
+        \\}
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "methods on open rows - an escaped row's equality requirement rejects a function payload at the call" {
+    var test_env = try TestEnv.init("Test",
+        \\check = |field| {
+        \\    on = |p| field(p) == On
+        \\    match field({}) {
+        \\        Unset => on({})
+        \\        _ => False
+        \\    }
+        \\}
+        \\bad = check(|_| Fn(|x| x))
+    );
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorHighlightsWithin("Type Does Not Support Equality", .{
+        .line = 8,
+        .start_column = 7,
+        .end_column = 12,
+    });
+}
+
 test "methods on open rows - each call answers the requirement with the type it supplies" {
     const source = open_row_tagged_decls ++
         \\a = same(one, two)

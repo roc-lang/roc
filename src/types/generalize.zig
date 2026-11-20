@@ -277,7 +277,7 @@ pub const Generalizer = struct {
     /// - `var_pool`: The main variable pool tracking all vars by rank
     /// - `rank_to_generalize`: The rank level to generalize (must be var_pool.current_rank)
     pub fn generalize(self: *Self, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
-        try self.adjustMarked(var_pool, rank_to_generalize);
+        try self.adjustMarked(var_pool, rank_to_generalize, .all);
         try self.quantify(var_pool, rank_to_generalize, false);
     }
 
@@ -286,7 +286,20 @@ pub const Generalizer = struct {
     /// tails the pass would quantify. The caller may unify between this and
     /// `quantify`, so no class is left marked (`Descriptor.Word`).
     pub fn adjust(self: *Self, _: std.mem.Allocator, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
-        try self.adjustMarked(var_pool, rank_to_generalize);
+        try self.adjustMarked(var_pool, rank_to_generalize, .all);
+        self.clearMarks();
+    }
+
+    /// Propagate ownership from enclosing scopes before a boundary decision
+    /// on a flex variable. A flex keeps the boundary rank unless one of these
+    /// walks reaches it. Do not settle boundary-local structures or quantify
+    /// anything: the decision can add new constraints.
+    pub fn adjustEscapes(self: *Self, var_pool: *VarPool) std.mem.Allocator.Error!void {
+        try self.adjustMarked(var_pool, var_pool.current_rank, .enclosing);
+        self.clearMarks();
+    }
+
+    fn clearMarks(self: *Self) void {
         for (self.tmp_vars.items) |ranked| {
             if (self.store.wordAt(ranked.desc_idx).marked()) self.store.clearGeneralizationMarks(ranked.desc_idx);
         }
@@ -294,7 +307,7 @@ pub const Generalizer = struct {
 
     /// `adjust`, leaving the classes it generalizes and the ones whose rank
     /// it adjusted marked for `quantify`.
-    fn adjustMarked(self: *Self, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
+    fn adjustMarked(self: *Self, var_pool: *VarPool, rank_to_generalize: Rank, comptime scope: enum { enclosing, all }) std.mem.Allocator.Error!void {
         if (rank_to_generalize == Rank.generalized) return;
 
         std.debug.assert(var_pool.current_rank == rank_to_generalize);
@@ -339,9 +352,11 @@ pub const Generalizer = struct {
         // Adjust ranks to maintain invariant: ranks never increase going deeper.
         // Process from lowest to highest rank so that lower ranks are finalized first,
         // ensuring we have accurate rank information when processing higher ranks.
-        for (self.tmp_vars.items) |ranked| {
+        const starts = if (scope == .enclosing) self.tmp_vars.items[0..self.below_rank_count] else self.tmp_vars.items;
+        for (starts) |ranked| {
             try self.adjustPooledRank(ranked, rank_to_generalize);
         }
+        if (scope == .enclosing) return;
 
         self.debugAssertQueuedDescriptors();
 

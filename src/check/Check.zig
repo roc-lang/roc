@@ -58052,36 +58052,44 @@ fn decideOpenRowsAtModuleEnd(self: *Self, env: *Env) Allocator.Error!void {
     }
 }
 
-/// Decide the requirements every open row of this boundary's rank holds
-/// that no root reaches: no use of the bindings can supply its type, so its
-/// value is the plain record or tag union its fields or tags make, decided
-/// in this definition (design.md "Methods On Open Rows"). The rows the
-/// boundary has already decided or generalized leave the list.
+/// A row no binding reaches is still supplied by the enclosing scope if it
+/// escaped through a capture. Only the current pool's adjusted, owned rows
+/// can be bounded here (design.md "Methods On Open Rows").
 fn decideUnreachedOpenRowsAtBoundary(self: *Self, roots: []const BoundaryRoot, env: *Env) Allocator.Error!void {
-    if (self.open_row_holders.items.len == 0) return;
+    if (self.open_row_holders.items.len == 0 or !env.var_pool.generalizesInnermostScope()) return;
     std.debug.assert(self.probe_depth == 0 and !self.commit_probe_active);
     const rank = env.rank();
-    var any_at_rank = false;
-    var write: usize = 0;
-    for (self.open_row_holders.items) |holder| {
-        const resolved = self.types.resolveVar(holder);
-        if (resolved.desc.content != .flex or resolved.desc.rank == .generalized) continue;
-        if (resolved.desc.rank == rank) any_at_rank = true;
-        self.open_row_holders.items[write] = resolved.var_;
-        write += 1;
-    }
-    self.open_row_holders.shrinkRetainingCapacity(write);
-    if (!any_at_rank) return;
-
     var reached = collections.DenseMap(Var, void).init(self.gpa);
     defer reached.deinit();
-    for (roots) |root| try self.collectReachableVars(root.interface, &reached);
+    var candidates = collections.DenseMap(Var, void).init(self.gpa);
+    defer candidates.deinit();
+    var write: usize = 0;
+    for (self.open_row_holders.items) |holder| {
+        const resolved = self.types.resolveVarWord(holder);
+        if (resolved.word.kind != .flex or resolved.word.rank == .generalized) continue;
+        const flex = self.types.flexAt(resolved.desc_idx);
+        for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+            if (constraint.receiver == .open_row_value) break;
+        } else continue;
+        self.open_row_holders.items[write] = resolved.var_;
+        write += 1;
+        if (resolved.word.rank != rank) continue;
+        if (reached.count() == 0) {
+            for (roots) |root| try self.collectReachableVars(root.interface, &reached);
+        }
+        if (!reached.contains(resolved.var_)) try candidates.put(resolved.var_, {});
+    }
+    self.open_row_holders.shrinkRetainingCapacity(write);
+    if (candidates.count() == 0) return;
+
+    // Numeric ranks alone do not identify a pool. Another definition can
+    // be suspended at the same rank; decide only members of this boundary.
+    try self.generalizer.adjustEscapes(&env.var_pool);
     var decided = false;
-    var index: usize = 0;
-    while (index < self.open_row_holders.items.len) : (index += 1) {
-        const resolved = self.types.resolveVar(self.open_row_holders.items[index]);
-        if (resolved.desc.rank != rank or reached.contains(resolved.var_)) continue;
-        if (try self.decideOpenRowAsPlain(resolved.var_, env)) decided = true;
+    for (env.var_pool.getVarsForRank(rank)) |pool_var| {
+        const row = self.types.resolveVarWord(pool_var);
+        if (row.word.rank != rank or !candidates.remove(row.var_)) continue;
+        if (try self.decideOpenRowAsPlain(row.var_, env)) decided = true;
     }
     if (decided) {
         try self.checkStaticDispatchConstraints(env, false);
