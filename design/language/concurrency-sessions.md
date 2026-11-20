@@ -2,10 +2,23 @@
 
 | | |
 |---|---|
-| Status | Draft. Not adopted; nothing here is part of `design.md`. |
+| Status | Superseded by [Shared State](concurrency-shared-variables.md). Kept as the record of the design and of the prototype evidence it produced. Not adopted; nothing here is part of `design.md`. |
 | Scope | Channel types and operations, mailboxes, their runtime state, `None` semantics for receives, deadlock detection, library patterns for shared resources |
 | Companion | [Suspendable Effects and Platform-Scheduled Concurrency](concurrency-explicit-suspension.md): the task tree, plans, concurrent loops and crashes this RFC builds on |
 | Prototype | [concurrency-prototype/](concurrency-prototype/README.md): `sessions.py`, the library patterns in `library.py`, the many-root host in `host.py`, and the `Sessions`, `HolderSets`, `Mailboxes`, `Libraries` and `Roots` tests. Sent values in the atomicity analyses: [rc-atomicity/](rc-atomicity/README.md) |
+
+> **Superseded.** [Shared State](concurrency-shared-variables.md) replaces this
+> RFC:
+>
+> - Its channels and mailboxes are replaced by queues, library types over
+>   `Shared` that `for!` reads as streams, and by replies for requests.
+> - Its resource libraries (semaphores, pools) are replaced by `Shared`
+>   updates.
+> - Its holder sets and deadlock detection are restated there, for cells.
+> - Its coroutine `None` builds are now the companion RFC's, for every program
+>   that can wait.
+>
+> The rest is kept unchanged as the record of the design and its evidence.
 
 ## Summary
 

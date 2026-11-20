@@ -4,7 +4,7 @@
 |---|---|
 | Status | Draft. Not adopted; nothing here is part of `design.md`. |
 | Scope | Plans and concurrent loops, a builtin library, platform and hosted declarations, host ABI, one LIR pass |
-| Companion | [Sessions, Channels and Shared Resources](concurrency-sessions.md): the rest of the same design |
+| Companion | [Shared State](concurrency-shared-variables.md): the rest of the same design. It supersedes [Sessions, Channels and Shared Resources](concurrency-sessions.md) |
 | Supersedes | The stackful prototype on `origin/greenthreads` |
 
 ## Summary
@@ -40,14 +40,14 @@ which procedures need the transformation without any new annotation in
 application code. The output is ordinary code that returns to its host, so it
 runs on every WebAssembly engine, with no stack switching.
 
-This RFC is half of one design. Its model is a tree of tasks with a session
-between each child and its parent, and here every session carries exactly one
-message: the child's result. The companion RFC,
-[Sessions, Channels and Shared Resources](concurrency-sessions.md), lets
-sessions carry protocols, makes cancellation a message the other end of a
-session receives, and builds synchronization from shared sessions. It adds to
-this RFC. Where it extends one of this RFC's invariants (C2, C6, C9 and R6),
-the invariant's row says so.
+This RFC is half of one design. Its model is a tree of tasks that share only
+immutable values, in which each child's only output is its result. The
+companion RFC, [Shared State](concurrency-shared-variables.md), adds state
+that several running tasks use: atomic pure updates, waiting until the state
+changes, and cleanup that runs however a task ends. On those it builds a
+library, including queues that `for!` reads as streams, which is how tasks
+stream values to each other. It adds to this RFC. Where it extends one of this
+RFC's guarantees or invariants (G2, R4, R6, C2, C6 and C9), the row says so.
 
 ## Motivation
 
@@ -358,8 +358,8 @@ start. So:
 So the timeout example still returns the fetch result, but the timeout cannot
 interrupt a call that blocks.
 
-A task can also wait for another task: at a receive or a `Wait`, under the
-companion RFCs. A waiting task pauses, as it would on a task platform, and
+A task can also wait for another task: at a `Wait` under the companion RFC,
+as when it waits for a permit or for an item in a queue. A waiting task pauses, as it would on a task platform, and
 the next ready task runs. So a protocol in which two tasks take turns, such
 as a permit that must come back before its lender continues, runs on every
 platform. If no task can run, nothing can ever end the wait, and the program
@@ -443,7 +443,7 @@ recorded on each LIR procedure (`LirProcSpec.suspends: never | may`) and on
 each call. Later stages read it and never rediscover it.
 
 - In `None` builds hosted calls never suspend. The suspension points are the
-  waits of the companion RFCs (receives and `Wait`), and the loop heads,
+  companion RFC's waits (`update!` calls that can answer `Wait`), and the loop heads,
   loop exits and `supervise!` waits of procedures whose children may reach
   one. So the pass does nothing for a program that cannot wait.
 - Under `.lss`, lambda sets give every call's possible targets, so the answer
@@ -817,8 +817,7 @@ point, and no drop ever waits.
 
 **Sessions.** Each entry is the parent's end of a session whose protocol is a
 single message: the entry's result. `Arrived(v)` is that message, and `Ended`
-says every session in the set has closed. The companion RFC lets an entry's
-protocol carry more messages; arrivals keep this shape.
+says every session in the set has closed.
 
 ### The `Concurrent` library
 
@@ -1081,7 +1080,7 @@ ReleaseFast benchmarks on the reference host.
 |---|---|
 | Pure code | None |
 | A program that cannot wait, on a platform without `concurrency: Tasks` | None: the pass does nothing |
-| A program that can wait, on a platform without `concurrency: Tasks` | A flag check after each call that may reach a wait, and pausing and resuming at the waits themselves. Hosted calls never pause. The companion RFC measured checks on 58% of procedures in such programs, within noise natively and 40% to 58% on a wasm kernel made only of calls |
+| A program that can wait, on a platform without `concurrency: Tasks` | A flag check after each call that may reach a wait, and pausing and resuming at the waits themselves. Hosted calls never pause. The superseded sessions RFC measured checks on 58% of procedures in such programs, within noise natively and 40% to 58% on a wasm kernel made only of calls |
 | Effectful call that does not pause | One load and predictable branch on the task's pending flag; suspending hosted calls return their result through `out` |
 | Code size | A save block per suspendable call site, plus resume and drop entries, in effectful code only. Asyncify's roughly 50% comes from instrumenting conservatively; this pass touches only code that can pause, usually a small share of a program |
 | Spawning a child task | One allocation for the task header and its first record, wake-state setup, and a host enqueue: estimated tens of nanoseconds |
@@ -1173,14 +1172,14 @@ established:
 | | Invariant | Established by |
 |---|---|---|
 | C1 | **Transparency.** If every suspending call completes immediately, the lowered program's results, effects and crashes equal those of the program without the pass. | Differential: a host that always returns `READY`, against a `None` build |
-| C2 | **Suspension only where declared.** A procedure marked `never` contains no suspendable call site; the pending flag is set only at a suspension point; and every suspension point traces to a `suspending` marker, an erased effectful call in a `.boxy` `Tasks` build, a concurrent loop's head or exit, or `supervise!`'s wait. The companion RFC adds channel and inbox receives. | Certify |
+| C2 | **Suspension only where declared.** A procedure marked `never` contains no suspendable call site; the pending flag is set only at a suspension point; and every suspension point traces to a `suspending` marker, an erased effectful call in a `.boxy` `Tasks` build, a concurrent loop's head or exit, or `supervise!`'s wait. The companion RFC adds `update!`. | Certify |
 | C3 | **Record completeness.** At every suspendable call site, the pending edge saves every value the procedure uses after that call, other than the call's result. | Certify |
 | C4 | **No native addresses in records.** A record never holds the address of native-frame storage: frame callables passed to suspendable call sites are heap-allocated, and suspendable procedures' pending cells live in task storage. | Certify |
 | C5 | **Ownership conservation.** At each suspendable call site, the suspension ledger equals what ARC owns after the call. Dropping a record releases each owned value exactly once, and so does resuming it to completion. | Certify, plus cancel-at-every-site tests with allocation tracking |
-| C6 | **Atomicity soundness.** An allocation that two tasks able to run in parallel can update counts on, or that the host can reach, uses atomic counts. Hosted arguments and results are seeds, closed under today's equality classes. In `ParallelTasks` builds, an entry's capture that a sibling may alias is a seed too, and modes propagate forward along copies, calls, returns, construction and projection; child results are not seeds. Every count statement on a position whose mode is atomic is atomic, plain and atomic updates of one allocation never race, and a borrowed capture is never released by a child. The companion RFC adds sent messages as seeds (S8). | Certify, checking each forward constraint locally (extends the existing rule) |
+| C6 | **Atomicity soundness.** An allocation that two tasks able to run in parallel can update counts on, or that the host can reach, uses atomic counts. Hosted arguments and results are seeds, closed under today's equality classes. In `ParallelTasks` builds, an entry's capture that a sibling may alias is a seed too, and modes propagate forward along copies, calls, returns, construction and projection; child results are not seeds. Every count statement on a position whose mode is atomic is atomic, plain and atomic updates of one allocation never race, and a borrowed capture is never released by a child. The companion RFC adds stores into cells as seeds. | Certify, checking each forward constraint locally (extends the existing rule) |
 | C7 | **Constant-space tail calls.** A frame-replacing call has no status check and leaves no record, so a paused tail cycle holds records only for the procedures actually live. | Certify, plus record-count tests on deep tail cycles that pause |
 | C8 | **Strategy equivalence.** `.lss` and `.boxy` builds produce the same traces under the same deterministic schedule. | Differential |
-| C9 | **Sequential equivalence.** A `None` build's results and effects equal a `Tasks` build's under the coroutine schedule: one thread, hosted calls that finish in place, and the ready task first in the task tree resumed next. Where no entry can wait, this is the input-order schedule, which starts each loop entry only when its loop asks for the next result and runs it to completion, and a `None` build runs it without tasks. The companion RFCs' waits need no change to the schedule (S7). | Differential: a deterministic test host with that policy, against a `None` build |
+| C9 | **Sequential equivalence.** A `None` build's results and effects equal a `Tasks` build's under the coroutine schedule: one thread, hosted calls that finish in place, and the ready task first in the task tree resumed next. Where no entry can wait, this is the input-order schedule, which starts each loop entry only when its loop asks for the next result and runs it to completion, and a `None` build runs it without tasks. The companion RFC's waits need no change to the schedule (its V8). | Differential: a deterministic test host with that policy, against a `None` build |
 | C10 | **Resume fidelity.** A resume entry continues at exactly the call site its record names, with every restored value equal to the saved one. Records resume innermost first, and each result reaches the record that was next in line, exactly as the returns would have. | Certify the entry tables; Differential: a host that pauses every suspending call, against one that never pauses |
 | C11 | **Loop exits.** Every edge out of a concurrent loop's body, other than a crash, passes through the loop's exit sequence, and a running set is used only by its own loop's operations. | Certify |
 
@@ -1197,7 +1196,7 @@ ThreadSanitizer with real threads.
 | R3 | **Tree shape.** Live tasks form a forest. A task reaches a terminal state only after all of its descendants have, and a parent processes a child's report only after that child's subtree is gone. |
 | R4 | **Cancellation finality.** After cancellation is requested, a task runs no more Roc code once it next parks (at once, if already parked). Its drop runs exactly once and runs no user code. |
 | R5 | **Crash containment.** After a crash in task `t`: `t` never runs again and is never dropped; children `t` started are dropped exactly; propagation stops at the nearest `supervise!` or root; tasks outside that supervisor's subtree are unaffected; nothing reachable is freed; `t`'s records are dropped exactly; and the only leak is what `t`'s running native frames owned. |
-| R6 | **Progress.** Tasks wait only on their own hosted operation or their own loops' entries, so waits form no cycles. Given P7, every loop whose entries' work terminates is left, crashes or is cancelled. Receives (companion RFC) can wait in cycles; a task tree stalled on them crashes the receiver that waited last instead (S6). |
+| R6 | **Progress.** Tasks wait only on their own hosted operation or their own loops' entries, so waits form no cycles. Given P7, every loop whose entries' work terminates is left, crashes or is cancelled. Waits on shared state (companion RFC) can form cycles; a task tree stalled on them crashes the waiter that began waiting last instead. |
 | R7 | **Bounded restarts.** `supervise!` restarts at most `max_restarts` times and then crashes with the last crash message. |
 | R8 | **Limits.** A running set never has more than `n` running entries under a `limit(n)`, and starts an eligible entry as soon as one under the same limit finishes. |
 
@@ -1250,10 +1249,10 @@ first group on models:
 - `bench/wake_tsan.c` runs the counted wake word on real threads under
   ThreadSanitizer: it is race-free and readies each park exactly once, and
   both flag protocols break R1 there too.
-- The same model runs the companion RFC's channels, mailboxes, semaphore
-  libraries and many-root services, and establishes its S1–S7, S9 and S10 in
-  the same way, with the same coverage matrix. Its S8, that sent values are
-  seeds, is established in the atomicity prototype.
+- The same model runs the companion RFC's cells, waking, cleanups, poisoning
+  and cell release, and establishes its V rows in the same way, with the same
+  coverage matrix. It also ran the superseded sessions RFC's channels,
+  mailboxes and many-root services, which established its S rows.
 
 Fuzzing composes small typed effectful constructs (loops, matches, closures,
 recursion, plans, concurrent loops, combinators) with randomly placed
@@ -1372,28 +1371,15 @@ The prototype settles every other decision this RFC left open:
 | How a deferred erased call whose target is suspendable hands its pending call up through a suspension | The two rules under "Calls between suspendable procedures" |
 | How precise the may-alias analysis behind spawn seeds must be | A points-to analysis that keeps call sites apart: it removes every false atomic the union-find causes in the prototype |
 | Whether edge modes are needed for path-copied shared data | They remove the path-copy residual that the static analyses leave. Whether that residual costs enough to add them is measured at step 6 of the implementation plan |
-| Whether `spawn` belongs in the first version, or only plans fixed when the loop starts | `spawn` belongs. The companion RFC's semaphore and pool libraries (`library.py`) start a grant for each request as it arrives, which no plan fixed when the loop starts can express. Crawlers and hedged requests need it for the same reason |
+| Whether `spawn` belongs in the first version, or only plans fixed when the loop starts | `spawn` belongs. The sessions RFC's semaphore and pool libraries (`library.py`) start a grant for each request as it arrives, which no plan fixed when the loop starts can express. Crawlers and hedged requests need it for the same reason |
 | Whether `supervise!` needs a time window for its restart limit, which would require a clock from the platform | No, not in the first version. In the prototype, a server supervised as a whole with a limit of 3 died after four transient crashes far apart in 20 requests, running its handler 50 times for 20 requests. Supervising each request with the same limit served all 20 with one restart per crash. A lifetime limit fits supervision of units of work, which the task tree makes the natural structure. OTP needs a window because its supervisors restart long-lived processes |
 | Whether a loop exit should cancel its entries (this RFC) or wait for them (Swift) by default | Cancel. Every loop the prototype's libraries leave early wants it: `race!` and `all_ok!` are written as loops whose exit cancels the rest, and a client that times out with `race!` must stop waiting for its permit or resource, which the semaphore and pool tests rely on. None of the library code needed a shield. Under waiting by default, each of these would have to opt into cancellation instead |
 
 Five open points are not prototype decisions: each needs the compiler or a
 platform, and is settled at its step of the implementation plan.
 
-Four later changes are not yet reflected in the prototype:
-- `None` builds that run as coroutines wherever a task can wait. The
-  companion RFC's prototype already does this for programs that use channels
-  (its decision (a)), with the evidence given there.
-- Spawned entries counting against the limit at the root of the loop's plan.
-- Background entries.
-- `all!` and `all_ok!` as methods of plans.
-
-The prototype's `None` engine, its input-order policy and its spawn and plan
-operations should be brought in line with them before G3, G9 and C9 are
-claimed for them.
-
 ## Future possibilities
 
-- **Sessions, channels and shared resources**, in the companion RFC.
 - **Concurrent streams**, such as a `Stream` whose items come from a limited
   plan, built on the same operations.
 - **Parallel evaluation of pure code.** Purity lets a platform run pure work

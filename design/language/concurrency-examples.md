@@ -3,16 +3,16 @@
 These examples test whether Roc's concurrency design covers the programs people
 write, and whether it covers them the Roc way: fast, friendly and functional.
 They follow the catalog of concurrent and distributed patterns that most
-programs draw from, and they use the APIs of three RFCs:
+programs draw from, and they use the APIs of two RFCs:
 
 - [Suspendable effects and platform-scheduled concurrency](concurrency-explicit-suspension.md):
   concurrent loops over plans, `spawn` and the `Concurrent` module.
 - [Shared state](concurrency-shared-variables.md): `Shared(s)`, `update!`,
-  `finally!` and `on_failure!`.
-- [Sessions](concurrency-sessions.md): channels and mailboxes. If the
-  shared-state RFC is adopted, it replaces mailboxes and keeps channels for
-  streaming. So channels appear here only for streaming, and a mailbox appears
-  once, for comparison.
+  `finally!` and `on_failure!`, and the library written with them, such as
+  `Queue`, which `for!` reads as a stream, and `Reply`.
+
+The sessions RFC's channels and mailboxes are superseded by that library, and
+appear nowhere below.
 
 No compiler checks these examples yet. Modules such as `Http`, `Sleep`,
 `Clock`, `Fs`, `Net`, `Kv`, `Db` and `Rand` stand for platform functions that
@@ -292,10 +292,11 @@ and it never misses the latest value, although it may skip the ones in between.
 
 ### A bounded queue
 
-```roc
-Queue(a) : { items : List(a), capacity : U64, closed : Bool }
+The shared-state RFC's library `Queue` is this, with the state behind an
+opaque type:
 
-push! : Shared(Queue(a)), a => [Pushed, Closed]
+```roc
+push! : Shared({ items : List(a), capacity : U64, closed : Bool }), a => [Pushed, Closed]
 push! = |q, item| q.update!(|s|
     if s.closed {
         Keep(Closed)
@@ -305,20 +306,18 @@ push! = |q, item| q.update!(|s|
         Set({ ..s, items: s.items.append(item) }, Pushed)
     })
 
-pop! : Shared(Queue(a)) => [Item(a), Closed]
 pop! = |q| q.update!(|s| match s.items {
     [item, .. as rest] => Set({ ..s, items: rest }, Item(item))
     [] if s.closed => Keep(Closed)
     [] => Wait
 })
-
-close! = |q| q.modify!(|s| { ..s, closed: True })
 ```
 
 A full queue makes producers wait, and an empty one makes consumers wait: that
 is backpressure. A non-blocking `try_push!` is the same function with
 `Keep(Full)` in place of `Wait`. Whether a call waits is just the tag its
-function returns.
+function returns. Below, `Queue` is the library type, whose `stream` method
+lets `for!` read it.
 
 ## 3. Producers, consumers and dataflow
 
@@ -339,25 +338,20 @@ limit are the pool.
 
 ```roc
 import_all! = |records| {
-    queue = Shared.new!({ items: [], capacity: 100, closed: False })
+    queue = Queue.new!(100)
     produce = || {
-        queue.finally!(|s| { ..s, closed: True }, || {
+        queue.closing!(|| {
             for! record in records {
-                _ = push!(queue, record)
+                _ = queue.push!(record)
             }
         })
         Produced
     }
     consume = || {
         var $stored = 0
-        while True {
-            match pop!(queue) {
-                Item(record) => {
-                    Db.insert!(record)
-                    $stored = $stored + 1
-                }
-                Closed => break
-            }
+        for! record in queue {
+            Db.insert!(record)
+            $stored = $stored + 1
         }
         Stored($stored)
     }
@@ -373,41 +367,38 @@ import_all! = |records| {
 }
 ```
 
-`records` is a `Stream`. The producer closes the queue however it ends,
-through `finally!`, so the consumers always finish. If a consumer crashes, the
-loop crashes and cancels the producer: the failure is not silently lost
-behind a queue.
+`records` is a `Stream`, and so is the queue. The producer closes the queue
+however it ends, through `closing!`, so the consumers' loops always end. If a
+consumer crashes, the loop crashes and cancels the producer: the failure is
+not silently lost behind a queue.
 
 ### A pipeline
 
 ```roc
-stage! = |input, output, f!| {
-    output.finally!(|s| { ..s, closed: True }, || {
-        while True {
-            match pop!(input) {
-                Item(x) => { _ = push!(output, f!(x)) }
-                Closed => break
-            }
+stage! = |input, output, f!|
+    output.closing!(|| {
+        for! x in input {
+            _ = output.push!(f!(x))
         }
     })
-}
 
 run! = |lines| {
-    parsed = Shared.new!({ items: [], capacity: 64, closed: False })
-    enriched = Shared.new!({ items: [], capacity: 64, closed: False })
+    parsed = Queue.new!(64)
+    enriched = Queue.new!(64)
     _ = Concurrent.all!([
-        || feed!(lines, parsed),
+        || stage!(lines, parsed, parse!),
         || stage!(parsed, enriched, enrich!),
-        || drain!(enriched, Db.insert!),
+        || { for! record in enriched { Db.insert!(record) } },
     ])
     {}
 }
 ```
 
-`feed!` pushes a stream's items and closes its queue, and `drain!` pops until
-the queue closes. Each stage is a sequential loop, and the bounded queues between them carry
-backpressure from the slowest stage back to the source. Fan-in is several
-producers pushing to one queue. Fan-out is several consumers popping from it.
+The first stage reads `lines`, a `Stream` from the platform, and every later
+stage reads the queue before it, with the same `for!`. Each stage is a
+sequential loop, and the bounded queues between them carry backpressure from
+the slowest stage back to the source. Fan-in is several stages pushing to one
+queue. Fan-out is several loops reading from it.
 
 ### Broadcast to subscribers that read at their own pace
 
@@ -437,19 +428,6 @@ read_from! = |log, next| log.update!(|l|
 Each subscriber keeps its own position in a `var` and reads every event after
 it. No queue exists per subscriber, and a subscriber that falls more than `cap`
 events behind is told so and skips ahead.
-
-### Streaming over channels
-
-The sessions RFC's channel protocols remain the tool for a stream between two
-tasks, where each message carries the end the next one arrives on:
-
-```roc
-Stream(a) : [More(a, In(Stream(a))), Done]
-```
-
-A pipeline of many workers is simpler with the bounded queue above, which any
-number of tasks can read. The shared-state RFC's "Channels as streams"
-possibility would let `for!` consume a receiving end directly.
 
 ## 4. Resource control
 
@@ -700,7 +678,7 @@ concurrently.
 
 ```roc
 serve_with_refresh! = |cache| {
-    stale = Shared.new!({ items: [], capacity: 1_000, closed: False })
+    stale = Queue.new!(1_000)
     _ = Concurrent.both!(|| serve!(cache, stale), || refresh_forever!(cache, stale))
     {}
 }
@@ -815,27 +793,27 @@ is sequential code, and all the coordination is in one record.
 ### A service that owns its effects
 
 ```roc
-account! = |inbox, balance|
-    match inbox.receive!() {
-        Got(Deposit(n), rest) => account!(rest, balance + n)
-        Got(Withdraw(n, reply), rest) =>
-            if n <= balance {
-                reply.send!(Ok({}))
-                account!(rest, balance - n)
-            } else {
-                reply.send!(Err(Insufficient))
-                account!(rest, balance)
-            }
-        Closed => balance
+serve_connection! = |conn, outgoing| {
+    for! (message, reply) in outgoing {
+        reply.answer!(|| Net.send!(conn, message))
     }
+}
+
+send! = |outgoing, message| {
+    reply = Reply.new!()
+    match outgoing.push!((message, reply)) {
+        Pushed => reply.wait!()
+        Closed => Dropped
+    }
+}
 ```
 
-The actor style uses the sessions RFC's mailboxes. The same account with
-shared state is one update:
+A connection must write each message whole and in order, so one task owns it,
+and other tasks queue their messages with a `Reply` to wait on. If the write
+fails, crashes or is cancelled, `answer!` marks the reply `Dropped`, so the
+sender stops waiting. Where a service's transitions are pure, it needs no task
+at all. An account is one update:
 `balance.update!(|b| if n <= b { Set(b - n, Ok({})) } else { Keep(Err(Insufficient)) })`.
-Shared state is shorter when the transition is pure. A service whose
-transitions perform effects, like a connection that must write each message in
-order, is where a mailbox fits.
 
 ## 8. Classic problems
 
@@ -924,12 +902,12 @@ every! = |period_ms, f!| {
 debounce! = |events, quiet_ms, flush!| {
     var $pending = []
     var $generation = 0
-    for! arrival in [|| Event(pop!(events))].concurrently() {
+    for! arrival in [|| Event(events.pop!())].concurrently() {
         match arrival {
             Event(Item(e)) => {
                 $pending = $pending.append(e)
                 $generation = $generation + 1
-                spawn || Event(pop!(events))
+                spawn || Event(events.pop!())
                 spawn || { Sleep.millis!(quiet_ms); Quiet($generation) }
             }
             Event(Closed) => {
@@ -957,11 +935,11 @@ timer needs. Throttling is the rate limiter, and timeouts are deadlines.
 |---|---|---|
 | Fan-out and fan-in | parallel calls, bounded map, map-reduce, recursive fan-out, first success, scatter-gather | Section 1 |
 | Coordination | mutex, semaphore, latch, barrier, readers–writer lock, condition variable, watch, bounded queue | Section 2, shared-state RFC |
-| Dataflow | worker pool, producer–consumer, pipeline, fan-in, fan-out, broadcast, channel streams | Section 3, sessions RFC |
+| Dataflow | worker pool, producer–consumer, pipeline, fan-in, fan-out, broadcast, queues as streams | Section 3, shared-state RFC |
 | Resource control | semaphore, pool, rate limiter, load shedding, bulkhead, adaptive limit | Section 4, shared-state RFC |
 | Fault tolerance | retry, deadline, timeout, hedging, circuit breaker, supervision, graceful shutdown, saga | Section 5, main RFC |
 | Caching | single-flight, TTL, background refresh, idempotent handling | Section 6 |
-| Distributed systems | quorum read and write, read repair, two-phase commit, leases, log replication, actors | Section 7, main RFC |
+| Distributed systems | quorum read and write, read repair, two-phase commit, leases, log replication, services | Section 7, main RFC |
 | Classic problems | dining philosophers, crawler, bounded buffer, sleeping barber, readers–writers | Section 8 |
 | Time | periodic task, debounce, throttle, timeout | Section 9 |
 
@@ -1012,8 +990,12 @@ slower, wordier or weaker than it could be, roughly in order of importance.
    `update2!` future possibility.
 7. **Supervision has no restart window or backoff.** OTP limits restarts per
    period of time, and production supervisors wait between restarts.
-   `supervise!` counts restarts for its whole life. Both would be fields of
-   its configuration record.
+   `supervise!` counts restarts for its whole life. The main RFC settled this
+   deliberately: in its prototype, supervising each unit of work with a
+   lifetime limit served every request, while a whole server under one limit
+   died after a few transient crashes. A window matters for long-lived
+   processes, which the task tree makes rare. Backoff between restarts is
+   still missing, and would be a field of the configuration record.
 8. **Pure parallel computation is out of scope.** Sorting or transforming
    large data in parallel, without effects, is the main RFC's future
    deterministic parallelism, not something these features give.

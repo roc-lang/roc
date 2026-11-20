@@ -3,8 +3,9 @@
 | | |
 |---|---|
 | Status | Draft. Not adopted; nothing here is part of `design.md`. |
-| Scope | The builtin `Shared(s)` type and its functions (`new!`, `update!`, `finally!`, `on_failure!`), atomic updates, waiting, cleanup on cancellation and crash, poisoning, their runtime representation and lowering, and the changes they make to the companion RFCs |
-| Companions | [Suspendable Effects and Platform-Scheduled Concurrency](concurrency-explicit-suspension.md): the task tree, plans, concurrent loops and crashes this RFC builds on. [Sessions, Channels and Shared Resources](concurrency-sessions.md): if this RFC is adopted, it replaces that RFC's mailboxes and its shared-resource libraries; channels remain for streaming |
+| Scope | The builtin `Shared(s)` type and its functions (`new!`, `update!`, `finally!`, `on_failure!`), atomic updates, waiting, cleanup on cancellation and crash, poisoning, releasing cells, deadlock detection, their runtime representation and lowering, the library built on them (queues that stream between tasks, replies, semaphores, pools and the rest), and the changes they make to the companion RFC |
+| Companion | [Suspendable Effects and Platform-Scheduled Concurrency](concurrency-explicit-suspension.md): the task tree, plans, concurrent loops and crashes this RFC builds on |
+| Supersedes | [Sessions, Channels and Shared Resources](concurrency-sessions.md): queues replace its channels and mailboxes, `Shared` replaces its resource libraries, and this RFC restates the holder sets and deadlock detection it keeps |
 | Prototype | [`concurrency-prototype/`](concurrency-prototype/): `shared.py`, `shared_model.py`, the holder sets in `sessions.py`, the libraries in `library.py`, and the `SharedVariables`, `SharedConveniences`, `SharedModel` and `CellRelease` tests; `cycles.py` and `NoCycles` measure the rejected type rules. See "What the prototype shows" |
 
 ## Summary
@@ -12,9 +13,10 @@
 The companion RFC's tasks share only immutable values. That covers fan-out,
 races and supervision, but not a resource that many tasks use while they run:
 a semaphore, a rate limiter, a pool, a circuit breaker shared across requests.
-The sessions RFC builds each of those as a server task that other tasks reach
-through a mailbox. This RFC instead adds one builtin opaque type, four
-functions and two shorthands, and no syntax:
+The sessions RFC, which this one supersedes, built each of those as a server
+task that other tasks reach through a mailbox, and streamed values between
+tasks over one-shot channels. This RFC instead adds one builtin opaque type,
+four functions and two shorthands, and no syntax:
 
 ```roc
 Shared.new! : s => Shared(s)
@@ -43,6 +45,11 @@ Shared.modify! : Shared(s), (s -> s) => {}     # update!(|s| Set(g(s), {}))
    `cleanup` to the state however `body` ends: by returning, by cancellation or
    by a crash. `on_failure!` applies it only on cancellation or a crash.
    Cleanups are pure too, so a cancelled task's drop can run them.
+4. **A library.** Queues, replies, semaphores, pools, latches, barriers,
+   watched values, readers–writer locks, single-flight caches, circuit
+   breakers and rate limiters are library types written with these
+   functions. A queue has a `stream` method, so `for! item in queue` reads
+   from it, which is how tasks stream values to each other.
 
 Crashes keep OTP's semantics. An update that crashes changes nothing, so
 shared state is never left half-updated. A cleanup that crashes poisons the
@@ -74,9 +81,9 @@ several running tasks use directly:
 
 ### Why not tasks that own the state
 
-The sessions RFC answers this with actors: a semaphore is a task that owns the
+The sessions RFC answered this with actors: a semaphore is a task that owns the
 count, serves requests from a mailbox and hands out permits over channels. The
-prototype shows that this works, and also what it costs:
+prototype showed that this works, and also what it costs:
 
 - **A server task per resource**, kept alive by running the program beside it
   in `both!` (`Semaphore.with!`), plus a mailbox and a reply channel for every
@@ -93,6 +100,20 @@ stay isolated, and that a restart begin from known-good state. The companion
 RFC's crash links and `supervise!` already give the first. Pure atomic updates
 give the second more strongly than OTP does: a crash can never leave shared
 state half-written, so a restart never has to rebuild it.
+
+### Why not channels for streams
+
+The sessions RFC streamed values between tasks over one-shot channels: each
+message carried the end the next one would arrive on. That has the same costs
+as its actors. Each end is used once, checked only at run time, a consumer
+threads the next end through every receive, and a stream has one reader. A
+sender never waits, so a fast producer fills memory unless the protocol adds
+replies for credit.
+
+A bounded queue in a handle has none of these. Any number of tasks write to it
+and read from it, a full queue makes writers wait, and `for!` reads it like
+any other stream. It is a library type over `Shared`, so streams need no
+mechanism of their own.
 
 ### Why not shared variables
 
@@ -419,7 +440,203 @@ everywhere. If no task can run, nothing can ever change the state, and the
 task crashes with "deadlock: no task can ever change the shared state this
 task waits for".
 
-### Library patterns
+### Streams between tasks
+
+A queue in a handle is how tasks stream values to each other. `Queue` is a
+library type over `Shared` (see "The library"), and its `stream` method makes it
+something `for!` can loop over:
+
+```roc
+import_all! = |lines| {
+    queue = Queue.new!(100)
+    produce = || queue.closing!(|| {
+        for! line in lines {
+            match queue.push!(parse(line)) {
+                Pushed => {}
+                Closed => break
+            }
+        }
+    })
+    consume = || {
+        for! record in queue {
+            Db.insert!(record)
+        }
+    }
+    _ = Concurrent.all!(List.repeat(consume, 4).prepend(produce))
+    {}
+}
+```
+
+- **Backpressure.** `push!` waits while the queue is full, and the loop waits
+  while it is empty.
+- **The end of the stream.** `closing!` runs its function and closes the queue
+  however the function ends: by returning, by cancellation or by a crash. A
+  loop over a closed queue takes what is left in it, then ends.
+- **Many readers.** Any number of tasks can loop over one queue. Each item goes
+  to exactly one of them, so a worker pool is several loops over the same
+  queue.
+- **A reader that stops early.** A reader that may `break` or `return` runs in
+  `closing!` too. Closing the queue makes the producer's next `push!` answer
+  `Closed`, so it stops instead of waiting for room that will never come.
+
+A request that needs an answer carries a `Reply`, a one-shot cell the caller
+waits on:
+
+```roc
+ask! = |requests, request| {
+    reply = Reply.new!()
+    match requests.push!((request, reply)) {
+        Pushed => reply.wait!()
+        Closed => Dropped
+    }
+}
+
+serve! = |requests| {
+    for! (request, reply) in requests {
+        reply.answer!(|| handle!(request))
+    }
+}
+```
+
+If `handle!` crashes or is cancelled, `answer!` marks the reply `Dropped`, so
+the caller stops waiting. A service whose transitions are pure needs neither:
+it is an update.
+
+### The library
+
+These types are libraries over `Shared`. Each is written with the functions
+above, and needs nothing else from the runtime. `Queue` and `Reply` are given
+in full; the others are in [the examples](concurrency-examples.md) or below.
+
+```roc
+Queue(a) :: Shared({ items : List(a), capacity : U64, closed : Bool }).{
+    new! : U64 => Queue(a)
+    new! = |capacity| Queue.(Shared.new!({ items: [], capacity, closed: False }))
+
+    push! : Queue(a), a => [Pushed, Closed]
+    push! = |Queue.(cell), item| cell.update!(|q|
+        if q.closed {
+            Keep(Closed)
+        } else if q.items.len() == q.capacity {
+            Wait
+        } else {
+            Set({ ..q, items: q.items.append(item) }, Pushed)
+        })
+
+    try_push! : Queue(a), a => [Pushed, Full, Closed]
+    try_push! = |Queue.(cell), item| cell.update!(|q|
+        if q.closed {
+            Keep(Closed)
+        } else if q.items.len() == q.capacity {
+            Keep(Full)
+        } else {
+            Set({ ..q, items: q.items.append(item) }, Pushed)
+        })
+
+    pop! : Queue(a) => [Item(a), Closed]
+    pop! = |Queue.(cell)| cell.update!(|q| match q.items {
+        [item, .. as rest] => Set({ ..q, items: rest }, Item(item))
+        [] if q.closed => Keep(Closed)
+        [] => Wait
+    })
+
+    close! : Queue(a) => {}
+    close! = |Queue.(cell)| cell.modify!(|q| { ..q, closed: True })
+
+    closing! : Queue(a), (() => r) => r
+    closing! = |Queue.(cell), f| cell.finally!(|q| { ..q, closed: True }, f)
+
+    stream : Queue(a) -> Stream(a)
+    stream = |queue| Stream.custom(queue, Err(Unknown), |q| match q.pop!() {
+        Item(item) => Ok((item, q))
+        Closed => Err(NoMore)
+    })
+}
+
+Reply(a) :: Shared([Pending, Done(a), Dropped]).{
+    new! : () => Reply(a)
+    new! = || Reply.(Shared.new!(Pending))
+
+    answer! : Reply(a), (() => a) => {}
+    answer! = |Reply.(cell), f|
+        cell.on_failure!(|_| Dropped, || {
+            value = f()
+            cell.update!(|r| match r {
+                Pending => Set(Done(value), {})
+                _ => crash "this reply was already answered"
+            })
+        })
+
+    wait! : Reply(a) => [Done(a), Dropped]
+    wait! = |Reply.(cell)| cell.update!(|r| match r {
+        Pending => Wait
+        Done(value) => Keep(Done(value))
+        Dropped => Keep(Dropped)
+    })
+}
+```
+
+The rest, by signature:
+
+```roc
+Semaphore :: Shared(U64)
+Semaphore.new! : U64 => Semaphore
+Semaphore.with! : Semaphore, (() => a) => a                         # waits for a permit
+Semaphore.try_with! : Semaphore, (() => a) => [Ran(a), Busy]        # sheds load instead
+
+Pool(r) :: Shared({ free : List(r), lost : U64 })
+Pool.new! : List(r) => Pool(r)
+Pool.with! : Pool(r), (() => r), (r => a) => a                      # opens a replacement for a lost one
+
+Latch :: Shared(U64)
+Latch.new! : U64 => Latch
+Latch.counting_down! : Latch, (() => a) => a                        # counts down however it ends
+Latch.wait! : Latch => {}
+
+Barrier :: { parties : U64, cell : Shared({ arrived : U64, round : U64 }) }
+Barrier.new! : U64 => Barrier
+Barrier.arrive_and_wait! : Barrier => {}
+
+Watch(a) :: Shared({ version : U64, value : a })
+Watch.new! : a => Watch(a)
+Watch.publish! : Watch(a), a => {}
+Watch.changed! : Watch(a), U64 => { version : U64, value : a }      # waits for a newer version
+
+RwLock :: Shared({ readers : U64, writing : Bool, writers_waiting : U64 })
+RwLock.new! : () => RwLock
+RwLock.read! : RwLock, (() => a) => a
+RwLock.write! : RwLock, (() => a) => a                              # writers go first
+
+Memo(k, v) :: Shared(Dict(k, [Loading, Ready(v)]))
+Memo.new! : () => Memo(k, v)
+Memo.get! : Memo(k, v), k, (k => v) => v                            # loads each key once
+
+Breaker :: Shared([Closed(U64), Open(Instant), Probing])
+Breaker.guarded! : Breaker, Instant, (() => Try(a, [CircuitOpen, ..e])) => Try(a, [CircuitOpen, ..e])
+
+Bucket :: Shared({ tokens : U64, next_refill : Instant })
+Bucket.take! : Bucket => {}                                         # sleeps until a token is due
+```
+
+What each does when a task using it is cancelled or crashes:
+
+| Type | While the task is… | What happens |
+|---|---|---|
+| `Queue` | Waiting in `push!` or `pop!` | Nothing: a `Wait` takes nothing |
+| `Queue` | Inside `closing!` | The queue closes, so readers finish and writers stop |
+| `Reply` | Inside `answer!` | The reply becomes `Dropped`, and the caller stops waiting |
+| `Semaphore` | Holding a permit | The permit comes back |
+| `Pool` | Holding or opening a resource | The slot is counted as lost, and the next borrower opens a new one |
+| `Latch` | Inside `counting_down!` | The count goes down anyway |
+| `Barrier` | Waiting for the others | Its arrival is withdrawn, so the barrier does not open early |
+| `Watch` | Anywhere | Nothing: readers hold nothing |
+| `RwLock` | Reading or writing | The lock is released |
+| `RwLock` | Waiting to write | Its claim is withdrawn, so readers are not blocked by it |
+| `Memo` | Loading a key | The key is unmarked, and one of the tasks waiting for it loads it instead |
+| `Breaker` | Probing | The breaker reopens instead of staying `Probing` |
+| `Bucket` | Sleeping for a token | Nothing: it took no token |
+
+The implementations of two of them follow.
 
 **Circuit breaker.** The state machine is a tag union, and each transition is
 a `match` inside an update:
@@ -487,7 +704,11 @@ take_token! = |bucket| {
 }
 ```
 
-**Semaphore and pool:** `with_permit!` and `with_conn!` above.
+`Semaphore.with!` is `with_permit!` above, and `Pool.with!` is `with_conn!`.
+`Latch.counting_down!(latch, f)` is `cell.finally!(|n| n - 1, f)`.
+`Latch`, `Barrier`, `Watch` and `RwLock` are in [the
+examples](concurrency-examples.md), section 2, and `Memo.get!` is `cached!` in
+section 6.
 
 ## Reference-level explanation
 
@@ -564,20 +785,29 @@ holds no entry, so a task parked in `Wait` has nothing of the update to undo.
 ### Releasing cells
 
 Immutable values cannot form a cycle, so every reference cycle passes through
-at least one cell. The runtime frees cycles by releasing cells. A cell is a
-port in the sense of the sessions RFC: the runtime records its holders, the
-tasks that may hold a reference to it, and acts when none is left.
+at least one cell. The runtime frees cycles by releasing cells. For each cell
+it records a set of **holders**, the tasks that may hold a reference to it, and
+acts when none is left.
 
 - `Shared.new!` makes a cell held by the current task.
-- A cell gains holders as ports do (sessions RFC, "Holders"): when a value
-  crosses to another task (at an entry's start, a send or a post, or a child's
-  result), every cell reachable from it gains that task.
+- When a value crosses to another task, every cell reachable from it gains that
+  task as a holder. A value crosses when an entry starts, for the values its
+  closure captured; when a child's result arrives at its parent; and when the
+  host takes a hosted call's arguments, for the host.
+- If the value reaches the cell only through objects whose count is one, it
+  was the only way to reach the cell, and the receiving task becomes its only
+  holder. Otherwise the sender may keep a copy, and it stays a holder.
 - **A store passes holders on.** When an update stores a new state, every cell
   reachable from the state gains the stored cell's holders. The walk continues
-  into the states of the cells it reaches, as the sessions RFC's walk
-  continues into a channel's buffer. So a task that can reach a cell through
-  other cells' states is one of that cell's holders.
+  into the states of the cells it reaches. So a task that can reach a cell
+  through other cells' states is one of that cell's holders.
 - A task leaves every holder set when it finishes.
+
+One holder per cell would not be enough. `supervise!` shares its closure, and
+the handles it captured, between the supervisor and each attempt. If an attempt
+crashes with a handle in a running frame, a restarted attempt may still use
+it, so the cell cannot be released when the first attempt ends. Holder sets
+keep it until the supervisor itself finishes.
 
 When a live cell has no holders left, no running task can reach it, and no
 task started later can either, since only a holder can pass a handle on. The
@@ -590,7 +820,8 @@ Holder sets over-approximate: a task stays a holder until it finishes, even
 after it drops its handle. So release is not the usual way cells are freed. A
 cell whose state does not lead back to it is freed by its count when its last
 handle goes, as any value is. Release matters for cycles, and for cells left
-in a crashed task's frames, which the sessions RFC already releases this way.
+in a crashed task's frames, which the companion RFC's R5 leaks: their holders
+finish, and the cells are released.
 
 - **`None` builds** track no holders. The runtime releases every cell still
   live when the program ends.
@@ -601,8 +832,7 @@ in a crashed task's frames, which the sessions RFC already releases this way.
 - **`ParallelTasks`.** A cell's lock also guards its holder set, so a task
   finishing on one thread and an update storing on another do not race.
 - **Release is a runtime action.** The runtime drops the state with the
-  type's generated drop helper, as it drops a channel's buffered message when
-  the channel's `In` end is released. Backends still follow only the explicit
+  type's generated drop helper. Backends still follow only the explicit
   `incref` and `decref` statements in LIR.
 
 ### Poisoning
@@ -691,11 +921,24 @@ cells"), so every cell is freed (V9).
 ### Deadlocks and liveness
 
 Updates cannot deadlock on locks. `Wait` can wait forever: when no task that
-will run again can change the state. This is a liveness bug in the program, as
-a receive that never gets a message is under the sessions RFC, and the runtime
-detects it the same way: each cell records the set of live tasks that hold its
-handle, and when every task of a root is parked and none of the holders of a
-waited-on cell can run, the waiters crash with the deadlock message.
+will run again can change the state. This is a liveness bug in the program,
+and the runtime detects it.
+
+A root's task tree is **stalled** when none of its tasks is queued, running or
+waiting on a hosted operation, at least one waits on a cell, and every holder
+of every cell waited on belongs to the tree. No task of the tree can run
+again, and nothing outside it can change those cells. The runtime then crashes
+the waiter that began waiting last, with the deadlock message, counting by the
+number of tasks started so far, and on a tie the task created later. The
+choice is deterministic for a given schedule. The crash readies other tasks,
+through cancellation and propagation, so one detection is enough to make
+progress, and a cycle that a supervisor restarts is detected again.
+
+A cell held by another root, or by the host, may still change, so a tree
+waiting on one is not stalled. With one root this is the same as the host
+having nothing to run. In a `None` build it is the scheduler finding no ready
+task. A runtime can keep the information incrementally, as a count per root of
+tasks not waiting on a cell, checking holders only when it reaches zero.
 
 ### Changes to the companion RFC
 
@@ -706,12 +949,14 @@ waited-on cell can run, the waiters crash with the deadlock message.
   shared values are atomic."
 - **R4** gains one exception: a task's drop runs its pending cleanups, which
   are pure functions of one handle's state.
-- **R6** gains waits on shared state, which can form cycles.
+- **R6** gains waits on shared state, which can form cycles, and the stall
+  detection in "Deadlocks and liveness".
 - **C2** counts `update!` as a declared suspension point.
 - **C6** gains cell stores as seeds.
-- **Sessions RFC.** Cells join the ports whose holders are tracked ("Holders"),
-  a store joins the crossings, and releasing a cell drops its state. S4
-  covers cells.
+- **The sessions RFC is superseded.** Queues and replies replace its channels
+  and mailboxes ("Streams between tasks"), `Shared` replaces its resource
+  libraries, and this RFC restates the holder sets and the stall detection
+  that it keeps. Its coroutine `None` builds are now the companion RFC's.
 - **G5 and G7 are unchanged.** Shared state can outlive the loop that created
   it, but no task does. Poisoning turns a crash into later crashes; no code
   can observe it.
@@ -773,6 +1018,16 @@ waited-on cell can run, the waiters crash with the deadlock message.
   of the new state that can hold a handle. Deadlock detection already needs
   this walk, but a large state full of handles makes every store O(n), even
   if open decision (f) makes changing it in place cheap.
+- **A reply nobody will answer is a deadlock, not a value.** A channel's
+  receiver learned `Cancelled` when the sender's end was dropped. A cell has
+  no ends: a `Reply` becomes `Dropped` only when the task answering it fails
+  inside `answer!`. If a server stops with requests still queued, their
+  askers wait until stall detection crashes them.
+- **A local timeout gives a permit back early.** When a task holding a permit
+  is cancelled while a hosted call is in progress, the call is aborted
+  locally, but the remote operation may still run. The permit then counts
+  local scopes, not remote operations. The sessions RFC fixed this by passing
+  the permit's end to the hosted call; see "Future possibilities".
 - **Poison outside a supervised scope** crashes every restart until the limit,
   by design.
 
@@ -780,6 +1035,7 @@ waited-on cell can run, the waiters crash with the deadlock message.
 
 | Alternative | Why not |
 |---|---|
+| One-shot channels that carry the next end, for streams (the sessions RFC) | Ends used once and checked only at run time, one reader per stream, and no backpressure without a protocol of replies. See "Why not channels for streams" |
 | Tasks that own the state, reached through mailboxes (the sessions RFC) | A server task per resource, two messages per acquire, end rules checked only at run time, and servers written as recursion. See "Why not tasks that own the state" |
 | Shared variables: `var $$x`, `&$$x`, `wait` and `defer` (this RFC's earlier draft) | References in Roc: names whose plain reads see other tasks' writes, an operator that aliases storage, and a statement rule for atomicity. See "Why not shared variables" |
 | `update!` returning a pair `(new, r)`, as Haskell's `atomicModifyIORef` does | Cannot say "unchanged", so every read would wake waiters, and cannot wait |
@@ -854,9 +1110,9 @@ and `CellRelease`):
   restart, and not poisoning is caught. A cancelled task whose cleanup crashes
   crashes.
 - A `Wait` ends when another task stores; a store that readies no waiter is
-  caught as a deadlock. A `None` build runs the storing entry on demand and
-  matches the input-order schedule. A `Wait` nothing can end is the same
-  deadlock in every build.
+  caught as a deadlock. A `None` build pauses the waiting task, runs the
+  storing entry, and matches the coroutine schedule. A `Wait` nothing can
+  end is the same deadlock in every build.
 - The pool with `on_failure!` counts a crashed user's connection as lost and
   opens one replacement; with `finally!` it lends the crashed user's
   connection again. A borrower cancelled while opening a replacement leaves
@@ -865,10 +1121,10 @@ and `CellRelease`):
   calling through, probes and closes; a cancelled probe reopens it, and
   without its cleanup it stays `Probing`.
 - An update that crashes stores nothing.
-- 20 clients contend for one permit. Readying only the most recent waiter
-  that a probe finds would not wait takes 80 task resumes and runs 19
-  updates again;
-  readying every waiter, the regression switch, takes 251 and 190.
+- 20 clients contend for one permit. Readying only the oldest waiter that a
+  probe finds would not wait takes 80 task resumes and runs 19 updates again,
+  as most recent first did; readying every waiter, the regression switch,
+  takes 251 and 190.
 - A waiter readied by a probe and cancelled by a race before it runs passes
   the wake on: the other waiter gets the permit under every schedule. Every
   client of the semaphore without a race holds the permit alone.
@@ -907,15 +1163,15 @@ pause schedule:
 
 | Written as | Tasks spawned | Resumes | Allocations | Messages | Update functions run | Probes |
 |---|---|---|---|---|---|---|
-| Semaphore, server task (sessions RFC) | 93 | 276 | 721 | 90 | | |
-| Semaphore, the runtime's semaphore cell (sessions RFC) | 30 | 120 | 187 | 0 | | |
-| Semaphore, `Shared`, every waiter readied | 30 | 526 | 652 | 0 | 495 | |
-| Semaphore, `Shared`, every waiter readied, equal states compared | 30 | 526 | 246 | 0 | 89 | |
-| Semaphore, `Shared`, most recent waiter that would not wait (the earlier rule) | 30 | 120 | 681 | 0 | 89 | 435 |
-| Pool, server task (sessions RFC) | 93 | 276 | 754 | 90 | | |
-| Pool, `Shared`, every waiter readied | 30 | 497 | 775 | 0 | 466 | |
-| Pool, `Shared`, every waiter readied, equal states compared | 30 | 497 | 397 | 0 | 88 | |
-| Pool, `Shared`, most recent waiter that would not wait (the earlier rule) | 30 | 119 | 887 | 0 | 88 | 406 |
+| Semaphore, server task (sessions RFC) | 93 | 276 | 725 | 90 | | |
+| Semaphore, the runtime's semaphore cell (sessions RFC) | 30 | 120 | 189 | 0 | | |
+| Semaphore, `Shared`, every waiter readied | 30 | 526 | 654 | 0 | 495 | |
+| Semaphore, `Shared`, every waiter readied, equal states compared | 30 | 526 | 248 | 0 | 89 | |
+| Semaphore, `Shared`, oldest waiter that would not wait | 30 | 120 | 683 | 0 | 89 | 435 |
+| Pool, server task (sessions RFC) | 93 | 276 | 758 | 90 | | |
+| Pool, `Shared`, every waiter readied | 30 | 497 | 777 | 0 | 466 | |
+| Pool, `Shared`, every waiter readied, equal states compared | 30 | 497 | 399 | 0 | 88 | |
+| Pool, `Shared`, oldest waiter that would not wait | 30 | 119 | 889 | 0 | 88 | 406 |
 
 These are counts of operations in the Python prototype, not timings. A resume
 is one dispatch of a task by the host, including a readied waiter that runs
@@ -929,12 +1185,16 @@ function by the storing task, whose result is discarded.
   running its function, but not the dispatch. The second row of each library
   is the earlier proposal to require equality on the state; it leaves resumes
   unchanged.
-- Readying only the most recent waiter that a probe finds would not wait
-  makes resumes linear: the semaphore then matches the runtime's semaphore cell.
+- Readying only the oldest waiter that a probe finds would not wait makes
+  resumes linear: the semaphore then matches the runtime's semaphore cell.
   The cost moves to probes, pure calls that are still about n², and to the
   allocations they make for the results they discard.
-- Under the input-order schedule, the server tasks deadlock, as they do in a
-  `None` build; `Shared` does not.
+- Most recent first, the earlier rule, gives the same counts in every
+  column, under this schedule and a random parallel one.
+- Under the coroutine schedule, which `None` builds of programs that can wait
+  use, both finish: the server tasks with 247 resumes, `Shared` with 61. Under
+  the input-order schedule, which models one plain stack, the server tasks
+  deadlock and `Shared` does not.
 
 These measurements and the fuzz run below use the earlier rule, most recent
 first. Oldest first readies one waiter per `Set` in the same way, so resumes
@@ -1037,7 +1297,8 @@ Still open:
 - **(a) Detecting a `Wait` that can never end across roots.** Per-root
   detection with holder sets is implemented and tested within one root. A
   root waiting on a handle that a task of another root holds is untested for
-  cells, though tested for the sessions RFC's ports, which use the same sets.
+  cells. It was tested for the superseded sessions RFC's ports, which used the
+  same sets.
 - **(b) Contention under `ParallelTasks`:** whether spinning then yielding is
   enough, and how a hot handle compares with a semaphore task. The Python
   prototype cannot measure it; it needs the real runtime.
@@ -1052,12 +1313,8 @@ Still open:
   Readying at once every waiter whose probe would `Keep`, with the first that
   would `Set`, would release them together, at the cost of probing every
   waiter after each `Set`.
-- **(d) Channel ends in states.** Releasing a cell drops any channel end in
-  its state, which closes it for the other side, as the sessions RFC's
-  release of a port does. A store should pass the cell's holders on to the
-  ends in the state, and the walk should continue from an `In` end into its
-  buffer. The prototype's walk does both, but no test puts an end in a
-  state.
+- **(d) Channel ends in states.** Moot: channels are superseded by queues
+  ("Streams between tasks"), which are cells.
 - **(e) Cycles in long-lived tasks.** Release frees an abandoned cycle when
   the last task that held it finishes. A task that runs for the whole program
   and keeps making and dropping cycles accumulates them, and so does a `None`
@@ -1089,10 +1346,11 @@ Still open:
 
 ## Future possibilities
 
-- **Channels as streams.** With shared resources handled here, the sessions
-  RFC narrows to pipelines and backpressure. A receiving end can be a builtin
-  `Stream`, consumed by `for!`, readable by several workers, and finished when
-  every sender is gone.
+- **Hosted functions that hold a permit.** A local timeout gives a permit
+  back while the remote operation it started may still run (see
+  "Drawbacks"). A hosted function that took the `Semaphore` and released the
+  permit when the platform had finished with the operation would count
+  operations instead of local scopes.
 - **Updates over several handles**, such as `Shared.update2!(a, b, f)`, if
   libraries come to need them. The prototype's runtime and model already cover
   locking several cells in one global order.
