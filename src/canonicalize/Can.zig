@@ -2073,6 +2073,28 @@ fn parserValueDeclIsLambda(
     return decl.kind == .value and decl.value_form == .lambda;
 }
 
+/// A block declaration in the parser's declaration inventory whose canonical
+/// expression is a lambda or closure is a local function: the checker and
+/// Monotype classify it as a local procedure from that expression, so its
+/// pattern must be among the block's local function patterns, which keeps it
+/// out of later closures' captures. A statement parsed on its own (a statement
+/// snapshot) has no declaration inventory to classify it.
+fn debugAssertLocalFunctionDeclRecorded(
+    self: *const Self,
+    ast_stmt_idx: AST.Statement.Idx,
+    pattern_idx: Pattern.Idx,
+    expr_idx: Expr.Idx,
+) void {
+    if (!std.debug.runtime_safety) return;
+    if (self.parse_ir.decl_index.declForStatement(@backingInt(ast_stmt_idx)) == null) return;
+    switch (self.env.store.getExpr(expr_idx)) {
+        .e_lambda, .e_closure => if (!self.scratch_local_function_patterns.contains(pattern_idx)) {
+            base.invariant("canonicalization invariant violated: a block declaration whose expression is a lambda or closure is not recorded as a local function", .{});
+        },
+        else => {},
+    }
+}
+
 fn moduleParserScopeIdx(self: *const Self) AST.DeclIndex.ScopeIdx {
     return self.parse_ir.store.getFile().scope;
 }
@@ -3943,12 +3965,12 @@ fn finishAssociatedDeclBody(
     try self.publishAssociatedAliasSinks(state.work.alias_sinks, work.decl_ident, pattern_idx);
 }
 
-/// Whether an associated value item's body is a lambda, mirroring the parser
-/// declaration inventory's `value_form == .lambda` classification. Lambda
-/// items may reference themselves (recursion), so they skip the
-/// defining-bound-vars self-reference guard just like ordinary declarations.
-fn associatedBodyIsLambda(self: *const Self, ast_body: AST.Expr.Idx) bool {
-    return self.parse_ir.store.getExpr(ast_body) == .lambda;
+/// Whether a declaration body is a lambda, by the same classification the
+/// parser declaration inventory records as `value_form == .lambda` (grouping
+/// parentheses are transparent). Lambda bodies may reference their own binder
+/// (recursion), so they skip the defining-bound-vars self-reference guard.
+fn declBodyIsLambda(self: *const Self, ast_body: AST.Expr.Idx) bool {
+    return self.parse_ir.store.exprLambdaArity(ast_body) != null;
 }
 
 fn canonicalizeAssociatedDeclBodyNow(
@@ -3965,7 +3987,7 @@ fn canonicalizeAssociatedDeclBodyNow(
     // reported as a self-referential definition, matching ordinary
     // declarations.
     const saved_defining_bound_vars = self.defining_bound_vars;
-    if (!self.associatedBodyIsLambda(work.ast_body)) {
+    if (!self.declBodyIsLambda(work.ast_body)) {
         self.defining_bound_vars = try self.beginDefiningBoundVars(work.pattern_idx, self.scratch_reassign_targets.top());
     }
 
@@ -5810,7 +5832,7 @@ fn canonicalizeDestructuredLiteralDef(
 
     // Track the def's bound binders so a reference to one of them on the RHS
     // is reported as a self-referential definition, as for any def.
-    const is_lambda = self.parse_ir.store.getExpr(item.value_expr) == .lambda;
+    const is_lambda = self.declBodyIsLambda(item.value_expr);
     const saved_defining_bound_vars = self.defining_bound_vars;
     if (!is_lambda) {
         self.defining_bound_vars = try self.beginDefiningBoundVars(pattern_idx, reassign_targets_start);
@@ -10762,6 +10784,7 @@ fn scheduleBlockDeclContinuation(
         .region = region,
         .pattern_idx = pattern_idx,
         .pattern_reused_existing_var = pattern_reused_existing_var,
+        .ast_stmt_idx = ast_stmt_idx,
         .annotation = mb_validated_anno,
         .saved_defining_bound_vars = saved_defining_bound_vars,
         .saved_current_local_def_ident = saved_current_local_def_ident,
@@ -12505,7 +12528,7 @@ fn runExprKernel(
                     // own body is reported as a self-referential definition,
                     // matching ordinary declarations.
                     const saved_defining_bound_vars = self.defining_bound_vars;
-                    if (!self.associatedBodyIsLambda(decl_work.ast_body)) {
+                    if (!self.declBodyIsLambda(decl_work.ast_body)) {
                         self.defining_bound_vars = try self.beginDefiningBoundVars(decl_work.pattern_idx, self.scratch_reassign_targets.top());
                     }
                     errdefer self.endDefiningBoundVars(saved_defining_bound_vars);
@@ -13129,6 +13152,7 @@ fn runExprKernel(
 
             const result_start = child_slots.items.len - 1;
             const expr = child_slots.items[result_start].expr;
+            self.debugAssertLocalFunctionDeclRecorded(state.ast_stmt_idx, state.pattern_idx, expr.idx);
             const stmt_idx = if (state.pattern_reused_existing_var)
                 try self.env.addStatement(Statement{ .s_reassign = .{
                     .pattern_idx = state.pattern_idx,
@@ -16950,6 +16974,7 @@ const ExprFinishBlockDeclStmtWork = struct {
     region: Region,
     pattern_idx: Pattern.Idx,
     pattern_reused_existing_var: bool,
+    ast_stmt_idx: AST.Statement.Idx,
     annotation: ?Annotation.Idx,
     saved_defining_bound_vars: ?DataSpan,
     saved_current_local_def_ident: ?Ident.Idx,

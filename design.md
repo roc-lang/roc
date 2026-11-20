@@ -7924,7 +7924,11 @@ dispatch is a reference to the local procedure it selects: once targets
 settle, each lineage selecting one adds that reference for the candidates
 enclosing the lineage's outermost dispatch site, recorded when the site's
 constraint was created. The capture list is not that proof: canonicalization omits
-local functions and globally resolvable patterns from captures. A promoted
+local functions and globally resolvable patterns from captures. A
+declaration is a local function by the parser's declaration form: its body is
+a lambda, with grouping parentheses transparent, so `f = (|x| x)` is one. This
+is the same classification the checked local-procedure role makes from the
+declaration's canonical lambda or closure. A promoted
 local procedure outputs a `promoted_proc` checked statement in place of its
 binding, its own procedure template (`ProcBaseKind.promoted_local`), and its
 pattern's scheme; references resolve to `promoted_top_level_proc`, so it
