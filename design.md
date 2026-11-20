@@ -7847,14 +7847,17 @@ does not depend on whether the pattern contains a binder or whether any binder i
 later referenced. The checker records the complete checked source pattern and
 right-hand side as a deferred validation candidate, together with the prospective
 maximal expression root that can own its evaluation. The candidate retains a
-dedicated validation root until post-solve pruning proves that the expression
-owner or a concrete live-binder extraction was actually kept. This prevents a
+dedicated validation candidate until request eligibility establishes that the
+published expression owner or a live-binder extraction will run. This prevents a
 non-concrete or otherwise rejected prospective owner from losing the validation,
 while a kept owner prevents the right-hand side from evaluating twice.
 
 A surviving validation-only root evaluates the right-hand side and matches the
 complete source pattern, but its successful result is discarded rather than
-archived as a unit constant. A binder-free source declaration may then be erased
+archived as a unit constant. A failure is discarded only once it is reported.
+Where finalization reports nothing for the root's module, a failed validation
+records the `runtime` payload, guarded or not, and the destructure stays in
+the runtime body, which fails the same way when it is reached. A binder-free source declaration may then be erased
 from runtime lowering. The pending exhaustiveness site is explicitly classified
 for empirical compile-time validation when the eligible candidate is recorded.
 No candidate is recorded inside an ordinary top-level constant, because that
@@ -8048,7 +8051,12 @@ unannotated data root with a reachable callable slot remains specialization-owne
 because an explicit consumer relation may still determine types inside that
 callable graph; it cannot cross Monotype's relation-freeze boundary as a
 context-free compile-time request. Data roots with no reachable callable slots
-continue to use the ordinary concreteness proof.
+continue to use the ordinary concreteness proof. A selected data root that
+already proved its stored value free of callable slots carries that proof;
+it still needs resolved record field kinds. Without a producer proof, a
+nominal backing contributes its own callable slots and those of the arguments
+it actually stores, not those of unused parameters. This summary belongs to
+the declaration, so instances need no copied backing.
 
 Runtime lowering restores a selected hoisted root by checked expression id. While
 lowering the synthetic compile-time wrapper for that same root, lowering must
@@ -18126,6 +18134,16 @@ A nominal whose overrides are instantiated at types that mention the nominal
 (a method generic in its receiver) holds its own descriptor through its
 `Methods` record: the descriptor and the override callables that capture it
 are one group of recipes that lead back to one another, evaluated together.
+
+A nominal's descriptor holds every override instantiated at the nominal's
+arguments, including an override whose `where` clause those arguments do not
+satisfy (`to_hash` requiring `a.frob` on a `Nullable(Str)` that is only ever
+compared). Checking reports a missing method at any dispatch that reaches such
+an override, so a requirement over a resolved dispatcher with no method and no
+structural derivation resolves to a `checked_error` crash dictionary. So does
+a requirement on one of a body's own variables that its scopes hold no
+dictionary for, where the body composes such a nominal's descriptor over that
+variable without the override's `where` clause in scope.
 
 A type declared in a function body may name the body's type variables in its
 backing. Its occurrences are instantiated at those variables' types as well as

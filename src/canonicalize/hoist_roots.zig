@@ -45,6 +45,8 @@ pub const ValueKind = enum(u8) {
     callable_binding,
     /// Validation succeeds or reports a diagnostic; it archives no runtime value.
     discarded,
+    /// Post-solve selection proved the entire stored value free of callable slots.
+    proven_data_constant,
 };
 
 /// A root selected during checking for compile-time evaluation.
@@ -69,7 +71,7 @@ pub const SelectedHoistedRoot = struct {
     /// discards a validation-only result.
     value_kind: ValueKind = .data_constant,
     /// Prospective expression root that subsumes this validation when that
-    /// expression survives post-solve pruning. Checker-only ownership metadata;
+    /// expression is published with an eligible request. Selection metadata;
     /// checked artifact publication does not persist it.
     validation_owner_expr: collections.OptionalId(CIR.Expr.Idx) = .none,
     /// Whether the root's expression is reached only through a branch, guard,

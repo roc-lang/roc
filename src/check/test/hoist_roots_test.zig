@@ -1023,7 +1023,7 @@ test "unused concrete binder retains refutable destructure validation root" {
     try std.testing.expectEqual(roots[0].expr, validation.base_expr);
 }
 
-test "live concrete extraction subsumes refutable destructure validation root" {
+test "live concrete extraction and validation remain candidates until request publication" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    Ok(value) = List.get([1.I64], 0)
@@ -1033,8 +1033,10 @@ test "live concrete extraction subsumes refutable destructure validation root" {
     defer test_env.deinit();
 
     const roots = test_env.checker.selectedHoistedRoots();
-    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try std.testing.expectEqual(@as(usize, 2), roots.len);
     try expectPatternExtractionRoot(roots[0]);
+    try std.testing.expectEqual(hoist_roots.ValueKind.proven_data_constant, roots[0].value_kind);
+    try std.testing.expectEqual(roots[0].body.pattern_extraction.scrutinee_pattern, roots[1].body.pattern_validation.scrutinee_pattern);
 }
 
 test "non-concrete extraction retains refutable destructure validation root" {
@@ -1135,7 +1137,7 @@ test "hoist roots publish top-level destructure binders used by executable roots
         switch (root.value_kind) {
             .data_constant => data_constant_count += 1,
             .callable_binding => callable_binding_count += 1,
-            .discarded => return error.TestUnexpectedResult,
+            .discarded, .proven_data_constant => return error.TestUnexpectedResult,
         }
     }
     try std.testing.expectEqual(@as(usize, 3), data_constant_count);

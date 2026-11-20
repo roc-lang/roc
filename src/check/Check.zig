@@ -16507,38 +16507,6 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         if (reader.read_by_root or self.selectedHoistedRootIsTopLevel(reader)) self.selected_hoisted_roots.items[read].read_by_root = true;
     }
 
-    // A validation keeps its dedicated root until solving has proved that the
-    // prospective maximal expression root is itself publishable. Only a kept
-    // owner may subsume the validation.
-    for (self.selected_hoisted_roots.items, 0..) |root, validation_index| {
-        if (!keep_roots[validation_index]) continue;
-        if (root.body != .pattern_validation) continue;
-        const owner_expr = root.validation_owner_expr.get() orelse continue;
-        const owner_index = self.hoist_selected_exprs.get(owner_expr) orelse continue;
-        if (!keep_roots[owner_index]) continue;
-        keep_roots[validation_index] = false;
-        kept_count -= 1;
-        kept_validation_count -= 1;
-    }
-
-    // A kept extraction evaluates the same scrutinee and complete source
-    // pattern as its validation root. Let it own that exhaustiveness site so
-    // the right-hand side is not evaluated twice. If the extraction's result
-    // type is not concrete, pruning leaves the unit-valued validation root in
-    // place instead.
-    for (self.selected_hoisted_roots.items, 0..) |root, i| {
-        if (!keep_roots[i]) continue;
-        const extraction = switch (root.body) {
-            .pattern_extraction => |extraction| extraction,
-            .expr, .pattern_validation, .pattern_error, .valueless_binding => continue,
-        };
-        const validation_index = self.hoist_selected_pattern_validations.get(extraction.scrutinee_pattern) orelse continue;
-        if (!keep_roots[validation_index]) continue;
-        keep_roots[validation_index] = false;
-        kept_count -= 1;
-        kept_validation_count -= 1;
-    }
-
     try self.hoist_selected_exprs.ensureTotalCapacity(self.gpa, kept_expr_count);
     try self.hoist_selected_bindings.ensureTotalCapacity(self.gpa, kept_pattern_count);
     try self.hoist_selected_pattern_validations.ensureTotalCapacity(self.gpa, kept_validation_count);
@@ -16744,7 +16712,9 @@ fn hoistedRootIsIntrinsicallyKept(
     root.value_kind = .data_constant;
     if (self.cir.store.getExpr(root.expr) == .e_runtime_error) return true;
     if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(root.expr))) return false;
-    return try self.hoistedRootTypeIsConcrete(concreteness, .data_constant, type_var);
+    if (!try self.hoistedRootTypeIsConcrete(concreteness, .data_constant, type_var)) return false;
+    root.value_kind = .proven_data_constant;
+    return true;
 }
 
 fn debugVerifyKeptHoistedRootDependencies(self: *Self, concreteness: *HoistedTypeConcreteness) Allocator.Error!void {
@@ -16929,10 +16899,11 @@ fn hoistedConstTypeComponents(
                 switch (backing) {
                     .args_only, .template => {},
                     .invalid => return false,
+                    .intrinsic_callable => if (purpose == .data_constant) return false,
                 }
                 for (self.types.sliceNominalArgs(nominal)) |arg| try components.add(walk, arg);
                 switch (backing) {
-                    .args_only, .invalid => {},
+                    .args_only, .invalid, .intrinsic_callable => {},
                     .template => |template| try components.add(.decl_template, template),
                 }
             },
@@ -16984,25 +16955,22 @@ const HoistedConstTypeScan = struct {
 /// which copies it.
 const StoredNominalBacking = union(enum) {
     args_only,
+    intrinsic_callable,
     template: Var,
     /// The declaration is invalid or source-less, so it has no backing.
     invalid,
 };
 
 fn storedNominalBacking(self: *const Self, nominal: types_mod.NominalType) StoredNominalBacking {
-    if (self.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional())) |builtin_decl| switch (builtin_decl) {
-        .list,
-        .box,
-        .dict,
-        .set,
-        .fields,
-        .field,
-        .num,
-        => return .args_only,
-        .try_type,
-        .numeral,
-        => {},
-    };
+    // Declaration indices are module-local. A user declaration with the same
+    // index as a builtin still stores its own backing.
+    if (nominal.originIsBuiltin()) {
+        if (nominal.ident.ident_idx.eql(self.cir.idents.builtin_encoding_parse_tag_union_spec)) return .intrinsic_callable;
+        if (self.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional())) |builtin_decl| switch (builtin_decl) {
+            .list, .box, .dict, .set, .fields, .field, .num => return .args_only,
+            .try_type, .numeral => {},
+        };
+    }
     const template = self.nominalDeclBackingTemplate(nominal) orelse return .invalid;
     return .{ .template = template };
 }
@@ -17087,6 +17055,7 @@ const HeldFunctionScan = struct {
                     for (self.types.sliceNominalArgs(nominal)) |arg| try items.add(arg);
                     switch (self.storedNominalBacking(nominal)) {
                         .args_only, .invalid => {},
+                        .intrinsic_callable => return .{ .value = true },
                         .template => |template| try items.add(template),
                     }
                 },
@@ -17336,7 +17305,7 @@ fn hoistSelectionInvariant(comptime message: []const u8) noreturn {
 /// kept root reads its own binding or it binds a top-level name
 /// (`CompileTimeRootTable.fromModule`); its body reads the binding instead.
 fn selectedRootBindingRead(self: *const Self, root: hoist_roots.SelectedHoistedRoot, oracle: *const HoistedRootKeepOracle) ?u32 {
-    if (root.body != .expr or root.value_kind != .data_constant) return null;
+    if (root.body != .expr or (root.value_kind != .data_constant and root.value_kind != .proven_data_constant)) return null;
     var expr = root.expr;
     while (true) switch (self.cir.store.getExpr(expr)) {
         .e_block => |block| {
