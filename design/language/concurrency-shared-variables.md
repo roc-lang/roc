@@ -1196,14 +1196,23 @@ function by the storing task, whose result is discarded.
   the input-order schedule, which models one plain stack, the server tasks
   deadlock and `Shared` does not.
 
-These measurements and the fuzz run below use the earlier rule, most recent
-first. Oldest first readies one waiter per `Set` in the same way, so resumes
-should stay linear, but neither has been rerun with it.
+With oldest first as the prototype's default, and `None` builds of programs
+that can wait running as coroutines, the suite passes, and so do the same
+2,000 fuzzed programs that passed under the earlier rule. Of these, 1,005 can
+wait and are compared against the coroutine schedule, and 995 cannot and are
+compared against the input-order schedule; 1,965 comparisons in all (C9), and
+for each program that cannot wait, the coroutine build gives the same results
+and effects as one stack. The run had 15,926 cancellations at a suspension
+point, 5,006 probes, and 338 wakes passed on by a readied waiter that was
+dropped before it ran. Under the earlier rule the figures were 1,964
+comparisons, 15,924 cancellations, 5,028 probes and 336 wakes passed on.
 
-With the earlier rule as the prototype's default, the suite passes, and so do 2,000
-fuzzed programs: 1,964 compared against the input-order schedule (C9),
-15,924 cancelled at a suspension point, 5,028 probes, and 336 wakes passed on
-by a readied waiter that was dropped before it ran.
+The generator then composed spawns under the limit at a plan's root,
+background entries and `plan.all!()` / `plan.all_ok!()`. Over 2,000 programs
+built that way, every check passed: 64,086 runs, 1,960 compared under C9,
+16,086 cancellations, 22,112 entries spawned under a root limit, 61,818 loops
+that ended with background entries left (107,256 of them cancelled and 11,894
+discarded before they started), 3,600 probes and 482 wakes passed on.
 
 **Releasing cells** (`CellRelease`, and `check.py` with `links`). The
 generator also composes cells whose states hold items: handles to cells,
@@ -1214,20 +1223,22 @@ states form cycles, and programs abandon them at random. Every run's heap is
 verified exact, so a cycle that survived would be reported as a leak, and
 every use of a cell asserts that it was not released.
 
-Over 2,000 such programs (1,341 with linked cells), each run under every
+Over 2,000 such programs (1,338 with linked cells), each run under every
 schedule, both lowerings, a `None` build and cancellation at suspension
 points, every check passed:
 
 | | Count |
 |---|---|
-| Runs | 63,506 |
-| Cells released when a child task finished | 79,876 |
-| Cells released when the root finished | 9,750 |
-| Cells released at the end of a `None` build | 2,059 |
+| Runs | 64,094 |
+| Cells released when a child task finished | 77,430 |
+| Cells released when the root finished | 10,316 |
+| Cells released by a `None` build (1,486 of the programs run there as coroutines, which release a cell when the last task holding it finishes; the other 514 on one stack, which releases at the end) | 3,425 |
 | Leaks, and cells used after release | 0 |
 
-The default programs, which form no cycles, give the same counts as before
-(63,924 runs, 15,924 cancelled at a suspension point) and release 368 cells.
+These programs come from the generator that also composes spawns under a
+root limit, background entries and `plan.all!()`. The default programs from
+it, which form no cycles, give 64,086 runs and 16,086 cancellations at a
+suspension point, and release 282 cells.
 Without a cycle, a live cell that no task holds can only be one left in a
 crashed frame.
 
@@ -1272,11 +1283,11 @@ Names are placeholders. The prototype settled six earlier questions:
   breaker. One handle per update keeps locks from nesting.
 - **Waking waiters.** After a `Set`, the runtime probes the waiters, oldest
   first, and readies the first whose function would not wait; a readied
-  waiter that ends without storing probes on. The prototype settled this with
-  most recent first, because its `None` builds ran on one plain stack, where
-  oldest first broke C9. With `None` builds that pause waiting tasks, the
-  order is free, and oldest first is fair; the prototype has not been rerun
-  with it. Readying every waiter makes
+  waiter that ends without storing probes on. The prototype first settled
+  this with most recent first, because its `None` builds ran on one plain
+  stack, where oldest first broke C9. With `None` builds that pause waiting
+  tasks, oldest first passes every check, gives the same counts, and is fair.
+  Readying every waiter makes
   dispatches quadratic under contention. Comparing states, which the earlier
   proposal needed equality for, leaves dispatches quadratic. Handing a result
   to a waiter at the `Set` loses permits when the waiter is cancelled. See

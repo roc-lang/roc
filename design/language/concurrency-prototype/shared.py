@@ -81,14 +81,15 @@ class Step:
     """A step's operands, owned by whoever holds this: the op while it runs,
     a waiting task's wait state, or a defer stack entry."""
 
-    __slots__ = ("f", "cells", "args", "dirty", "on_error", "seen", "baton")
+    __slots__ = ("f", "cells", "args", "dirty", "on_error", "seen", "baton", "since")
 
     def __init__(self, f, cells, args, on_error=False):
         self.f, self.cells, self.args = f, cells, args
         self.on_error = on_error  # an errdefer: runs only on cancellation or a crash
         self.dirty = False  # a commit to one of its cells since it began waiting
         self.seen = None  # skip_unchanged: the values it waited on
-        self.baton = False  # wake_rule "first": readied by a probe; passes the wake on unless it stores
+        self.baton = False  # readied by a probe; passes the wake on unless it stores
+        self.since = None  # when it began waiting: its place among a cell's waiters
 
 
 class Shared:
@@ -112,17 +113,18 @@ class Shared:
         # None of these saves a dispatch under contention.
         self.skip_unchanged = False
         # Which waiters a store readies (concurrency-shared-variables.md,
-        # "Runtime"). "latest", the rule: the runtime probes the waiters,
-        # most recently waiting first, running each one's pure function
-        # without storing, and readies only the first that would not wait; a
-        # readied waiter that then ends without storing (it keeps, waits
-        # again, crashes or is cancelled first) probes on from there. That
-        # order is the one stack of a None build, where the latest waiter is
-        # on top (C9, V8). "first" probes oldest first instead, which a None
-        # build cannot match. "all": every waiter is readied and runs its
-        # function again when dispatched, which costs n**2 dispatches under
-        # contention.
-        self.wake_rule = "latest"
+        # "Waking"). "first", the rule: the runtime probes the waiters, oldest
+        # first, running each one's pure function without storing, and
+        # readies only the first that would not wait; a readied waiter that
+        # then ends without storing (it keeps, waits again, crashes or is
+        # cancelled first) probes on from there. A readied waiter that waits
+        # again keeps its place. "latest", the earlier rule, probes the most
+        # recent waiter first, and a waiter that waits again moves to the most
+        # recent place: the order of a None build on one plain stack. "all":
+        # every waiter is readied and runs its function again when
+        # dispatched, which costs n**2 dispatches under contention.
+        self.wake_rule = "first"
+        self.wait_seq = 0
 
     def cell(self, r):
         return self.cells[self.heap.obj(r).tag]
@@ -212,7 +214,7 @@ class Shared:
         return mode in (at, "both") and st.seen == self.values(st)
 
     def probe(self, st):
-        """wake_rule "first": run st's function on the current state without
+        """Run st's function on the current state without
         storing anything. True if it would not wait (a crash counts: the
         waiter is readied and crashes when it runs)."""
         heap = self.heap
@@ -239,8 +241,8 @@ class Shared:
         return not waits
 
     def pass_on(self, cells):
-        """wake_rule "first": ready the first waiter on each cell (a Cell) that
-        would not wait."""
+        """Ready the first waiter on each cell (a Cell), in the wake rule's
+        order, that would not wait."""
         if self.no_wake:
             return
         for c in cells:
@@ -277,10 +279,18 @@ class Shared:
         st.dirty = False
         if self.skip_unchanged:
             st.seen = self.values(st)
+        if st.since is None or self.wake_rule == "latest":
+            self.wait_seq += 1
+            st.since = self.wait_seq
         for r in st.cells:
             c = self.cell(r)
             if t not in c.waiters:
-                c.waiters.append(t)
+                # In order of when each began waiting, so a waiter that waits
+                # again after a probe readied it keeps its place.
+                i = len(c.waiters)
+                while i > 0 and c.waiters[i - 1].wait_on.since > st.since:
+                    i -= 1
+                c.waiters.insert(i, t)
 
     def unpark(self, t, st):
         for r in st.cells:

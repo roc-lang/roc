@@ -44,6 +44,8 @@ SOURCE = r"""
 
 (proc shielded (p) pure (ret (tag Shield p)))
 
+(proc background (p) pure (ret (tag Background p)))
+
 ; ------------------------------------------------------------- loop exit
 (proc close_loop (g) eff
   (do (cancel_group g))
@@ -67,41 +69,141 @@ SOURCE = r"""
       (let n2 (sub n 1))
       (tail zeros n2 acc2))))
 
-; Each closure, wrapped so that its arrival says which one it was.
+; Each closure, wrapped so that its arrival says which one it was: At(i, v),
+; or Skip for an entry of a background plan, whose result is left out.
 (proc indexed (f i) eff
   (let v (callc! f))
-  (ret (tup i v)))
+  (ret (tag At i v)))
 
-(proc index_all (fs i n acc) pure
-  (let c (lt i n))
+(proc skipped (f) eff
+  (let v (callc! f))
+  (ret (tag Skip)))
+
+; The closures of fs from index k, wrapped with indices from i on.
+(proc index_each (fs k n i acc) pure
+  (let c (lt k n))
   (if c
     (block
-      (let f (get fs i))
+      (let f (get fs k))
       (let w (clo indexed f i))
       (let acc2 (push acc w))
+      (let k2 (add k 1))
       (let i2 (add i 1))
-      (tail index_all fs i2 n acc2))
+      (tail index_each fs k2 n i2 acc2))
     (block (ret acc))))
 
-; ------------------------------------------------------------- Concurrent
-(proc all! (fs) eff
-  (let n (len fs))
-  (let ws (call index_all fs 0 n (list)))
-  (let p (call concurrently ws))
+(proc skip_each (fs k n acc) pure
+  (let c (lt k n))
+  (if c
+    (block
+      (let f (get fs k))
+      (let w (clo skipped f))
+      (let acc2 (push acc w))
+      (let k2 (add k 1))
+      (tail skip_each fs k2 n acc2))
+    (block (ret acc))))
+
+; The plan p with each entry wrapped: the ones that are not background get
+; indices from i on, in input order. Returns the new plan and the next index.
+; Limits, shields and background marks keep their places.
+(proc index_plan (p i bg) pure
+  (match p
+    (Each (fs) (block
+      (let n (len fs))
+      (if bg
+        (block
+          (let ws (call skip_each fs 0 n (list)))
+          (let q (tag Each ws))
+          (ret (tup q i)))
+        (block
+          (let ws (call index_each fs 0 n i (list)))
+          (let q (tag Each ws))
+          (let i2 (add i n))
+          (ret (tup q i2))))))
+    (Cat (a b) (block
+      (let ra (call index_plan a i bg))
+      (let a2 (field ra 0))
+      (let i1 (field ra 1))
+      (let rb (call index_plan b i1 bg))
+      (let b2 (field rb 0))
+      (let i2 (field rb 1))
+      (let q (tag Cat a2 b2))
+      (ret (tup q i2))))
+    (Limit (n a) (block
+      (let ra (call index_plan a i bg))
+      (let a2 (field ra 0))
+      (let i2 (field ra 1))
+      (let q (tag Limit n a2))
+      (ret (tup q i2))))
+    (Shield (a) (block
+      (let ra (call index_plan a i bg))
+      (let a2 (field ra 0))
+      (let i2 (field ra 1))
+      (let q (tag Shield a2))
+      (ret (tup q i2))))
+    (Background (a) (block
+      (let t (int 1))
+      (let ra (call index_plan a i t))
+      (let a2 (field ra 0))
+      (let i2 (field ra 1))
+      (let q (tag Background a2))
+      (ret (tup q i2))))))
+
+; ------------------------------------------------------------- plans run whole
+; plan.all!() and plan.all_ok!(): results in input order, without those of
+; background entries.
+(proc plan_all! (p) eff
+  (let z (int 0))
+  (let r (call index_plan p 0 z))
+  (let q (field r 0))
+  (let n (field r 1))
   (let res (call zeros n (list)))
-  (let g (group p))
+  (let g (group q))
   (tail all_loop g res))
 
 (proc all_loop (g res) eff
   (let a (next g))
   (match a
     (Arrived (iv) (block
-      (let i (field iv 0))
-      (let v (field iv 1))
-      (let res2 (set res i v))
-      (tail all_loop g res2)))
+      (match iv
+        (At (i v) (block
+          (let res2 (set res i v))
+          (tail all_loop g res2)))
+        (Skip () (block (tail all_loop g res))))))
     (Cancelled () (block (let u (str "unreachable: a loop body saw Cancelled")) (crash u)))
     (Ended () (block (ret res)))))
+
+(proc plan_all_ok! (p) eff
+  (let z (int 0))
+  (let r (call index_plan p 0 z))
+  (let q (field r 0))
+  (let n (field r 1))
+  (let res (call zeros n (list)))
+  (let g (group q))
+  (tail ok_loop g res))
+
+(proc ok_loop (g res) eff
+  (let a (next g))
+  (match a
+    (Arrived (iv) (block
+      (match iv
+        (At (i v) (block
+          (match v
+            (Ok (x) (block
+              (let res2 (set res i x))
+              (tail ok_loop g res2)))
+            (Err (e) (block
+              (do (call close_loop g))
+              (ret (tag Err e)))))))
+        (Skip () (block (tail ok_loop g res))))))
+    (Cancelled () (block (let u (str "unreachable: a loop body saw Cancelled")) (crash u)))
+    (Ended () (block (ret (tag Ok res))))))
+
+; ------------------------------------------------------------- Concurrent
+; Concurrent.all!(fs) is fs.concurrently().all!(), and likewise all_ok!.
+(proc all! (fs) eff
+  (let p (call concurrently fs))
+  (tail plan_all! p))
 
 (proc both! (f g) eff
   (let fs (list f g))
@@ -111,28 +213,8 @@ SOURCE = r"""
   (ret (tup a b)))
 
 (proc all_ok! (fs) eff
-  (let n (len fs))
-  (let ws (call index_all fs 0 n (list)))
-  (let p (call concurrently ws))
-  (let res (call zeros n (list)))
-  (let g (group p))
-  (tail ok_loop g res))
-
-(proc ok_loop (g res) eff
-  (let a (next g))
-  (match a
-    (Arrived (iv) (block
-      (let i (field iv 0))
-      (let v (field iv 1))
-      (match v
-        (Ok (x) (block
-          (let res2 (set res i x))
-          (tail ok_loop g res2)))
-        (Err (e) (block
-          (do (call close_loop g))
-          (ret (tag Err e)))))))
-    (Cancelled () (block (let u (str "unreachable: a loop body saw Cancelled")) (crash u)))
-    (Ended () (block (ret (tag Ok res))))))
+  (let p (call concurrently fs))
+  (tail plan_all_ok! p))
 
 (proc race! (f fs) eff
   (let first (list f))
@@ -181,4 +263,4 @@ SOURCE = r"""
 """
 
 BUILTINS = parse(SOURCE)
-COMBINATORS = ("all!", "both!", "all_ok!", "race!", "supervise!")
+COMBINATORS = ("all!", "both!", "all_ok!", "race!", "supervise!", "plan_all!", "plan_all_ok!")

@@ -44,6 +44,16 @@ class Violation(Exception):
     pass
 
 
+class NoneCrash(Exception):
+    """A crash in a None build that runs its tasks as coroutines: as in any
+    None build, it stops the whole program at once, and `supervise!` never
+    restarts (RFC, "On platforms that do not schedule tasks")."""
+
+    def __init__(self, msg, supervised):
+        super().__init__("crash")
+        self.msg, self.supervised = msg, supervised
+
+
 def require(cond, code, msg):
     if not cond:
         raise Violation(f"{code}: {msg}")
@@ -109,6 +119,7 @@ class Runtime:
         self.sessions = Sessions(heap, self.stats, self.port_wake)
         self.shared = None  # made when the engine is attached: steps need the program
         self.starts = 0
+        self.none_build = False  # a crash stops the program (NoneCrash)
         # Mutation switches for the regression tests.
         self.limit_slack = 0  # start one more entry than a Limit allows
         self.ignore_shields = False  # a loop exit cancels shielded entries too
@@ -116,6 +127,8 @@ class Runtime:
         self.no_linked_crashes = False  # an entry's crash waits for its loop's head
         self.stall_ignores_other_roots = False  # per-root detection ignores holders in other roots
         self.skip_deferred_on_drop = False  # a cancelled or crashed task's deferred steps never run
+        self.spawn_outside_root_limit = False  # spawned entries run under no Limit
+        self.ignore_background = False  # background entries keep their loop going
 
     def attach(self, engine, prog):
         self.engine = engine
@@ -390,7 +403,8 @@ class Runtime:
             self.limit_ids += 1
             return self.limit_ids
 
-        g = Group(len(self.groups) + 1, t, flatten(self.heap, plan, fresh_limit))
+        entries, root_limit = flatten(self.heap, plan, fresh_limit)
+        g = Group(len(self.groups) + 1, t, entries, root_limit=root_limit)
         self.groups[g.gid] = g
         for e in g.entries:  # identities fixed in input order (C9, G3)
             e.index = t.spawned
@@ -401,10 +415,15 @@ class Runtime:
         return GroupRef(g.gid)
 
     def spawn_in(self, t, gref, closure):
-        """`spawn` in a loop body: one more entry, under no Limit."""
+        """`spawn` in a loop body: one more entry, under the Limit at the root
+        of the loop's plan if its root is one, else under none. It starts when
+        that Limit has room. Spawned entries are never background."""
         g = self.groups[gref.gid]
         require(g.open and not g.closing and g.owner is t, "G5", f"spawn into loop {g.gid}, which is not running")
-        e = Entry(closure, (), False, t.spawned)
+        under = g.root_limit is not None and not self.spawn_outside_root_limit
+        e = Entry(closure, (g.root_limit,) if under else (), False, t.spawned)
+        if g.root_limit is not None:
+            self.stats["loop spawns under the root limit"] += 1
         t.spawned += 1
         g.entries.append(e)
         self.stats["loop spawns"] += 1
@@ -430,6 +449,14 @@ class Runtime:
                 busy = sum(1 for f in g.entries if f.state == "running" and f.task.phase != "finished"
                            and any(l == lid for l, _ in f.limits))
                 require(busy < n, "R8", f"loop {g.gid} starts an entry with {busy} of its Limit({n}) running")
+            if g.root_limit is not None:
+                # G9: every entry of a loop over a limited plan, spawned ones
+                # included, counts against the limit at its root.
+                busy = sum(1 for f in g.entries if f.state == "running" and f.task.phase != "finished")
+                require(busy < g.root_limit[1], "G9",
+                        f"loop {g.gid} starts an entry with {busy} running under its root Limit({g.root_limit[1]})")
+                self.stats["loop: most entries running under a root limit"] = max(
+                    self.stats["loop: most entries running under a root limit"], busy + 1)
             clo, e.clo = e.clo, None
             e.state = "running"
             c = self.spawn(t, clo, e.index)
@@ -449,24 +476,71 @@ class Runtime:
         if r is not None:
             t.wait_group = None
             return ("ready", r)
+        left = [e for e in g.entries if e.state in ("unstarted", "running")]
+        if left and all(e.background for e in left) and not g.closing and not self.ignore_background:
+            # Only background entries are left: cancel them, as at an exit,
+            # and wait until they have stopped. Their reports are dropped.
+            g.ending = True
+            self.stats["loops ended with background entries left"] += 1
+            self.stats["background entries cancelled at the end"] += sum(e.state == "running" for e in left)
+            self.stats["background entries discarded at the end"] += sum(e.state == "unstarted" for e in left)
+            self.close_entries(g)
+        if g.ending:
+            self.drop_group_reports(t, g)
+            if not self.deliverable_end(g):
+                t.waiting = "group"
+                return ("pending",)
+            t.wait_group = None
+            return ("ready", self.end_group(t, g))
         if any(e.state == "running" for e in g.entries):
             t.waiting = "group"
             return ("pending",)
         t.wait_group = None
         require(all(e.state != "unstarted" for e in g.entries), "R6",
                 f"loop {g.gid} has unstarted entries and none running")
+        return ("ready", self.end_group(t, g))
+
+    def end_group(self, t, g):
+        # G9: a loop ends only once no entry is running and every one that
+        # is not background has finished.
+        require(all(e.state != "unstarted" and (e.state != "running" or e.task.phase == "finished")
+                    for e in g.entries), "G9", f"loop {g.gid} ended with entries left")
+        exited = g.closing and not g.ending
+        require(exited or all(e.background or e.state == "arrived" for e in g.entries),
+                "G9", f"loop {g.gid} ended before an entry that is not background arrived")
         g.open = False
         t.groups.remove(g)
         self.stats["loops ended"] += 1
-        return ("ready", self.heap.alloc("tag", "Ended", []))
+        return self.heap.alloc("tag", "Ended", [])
+
+    def deliverable_end(self, g):
+        """A loop whose background entries were cancelled at its end can
+        report Ended once every one of them has stopped."""
+        return all(e.state != "running" or e.task.phase == "finished" for e in g.entries)
+
+    def drop_group_reports(self, t, g):
+        keep = []
+        for c, rep in t.reports:
+            if c.entry is not None and c.entry[0] is g and rep[0] != "crashed":
+                c.entry[1].state = "arrived" if rep[0] == "done" else "cancelled"
+                if rep[0] == "done":
+                    self.heap.drop(rep[1])
+                self.stats["background reports dropped at the end"] += 1
+            else:
+                keep.append((c, rep))
+        t.reports = keep
 
     def cancel_group(self, t, gref):
         """A loop exit: unstarted entries never start; running ones are cancelled
         unless shielded and begun, and the exit then waits for them all."""
         g = self.groups[gref.gid]
         require(g.open and not g.closing, "G5", f"loop {g.gid} exited twice")
-        g.closing = True
         self.stats["loop exits"] += 1
+        self.close_entries(g)
+        return 0
+
+    def close_entries(self, g):
+        g.closing = True
         for e in g.entries:
             if e.state == "unstarted":
                 self.heap.drop(e.clo)
@@ -476,7 +550,6 @@ class Runtime:
                     self.stats["shielded waits"] += 1
                     continue
                 self.cancel_task(e.task)
-        return 0
 
     def take_group_report(self, t, g):
         for k, (c, rep) in enumerate(t.reports):
@@ -550,7 +623,7 @@ class Runtime:
         st = t.wait_on
         sh = self.shared
         cells = [sh.cell(r) for r in st.cells]
-        # wake_rule "first": a waiter readied by a probe that ends without
+        # A waiter readied by a probe that ends without
         # storing passes the wake on to the next waiter that would not wait.
         baton, st.baton = st.baton and not sh.no_pass_on, False
         if sh.unchanged(st, "resume") and not any(c.poisoned for c in cells):
@@ -706,6 +779,12 @@ class Runtime:
             require(r is not None, "R1", f"task {t.id} resumed with no report")
             t.waiting = None
             return r
+        if t.waiting == "group" and t.wait_group.ending:
+            g = t.wait_group
+            require(self.deliverable_end(g), "R1", f"task {t.id} resumed at the end of loop {g.gid} too early")
+            self.drop_group_reports(t, g)
+            t.waiting, t.wait_group = None, None
+            return self.end_group(t, g)
         if t.waiting == "group":
             r = self.take_group_report(t, t.wait_group)
             require(r is not None, "R1", f"task {t.id} resumed at a loop head with no arrival")
@@ -735,6 +814,8 @@ class Runtime:
             return not t.op_pending
         if t.waiting == "children":
             return any(c.id in t.await_kids for c, _ in t.reports)
+        if t.waiting == "group" and t.wait_group.ending:
+            return self.deliverable_end(t.wait_group)
         if t.waiting == "group":
             return any(c.entry is not None and c.entry[0] is t.wait_group for c, _ in t.reports)
         if t.waiting == "chan":
@@ -839,6 +920,12 @@ class Runtime:
         self.check_finished(t)
 
     def finish_code_crashed(self, t, msg, leaked, linked=False):
+        if self.none_build and not linked:
+            u, supervised = t, False
+            while u is not None:
+                supervised = supervised or (u.sup is not None and u is not t)
+                u = u.parent
+            raise NoneCrash(self.heap.data(msg), supervised)
         if t.sup is not None and not linked:
             # A crash inside supervise! is its giving up: after exactly
             # max_restarts restarts, with the last child's message.

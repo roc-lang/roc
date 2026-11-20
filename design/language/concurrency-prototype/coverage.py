@@ -34,7 +34,9 @@ MATRIX = {
            "the wake word race-free under ThreadSanitizer",
            ["RcAtomicity.test_fuzz_sound_and_ordered", "RcAtomicity.test_scenarios", "Maude.test_rc_model",
             "ThreadSanitizer.test_counted_wake_word_is_race_free_and_exact"]),
-    "G3": ("A None build against an input-order Tasks build, on every generated program",
+    "G3": ("A None build against a Tasks build under the coroutine schedule, or the input-order schedule for "
+           "a program that cannot wait, on every generated program; the two schedules agree where no task "
+           "can wait",
            [FUZZ, "Combinators.test_supervise_restarts_exactly_max_times"]),
     "G4": ("Deterministic programs give one result and the same per-task effects under every schedule",
            [FUZZ, "Combinators.test_all_returns_in_input_order_under_every_schedule"]),
@@ -53,10 +55,22 @@ MATRIX = {
     "G8": ("Paused tail loops, direct and through closures, hold a constant record chain",
            ["Lowering.test_tail_loop_that_pauses_keeps_constant_records",
             "Lowering.test_tail_cycle_through_a_closure_keeps_constant_records"]),
-    "G9": ("R8's monitor in every run; shields checked by their effects, with and without the shield",
+    "G9": ("R8's monitor in every run, and G9's: every entry of a loop over a limited plan, spawned ones "
+           "included, counts against the limit at its root, and a loop ends only once every entry that is "
+           "not background has arrived and every background one has stopped; shields checked by their "
+           "effects, with and without the shield; background entries by their effects, with and without "
+           "the mark; both mutations caught by the fuzzer",
            ["Loops.test_limit_runs_entries_one_at_a_time_and_refills_as_each_finishes",
             "Loops.test_an_exit_waits_for_a_shielded_entry_instead_of_cancelling_it",
-            "Loops.test_a_shielded_entry_that_has_not_begun_is_cancelled_at_an_exit", FUZZ]),
+            "Loops.test_a_shielded_entry_that_has_not_begun_is_cancelled_at_an_exit",
+            "Loops.test_spawned_entries_count_against_the_limit_at_the_plans_root",
+            "Loops.test_a_plan_whose_root_is_not_a_limit_spawns_under_no_limit",
+            "Loops.test_a_limited_loop_whose_entries_wait_on_a_spawned_one_deadlocks",
+            "Loops.test_a_loop_ends_once_only_background_entries_are_left",
+            "Loops.test_a_background_entry_before_the_others_runs_first_in_a_none_build",
+            "Loops.test_plan_all_returns_results_in_input_order_without_background_ones",
+            "Loops.test_plan_all_ok_leaves_at_the_first_err",
+            "Fuzz.test_generated_plans_catch_mutations_of_g9", FUZZ]),
     # ------------------------------------------------ compiler invariants
     "C1": ("Unwinding against the stackful oracle under every schedule, including `ready`",
            [FUZZ, "Lowering.test_rfc_example_runs_straight_through_when_nothing_pauses"]),
@@ -79,8 +93,9 @@ MATRIX = {
             "Lowering.test_tail_cycle_through_a_closure_keeps_constant_records"]),
     "C8": (".lss against .boxy on every generated program and schedule",
            [FUZZ, "Lowering.test_boxy_checks_every_erased_effectful_call"]),
-    "C9": ("A None build against the input-order Tasks build that starts loop entries only when asked, on "
-           "every generated program",
+    "C9": ("A None build against the Tasks build under the coroutine schedule, which resumes an entry that "
+           "has not begun only once its loop asks or nothing else can run, on every generated program; a "
+           "program that cannot wait gives the same results and effects on one stack and as coroutines",
            [FUZZ, "Loops.test_a_shielded_entry_that_has_not_begun_is_cancelled_at_an_exit",
             "Loops.test_spawn_in_a_body_adds_entries"]),
     "C10": ("Unwinding, which resumes innermost first through resume entries, against the stackful oracle",
@@ -168,10 +183,10 @@ MATRIX = {
            "finished",
            ["Sessions.test_a_cycle_of_sessions_deadlocks_and_crashes_the_last_receiver",
             "Sessions.test_a_request_reply_release_server_deadlocks_on_one_stack", FUZZ]),
-    "S7": ("A None build against the input-order schedule that models the one stack, on every generated "
-           "program, deadlocks included; the coroutine None build as a Tasks policy whose engines and "
-           "lowerings agree on every generated program",
-           ["Sessions.test_a_none_build_runs_a_later_entry_on_demand_and_matches_input_order",
+    "S7": ("A None build against the coroutine schedule on every generated program that can wait, deadlocks "
+           "included, and against the input-order schedule on every one that cannot; the coroutine None "
+           "build's engines and lowerings agree on every generated program",
+           ["Sessions.test_a_none_build_runs_a_later_entry_while_an_earlier_one_waits",
             "Libraries.test_coroutines_on_one_stack_run_turn_taking",
             "Sessions.test_a_stream_flows_by_continuation_passing",
             "Sessions.test_a_request_reply_release_server_deadlocks_on_one_stack", FUZZ]),
@@ -225,8 +240,8 @@ MATRIX = {
            "caught",
            ["SharedModel.test_every_interleaving_of_the_lock_protocol",
             "SharedVariables.test_a_wait_ends_when_another_task_commits"]),
-    "V8": ("A None build runs entries on demand while an update waits, against the input-order schedule on "
-           "every generated program; a wait nothing can end is the same deadlock in every build",
+    "V8": ("A None build switches to the next ready task while an update waits, against the coroutine "
+           "schedule on every generated program; a wait nothing can end is the same deadlock in every build",
            ["SharedVariables.test_a_wait_ends_when_another_task_commits",
             "SharedVariables.test_a_wait_nothing_can_end_is_a_deadlock_in_every_build", FUZZ]),
     "V9": ("Cells whose states hold handles, their own included, and jobs that capture their own queue: "

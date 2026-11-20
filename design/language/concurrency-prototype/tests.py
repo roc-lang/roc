@@ -29,9 +29,9 @@ import runtime  # noqa: E402
 import sessions as sessions_mod  # noqa: E402
 import shared as shared_mod  # noqa: E402
 from arc import ArcError, certify  # noqa: E402
-from check import CancelAtPolicy, check_program  # noqa: E402
+from check import CancelAtPolicy, Failure, check_program  # noqa: E402
 from heap import HeapError  # noqa: E402
-from host import (InputOrderPolicy, PausePolicy, RandomPolicy, ReadyPolicy, run_none,  # noqa: E402
+from host import (InputOrderPolicy, PausePolicy, RandomPolicy, ReadyPolicy, run_none, run_none_build,  # noqa: E402
                   run_tasks)
 from lower import LowerError  # noqa: E402
 from pipeline import build  # noqa: E402
@@ -124,7 +124,7 @@ class Lowering(unittest.TestCase):
 
     def test_tail_cycle_through_a_closure_keeps_constant_records(self):
         _, lows = build(self.CLOSURE_LOOP)
-        none = run_none(lows["lss"].prog)
+        none = none_build(lows)
         for mode in ("lss", "boxy"):
             r = tasks(lows, PausePolicy(), mode)
             self.assertEqual(r.result, none.result)
@@ -173,7 +173,7 @@ class Combinators(unittest.TestCase):
 
     def test_all_returns_in_input_order_under_every_schedule(self):
         _, lows = prog(self.MAIN.format(comb="all!"))
-        want = run_none(lows["lss"].prog).result
+        want = none_build(lows).result
         for seed in range(40):
             for pol in (RandomPolicy(seed), RandomPolicy(seed, parallel=True)):
                 r = tasks(lows, pol, conc="ParallelTasks" if pol.parallel else "Tasks")
@@ -181,7 +181,7 @@ class Combinators(unittest.TestCase):
 
     def test_all_ok_cancels_the_rest_at_the_first_err(self):
         _, lows = prog(self.MAIN.format(comb="all_ok!"))
-        none = run_none(lows["lss"].prog)
+        none = none_build(lows)
         self.assertEqual(none.result, ("done", ("tag", "Err", (("str", "e4"),))))
         # None: the fourth child never starts.
         self.assertNotIn(((3,), "read", (5,)), none.effects)
@@ -199,7 +199,7 @@ class Combinators(unittest.TestCase):
         (proc main () eff (ret (call race! (clo slow3) (list (clo fast)))))
         """
         _, lows = build(src)
-        self.assertEqual(run_none(lows["lss"].prog).result, ("done", 1 + 7 * 3))  # None: first one only
+        self.assertEqual(none_build(lows).result, ("done", 1 + 7 * 3))  # None: first one only
         r = tasks(lows, PausePolicy())
         self.assertEqual(r.result, ("done", 1))
         self.assertEqual(r.runtime["cancelled"], 1)
@@ -215,7 +215,7 @@ class Combinators(unittest.TestCase):
         self.assertEqual(r.runtime["spawns"], 4)  # one run plus three restarts (R7)
         self.assertEqual(sum(1 for e in r.effects if e[1] == "slow"), 4)
         # None builds run it once and stop the program.
-        self.assertEqual(len(run_none(lows["lss"].prog).effects), 1)
+        self.assertEqual(len(none_build(lows).effects), 1)
 
     SERVER = """
     (proc handle (i flaky) eff
@@ -320,7 +320,7 @@ class Loops(unittest.TestCase):
         r, lows = self.run_with(self.LIMITED, PausePolicy())
         self.assertEqual(r.result, ("done", 8 + 9 + 10))
         self.assertEqual(r.runtime["limit refills"], 2)
-        self.assertEqual(run_none(lows["lss"].prog).result, r.result)
+        self.assertEqual(none_build(lows).result, r.result)
 
     def test_starting_past_a_limit_trips_r8(self):
         with self.assertRaisesRegex(Violation, "R8"):
@@ -358,7 +358,7 @@ class Loops(unittest.TestCase):
         r, lows = self.run_with(src, InputOrderPolicy())
         self.assertEqual(r.result, ("done", 1))
         self.assertEqual([e for e in r.effects if e[1] == "slow"], [])
-        none = run_none(lows["lss"].prog)
+        none = none_build(lows)
         self.assertEqual((none.result, none.effects), (r.result, r.effects))
         # FIFO starts it as soon as the limit frees a slot; once it has begun,
         # the exit waits for it.
@@ -401,7 +401,160 @@ class Loops(unittest.TestCase):
         r, lows = self.run_with(src, PausePolicy())
         self.assertEqual(r.result, ("done", 3 * 8))
         self.assertEqual(r.runtime["loop spawns"], 2)
-        self.assertEqual(run_none(lows["lss"].prog).result, r.result)
+        self.assertEqual(none_build(lows).result, r.result)
+
+    GROW = """
+    (proc grow (g acc budget) eff
+      (let a (next g))
+      (match a
+        (Arrived (v) (block
+          (let acc2 (add acc v))
+          (let more (lt 0 budget))
+          (if more
+            (block (do (spawn_in g (clo kid 1))) (do (spawn_in g (clo kid 2))) (tail grow g acc2 (sub budget 1)))
+            (block (tail grow g acc2 budget)))))
+        (Cancelled () (block (crash "unreachable")))
+        (Ended () (block (ret acc)))))
+    (proc main () eff
+      (let p (call concurrently (list (clo kid 1) (clo kid 2))))
+      {plan}
+      (let g (group q))
+      (tail grow g 0 2))
+    """
+
+    def test_spawned_entries_count_against_the_limit_at_the_plans_root(self):
+        # A crawler over plan.limit(2) never runs more than two fetches, however
+        # many the body spawns (G9).
+        src = self.GROW.format(plan="(let q (call limit p 2))")
+        want = ("done", 3 * (8 + 9))
+        for mk in (PausePolicy, ReadyPolicy, lambda: RandomPolicy(5, parallel=True)):
+            pol = mk()
+            _, lows = build(self.LIB + src)
+            r = run_tasks(lows["lss"], "unwind", pol, "ParallelTasks" if pol.parallel else "Tasks")
+            self.assertEqual(r.result, want)
+            self.assertEqual(r.runtime["loop spawns under the root limit"], 4)
+            self.assertEqual(r.runtime["loop: most entries running under a root limit"], 2)
+        r, lows = self.run_with(src, PausePolicy())
+        self.assertEqual(none_build(lows).result, want)
+        # Spawned entries under no limit: a third runs at once.
+        with self.assertRaisesRegex(Violation, "G9"):
+            self.run_with(src, PausePolicy(), spawn_outside_root_limit=True)
+
+    def test_a_plan_whose_root_is_not_a_limit_spawns_under_no_limit(self):
+        src = self.GROW.format(plan="(let l (call limit p 1)) (let e (call concurrently (list))) (let q (call concat l e))")
+        r, lows = self.run_with(src, PausePolicy())
+        self.assertEqual(r.result, ("done", 3 * (8 + 9)))
+        self.assertEqual(r.runtime["loop spawns"], 4)
+        self.assertEqual(r.runtime["loop spawns under the root limit"], 0)
+        self.assertEqual(none_build(lows).result, r.result)
+
+    def test_a_limited_loop_whose_entries_wait_on_a_spawned_one_deadlocks(self):
+        # The class of deadlock spawn under the root limit adds: both slots
+        # hold entries that wait for one the body spawns, which never starts.
+        src = """
+        (proc waiter (i) eff (let r (recv i)) (match r (Got (x) (block (ret x))) (Cancelled () (block (ret 0)))))
+        (proc giver (o) eff (do (send o 5)) (ret 0))
+        (proc spawn_loop (g o acc) eff
+          (let a (next g))
+          (match a
+            (Arrived (v) (block (let acc2 (add acc v)) (tail spawn_loop g o acc2)))
+            (Cancelled () (block (crash "unreachable")))
+            (Ended () (block (ret acc)))))
+        (proc main () eff
+          (let pr (pair)) (let o (field pr 0)) (let i (field pr 1))
+          (let p (call concurrently (list (clo waiter i) (clo fast))))
+          (let q (call limit p 1))
+          (let g (group q))
+          (do (spawn_in g (clo giver o)))
+          (tail spawn_loop g 0 0))
+        """
+        r, lows = self.run_with(src, PausePolicy())
+        self.assertEqual(r.result, ("crashed", ("str", sessions_mod.DEADLOCK)))
+        # Under a limit that is not at the root, the giver runs beside the waiter.
+        r, _ = self.run_with(src.replace("(let q (call limit p 1))", "(let l (call limit p 1)) (let e (call concurrently (list))) (let q (call concat l e))"), PausePolicy())
+        self.assertEqual(r.result, ("done", 6))
+
+    DEADLINE = """
+    (proc ticker (n) eff
+      (let z (lt n 1))
+      (if z
+        (block (ret 0))
+        (block (let a (host slow n)) (tail ticker (sub n 1)))))
+    (proc main () eff
+      (let p (call concurrently (list (clo kid 1) (clo kid 2))))
+      (let b (call concurrently (list (clo ticker 50))))
+      (let bg (call background b))
+      (let q (call concat {order}))
+      (let g (group q))
+      (tail sum_loop g 0))
+    """
+
+    def test_a_loop_ends_once_only_background_entries_are_left(self):
+        src = self.DEADLINE.format(order="p bg")
+        ticks = lambda r: sum(1 for e in r.effects if e[0] == (2,))
+        seen = set()
+        for mk in ALL_POLICIES[:8]:
+            pol = mk()
+            _, lows = build(self.LIB + src)
+            for mode in ("lss", "boxy"):
+                for eng in ("unwind", "stack"):
+                    r = run_tasks(lows[mode], eng, mk(), "ParallelTasks" if pol.parallel else "Tasks")
+                    # The ticker's arrival, if it finished first, adds 0.
+                    self.assertEqual(r.result, ("done", 8 + 9))
+                    seen.add(ticks(r) < 50)
+        # It was cancelled, except where hosted calls finish in place and it
+        # ran to its end before the others (the ready schedule).
+        self.assertIn(True, seen)
+        r, lows = self.run_with(src, PausePolicy())
+        self.assertEqual(r.runtime["background entries cancelled at the end"], 1)
+        # A None build never starts it: once every unstarted entry is
+        # background, the loop ends.
+        for none in (none_build(lows), run_none(lows["lss"].prog)):
+            self.assertEqual((none.result, ticks(none)), (("done", 8 + 9), 0))
+        # If background entries kept the loop going, it would wait for all 50 ticks.
+        r, _ = self.run_with(src, PausePolicy(), ignore_background=True)
+        self.assertEqual(ticks(r), 50)
+
+    def test_a_background_entry_before_the_others_runs_first_in_a_none_build(self):
+        # The None build runs the earliest unstarted entry, background or not.
+        _, lows = build(self.LIB + self.DEADLINE.format(order="bg p"))
+        ticks = lambda r: sum(1 for e in r.effects if e[0] == (0,))
+        for none in (none_build(lows), run_none(lows["lss"].prog)):
+            self.assertEqual((none.result, ticks(none)), (("done", 8 + 9), 50))
+        r = tasks(lows, InputOrderPolicy())
+        self.assertEqual((r.result, ticks(r)), (("done", 8 + 9), 50))
+
+    def test_plan_all_returns_results_in_input_order_without_background_ones(self):
+        src = """
+        (proc main () eff
+          (let p (call concurrently (list (clo kid 3) (clo kid 1) (clo kid 2))))
+          (let l (call limit p 2))
+          (let b (call concurrently (list (clo kid 9))))
+          (let bg (call background b))
+          (let q (call concat l bg))
+          (let r (call plan_all! q))
+          (ret r))
+        """
+        _, lows = build(self.LIB + src)
+        want = ("done", ("list", None, (10, 8, 9)))
+        self.assertEqual(everywhere(lows), {want})
+        self.assertEqual(none_build(lows).result, want)
+
+    def test_plan_all_ok_leaves_at_the_first_err(self):
+        src = """
+        (proc okv (n) eff (let a (host slow n)) (ret (tag Ok a)))
+        (proc bad () eff (let a (host slow 0)) (ret (tag Err 7)))
+        (proc main () eff
+          (let p (call concurrently (list (clo okv 1) (clo bad) (clo okv 2))))
+          (let l (call limit p 1))
+          (let r (call plan_all_ok! l))
+          (ret r))
+        """
+        _, lows = build(self.LIB + src)
+        self.assertEqual(everywhere(lows), {("done", ("tag", "Err", (7,)))})
+        none = none_build(lows)
+        self.assertEqual(none.result, ("done", ("tag", "Err", (7,))))
+        self.assertNotIn(((2,), "slow", (2,)), none.effects)  # the third never starts
 
     BODY_WAITS = """
     (proc body_loop (g acc) eff
@@ -522,7 +675,7 @@ class Sessions(unittest.TestCase):
     def everywhere(self, src):
         """The None result, and every Tasks result under every schedule and engine."""
         _, lows = build(self.LIB + src)
-        none = run_none(lows["lss"].prog)
+        none = none_build(lows)
         out = set()
         for mk in self.POLICIES:
             for eng in ("unwind", "stack"):
@@ -563,7 +716,9 @@ class Sessions(unittest.TestCase):
         none, tasks_results, _ = self.everywhere(self.STREAM)
         self.assertEqual(none.result, ("done", 10 + 9 + 8))
         self.assertEqual(tasks_results, {none.result})
-        self.assertGreaterEqual(none.extra["on demand"], 1)  # the receive ran the producer
+        # The receive switches to the producer: a None build of a program
+        # that can wait runs as coroutines.
+        self.assertEqual(none.extra["engine"], "coroutine")
 
     CONSUMER_FIRST = """
     (proc main () eff
@@ -579,13 +734,16 @@ class Sessions(unittest.TestCase):
         (Ended () (block (ret 0)))))
     """
 
-    def test_a_none_build_runs_a_later_entry_on_demand_and_matches_input_order(self):
+    def test_a_none_build_runs_a_later_entry_while_an_earlier_one_waits(self):
         _, lows = build(self.LIB + self.CONSUMER_FIRST)
-        none = run_none(lows["lss"].prog)
-        io = tasks(lows, InputOrderPolicy())
-        self.assertEqual((none.result, none.effects), (io.result, io.effects))
-        self.assertEqual(none.result, ("done", 0))  # the producer, run on demand, finished first
-        self.assertEqual(none.extra["on demand"], 1)
+        none = none_build(lows)
+        co = tasks(lows, host_mod.CoroutinePolicy())
+        self.assertEqual((none.result, none.effects), (co.result, co.effects))
+        self.assertEqual(none.result, ("done", 0))  # the producer, run while the consumer waits, finished first
+        self.assertEqual(none.extra["engine"], "coroutine")
+        # On one stack the receive runs the producer on demand, with the same result.
+        one = run_none(lows["lss"].prog)
+        self.assertEqual((one.result, one.extra["on demand"]), (("done", 0), 1))
 
     DROPPED = """
     (proc main () eff
@@ -879,8 +1037,14 @@ class switches:
         runtime.Runtime.attach = self.orig_attach
 
 
-ALL_POLICIES = [lambda: InputOrderPolicy(), lambda: ReadyPolicy(), lambda: PausePolicy()] + \
+# The first is the None build's schedule for a program that can wait.
+ALL_POLICIES = [lambda: host_mod.CoroutinePolicy(), lambda: ReadyPolicy(), lambda: PausePolicy()] + \
     [lambda s=s: RandomPolicy(s, parallel=s % 2 == 1) for s in range(24)]
+
+
+def none_build(lows):
+    """The None build: coroutines if the program can wait, else one stack."""
+    return run_none_build(lows["lss"].arc)
 
 
 def all_results(lows, policies=None, host_cls=None):
@@ -958,7 +1122,7 @@ class Mailboxes(unittest.TestCase):
 
     def everywhere(self, src):
         _, lows = build(self.LIB + src)
-        return run_none(lows["lss"].prog), all_results(lows), lows
+        return none_build(lows), all_results(lows), lows
 
     def test_many_posters_one_reader_closed_when_every_post_is_gone(self):
         none, results, _ = self.everywhere("""
@@ -1148,7 +1312,7 @@ class Libraries(unittest.TestCase):
     def coroutines(self, src):
         """Option (a): the None build as coroutines on one stack. Hosted calls
         never suspend; every engine and lowering gives one result."""
-        from check import NONE_HOSTED
+        from host import NONE_HOSTED
         from lower import Lowering
         arc, _ = build(src)
         out = set()
@@ -1167,7 +1331,11 @@ class Libraries(unittest.TestCase):
         # deadlock on one stack, all finish.
         self.assertEqual(self.coroutines(library.SOURCE + self.SEM), ("done", 1))
         self.assertEqual(self.coroutines(library.SOURCE + self.POOL), ("done", 2))
-        self.assertEqual(self.coroutines(Sessions.LIB + Sessions.PERMIT), ("done", ("tag", "R", (1, 10))))
+        # The semaphore server is an entry of the outer loop, which main is
+        # not waiting on while it races the client against the timeout, so
+        # it runs only once nothing else can: the timeout wins, and the
+        # permit comes back as Cancelled.
+        self.assertEqual(self.coroutines(Sessions.LIB + Sessions.PERMIT), ("done", ("tag", "R", (2, 8))))
         # A real cycle of receives still deadlocks.
         self.assertEqual(self.coroutines(Sessions.LIB + Sessions.CYCLE),
                          ("crashed", ("str", sessions_mod.DEADLOCK)))
@@ -1256,7 +1424,7 @@ class Libraries(unittest.TestCase):
     def test_a_semaphore_cell_runs_on_one_stack_and_returns_every_permit(self):
         for second in ("clo client", "clo timed"):
             lows = self.build(self.CELL.replace("{with}", "with_cell_permit").replace("{second}", second))
-            none = run_none(lows["lss"].prog)
+            none = none_build(lows)
             self.assertEqual(none.result[0], "done")
             io = tasks(lows, InputOrderPolicy())
             self.assertEqual((none.result, none.effects), (io.result, io.effects))
@@ -1571,6 +1739,19 @@ class Fuzz(unittest.TestCase):
         self.assertGreater(stats["cancel-at runs"], 0)
         self.assertGreater(stats["shared: waits"], 0)
         self.assertGreater(stats["shared: deferred steps run at drop"], 0)
+        for f in ("background", "loop spawn under a root limit", "plan.all!", "plan.all_ok!"):
+            self.assertGreater(stats["feature " + f], 5, f)
+        self.assertGreater(stats["loop: loops ended with background entries left"], 0)
+        self.assertGreater(stats["loop: loop spawns under the root limit"], 0)
+
+    def test_generated_plans_catch_mutations_of_g9(self):
+        # Background entries that keep their loop going change what a None
+        # build runs (C9); spawned entries outside the root limit trip G9.
+        for sw, err in (("ignore_background", Failure), ("spawn_outside_root_limit", Violation)):
+            with switches(rt={sw: True}):
+                with self.assertRaises(err, msg=sw):
+                    for seed in range(1, 61):
+                        check_program(seed, Counter(), cancel_sites=1)
 
 
 class RcAtomicity(unittest.TestCase):
@@ -1743,7 +1924,7 @@ class SharedVariables(unittest.TestCase):
         # root is cancelled at any suspension; at most one job runs at once.
         lows = self.build(self.SEM)
         self.assertEqual(everywhere(lows), {("done", 1)})
-        self.assertEqual(run_none(lows["lss"].prog).result, ("done", 1))
+        self.assertEqual(none_build(lows).result, ("done", 1))
         # Without a race, no cancelled holder leaves aborted work running
         # after it gives the permit back (Finding 9), so one job runs at once.
         plain = self.build(self.contended(3))
@@ -1912,11 +2093,11 @@ class SharedVariables(unittest.TestCase):
         lows = self.build(self.HANDOFF)
         want = ("done", ("list", None, (5, 8)))
         self.assertEqual(everywhere(lows), {want})
-        # A None build runs the giver on demand, as for a receive, and
-        # matches the input-order schedule.
-        none = run_none(lows["lss"].prog)
+        # A None build switches to the giver while the taker waits, as for a
+        # receive.
+        none = none_build(lows)
         self.assertEqual(none.result, want)
-        self.assertEqual(none.extra["on demand"], 1)
+        self.assertEqual(none.extra["engine"], "coroutine")
         # A commit that readied no waiter would leave the taker stuck.
         with switches(shared={"no_wake": True}):
             r = tasks(lows, PausePolicy())
@@ -1926,7 +2107,7 @@ class SharedVariables(unittest.TestCase):
         lows = self.build(self.HANDOFF, "stuck")
         dead = ("crashed", ("str", shared_mod.WAIT_DEADLOCK))
         self.assertEqual(everywhere(lows), {dead})
-        self.assertEqual(run_none(lows["lss"].prog).result, dead)
+        self.assertEqual(none_build(lows).result, dead)
 
     POOL = """
     (proc maybe_crash (res) eff
@@ -2120,8 +2301,9 @@ class SharedVariables(unittest.TestCase):
     """
 
     def test_a_readied_waiter_cancelled_before_it_runs_passes_the_wake_on(self):
-        # The giver releases the only permit, which readies the raced
-        # client, the most recent waiter, and then ends the race. Under some
+        # The giver releases the only permit, which readies the oldest
+        # waiter, under some schedules the raced client, and then ends the
+        # race. Under some
         # schedules the race cancels that client before it runs, and the
         # other client must be readied instead.
         lows = self.build(self.PASS_ON)
@@ -2163,7 +2345,7 @@ class SharedConveniences(unittest.TestCase):
         lows = build(library.SOURCE + library.SHARED_SOURCE + self.PROGRESS)[1]
         want = ("done", ("tup", None, (("list", None, (101, 3, 102, 103)), 3)))
         self.assertEqual(everywhere(lows), {want})
-        self.assertEqual(run_none(lows["lss"].prog).result, want)
+        self.assertEqual(none_build(lows).result, want)
         # The reporter waits until the third modify! and is woken by it.
         r = tasks(lows, PausePolicy())
         self.assertGreaterEqual(r.runtime["waits"], 1)
@@ -2244,12 +2426,12 @@ class CellRelease(unittest.TestCase):
     def test_jobs_that_capture_their_own_queue(self):
         lows = self.build(self.CRAWLER)
         self.assertEqual(everywhere(lows), {("done", 7)})
-        none = run_none(lows["lss"].prog)
+        none = none_build(lows)
         self.assertEqual(none.result, ("done", 7))
-        # The abandoned queue is released when main finishes, or at the end of
-        # a None build, and everything it held is freed.
+        # The abandoned queue is released when main finishes, in either
+        # build, and everything it held is freed.
         self.assertEqual(tasks(lows, PausePolicy()).runtime["cells released when the root finished"], 1)
-        self.assertEqual(none.extra["cells released"], 1)
+        self.assertEqual(none.runtime["cells released when the root finished"], 1)
 
     def test_a_cycle_made_in_a_task_is_released_when_it_finishes(self):
         lows = self.build(self.PAIRS)
@@ -2258,7 +2440,7 @@ class CellRelease(unittest.TestCase):
         self.assertEqual(r.runtime["cells released when a child task finished"], 2)
         # Releasing one cell of each pair frees the other.
         self.assertEqual(r.runtime["cells released"], 2)
-        self.assertEqual(run_none(lows["lss"].prog).result, ("done", 0))
+        self.assertEqual(none_build(lows).result, ("done", 0))
 
     def test_a_stored_cell_gains_the_holders_of_the_cell_that_holds_it(self):
         lows = self.build(self.STASH)
@@ -2278,7 +2460,7 @@ class CellRelease(unittest.TestCase):
             self.assertGreater(stats["feature " + f], 5, f)
         self.assertGreater(stats["cells released when a child task finished"], 100)
         self.assertGreater(stats["cells released when the root finished"], 10)
-        self.assertGreater(stats["None: cells released at the end"], 10)
+        self.assertGreater(stats["None: cells released"], 10)
         # Never releasing leaks the cycles.
         with switches(sessions={"no_release_cells": True}):
             with self.assertRaisesRegex(HeapError, "leaked"):

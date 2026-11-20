@@ -270,7 +270,7 @@ class NoneEngine:
     # same limit is still running.
     def group(self, plan):
         me = self.path[-1]
-        entries = flatten(self.heap, plan, self.fresh_limit)
+        entries, _ = flatten(self.heap, plan, self.fresh_limit)
         for en in entries:
             en.index = self.spawned[me]
             self.spawned[me] += 1
@@ -312,6 +312,14 @@ class NoneEngine:
         entries = self.groups[g]
         if not any(en.state == "done" for en in entries):
             en = next((en for en in entries if en.state == "unstarted"), None)
+            if en is not None and all(o.background for o in entries if o.state == "unstarted"):
+                # Every entry left is background: discard them and end (G9).
+                for o in entries:
+                    if o.state == "unstarted":
+                        heap.drop(o.clo)
+                        o.clo, o.state = None, "discarded"
+                        self.stats["background entries discarded at the end"] += 1
+                en = None
             if en is None:
                 assert all(en.state in ("arrived", "discarded") for en in entries), "a loop head waited on a running entry"
                 return heap.alloc("tag", "Ended", [])

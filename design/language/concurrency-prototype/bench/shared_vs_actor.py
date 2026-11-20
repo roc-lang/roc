@@ -25,7 +25,7 @@ sys.setrecursionlimit(100000)
 
 import library  # noqa: E402
 import runtime  # noqa: E402
-from host import InputOrderPolicy, PausePolicy, RandomPolicy, run_tasks  # noqa: E402
+from host import CoroutinePolicy, InputOrderPolicy, PausePolicy, RandomPolicy, run_tasks  # noqa: E402
 from pipeline import build  # noqa: E402
 
 COMMON = """
@@ -89,22 +89,25 @@ def pool_shared(n):
 #              when it is dispatched
 #   all+cmp    the same, but a dispatched waiter whose state equals the one
 #              it waited on parks again without running its function
-#   latest     a store probes the waiters, most recent first, and readies only the first
-#              that would not wait; one that then does not store probes on
-#              (the rule; "first" probes oldest first, which a None build cannot match)
+#   first      a store probes the waiters, oldest first, and readies only the first
+#              that would not wait; one that then does not store probes on (the rule)
+#   latest     the same, most recent first (the earlier rule)
 CASES = [
     ("semaphore", "server task", sem_actor, None),
     ("semaphore", "semaphore cell", sem_cell, None),
     ("semaphore", "shared, all", sem_shared, ("all", False)),
     ("semaphore", "shared, all+cmp", sem_shared, ("all", "resume")),
+    ("semaphore", "shared, first", sem_shared, ("first", False)),
     ("semaphore", "shared, latest", sem_shared, ("latest", False)),
     ("pool", "server task", pool_actor, None),
     ("pool", "shared, all", pool_shared, ("all", False)),
     ("pool", "shared, all+cmp", pool_shared, ("all", "resume")),
+    ("pool", "shared, first", pool_shared, ("first", False)),
     ("pool", "shared, latest", pool_shared, ("latest", False)),
 ]
 
 POLICIES = [("pause", PausePolicy, "Tasks"), ("input order", InputOrderPolicy, "Tasks"),
+            ("coroutine", CoroutinePolicy, "Tasks"),
             ("random parallel", lambda: RandomPolicy(7, parallel=True), "ParallelTasks")]
 
 

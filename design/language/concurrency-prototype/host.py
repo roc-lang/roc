@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 
 from engines import NoneEngine, ProgramCrash, StackEngine, UnwindEngine
 from heap import Heap
-from runtime import CANCELLED, CRASHED, DONE, PENDING, WAITS, Runtime, Violation
+from runtime import CANCELLED, CRASHED, DONE, PENDING, WAITS, NoneCrash, Runtime, Violation
 from sessions import HOST
 
 
@@ -166,8 +166,26 @@ class CoroutinePolicy(Policy):
 
     name = "coroutine"
 
+    # Whether an entry that has not begun waits for its owner to ask: it is
+    # resumed only while its owner waits at that entry's loop head, unless
+    # no other task can run. Without this, an outer loop's entries, started
+    # when the loop began, run before the entries of a loop nested in its
+    # body, which come later in the task tree, and a program that cannot
+    # wait no longer gives the plain stack's results.
+    lazy_entries = True
+
+    def __init__(self, lazy_entries=None):
+        if lazy_entries is not None:
+            self.lazy_entries = lazy_entries
+
     def on_call(self, host, t, name):
         return "ready"
+
+    def asked(self, t):
+        if t.entry is None or t.phase != "new" or t.cancel_req:
+            return True
+        owner = t.parent
+        return owner.waiting == "group" and owner.wait_group is t.entry[0]
 
     def choose(self, host):
         if not host.queue:
@@ -176,7 +194,8 @@ class CoroutinePolicy(Policy):
         crashing = [(t.path, i) for i, t in enumerate(host.queue) if host.rt.linked_crash(t) is not None]
         if crashing:
             return ("resume", min(crashing)[1])
-        return ("resume", min((t.path, i) for i, t in enumerate(host.queue))[1])
+        cands = [(t.path, i) for i, t in enumerate(host.queue) if not self.lazy_entries or self.asked(t)]
+        return ("resume", min(cands or [(t.path, i) for i, t in enumerate(host.queue)])[1])
 
 
 class RandomPolicy(Policy):
@@ -349,12 +368,17 @@ class Run:
     extra: dict = field(default_factory=dict)
 
 
-def run_tasks(lowering, engine_kind, policy, concurrency="Tasks", max_steps=200000, host_cls=None):
+def run_tasks(lowering, engine_kind, policy, concurrency="Tasks", max_steps=200000, host_cls=None,
+              none_build=False):
     """Run a lowered program as a root task under a host policy; check the
-    runtime invariants and the exact heap accounting afterwards."""
+    runtime invariants and the exact heap accounting afterwards. With
+    `none_build`, a crash stops the program at once, as in a None build:
+    the result is then the crash, and the heap is not checked, as in
+    `run_none`."""
     prog = lowering.prog
     heap = Heap()
     rt = Runtime(heap, concurrency)
+    rt.none_build = none_build
     host = (host_cls or Host)(rt, heap, policy)
     if engine_kind == "unwind":
         eng = UnwindEngine(prog, lowering, heap, rt)
@@ -365,12 +389,16 @@ def run_tasks(lowering, engine_kind, policy, concurrency="Tasks", max_steps=2000
     host.root = rt.start_root(clo)
     host.queue.append(host.root)
     steps = 0
-    while host.root_status == PENDING:
-        if not host.step() and not rt.break_deadlock():
-            raise Violation("R6: no task can run and the root has not finished")
-        steps += 1
-        if steps > max_steps:
-            raise Violation("R6: the run did not terminate")
+    try:
+        while host.root_status == PENDING:
+            if not host.step() and not rt.break_deadlock():
+                raise Violation("R6: no task can run and the root has not finished")
+            steps += 1
+            if steps > max_steps:
+                raise Violation("R6: the run did not terminate")
+    except NoneCrash as c:
+        return Run(("crashed", c.msg), host.effects, heap.stats, getattr(eng, "stats", Counter()), rt.stats,
+                   host.stats, extra={"supervised": c.supervised})
     while host.ops:  # late completions of aborted operations
         host.complete(host.ops[0])
     host.drained()
@@ -401,6 +429,55 @@ class SyncHost:
         for a in args:
             heap.drop(a)
         return v
+
+
+# A None build's hosted calls finish in place, so they are never sites.
+NONE_HOSTED = {k: False for k in HOSTED}
+WAIT_OPS = ("recv", "take", "acquire", "step")
+
+
+def can_wait(prog):
+    """Whether a task of the program can wait for another: a receive, a take,
+    an acquire or an update (which may answer Wait) in a procedure reachable
+    from main. Only then does a None build need tasks (RFC, "On platforms
+    that do not schedule tasks")."""
+    from ir import blocks
+    seen, stack = set(), [prog.entry]
+    while stack:
+        f = stack.pop()
+        if f in seen:
+            continue
+        seen.add(f)
+        for b in blocks(prog.procs[f].body):
+            for st in b.stmts:
+                if st[0] != "let":
+                    continue
+                e = st[2]
+                if e[0] in WAIT_OPS:
+                    return True
+                if e[0] in ("call", "clo"):
+                    stack.append(e[1])
+                if e[0] in ("step", "defer", "errdefer"):
+                    stack.append(e[1])
+            if b.term[0] == "tail":
+                stack.append(b.term[1])
+    return False
+
+
+def run_none_build(arc, mode="lss", engine_kind="unwind"):
+    """A None build. A program that cannot wait runs on one plain stack
+    (`run_none`). One that can wait runs its tasks as coroutines on one
+    thread, with hosted calls that finish in place, resuming the ready task
+    first in the task tree (CoroutinePolicy)."""
+    if not can_wait(arc.prog):
+        r = run_none(arc.prog)
+        r.extra["engine"] = "stack"
+        return r
+    from lower import Lowering
+    low = Lowering(arc, NONE_HOSTED, mode)
+    r = run_tasks(low, engine_kind, CoroutinePolicy(), none_build=True)
+    r.extra["engine"] = "coroutine"
+    return r
 
 
 def run_none(prog):

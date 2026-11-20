@@ -344,7 +344,9 @@ today.
 
 On a platform that does not opt in, the program runs its tasks itself, one at
 a time on one thread, and hosted calls finish before they return. The next
-task to run is always the ready one that comes first in the task tree. So in a
+task to run is always the ready one that comes first in the task tree. A loop
+entry that has not begun counts as ready only once its loop asks for the next
+result, or when no other task can run. So in a
 program where no task waits for another, a loop runs its entries one at a time,
 in order. Each starts only when the loop asks for the next result, and runs to
 completion before the body sees it. Limits and shields change nothing, `spawn`
@@ -765,7 +767,8 @@ internal operations, each with explicit `RcEffect` data:
 
 The middle column is the meaning in every build. A `None` build runs it with
 the program's own scheduler, which resumes the ready task that comes first in
-the task tree. Where no entry can wait, that schedule starts each entry only
+the task tree, where an entry that has not begun is ready only once its loop
+asks for the next result or no other task can run. Where no entry can wait, that schedule starts each entry only
 when the loop asks for the next result and runs it to completion, so a `None`
 build of such a loop needs no tasks: the last column gives the same results,
 and the compiler uses it.
@@ -1159,7 +1162,7 @@ established:
 |---|---|---|
 | G1 | **Pure code is never interrupted.** Tasks interleave only at suspension points. | C1, C2, R2 |
 | G2 | **No data races.** Tasks share only immutable values, and counts on shared values are atomic. | C6, R2, P2, P6, P10 |
-| G3 | **Concurrency does not change meaning.** On a platform without tasks, a program behaves as it would on a task platform with one thread, whose hosted calls finish before they return, and which always resumes the ready task that comes first in the task tree. A program in which no task waits for another therefore starts each loop entry only when its loop asks for the next result, and runs it to completion. | C1, C9 |
+| G3 | **Concurrency does not change meaning.** On a platform without tasks, a program behaves as it would on a task platform with one thread, whose hosted calls finish before they return, and which always resumes the ready task that comes first in the task tree, where a loop entry that has not begun is ready only once its loop asks for the next result or no other task can run. A program in which no task waits for another therefore starts each loop entry only when its loop asks for the next result, and runs it to completion. | C1, C9 |
 | G4 | **Fixed result order.** Combinators return results in input order. Only effect interleaving and the order in which loop bodies see arrivals depend on scheduling, and through them which `Err` arrives first and which `race!` entrant wins. | R1, R3, Model of combinators |
 | G5 | **Structured lifetimes.** No task outlives the loop that started it: every way out of a loop cancels or waits for each of its entries, and the running set never escapes the loop. | C11, R3, R4 |
 | G6 | **Silent, exact cancellation.** A cancelled task runs no more of its own code and releases everything it owns. | C5, R4, P3, P4 |
@@ -1179,7 +1182,7 @@ established:
 | C6 | **Atomicity soundness.** An allocation that two tasks able to run in parallel can update counts on, or that the host can reach, uses atomic counts. Hosted arguments and results are seeds, closed under today's equality classes. In `ParallelTasks` builds, an entry's capture that a sibling may alias is a seed too, and modes propagate forward along copies, calls, returns, construction and projection; child results are not seeds. Every count statement on a position whose mode is atomic is atomic, plain and atomic updates of one allocation never race, and a borrowed capture is never released by a child. The companion RFC adds stores into cells as seeds. | Certify, checking each forward constraint locally (extends the existing rule) |
 | C7 | **Constant-space tail calls.** A frame-replacing call has no status check and leaves no record, so a paused tail cycle holds records only for the procedures actually live. | Certify, plus record-count tests on deep tail cycles that pause |
 | C8 | **Strategy equivalence.** `.lss` and `.boxy` builds produce the same traces under the same deterministic schedule. | Differential |
-| C9 | **Sequential equivalence.** A `None` build's results and effects equal a `Tasks` build's under the coroutine schedule: one thread, hosted calls that finish in place, and the ready task first in the task tree resumed next. Where no entry can wait, this is the input-order schedule, which starts each loop entry only when its loop asks for the next result and runs it to completion, and a `None` build runs it without tasks. The companion RFC's waits need no change to the schedule (its V8). | Differential: a deterministic test host with that policy, against a `None` build |
+| C9 | **Sequential equivalence.** A `None` build's results and effects equal a `Tasks` build's under the coroutine schedule: one thread, hosted calls that finish in place, and the ready task first in the task tree resumed next, where an entry that has not begun is ready only once its loop asks for the next result or no other task can run. Where no entry can wait, this is the input-order schedule, which starts each loop entry only when its loop asks for the next result and runs it to completion, and a `None` build runs it without tasks. The companion RFC's waits need no change to the schedule (its V8). | Differential: a deterministic test host with that policy, against a `None` build |
 | C10 | **Resume fidelity.** A resume entry continues at exactly the call site its record names, with every restored value equal to the saved one. Records resume innermost first, and each result reaches the record that was next in line, exactly as the returns would have. | Certify the entry tables; Differential: a host that pauses every suspending call, against one that never pauses |
 | C11 | **Loop exits.** Every edge out of a concurrent loop's body, other than a crash, passes through the loop's exit sequence, and a running set is used only by its own loop's operations. | Certify |
 

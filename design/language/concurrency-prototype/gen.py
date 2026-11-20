@@ -207,12 +207,13 @@ class Gen:
     def statement(self, out, env, depth, me):
         rng = self.rng
         kinds = ["const", "prim", "tup", "field", "tag", "list", "len", "push", "host", "host", "log",
-                 "call", "callc", "all", "all_ok", "race", "both", "supervise", "loop", "session", "shared"]
+                 "call", "callc", "all", "all_ok", "race", "both", "supervise", "loop", "session", "shared",
+                 "plan_all", "plan_all_ok"]
         weights = [2, 3, 1, 2, 1, 1, 1, 1, 4, 2, 1, 2, 1, 2, 1, 1, 1, 1, 3, 2 if self.sessions else 0,
-                   2 if self.shared else 0]
+                   2 if self.shared else 0, 1, 1]
         if depth >= 3:
             weights = [w if k not in ("all", "all_ok", "race", "both", "supervise", "callc", "call", "loop",
-                                      "session", "shared") else 0
+                                      "session", "shared", "plan_all", "plan_all_ok") else 0
                        for k, w in zip(kinds, weights)]
         k = rng.choices(kinds, weights)[0]
         if k == "const":
@@ -268,6 +269,15 @@ class Gen:
             fs = self.let(out, env, "LC", ("list", cs))
             self.let(out, env, "TL", ("call", "all_ok!", [fs]))
             self.features.add("all_ok!")
+        elif k == "plan_all":
+            p = self.plan(out, env, "C", depth)
+            self.let(out, env, "L", ("call", "plan_all!", [p]))
+            self.features.add("plan.all!")
+        elif k == "plan_all_ok":
+            p = self.plan(out, env, "CT", depth)
+            self.let(out, env, "TL", ("call", "plan_all_ok!", [p]))
+            self.features.add("plan.all_ok!")
+            self.features.add("all_ok!")
         elif k == "race":
             f = self.need(out, env, "C", depth)
             cs = [self.need(out, env, "C", depth) for _ in range(rng.randint(0, 2))]
@@ -292,25 +302,38 @@ class Gen:
 
     # ------------------------------------------------------------ loops
     def plan(self, out, env, ty, depth, cs=None):
-        """A plan over closures of type ty: entries, maybe limited, shielded or
-        concatenated with another plan."""
+        """A plan over closures of type ty: entries, maybe limited, shielded,
+        marked background, concatenated with another plan, or limited as a
+        whole. Sets self.root_limited: whether the plan's root is a limit."""
         rng = self.rng
         cs = cs or [self.need(out, env, ty, depth) for _ in range(rng.randint(1, 3))]
         fs = self.let(out, env, "LC", ("list", cs))
         p = self.let(out, env, "PLAN", ("call", "concurrently", [fs]))
-        r = rng.random()
-        if r < 0.3:
-            n = self.let(out, env, "I", ("int", rng.randint(1, 2)))
-            p = self.let(out, env, "PLAN", ("call", "limit", [p, n]))
-            self.features.add("limit")
+        root_limited = False
+        if rng.random() < 0.3:
+            p, root_limited = self.limited(out, env, p), True
         if rng.random() < 0.25:
-            p = self.let(out, env, "PLAN", ("call", "shielded", [p]))
+            p, root_limited = self.let(out, env, "PLAN", ("call", "shielded", [p])), False
             self.features.add("shield")
+        if rng.random() < 0.15:
+            p, root_limited = self.let(out, env, "PLAN", ("call", "background", [p])), False
+            self.features.add("background")
+            # Whether a background entry runs, and how far, depends on the
+            # schedule.
+            self.features.add("arrival order")
         if rng.random() < 0.3:
             q = self.plan(out, env, ty, depth)
-            p = self.let(out, env, "PLAN", ("call", "concat", [p, q]))
+            p, root_limited = self.let(out, env, "PLAN", ("call", "concat", [p, q])), False
             self.features.add("concat")
+            if rng.random() < 0.3:
+                p, root_limited = self.limited(out, env, p), True
+        self.root_limited = root_limited
         return p
+
+    def limited(self, out, env, p):
+        n = self.let(out, env, "I", ("int", self.rng.randint(1, 2)))
+        self.features.add("limit")
+        return self.let(out, env, "PLAN", ("call", "limit", [p, n]))
 
     def loop(self, out, env, depth, cs=None):
         """for! v in plan { ... }, lowered as the compiler lowers it."""
@@ -318,6 +341,7 @@ class Gen:
         trying = cs is None and rng.random() < 0.3  # arrivals are Try values; an Err exits, as `?` does
         ty = "CT" if trying else "C"
         p = self.plan(out, env, ty, depth, cs)
+        root_limited = self.root_limited
         g = self.let(out, env, "G", ("group", p))
         acc = self.let(out, env, "I", ("int", 0))
         budget = self.let(out, env, "I", ("int", rng.choice([0, 0, 1, 2])))
@@ -389,6 +413,8 @@ class Gen:
         self.features.add("loop")
         if state["spawn"]:
             self.features.add("loop spawn")
+            if root_limited:
+                self.features.add("loop spawn under a root limit")
         if exits or trying or state["spawn"]:
             self.features.add("arrival order")
 

@@ -6,17 +6,20 @@ Per program:
            results, effect traces and heap operations
   C8       .lss vs .boxy lowering: identical results and traces, and identical
            heap operations in runs without a crash
-  C9/G3    None build vs Tasks build under an input-order schedule
+  C9/G3    None build vs Tasks build under its schedule: for a program that
+           can wait, the coroutine schedule (one thread, hosted calls that
+           finish in place, the ready task first in the task tree); for one
+           that cannot, the input-order schedule
   G4       programs without race!, all_ok!, crashes or loops whose bodies
            depend on arrival order (exits, errors, spawns): one result under
            every schedule, and the None build's
   C5       cancel the root at every suspension in turn: exact heap accounting,
            and deferred steps of shared variables run exactly once (V5)
-  (a)      the None build as coroutines on one stack (concurrency-sessions.md,
-           "Decisions left to prototypes"): the unwinding lowering with hosted
-           calls that never suspend, under CoroutinePolicy. Engines and
-           lowerings agree, programs of G4 give the None build's result, and
-           deadlocks that coroutines avoid or add are counted
+  None     the None build as coroutines (the unwinding lowering with hosted
+           calls that never suspend, under CoroutinePolicy), which is the
+           None build of a program that can wait: engines and lowerings
+           agree; for a program that cannot wait, it gives the plain stack's
+           results and effects
   R1-R6    monitored in every run (runtime.py); heap verified exact after
            every run, with crashed native frames as the only leak (R5)
 
@@ -33,14 +36,11 @@ import sys
 from collections import Counter
 
 from gen import gen_program
-from host import (HOSTED, CoroutinePolicy, InputOrderPolicy, PausePolicy, Policy, RandomPolicy, ReadyPolicy,
-                  run_none, run_tasks)
+from host import (NONE_HOSTED, CoroutinePolicy, InputOrderPolicy, PausePolicy, Policy, RandomPolicy, ReadyPolicy,
+                  run_none_build, run_tasks)
 from lower import Lowering
 from pipeline import build
-from sessions import DEADLOCK
 
-# A None build's hosted calls finish in place, so they are never sites.
-NONE_HOSTED = {k: False for k in HOSTED}
 
 sys.setrecursionlimit(100000)
 
@@ -81,15 +81,24 @@ class Failure(Exception):
     pass
 
 
+def seq_name(can):
+    return "coroutine" if can else "input-order"
+
+
 def check_program(seed, stats, cancel_sites=6, links=False):
     procs, features = gen_program(seed, links=links)
     arc, lows = build(procs)
     stats["programs"] += 1
     for f in features:
         stats["feature " + f] += 1
-    none = run_none(arc.prog)
+    none = run_none_build(arc)
+    can = none.extra["engine"] == "coroutine"
+    stats["None build: " + ("coroutines" if can else "one stack")] += 1
     stats["none " + none.result[0]] += 1
-    stats["None: cells released at the end"] += none.extra.get("cells released", 0)
+    # On one stack every cell is released at the end; as coroutines, when the
+    # last task holding it finishes, as in a Tasks build.
+    stats["None: cells released"] += none.runtime.get("cells released", 0) if can else none.extra.get(
+        "cells released", 0)
     stats["session: None entries run on demand"] += none.extra.get("on demand", 0)
 
     def run(mode, eng, pol, conc="Tasks"):
@@ -106,7 +115,10 @@ def check_program(seed, stats, cancel_sites=6, links=False):
         stats["R7 supervise! returned"] += r.runtime.get("R7 returned", 0)
         stats["R7 supervise! gave up"] += r.runtime.get("R7 gave up", 0)
         stats["deferred erased calls"] += r.engine.get("deferred_calls", 0) if eng == "unwind" else 0
-        for k in ("loops", "arrivals", "loop exits", "loop spawns", "limit refills", "shielded waits",
+        for k in ("loops", "arrivals", "loop exits", "loop spawns", "loop spawns under the root limit",
+                  "loops ended with background entries left", "background entries cancelled at the end",
+                  "background entries discarded at the end", "background reports dropped at the end",
+                  "limit refills", "shielded waits",
                   "reports held for another wait", "linked crashes",
                   "linked crashes pending at a suspension"):
             stats["loop: " + k] += r.runtime.get(k, 0)
@@ -121,7 +133,9 @@ def check_program(seed, stats, cancel_sites=6, links=False):
             stats["shared: " + k] += r.runtime.get(k, 0)
         return r
 
-    policies = [lambda: ReadyPolicy(), lambda: PausePolicy(), lambda: InputOrderPolicy(),
+    # The third is the None build's schedule.
+    policies = [lambda: ReadyPolicy(), lambda: PausePolicy(), (lambda: CoroutinePolicy()) if can else
+                (lambda: InputOrderPolicy()),
                 lambda: RandomPolicy(seed * 7 + 1), lambda: RandomPolicy(seed * 7 + 2, parallel=True),
                 lambda: RandomPolicy(seed * 7 + 3, parallel=True, p_cancel=0.02)]
     results = {}
@@ -151,11 +165,11 @@ def check_program(seed, stats, cancel_sites=6, links=False):
         stats["lss checks"] += base.engine["checks"]
         results[pol.name + str(pi)] = base
     # C9: None vs input order.
-    io = results["input_order2"]
+    seq = results["coroutine2" if can else "input_order2"]
     if not (none.result[0] == "crashed" and none.extra.get("supervised")):
-        if (none.result, none.effects) != (io.result, io.effects):
-            raise Failure(f"seed {seed}: None and input-order differ:\n{none.result}\n{io.result}\n"
-                          f"{none.effects}\n{io.effects}")
+        if (none.result, none.effects) != (seq.result, seq.effects):
+            raise Failure(f"seed {seed}: the None build and the {seq_name(can)} schedule differ:\n"
+                          f"{none.result}\n{seq.result}\n{none.effects}\n{seq.effects}")
         stats["C9 compared"] += 1
     # G4: deterministic programs give one result everywhere.
     # A session program may deadlock under one schedule and not another, or
@@ -169,8 +183,9 @@ def check_program(seed, stats, cancel_sites=6, links=False):
                 raise Failure(f"seed {seed}: {name} result {r.result} != None {none.result}")
             if per_task(r.effects) != per_task(none.effects):
                 raise Failure(f"seed {seed}: {name} per-task effects differ from the None build")
-    # (a): coroutines on one stack.
-    dead = ("crashed", ("str", DEADLOCK))
+    # The None build as coroutines, in both lowerings and engines. It is the
+    # None build of a program that can wait; one that cannot runs on the
+    # plain stack, and the two must agree.
     co = {}
     for mode in ("lss", "boxy"):
         low = Lowering(arc, NONE_HOSTED, mode)
@@ -182,24 +197,22 @@ def check_program(seed, stats, cancel_sites=6, links=False):
             stats["coroutine: user procedures that may suspend in a Tasks build, port programs"] += sum(
                 lows["lss"].may[f] for f in procs if mode == "lss")
         for eng in ("unwind", "stack"):
-            co[(mode, eng)] = r = run_tasks(low, eng, CoroutinePolicy())
+            co[(mode, eng)] = r = run_tasks(low, eng, CoroutinePolicy(), none_build=True)
             stats["coroutine runs"] += 1
             stats["leaked objects verified"] += r.leaked_live
     c = co[("lss", "unwind")]
-    crashed = c.runtime.get("crashes", 0) > 0
+    crashed = c.result[0] == "crashed" or c.runtime.get("crashes", 0) > 0
     for mode in ("lss", "boxy"):
         if key(co[(mode, "unwind")], heap=not crashed) != key(co[(mode, "stack")], heap=not crashed):
             raise Failure(f"seed {seed}: coroutines: unwind and stack differ under {mode}")
     if key(c, heap=not crashed) != key(co[("boxy", "unwind")], heap=not crashed):  # as C8 above
         raise Failure(f"seed {seed}: coroutines: lss and boxy differ")
     stats["coroutine: status checks"] += c.engine["checks"]
-    if none.result == dead and c.result != dead:
-        stats["coroutine: completes where one stack deadlocks"] += 1
-    if c.result == dead and none.result != dead:
-        stats["coroutine: deadlocks where one stack does not"] += 1
-    if not features & {"race!", "all_ok!", "crash", "arrival order", "session", "shared"}:
-        if c.result != none.result or per_task(c.effects) != per_task(none.effects):
-            raise Failure(f"seed {seed}: coroutines differ from the None build on a deterministic program")
+    if not can:
+        if (c.result, c.effects) != (none.result, none.effects):
+            raise Failure(f"seed {seed}: a program that cannot wait gives different results as coroutines "
+                          f"and on one stack:\n{c.result}\n{none.result}\n{c.effects}\n{none.effects}")
+        stats["cannot wait: coroutines and one stack agree"] += 1
     # C5: cancel at every suspension.
     n = results["pause1"].host.get("pending", 0)
     for k in range(1, min(n, cancel_sites) + 1):
