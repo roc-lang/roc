@@ -85,13 +85,14 @@ const Lane = enum {
     source,
     /// The Linux x86_64 lane: every job that needs `build-ci` outputs.
     primary,
-    /// The macOS lanes: only the jobs whose result can differ by host.
-    /// Source and primary-host jobs already ran on Linux.
+    /// The macOS lanes and the nightly lanes on hosts pull-request CI never
+    /// uses: only the jobs whose result can differ by host. Source and
+    /// primary-host jobs already ran on Linux.
     secondary,
-    /// The Windows lanes: every job. Windows paths, shells and tools differ
-    /// enough that host-independent jobs have failed there alone (the Zig
-    /// lints compared `\`-separated paths with `/`-separated ones), so Windows
-    /// CI runs everything `zig build minici` runs on a Windows machine.
+    /// The pull-request Windows lanes: every job. Windows paths, shells and
+    /// tools differ enough that host-independent jobs have failed there alone
+    /// (the Zig lints compared `\`-separated paths with `/`-separated ones), so
+    /// Windows CI runs everything `zig build minici` runs on a Windows machine.
     all,
 
     fn runs(self: Lane, placement: Placement) bool {
@@ -117,12 +118,34 @@ const Lane = enum {
     }
 };
 
-/// The host family a CI shard runs on. Used only to prove shard coverage.
-const Host = enum { linux, macos, windows };
+/// The CI runner a shard runs on, and with it the build artifact the shard
+/// restores: every shard of a host reuses one `build-ci` from that host. Used
+/// to prove shard coverage and to say which CI file runs which shards.
+const Host = enum {
+    /// Pull-request CI's runners: ubuntu-24.04, macos-15 and windows-2025.
+    linux,
+    macos,
+    windows,
+    /// The nightly runners pull-request CI never uses: ubuntu-24.04-arm,
+    /// macos-15-intel and windows-2022.
+    linux_arm,
+    macos_intel,
+    windows_2022,
+
+    /// The lane whose jobs this host's shards run between them, each exactly
+    /// once. Linux gets there through the `source` and `primary` lanes
+    /// together.
+    fn coverage(self: Host) Lane {
+        return switch (self) {
+            .linux, .windows => .all,
+            .macos, .linux_arm, .macos_intel, .windows_2022 => .secondary,
+        };
+    }
+};
 
 /// One CI job's slice of MiniCI: the jobs in `selection` that `lane` runs.
-/// `.github/workflows/ci_manager.yml` names every shard exactly once through
-/// its `minici_shard:` matrix keys, and `--minici-verify-workflows` checks that.
+/// The CI files in `workflows` name every shard exactly once through their
+/// `minici_shard:` matrix keys, and `--minici-verify-workflows` checks that.
 const Shard = struct {
     name: []const u8,
     host: Host,
@@ -135,9 +158,10 @@ const Shard = struct {
 /// and two backends, which alone takes most of a 120-minute job on the slowest
 /// host, so it is the last job in `jobs` and each host runs it as a shard of
 /// its own. The
-/// "MiniCI shards cover" tests prove that, for each host, the shards run every
-/// job exactly once: the Linux shards (`source` included) and the Windows
-/// shards each run every job, and the macOS shards run every `every_host` job.
+/// "MiniCI shards cover" test proves that, for each host, the shards run every
+/// job of the host's `coverage` lane exactly once. The nightly hosts split the
+/// secondary lane like macOS, and each of their shards takes at most about
+/// two and a half hours on its runner.
 const shards = [_]Shard{
     .{ .name = "source", .host = .linux, .lane = .source },
     .{ .name = "linux-core", .host = .linux, .lane = .primary, .selection = .{ .before = "run-test-eval" } },
@@ -155,6 +179,18 @@ const shards = [_]Shard{
     .{ .name = "windows-simd", .host = .windows, .lane = .all, .selection = .{ .from = "run-test-simd-differential", .to = "run-test-eval-host-effects" } },
     .{ .name = "windows-harness", .host = .windows, .lane = .all, .selection = .{ .after = "run-test-eval-host-effects", .before = strategy_differential_job } },
     .{ .name = "windows-strategy", .host = .windows, .lane = .all, .selection = .{ .from = strategy_differential_job } },
+    .{ .name = "linux-arm-core", .host = .linux_arm, .lane = .secondary, .selection = .{ .before = "run-test-eval" } },
+    .{ .name = "linux-arm-eval", .host = .linux_arm, .lane = .secondary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval" } },
+    .{ .name = "linux-arm-harness", .host = .linux_arm, .lane = .secondary, .selection = .{ .after = "run-test-eval", .before = strategy_differential_job } },
+    .{ .name = "linux-arm-strategy", .host = .linux_arm, .lane = .secondary, .selection = .{ .from = strategy_differential_job } },
+    .{ .name = "macos-intel-core", .host = .macos_intel, .lane = .secondary, .selection = .{ .before = "run-test-eval" } },
+    .{ .name = "macos-intel-eval", .host = .macos_intel, .lane = .secondary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval" } },
+    .{ .name = "macos-intel-harness", .host = .macos_intel, .lane = .secondary, .selection = .{ .after = "run-test-eval", .before = strategy_differential_job } },
+    .{ .name = "macos-intel-strategy", .host = .macos_intel, .lane = .secondary, .selection = .{ .from = strategy_differential_job } },
+    .{ .name = "windows-2022-core", .host = .windows_2022, .lane = .secondary, .selection = .{ .before = "run-test-eval" } },
+    .{ .name = "windows-2022-eval", .host = .windows_2022, .lane = .secondary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval" } },
+    .{ .name = "windows-2022-harness", .host = .windows_2022, .lane = .secondary, .selection = .{ .after = "run-test-eval", .before = strategy_differential_job } },
+    .{ .name = "windows-2022-strategy", .host = .windows_2022, .lane = .secondary, .selection = .{ .from = strategy_differential_job } },
 };
 
 fn shardByName(name: []const u8) ?Shard {
@@ -2390,15 +2426,17 @@ fn runPhaseJobs(env: *const std.process.Environ.Map) ?usize {
     return if (builtin.os.tag == .windows) 2 else null;
 }
 
-/// How a CI file runs MiniCI.
+/// How a CI file runs MiniCI. No CI file runs a whole lane: every CI host
+/// builds once and splits its lane across shards.
 const WorkflowRuns = union(enum) {
-    /// Names every shard in `shards` exactly once through `minici_shard:`
-    /// matrix keys, which together with the "MiniCI shards cover" tests means
-    /// it runs every MiniCI job on every host it belongs on.
-    every_shard,
-    /// Runs one lane in full through exactly one `--minici-lane` invocation
-    /// and names no shard.
-    lane: Lane,
+    /// Names every shard of these hosts exactly once through `minici_shard:`
+    /// matrix keys, and no other shard, which together with the "MiniCI shards
+    /// cover" test means it runs every MiniCI job its hosts are meant to run.
+    shards_of: []const Host,
+    /// Names no shard. The file builds or runs what the sharded files share,
+    /// so it is checked for MiniCI jobs run by hand and for `build-ci` built
+    /// without MiniCI's options.
+    no_shards,
 };
 
 const Workflow = struct {
@@ -2411,13 +2449,18 @@ const Workflow = struct {
 /// running its part of MiniCI, or runs a MiniCI job by hand beside it, fails
 /// the change that does it.
 const workflows = [_]Workflow{
-    .{ .path = ".github/workflows/ci_manager.yml", .runs = .every_shard },
+    .{ .path = ".github/workflows/ci_manager.yml", .runs = .{ .shards_of = &.{ .linux, .macos, .windows } } },
     // The nightly legs on hosts pull-request CI never uses. Every job whose
     // result can differ by host runs there, so a job added to `jobs` runs on
     // those hosts with no workflow edit.
-    .{ .path = ".github/workflows/ci_zig.yml", .runs = .{ .lane = .secondary } },
-    // The Nix dev shell leg that `.github/workflows/ci_zig_nix.yml` runs.
-    .{ .path = "ci/zig_nix_ci.sh", .runs = .{ .lane = .secondary } },
+    .{ .path = ".github/workflows/ci_zig.yml", .runs = .{ .shards_of = &.{ .linux_arm, .macos_intel, .windows_2022 } } },
+    // The build and shard steps both sharded files run.
+    .{ .path = ".github/actions/minici-build/action.yml", .runs = .no_shards },
+    .{ .path = ".github/actions/minici-shard/action.yml", .runs = .no_shards },
+    // The Nix dev shell leg that `.github/workflows/ci_zig_nix.yml` runs. It
+    // builds what MiniCI runs inside the dev shell; the tests themselves run
+    // in the shards above.
+    .{ .path = "ci/zig_nix_ci.sh", .runs = .no_shards },
 };
 
 const workflow_shard_key = "minici_shard:";
@@ -2471,16 +2514,15 @@ fn missingBuildCiArg(command: []const u8) ?[]const u8 {
 }
 
 /// Returns one message per way `text` departs from running MiniCI as `runs`
-/// says: a shard named wrongly (see `WorkflowRuns`), a lane invocation missing,
-/// repeated or naming the wrong lane, a `zig build` command that runs a
-/// MiniCI job by hand, or one that runs `build-ci` without the options MiniCI
-/// builds with (`minici_build_args`). Comment lines are skipped. An empty
-/// result means the file runs MiniCI exactly as declared.
+/// says: a shard named wrongly (see `WorkflowRuns`), a whole lane run, a `zig
+/// build` command that runs a MiniCI job by hand, or one that runs `build-ci`
+/// without the options MiniCI builds with (`minici_build_args`). Comment lines
+/// are skipped. An empty result means the file runs MiniCI exactly as
+/// declared.
 fn workflowProblems(allocator: std.mem.Allocator, text: []const u8, runs: WorkflowRuns) ![]const []const u8 {
     var problems = std.ArrayList([]const u8).empty;
     errdefer problems.deinit(allocator);
     var shard_counts = @as([shards.len]usize, @splat(0));
-    var lane_count: usize = 0;
 
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |raw_line| {
@@ -2505,22 +2547,11 @@ fn workflowProblems(allocator: std.mem.Allocator, text: []const u8, runs: Workfl
         while (std.mem.find(u8, rest, workflow_lane_option)) |start| {
             rest = rest[start + workflow_lane_option.len ..];
             const value = workflowLaneValue(rest) orelse continue;
-            switch (runs) {
-                .every_shard => try problems.append(allocator, try std.fmt.allocPrint(
-                    allocator,
-                    "runs MiniCI lane `{s}`, but this file runs MiniCI through its shards",
-                    .{value},
-                )),
-                .lane => |lane| if (std.mem.eql(u8, value, @tagName(lane))) {
-                    lane_count += 1;
-                } else {
-                    try problems.append(allocator, try std.fmt.allocPrint(
-                        allocator,
-                        "runs MiniCI lane `{s}` (expected `{s}`)",
-                        .{ value, @tagName(lane) },
-                    ));
-                },
-            }
+            try problems.append(allocator, try std.fmt.allocPrint(
+                allocator,
+                "runs MiniCI lane `{s}` in full; CI runs MiniCI through shards",
+                .{value},
+            ));
         }
 
         rest = line;
@@ -2544,32 +2575,30 @@ fn workflowProblems(allocator: std.mem.Allocator, text: []const u8, runs: Workfl
         }
     }
 
-    switch (runs) {
-        .every_shard => for (shards, shard_counts) |shard, count| {
-            if (count == 1) continue;
-            try problems.append(allocator, try std.fmt.allocPrint(
-                allocator,
-                "MiniCI shard `{s}` is named {d} times (expected exactly once)",
-                .{ shard.name, count },
-            ));
-        },
-        .lane => |lane| {
-            for (shards, shard_counts) |shard, count| {
-                if (count == 0) continue;
-                try problems.append(allocator, try std.fmt.allocPrint(
-                    allocator,
-                    "names MiniCI shard `{s}`, but this file runs the `{s}` lane in full",
-                    .{ shard.name, @tagName(lane) },
-                ));
-            }
-            if (lane_count != 1) try problems.append(allocator, try std.fmt.allocPrint(
-                allocator,
-                "runs MiniCI with `{s} {s}` {d} times (expected exactly once)",
-                .{ workflow_lane_option, @tagName(lane), lane_count },
-            ));
-        },
+    for (shards, shard_counts) |shard, count| {
+        const expected: usize = switch (runs) {
+            .shards_of => |hosts| @intFromBool(containsHost(hosts, shard.host)),
+            .no_shards => 0,
+        };
+        if (count == expected) continue;
+        try problems.append(allocator, if (expected == 0) try std.fmt.allocPrint(
+            allocator,
+            "names MiniCI shard `{s}`, which runs on {s}, a host this file does not run",
+            .{ shard.name, @tagName(shard.host) },
+        ) else try std.fmt.allocPrint(
+            allocator,
+            "MiniCI shard `{s}` is named {d} times (expected exactly once)",
+            .{ shard.name, count },
+        ));
     }
     return problems.toOwnedSlice(allocator);
+}
+
+fn containsHost(hosts: []const Host, host: Host) bool {
+    for (hosts) |candidate| {
+        if (candidate == host) return true;
+    }
+    return false;
 }
 
 fn verifyWorkflows(allocator: std.mem.Allocator, io: std.Io) !void {
@@ -2587,8 +2616,8 @@ fn verifyWorkflows(allocator: std.mem.Allocator, io: std.Io) !void {
             continue;
         }
         switch (workflow.runs) {
-            .every_shard => std.debug.print("MiniCI: `{s}` runs each of the {d} MiniCI shards exactly once\n", .{ workflow.path, shards.len }),
-            .lane => |lane| std.debug.print("MiniCI: `{s}` runs the MiniCI `{s}` lane exactly once\n", .{ workflow.path, @tagName(lane) }),
+            .shards_of => |hosts| std.debug.print("MiniCI: `{s}` runs each MiniCI shard of its {d} hosts exactly once\n", .{ workflow.path, hosts.len }),
+            .no_shards => std.debug.print("MiniCI: `{s}` names no MiniCI shard and runs no MiniCI job by hand\n", .{workflow.path}),
         }
     }
     if (failed) std.process.exit(1);
@@ -2925,26 +2954,22 @@ fn shardRunsForHost(host: Host, job_index: usize) !usize {
     return count;
 }
 
-test "MiniCI shards cover every job exactly once on Linux and Windows" {
-    for ([_]Host{ .linux, .windows }) |host| {
+test "MiniCI shards cover every job of each host's lane exactly once" {
+    for (std.enums.values(Host)) |host| {
         for (jobs, 0..) |job, i| {
+            // The secondary hosts rely on Linux for source and primary-host jobs.
+            const expected: usize = @intFromBool(host.coverage().runs(job.placement));
             const count = try shardRunsForHost(host, i);
-            if (count != 1) std.debug.print("job `{s}` runs {d} times on {s}\n", .{ job.name, count, @tagName(host) });
-            try std.testing.expectEqual(@as(usize, 1), count);
+            if (count != expected) std.debug.print("job `{s}` runs {d} times on {s}\n", .{ job.name, count, @tagName(host) });
+            try std.testing.expectEqual(expected, count);
         }
     }
 }
 
-test "MiniCI shards cover every host-specific job exactly once on macOS" {
-    for (jobs, 0..) |job, i| {
-        // macOS relies on Linux for source and primary-host jobs.
-        const expected: usize = switch (job.placement) {
-            .source, .primary_host => 0,
-            .every_host => 1,
-        };
-        const count = try shardRunsForHost(.macos, i);
-        if (count != expected) std.debug.print("job `{s}` runs {d} times on macOS\n", .{ job.name, count });
-        try std.testing.expectEqual(expected, count);
+test "MiniCI host coverage puts every job on Linux and Windows" {
+    for (std.enums.values(Placement)) |placement| {
+        try std.testing.expect(Host.linux.coverage().runs(placement));
+        try std.testing.expect(Host.windows.coverage().runs(placement));
     }
 }
 
@@ -2996,8 +3021,11 @@ test "parseMiniArgs rejects unknown shards and shards combined with ranges" {
     );
 }
 
+const pr_hosts = [_]Host{ .linux, .macos, .windows };
+const nightly_hosts = [_]Host{ .linux_arm, .macos_intel, .windows_2022 };
+
 fn expectWorkflowProblems(text: []const u8, expected: usize) !void {
-    try expectWorkflowProblemsFor(text, .every_shard, expected);
+    try expectWorkflowProblemsFor(text, .{ .shards_of = &pr_hosts }, expected);
 }
 
 fn expectWorkflowProblemsFor(text: []const u8, runs: WorkflowRuns, expected: usize) !void {
@@ -3010,50 +3038,69 @@ fn expectWorkflowProblemsFor(text: []const u8, runs: WorkflowRuns, expected: usi
     try std.testing.expectEqual(expected, problems.len);
 }
 
-test "workflowProblems accepts a workflow naming every shard once" {
+/// One `minici_shard:` line per shard of `hosts`.
+fn appendShardLines(text: *std.ArrayList(u8), hosts: []const Host) !void {
+    for (shards) |shard| {
+        if (!containsHost(hosts, shard.host)) continue;
+        const line = try std.fmt.allocPrint(std.testing.allocator, "minici_shard: {s}\n", .{shard.name});
+        defer std.testing.allocator.free(line);
+        try text.appendSlice(std.testing.allocator, line);
+    }
+}
+
+fn hostShardCount(hosts: []const Host) usize {
+    var count: usize = 0;
+    for (shards) |shard| count += @intFromBool(containsHost(hosts, shard.host));
+    return count;
+}
+
+test "workflowProblems accepts a workflow naming every shard of its hosts once" {
     var text = std.ArrayList(u8).empty;
     defer text.deinit(std.testing.allocator);
-    for (shards, 0..) |shard, i| {
+    var i: usize = 0;
+    for (shards) |shard| {
+        if (!containsHost(&pr_hosts, shard.host)) continue;
         // Exercise the list-item, quoted and trailing-comment spellings.
         const line = switch (i % 3) {
             0 => try std.fmt.allocPrint(std.testing.allocator, "          - minici_shard: {s}\n", .{shard.name}),
             1 => try std.fmt.allocPrint(std.testing.allocator, "            minici_shard: '{s}'\n", .{shard.name}),
             else => try std.fmt.allocPrint(std.testing.allocator, "            minici_shard: \"{s}\" # note\n", .{shard.name}),
         };
+        i += 1;
         defer std.testing.allocator.free(line);
         try text.appendSlice(std.testing.allocator, line);
     }
     try expectWorkflowProblems(text.items, 0);
+
+    text.clearRetainingCapacity();
+    try appendShardLines(&text, &nightly_hosts);
+    try expectWorkflowProblemsFor(text.items, .{ .shards_of = &nightly_hosts }, 0);
 }
 
-test "workflowProblems reports missing, duplicate and unknown shards" {
+test "workflowProblems reports missing, duplicate, unknown and other hosts' shards" {
     // Every shard missing.
-    try expectWorkflowProblems("jobs: {}\n", shards.len);
+    try expectWorkflowProblems("jobs: {}\n", hostShardCount(&pr_hosts));
 
     var text = std.ArrayList(u8).empty;
     defer text.deinit(std.testing.allocator);
-    for (shards) |shard| {
-        const line = try std.fmt.allocPrint(std.testing.allocator, "minici_shard: {s}\n", .{shard.name});
-        defer std.testing.allocator.free(line);
-        try text.appendSlice(std.testing.allocator, line);
-    }
+    try appendShardLines(&text, &pr_hosts);
     try text.appendSlice(std.testing.allocator, "minici_shard: linux-core\nminici_shard: ubuntu-full\n");
     // One duplicate plus one unknown name.
     try expectWorkflowProblems(text.items, 2);
 
+    // A shard of a host another file runs.
+    try text.appendSlice(std.testing.allocator, "minici_shard: linux-arm-eval\n");
+    try expectWorkflowProblems(text.items, 3);
+
     // A sharded workflow runs no whole lane and no MiniCI job by hand.
     try text.appendSlice(std.testing.allocator, "run: zig build minici -- --minici-lane secondary\nrun: zig build run-test-cli\n");
-    try expectWorkflowProblems(text.items, 4);
+    try expectWorkflowProblems(text.items, 5);
 }
 
 test "workflowProblems requires build-ci to pass MiniCI's build options" {
     var text = std.ArrayList(u8).empty;
     defer text.deinit(std.testing.allocator);
-    for (shards) |shard| {
-        const line = try std.fmt.allocPrint(std.testing.allocator, "minici_shard: {s}\n", .{shard.name});
-        defer std.testing.allocator.free(line);
-        try text.appendSlice(std.testing.allocator, line);
-    }
+    try appendShardLines(&text, &pr_hosts);
     const shard_lines = text.items.len;
 
     try text.appendSlice(std.testing.allocator, "  command: zig build build-ci");
@@ -3069,68 +3116,47 @@ test "workflowProblems requires build-ci to pass MiniCI's build options" {
     try expectWorkflowProblems(text.items, 1);
 }
 
-test "workflowProblems accepts a nightly file that runs its lane once" {
-    const nightly: WorkflowRuns = .{ .lane = .secondary };
+test "workflowProblems accepts a file that names no shard and runs no job by hand" {
     try expectWorkflowProblemsFor(
-        \\      # Not `--minici-lane primary`: comment lines are not commands.
-        \\      - name: Run MiniCI
-        \\        run: zig build minici -- --minici-lane secondary
+        \\      # Not `--minici-lane primary` or `minici_shard: linux-core`: comment lines are not commands.
+        \\      - name: Build MiniCI binaries
+        \\        command: zig build ${{ inputs.jobs }} build-ci -Dembed-builtin-unit=true
+        \\      - run: zig build minici -- --minici-skip-build --minici-shard "$MINICI_SHARD"
         \\      # Configurations MiniCI does not run, and steps that are not MiniCI jobs.
         \\      - run: zig build run-check-snapshots ${{ matrix.target_flag }} -- --debug
         \\      - run: zig build run-test-cli -Doptimize=ReleaseFast
         \\      - run: zig build run-test-zig && zig build build-test-eval-runner
-    , nightly, 0);
-    try expectWorkflowProblemsFor("zig build minici \"$@\" -- --minici-lane=secondary\n", nightly, 0);
+    , .no_shards, 0);
+    try expectWorkflowProblemsFor("zig build build-ci -Dembed-builtin-unit=true \"$@\"\n", .no_shards, 0);
 }
 
-test "workflowProblems reports a nightly file that drifts from its lane" {
-    const nightly: WorkflowRuns = .{ .lane = .secondary };
-    // The lane is not run at all.
-    try expectWorkflowProblemsFor("run: zig build run-test-zig\n", nightly, 1);
-    // The lane is run twice.
-    try expectWorkflowProblemsFor(
-        \\run: zig build minici -- --minici-lane secondary
-        \\run: zig build minici -- --minici-lane secondary
-    , nightly, 1);
-    // The wrong lane, which also leaves the declared one unrun.
-    try expectWorkflowProblemsFor("run: zig build minici -- --minici-lane primary\n", nightly, 2);
-    // A shard key, and MiniCI jobs run by hand beside the lane.
+test "workflowProblems reports a file without shards that runs MiniCI itself" {
+    // A whole lane.
+    try expectWorkflowProblemsFor("run: zig build minici -- --minici-lane secondary\n", .no_shards, 1);
+    // A shard key, MiniCI jobs run by hand, and `build-ci` without MiniCI's options.
     try expectWorkflowProblemsFor(
         \\- minici_shard: macos-core
-        \\run: zig build minici -- --minici-lane secondary
         \\run: zig build run-test-cli ${{ matrix.target_flag }}
         \\run: zig build run-check-snapshots; zig build run-test-wasm-static-lib
-    , nightly, 4);
+        \\run: zig build build-ci
+    , .no_shards, 5);
 }
 
-test "MiniCI's nightly lanes run exactly the jobs whose result can differ by host" {
-    // Every `.lane` file in `workflows` runs its lane once over every job, so
-    // this is what each nightly leg runs: every `every_host` job, once. The
-    // `source` and `primary_host` jobs it leaves out run on every pull request
-    // (see the "MiniCI shards cover" tests).
-    for (workflows) |workflow| {
-        const lane = switch (workflow.runs) {
-            .every_shard => continue,
-            .lane => |lane| lane,
-        };
-        try std.testing.expectEqual(Lane.secondary, lane);
-        for (jobs) |job| {
-            const runs = lane.runs(job.placement);
-            if (runs != (job.placement == .every_host)) std.debug.print("job `{s}` is wrongly selected by the {s} lane\n", .{ job.name, @tagName(lane) });
-            try std.testing.expectEqual(job.placement == .every_host, runs);
-        }
-    }
-}
-
-test "MiniCI's CI file table names each file once and one file runs the shards" {
-    var sharded: usize = 0;
+test "MiniCI's CI file table names each file once and runs each host's shards in one file" {
     for (workflows, 0..) |workflow, i| {
-        if (workflow.runs == .every_shard) sharded += 1;
         for (workflows[i + 1 ..]) |other| {
             try std.testing.expect(!std.mem.eql(u8, workflow.path, other.path));
         }
     }
-    try std.testing.expectEqual(@as(usize, 1), sharded);
+    for (std.enums.values(Host)) |host| {
+        var files: usize = 0;
+        for (workflows) |workflow| switch (workflow.runs) {
+            .shards_of => |hosts| files += @intFromBool(containsHost(hosts, host)),
+            .no_shards => {},
+        };
+        if (files != 1) std.debug.print("host `{s}` has its shards run by {d} CI files\n", .{ @tagName(host), files });
+        try std.testing.expectEqual(@as(usize, 1), files);
+    }
 }
 
 test "parseMiniArgs selects a whole lane" {
