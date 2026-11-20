@@ -83,13 +83,38 @@ fn isAscii(text: []const u8) bool {
 /// agree until a line contains a character outside ASCII, after which every
 /// column to its right differs.
 pub fn byteOffsetToUtf16Column(line_text: []const u8, byte_offset: u32) u32 {
-    const upto = line_text[0..@min(byte_offset, line_text.len)];
-    if (isAscii(upto)) return @intCast(upto.len);
+    const column = @min(byte_offset, line_text.len);
+    if (isAscii(line_text[0..column])) return @intCast(column);
+    const counted = countUtf16Units(line_text, 0, column);
+    return counted.whole_units + counted.partial_units;
+}
 
+/// The UTF-16 code units of `line_text[from..to]`, where `from` is where a
+/// UTF-8 sequence starts.
+const Utf16Count = struct {
+    /// The units of the sequences that end at or before `to`.
+    whole_units: u32,
+    /// Where the last of those sequences ends: `to`, unless a sequence starts
+    /// before `to` and ends after it.
+    boundary: usize,
+    /// The units of the bytes from `boundary` to `to`, which begin a sequence
+    /// that `to` cuts short. Each byte counts as one, as the cut sequence is
+    /// not valid UTF-8 up to `to`.
+    partial_units: u32,
+};
+
+fn countUtf16Units(line_text: []const u8, from: usize, to: usize) Utf16Count {
+    std.debug.assert(from <= to and to <= line_text.len);
     var units: u32 = 0;
-    var index: usize = 0;
-    while (index < upto.len) {
-        const sequence = utf8SequenceAt(upto, index);
+    var index = from;
+    while (index < to) {
+        if (line_text[index] < 0x80) {
+            units += 1;
+            index += 1;
+            continue;
+        }
+        const sequence = utf8SequenceAt(line_text, index);
+        if (index + sequence.len > to) break;
         units += if (sequence.codepoint) |codepoint|
             (if (codepoint <= 0xFFFF) @as(u32, 1) else 2)
         else
@@ -97,7 +122,7 @@ pub fn byteOffsetToUtf16Column(line_text: []const u8, byte_offset: u32) u32 {
             @as(u32, @intCast(sequence.len));
         index += sequence.len;
     }
-    return units;
+    return .{ .whole_units = units, .boundary = index, .partial_units = @intCast(to - index) };
 }
 
 /// One UTF-8 sequence, as far as the bytes allow it to be read.
@@ -207,6 +232,45 @@ pub fn offsetToPosition(offset: u32, line_offsets: *const LineOffsets) document_
         .character = byteOffsetToUtf16Column(text, offset - line_offsets.offsets[line]),
     };
 }
+
+/// Converts byte offsets to LSP positions in nondecreasing order, counting the
+/// UTF-16 columns of each line once across all the offsets on it rather than
+/// from the line's start for each one.
+pub const PositionCursor = struct {
+    line_offsets: *const LineOffsets,
+    line: u32 = 0,
+    /// Where in `line`'s text the last whole UTF-8 sequence counted so far ends.
+    boundary: usize = 0,
+    /// The UTF-16 code units of `line`'s text before `boundary`.
+    units: u32 = 0,
+    /// The offset last converted, which the next one may not precede.
+    last_offset: u32 = 0,
+
+    pub fn init(line_offsets: *const LineOffsets) PositionCursor {
+        return .{ .line_offsets = line_offsets };
+    }
+
+    /// The position of `offset`, which is at or after the offset converted last.
+    pub fn positionOf(self: *PositionCursor, offset: u32) document_symbol_handler.Position {
+        std.debug.assert(offset >= self.last_offset);
+        self.last_offset = offset;
+        const line = self.line_offsets.lineAt(offset);
+        if (line != self.line) {
+            self.line = line;
+            self.boundary = 0;
+            self.units = 0;
+        }
+        const text = lineText(self.line_offsets.source, self.line_offsets.offsets, line) orelse return .{
+            .line = line,
+            .character = 0,
+        };
+        const column = @min(offset - self.line_offsets.offsets[line], text.len);
+        const counted = countUtf16Units(text, self.boundary, column);
+        self.units += counted.whole_units;
+        self.boundary = counted.boundary;
+        return .{ .line = line, .character = self.units + counted.partial_units };
+    }
+};
 
 /// What a column past the end of its line's text converts to.
 const PastLineEnd = enum { reject, clamp_to_line_end };

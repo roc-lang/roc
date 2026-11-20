@@ -118,6 +118,32 @@ test "offsetToPosition finds the line and column of an offset" {
     try std.testing.expectEqual(@as(u32, 0), start.character);
 }
 
+test "a cursor converts ascending offsets to the positions offsetToPosition gives" {
+    const allocator = std.testing.allocator;
+    // Multi-byte characters, invalid and cut-short UTF-8, and both line endings,
+    // so that offsets land inside sequences as well as between them.
+    const sources = [_][]const u8{ "aé😀x\nyz", "é\r\n😀b\r\n", "a\xffb\xe2\x82c\n\xf0\x9f", "", "\n\n", "one line" };
+    for (sources) |source| {
+        const table = try position.LineOffsets.init(allocator, source);
+        defer table.deinit();
+
+        // Every offset in turn, then every other one with each repeated, as a
+        // token's end is the next token's start.
+        for ([_]u32{ 1, 2 }) |stride| {
+            var cursor = position.PositionCursor.init(&table);
+            var offset: u32 = 0;
+            while (offset <= source.len) : (offset += stride) {
+                for (0..stride) |_| {
+                    const expected = position.offsetToPosition(offset, &table);
+                    const found = cursor.positionOf(offset);
+                    try std.testing.expectEqual(expected.line, found.line);
+                    try std.testing.expectEqual(expected.character, found.character);
+                }
+            }
+        }
+    }
+}
+
 test "a position converts back to the offset it came from" {
     const allocator = std.testing.allocator;
     // Lines holding characters that are one, two and four bytes of UTF-8 but
