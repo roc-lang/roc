@@ -1202,6 +1202,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
     // Create CLI context at the top level - this is passed to all command handlers
     var ctx = CliCtx.init(gpa, arena, &io, command);
     ctx.setNoColor(parsed.no_color);
+    ctx.replay_ansi = parsed_args.watchReplayAnsi();
     ctx.initIo(); // Must be called after ctx is at its final stack location
     defer ctx.deinit(); // deinit flushes I/O
 
@@ -16976,8 +16977,6 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
             try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
             try appendReplaceDepArgs(ctx.gpa, &argv, &args.resolve_limits.replace_deps);
-            try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
-            try argv.append(ctx.gpa, args.path);
         },
         .test_cmd => |args| {
             try argv.append(ctx.gpa, "test");
@@ -16989,8 +16988,6 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
             try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
             try appendReplaceDepArgs(ctx.gpa, &argv, &args.resolve_limits.replace_deps);
-            try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
-            try argv.append(ctx.gpa, args.path);
         },
         .build => |args| {
             try argv.append(ctx.gpa, "build");
@@ -17007,10 +17004,12 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             if (args.wasm_stack_size) |bytes| try appendOwnedArg(ctx.gpa, &argv, &owned, "--wasm-stack-size={}", .{bytes});
             try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
             try appendReplaceDepArgs(ctx.gpa, &argv, &args.resolve_limits.replace_deps);
-            try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
-            try argv.append(ctx.gpa, args.path);
         },
     }
+    if (ctx.streamSupportsAnsi(.stdout)) try argv.append(ctx.gpa, "--watch-ansi-stdout");
+    if (ctx.streamSupportsAnsi(.stderr)) try argv.append(ctx.gpa, "--watch-ansi-stderr");
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
+    try argv.append(ctx.gpa, watchCommandPath(command));
 
     return .{
         .argv = try argv.toOwnedSlice(ctx.gpa),
@@ -17052,6 +17051,21 @@ test "watch child argv forwards every dependency replacement" {
         try std.testing.expectEqualStrings("../pkg/main.roc", limits.replace_deps.slice()[0].new);
         try std.testing.expectEqualStrings("./b/main.roc", limits.replace_deps.slice()[1].old);
         try std.testing.expectEqualStrings(url, limits.replace_deps.slice()[1].new);
+    }
+}
+
+test "watch child argv preserves the replay destinations' ANSI capabilities" {
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, std.testing.allocator, &io, .test_cmd);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    for ([_]cli_context.AnsiStreams{ .{}, .{ .stdout = true }, .{ .stderr = true }, .{ .stdout = true, .stderr = true } }) |streams| {
+        ctx.replay_ansi = streams;
+        var child_argv = try buildWatchChildArgv(&ctx, "roc", .{ .test_cmd = .{} }, "watch-inputs");
+        defer child_argv.deinit(std.testing.allocator);
+        const parsed = try cli_args.parse(std.testing.allocator, std.testing.io, child_argv.argv[1..]);
+        try std.testing.expectEqual(streams, parsed.watchReplayAnsi().?);
     }
 }
 

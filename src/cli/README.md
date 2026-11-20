@@ -14,6 +14,10 @@ The CLI is the main entry point for developers using Roc. Its responsibilities i
 
 The CLI coordinates between the compiler frontend (parsing, type checking) and backend (code generation, linking) to provide a seamless development experience.
 
+`test`, `check`, and `build` in watch mode capture each run's output so an
+interrupted run can be discarded. Color detection uses the watcher's output
+destinations rather than the capture pipes; the usual color preferences still apply.
+
 ## ELF PIE host links
 
 Roc hosts must support relocatable code and data. Native executables always
