@@ -424,7 +424,8 @@ scratch_local_function_patterns: base.Scratch(Pattern.Idx),
 /// use-before-definition vs mutual recursion at block end. Snapshot/rollback
 /// per block.
 scratch_block_local_defs: base.Scratch(BlockLocalDef),
-/// Local type declarations found inside function bodies.
+/// Local type declarations found inside function bodies, including the types
+/// nested in their associated blocks.
 /// Collected during canonicalization, then added to all_statements at the end.
 scratch_local_type_decls: std.ArrayList(CIR.Statement.Idx),
 /// Module-global value definitions produced by canonicalization.
@@ -4321,6 +4322,12 @@ fn canonicalizeAssociatedItems(
                     nested_type_decl,
                 )) orelse continue;
                 const nested_type_decl_idx = nested_registration.stmt_idx;
+
+                // A type nested in a block-local type is itself a local type
+                // declaration, listed in `all_statements` like its owner.
+                if (block_context != null and !nested_registration.is_redeclaration) {
+                    try self.scratch_local_type_decls.append(self.env.gpa, nested_type_decl_idx);
+                }
 
                 const nested_qualified_idx = try self.insertQualifiedIdent(
                     self.env.getIdent(parent_name),
