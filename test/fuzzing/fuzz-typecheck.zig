@@ -1,10 +1,10 @@
 //! Fuzzing for Roc type checking with generated well-typed source.
 //!
-//! To build just the repro executable:
-//!   zig build build-repro-typecheck
+//! To build just the repro executable, which runs every fuzz target:
+//!   zig build build-repro
 //!
 //! To run one input:
-//!   ./zig-out/bin/repro-typecheck --verbose <seed_file>
+//!   ./zig-out/bin/repro typecheck --verbose <seed_file>
 //!
 //! To run with AFL++:
 //!   zig build -Dfuzz
@@ -22,11 +22,8 @@ const TypedCodeGenerator = @import("TypedCodeGenerator.zig");
 
 const BuildEnv = compile.BuildEnv;
 
-pub export fn zig_fuzz_init() void {}
-
-pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
-    zig_fuzz_test_inner(buf, len, false);
-}
+/// Prepares the fuzz test environment once per process.
+pub fn zig_fuzz_init() void {}
 
 pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};

@@ -12,8 +12,8 @@
 //! To build with fuzzing support:
 //!   zig build -Dfuzz
 //!
-//! To build just the repro executable (no AFL++ required):
-//!   zig build build-repro-canonicalize
+//! To build just the repro executable, which runs every fuzz target (no AFL++ required):
+//!   zig build build-repro
 //!
 //! ## Running
 //!
@@ -23,9 +23,9 @@
 //!  3. ./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz-corpus/canonicalize -o /tmp/canonicalize-out/ zig-out/bin/fuzz-canonicalize
 //!
 //! To reproduce a crash:
-//!   ./zig-out/bin/repro-canonicalize /tmp/canonicalize-out/default/crashes/id:000000...
+//!   ./zig-out/bin/repro canonicalize /tmp/canonicalize-out/default/crashes/id:000000...
 //!   # Or with verbose output:
-//!   ./zig-out/bin/repro-canonicalize --verbose /tmp/canonicalize-out/default/crashes/id:000000...
+//!   ./zig-out/bin/repro canonicalize --verbose /tmp/canonicalize-out/default/crashes/id:000000...
 //!
 //! ## Corpus
 //!
@@ -44,13 +44,8 @@ const FuzzHarness = @import("FuzzHarness.zig");
 
 const BuildEnv = compile.BuildEnv;
 
-/// Hook for AFL++ to initialize the fuzz test environment.
-pub export fn zig_fuzz_init() void {}
-
-/// Hook for AFL++ to run the fuzz test.
-pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
-    zig_fuzz_test_inner(buf, len, false);
-}
+/// Prepares the fuzz test environment once per process.
+pub fn zig_fuzz_init() void {}
 
 /// Inner implementation that can be called with debug flag for repro executable
 pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {

@@ -11,13 +11,8 @@ const std = @import("std");
 const build_options = @import("build_options");
 const parse = @import("parse");
 
-/// Hook for AFL++ to initialize the fuzz test environment.
-pub export fn zig_fuzz_init() void {}
-
-/// Hook for AFL++ to run the fuzz test.
-pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
-    zig_fuzz_test_inner(buf, len, false);
-}
+/// Prepares the fuzz test environment once per process.
+pub fn zig_fuzz_init() void {}
 
 /// todo
 pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {

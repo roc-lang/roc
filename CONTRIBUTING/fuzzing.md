@@ -62,12 +62,12 @@ brew install afl++
 From your Roc checkout, build the fuzz executables with:
 
 ```bash
-zig build -j2 -Dfuzz
+zig build -Dfuzz
 ```
 
 This builds:
 - `zig-out/bin/fuzz-*` - Fuzz targets for AFL++
-- `zig-out/bin/repro-*` - Reproduction executables for debugging crashes
+- `zig-out/bin/repro` - Reproduction executable for debugging crashes in any fuzz target
 
 Available fuzz targets:
 - `fuzz-parse` - Parser and formatter stability and comment preservation testing
@@ -82,7 +82,7 @@ Generate a seed corpus from the snapshot tests:
 
 ```bash
 mkdir -p /tmp/corpus
-zig build -j2 run-snapshot-tool -- --fuzz-corpus /tmp/corpus
+zig build run-snapshot-tool -- --fuzz-corpus /tmp/corpus
 ```
 
 This extracts source code from all snapshot tests. For REPL snapshots, it strips the `»` delimiters and creates separate corpus files for each expression.
@@ -121,19 +121,16 @@ Crashes are saved to `/tmp/parse-out/default/crashes/`.
 
 ## Reproducing Crashes
 
-Use the repro executable to debug a crash:
+Use the repro executable to debug a crash, naming the fuzz target that found it:
 
 ```bash
-./zig-out/bin/repro-parse /tmp/parse-out/default/crashes/<crash-file>
+./zig-out/bin/repro parse /tmp/parse-out/default/crashes/<crash-file>
+./zig-out/bin/repro typecheck /tmp/typecheck-out/default/crashes/<crash-file>
 ```
 
-Use the matching repro executable for each fuzz target, for example:
-
-```bash
-./zig-out/bin/repro-typecheck /tmp/typecheck-out/default/crashes/<crash-file>
-```
-
-The repro executables include extra debug output and full stack traces.
+`zig build build-repro` builds just the repro executable, which needs no
+AFL++. Add `--verbose` for extra debug output; the repro executable also
+prints full stack traces.
 
 ## Minimizing Test Cases
 
@@ -166,7 +163,7 @@ Keep your corpus between sessions for incremental improvement:
 
 ```bash
 # First run - generate initial corpus
-zig build -j2 run-snapshot-tool -- --fuzz-corpus ~/roc-fuzz-corpus
+zig build run-snapshot-tool -- --fuzz-corpus ~/roc-fuzz-corpus
 
 # Subsequent runs - AFL++ will add new interesting inputs
 afl-fuzz -i ~/roc-fuzz-corpus -o /tmp/parse-out zig-out/bin/fuzz-parse
