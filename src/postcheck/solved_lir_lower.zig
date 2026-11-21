@@ -647,10 +647,38 @@ fn DenseChainMap(comptime Key: type, comptime primary: []const u8, comptime V: t
             });
             head.value_ptr.* = index;
         }
+
+        /// Undo the newest write to `key`: put back `previous`, or remove
+        /// the entry when the write inserted it. Writes are undone newest
+        /// first, so the entry an undone insert made is the last node and
+        /// its chain's head.
+        fn undoPut(self: *Self, key: Key, previous: ?V) void {
+            const index = self.find(key).?;
+            if (previous) |value| {
+                self.nodes.items[index].value = value;
+                return;
+            }
+            std.debug.assert(index + 1 == self.nodes.items.len);
+            const head = self.heads.getPtr(@field(key, primary)).?;
+            std.debug.assert(head.* == index);
+            const next = self.nodes.items[index].next;
+            if (next == end) {
+                _ = self.heads.remove(@field(key, primary));
+            } else {
+                head.* = next;
+            }
+            self.nodes.items.len = index;
+        }
     };
 }
 
 const TypedLocalMap = DenseChainMap(TypedLiftedLocal, "local", LIR.LocalId);
+
+/// A `local_map` or `typed_local_map` write, with the binding it replaced.
+const LocalBindingUndo = union(enum) {
+    local: struct { local: Lifted.LocalId, previous: ?LIR.LocalId },
+    typed: struct { key: TypedLiftedLocal, previous: ?LIR.LocalId },
+};
 
 const EquivalentNamedLayout = struct {
     ty: Type.TypeId,
@@ -1042,6 +1070,14 @@ const Lowerer = struct {
         /// its task records until the call finishes, and inner calls stack
         /// their runs above it.
         inline_substitutions: std.ArrayList(bool) = .empty,
+        /// The `local_map` and `typed_local_map` writes made while an
+        /// inlined call's body is lowered, each with the binding it
+        /// replaced. Each open inlined call owns the run from the start its
+        /// task records, and inner calls stack their runs above it.
+        inline_binding_undo: std.ArrayList(LocalBindingUndo) = .empty,
+        /// How many inlined calls are open, so writes outside every inlined
+        /// body are not logged.
+        open_inline_calls: u32 = 0,
         /// Debug builds only: the single-use bodies inlined into the bodies
         /// being lowered, those of the innermost body from
         /// `single_use_inlined_start` on. Each is lowered at most once per
@@ -1066,6 +1102,7 @@ const Lowerer = struct {
             for (self.spare_arenas.items) |arena| self.destroyArena(arena);
             self.spare_arenas.deinit(self.allocator);
             self.inline_substitutions.deinit(self.allocator);
+            self.inline_binding_undo.deinit(self.allocator);
             self.single_use_inlined.deinit(self.allocator);
             self.frame_locals.deinit(self.allocator);
             self.proc_locals.deinit();
@@ -2957,8 +2994,8 @@ const Lowerer = struct {
             const arg = GuardedList.at(lifted_args, i);
             const proc_arg = GuardedList.at(proc_args, i);
             const arg_ty = try self.lowerType(.{ .ty = GuardedList.at(solved_args, i), .env = solved_fn_ty.env });
-            try self.local_map.put(arg.local, proc_arg);
-            try self.typed_local_map.put(.{
+            try self.bindLiftedLocal(arg.local, proc_arg);
+            try self.bindTypedLiftedLocal(.{
                 .local = arg.local,
                 .ty = arg_ty,
             }, proc_arg);
@@ -6590,9 +6627,9 @@ const Lowerer = struct {
         capture_locals: []const LIR.LocalId,
         body_expr: Lifted.ExprId,
         next: LIR.CFStmtId,
-        /// The bindings the callee's arguments and captures shadowed, once
-        /// installed.
-        saved: ?[]collections.OptionalId(LIR.LocalId) = null,
+        /// The start of this call's run of binding undo entries
+        /// (`enterInlineCallBindings`), while its bindings are open.
+        bindings_start: ?usize = null,
         /// The caller's instance, put back once the callee's body is
         /// lowered.
         saved_env: Env = .global,
@@ -7132,7 +7169,7 @@ const Lowerer = struct {
                 if (task.substituted_start) |start| self.lane_scratch.inline_substitutions.shrinkRetainingCapacity(start);
                 task.substituted_start = null;
             },
-            .inline_call => |*task| self.restoreInlineCallArgs(task),
+            .inline_call => |*task| self.leaveInlineCallBindings(task),
             .callable_call => |*task| {
                 self.allocator.free(task.variants);
                 task.variants = &.{};
@@ -8722,7 +8759,7 @@ const Lowerer = struct {
 
     fn stepInlineCall(self: *Lowerer, frame: *LowerFrame, task: *InlineCallTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
         if (frame.cursor == 1) {
-            self.restoreInlineCallArgs(task);
+            self.leaveInlineCallBindings(task);
             self.type_env = task.saved_env;
             const done = task.done orelse return .{ .ret = input.? };
             self.inline_return = task.saved_inline_return;
@@ -8748,15 +8785,15 @@ const Lowerer = struct {
         const captures = self.captureSpan(spec.captures);
         if (task.capture_locals.len != captures.len) Common.invariant("inline call capture count differed from function captures");
 
-        const saved = try self.allocator.alloc(collections.OptionalId(LIR.LocalId), lifted_args.len + captures.len);
-        errdefer self.allocator.free(saved);
+        // The callee's locals are bound afresh for this call: the body may be
+        // inlined again in this procedure, at another instance of its group.
+        task.bindings_start = self.enterInlineCallBindings();
         for (0..lifted_args.len) |i| {
-            saved[i] = .of(try self.shadowLocal(GuardedList.at(lifted_args, i).local, task.arg_locals[i]));
+            try self.bindLiftedLocal(GuardedList.at(lifted_args, i).local, task.arg_locals[i]);
         }
         for (0..captures.len) |i| {
-            saved[lifted_args.len + i] = .of(try self.shadowLocal(GuardedList.at(captures, i).local, task.capture_locals[i]));
+            try self.bindLiftedLocal(GuardedList.at(captures, i).local, task.capture_locals[i]);
         }
-        task.saved = saved;
 
         // The callee body's lifted inline scopes are rebased under the known
         // call's scope, whose call site is this call.
@@ -8789,41 +8826,57 @@ const Lowerer = struct {
         return .{ .call = try self.valueBranchTask(callee_parent, task.target, task.body_expr, ret_ty, true, done.id, task.next) };
     }
 
-    /// Put back the bindings an inlined call's arguments and captures
-    /// shadowed, in the reverse of the order they were installed.
-    fn restoreInlineCallArgs(self: *Lowerer, task: *InlineCallTask) void {
-        const saved = task.saved orelse return;
-        const spec = self.fn_specs.items[@backingInt(task.callee)];
-        const lifted_args = self.solved.lifted.typedLocalSpan(self.solved.lifted.getFn(spec.source).args);
-        const captures = self.captureSpan(spec.captures);
-        var i = captures.len;
-        while (i > 0) {
-            i -= 1;
-            self.restoreShadowedLocal(GuardedList.at(captures, i).local, saved[lifted_args.len + i].get());
-        }
-        i = lifted_args.len;
-        while (i > 0) {
-            i -= 1;
-            self.restoreShadowedLocal(GuardedList.at(lifted_args, i).local, saved[i].get());
-        }
-        self.allocator.free(saved);
-        task.saved = null;
+    /// Open an inlined call's bindings: every `local_map` and
+    /// `typed_local_map` write until the call's `leaveInlineCallBindings` is
+    /// undone there. Returns the start of the call's run of undo entries.
+    fn enterInlineCallBindings(self: *Lowerer) usize {
+        self.lane_scratch.open_inline_calls += 1;
+        return self.lane_scratch.inline_binding_undo.items.len;
     }
 
-    /// Bind `local` to `value`, returning the binding it shadows.
-    fn shadowLocal(self: *Lowerer, local: Lifted.LocalId, value: LIR.LocalId) std.mem.Allocator.Error!?LIR.LocalId {
-        const entry = try self.local_map.getOrPut(local);
-        const previous = if (entry.found_existing) entry.value_ptr.* else null;
-        entry.value_ptr.* = value;
-        return previous;
+    /// Put back the bindings an inlined call's arguments, captures and body
+    /// replaced, newest first, so the caller and every later lowering of the
+    /// same body see none of this call's bindings.
+    fn leaveInlineCallBindings(self: *Lowerer, task: *InlineCallTask) void {
+        const start = task.bindings_start orelse return;
+        task.bindings_start = null;
+        const undo = &self.lane_scratch.inline_binding_undo;
+        var index = undo.items.len;
+        while (index > start) {
+            index -= 1;
+            switch (undo.items[index]) {
+                .local => |entry| if (entry.previous) |binding| {
+                    self.local_map.getPtr(entry.local).?.* = binding;
+                } else {
+                    _ = self.local_map.remove(entry.local);
+                },
+                .typed => |entry| self.typed_local_map.undoPut(entry.key, entry.previous),
+            }
+        }
+        undo.shrinkRetainingCapacity(start);
+        self.lane_scratch.open_inline_calls -= 1;
     }
 
-    fn restoreShadowedLocal(self: *Lowerer, local: Lifted.LocalId, previous: ?LIR.LocalId) void {
-        if (previous) |binding| {
-            self.local_map.getPtr(local).?.* = binding;
-        } else {
-            _ = self.local_map.remove(local);
-        }
+    /// Bind `local` to `value` in `local_map`, logging the replaced binding
+    /// while an inlined call is open.
+    fn bindLiftedLocal(self: *Lowerer, local: Lifted.LocalId, value: LIR.LocalId) std.mem.Allocator.Error!void {
+        if (self.lane_scratch.open_inline_calls == 0) return try self.local_map.put(local, value);
+        const undo = &self.lane_scratch.inline_binding_undo;
+        try undo.ensureUnusedCapacity(self.allocator, 1);
+        const previous = self.local_map.get(local);
+        try self.local_map.put(local, value);
+        undo.appendAssumeCapacity(.{ .local = .{ .local = local, .previous = previous } });
+    }
+
+    /// Bind `key` to `value` in `typed_local_map`, logging the replaced
+    /// binding while an inlined call is open.
+    fn bindTypedLiftedLocal(self: *Lowerer, key: TypedLiftedLocal, value: LIR.LocalId) std.mem.Allocator.Error!void {
+        if (self.lane_scratch.open_inline_calls == 0) return try self.typed_local_map.put(key, value);
+        const undo = &self.lane_scratch.inline_binding_undo;
+        try undo.ensureUnusedCapacity(self.allocator, 1);
+        const previous = self.typed_local_map.get(key);
+        try self.typed_local_map.put(key, value);
+        undo.appendAssumeCapacity(.{ .typed = .{ .key = key, .previous = previous } });
     }
 
     /// The capture record fields of a capturing specialization, in capture
@@ -13007,13 +13060,13 @@ const Lowerer = struct {
             return existing;
         }
         if (try self.mappedLocalForMatchingLocal(local)) |existing| {
-            try self.local_map.put(local, existing);
+            try self.bindLiftedLocal(local, existing);
             try self.noteLocal(existing);
             return existing;
         }
         const lir_local = try self.addTemp(try self.lowerLocalTy(local));
         try self.setLocalName(lir_local, local);
-        try self.local_map.put(local, lir_local);
+        try self.bindLiftedLocal(local, lir_local);
         return lir_local;
     }
 
@@ -13039,8 +13092,8 @@ const Lowerer = struct {
         // Reserve the producer's solved representation; the use's destination
         // may have a different row and is converted at its typed boundary.
         const source = try self.addTemp(ty);
-        try self.local_map.put(local, source);
-        try self.typed_local_map.put(.{ .local = local, .ty = ty }, source);
+        try self.bindLiftedLocal(local, source);
+        try self.bindTypedLiftedLocal(.{ .local = local, .ty = ty }, source);
         try self.local_types.put(source, ty);
         try self.setLocalName(source, local);
         return source;
@@ -13088,7 +13141,7 @@ const Lowerer = struct {
         } else if (self.layoutsMatch(declared_layout, requested_layout)) {
             const lir_local = try self.addLocalForLayout(requested_layout);
             try self.setLocalName(lir_local, local);
-            try self.local_map.put(local, lir_local);
+            try self.bindLiftedLocal(local, lir_local);
             return lir_local;
         }
 
@@ -13100,7 +13153,7 @@ const Lowerer = struct {
 
         const lir_local = try self.addTemp(ty);
         try self.setLocalName(lir_local, local);
-        try self.typed_local_map.put(typed, lir_local);
+        try self.bindTypedLiftedLocal(typed, lir_local);
         return lir_local;
     }
 
@@ -13110,15 +13163,15 @@ const Lowerer = struct {
     };
 
     fn rememberRecursiveSlotLocalForType(self: *Lowerer, local: Lifted.LocalId, ty: Type.TypeId, slot: LIR.LocalId) Common.LowerError!void {
-        try self.typed_local_map.put(.{ .local = local, .ty = ty }, slot);
+        try self.bindTypedLiftedLocal(.{ .local = local, .ty = ty }, slot);
 
         const slot_ty = try self.recursiveSlotTypeOfType(ty);
-        try self.typed_local_map.put(.{ .local = local, .ty = slot_ty }, slot);
+        try self.bindTypedLiftedLocal(.{ .local = local, .ty = slot_ty }, slot);
 
         const runtime_ty = self.runtimeBackingType(ty);
         if (runtime_ty != ty) {
             const runtime_slot_ty = try self.recursiveSlotTypeOfType(runtime_ty);
-            try self.typed_local_map.put(.{ .local = local, .ty = runtime_slot_ty }, slot);
+            try self.bindTypedLiftedLocal(.{ .local = local, .ty = runtime_slot_ty }, slot);
         }
     }
 
@@ -13153,7 +13206,7 @@ const Lowerer = struct {
         const lir_local = try self.addLocalForLayout(slot_layout);
         try self.local_types.put(lir_local, ty);
         try self.setLocalName(lir_local, local);
-        try self.local_map.put(local, lir_local);
+        try self.bindLiftedLocal(local, lir_local);
         try self.rememberRecursiveSlotLocalForType(local, ty, lir_local);
         return .{ .slot = lir_local };
     }

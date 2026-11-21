@@ -24542,7 +24542,10 @@ reference: lowered types, procedure identities, capture records, and function
 specializations, whose `env` is the instance whose body they lower. A body
 reads its types under its specialization's instance (`Lowerer.type_env`), an
 inlined callee's body under the callee's, and a reference names the instance
-its occurrence was assigned (`Instances.referenceEnv`). A function keeps its
+its occurrence was assigned (`Instances.referenceEnv`). One procedure can
+inline a function's body at several instances, and every copy reads the same
+lifted locals, so an inlined call binds its callee's locals afresh and puts
+back every binding its body made when the call ends. A function keeps its
 source at every instance, so procedure identities (`proc_identity.zig`) name
 it by content. Solved Inline decides per spec function. SpecConstr's
 procedure-use inventory counts uses per lifted function, which is the answer
