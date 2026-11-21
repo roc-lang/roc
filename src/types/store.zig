@@ -2232,7 +2232,7 @@ pub const Store = struct {
                     try self.setDescWord(resolved.desc_idx, word);
                     return;
                 },
-                else => return,
+                .field_presence, .err, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return,
             }
         }
     }

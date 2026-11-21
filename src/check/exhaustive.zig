@@ -422,12 +422,16 @@ pub const CtorInfo = struct {
     name: CtorName,
     tag_id: TagId,
     arity: u32,
-    /// For a tag, its payload run in the opened backing. Reuse the range
+    /// For a tag, its payload run in the opened backing, reused from the range
     /// gathered with the family instead of traversing the row chain again.
-    tag_args_start: @FieldType(Var.SafeList.Range, "start") = @fromBackingInt(0),
+    /// `.none` for the synthetic open constructor, which has no payload, and
+    /// for record, tuple, and opaque constructors, whose argument types come
+    /// from the matrix columns.
+    tag_args: CtorArgTypes,
 
     fn tagArgs(self: CtorInfo) CtorArgTypes {
-        return .{ .vars = .{ .start = self.tag_args_start, .count = self.arity } };
+        std.debug.assert(self.tag_args.len() == self.arity);
+        return self.tag_args;
     }
 
     fn inhabited(self: CtorInfo, family: Union, columns: ColumnTypes) Allocator.Error!bool {
@@ -831,6 +835,7 @@ fn convertPatternNode(
                 .name = .{ .tag = Ident.Idx.NONE },
                 .tag_id = .only,
                 .arity = @intCast(fields),
+                .tag_args = .none,
             };
 
             break :node .{ .known_ctor = .{
@@ -856,6 +861,7 @@ fn convertPatternNode(
                 .name = .{ .tag = Ident.Idx.NONE },
                 .tag_id = .only,
                 .arity = @intCast(elem_indices.len),
+                .tag_args = .none,
             };
 
             break :node .{ .known_ctor = .{
@@ -1173,7 +1179,7 @@ fn buildUnionFromTagUnion(
             .name = .{ .tag = tag.name },
             .tag_id = @fromBackingInt(@intCast(i)),
             .arity = tag.args.count,
-            .tag_args_start = tag.args.start,
+            .tag_args = .{ .vars = tag.args },
         };
     }
 
@@ -1183,6 +1189,7 @@ fn buildUnionFromTagUnion(
             .name = .{ .tag = Ident.Idx.NONE }, // Represents "#Open"
             .tag_id = @fromBackingInt(@intCast(all_tags.items.len)),
             .arity = 0,
+            .tag_args = .none,
         };
     }
 
@@ -2716,6 +2723,7 @@ fn collectCtorsSketched(
                     .tag_id = result_union_info.alternatives[0].tag_id,
                     .arity = @intCast(all_fields.len),
                     .name = result_union_info.alternatives[0].name,
+                    .tag_args = .none,
                 };
                 result_union_info.alternatives = new_alts;
             }
@@ -3664,6 +3672,7 @@ fn usefulEnter(
                             .tag_id = merged_union_info.alternatives[0].tag_id,
                             .arity = @intCast(all_fields_slice.len),
                             .name = merged_union_info.alternatives[0].name,
+                            .tag_args = .none,
                         };
                         merged_union_info.alternatives = new_alts;
                     }
@@ -4329,7 +4338,7 @@ fn resultAllocationFailureCase(gpa: Allocator) (Allocator.Error || Ident.Error |
     defer arena.deinit();
     const arena_alloc = arena.allocator();
     const args = try arena_alloc.dupe(Pattern, &.{.{ .anything = vars[0] }});
-    const alternatives = [_]CtorInfo{.{ .name = .{ .tag = name }, .tag_id = .only, .arity = 1 }};
+    const alternatives = [_]CtorInfo{.{ .name = .{ .tag = name }, .tag_id = .only, .arity = 1, .tag_args = .none }};
     const missing = try arena_alloc.dupe(Pattern, &.{.{ .ctor = .{
         .union_info = .{
             .alternatives = try arena_alloc.dupe(CtorInfo, &alternatives),

@@ -5747,7 +5747,7 @@ const Certifier = struct {
                     .{ .value = state.knownVariant(state.valueOf(s.op.source)) orelse return null, .from_variant = true }
                 else
                     null,
-                else => null,
+                .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => null,
             },
             .set_local => |s| self.segment_scalars.get(s.value),
             .assign_low_level => |s| blk: {
@@ -5761,7 +5761,7 @@ const Certifier = struct {
                 const b = self.segment_scalars.get(GuardedList.at(args, 1)) orelse return null;
                 break :blk .{ .value = @intFromBool(a.value == b.value), .from_variant = a.from_variant or b.from_variant };
             },
-            else => null,
+            .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => null,
         };
     }
 
@@ -5792,7 +5792,7 @@ const Certifier = struct {
                     const source = switch (stmt.*) {
                         .assign_ref => |s| if (s.op.kind == .local) state.variantDiscriminant(s.op.source) else null,
                         .set_local => |s| state.variantDiscriminant(s.value),
-                        else => null,
+                        .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => null,
                     };
                     try state.setVariantDiscriminant(target, source orelse no_value);
                 }

@@ -1589,7 +1589,7 @@ const Unifier = struct {
                 },
                 .alias => current = self.types_store.resolveVarWord(self.types_store.aliasBackingVarAt(current.desc_idx)),
                 .empty_tag_union, .err => return,
-                else => return error.TypeMismatch,
+                .field_presence, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return error.TypeMismatch,
             }
         }
         return error.TypeMismatch;

@@ -1541,7 +1541,7 @@ pub fn writeFlexVarName(self: *TypeWriter, writer: *ByteWrite, var_: Var, contex
     const source_id: ?Ident.Idx = switch (resolved.desc.content) {
         .flex => |flex| flex.name,
         .rigid => |rigid| rigid.name,
-        else => null,
+        .alias, .field_presence, .structure, .err => null,
     };
     const start = self.flex_var_names.items.len;
     var preferred = if (source_id) |id| self.getIdent(id) else "";

@@ -4,9 +4,12 @@
 
 const std = @import("std");
 
+/// The longest delimiter searched by inline comparison instead of a `Plan`.
 pub const max_inline_len = 16;
 
+/// The Two-Way critical factorization of a delimiter.
 pub const Plan = struct {
+    /// Where the delimiter splits into the prefix and its maximal suffix.
     cut: usize,
     /// Zero when the prefix does not repeat with the suffix's period.
     period: usize,
