@@ -6200,7 +6200,12 @@ fn generalizeRank(self: *Self, env: *Env, roots: []const Var) Allocator.Error!vo
     // are generalized when that scope is.
     if (!env.var_pool.generalizesInnermostScope()) return;
     try self.generalizer.adjust(self.gpa, &env.var_pool, env.rank());
-    var committed = try self.closeOwnedParameterRows(env);
+    // A closed parameter row ends in a fresh uncommitted tag tail at this
+    // rank, which the boundary quantifies like every other class it owns
+    // (design.md "Uncommitted Tag Tails"), so the pass queues it by adjusting
+    // the rank's classes once more.
+    if (try self.closeOwnedParameterRows(env)) try self.generalizer.adjust(self.gpa, &env.var_pool, env.rank());
+    var committed = false;
     if (self.generalizer.owned_tails.items.len != 0) {
         const commit_all = self.rootsIncludeProvidedDef(roots);
         var tails: std.ArrayListUnmanaged(Var) = .empty;
