@@ -1211,6 +1211,11 @@ const State = struct {
         return if (value == no_value) null else value;
     }
 
+    fn setVariantDiscriminant(self: *State, local: LIR.LocalId, value: ValueId) Allocator.Error!void {
+        if (self.variant_discriminants.get(@backingInt(local)) != value)
+            try self.put(&self.variant_discriminants, @backingInt(local), value);
+    }
+
     fn claimsOf(self: *const State, value: ValueId) ClaimSet {
         return self.claims.get(value);
     }
@@ -2049,6 +2054,10 @@ const Certifier = struct {
     summary_index_scratch: collections.DenseMap(u32, u32),
     /// Relevant positions the summarized state binds, ascending.
     relevant_bound_scratch: std.ArrayList(u32) = .empty,
+    /// Exact scalar facts within one straight-line segment. Equality of a
+    /// tag's known discriminant with a numeric literal is a tag test just
+    /// like switching on the discriminant itself.
+    segment_scalars: collections.DenseMapUnmanaged(LIR.LocalId, ScalarFact) = .empty,
     /// Bound positions the join's body never reads that are nonetheless
     /// relevant to one summary: each is the only carrier of a container in a
     /// relevant value's payload chain.
@@ -2175,6 +2184,7 @@ const Certifier = struct {
         self.provenance_carrier_scratch.deinit();
         self.summary_index_scratch.deinit();
         self.relevant_bound_scratch.deinit(self.allocator);
+        self.segment_scalars.deinit(self.allocator);
         self.domain_values_scratch.deinit();
         self.value_reach_seen.deinit();
         self.value_reach_stack.deinit(self.allocator);
@@ -5518,9 +5528,8 @@ const Certifier = struct {
 
     /// Copies every value reachable from `value_reach_stack` (through
     /// lenders, holders, and payload sources) with its ownership facts from
-    /// `source` into `target`. The containers through which a reached taken
-    /// projection still owes its claim also retain a carrier binding (see
-    /// `bindTakenProjectionCarriers`).
+    /// `source` into `target`. When a projection still needs its container's
+    /// unit as a claim target or a lender, preserve its carrier binding too.
     fn copyReachedValues(self: *Certifier, source: *const State, target: *State) Allocator.Error!void {
         self.repr_scratch.clearRetainingCapacity();
         var bindings = source.local_value.iterator();
@@ -5548,23 +5557,24 @@ const Certifier = struct {
             if (source.knownVariant(value)) |known| try target.setKnownVariant(value, known);
             const info = self.values.items[value];
             try self.value_reach_stack.appendSlice(self.allocator, info.lenders);
-            if (info.payload_taken and balance <= 0) try self.bindTakenProjectionCarriers(source, target, value);
+            // A borrowed selection may keep a nonlocal lender across a
+            // frame exit just as a deferred take keeps its claim path.
+            // Copying the lender's balance without a binding would orphan
+            // that unit at the very next jump.
+            if (balance <= 0 and info.payload_source != no_value and
+                (info.payload_taken or self.payloadChainStoresOwnership(source, value)))
+                try self.bindProjectionCarriers(source, target, value);
             try self.value_reach_stack.append(self.allocator, info.payload_source);
             try self.value_reach_stack.append(self.allocator, holder);
         }
     }
 
-    /// A taken projection without a unit of its own claims its stored unit
-    /// by walking its container chain (`tryClaimSeen`) through views up to
-    /// the first container that holds a unit or claims; one with a unit
-    /// never walks it. Later summaries encode that path by carrier
-    /// local, so an anonymous container alone cannot preserve it: each
-    /// container on the path that `target` does not already carry keeps its
-    /// lowest carrier from `source`, even a local of an exited region.
-    /// Borrowed projections spend no stored unit; summaries reduce their
-    /// unnamed containers to live anchors instead.
-    fn bindTakenProjectionCarriers(self: *Certifier, source: *const State, target: *State, taken: ValueId) Allocator.Error!void {
-        var container = self.values.items[taken].payload_source;
+    /// Later summaries encode the path to a stored unit by carrier local.
+    /// Keep its lowest source binding through frame exits even when the
+    /// selection itself only borrows: a live but unnamed unit cannot be
+    /// spent at the continuation that owns it.
+    fn bindProjectionCarriers(self: *Certifier, source: *const State, target: *State, selection: ValueId) Allocator.Error!void {
+        var container = self.values.items[selection].payload_source;
         while (container != no_value) : (container = self.values.items[container].payload_source) {
             if (!self.target_carried_scratch.contains(container)) {
                 if (self.repr_scratch.get(container)) |carrier| {
@@ -5723,15 +5733,51 @@ const Certifier = struct {
         try self.processJump(work, arrival.walk, &merged, frame_record.target);
     }
 
+    const ScalarFact = struct { value: u32, from_variant: bool };
+
+    fn scalarResult(self: *Certifier, state: *const State, stmt: LIR.CFStmt) ?ScalarFact {
+        return switch (stmt) {
+            .assign_literal => |s| if (s.value == .i64_literal)
+                .{ .value = std.math.cast(u32, s.value.i64_literal.value) orelse return null, .from_variant = false }
+            else
+                null,
+            .assign_ref => |s| switch (s.op.kind) {
+                .local => self.segment_scalars.get(s.op.source),
+                .discriminant => if (self.isRc(s.op.source))
+                    .{ .value = state.knownVariant(state.valueOf(s.op.source)) orelse return null, .from_variant = true }
+                else
+                    null,
+                else => null,
+            },
+            .set_local => |s| self.segment_scalars.get(s.value),
+            .assign_low_level => |s| blk: {
+                const args = self.store.getLocalSpan(s.args);
+                if (s.op == .bool_not) {
+                    const a = self.segment_scalars.get(GuardedList.at(args, 0)) orelse return null;
+                    break :blk .{ .value = @intFromBool(a.value == 0), .from_variant = a.from_variant };
+                }
+                if (s.op != .num_is_eq) return null;
+                const a = self.segment_scalars.get(GuardedList.at(args, 0)) orelse return null;
+                const b = self.segment_scalars.get(GuardedList.at(args, 1)) orelse return null;
+                break :blk .{ .value = @intFromBool(a.value == b.value), .from_variant = a.from_variant or b.from_variant };
+            },
+            else => null,
+        };
+    }
+
     fn runSegment(self: *Certifier, work: *WorkQueue, segment: Segment) CertifyError!void {
         var state = segment.state;
         defer state.deinit();
+        self.segment_scalars.clearRetainingCapacity();
         var cursor = segment.cursor;
         self.current_origin_join = segment.origin_join;
         while (true) {
             self.current_stmt = cursor;
 
             if (self.memo_points.contains(cursor)) {
+                // Join and memo keys describe ownership and variant facts,
+                // not an arbitrary execution history for scalar locals.
+                self.segment_scalars.clearRetainingCapacity();
                 const summary = try self.summarize(&state);
                 const memo_entry = MemoEntry{ .stmt = @backingInt(cursor), .walk = segment.walk, .digest = summaryDigest(cursor, summary) };
                 const seen = try self.memo.getOrPut(memo_entry);
@@ -5739,6 +5785,25 @@ const Certifier = struct {
             }
 
             const stmt = self.store.getCFStmtImmediate(cursor);
+            if (state.variant_discriminants.root != null) {
+                if (body_clone.writtenLocal(stmt.*)) |target| {
+                    // A copied discriminator keeps its container association;
+                    // any other definition kills the old association.
+                    const source = switch (stmt.*) {
+                        .assign_ref => |s| if (s.op.kind == .local) state.variantDiscriminant(s.op.source) else null,
+                        .set_local => |s| state.variantDiscriminant(s.value),
+                        else => null,
+                    };
+                    try state.setVariantDiscriminant(target, source orelse no_value);
+                }
+            }
+            if (state.known_variants.root != null) {
+                if (body_clone.writtenLocal(stmt.*)) |target| {
+                    if (self.scalarResult(&state, stmt.*)) |fact| {
+                        try self.segment_scalars.put(self.allocator, target, fact);
+                    } else _ = self.segment_scalars.remove(target);
+                }
+            }
             // Any write to the returned local kills its discriminant witness;
             // `assign_tag` establishes a replacement after this kill.
             if (self.current_return_local) |return_local| {
@@ -5784,10 +5849,7 @@ const Certifier = struct {
                             {
                                 try state.setOutcomeDiscriminant(assign.target, source_value);
                             }
-                            try state.put(&state.variant_discriminants, @backingInt(assign.target), no_value);
-                            if (source_value != no_value) {
-                                try state.put(&state.variant_discriminants, @backingInt(assign.target), source_value);
-                            }
+                            try state.setVariantDiscriminant(assign.target, source_value);
                         },
                         .field => try self.bindPayloadReadWithShell(
                             &state,
@@ -6021,7 +6083,10 @@ const Certifier = struct {
                     // variants are infeasible once the variant is proven, and
                     // an arm proves its variant where nothing did before.
                     const variant_container = state.variantDiscriminant(switch_stmt.cond);
-                    const known_variant: ?u32 = if (variant_container) |container| state.knownVariant(container) else null;
+                    const known_variant: ?u32 = if (variant_container) |container| state.knownVariant(container) else blk: {
+                        const fact = self.segment_scalars.get(switch_stmt.cond) orelse break :blk null;
+                        break :blk if (fact.from_variant) fact.value else null;
+                    };
                     var known_is_listed = false;
                     for (0..GuardedList.borrowLen(branches)) |branch_index| {
                         const branch = GuardedList.at(branches, branch_index);
@@ -11449,6 +11514,48 @@ test "issue 13304 certify reads the constructed variant after a switch on its al
 test "certify known variant does not prune an arm a later jump reaches" {
     // Branches arrive last-listed first, so variant 1 reaches the join first.
     try testing.expectError(error.Certification, certifyKnownVariantJoin(&.{ 0, 1 }));
+}
+
+test "certify a discriminant equality prunes only the infeasible Boolean arm" {
+    for ([_]u32{ 0, 1 }) |discriminant| {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+        const layout = try f.layouts.putTagUnion(&.{ .str, .str });
+        const tag = try f.local(layout);
+        const payload = try f.local(.str);
+        const disc = try f.local(.u8);
+        const zero = try f.local(.u8);
+        const eq = try f.local(.bool);
+        const result = try f.local(.i64);
+        const leak = try f.assignI64(result, try f.ret(result));
+        const choose = try f.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = eq,
+            .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 1, .body = leak }}),
+            .default_branch = try f.decrefStmt(tag, layout, leak),
+        } }, .test_fixture);
+        const compare = try f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = eq,
+            .op = .num_is_eq,
+            .rc_effect = try f.store.addRcEffect(LIR.LowLevel.num_is_eq.rcEffect()),
+            .args = try f.store.addLocalSpan(&.{ disc, zero }),
+            .next = choose,
+        } }, .test_fixture);
+        const constant = try f.store.addCFStmt(.{ .assign_literal = .{
+            .target = zero,
+            .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u8 } },
+            .next = compare,
+        } }, .test_fixture);
+        const read = try f.store.addCFStmt(.{ .assign_ref = .{ .target = disc, .op = .discriminant(tag), .next = constant } }, .test_fixture);
+        const body = try f.store.addCFStmt(.{ .assign_tag = .{
+            .target = tag,
+            .variant_index = discriminant,
+            .discriminant = discriminant,
+            .payload = payload,
+            .next = read,
+        } }, .test_fixture);
+        _ = try f.addProc(&.{payload}, body, .i64);
+        if (discriminant == 0) try testing.expectError(error.Certification, f.certify()) else try f.certify();
+    }
 }
 
 test "certify dynamic product scalar reads preserve representation but not released payloads" {
