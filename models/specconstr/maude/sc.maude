@@ -1,0 +1,1245 @@
+*** SpecConstr as a rewrite system over the IR of ir.maude.
+***
+*** The cloner (op cln) is the value-aware clone of spec_constr.zig's
+*** `Cloner`: it carries a substitution of locals to symbolic values,
+*** the active inline stack, the lexical loop stack, and threads a state
+*** with the worker table, the fresh-name counter and the per-clone
+*** code-growth budget.  The pass driver (module SC-PASS) is a rewrite
+*** system: worker writes and original-body normalizations are `rl`s, so
+*** `search` explores every order the coordinator could pick.
+***
+*** Bug flags (St field FL) switch individual rules back to the behaviour
+*** before a known fix, for calibration (the number is the roc-lang/roc issue or PR):
+***   'B9975  literal patterns verdict no_match, all-no_match is an invariant
+***   'B10124 case-of-case copies an outer arm into every leaf (no joins)
+***   'B10438 loop exit selection mints a tuple type of the kept components
+***   'B10461 single-site exit join inlined without the loop-control check
+***   'B10760 worker clones read the rewritten output body, not sealed source
+*** Rule names in comments match RULES.md.
+
+load ir.maude
+
+fmod SC-CORE is
+  protecting IR-TYPING .
+  protecting CONVERSION .
+
+  *** ---------------- symbolic values, shapes, chains ----------------
+  sorts SV SVL Shape ShL Chain Bnd .
+  subsort SV < SVL . subsort Shape < ShL . subsort Bnd < Chain .
+  op kc : Qid SVL -> SV [ctor] .          *** known tag
+  op kt : SVL -> SV [ctor] .              *** known tuple/record
+  op at : Expr Type -> SV [ctor] .        *** work-free opaque leaf (local, literal, field read)
+  op ox : Expr Type -> SV [ctor] .        *** opaque strict expression (must be named before reuse)
+  op dvx : Expr -> SV [ctor] .            *** control transfer (continue/break/jump), type bottom
+  op svnil : -> SVL [ctor] .
+  op _~_ : SVL SVL -> SVL [ctor assoc id: svnil] .
+  op any : Type -> Shape [ctor] .
+  op sk : Qid ShL -> Shape [ctor] .
+  op stp : ShL -> Shape [ctor] .
+  op shnil : -> ShL [ctor] .
+  op _~_ : ShL ShL -> ShL [ctor assoc id: shnil] .
+  op b : Qid Expr -> Bnd [ctor] .
+  op chnil : -> Chain [ctor] .
+  op _^_ : Chain Chain -> Chain [ctor assoc id: chnil] .
+
+  *** ---------------- worker table ----------------
+  sorts Spec Specs .
+  subsort Spec < Specs .
+  *** sp(source fn, admission index, pattern, worker name, written?)
+  op sp : Qid Nat ShL Qid Bool -> Spec [ctor] .
+  op noSp : -> Specs [ctor] .
+  op _<>_ : Specs Specs -> Specs [ctor assoc comm id: noSp] .
+
+  *** ---------------- loop registers (task.shapes of a loop attempt) ----------------
+  sorts LReg LRegs .
+  subsort LReg < LRegs .
+  op lr : Nat ShL Bool -> LReg [ctor] .   *** scalarizing attempt: shapes, demoted?
+  op lpl : Nat Nat -> LReg [ctor] .       *** plain loop: param count
+  op noLR : -> LRegs [ctor] .
+  op _<>_ : LRegs LRegs -> LRegs [ctor assoc comm id: noLR] .
+
+  *** ---------------- flags ----------------
+  sort Flags . subsort Qid < Flags .
+  op noF : -> Flags [ctor] .
+  op _+_ : Flags Flags -> Flags [ctor assoc comm id: noF] .
+  op _on_ : Qid Flags -> Bool .
+  var FQ : Qid . var FL : Flags .
+  eq FQ on (FQ + FL) = true .
+  eq FQ on FL = false [owise] .
+
+  *** ---------------- state ----------------
+  *** st(source program, output fns, specs, fresh counter, clone budget, loop regs, flags, pass notes)
+  sort St .
+  op st : Prog Prog Specs Nat Nat LRegs Flags String -> St [ctor] .
+
+  *** ---------------- context ----------------
+  sorts SBind SEnv Frame IStack JRen JR LIds .
+  subsort SBind < SEnv . subsort Frame < IStack . subsort JR < JRen .
+  op _|>_ : Qid SV -> SBind [ctor prec 20] .
+  op senil : -> SEnv [ctor] .
+  op _@_ : SEnv SEnv -> SEnv [ctor assoc id: senil] .
+  sort MNat . subsort Nat < MNat .
+  op nul : -> MNat [ctor] .
+  op fm : Qid MNat -> Frame [ctor] .
+  op isnil : -> IStack [ctor] .
+  op _*_ : IStack IStack -> IStack [ctor assoc comm id: isnil] .
+  op jr : Qid Qid -> JR [ctor] .
+  op jrnil : -> JRen [ctor] .
+  op _*_ : JRen JRen -> JRen [ctor assoc id: jrnil] .
+  op lnone : -> LIds [ctor] .
+  op _::_ : Nat LIds -> LIds [ctor] .
+  sort Cx .
+  op cx : SEnv IStack JRen LIds -> Cx [ctor] .
+
+  sorts CR CRL .
+  op cr : Chain SV St -> CR [ctor] .
+  op crl : Chain SVL St -> CRL [ctor] .
+
+  vars X Y Z F G W J J2 C C2 Q : Qid . vars E E0 E1 E2 REST : Expr . vars EL EL2 : ExprList .
+  vars P P2 : Pat . vars PL PL2 : PatList . vars BL BL2 : BranchList . var BR : Branch .
+  vars T T1 T2 : Type . vars TL TL2 : TypeList . vars QL QL2 : ParamList .
+  vars SG SG2 SG3 : SEnv . var IS : IStack . var JRN : JRen . var LI : LIds .
+  vars SV1 SV2 SV3 : SV . vars SVS SVS2 SVS3 : SVL . vars SH SH2 : Shape . vars SHL SHL2 SHL3 : ShL .
+  vars CH CH1 CH2 CH3 : Chain . vars S S1 S2 S3 : St .
+  vars PS PO PG : Prog . var WS : Specs . vars N N1 N2 K M : Nat . var BG : Nat .
+  var LRS : LRegs . var NT : String . var I : Int . var B1 B2 : Bool . var MN : MNat .
+  var CDS : CtorDecls .
+
+  *** ---------------- helpers ----------------
+  op fresh : Nat -> Qid .
+  eq fresh(N) = qid("%" + string(N, 10)) .
+  op src : St -> Prog .
+  eq src(st(PS, PO, WS, N, BG, LRS, FL, NT)) = PS .
+  op flags : St -> Flags .
+  eq flags(st(PS, PO, WS, N, BG, LRS, FL, NT)) = FL .
+  op bump : St -> St .        *** consume one fresh name
+  eq bump(st(PS, PO, WS, N, BG, LRS, FL, NT)) = st(PS, PO, WS, s N, BG, LRS, FL, NT) .
+  op ctr : St -> Nat .
+  eq ctr(st(PS, PO, WS, N, BG, LRS, FL, NT)) = N .
+  op note : St String -> St .
+  eq note(st(PS, PO, WS, N, BG, LRS, FL, NT), NT2) = st(PS, PO, WS, N, BG, LRS, FL, NT + NT2) .
+  var NT2 : String .
+
+  op wrap : Chain Expr -> Expr .
+  eq wrap(chnil, E) = E .
+  eq wrap(b(X, E1) ^ CH, E) = lt(X, E1, wrap(CH, E)) .
+
+  op look : SEnv Qid -> SV .
+  eq look(SG @ (X |> SV1), X) = SV1 .
+  eq look(SG @ (Y |> SV1), X) = look(SG, X) [owise] .
+  eq look(senil, X) = at(v(X), tErr("unbound in clone")) .
+
+  op mat : SV -> Expr .
+  op mats : SVL -> ExprList .
+  eq mat(kc(C, SVS)) = tg(C, mats(SVS)) .
+  eq mat(kt(SVS)) = tp(mats(SVS)) .
+  eq mat(at(E, T)) = E .
+  eq mat(ox(E, T)) = E .
+  eq mat(dvx(E)) = E .
+  eq mats(svnil) = enil .
+  eq mats(SV1 ~ SVS) = mat(SV1), mats(SVS) .
+
+  op typeSV : Prog SV -> Type .
+  op typeSVs : Prog SVL -> TypeList .
+  eq typeSV(PS, kc(C, SVS)) = ownerOf(PS, C) .
+  eq typeSV(PS, kt(SVS)) = tT(typeSVs(PS, SVS)) .
+  eq typeSV(PS, at(E, T)) = T .
+  eq typeSV(PS, ox(E, T)) = T .
+  eq typeSV(PS, dvx(E)) = tBot .
+  eq typeSVs(PS, svnil) = tnil .
+  eq typeSVs(PS, SV1 ~ SVS) = typeSV(PS, SV1) ; typeSVs(PS, SVS) .
+
+  op known? : SV -> Bool .
+  eq known?(kc(C, SVS)) = true . eq known?(kt(SVS)) = true . eq known?(SV1) = false [owise] .
+  op anyKnown : SVL -> Bool .
+  eq anyKnown(svnil) = false . eq anyKnown(SV1 ~ SVS) = known?(SV1) or anyKnown(SVS) .
+  op svnth : SVL Nat -> SV .
+  eq svnth(SV1 ~ SVS, 0) = SV1 . eq svnth(SV1 ~ SVS, s N) = svnth(SVS, N) .
+  op svlen : SVL -> Nat .
+  eq svlen(svnil) = 0 . eq svlen(SV1 ~ SVS) = s svlen(SVS) .
+
+  *** knownConstructorSize (spec_constr.zig)
+  op ksize : SV -> Nat .
+  op ksizes : SVL -> Nat .
+  eq ksize(kc(C, SVS)) = s ksizes(SVS) .
+  eq ksize(kt(SVS)) = s ksizes(SVS) .
+  eq ksize(SV1) = 0 [owise] .
+  eq ksizes(svnil) = 0 . eq ksizes(SV1 ~ SVS) = ksize(SV1) + ksizes(SVS) .
+
+  *** naming: an ox value is bound to a fresh local before it can flow
+  *** BindingChain note: BindingChain: strict work is named once at its source position
+  op nm : SV St -> CR .
+  op nms : SVL St -> CRL .
+  ceq nm(ox(E, T), S) = cr(b(fresh(ctr(S)), E), at(v(fresh(ctr(S))), T), bump(S)) if T =/= tBot .
+  eq nm(kc(C, SVS), S) = nmTag(C, nms(SVS, S)) .
+  eq nm(kt(SVS), S) = nmTup(nms(SVS, S)) .
+  eq nm(SV1, S) = cr(chnil, SV1, S) [owise] .
+  op nmTag : Qid CRL -> CR .
+  eq nmTag(C, crl(CH, SVS, S)) = cr(CH, kc(C, SVS), S) .
+  op nmTup : CRL -> CR .
+  eq nmTup(crl(CH, SVS, S)) = cr(CH, kt(SVS), S) .
+  eq nms(svnil, S) = crl(chnil, svnil, S) .
+  eq nms(SV1 ~ SVS, S) = nms2(nm(SV1, S), SVS) .
+  op nms2 : CR SVL -> CRL .
+  eq nms2(cr(CH, SV1, S), SVS) = consCR(CH, SV1, nms(SVS, S)) .
+  op consCR : Chain SV CRL -> CRL .
+  eq consCR(CH, SV1, crl(CH2, SVS, S)) = crl(CH ^ CH2, SV1 ~ SVS, S) .
+
+  *** ---------------- shapes (CallPattern / loop task.shapes) ----------------
+  op shapeOf : Prog SV -> Shape .
+  op shapeOfs : Prog SVL -> ShL .
+  eq shapeOf(PS, kc(C, SVS)) = sk(C, shapeOfs(PS, SVS)) .
+  eq shapeOf(PS, kt(SVS)) = stp(shapeOfs(PS, SVS)) .
+  eq shapeOf(PS, SV1) = any(typeSV(PS, SV1)) [owise] .
+  eq shapeOfs(PS, svnil) = shnil .
+  eq shapeOfs(PS, SV1 ~ SVS) = shapeOf(PS, SV1) ~ shapeOfs(PS, SVS) .
+  op hasCtor : ShL -> Bool .
+  eq hasCtor(shnil) = false .
+  eq hasCtor(any(T) ~ SHL) = hasCtor(SHL) .
+  eq hasCtor(SH ~ SHL) = true [owise] .
+  op ccount : ShL -> Nat .    *** patternConstructorCount
+  eq ccount(shnil) = 0 .
+  eq ccount(any(T) ~ SHL) = ccount(SHL) .
+  eq ccount(sk(C, SHL2) ~ SHL) = s (ccount(SHL2) + ccount(SHL)) .
+  eq ccount(stp(SHL2) ~ SHL) = s (ccount(SHL2) + ccount(SHL)) .
+  op shType : Prog Shape -> Type .
+  op shTypes : Prog ShL -> TypeList .
+  eq shType(PS, any(T)) = T .
+  eq shType(PS, sk(C, SHL)) = ownerOf(PS, C) .
+  eq shType(PS, stp(SHL)) = tT(shTypes(PS, SHL)) .
+  eq shTypes(PS, shnil) = tnil .
+  eq shTypes(PS, SH ~ SHL) = shType(PS, SH) ; shTypes(PS, SHL) .
+
+  *** shapeMatchesValue: no type check at `any` (faithful)
+  op smatch : Shape SV -> Bool .
+  op smatches : ShL SVL -> Bool .
+  eq smatch(any(T), SV1) = true .
+  eq smatch(sk(C, SHL), kc(C, SVS)) = smatches(SHL, SVS) .
+  eq smatch(stp(SHL), kt(SVS)) = smatches(SHL, SVS) .
+  eq smatch(SH, SV1) = false [owise] .
+  eq smatches(shnil, svnil) = true .
+  eq smatches(SH ~ SHL, SV1 ~ SVS) = smatch(SH, SV1) and smatches(SHL, SVS) .
+  eq smatches(SHL, SVS) = false [owise] .
+
+  *** leaves of a value under a shape, pre-order (stepAppendExprs)
+  op leaves : ShL SVL -> ExprList .
+  eq leaves(shnil, svnil) = enil .
+  eq leaves(any(T) ~ SHL, SV1 ~ SVS) = mat(SV1), leaves(SHL, SVS) .
+  eq leaves(sk(C, SHL2) ~ SHL, kc(C, SVS2) ~ SVS) = leaves(SHL2, SVS2), leaves(SHL, SVS) .
+  eq leaves(stp(SHL2) ~ SHL, kt(SVS2) ~ SVS) = leaves(SHL2, SVS2), leaves(SHL, SVS) .
+  eq leaves(SHL, SVS) = ivk("tag call pattern matched a non-tag value") [owise] .
+
+  *** fresh params for every `any` leaf, and the value rebuilt from them (buildArgs / valueFromShapeArgs)
+  sort PV .
+  op pv3 : ParamList SVL Nat -> PV [ctor] .
+  op shParams : ShL Nat -> PV .
+  eq shParams(shnil, N) = pv3(qnil, svnil, N) .
+  eq shParams(any(T) ~ SHL, N) = consPV((fresh(N) : T), at(v(fresh(N)), T), shParams(SHL, s N)) .
+  eq shParams(sk(C, SHL2) ~ SHL, N) = consPVT(C, shParams(SHL2, N), SHL) .
+  eq shParams(stp(SHL2) ~ SHL, N) = consPVP(shParams(SHL2, N), SHL) .
+  op consPV : Param SV PV -> PV .
+  eq consPV(Q2, SV1, pv3(QL, SVS, N)) = pv3((Q2, QL), SV1 ~ SVS, N) .
+  var Q2 : Param .
+  op consPVT : Qid PV ShL -> PV .
+  eq consPVT(C, pv3(QL, SVS, N), SHL) = joinPV(QL, kc(C, SVS), shParams(SHL, N)) .
+  op consPVP : PV ShL -> PV .
+  eq consPVP(pv3(QL, SVS, N), SHL) = joinPV(QL, kt(SVS), shParams(SHL, N)) .
+  op joinPV : ParamList SV PV -> PV .
+  eq joinPV(QL, SV1, pv3(QL2, SVS, N)) = pv3((QL, QL2), SV1 ~ SVS, N) .
+
+  *** generalize a shape against a value that did not match it (demoteLoopSlotLeaf)
+  op gen : Prog Shape SV -> Shape .
+  op gens : Prog ShL SVL -> ShL .
+  eq gen(PS, any(T), SV1) = any(T) .
+  eq gen(PS, sk(C, SHL), kc(C, SVS)) = sk(C, gens(PS, SHL, SVS)) .
+  eq gen(PS, stp(SHL), kt(SVS)) = stp(gens(PS, SHL, SVS)) .
+  eq gen(PS, SH, SV1) = any(shType(PS, SH)) [owise] .
+  eq gens(PS, shnil, svnil) = shnil .
+  eq gens(PS, SH ~ SHL, SV1 ~ SVS) = gen(PS, SH, SV1) ~ gens(PS, SHL, SVS) .
+
+  *** ---------------- program facts ----------------
+  op bsize : Expr -> Nat .     *** body size in expressions
+  op bsizes : ExprList -> Nat .
+  op bsizeB : BranchList -> Nat .
+  eq bsize(v(X)) = 1 . eq bsize(i(I)) = 1 . eq bsize(ivk(NT)) = 1 .
+  eq bsize(tg(C, EL)) = s bsizes(EL) . eq bsize(tp(EL)) = s bsizes(EL) .
+  eq bsize(pj(E, N)) = s bsize(E) . eq bsize(lt(X, E1, E2)) = s (bsize(E1) + bsize(E2)) .
+  eq bsize(mt(E, BL)) = s (bsize(E) + bsizeB(BL)) . eq bsize(cl(F, EL)) = s bsizes(EL) .
+  eq bsize(pr(F, EL)) = s bsizes(EL) . eq bsize(lp(T, QL, EL, E)) = s (bsizes(EL) + bsize(E)) .
+  eq bsize(ct(EL)) = s bsizes(EL) . eq bsize(bk(E)) = s bsize(E) .
+  eq bsize(jn(J, QL, E1, E2)) = s (bsize(E1) + bsize(E2)) . eq bsize(jp(J, EL)) = s bsizes(EL) .
+  eq bsizes(enil) = 0 . eq bsizes((E, EL)) = bsize(E) + bsizes(EL) .
+  eq bsizeB(bnil) = 0 . eq bsizeB((P => E) | BL) = bsize(E) + bsizeB(BL) .
+  op progSize : Prog -> Nat .
+  eq progSize(fn(F, QL, T, E) PG) = bsize(E) + progSize(PG) .
+  eq progSize(PG) = 0 [owise] .
+
+  *** does the body consume param X structurally (scrutinee / field read)?
+  *** Model of `used_args` and of the argument-crossing productivity query.
+  op consumes : Expr Qid -> Bool .
+  op consumesL : ExprList Qid -> Bool .
+  op consumesB : BranchList Qid -> Bool .
+  eq consumes(mt(v(X), BL), X) = true .
+  eq consumes(pj(v(X), N), X) = true .
+  eq consumes(tg(C, EL), X) = consumesL(EL, X) . eq consumes(tp(EL), X) = consumesL(EL, X) .
+  eq consumes(pj(E, N), X) = consumes(E, X) .
+  eq consumes(lt(Y, E1, E2), X) = consumes(E1, X) or (X =/= Y and consumes(E2, X)) .
+  eq consumes(mt(E, BL), X) = consumes(E, X) or consumesB(BL, X) .
+  eq consumes(cl(F, EL), X) = consumesL(EL, X) . eq consumes(pr(F, EL), X) = consumesL(EL, X) .
+  eq consumes(lp(T, QL, EL, E), X) = consumesL(EL, X) or consumes(E, X) .
+  eq consumes(ct(EL), X) = consumesL(EL, X) . eq consumes(bk(E), X) = consumes(E, X) .
+  eq consumes(jn(J, QL, E1, E2), X) = consumes(E1, X) or consumes(E2, X) .
+  eq consumes(jp(J, EL), X) = consumesL(EL, X) .
+  eq consumes(E, X) = false [owise] .
+  eq consumesL(enil, X) = false . eq consumesL((E, EL), X) = consumes(E, X) or consumesL(EL, X) .
+  eq consumesB(bnil, X) = false . eq consumesB((P => E) | BL, X) = consumes(E, X) or consumesB(BL, X) .
+
+  *** param X is passed at a position of a call: used_args fixpoint, depth-bounded
+  op usedArg : Prog Qid Nat Nat -> Bool .
+  op paramName : ParamList Nat -> Qid .
+  eq paramName(((X : T), QL), 0) = X .
+  eq paramName(((X : T), QL), s N) = paramName(QL, N) .
+  eq usedArg(PS, F, N, 0) = consumes(bodyOf(PS, F), paramName(paramsOf(PS, F), N)) .
+  eq usedArg(PS, F, N, s K) =
+     consumes(bodyOf(PS, F), paramName(paramsOf(PS, F), N))
+     or passesTo(PS, bodyOf(PS, F), paramName(paramsOf(PS, F), N), K) .
+  op passesTo : Prog Expr Qid Nat -> Bool .
+  op passesL : Prog ExprList Qid Nat -> Bool .
+  op passesArgs : Prog Qid ExprList Nat Qid Nat -> Bool .
+  op passesB : Prog BranchList Qid Nat -> Bool .
+  eq passesTo(PS, cl(F, EL), X, K) = passesArgs(PS, F, EL, 0, X, K) or passesL(PS, EL, X, K) .
+  eq passesTo(PS, tg(C, EL), X, K) = passesL(PS, EL, X, K) .
+  eq passesTo(PS, tp(EL), X, K) = passesL(PS, EL, X, K) .
+  eq passesTo(PS, pr(F, EL), X, K) = passesL(PS, EL, X, K) .
+  eq passesTo(PS, lt(Y, E1, E2), X, K) = passesTo(PS, E1, X, K) or passesTo(PS, E2, X, K) .
+  eq passesTo(PS, mt(E, BL), X, K) = passesTo(PS, E, X, K) or passesB(PS, BL, X, K) .
+  eq passesTo(PS, lp(T, QL, EL, E), X, K) = passesL(PS, EL, X, K) or passesTo(PS, E, X, K) .
+  eq passesTo(PS, ct(EL), X, K) = passesL(PS, EL, X, K) .
+  eq passesTo(PS, bk(E), X, K) = passesTo(PS, E, X, K) .
+  eq passesTo(PS, E, X, K) = false [owise] .
+  eq passesL(PS, enil, X, K) = false .
+  eq passesL(PS, (E, EL), X, K) = passesTo(PS, E, X, K) or passesL(PS, EL, X, K) .
+  eq passesB(PS, bnil, X, K) = false .
+  eq passesB(PS, (P => E) | BL, X, K) = passesTo(PS, E, X, K) or passesB(PS, BL, X, K) .
+  eq passesArgs(PS, F, enil, N, X, K) = false .
+  eq passesArgs(PS, F, (v(X), EL), N, X, K) = (hasFn(PS, F) and usedArg(PS, F, N, K)) or passesArgs(PS, F, EL, s N, X, K) .
+  eq passesArgs(PS, F, (E, EL), N, X, K) = passesArgs(PS, F, EL, s N, X, K) [owise] .
+
+  op usedMask : Prog Qid ShL Nat -> ShL .    *** arguments the callee does not use become `any`
+  eq usedMask(PS, F, shnil, N) = shnil .
+  eq usedMask(PS, F, SH ~ SHL, N) =
+     (if usedArg(PS, F, N, 3) then SH else any(shType(PS, SH)) fi) ~ usedMask(PS, F, SHL, s N) .
+
+  *** wrapper_body.zig: a body that does less work than its call, not on a call cycle
+  op wrapper : Prog Qid -> Bool .
+  op atomArgs : ExprList -> Bool .
+  eq atomArgs(enil) = true .
+  eq atomArgs((v(X), EL)) = atomArgs(EL) . eq atomArgs((i(I), EL)) = atomArgs(EL) .
+  eq atomArgs(EL) = false [owise] .
+  eq wrapper(PS, F) = wrapperBody(bodyOf(PS, F)) and not calls(bodyOf(PS, F), F) .
+  op wrapperBody : Expr -> Bool .
+  eq wrapperBody(cl(G, EL)) = atomArgs(EL) .
+  eq wrapperBody(tg(C, EL)) = atomArgs(EL) .
+  eq wrapperBody(tp(EL)) = atomArgs(EL) .
+  eq wrapperBody(v(X)) = true .
+  eq wrapperBody(E) = false [owise] .
+  op calls : Expr Qid -> Bool .
+  op callsL : ExprList Qid -> Bool .
+  op callsB : BranchList Qid -> Bool .
+  eq calls(cl(G, EL), F) = G == F or callsL(EL, F) .
+  eq calls(tg(C, EL), F) = callsL(EL, F) . eq calls(tp(EL), F) = callsL(EL, F) .
+  eq calls(pr(G, EL), F) = callsL(EL, F) . eq calls(pj(E, N), F) = calls(E, F) .
+  eq calls(lt(Y, E1, E2), F) = calls(E1, F) or calls(E2, F) .
+  eq calls(mt(E, BL), F) = calls(E, F) or callsB(BL, F) .
+  eq calls(lp(T, QL, EL, E), F) = callsL(EL, F) or calls(E, F) .
+  eq calls(ct(EL), F) = callsL(EL, F) . eq calls(bk(E), F) = calls(E, F) .
+  eq calls(jn(J, QL, E1, E2), F) = calls(E1, F) or calls(E2, F) .
+  eq calls(jp(J, EL), F) = callsL(EL, F) .
+  eq calls(E, F) = false [owise] .
+  eq callsL(enil, F) = false . eq callsL((E, EL), F) = calls(E, F) or callsL(EL, F) .
+  eq callsB(bnil, F) = false . eq callsB((P => E) | BL, F) = calls(E, F) or callsB(BL, F) .
+
+  *** free loop control: continue/break not owned by a loop inside E (exprContainsFreeLoopControl)
+  op freeLC : Expr -> Bool .
+  op freeLCL : ExprList -> Bool .
+  op freeLCB : BranchList -> Bool .
+  eq freeLC(ct(EL)) = true . eq freeLC(bk(E)) = true .
+  eq freeLC(lp(T, QL, EL, E)) = freeLCL(EL) .
+  eq freeLC(tg(C, EL)) = freeLCL(EL) . eq freeLC(tp(EL)) = freeLCL(EL) .
+  eq freeLC(cl(G, EL)) = freeLCL(EL) . eq freeLC(pr(G, EL)) = freeLCL(EL) .
+  eq freeLC(pj(E, N)) = freeLC(E) . eq freeLC(lt(Y, E1, E2)) = freeLC(E1) or freeLC(E2) .
+  eq freeLC(mt(E, BL)) = freeLC(E) or freeLCB(BL) .
+  eq freeLC(jn(J, QL, E1, E2)) = freeLC(E1) or freeLC(E2) .
+  eq freeLC(jp(J, EL)) = freeLCL(EL) .
+  eq freeLC(E) = false [owise] .
+  eq freeLCL(enil) = false . eq freeLCL((E, EL)) = freeLC(E) or freeLCL(EL) .
+  eq freeLCB(bnil) = false . eq freeLCB((P => E) | BL) = freeLC(E) or freeLCB(BL) .
+endfm
+
+*** =====================================================================
+*** The cloner.
+*** =====================================================================
+fmod SC-CLONE is
+  protecting SC-CORE .
+
+  vars X Y Z F G W J J2 C C2 : Qid . vars E E0 E1 E2 REST BODY : Expr . vars EL EL2 : ExprList .
+  vars P P2 : Pat . vars PL PL2 : PatList . vars BL BL2 OBL : BranchList .
+  vars T T1 T2 : Type . vars TL TL2 : TypeList . vars QL QL2 QL3 : ParamList .
+  vars SG SG2 SG3 : SEnv . var IS : IStack . var JRN : JRen . var LI : LIds .
+  vars SV1 SV2 SV3 : SV . vars SVS SVS2 SVS3 : SVL . vars SH SH2 : Shape . vars SHL SHL2 SHL3 : ShL .
+  vars CH CH1 CH2 CH3 : Chain . vars S S1 S2 S3 : St . var CX : Cx .
+  vars PS PO PG : Prog . var WS : Specs . vars N N1 N2 K M LID : Nat . var BG : Nat .
+  var LRS : LRegs . var NT : String . var I : Int . vars B1 B2 : Bool . var MN : MNat . var FL : Flags .
+
+  op cln : Expr Cx St -> CR .
+  op clns : ExprList Cx St -> CRL .     *** clones and names each element, in order
+
+  eq clns(enil, CX, S) = crl(chnil, svnil, S) .
+  eq clns((E, EL), CX, S) = clns2(nmCR(cln(E, CX, S)), EL, CX) .
+  op nmCR : CR -> CR .
+  eq nmCR(cr(CH, SV1, S)) = prependCR(CH, nm(SV1, S)) .
+  op prependCR : Chain CR -> CR .
+  eq prependCR(CH, cr(CH2, SV1, S)) = cr(CH ^ CH2, SV1, S) .
+  op clns2 : CR ExprList Cx -> CRL .
+  eq clns2(cr(CH, SV1, S), EL, CX) = consCR(CH, SV1, clns(EL, CX, S)) .
+
+  *** [C-Var] [C-Lit] [C-Tag] [C-Tup]
+  eq cln(v(X), cx(SG, IS, JRN, LI), S) = cr(chnil, look(SG, X), S) .
+  eq cln(i(I), CX, S) = cr(chnil, at(i(I), tInt), S) .
+  eq cln(ivk(NT), CX, S) = cr(chnil, ox(ivk(NT), tErr(NT)), S) .
+  eq cln(tg(C, EL), CX, S) = nmTag(C, clns(EL, CX, S)) .
+  eq cln(tp(EL), CX, S) = nmTup(clns(EL, CX, S)) .
+
+  *** [C-Proj] known tuple reads its component; otherwise a work-free field read
+  eq cln(pj(E, N), CX, S) = clProj(nmCR(cln(E, CX, S)), N) .
+  op clProj : CR Nat -> CR .
+  eq clProj(cr(CH, kt(SVS), S), N) = cr(CH, svnth(SVS, N), S) .
+  eq clProj(cr(CH, SV1, S), N) = cr(CH, at(pj(mat(SV1), N), tnthT(typeSV(src(S), SV1), N)), S) [owise] .
+  op tnthT : Type Nat -> Type .
+  eq tnthT(tT(TL), N) = tnth(TL, N) .
+  eq tnthT(T, N) = tErr("projection from non-tuple") [owise] .
+
+  *** [C-Prim] strict work, left opaque (SpecConstr does not fold primitives)
+  eq cln(pr(F, EL), CX, S) = clPrim(F, clns(EL, CX, S)) .
+  op clPrim : Qid CRL -> CR .
+  eq clPrim(F, crl(CH, SVS, S)) = cr(CH, ox(pr(F, mats(SVS)), primT(F)), S) .
+  op primT : Qid -> Type .
+  eq primT('lt) = tN('Bool) . eq primT('eq) = tN('Bool) . eq primT(F) = tInt [owise] .
+
+  *** [C-Let] ordinary let: name the bound value, substitute, continue
+  ceq cln(lt(X, E1, E2), cx(SG, IS, JRN, LI), S) = clLet(X, E2, cx(SG, IS, JRN, LI), nmCR(cln(E1, cx(SG, IS, JRN, LI), S)))
+    if not isMatch(E1) .
+  op isMatch : Expr -> Bool .
+  eq isMatch(mt(E, BL)) = true . eq isMatch(E) = false [owise] .
+  op clLet : Qid Expr Cx CR -> CR .
+  eq clLet(X, E2, CX, cr(CH, dvx(E), S)) = cr(CH, dvx(E), S) .
+  eq clLet(X, E2, cx(SG, IS, JRN, LI), cr(CH, SV1, S)) = prependCR(CH, cln(E2, cx(SG @ (X |> SV1), IS, JRN, LI), S)) [owise] .
+
+  *** ---------------- match ----------------
+  *** pattern verdicts (stepBindPat)
+  sort Verdict .
+  op yes : SEnv -> Verdict [ctor] .
+  op no : -> Verdict [ctor] .
+  op unk : -> Verdict [ctor] .
+  op verdict : Prog Flags Pat SV -> Verdict .
+  op verdicts : Prog Flags PatList SVL -> Verdict .
+  eq verdict(PS, FL, pv(X), SV1) = yes(X |> SV1) .
+  eq verdict(PS, FL, pw, SV1) = yes(senil) .
+  eq verdict(PS, FL, pl(I), SV1) = if 'B9975 on FL then no else unk fi .
+  eq verdict(PS, FL, pc(C, PL), kc(C2, SVS)) = if C == C2 then verdicts(PS, FL, PL, SVS) else no fi .
+  eq verdict(PS, FL, pt(PL), kt(SVS)) = verdicts(PS, FL, PL, SVS) .
+  ceq verdict(PS, FL, pt(PL), at(E, tT(TL))) = verdicts(PS, FL, PL, projs(E, TL, 0)) if PL =/= pnil .
+  eq verdict(PS, FL, P, SV1) = unk [owise] .
+  op projs : Expr TypeList Nat -> SVL .
+  eq projs(E, tnil, N) = svnil .
+  eq projs(E, (T ; TL), N) = at(pj(E, N), T) ~ projs(E, TL, s N) .
+  eq verdicts(PS, FL, pnil, svnil) = yes(senil) .
+  eq verdicts(PS, FL, (P, PL), SV1 ~ SVS) = vmerge(verdict(PS, FL, P, SV1), verdicts(PS, FL, PL, SVS)) .
+  op vmerge : Verdict Verdict -> Verdict .   *** mergeMatchUnknown: no_match dominates
+  eq vmerge(no, VD) = no . eq vmerge(VD, no) = no .
+  eq vmerge(yes(SG), yes(SG2)) = yes(SG @ SG2) .
+  eq vmerge(VD, VD2) = unk [owise] .
+  vars VD VD2 : Verdict .
+
+  *** branch selection (stepSelectKnownMatch)
+  sort Sel .
+  op pick : Nat SEnv Expr -> Sel [ctor] .
+  op decline : -> Sel [ctor] .
+  op nobranch : -> Sel [ctor] .
+  op select : Prog Flags BranchList SV Nat -> Sel .
+  eq select(PS, FL, bnil, SV1, N) = nobranch .
+  eq select(PS, FL, (P => E) | BL, SV1, N) = selStep(verdict(PS, FL, P, SV1), E, N, PS, FL, BL, SV1) .
+  op selStep : Verdict Expr Nat Prog Flags BranchList SV -> Sel .
+  eq selStep(yes(SG), E, N, PS, FL, BL, SV1) = pick(N, SG, E) .
+  eq selStep(unk, E, N, PS, FL, BL, SV1) = decline .
+  eq selStep(no, E, N, PS, FL, BL, SV1) = select(PS, FL, BL, SV1, s N) .
+
+  *** [KC] known-constructor case, else [CoC] case-of-case, else residual match
+  ceq cln(mt(E, BL), cx(SG, IS, JRN, LI), S) = clMatch(BL, cx(SG, IS, JRN, LI), nmCR(cln(E, cx(SG, IS, JRN, LI), S)))
+    if not (isMatch(E) and binderFree(BL)) .
+  op clMatch : BranchList Cx CR -> CR .
+  ceq clMatch(BL, cx(SG, IS, JRN, LI), cr(CH, SV1, S)) =
+      clSel(select(src(S), flags(S), BL, SV1, 0), BL, cx(SG, IS, JRN, LI), cr(CH, SV1, S))
+    if known?(SV1) .
+  eq clMatch(BL, CX, cr(CH, SV1, S)) = prependCR(CH, residual(SV1, BL, CX, S)) [owise] .
+  op clSel : Sel BranchList Cx CR -> CR .
+  eq clSel(pick(N, SG2, E), BL, cx(SG, IS, JRN, LI), cr(CH, SV1, S)) = prependCR(CH, cln(E, cx(SG @ SG2, IS, JRN, LI), S)) .
+  eq clSel(decline, BL, CX, cr(CH, SV1, S)) = prependCR(CH, residual(SV1, BL, CX, S)) .
+  eq clSel(nobranch, BL, CX, cr(CH, SV1, S)) =
+     if 'B9975 on flags(S) then cr(CH, ox(ivk("known constructor match had no matching branch"), tErr("ivk")), S)
+     else prependCR(CH, residual(SV1, BL, CX, S)) fi .
+
+  *** residual match: every arm cloned with fresh binders (hygiene)
+  sorts Arm Arms AR .
+  subsort Arm < Arms .
+  op arm : Pat Chain SV -> Arm [ctor] .
+  op anil : -> Arms [ctor] .
+  op _||_ : Arms Arms -> Arms [ctor assoc id: anil] .
+  op ar : Arms St -> AR [ctor] .
+
+  op cloneArms : Type BranchList Cx St -> AR .
+  eq cloneArms(T, bnil, CX, S) = ar(anil, S) .
+  eq cloneArms(T, (P => E) | BL, cx(SG, IS, JRN, LI), S) =
+     cloneArm2(T, P, E, BL, cx(SG, IS, JRN, LI), renamePat(src(S), P, T, S)) .
+  sort RP .
+  op rp : Pat SEnv St -> RP [ctor] .
+  op cloneArm2 : Type Pat Expr BranchList Cx RP -> AR .
+  eq cloneArm2(T, P, E, BL, cx(SG, IS, JRN, LI), rp(P2, SG2, S)) =
+     consArm(P2, cln(E, cx(SG @ SG2, IS, JRN, LI), S), T, BL, cx(SG, IS, JRN, LI)) .
+  op consArm : Pat CR Type BranchList Cx -> AR .
+  eq consArm(P2, cr(CH, SV1, S), T, BL, CX) = consAR(arm(P2, CH, SV1), cloneArms(T, BL, CX, S)) .
+  op consAR : Arm AR -> AR .
+  eq consAR(A, ar(AS, S)) = ar(A || AS, S) .
+  var A : Arm . vars AS AS2 : Arms .
+
+  op renamePat : Prog Pat Type St -> RP .
+  op renamePats : Prog PatList TypeList St -> RPL .
+  sort RPL . op rpl : PatList SEnv St -> RPL [ctor] .
+  eq renamePat(PS, pv(X), T, S) = rp(pv(fresh(ctr(S))), X |> at(v(fresh(ctr(S))), T), bump(S)) .
+  eq renamePat(PS, pw, T, S) = rp(pw, senil, S) .
+  eq renamePat(PS, pl(I), T, S) = rp(pl(I), senil, S) .
+  eq renamePat(PS, pc(C, PL), T, S) = rpTag(C, renamePats(PS, PL, ctorArgs(ctorsOf(PS, tname(ownerOf(PS, C))), C), S)) .
+  eq renamePat(PS, pt(PL), tT(TL), S) = rpTup(renamePats(PS, PL, TL, S)) .
+  op tname : Type -> Qid .
+  eq tname(tN(X)) = X .
+  op rpTag : Qid RPL -> RP .
+  eq rpTag(C, rpl(PL, SG, S)) = rp(pc(C, PL), SG, S) .
+  op rpTup : RPL -> RP .
+  eq rpTup(rpl(PL, SG, S)) = rp(pt(PL), SG, S) .
+  eq renamePats(PS, pnil, TL, S) = rpl(pnil, senil, S) .
+  eq renamePats(PS, (P, PL), (T ; TL), S) = rpls(renamePat(PS, P, T, S), PL, TL) .
+  op rpls : RP PatList TypeList -> RPL .
+  eq rpls(rp(P2, SG, S), PL, TL) = rplCons(P2, SG, renamePats(src(S), PL, TL, S)) .
+  op rplCons : Pat SEnv RPL -> RPL .
+  eq rplCons(P2, SG, rpl(PL, SG2, S)) = rpl((P2, PL), SG @ SG2, S) .
+
+  op armsExpr : Arms -> BranchList .
+  eq armsExpr(anil) = bnil .
+  eq armsExpr(arm(P, CH, SV1) || AS) = (P => wrap(CH, mat(SV1))) | armsExpr(AS) .
+  op armsType : Prog Arms -> Type .
+  eq armsType(PS, anil) = tBot .
+  eq armsType(PS, arm(P, CH, SV1) || AS) = lub(typeSV(PS, SV1), armsType(PS, AS)) .
+
+  op residual : SV BranchList Cx St -> CR .
+  eq residual(SV1, BL, CX, S) = resid2(SV1, cloneArms(typeSV(src(S), SV1), BL, CX, S)) .
+  op resid2 : SV AR -> CR .
+  eq resid2(SV1, ar(AS, S)) = cr(chnil, matchSV(mt(mat(SV1), armsExpr(AS)), armsType(src(S), AS)), S) .
+  op matchSV : Expr Type -> SV .
+  eq matchSV(E, tBot) = dvx(E) .
+  eq matchSV(E, T) = ox(E, T) [owise] .
+
+  *** ---------------- case-of-case (stepCaseOfCase) ----------------
+  op binderFree : BranchList -> Bool .
+  op bfPat : Pat -> Bool .
+  op bfPats : PatList -> Bool .
+  eq binderFree(bnil) = true .
+  eq binderFree((P => E) | BL) = bfPat(P) and binderFree(BL) .
+  eq bfPat(pv(X)) = false . eq bfPat(pw) = true . eq bfPat(pl(I)) = true .
+  eq bfPat(pc(C, PL)) = bfPats(PL) . eq bfPat(pt(PL)) = bfPats(PL) .
+  eq bfPats(pnil) = true . eq bfPats((P, PL)) = bfPat(P) and bfPats(PL) .
+
+  ceq cln(mt(mt(E0, BL), OBL), cx(SG, IS, JRN, LI), S) =
+      coc1(BL, OBL, cx(SG, IS, JRN, LI), nmCR(cln(E0, cx(SG, IS, JRN, LI), S)))
+    if binderFree(OBL) .
+  op coc1 : BranchList BranchList Cx CR -> CR .
+  *** inner scrutinee known: inner KC first, outer continues on its value
+  ceq coc1(BL, OBL, CX, cr(CH, SV1, S)) = prependCR(CH, clMatch(OBL, CX, nmCR(clMatch(BL, CX, cr(chnil, SV1, S)))))
+    if known?(SV1) .
+  eq coc1(BL, OBL, CX, cr(CH, SV1, S)) = prependCR(CH, coc2(SV1, OBL, CX, cloneArms(typeSV(src(S), SV1), BL, CX, S))) [owise] .
+
+  *** reach counting (countCaseOfCaseArmReach)
+  sort Reach . op rc : NatList Bool -> Reach [ctor] .   *** per-outer-arm count, ok?
+  sort NatList . subsort Nat < NatList .
+  op nnil : -> NatList [ctor] .
+  op _;;_ : NatList NatList -> NatList [ctor assoc id: nnil] .
+  var NLS : NatList .
+  op zeros : BranchList -> NatList .
+  eq zeros(bnil) = nnil . eq zeros(BR | BL) = 0 ;; zeros(BL) .
+  var BR : Branch .
+  op incAt : NatList Nat -> NatList .
+  eq incAt(N ;; NLS, 0) = s N ;; NLS .
+  eq incAt(N ;; NLS, s K) = N ;; incAt(NLS, K) .
+  op natAt : NatList Nat -> Nat .
+  eq natAt(N ;; NLS, 0) = N . eq natAt(N ;; NLS, s K) = natAt(NLS, K) .
+  op reach : Prog Flags BranchList Arms NatList -> Reach .
+  eq reach(PS, FL, OBL, anil, NLS) = rc(NLS, true) .
+  eq reach(PS, FL, OBL, arm(P, CH, dvx(E)) || AS, NLS) = reach(PS, FL, OBL, AS, NLS) .
+  ceq reach(PS, FL, OBL, arm(P, CH, SV1) || AS, NLS) = reachSel(select(PS, FL, OBL, SV1, 0), PS, FL, OBL, AS, NLS)
+    if known?(SV1) .
+  eq reach(PS, FL, OBL, AS, NLS) = rc(NLS, false) [owise] .
+  op reachSel : Sel Prog Flags BranchList Arms NatList -> Reach .
+  eq reachSel(pick(K, SG, E), PS, FL, OBL, AS, NLS) = reach(PS, FL, OBL, AS, incAt(NLS, K)) .
+  eq reachSel(SL, PS, FL, OBL, AS, NLS) = rc(NLS, false) [owise] .
+  var SL : Sel .
+
+  op coc2 : SV BranchList Cx AR -> CR .
+  ceq coc2(SV1, OBL, CX, ar(AS, S)) = coc3(SV1, OBL, CX, AS, NLS, S)
+    if rc(NLS, true) := reach(src(S), flags(S), OBL, AS, zeros(OBL)) .
+  *** an opaque leaf declines the whole distribution: outer stays residual over the inner residual
+  eq coc2(SV1, OBL, CX, ar(AS, S)) =
+     clMatch(OBL, CX, nmCR(cr(chnil, matchSV(mt(mat(SV1), armsExpr(AS)), armsType(src(S), AS)), S))) [owise] .
+
+  *** joins for outer arms reached >= 2 times (unless the arm only builds a value)
+  sort JPlan . op jpl : NatList Qid -> JPlan [ctor] .
+  op onlyBuilds : Expr -> Bool .
+  op onlyBuildsL : ExprList -> Bool .
+  eq onlyBuilds(v(X)) = true . eq onlyBuilds(i(I)) = true .
+  eq onlyBuilds(tg(C, EL)) = onlyBuildsL(EL) . eq onlyBuilds(tp(EL)) = onlyBuildsL(EL) .
+  eq onlyBuilds(E) = false [owise] .
+  eq onlyBuildsL(enil) = true . eq onlyBuildsL((E, EL)) = onlyBuilds(E) and onlyBuildsL(EL) .
+  op branchBody : BranchList Nat -> Expr .
+  eq branchBody((P => E) | BL, 0) = E .
+  eq branchBody((P => E) | BL, s K) = branchBody(BL, K) .
+  op useJoin : Flags NatList BranchList Nat -> Bool .
+  eq useJoin(FL, NLS, OBL, K) =
+     (not ('B10124 on FL)) and natAt(NLS, K) >= 2 and not onlyBuilds(branchBody(OBL, K)) .
+
+  *** coc3: emit joins (one per joined outer arm, fresh name = %jK), then the inner match whose
+  *** arm tails jump to the join or clone the outer arm in place
+  op coc3 : SV BranchList Cx Arms NatList St -> CR .
+  eq coc3(SV1, OBL, CX, AS, NLS, S) = coc4(SV1, OBL, CX, AS, NLS, ctr(S), bumpN(S, blen(OBL))) .
+  op blen : BranchList -> Nat .
+  eq blen(bnil) = 0 . eq blen(BR | BL) = s blen(BL) .
+  op bumpN : St Nat -> St .
+  eq bumpN(S, 0) = S . eq bumpN(S, s K) = bumpN(bump(S), K) .
+  op joinName : Nat Nat -> Qid .
+  eq joinName(N, K) = qid("%j" + string(N + K, 10)) .
+  op coc4 : SV BranchList Cx Arms NatList Nat St -> CR .
+  eq coc4(SV1, OBL, CX, AS, NLS, N, S) =
+     coc5(SV1, OBL, CX, NLS, N, cocArms(OBL, CX, AS, NLS, N, S)) .
+  op cocArms : BranchList Cx Arms NatList Nat St -> AR .
+  eq cocArms(OBL, CX, anil, NLS, N, S) = ar(anil, S) .
+  eq cocArms(OBL, CX, arm(P, CH, dvx(E)) || AS, NLS, N, S) = consAR(arm(P, CH, dvx(E)), cocArms(OBL, CX, AS, NLS, N, S)) .
+  ceq cocArms(OBL, CX, arm(P, CH, SV1) || AS, NLS, N, S) =
+      (if useJoin(flags(S), NLS, OBL, K)
+       then consAR(arm(P, CH, dvx(jp(joinName(N, K), enil))), cocArms(OBL, CX, AS, NLS, N, S))
+       else cocLeaf(P, CH, cln(branchBody(OBL, K), CX, S), OBL, CX, AS, NLS, N) fi)
+    if pick(K, SG, E) := select(src(S), flags(S), OBL, SV1, 0) .
+  op cocLeaf : Pat Chain CR BranchList Cx Arms NatList Nat -> AR .
+  eq cocLeaf(P, CH, cr(CH2, SV2, S), OBL, CX, AS, NLS, N) = consAR(arm(P, CH ^ CH2, SV2), cocArms(OBL, CX, AS, NLS, N, S)) .
+  op coc5 : SV BranchList Cx NatList Nat AR -> CR .
+  eq coc5(SV1, OBL, CX, NLS, N, ar(AS, S)) =
+     cocJoins(OBL, CX, NLS, N, 0, mt(mat(SV1), armsExpr(AS)), armsType(src(S), AS), S) .
+  op cocJoins : BranchList Cx NatList Nat Nat Expr Type St -> CR .
+  eq cocJoins(bnil, CX, NLS, N, K, E, T, S) = cr(chnil, matchSV(E, T), S) .
+  eq cocJoins((P => E1) | BL, CX, NLS, N, K, E, T, S) =
+     if useJoin(flags(S), NLS, (P => E1) | BL, 0)
+     then cocJ2(BL, CX, NLS, N, K, E, T, joinName(N, K), nmCR(cln(E1, CX, S)))
+     else cocJoins(BL, CX, tailN(NLS), N, s K, E, T, S) fi .
+  op tailN : NatList -> NatList .
+  eq tailN(N ;; NLS) = NLS .
+  op cocJ2 : BranchList Cx NatList Nat Nat Expr Type Qid CR -> CR .
+  eq cocJ2(BL, CX, NLS, N, K, E, T, J, cr(CH, SV1, S)) =
+     cocJoins(BL, CX, tailN(NLS), N, s K, jn(J, qnil, wrap(CH, mat(SV1)), E), lub(T, typeSV(src(S), SV1)), S) .
+
+  *** ---------------- let-of-case (stepLetOfCase) ----------------
+  eq cln(lt(X, mt(E0, BL), REST), cx(SG, IS, JRN, LI), S) =
+     loc1(X, BL, REST, cx(SG, IS, JRN, LI), nmCR(cln(E0, cx(SG, IS, JRN, LI), S))) .
+  op loc1 : Qid BranchList Expr Cx CR -> CR .
+  *** known scrutinee: KC, then an ordinary let
+  ceq loc1(X, BL, REST, CX, cr(CH, SV1, S)) =
+      prependCR(CH, clLet(X, REST, CX, nmCR(clMatch(BL, CX, cr(chnil, SV1, S)))))
+    if known?(SV1) .
+  eq loc1(X, BL, REST, CX, cr(CH, SV1, S)) =
+     prependCR(CH, loc2(X, SV1, REST, CX, cloneArms(typeSV(src(S), SV1), BL, CX, S))) [owise] .
+
+  op allArmsKnown : Arms -> Bool .
+  eq allArmsKnown(anil) = true .
+  eq allArmsKnown(arm(P, CH, dvx(E)) || AS) = allArmsKnown(AS) .
+  eq allArmsKnown(arm(P, CH, SV1) || AS) = known?(SV1) and allArmsKnown(AS) [owise] .
+  op sites : Arms -> Nat .
+  eq sites(anil) = 0 .
+  eq sites(arm(P, CH, dvx(E)) || AS) = sites(AS) .
+  eq sites(arm(P, CH, SV1) || AS) = s sites(AS) [owise] .
+
+  op loc2 : Qid SV Expr Cx AR -> CR .
+  *** decline: an opaque arm value -> ordinary let of the residual match
+  ceq loc2(X, SV1, REST, CX, ar(AS, S)) =
+      clLet(X, REST, CX, nmCR(cr(chnil, matchSV(mt(mat(SV1), armsExpr(AS)), armsType(src(S), AS)), S)))
+    if not allArmsKnown(AS) .
+  *** dispatch split: rest immediately matches x, binder-free continuation branches
+  ceq loc2(X, SV1, mt(v(X), OBL), CX, ar(AS, S)) = locDispatch(X, SV1, OBL, CX, AS, S, reach(src(S), flags(S), OBL, AS, zeros(OBL)))
+    if allArmsKnown(AS) /\ binderFree(OBL) /\ not occursB(OBL, X) .
+  *** pattern join
+  eq loc2(X, SV1, REST, CX, ar(AS, S)) = locPattern(X, SV1, REST, CX, AS, S, sites(AS)) [owise] .
+
+  op occurs : Expr Qid -> Bool .
+  op occursL : ExprList Qid -> Bool .
+  op occursB : BranchList Qid -> Bool .
+  eq occurs(v(X), X) = true .
+  eq occurs(tg(C, EL), X) = occursL(EL, X) . eq occurs(tp(EL), X) = occursL(EL, X) .
+  eq occurs(pj(E, N), X) = occurs(E, X) . eq occurs(lt(Y, E1, E2), X) = occurs(E1, X) or occurs(E2, X) .
+  eq occurs(mt(E, BL), X) = occurs(E, X) or occursB(BL, X) .
+  eq occurs(cl(F, EL), X) = occursL(EL, X) . eq occurs(pr(F, EL), X) = occursL(EL, X) .
+  eq occurs(lp(T, QL, EL, E), X) = occursL(EL, X) or occurs(E, X) .
+  eq occurs(ct(EL), X) = occursL(EL, X) . eq occurs(bk(E), X) = occurs(E, X) .
+  eq occurs(jn(J, QL, E1, E2), X) = occurs(E1, X) or occurs(E2, X) .
+  eq occurs(jp(J, EL), X) = occursL(EL, X) .
+  eq occurs(E, X) = false [owise] .
+  eq occursL(enil, X) = false . eq occursL((E, EL), X) = occurs(E, X) or occursL(EL, X) .
+  eq occursB(bnil, X) = false . eq occursB((P => E) | BL, X) = occurs(E, X) or occursB(BL, X) .
+
+  op locDispatch : Qid SV BranchList Cx Arms St Reach -> CR .
+  eq locDispatch(X, SV1, OBL, CX, AS, S, rc(NLS, true)) = coc3(SV1, OBL, CX, AS, NLS, S) .
+  eq locDispatch(X, SV1, OBL, CX, AS, S, rc(NLS, false)) =
+     clLet(X, mt(v(X), OBL), CX, nmCR(cr(chnil, matchSV(mt(mat(SV1), armsExpr(AS)), armsType(src(S), AS)), S))) .
+
+  op locPattern : Qid SV Expr Cx Arms St Nat -> CR .
+  *** no site: every arm diverges; the rest is unreachable
+  eq locPattern(X, SV1, REST, CX, AS, S, 0) = cr(chnil, dvx(mt(mat(SV1), armsExpr(AS))), S) .
+  *** one site: the rest is cloned at the site, against the site's full value
+  *** inline_let_case_join; no loop-control closure check, as in the compiler
+  eq locPattern(X, SV1, REST, CX, AS, S, 1) = locOne(SV1, X, REST, CX, AS, S, anil) .
+  op locOne : SV Qid Expr Cx Arms St Arms -> CR .
+  eq locOne(SV1, X, REST, CX, anil, S, AS2) = cr(chnil, matchSV(mt(mat(SV1), armsExpr(AS2)), armsType(src(S), AS2)), S) .
+  eq locOne(SV1, X, REST, CX, arm(P, CH, dvx(E)) || AS, S, AS2) = locOne(SV1, X, REST, CX, AS, S, AS2 || arm(P, CH, dvx(E))) .
+  eq locOne(SV1, X, REST, cx(SG, IS, JRN, LI), arm(P, CH, SV2) || AS, S, AS2) =
+     locOne2(SV1, X, REST, cx(SG, IS, JRN, LI), P, CH, AS, AS2, cln(REST, cx(SG @ (X |> SV2), IS, JRN, LI), S)) [owise] .
+  op locOne2 : SV Qid Expr Cx Pat Chain Arms Arms CR -> CR .
+  eq locOne2(SV1, X, REST, CX, P, CH, AS, AS2, cr(CH2, SV3, S)) =
+     locOne(SV1, X, REST, CX, AS, S, AS2 || arm(P, CH ^ CH2, SV3)) .
+  *** >= 2 sites: one join whose params are the leaves of the generalized skeleton
+  ceq locPattern(X, SV1, REST, CX, AS, S, s s N) = locJoin(X, SV1, REST, CX, AS, S, SH)
+    if SH := genArms(src(S), AS, none?) /\ rootOk(SH) .
+  eq locPattern(X, SV1, REST, CX, AS, S, N) =
+     clLet(X, REST, CX, nmCR(cr(chnil, matchSV(mt(mat(SV1), armsExpr(AS)), armsType(src(S), AS)), S))) [owise] .
+  op none? : -> Shape .
+  op genArms : Prog Arms Shape -> Shape .
+  eq genArms(PS, anil, SH) = SH .
+  eq genArms(PS, arm(P, CH, dvx(E)) || AS, SH) = genArms(PS, AS, SH) .
+  eq genArms(PS, arm(P, CH, SV1) || AS, none?) = genArms(PS, AS, shapeOf(PS, SV1)) [owise] .
+  eq genArms(PS, arm(P, CH, SV1) || AS, SH) = genArms(PS, AS, gen(PS, SH, SV1)) [owise] .
+  op rootOk : Shape -> Bool .     *** sites must share their outer skeleton
+  eq rootOk(any(T)) = false . eq rootOk(SH) = true [owise] .
+
+  op locJoin : Qid SV Expr Cx Arms St Shape -> CR .
+  eq locJoin(X, SV1, REST, CX, AS, S, SH) =
+     locJoin2(X, SV1, REST, CX, AS, qid("%j" + string(ctr(S), 10)), SH, shParams(SH, s ctr(S)), S) .
+  op locJoin2 : Qid SV Expr Cx Arms Qid Shape PV St -> CR .
+  eq locJoin2(X, SV1, REST, cx(SG, IS, JRN, LI), AS, J, SH, pv3(QL, SV2, N), S) =
+     locJoin3(SV1, AS, J, SH, QL, cln(REST, cx(SG @ (X |> SV2), IS, JRN, LI), setCtr(S, N))) .
+  op setCtr : St Nat -> St .
+  eq setCtr(st(PS, PO, WS, N1, BG, LRS, FL, NT), N) = st(PS, PO, WS, N, BG, LRS, FL, NT) .
+  op locJoin3 : SV Arms Qid Shape ParamList CR -> CR .
+  eq locJoin3(SV1, AS, J, SH, QL, cr(CH, SV3, S)) =
+     cr(chnil, matchSV(jn(J, QL, wrap(CH, mat(SV3)), mt(mat(SV1), armsExpr(jumpArms(AS, J, SH)))), typeSV(src(S), SV3)), S) .
+  op jumpArms : Arms Qid Shape -> Arms .
+  eq jumpArms(anil, J, SH) = anil .
+  eq jumpArms(arm(P, CH, dvx(E)) || AS, J, SH) = arm(P, CH, dvx(E)) || jumpArms(AS, J, SH) .
+  eq jumpArms(arm(P, CH, SV1) || AS, J, SH) = arm(P, CH, dvx(jp(J, leaves(SH, SV1)))) || jumpArms(AS, J, SH) [owise] .
+
+  *** ---------------- joins and jumps in source (hygienic copy) ----------------
+  eq cln(jn(J, QL, E1, E2), cx(SG, IS, JRN, LI), S) =
+     clJoin(qid("%j" + string(ctr(S), 10)), QL, E1, E2, cx(SG, IS, JRN * jr(J, qid("%j" + string(ctr(S), 10))), LI), renameParams(QL, bump(S))) .
+  sort RQ . op rq : ParamList SEnv St -> RQ [ctor] .
+  op renameParams : ParamList St -> RQ .
+  eq renameParams(qnil, S) = rq(qnil, senil, S) .
+  eq renameParams(((X : T), QL), S) = rqCons((fresh(ctr(S)) : T), X |> at(v(fresh(ctr(S))), T), renameParams(QL, bump(S))) .
+  op rqCons : Param SEnv RQ -> RQ .
+  eq rqCons(QP, SG, rq(QL, SG2, S)) = rq((QP, QL), SG @ SG2, S) .
+  var QP : Param .
+  op clJoin : Qid ParamList Expr Expr Cx RQ -> CR .
+  eq clJoin(J2, QL, E1, E2, cx(SG, IS, JRN, LI), rq(QL2, SG2, S)) =
+     clJoin2(J2, QL2, E2, cx(SG, IS, JRN, LI), cln(E1, cx(SG @ SG2, IS, JRN, LI), S)) .
+  op clJoin2 : Qid ParamList Expr Cx CR -> CR .
+  eq clJoin2(J2, QL2, E2, CX, cr(CH, SV1, S)) = clJoin3(J2, QL2, wrap(CH, mat(SV1)), typeSV(src(S), SV1), cln(E2, CX, S)) .
+  op clJoin3 : Qid ParamList Expr Type CR -> CR .
+  eq clJoin3(J2, QL2, E1, T, cr(CH, SV1, S)) = cr(chnil, matchSV(jn(J2, QL2, E1, wrap(CH, mat(SV1))), lub(T, typeSV(src(S), SV1))), S) .
+  op lookJR : JRen Qid -> Qid .
+  eq lookJR(JRN * jr(J, J2), J) = J2 .
+  eq lookJR(JRN * jr(Y, J2), J) = lookJR(JRN, J) [owise] .
+  eq lookJR(jrnil, J) = J .
+  eq cln(jp(J, EL), cx(SG, IS, JRN, LI), S) = clJump(lookJR(JRN, J), clns(EL, cx(SG, IS, JRN, LI), S)) .
+  op clJump : Qid CRL -> CR .
+  eq clJump(J, crl(CH, SVS, S)) = cr(CH, dvx(jp(J, mats(SVS))), S) .
+
+  *** ---------------- break ----------------
+  eq cln(bk(E), CX, S) = clBreak(nmCR(cln(E, CX, S))) .
+  op clBreak : CR -> CR .
+  eq clBreak(cr(CH, dvx(E), S)) = cr(CH, dvx(E), S) .
+  eq clBreak(cr(CH, SV1, S)) = cr(CH, dvx(bk(mat(SV1))), S) [owise] .
+
+  *** ---------------- loops: scalarization by attempt (stepLoopValue) ----------------
+  eq cln(lp(T, QL, EL, E), CX, S) = clLoop(T, QL, E, CX, clns(EL, CX, S)) .
+  op clLoop : Type ParamList Expr Cx CRL -> CR .
+  ceq clLoop(T, QL, E, CX, crl(CH, SVS, S)) = prependCR(CH, loopAttempt(T, QL, E, CX, SVS, SHL, S))
+    if SHL := shapeOfs(src(S), SVS) /\ hasCtor(SHL) .
+  eq clLoop(T, QL, E, cx(SG, IS, JRN, LI), crl(CH, SVS, S)) =
+     prependCR(CH, plainLoop(T, E, cx(SG, IS, JRN, LI), SVS, ctr(S), renameParams(QL, bump(S)))) [owise] .
+
+  op plainLoop : Type Expr Cx SVL Nat RQ -> CR .
+  eq plainLoop(T, E, cx(SG, IS, JRN, LI), SVS, LID, rq(QL2, SG2, S)) =
+     plainLoop2(T, QL2, SVS, LID, cln(E, cx(SG @ SG2, IS, JRN, LID :: LI), addLR(S, lpl(LID, plen(QL2))))) .
+  op addLR : St LReg -> St .
+  eq addLR(st(PS, PO, WS, N, BG, LRS, FL, NT), LR) = st(PS, PO, WS, N, BG, LRS <> LR, FL, NT) .
+  var LR : LReg .
+  op plainLoop2 : Type ParamList SVL Nat CR -> CR .
+  eq plainLoop2(T, QL2, SVS, LID, cr(CH, SV1, S)) = cr(chnil, matchSV(lp(T, QL2, mats(SVS), wrap(CH, mat(SV1))), T), S) .
+
+  op loopAttempt : Type ParamList Expr Cx SVL ShL St -> CR .
+  eq loopAttempt(T, QL, E, cx(SG, IS, JRN, LI), SVS, SHL, S) =
+     loopAttempt2(T, QL, E, cx(SG, IS, JRN, LI), SVS, SHL, ctr(S), S, slotParams(QL, SHL, s ctr(S))) .
+  *** fresh leaf params for every slot; each source param is bound to its rebuilt value
+  sort SPV . op spv : ParamList SEnv Nat -> SPV [ctor] .
+  op slotParams : ParamList ShL Nat -> SPV .
+  eq slotParams(qnil, shnil, N) = spv(qnil, senil, N) .
+  eq slotParams(((X : T), QL), SH ~ SHL, N) = slotP2(X, shParams(SH, N), QL, SHL) .
+  op slotP2 : Qid PV ParamList ShL -> SPV .
+  eq slotP2(X, pv3(QL2, SV1, N), QL, SHL) = slotP3(QL2, X |> SV1, slotParams(QL, SHL, N)) .
+  op slotP3 : ParamList SEnv SPV -> SPV .
+  eq slotP3(QL2, SG, spv(QL3, SG2, N)) = spv((QL2, QL3), SG @ SG2, N) .
+  op loopAttempt2 : Type ParamList Expr Cx SVL ShL Nat St SPV -> CR .
+  eq loopAttempt2(T, QL, E, cx(SG, IS, JRN, LI), SVS, SHL, LID, S, spv(QL2, SG2, N)) =
+     loopAttempt3(T, QL, E, cx(SG, IS, JRN, LI), SVS, SHL, LID, QL2,
+                  cln(E, cx(SG @ SG2, IS, JRN, LID :: LI), addLR(setCtr(S, N), lr(LID, SHL, false)))) .
+  op loopAttempt3 : Type ParamList Expr Cx SVL ShL Nat ParamList CR -> CR .
+  *** no demotion: emit the split loop
+  eq loopAttempt3(T, QL, E, CX, SVS, SHL, LID, QL2, cr(CH, SV1, st(PS, PO, WS, N, BG, LRS <> lr(LID, SHL2, false), FL, NT))) =
+     cr(chnil, matchSV(lp(T, QL2, leaves(SHL, SVS), wrap(CH, mat(SV1))), T), st(PS, PO, WS, N, BG, LRS, FL, NT)) .
+  *** demoted: rewind and retry with the demoted shapes (measure: ctor nodes of shapes)
+  ceq loopAttempt3(T, QL, E, CX, SVS, SHL, LID, QL2, cr(CH, SV1, st(PS, PO, WS, N, BG, LRS <> lr(LID, SHL2, true), FL, NT))) =
+      (if hasCtor(SHL2) then loopAttempt(T, QL, E, CX, SVS, SHL2, st(PS, PO, WS, N, BG, LRS, FL, NT))
+       else plainLoopRetry(T, QL, E, CX, SVS, st(PS, PO, WS, N, BG, LRS, FL, NT)) fi)
+    if ccount(SHL2) < ccount(SHL) .
+  op plainLoopRetry : Type ParamList Expr Cx SVL St -> CR .
+  eq plainLoopRetry(T, QL, E, CX, SVS, S) = plainLoop(T, E, CX, SVS, ctr(S), renameParams(QL, bump(S))) .
+
+  *** continue (stepContinue): arity invariant against the top loop frame, then supply leaves
+  eq cln(ct(EL), cx(SG, IS, JRN, LID :: LI), S) = clCont(len(EL), LID, clns(EL, cx(SG, IS, JRN, LID :: LI), S)) .
+  eq cln(ct(EL), cx(SG, IS, JRN, lnone), S) = clCont0(clns(EL, cx(SG, IS, JRN, lnone), S)) .
+  op clCont0 : CRL -> CR .
+  eq clCont0(crl(CH, SVS, S)) = cr(CH, dvx(ct(mats(SVS))), S) .
+  op clCont : Nat Nat CRL -> CR .
+  eq clCont(N, LID, crl(CH, SVS, st(PS, PO, WS, N1, BG, LRS <> lpl(LID, M), FL, NT))) =
+     if N == M then cr(CH, dvx(ct(mats(SVS))), st(PS, PO, WS, N1, BG, LRS <> lpl(LID, M), FL, NT))
+     else cr(CH, ox(ivk("continue value count differed from loop"), tErr("ivk")), st(PS, PO, WS, N1, BG, LRS <> lpl(LID, M), FL, NT)) fi .
+  eq clCont(N, LID, crl(CH, SVS, st(PS, PO, WS, N1, BG, LRS <> lr(LID, SHL, B1), FL, NT))) =
+     if N == svlen(SVS) and N == shlen(SHL)
+     then supply(CH, SHL, SVS, st(PS, PO, WS, N1, BG, LRS, FL, NT), LID, B1)
+     else cr(CH, ox(ivk("continue value count differed from specialized loop pattern"), tErr("ivk")),
+             st(PS, PO, WS, N1, BG, LRS <> lr(LID, SHL, B1), FL, NT)) fi .
+  op shlen : ShL -> Nat .
+  eq shlen(shnil) = 0 . eq shlen(SH ~ SHL) = s shlen(SHL) .
+  op supply : Chain ShL SVL St Nat Bool -> CR .
+  eq supply(CH, SHL, SVS, st(PS, PO, WS, N1, BG, LRS, FL, NT), LID, B1) =
+     if smatches(SHL, SVS)
+     then cr(CH, dvx(ct(leaves(SHL, SVS))), st(PS, PO, WS, N1, BG, LRS <> lr(LID, SHL, B1), FL, NT))
+     else cr(CH, dvx(ct(mats(SVS))), st(PS, PO, WS, N1, BG, LRS <> lr(LID, gens(PS, SHL, SVS), true), FL, NT)) fi .
+
+  *** ---------------- calls: inline under the active stack, else worker, else residual ----------------
+  eq cln(cl(F, EL), CX, S) = clCall(F, CX, clns(EL, CX, S)) .
+  op clCall : Qid Cx CRL -> CR .
+  ceq clCall(F, cx(SG, IS, JRN, LI), crl(CH, SVS, st(PS, PO, WS, N, BG, LRS, FL, NT))) =
+      prependCR(CH, finishInline(cln(inlineBody(F, st(PS, PO, WS, N, BG, LRS, FL, NT)),
+                                     cx(bindArgs(paramsOf(PS, F), SVS), IS * fm(F, ksizes(SVS)), jrnil, lnone),
+                                     st(PS, PO, WS, N, sd(BG, cost(PS, F)), LRS, FL, NT))))
+    if hasFn(PS, F) /\ (wrapper(PS, F) or productive(PS, F, SVS, 0))
+       /\ guardOk(IS, F, ksizes(SVS)) /\ BG >= cost(PS, F) .
+  eq clCall(F, CX, crl(CH, SVS, S)) = prependCR(CH, stepCallProc(F, SVS, S)) [owise] .
+  op cost : Prog Qid -> Nat .
+  eq cost(PS, F) = max(bsize(bodyOf(PS, F)), 1) .
+  op inlineBody : Qid St -> Expr .
+  eq inlineBody(F, st(PS, PO, WS, N, BG, LRS, FL, NT)) = bodyOf(PS, F) .
+  op finishInline : CR -> CR .
+  eq finishInline(CR0) = nmCR(CR0) .
+  var CR0 : CR .
+  op bindArgs : ParamList SVL -> SEnv .
+  eq bindArgs(qnil, svnil) = senil .
+  eq bindArgs(((X : T), QL), SV1 ~ SVS) = (X |> SV1) @ bindArgs(QL, SVS) .
+  op productive : Prog Qid SVL Nat -> Bool .
+  eq productive(PS, F, svnil, N) = false .
+  eq productive(PS, F, SV1 ~ SVS, N) =
+     (known?(SV1) and usedArg(PS, F, N, 2)) or productive(PS, F, SVS, s N) .
+  *** active-stack guard (stepInlineDirect)
+  op guardOk : IStack Qid Nat -> Bool .
+  eq guardOk(IS * fm(F, MN), F, K) = guardFrame(MN, K) and guardOk(IS, F, K) .
+  eq guardOk(IS, F, K) = true [owise] .
+  op guardFrame : MNat Nat -> Bool .
+  eq guardFrame(nul, K) = false .
+  eq guardFrame(N, K) = K > 0 and K < N .
+
+  *** stepCallProc: most specific admitted worker, else admit, else residual
+  op stepCallProc : Qid SVL St -> CR .
+  ceq stepCallProc(F, SVS, S) = cr(chnil, ox(cl(W, leaves(SHL, SVS)), retOf(src(S), F)), S)
+    if sp(F, K, SHL, W, B1) := bestSpec(specsOf(S), F, SVS, noSp) .
+  ceq stepCallProc(F, SVS, st(PS, PO, WS, N, BG, LRS, FL, NT)) =
+      stepCallProc(F, SVS, st(PS, PO, WS <> sp(F, countSpecs(WS, F), SHL, workerName(F, countSpecs(WS, F)), false), N, BG, LRS, FL, NT))
+    if hasFn(PS, F) /\ SHL := usedMask(PS, F, shapeOfs(PS, SVS), 0) /\ hasCtor(SHL)
+       /\ bsize(bodyOf(PS, F)) <= 200 /\ countSpecs(WS, F) < 3 /\ not hasPattern(WS, F, SHL) .
+  eq stepCallProc(F, SVS, S) = cr(chnil, ox(cl(F, mats(SVS)), retOf(src(S), F)), S) [owise] .
+
+  op specsOf : St -> Specs .
+  eq specsOf(st(PS, PO, WS, N, BG, LRS, FL, NT)) = WS .
+  op workerName : Qid Nat -> Qid .
+  eq workerName(F, K) = qid(string(F) + "#w" + string(K, 10)) .
+  op countSpecs : Specs Qid -> Nat .
+  eq countSpecs(sp(F, K, SHL, W, B1) <> WS, F) = s countSpecs(WS, F) .
+  eq countSpecs(WS, F) = 0 [owise] .
+  op hasPattern : Specs Qid ShL -> Bool .
+  eq hasPattern(sp(F, K, SHL, W, B1) <> WS, F, SHL) = true .
+  eq hasPattern(WS, F, SHL) = false [owise] .
+  *** specSelectionOrder: descending constructor count, ties by admission order
+  op bestSpec : Specs Qid SVL Specs -> Spec .
+  op noSpec : -> Spec .
+  ceq bestSpec(sp(F, K, SHL, W, B1) <> WS, F, SVS, WS2) = better(sp(F, K, SHL, W, B1), bestSpec(WS, F, SVS, WS2))
+    if smatches(SHL, SVS) .
+  eq bestSpec(WS, F, SVS, WS2) = noSpec [owise] .
+  var WS2 : Specs .
+  op better : Spec Spec -> Spec .
+  eq better(SP1, noSpec) = SP1 .
+  eq better(sp(F, K, SHL, W, B1), sp(F, K2, SHL2, W2, B2)) =
+     if ccount(SHL) > ccount(SHL2) or (ccount(SHL) == ccount(SHL2) and K < K2)
+     then sp(F, K, SHL, W, B1) else sp(F, K2, SHL2, W2, B2) fi .
+  var SP1 : Spec . var K2 : Nat . var W2 : Qid .
+endfm
+
+*** =====================================================================
+*** Pass-level transformations: worker writing, original normalization,
+*** in-place redirection, loop exit selection.
+*** =====================================================================
+fmod SC-PHASES is
+  protecting SC-CLONE .
+
+  vars X Y F G W J C : Qid . vars E E1 E2 REST B : Expr . vars EL EL2 : ExprList .
+  var P : Pat . var BL : BranchList . vars T T1 : Type . vars TL TL2 : TypeList . vars QL QL2 : ParamList .
+  vars PS PO PG PG2 : Prog . var WS : Specs . vars N N2 K M BG : Nat . var LRS : LRegs . var FL : Flags .
+  var NT : String . var SHL : ShL . var B1 : Bool . var SV1 : SV . var CH : Chain . var S : St .
+  var SG : SEnv . var I : Int . var NS : NatSet .
+
+  op budget0 : -> Nat .
+  eq budget0 = 65536 .
+  op resetBudget : St -> St .
+  eq resetBudget(st(PS, PO, WS, N, BG, LRS, FL, NT)) = st(PS, PO, WS, N, budget0, noLR, FL, NT) .
+
+  *** [W-Write] writeSpecialization: clone the sealed source body under a root frame
+  op writeSpec : Spec St -> St .
+  eq writeSpec(sp(F, K, SHL, W, false), st(PS, PO, WS, N, BG, LRS, FL, NT)) =
+     writeSpec2(F, W, specBody(F, PS, PO, FL), shArgs(paramsOf(PS, F), SHL, N),
+                st(PS, PO, WS, N, BG, LRS, FL, NT)) .
+  op specBody : Qid Prog Prog Flags -> Expr .
+  *** B10760: the clone reads the function's rewritten output body
+  ceq specBody(F, PS, fn(F, QL, T, E) PO, FL) = E if 'B10760 on FL .
+  eq specBody(F, PS, PO, FL) = bodyOf(PS, F) [owise] .
+  sort SA . op sa : ParamList SEnv Nat -> SA [ctor] .
+  op shArgs : ParamList ShL Nat -> SA .
+  eq shArgs(qnil, shnil, N) = sa(qnil, senil, N) .
+  eq shArgs(((X : T), QL), SH ~ SHL, N) = shArgs2(X, shParams(SH, N), QL, SHL) .
+  var SH : Shape .
+  op shArgs2 : Qid PV ParamList ShL -> SA .
+  eq shArgs2(X, pv3(QL2, SV1 ~ svnil, N), QL, SHL) = shArgs3(QL2, X |> SV1, shArgs(QL, SHL, N)) .
+  op shArgs3 : ParamList SEnv SA -> SA .
+  eq shArgs3(QL2, SG, sa(QL, SG2, N)) = sa((QL2, QL), SG @ SG2, N) .
+  var SG2 : SEnv .
+  op writeSpec2 : Qid Qid Expr SA St -> St .
+  eq writeSpec2(F, W, B, sa(QL, SG, N), st(PS, PO, WS, N2, BG, LRS, FL, NT)) =
+     writeSpec3(F, W, QL, cln(B, cx(SG, fm(F, nul), jrnil, lnone), resetBudget(st(PS, PO, WS, N, BG, LRS, FL, NT)))) .
+  op writeSpec3 : Qid Qid ParamList CR -> St .
+  eq writeSpec3(F, W, QL, cr(CH, SV1, st(PS, PO, WS, N, BG, LRS, FL, NT))) =
+     markWritten(W, st(PS, PO fn(W, QL, retOf(PS, F), wrap(CH, mat(SV1))), WS, N, BG, LRS, FL, NT)) .
+  op markWritten : Qid St -> St .
+  eq markWritten(W, st(PS, PO, sp(F, K, SHL, W, false) <> WS, N, BG, LRS, FL, NT)) =
+     st(PS, PO, sp(F, K, SHL, W, true) <> WS, N, BG, LRS, FL, NT) .
+
+  *** [N-Norm] value-aware normalization clone of an original body (cloneFnBody; no root frame)
+  op normalize : Qid St -> St .
+  eq normalize(F, st(PS, PO, WS, N, BG, LRS, FL, NT)) =
+     normalize2(F, cln(bodyOf(PS, F), cx(paramEnv(paramsOf(PS, F)), isnil, jrnil, lnone), resetBudget(st(PS, PO, WS, N, BG, LRS, FL, NT)))) .
+  op paramEnv : ParamList -> SEnv .
+  eq paramEnv(qnil) = senil .
+  eq paramEnv(((X : T), QL)) = (X |> at(v(X), T)) @ paramEnv(QL) .
+  op normalize2 : Qid CR -> St .
+  eq normalize2(F, cr(CH, SV1, st(PS, PO, WS, N, BG, LRS, FL, NT))) =
+     st(PS, replaceFn(PO, fn(F, paramsOf(PS, F), retOf(PS, F), wrap(CH, mat(SV1)))), WS, N, BG, LRS, FL, NT) .
+  op replaceFn : Prog Decl -> Prog .
+  eq replaceFn(fn(F, QL, T, E) PO, fn(F, QL2, T1, E2)) = fn(F, QL2, T1, E2) PO .
+  eq replaceFn(PO, fn(F, QL2, T1, E2)) = fn(F, QL2, T1, E2) PO [owise] .
+
+  *** [C-Collect] syntactic call-pattern collection over source bodies (collectCallPatternsInExpr)
+  op collect : St -> St .
+  eq collect(st(PS, PO, WS, N, BG, LRS, FL, NT)) = collectFns(PS, st(PS, PO, WS, N, BG, LRS, FL, NT)) .
+  op collectFns : Prog St -> St .
+  eq collectFns(fn(F, QL, T, E) PG, S) = collectFns(PG, collectE(E, S)) .
+  eq collectFns(PG, S) = S [owise] .
+  op collectE : Expr St -> St .
+  op collectL : ExprList St -> St .
+  op collectB : BranchList St -> St .
+  eq collectE(cl(F, EL), S) = recordPattern(F, ctorShapes(src(S), EL), collectL(EL, S)) .
+  eq collectE(tg(C, EL), S) = collectL(EL, S) . eq collectE(tp(EL), S) = collectL(EL, S) .
+  eq collectE(pr(F, EL), S) = collectL(EL, S) . eq collectE(pj(E, N), S) = collectE(E, S) .
+  eq collectE(lt(X, E1, E2), S) = collectE(E2, collectE(E1, S)) .
+  eq collectE(mt(E, BL), S) = collectB(BL, collectE(E, S)) .
+  eq collectE(lp(T, QL, EL, E), S) = collectE(E, collectL(EL, S)) .
+  eq collectE(ct(EL), S) = collectL(EL, S) . eq collectE(bk(E), S) = collectE(E, S) .
+  eq collectE(E, S) = S [owise] .
+  eq collectL(enil, S) = S . eq collectL((E, EL), S) = collectL(EL, collectE(E, S)) .
+  eq collectB(bnil, S) = S . eq collectB((P => E) | BL, S) = collectB(BL, collectE(E, S)) .
+  *** constructorShape: explicit constructors only
+  op ctorShape : Prog Expr -> Shape .
+  op ctorShapes : Prog ExprList -> ShL .
+  eq ctorShape(PS, tg(C, EL)) = sk(C, ctorShapes(PS, EL)) .
+  eq ctorShape(PS, tp(EL)) = stp(ctorShapes(PS, EL)) .
+  eq ctorShape(PS, E) = any(tErr("syntactic arg")) [owise] .
+  eq ctorShapes(PS, enil) = shnil .
+  eq ctorShapes(PS, (E, EL)) = ctorShape(PS, E) ~ ctorShapes(PS, EL) .
+  op recordPattern : Qid ShL St -> St .
+  ceq recordPattern(F, SHL, st(PS, PO, WS, N, BG, LRS, FL, NT)) =
+      st(PS, PO, WS <> sp(F, countSpecs(WS, F), SHL2, workerName(F, countSpecs(WS, F)), false), N, BG, LRS, FL, NT)
+    if hasFn(PS, F) /\ SHL2 := typedShapes(PS, F, usedMask(PS, F, SHL, 0)) /\ hasCtor(SHL2)
+       /\ bsize(bodyOf(PS, F)) <= 200 /\ countSpecs(WS, F) < 3 /\ not hasPattern(WS, F, SHL2) .
+  eq recordPattern(F, SHL, S) = S [owise] .
+  var SHL2 : ShL .
+  *** an `any` takes the type of the callee parameter at the top level (pattern type from the call's arg type)
+  op typedShapes : Prog Qid ShL -> ShL .
+  eq typedShapes(PS, F, SHL) = fixAny(SHL, ptypes(paramsOf(PS, F)), PS) .
+  op fixAny : ShL TypeList Prog -> ShL .
+  eq fixAny(shnil, TL, PS) = shnil .
+  eq fixAny(SH ~ SHL, T ; TL, PS) = fixAny1(SH, T, PS) ~ fixAny(SHL, TL, PS) .
+  op fixAny1 : Shape Type Prog -> Shape .
+  eq fixAny1(any(T1), T, PS) = any(T) .
+  eq fixAny1(sk(C, SHL), T, PS) = sk(C, fixAny(SHL, ctorArgs(ctorsOf(PS, tname(T)), C), PS)) .
+  eq fixAny1(stp(SHL), tT(TL), PS) = stp(fixAny(SHL, TL, PS)) .
+
+  *** [L-Exit] loop exit selection (projectUnusedLoopResultsInFn + loop_exit_demand.zig)
+  sort NatSet . subsort Nat < NatSet .
+  op nsnil : -> NatSet [ctor] .
+  op _,,_ : NatSet NatSet -> NatSet [ctor assoc comm id: nsnil] .
+  eq N ,, N = N .
+  op whole : -> NatSet [ctor] .         *** a bare use of the aggregate
+  eq whole ,, NS = whole .
+  op demand : Expr Qid -> NatSet .
+  op demandL : ExprList Qid -> NatSet .
+  op demandB : BranchList Qid -> NatSet .
+  eq demand(pj(v(X), N), X) = N .
+  eq demand(v(X), X) = whole .
+  eq demand(tg(C, EL), X) = demandL(EL, X) . eq demand(tp(EL), X) = demandL(EL, X) .
+  eq demand(pj(E, N), X) = demand(E, X) .
+  eq demand(lt(Y, E1, E2), X) = demand(E1, X) ,, demand(E2, X) .
+  eq demand(mt(E, BL), X) = demand(E, X) ,, demandB(BL, X) .
+  eq demand(cl(F, EL), X) = demandL(EL, X) . eq demand(pr(F, EL), X) = demandL(EL, X) .
+  eq demand(lp(T, QL, EL, E), X) = demandL(EL, X) ,, demand(E, X) .
+  eq demand(ct(EL), X) = demandL(EL, X) . eq demand(bk(E), X) = demand(E, X) .
+  eq demand(jn(J, QL, E1, E2), X) = demand(E1, X) ,, demand(E2, X) .
+  eq demand(jp(J, EL), X) = demandL(EL, X) .
+  eq demand(E, X) = nsnil [owise] .
+  eq demandL(enil, X) = nsnil . eq demandL((E, EL), X) = demand(E, X) ,, demandL(EL, X) .
+  eq demandB(bnil, X) = nsnil . eq demandB((P => E) | BL, X) = demand(E, X) ,, demandB(BL, X) .
+  op nsSize : NatSet -> Nat .
+  eq nsSize(nsnil) = 0 . eq nsSize(N ,, NS) = s nsSize(NS) .
+  op scalarsOnly : TypeList -> Bool .    *** isScalar: primitive other than Str; named types are not scalar
+  eq scalarsOnly(tnil) = true .
+  eq scalarsOnly(T ; TL) = (T == tInt) and scalarsOnly(TL) .
+  op selected : NatSet TypeList -> Bool .
+  eq selected(whole, TL) = false .
+  eq selected(NS, TL) = nsSize(NS) > 0 and (nsSize(NS) < tlen(TL) or not scalarsOnly(TL)) [owise] .
+  op sortNS : NatSet Nat Nat -> NatList .   *** kept components in order
+  eq sortNS(NS, N, M) = if N >= M then nnil else (if N in NS then N ;; sortNS(NS, s N, M) else sortNS(NS, s N, M) fi) fi .
+  op _in_ : Nat NatSet -> Bool .
+  eq N in (N ,, NS) = true . eq N in NS = false [owise] .
+
+  op exitSel : Expr St -> ER .
+  sort ER . op er : Expr St -> ER [ctor] .
+  op exitSelL : ExprList St -> ERL .
+  sort ERL . op erl : ExprList St -> ERL [ctor] .
+  op exitSelB : BranchList St -> ERB .
+  sort ERB . op erb : BranchList St -> ERB [ctor] .
+  ceq exitSel(lt(X, lp(tT(TL), QL, EL, B), REST), S) = exitRewrite(X, TL, QL, EL, B, REST, NS, S)
+    if NS := demand(REST, X) /\ tlen(TL) >= 2 /\ selected(NS, TL) .
+  eq exitSel(lt(X, E1, E2), S) = erLet(X, exitSel(E1, S), E2) .
+  op erLet : Qid ER Expr -> ER .
+  eq erLet(X, er(E1, S), E2) = erLet2(X, E1, exitSel(E2, S)) .
+  op erLet2 : Qid Expr ER -> ER .
+  eq erLet2(X, E1, er(E2, S)) = er(lt(X, E1, E2), S) .
+  eq exitSel(mt(E, BL), S) = erMt(exitSel(E, S), BL) .
+  op erMt : ER BranchList -> ER .
+  eq erMt(er(E, S), BL) = erMt2(E, exitSelB(BL, S)) .
+  op erMt2 : Expr ERB -> ER .
+  eq erMt2(E, erb(BL, S)) = er(mt(E, BL), S) .
+  eq exitSel(lp(T, QL, EL, B), S) = erLp(T, QL, EL, exitSel(B, S)) .
+  op erLp : Type ParamList ExprList ER -> ER .
+  eq erLp(T, QL, EL, er(B, S)) = er(lp(T, QL, EL, B), S) .
+  eq exitSel(jn(J, QL, E1, E2), S) = erJn(J, QL, exitSel(E1, S), E2) .
+  op erJn : Qid ParamList ER Expr -> ER .
+  eq erJn(J, QL, er(E1, S), E2) = erJn2(J, QL, E1, exitSel(E2, S)) .
+  op erJn2 : Qid ParamList Expr ER -> ER .
+  eq erJn2(J, QL, E1, er(E2, S)) = er(jn(J, QL, E1, E2), S) .
+  eq exitSel(bk(E), S) = erBk(exitSel(E, S)) .
+  op erBk : ER -> ER .
+  eq erBk(er(E, S)) = er(bk(E), S) .
+  eq exitSel(E, S) = er(E, S) [owise] .
+  eq exitSelB(bnil, S) = erb(bnil, S) .
+  eq exitSelB((P => E) | BL, S) = erbCons(P, exitSel(E, S), BL) .
+  op erbCons : Pat ER BranchList -> ERB .
+  eq erbCons(P, er(E, S), BL) = erbCons2(P, E, exitSelB(BL, S)) .
+  op erbCons2 : Pat Expr ERB -> ERB .
+  eq erbCons2(P, E, erb(BL, S)) = erb((P => E) | BL, S) .
+
+  op exitRewrite : Qid TypeList ParamList ExprList Expr Expr NatSet St -> ER .
+  *** one kept component: the loop's type becomes that component
+  ceq exitRewrite(X, TL, QL, EL, B, REST, NS, S) =
+      erLet2(X, lp(tnth(TL, K), QL, EL, selBreaks(B, K ;; nnil, sel1, S)), exitSel(substProj(REST, X, K, v(X)), S))
+    if K ;; nnil := sortNS(NS, 0, tlen(TL)) .
+  *** several kept components
+  ceq exitRewrite(X, TL, QL, EL, B, REST, NS, S) =
+      (if 'B10438 on flags(S)
+       *** pre-fix: mint tuple type of the kept components
+       then erLet2(X, lp(tT(keptTypes(TL, KS)), QL, EL, selBreaks(B, KS, selTup, S)),
+                   exitSel(reindex(REST, X, KS, 0), S))
+       else exitJoin(qid("%x" + string(ctr(S), 10)), keptParams(TL, KS, ctr(S)), TL, QL, EL, B, REST, X, KS, bumpN(S, s s tlen(TL))) fi)
+    if KS := sortNS(NS, 0, tlen(TL)) [owise] .
+  var KS : NatList . var NLS : NatList .
+  op keptTypes : TypeList NatList -> TypeList .
+  eq keptTypes(TL, nnil) = tnil .
+  eq keptTypes(TL, K ;; NLS) = tnth(TL, K) ; keptTypes(TL, NLS) .
+  op keptParams : TypeList NatList Nat -> ParamList .
+  eq keptParams(TL, nnil, N) = qnil .
+  eq keptParams(TL, K ;; NLS, N) = (qid("%x" + string(N, 10) + "_" + string(K, 10)) : tnth(TL, K)), keptParams(TL, NLS, N) .
+  op exitJoin : Qid ParamList TypeList ParamList ExprList Expr Expr Qid NatList St -> ER .
+  eq exitJoin(J, QL2, TL, QL, EL, B, REST, X, KS, S) =
+     exitJoin2(J, QL2, lp(tT(TL), QL, EL, selBreaks(B, KS, selJump(J), S)),
+               exitSel(substKept(REST, X, KS, QL2), S)) .
+  op exitJoin2 : Qid ParamList Expr ER -> ER .
+  *** B10461 / current: single-site join inlining (keeps the join when the body has free loop control,
+  *** unless 'B10461 is set)
+  eq exitJoin2(J, QL2, E1, er(E2, S)) =
+     if jumpCount(E1, J) == 1 and ('B10461 on flags(S) or not freeLC(E2))
+     then er(autoType(inlineJump(E1, J, QL2, E2)), S)
+     else er(jn(J, QL2, E2, E1), S) fi .
+
+  *** rewrite owned breaks (nested loops push a null selection)
+  sort SelMode . op sel1 : -> SelMode [ctor] . op selTup : -> SelMode [ctor] . op selJump : Qid -> SelMode [ctor] .
+  op selBreaks : Expr NatList SelMode St -> Expr .
+  op selBreaksL : ExprList NatList SelMode St -> ExprList .
+  op selBreaksB : BranchList NatList SelMode St -> BranchList .
+  eq selBreaks(bk(E), KS, MD, S) = selExit(E, KS, MD) .
+  eq selBreaks(lp(T, QL, EL, E), KS, MD, S) = lp(T, QL, EL, E) .
+  eq selBreaks(lt(X, E1, E2), KS, MD, S) = lt(X, selBreaks(E1, KS, MD, S), selBreaks(E2, KS, MD, S)) .
+  eq selBreaks(mt(E, BL), KS, MD, S) = mt(selBreaks(E, KS, MD, S), selBreaksB(BL, KS, MD, S)) .
+  eq selBreaks(jn(J, QL, E1, E2), KS, MD, S) = jn(J, QL, selBreaks(E1, KS, MD, S), selBreaks(E2, KS, MD, S)) .
+  eq selBreaks(E, KS, MD, S) = E [owise] .
+  eq selBreaksB(bnil, KS, MD, S) = bnil .
+  eq selBreaksB((P => E) | BL, KS, MD, S) = (P => selBreaks(E, KS, MD, S)) | selBreaksB(BL, KS, MD, S) .
+  var MD : SelMode .
+  *** each exit keeps its complete strict chain: components are named in order, kept ones transfer
+  op selExit : Expr NatList SelMode -> Expr .
+  eq selExit(tp(EL), KS, MD) = nameAll(EL, 0, KS, MD, enil) .
+  eq selExit(E, KS, MD) = lt('%t, E, finishExit(projAll('%t, KS), MD)) [owise] .
+  op nameAll : ExprList Nat NatList SelMode ExprList -> Expr .
+  eq nameAll(enil, N, KS, MD, EL2) = finishExit(pickKept(EL2, KS), MD) .
+  eq nameAll((E, EL), N, KS, MD, EL2) = lt(qid("%e" + string(N, 10)), E, nameAll(EL, s N, KS, MD, (EL2, v(qid("%e" + string(N, 10)))))) .
+  op pickKept : ExprList NatList -> ExprList .
+  eq pickKept(EL, nnil) = enil .
+  eq pickKept(EL, K ;; NLS) = nth(EL, K), pickKept(EL, NLS) .
+  op projAll : Qid NatList -> ExprList .
+  eq projAll(X, nnil) = enil .
+  eq projAll(X, K ;; NLS) = pj(v(X), K), projAll(X, NLS) .
+  op finishExit : ExprList SelMode -> Expr .
+  eq finishExit(E, sel1) = bk(E) .
+  eq finishExit(EL, selTup) = bk(tp(EL)) .
+  eq finishExit(EL, selJump(J)) = jp(J, EL) .
+
+  op substProj : Expr Qid Nat Expr -> Expr .     *** x.k  ->  replacement
+  op substProjL : ExprList Qid Nat Expr -> ExprList .
+  op substProjB : BranchList Qid Nat Expr -> BranchList .
+  eq substProj(pj(v(X), K), X, K, E2) = E2 .
+  eq substProj(tg(C, EL), X, K, E2) = tg(C, substProjL(EL, X, K, E2)) .
+  eq substProj(tp(EL), X, K, E2) = tp(substProjL(EL, X, K, E2)) .
+  eq substProj(pj(E, N), X, K, E2) = pj(substProj(E, X, K, E2), N) .
+  eq substProj(lt(Y, E1, E), X, K, E2) = lt(Y, substProj(E1, X, K, E2), substProj(E, X, K, E2)) .
+  eq substProj(mt(E, BL), X, K, E2) = mt(substProj(E, X, K, E2), substProjB(BL, X, K, E2)) .
+  eq substProj(cl(F, EL), X, K, E2) = cl(F, substProjL(EL, X, K, E2)) .
+  eq substProj(pr(F, EL), X, K, E2) = pr(F, substProjL(EL, X, K, E2)) .
+  eq substProj(lp(T, QL, EL, E), X, K, E2) = lp(T, QL, substProjL(EL, X, K, E2), substProj(E, X, K, E2)) .
+  eq substProj(ct(EL), X, K, E2) = ct(substProjL(EL, X, K, E2)) .
+  eq substProj(bk(E), X, K, E2) = bk(substProj(E, X, K, E2)) .
+  eq substProj(jn(J, QL, E1, E), X, K, E2) = jn(J, QL, substProj(E1, X, K, E2), substProj(E, X, K, E2)) .
+  eq substProj(jp(J, EL), X, K, E2) = jp(J, substProjL(EL, X, K, E2)) .
+  eq substProj(E, X, K, E2) = E [owise] .
+  eq substProjL(enil, X, K, E2) = enil .
+  eq substProjL((E, EL), X, K, E2) = substProj(E, X, K, E2), substProjL(EL, X, K, E2) .
+  eq substProjB(bnil, X, K, E2) = bnil .
+  eq substProjB((P => E) | BL, X, K, E2) = (P => substProj(E, X, K, E2)) | substProjB(BL, X, K, E2) .
+  op substKept : Expr Qid NatList ParamList -> Expr .
+  eq substKept(E, X, nnil, QL) = E .
+  eq substKept(E, X, K ;; NLS, ((Y : T), QL)) = substKept(substProj(E, X, K, v(Y)), X, NLS, QL) .
+  op reindex : Expr Qid NatList Nat -> Expr .
+  eq reindex(E, X, nnil, N) = substVar(E, '%ri, X) .
+  eq reindex(E, X, K ;; NLS, N) = reindex(substProj(E, X, K, pj(v(qid("%ri")), N)), X, NLS, s N) .
+  *** note: the %ri placeholder is renamed back to X at the end, so later reindexing does not collide
+  op substVar : Expr Qid Qid -> Expr .
+  op substVarL : ExprList Qid Qid -> ExprList .
+  op substVarB : BranchList Qid Qid -> BranchList .
+  eq substVar(v(Y), Y, X) = v(X) .
+  eq substVar(tg(C, EL), Y, X) = tg(C, substVarL(EL, Y, X)) .
+  eq substVar(tp(EL), Y, X) = tp(substVarL(EL, Y, X)) .
+  eq substVar(pj(E, N), Y, X) = pj(substVar(E, Y, X), N) .
+  eq substVar(lt(F, E1, E), Y, X) = lt(F, substVar(E1, Y, X), substVar(E, Y, X)) .
+  eq substVar(mt(E, BL), Y, X) = mt(substVar(E, Y, X), substVarB(BL, Y, X)) .
+  eq substVar(cl(F, EL), Y, X) = cl(F, substVarL(EL, Y, X)) .
+  eq substVar(pr(F, EL), Y, X) = pr(F, substVarL(EL, Y, X)) .
+  eq substVar(lp(T, QL, EL, E), Y, X) = lp(T, QL, substVarL(EL, Y, X), substVar(E, Y, X)) .
+  eq substVar(ct(EL), Y, X) = ct(substVarL(EL, Y, X)) .
+  eq substVar(bk(E), Y, X) = bk(substVar(E, Y, X)) .
+  eq substVar(jn(J, QL, E1, E), Y, X) = jn(J, QL, substVar(E1, Y, X), substVar(E, Y, X)) .
+  eq substVar(jp(J, EL), Y, X) = jp(J, substVarL(EL, Y, X)) .
+  eq substVar(E, Y, X) = E [owise] .
+  eq substVarL(enil, Y, X) = enil .
+  eq substVarL((E, EL), Y, X) = substVar(E, Y, X), substVarL(EL, Y, X) .
+  eq substVarB(bnil, Y, X) = bnil .
+  eq substVarB((P => E) | BL, Y, X) = (P => substVar(E, Y, X)) | substVarB(BL, Y, X) .
+
+  op autoType : Expr -> Expr .
+  eq autoType(lp(T, QL, EL, E)) = lp(tAuto, QL, EL, E) .
+  op jumpCount : Expr Qid -> Nat .
+  op jumpCountL : ExprList Qid -> Nat .
+  op jumpCountB : BranchList Qid -> Nat .
+  eq jumpCount(jp(J, EL), J) = 1 .
+  eq jumpCount(lt(Y, E1, E2), J) = jumpCount(E1, J) + jumpCount(E2, J) .
+  eq jumpCount(mt(E, BL), J) = jumpCount(E, J) + jumpCountB(BL, J) .
+  eq jumpCount(lp(T, QL, EL, E), J) = jumpCount(E, J) .
+  eq jumpCount(jn(Y, QL, E1, E2), J) = jumpCount(E1, J) + jumpCount(E2, J) .
+  eq jumpCount(E, J) = 0 [owise] .
+  eq jumpCountB(bnil, J) = 0 .
+  eq jumpCountB((P => E) | BL, J) = jumpCount(E, J) + jumpCountB(BL, J) .
+  op inlineJump : Expr Qid ParamList Expr -> Expr .
+  op inlineJumpB : BranchList Qid ParamList Expr -> BranchList .
+  eq inlineJump(jp(J, EL), J, QL, E2) = bindJ(QL, EL, E2) .
+  eq inlineJump(lt(Y, E1, E), J, QL, E2) = lt(Y, E1, inlineJump(E, J, QL, E2)) .
+  eq inlineJump(mt(E, BL), J, QL, E2) = mt(E, inlineJumpB(BL, J, QL, E2)) .
+  eq inlineJump(lp(T, QL2, EL, E), J, QL, E2) = lp(T, QL2, EL, inlineJump(E, J, QL, E2)) .
+  eq inlineJump(jn(Y, QL2, E1, E), J, QL, E2) = jn(Y, QL2, inlineJump(E1, J, QL, E2), inlineJump(E, J, QL, E2)) .
+  eq inlineJump(E, J, QL, E2) = E [owise] .
+  eq inlineJumpB(bnil, J, QL, E2) = bnil .
+  eq inlineJumpB((P => E) | BL, J, QL, E2) = (P => inlineJump(E, J, QL, E2)) | inlineJumpB(BL, J, QL, E2) .
+  op bindJ : ParamList ExprList Expr -> Expr .
+  eq bindJ(qnil, enil, E2) = E2 .
+  eq bindJ(((Y : T), QL), (E, EL), E2) = lt(Y, E, bindJ(QL, EL, E2)) .
+
+  op exitPhase : St -> St .
+  eq exitPhase(st(PS, PO, WS, N, BG, LRS, FL, NT)) = exitFns(PO, st(PS, none, WS, N, BG, LRS, FL, NT)) .
+  op exitFns : Prog St -> St .
+  eq exitFns(fn(F, QL, T, E) PG, S) = exitFn2(F, QL, T, PG, exitSel(E, S)) .
+  eq exitFns(PG, S) = S [owise] .
+  op exitFn2 : Qid ParamList Type Prog ER -> St .
+  eq exitFn2(F, QL, T, PG, er(E, st(PS, PO, WS, N, BG, LRS, FL, NT))) =
+     exitFns(PG, st(PS, PO fn(F, QL, T, E), WS, N, BG, LRS, FL, NT)) .
+endfm
