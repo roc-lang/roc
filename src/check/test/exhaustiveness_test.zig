@@ -156,6 +156,24 @@ test "non-exhaustive - guarded-only match needs unguarded fallback" {
 
 // Redundancy Checking
 
+test "issue 13294 - second wildcard on an open union result is redundant" {
+    const source =
+        \\mk : Bool -> [A, B]
+        \\mk = |flag| if flag A else B
+        \\
+        \\f = |flag| match mk(flag) {
+        \\    A => "a"
+        \\    _ => "other"
+        \\    _ => "unreachable"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeWarning("Redundant Pattern");
+    try test_env.assertOneTypeProblemMsgContains("Redundant Pattern", "_ => \"unreachable\"");
+}
+
 test "redundant - pattern after wildcard" {
     const source =
         \\x : Try(I64, Str)
@@ -206,6 +224,26 @@ test "redundant - duplicate integer literal" {
 }
 
 // Record Pattern Exhaustiveness
+
+test "issue 13295 - a missing record pattern names only source fields" {
+    const source =
+        \\f : { b : [A, B], c : I64 } -> U64
+        \\f = |x| match x {
+        \\    { c: -1, .. } => 0
+        \\    { b: B, .. } => 1
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    const report = try test_env.allocOneTypeProblemMsg("Non Exhaustive Match");
+    defer test_env.gpa.free(report);
+    try std.testing.expect(std.mem.find(u8, report, "b: A") != null);
+    if (std.mem.find(u8, report, "#others") != null) {
+        std.debug.print("unexpected internal field in report:\n{s}\n", .{report});
+        return error.TestUnexpectedResult;
+    }
+}
 
 test "exhaustive - record destructuring" {
     const source =
@@ -344,6 +382,37 @@ test "non-exhaustive - nested Try missing inner Err" {
 
 // Tuple exhaustiveness
 
+test "issue 13291 - missing nested payload on an open union result" {
+    const source =
+        \\mk : Bool -> ([A([X, Y])], Bool)
+        \\mk = |flag| if flag (A(X), True) else (A(Y), False)
+        \\
+        \\f = |flag| match mk(flag) {
+        \\    (A(X), _) => "first"
+        \\    (_, True) => "second"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeProblemMsgContains("Non Exhaustive Match", "(A(Y), False)");
+}
+
+test "issue 13291 - a partial wildcard keeps an open remainder but does not cover it" {
+    const body =
+        \\pick = |tag, flag| match (tag, flag) {
+        \\    (A, _) => 1.U64
+        \\    (_, True) => 2.U64
+        \\}
+        \\example = |_| pick(B, False)
+    ;
+    inline for (.{ "", "pick : [A, ..], Bool -> U64\n" }) |annotation| {
+        var env = try TestEnv.init("Test", annotation ++ body);
+        defer env.deinit();
+        try env.assertOneTypeError("Non Exhaustive Match");
+    }
+}
+
 test "exhaustive - tuple with Try" {
     const source =
         \\x : (Try(I64, Str), I64)
@@ -364,6 +433,85 @@ test "exhaustive - tuple with Try" {
 // Uninhabited Types - Empty Tag Union Handling
 // These tests verify that empty tag unions (like []) are recognized as uninhabited,
 // making patterns on them unnecessary.
+
+test "uninhabited - issue 13289 - Ok literal leaves other numbers uncovered" {
+    const source =
+        \\describe : Try(U64, []) -> Str
+        \\describe = |r| match r {
+        \\    Ok(0) => "zero"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Non Exhaustive Match");
+}
+
+test "uninhabited - issue 13289 - wildcard after Ok literal covers other numbers" {
+    const source =
+        \\describe : Try(U64, []) -> Str
+        \\describe = |r| match r {
+        \\    Ok(0) => "zero"
+        \\    _ => "other"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "uninhabited - issue 13290 - wildcard on an empty union cannot miss a value" {
+    const source =
+        \\f : [] -> U64
+        \\f = |x| match x {
+        \\    _ => 0
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // The branch can be warned about, but the match is exhaustive.
+    for (test_env.checker.problems.problems.items) |problem| {
+        try std.testing.expectEqual(.unmatchable_pattern, std.meta.activeTag(problem));
+    }
+    try std.testing.expectEqual(@as(usize, 0), try test_env.typeProblemCount());
+}
+
+test "uninhabited - issue 13292 - guarded Ok needs an unguarded fallback" {
+    const source =
+        \\size : Try(U64, []) -> Str
+        \\size = |r| match r {
+        \\    Ok(n) if n > 5 => "big"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Non Exhaustive Match");
+}
+
+test "uninhabited - issue 13293 - inline map callback can destructure Ok" {
+    const source =
+        \\inline : List(Try(U64, [])) -> List(U64)
+        \\inline = |xs| xs.map(|Ok(n)| n)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "issue 13293 - a forwarded callback cannot generalize an unmatched tag tail" {
+    const source =
+        \\preserve = |f| f
+        \\get = |_| preserve(|Only(n)| n)
+        \\bad = |_| get({})(Other)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorHighlightsWithin("Type Mismatch", .{ .line = 3, .start_column = 19, .end_column = 24 });
+}
 
 test "exhaustive - empty error type means only Ok needed" {
     // When the error type is an empty tag union [], the Err case is uninhabited

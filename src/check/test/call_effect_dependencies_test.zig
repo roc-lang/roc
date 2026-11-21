@@ -60,6 +60,19 @@ test "call effect dependencies - a call of a callback argument stays a dependenc
     try std.testing.expectEqual(@as(usize, 1), try effectDepCount(&env, "apply"));
 }
 
+test "issue 13299: a diagnostic preserves the effect of an instantiated callback" {
+    var env = try TestEnv.init("Test",
+        \\e! : U64 => U64
+        \\e! = |n| n
+        \\w = |f| |x| f(x)
+        \\h = w(e!)
+        \\g : U64 -> U64
+        \\g = h
+    );
+    defer env.deinit();
+    try env.assertOneTypeProblemMsgContains("Type Mismatch", "U64 => U64");
+}
+
 test "call effect dependencies - a local function calling a captured callback stays a dependency" {
     var env = try TestEnv.init("Test",
         \\wrap = |f| {

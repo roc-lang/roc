@@ -43,6 +43,7 @@ const TypeContext = enum {
 const TypeWriter = @This();
 
 types: *const TypesStore,
+effects: @import("effect_solver.zig").Solver,
 idents: *const Ident.Store,
 buf: std.array_list.Managed(u8),
 /// The vars enclosing the node being rendered, innermost last. A var already
@@ -85,6 +86,7 @@ next_name_index: u32,
 name_counters: std.EnumMap(TypeContext, u32),
 flex_var_names_map: collections_mod.DenseMap(Var, FlexVarNameRange),
 flex_var_names: std.array_list.Managed(u8),
+used_names: std.HashMapUnmanaged(FlexVarNameRange, void, NameContext, 80) = .empty,
 static_dispatch_constraints: std.array_list.Managed(ConstraintWithDispatcher),
 static_dispatch_constraints_tmp: std.array_list.Managed(StaticDispatchTmp),
 /// A receiver contributes its complete requirement list once per rendering,
@@ -147,6 +149,18 @@ pub fn setDefaultSourceResolver(self: *TypeWriter, ctx: *const anyopaque, resolv
 const ByteWrite = std.Io.Writer;
 
 const FlexVarNameRange = struct { start: usize, end: usize };
+
+// Keys are offsets, not slices: appending the next spelling can relocate
+// the backing buffer while names from earlier in this render remain live.
+const NameContext = struct {
+    bytes: []const u8,
+    pub fn hash(ctx: NameContext, range: FlexVarNameRange) u64 {
+        return std.hash.Wyhash.hash(0, ctx.bytes[range.start..range.end]);
+    }
+    pub fn eql(ctx: NameContext, a: FlexVarNameRange, b: FlexVarNameRange) bool {
+        return std.mem.eql(u8, ctx.bytes[a.start..a.end], ctx.bytes[b.start..b.end]);
+    }
+};
 
 const StaticDispatchTmp = struct {
     fn_name: Ident.Idx,
@@ -321,6 +335,7 @@ pub fn initFromParts(
 ) std.mem.Allocator.Error!TypeWriter {
     return .{
         .types = types_store,
+        .effects = .init(gpa),
         .idents = idents,
         .buf = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .seen = try std.array_list.Managed(Var).initCapacity(gpa, 16),
@@ -354,6 +369,7 @@ pub fn initFromParts(
 
 /// Deinit type writer
 pub fn deinit(self: *TypeWriter) void {
+    self.effects.deinit();
     self.buf.deinit();
     self.seen.deinit();
     self.seen_set.deinit();
@@ -366,6 +382,7 @@ pub fn deinit(self: *TypeWriter) void {
     self.ext_seen.deinit();
     self.flex_var_names_map.deinit();
     self.flex_var_names.deinit();
+    self.used_names.deinit(self.gpa);
     self.static_dispatch_constraints.deinit();
     self.static_dispatch_constraints_tmp.deinit();
     self.collected_dispatchers.deinit();
@@ -387,6 +404,7 @@ pub fn setImportMapping(self: *TypeWriter, import_mapping: ?*const import_mappin
 
 /// Reset type writer state
 pub fn reset(self: *TypeWriter) void {
+    self.effects.reset();
     self.polarity = .pos;
     self.buf.clearRetainingCapacity();
     self.seen.clearRetainingCapacity();
@@ -401,6 +419,7 @@ pub fn reset(self: *TypeWriter) void {
     self.ext_seen.clearRetainingCapacity();
     self.flex_var_names_map.clearRetainingCapacity();
     self.flex_var_names.clearRetainingCapacity();
+    self.used_names.clearRetainingCapacity();
     self.static_dispatch_constraints.clearRetainingCapacity();
     self.static_dispatch_constraints_tmp.clearRetainingCapacity();
     self.collected_dispatchers.clearRetainingCapacity();
@@ -805,18 +824,14 @@ fn writeContentHead(
         .flex => |flex| {
             const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
 
-            if (flex.name) |ident_idx| {
-                try writer.writeAll(self.getIdent(ident_idx));
-            } else {
-                try self.writeFlexVarName(writer, var_, context, root_var);
-            }
+            try self.writeFlexVarName(writer, var_, context, root_var);
 
             try self.collectDispatchConstraints(var_, resolved_var, constraints);
             if (flex.literal != .none) try self.collectLiteralDispatcher(resolved_var, flex.literal);
             return false;
         },
         .rigid => |rigid| {
-            try writer.writeAll(self.getIdent(rigid.name));
+            try self.writeFlexVarName(writer, var_, context, root_var);
 
             // Useful in debugging to see if a var is rigid or not
             // _ = try writer.print("[r-{}]", .{var_});
@@ -885,7 +900,10 @@ fn startFlatType(
         .nominal_type => |nominal_type| return try self.startNominalType(writer, nominal_type),
         .fn_pure => |func| return try self.startFunc(writer, func, " -> ", wrap_in_parens),
         .fn_effectful => |func| return try self.startFunc(writer, func, " => ", wrap_in_parens),
-        .fn_unbound => |func| return try self.startFunc(writer, func, " -> ", wrap_in_parens),
+        .fn_unbound => |func| {
+            const state = try self.effects.resolve(self.types, flat_type_var);
+            return self.startFunc(writer, func, if (state == .effectful) " => " else " -> ", wrap_in_parens);
+        },
         .record => |record| return try self.startRecord(writer, record, flat_type_var, root_var),
         .empty_record => {
             try writer.writeAll("{}");
@@ -1168,7 +1186,7 @@ fn stepRecord(self: *TypeWriter, writer: *ByteWrite, frame: *RecordFrame, root_v
                             const name = self.getIdent(ident_idx);
                             // Suppress internal names (e.g. #open_ext_0 from anonymous `..`)
                             if (name.len > 0 and name[0] != '#') {
-                                try writer.writeAll(name);
+                                try self.writeFlexVarName(writer, flex.var_, .RecordExtension, root_var);
                             }
                         } else {
                             if (frame.flex_ext_occurrences > 1) {
@@ -1186,7 +1204,7 @@ fn stepRecord(self: *TypeWriter, writer: *ByteWrite, frame: *RecordFrame, root_v
                         const name = self.getIdent(rigid.name);
                         // Suppress internal names (e.g. #open_ext_0 from anonymous `..`)
                         if (name.len == 0 or name[0] != '#') {
-                            try writer.writeAll(name);
+                            try self.writeFlexVarName(writer, frame.ext_var, .RecordExtension, root_var);
                         }
 
                         // Since don't recurse above, we must capture the static dispatch
@@ -1262,8 +1280,7 @@ fn stepTagUnion(self: *TypeWriter, writer: *ByteWrite, frame: *TagUnionFrame, ro
                             switch (display) {
                                 .hidden, .anonymous => {},
                                 .row_name => try self.writeRowName(writer, flex.var_, root_var),
-                                .source_name => try writer.writeAll(self.getIdent(flex.payload.name.?)),
-                                .generated_name => try self.writeFlexVarName(writer, flex.var_, .TagUnionExtension, root_var),
+                                .source_name, .generated_name => try self.writeFlexVarName(writer, flex.var_, .TagUnionExtension, root_var),
                             }
                         }
 
@@ -1282,7 +1299,7 @@ fn stepTagUnion(self: *TypeWriter, writer: *ByteWrite, frame: *TagUnionFrame, ro
                         if (!std.mem.eql(u8, name, types_mod.polarity_var_text)) {
                             if (frame.tags_count > 0) try writer.writeAll(", ");
                             try writer.writeAll("..");
-                            if (name.len > 0 and name[0] != '#') try writer.writeAll(name);
+                            if (name.len > 0 and name[0] != '#') try self.writeFlexVarName(writer, frame.ext_var, .TagUnionExtension, root_var);
 
                             try self.collectDispatchConstraints(frame.ext_var, self.types.resolveVar(frame.ext_var).var_, self.types.sliceStaticDispatchConstraints(rigid.constraints));
                         }
@@ -1502,7 +1519,8 @@ fn appendStaticDispatchConstraint(self: *TypeWriter, dispatcher_var: Var, constr
 
 /// Generate a name for a flex var that may appear multiple times in the type
 pub fn writeFlexVarName(self: *TypeWriter, writer: *ByteWrite, var_: Var, context: TypeContext, root_var: Var) error{ OutOfMemory, WriteFailed }!void {
-    const resolved_var = self.types.resolveVar(var_).var_;
+    const resolved = self.types.resolveVar(var_);
+    const resolved_var = resolved.var_;
 
     // If resolved var is out of bounds, it's corrupted - just write a simple name
     if (@backingInt(resolved_var) >= self.types.len()) {
@@ -1516,36 +1534,33 @@ pub fn writeFlexVarName(self: *TypeWriter, writer: *ByteWrite, var_: Var, contex
         try writer.writeAll(
             self.flex_var_names.items[range.start..range.end],
         );
-    } else {
-        // Check if this variable appears multiple times
-        // Note: counting can fail with corrupted data, so we treat it as appearing once
-        const occurrences = try self.countVarOccurrences(resolved_var, root_var);
-        if (occurrences <= 1 and !self.holdsOpenRowValue(resolved_var)) {
-            // If it appears once, then generate and write the name
-            try writer.writeAll("_");
-            try self.generateContextualName(writer, context);
+        return;
+    }
+    const singleton = resolved.desc.content == .flex and
+        (try self.countVarOccurrences(resolved_var, root_var)) <= 1 and !self.holdsOpenRowValue(resolved_var);
+    const source_id: ?Ident.Idx = switch (resolved.desc.content) {
+        .flex => |flex| flex.name,
+        .rigid => |rigid| rigid.name,
+        else => null,
+    };
+    const start = self.flex_var_names.items.len;
+    var preferred = if (source_id) |id| self.getIdent(id) else "";
+    while (true) {
+        var aw = collections_mod.managedWriter(&self.flex_var_names);
+        if (singleton and !std.mem.startsWith(u8, preferred, "_")) try aw.writer.writeAll("_");
+        if (preferred.len != 0 and preferred[0] != '#') {
+            try aw.writer.writeAll(preferred);
         } else {
-            // If it appears more than once, then we have to track the name we
-            // assign it so it appears consistently across the type str
-
-            // Generate a new general var name directly to the output writer.
-            // We do not use the context here because that may be the current
-            // context the var appears in, but the var may later appear in a
-            // different context
-            const name_start = self.flex_var_names.items.len;
-            var flex_aw = collections_mod.managedWriter(&self.flex_var_names);
-            try self.generateContextualName(&flex_aw.writer, .General);
-            collections_mod.managedWriterFinish(&flex_aw, &self.flex_var_names);
-            const name_end = self.flex_var_names.items.len;
-
-            const contextual_name = self.flex_var_names.items[name_start..name_end];
-
-            // Write the name to the output
-            try writer.writeAll(contextual_name);
-
-            // Record the name range for this var
-            try self.flex_var_names_map.put(resolved_var, .{ .start = name_start, .end = name_end });
+            try self.generateContextualName(&aw.writer, if (singleton) context else .General);
         }
+        collections_mod.managedWriterFinish(&aw, &self.flex_var_names);
+        const range: FlexVarNameRange = .{ .start = start, .end = self.flex_var_names.items.len };
+        if (!(try self.used_names.getOrPutContext(self.gpa, range, .{ .bytes = self.flex_var_names.items })).found_existing) {
+            try self.flex_var_names_map.put(resolved_var, range);
+            return writer.writeAll(self.flex_var_names.items[start..]);
+        }
+        self.flex_var_names.shrinkRetainingCapacity(start);
+        preferred = "";
     }
 }
 
@@ -1759,20 +1774,7 @@ fn openRowValueOf(self: *const TypeWriter, constraint: types_mod.StaticDispatchC
 /// Write the name of a row variable that holds requirements: the name an
 /// annotation gave it, or one generated for it, never an anonymous `..`.
 fn writeRowName(self: *TypeWriter, writer: *ByteWrite, row: Var, root_var: Var) error{ OutOfMemory, WriteFailed }!void {
-    const resolved = self.types.resolveVar(row);
-    const source_name: ?Ident.Idx = switch (resolved.desc.content) {
-        .rigid => |rigid| rigid.name,
-        .flex => |flex| flex.name,
-        .alias, .structure, .err, .field_presence => null,
-    };
-    if (source_name) |ident_idx| {
-        const name = self.getIdent(ident_idx);
-        if (name.len > 0 and name[0] != '#') {
-            try writer.writeAll(name);
-            return;
-        }
-    }
-    try self.writeFlexVarName(writer, resolved.var_, .General, root_var);
+    try self.writeFlexVarName(writer, row, .General, root_var);
 }
 
 /// Retrieves the text representation of an identifier by its index.
@@ -2043,6 +2045,16 @@ test "TypeWriter renders zero-argument functions distinctly from empty-record ar
     );
 }
 
+test "TypeWriter renders a function with a known effectful dependency as effectful" {
+    var env = try TestEnv.init(testing.allocator, 16);
+    defer env.deinit();
+
+    const result = try env.types.freshFromContent(.{ .structure = .empty_record });
+    const callee = try env.types.freshFromContent(try env.types.mkFuncEffectful(&.{}, result));
+    const caller = try env.types.freshFromContent(try env.types.mkFuncUnboundWithEffectDeps(&.{}, result, &.{callee}));
+    try env.expectRender(caller, "() => {}");
+}
+
 test "TypeWriter renders every shape the walk descends through" {
     var env = try TestEnv.init(testing.allocator, 128);
     defer env.deinit();
@@ -2149,6 +2161,26 @@ test "TypeWriter names a flex var consistently once it occurs more than once" {
     try env.expectRender(try env.tuple(&.{ shared, shared, solo }), "(a, a, _field)");
 }
 
+test "TypeWriter distinguishes flex variables with the same source name" {
+    var env = try TestEnv.init(testing.allocator, 16);
+    defer env.deinit();
+
+    const named: types_mod.Content = .{ .flex = .{ .name = try env.ident("ok"), .constraints = .empty() } };
+    const shared = try env.types.freshFromContent(named);
+    const solo = try env.types.freshFromContent(named);
+    const rendered = try env.writer.writeGet(try env.tuple(&.{ shared, solo, shared }), .one_line);
+    errdefer std.debug.print("rendered tuple: {s}\n", .{rendered});
+
+    // The spelling of a fresh name is not significant; the sharing is.
+    var names = std.mem.tokenizeAny(u8, rendered, "(), ");
+    const first = names.next() orelse return error.TestExpectedEqual;
+    const second = names.next() orelse return error.TestExpectedEqual;
+    try testing.expectEqualStrings(first, names.next() orelse return error.TestExpectedEqual);
+    try testing.expect(names.next() == null);
+    try testing.expect(!std.mem.eql(u8, first, second));
+    try testing.expect(!std.mem.startsWith(u8, first, "_") and std.mem.startsWith(u8, second, "_"));
+}
+
 test "TypeWriter renders a where clause for the constraints it collects" {
     var env = try TestEnv.init(testing.allocator, 32);
     defer env.deinit();
@@ -2165,7 +2197,7 @@ test "TypeWriter renders a where clause for the constraints it collects" {
         .flex = types_mod.Flex.init().withConstraints(constraints),
     });
 
-    try env.expectRender(constrained, "_a where [_b.plus : {} -> {}]");
+    try env.expectRender(constrained, "_a where [_a.plus : {} -> {}]");
 }
 
 // A row whose extension chain returns to a row it already collected has

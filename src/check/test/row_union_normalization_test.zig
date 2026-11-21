@@ -71,8 +71,8 @@ test "row union - a method call types like the direct call it names" {
     var env = try TestEnv.init("Test", source);
     defer env.deinit();
     try env.assertNoErrors();
-    try env.assertDefType("by_method!", "{} => Try(ok, [DbErr(Str), NoRows])");
-    try env.assertDefType("by_name!", "{} => Try(ok, [DbErr(Str), NoRows])");
+    try env.assertDefType("by_method!", "{} => Try(_ok, [DbErr(Str), NoRows])");
+    try env.assertDefType("by_name!", "{} => Try(_ok, [DbErr(Str), NoRows])");
 }
 
 test "row union - a tag repeated two extensions down merges" {

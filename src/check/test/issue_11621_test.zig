@@ -121,7 +121,7 @@ test "issue 11621 - recursion through a generalized higher-order helper" {
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try test_env.assertDefType("rec", "U64 -> Try(ok, [StepFailed])");
+    try test_env.assertDefType("rec", "U64 -> Try(_ok, [StepFailed])");
 }
 
 test "issue 11621 - a callback failing with the same tag as the helper's own ?" {

@@ -190,6 +190,34 @@ test "value binding generalization: an unannotated value used at two types is a 
     try test_env.assertOneTypeError("Type Mismatch");
 }
 
+test "issue 13298: returning a weak function cannot bind it to the annotation's rigid variable" {
+    var env = try TestEnv.init("Test",
+        \\k = if Bool.True |x| x else |x| x
+        \\f : {} -> (b -> b)
+        \\f = |_| k
+        \\g : U64 -> U64
+        \\g = |n| k(n)
+    );
+    defer env.deinit();
+    // The only mismatch belongs to f's result; using k at U64 in g is valid.
+    try env.assertOneTypeErrorHighlightsWithin("Type Mismatch", .{ .line = 3, .start_column = 9, .end_column = 10 });
+}
+
+test "issue 13298: returning a weak record cannot bind its callback to an annotation rigid" {
+    var env = try TestEnv.init("Test",
+        \\k = if Bool.True { next: |x| x } else { next: |x| x }
+        \\f : {} -> { next: b -> b }
+        \\f = |_| k
+        \\g : U64 -> U64
+        \\g = |n| {
+        \\    next = k.next
+        \\    next(n)
+        \\}
+    );
+    defer env.deinit();
+    try env.assertOneTypeErrorHighlightsWithin("Type Mismatch", .{ .line = 3, .start_column = 9, .end_column = 10 });
+}
+
 // Accepted: the binding generalizes by its right-hand side, or the annotation
 // introduces no type variable.
 

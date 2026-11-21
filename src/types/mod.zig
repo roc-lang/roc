@@ -10,6 +10,7 @@ const std = @import("std");
 pub const types = @import("types.zig");
 pub const numeral = @import("numeral.zig");
 pub const literal_defaulting = @import("literal_defaulting.zig");
+pub const effect_solver = @import("effect_solver.zig");
 pub const store = @import("store.zig");
 pub const instantiate = @import("instantiate.zig");
 pub const generalize = @import("generalize.zig");
@@ -68,6 +69,7 @@ test {
     std.testing.refAllDecls(@import("generalize.zig"));
     std.testing.refAllDecls(@import("numeral.zig"));
     std.testing.refAllDecls(@import("literal_defaulting.zig"));
+    std.testing.refAllDecls(effect_solver);
     // A file's tests are collected only once some analyzed declaration
     // evaluates its import. `pub const TypeWriter` above is lazily analyzed
     // and nothing inside this module references it, so naming the file here
