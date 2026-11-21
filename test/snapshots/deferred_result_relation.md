@@ -1293,7 +1293,7 @@ not_polymorphic = |x| {
 		(patt (type "{ step: () -> [A, B] } -> Try(() -> [A, B], [MissingField])"))
 		(patt (type "{ step ?: () -> [A, B] } -> U64"))
 		(patt (type "Error -> [A, B, C]"))
-		(patt (type "Error -> [A(a)]")))
+		(patt (type "Error -> [A(_a)]")))
 	(type_decls
 		(nominal (type "Stepper")
 			(ty-header (name "Stepper"))))
@@ -1306,5 +1306,5 @@ not_polymorphic = |x| {
 		(expr (type "{ step: () -> [A, B] } -> Try(() -> [A, B], [MissingField])"))
 		(expr (type "{ step ?: () -> [A, B] } -> U64"))
 		(expr (type "Error -> [A, B, C]"))
-		(expr (type "Error -> [A(a)]"))))
+		(expr (type "Error -> [A(_a)]"))))
 ~~~

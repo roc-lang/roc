@@ -212,9 +212,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "({} -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..err])"))
+		(patt (type "({} -> Try(_ok, err)) -> Try({}, [PersistFailed(err), ..err])"))
 		(patt (type "Try({}, Error)")))
 	(expressions
-		(expr (type "({} -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..err])"))
+		(expr (type "({} -> Try(_ok, err)) -> Try({}, [PersistFailed(err), ..err])"))
 		(expr (type "Try({}, Error)"))))
 ~~~

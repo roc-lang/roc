@@ -1108,7 +1108,7 @@ run = |{}| {
 		(patt (type "(a -> Try(ok, err)) -> Try(ok, [NotFound, ShareLookupFailed({ cause: [NotFound, ..err] }), ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), ok.from_numeral : Numeral -> Try(ok, [InvalidNumeral(Str)]), ok.is_eq : ok, ok -> Bool, ok.plus : ok, ok -> ok]"))
 		(patt (type "(a -> Try(ok, err)) -> Try(ok, [NotFound, ShareLookupFailed([NotFound, ..err]), ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), ok.from_numeral : Numeral -> Try(ok, [InvalidNumeral(Str)]), ok.is_eq : ok, ok -> Bool, ok.plus : ok, ok -> ok]"))
 		(patt (type "(Str -> Try(U64, [NotFound, ..e])) -> Try(U64, [NotFound, ShareLookupFailed([NotFound, ..e]), ..e])"))
-		(patt (type "({} -> Try(ok, [NotFound, ..err])), (a -> Try(ok, err)) -> Try({}, [NotFound, Wrapped([NotFound, ..err]), ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), ok.from_numeral : Numeral -> Try(ok, [InvalidNumeral(Str)]), ok.is_eq : ok, ok -> Bool]"))
+		(patt (type "({} -> Try(_ok, [NotFound, ..err])), (a -> Try(ok, err)) -> Try({}, [NotFound, Wrapped([NotFound, ..err]), ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), ok.from_numeral : Numeral -> Try(ok, [InvalidNumeral(Str)]), ok.is_eq : ok, ok -> Bool]"))
 		(patt (type "{} -> [Ok({})]")))
 	(expressions
 		(expr (type "(a -> Try(ok, err)) -> Try(ok, [NotFound, ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), ok.from_numeral : Numeral -> Try(ok, [InvalidNumeral(Str)]), ok.is_eq : ok, ok -> Bool]"))
@@ -1116,6 +1116,6 @@ run = |{}| {
 		(expr (type "(a -> Try(ok, err)) -> Try(ok, [NotFound, ShareLookupFailed({ cause: [NotFound, ..err] }), ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), ok.from_numeral : Numeral -> Try(ok, [InvalidNumeral(Str)]), ok.is_eq : ok, ok -> Bool, ok.plus : ok, ok -> ok]"))
 		(expr (type "(a -> Try(ok, err)) -> Try(ok, [NotFound, ShareLookupFailed([NotFound, ..err]), ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), ok.from_numeral : Numeral -> Try(ok, [InvalidNumeral(Str)]), ok.is_eq : ok, ok -> Bool, ok.plus : ok, ok -> ok]"))
 		(expr (type "(Str -> Try(U64, [NotFound, ..e])) -> Try(U64, [NotFound, ShareLookupFailed([NotFound, ..e]), ..e])"))
-		(expr (type "({} -> Try(ok, [NotFound, ..err])), (a -> Try(ok, err)) -> Try({}, [NotFound, Wrapped([NotFound, ..err]), ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), ok.from_numeral : Numeral -> Try(ok, [InvalidNumeral(Str)]), ok.is_eq : ok, ok -> Bool]"))
+		(expr (type "({} -> Try(_ok, [NotFound, ..err])), (a -> Try(ok, err)) -> Try({}, [NotFound, Wrapped([NotFound, ..err]), ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), ok.from_numeral : Numeral -> Try(ok, [InvalidNumeral(Str)]), ok.is_eq : ok, ok -> Bool]"))
 		(expr (type "{} -> [Ok({})]"))))
 ~~~

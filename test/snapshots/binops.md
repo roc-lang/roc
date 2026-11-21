@@ -48,7 +48,7 @@ TYPE MISMATCH - binops.md:16:5:16:5
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "Try(ok, err)")
+			(text "Try(_ok, _err)")
 			(annotation-end)
 			(line-break)
 			(line-break)
