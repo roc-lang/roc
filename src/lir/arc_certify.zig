@@ -4778,7 +4778,7 @@ const Certifier = struct {
             const value = state.valueAtDense(dense);
             const spent = try self.claimsSpendUnit(state, value);
             if (state.balanceOf(value) != 0 and !spent) continue;
-            if (self.values.items[value].payload_source == no_value) continue;
+            if (!self.values.items[value].payload_taken) continue;
 
             var root = value;
             while (self.values.items[root].payload_source != no_value) {
@@ -5050,7 +5050,10 @@ const Certifier = struct {
                 break :reach false;
             };
             const holds_unit = state.balanceOf(value) != 0 and !try self.claimsSpendUnit(state, value);
-            if (!reaches_carried and !(holds_unit and self.payloadChainStoresOwnership(state, value))) continue;
+            // A borrow has no authority to take the stored unit. Preserve
+            // its lender before any competing stamped read settles at this
+            // quotient; otherwise the surviving borrow loses its anchor.
+            if (!reaches_carried and !((holds_unit or !self.values.items[value].payload_taken) and self.payloadChainStoresOwnership(state, value))) continue;
             var link = self.values.items[value].payload_source;
             while (link != no_value and !self.carrier_scratch.contains(link)) : (link = self.values.items[link].payload_source) {
                 const carrier = self.repr_scratch.get(link) orelse continue;
@@ -5908,6 +5911,10 @@ const Certifier = struct {
                     if (self.current_return_local != null and assign.target == self.current_return_local.?) {
                         state.result_discriminant = assign.discriminant;
                     }
+                    // A constructor is as strong a witness as a switch arm.
+                    // Track the value (not the local) so copies see the same
+                    // fact and a redefinition cannot change an old alias.
+                    if (self.isRc(assign.target)) try state.setKnownVariant(state.valueOf(assign.target), assign.discriminant);
                     cursor = assign.next;
                 },
                 .store_struct => |assign| {
@@ -8726,6 +8733,48 @@ test "certify preserves payload lender when retained holder crosses join" {
     try f.certifyWith(.{ .sigs = &sigs });
 }
 
+test "issue 13305 certify carries a record field through its second read after borrowing the first" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const record_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = .str }});
+    const record = try f.local(record_layout);
+    const borrowed = try f.local(.str);
+    const owned = try f.local(.str);
+    const length = try f.local(.u64);
+    const outer = f.freshJoinPointId();
+    const inner = f.freshJoinPointId();
+
+    // Both reads name the same string. Measuring its length borrows it;
+    // releasing the second read then spends the record's only stored unit.
+    const release = try f.decrefStmt(owned, .str, try f.ret(length));
+    const jump_outer = try f.store.addCFStmt(.{ .jump = .{ .target = outer } }, .test_fixture);
+    const measure = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = length,
+        .op = .str_count_utf8_bytes,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.str_count_utf8_bytes.rcEffect()),
+        .args = try f.store.addLocalSpan(&.{borrowed}),
+        .next = jump_outer,
+    } }, .test_fixture);
+    const jump_inner = try f.store.addCFStmt(.{ .jump = .{ .target = inner } }, .test_fixture);
+    const inner_join = try f.store.addCFStmt(.{ .join = .{
+        .id = inner,
+        .params = .empty(),
+        .body = measure,
+        .remainder = jump_inner,
+    } }, .test_fixture);
+    const outer_join = try f.store.addCFStmt(.{ .join = .{
+        .id = outer,
+        .params = .empty(),
+        .body = release,
+        .remainder = inner_join,
+    } }, .test_fixture);
+    const second_read = try takeFieldStmt(&f, owned, record, 0, outer_join);
+    const body = try fieldReadStmt(&f, borrowed, record, 0, second_read);
+    _ = try f.addProc(&.{record}, body, .u64);
+    errdefer std.debug.print("{s}\n", .{f.diag.message()});
+    try f.certify();
+}
+
 /// A record's two units, its own and with `retain` a retained one, are each
 /// dismantled through their own alias: a take and a residual release apiece.
 fn buildRecordDismantledTwice(f: *CertifyTest, retain: bool) Allocator.Error!void {
@@ -11347,6 +11396,54 @@ fn certifyKnownVariantJoin(entry_variants: []const u32) CertifyError!void {
 
 test "certify known variant prunes a join body's infeasible arm" {
     try certifyKnownVariantJoin(&.{1});
+}
+
+test "issue 13304 certify reads the constructed variant after a switch on its alias" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const tag_layout = try f.layouts.putTagUnion(&.{ .str, try f.layouts.ensureZstLayout(), .i64 });
+    const payload = try f.local(.i64);
+    const tag = try f.local(tag_layout);
+    const alias = try f.local(tag_layout);
+    const disc = try f.local(.u8);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    // The default arm returns the original payload. The arm that would
+    // carry a variant-0 witness into the join is unreachable.
+    const read = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = result,
+        .op = .tagPayload(tag, 0, 2, 2),
+        .next = try f.decrefStmt(tag, tag_layout, try f.ret(result)),
+    } }, .test_fixture);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const choose = try f.store.addCFStmt(.{ .switch_stmt = .{
+        .cond = disc,
+        .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 0, .body = jump }}),
+        .default_branch = try f.decrefStmt(tag, tag_layout, try f.ret(payload)),
+    } }, .test_fixture);
+    const read_disc = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = disc,
+        .op = .discriminant(alias),
+        .next = choose,
+    } }, .test_fixture);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = .empty(),
+        .body = read,
+        .remainder = read_disc,
+    } }, .test_fixture);
+    const copy = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .local(tag), .next = join } }, .test_fixture);
+    const body = try f.store.addCFStmt(.{ .assign_tag = .{
+        .target = tag,
+        .variant_index = 2,
+        .discriminant = 2,
+        .payload = payload,
+        .next = copy,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{payload}, body, .i64);
+    errdefer std.debug.print("{s}\n", .{f.diag.message()});
+    try f.certify();
 }
 
 test "certify known variant does not prune an arm a later jump reaches" {

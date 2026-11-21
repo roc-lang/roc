@@ -679,8 +679,13 @@ const Analysis = struct {
     /// so the take dataflow rejects takes such a mention could follow.
     mention_builder: collections.CsrGroups(u32).Builder,
     mentions: collections.CsrGroups(u32) = .{},
+    /// Lenders changed by the current candidate's settled projection plan.
+    /// A committed repeated read is a same-value alias, not a second edge
+    /// to the container from which the original LIR read it.
+    materialized_lenders: std.AutoHashMapUnmanaged(u32, u32) = .empty,
 
     fn deinit(self: *Analysis) void {
+        self.materialized_lenders.deinit(self.gpa);
         var it = self.candidates.valueIterator();
         while (it.next()) |candidate| {
             candidate.reads.deinit(self.gpa);
@@ -2642,7 +2647,7 @@ fn valuePathHoldsUnit(analysis: *const Analysis, solution: *const arc_solve.Solu
     while (true) {
         if (result.take_bindings[cursor] or result.owned_only_binding_roots.items[cursor] != .none) return true;
         if (cursor == root) return false;
-        const source = analysis.projection_source[cursor].get() orelse dismantleInvariant("ARC dismantle operand left its read's projection chain");
+        const source = projectionLender(analysis, cursor) orelse dismantleInvariant("ARC dismantle operand left its read's projection chain");
         cursor = @backingInt(solution.unitLocalOf(@fromBackingInt(source)));
         steps += 1;
         if (steps > analysis.projection_source.len) dismantleInvariant("ARC dismantle projection chain contained a cycle");
@@ -2658,12 +2663,19 @@ fn carriesReadValue(analysis: *const Analysis, solution: *const arc_solve.Soluti
     var cursor = @backingInt(solution.unitLocalOf(local));
     var steps: usize = 0;
     while (cursor != root) {
-        const source = analysis.projection_source[cursor].get() orelse return false;
+        const source = projectionLender(analysis, cursor) orelse return false;
         cursor = @backingInt(solution.unitLocalOf(@fromBackingInt(source)));
         steps += 1;
         if (steps > analysis.projection_source.len) dismantleInvariant("ARC dismantle projection chain contained a cycle");
     }
     return true;
+}
+
+fn projectionLender(analysis: *const Analysis, cursor: u32) ?u32 {
+    if (analysis.materialized_lenders.count() != 0) {
+        if (analysis.materialized_lenders.get(cursor)) |lender| return lender;
+    }
+    return analysis.projection_source[cursor].get();
 }
 
 /// Where `stmt` consumes exactly one member of a borrowed read's forest, and
@@ -2984,7 +2996,8 @@ fn collectBorrowForest(
         var child = borrow_child_heads[borrower];
         while (child.get()) |child_index| {
             const child_edge = borrow_child_edges[child_index];
-            if (!analysis.read_through_view[child_edge.local]) {
+            const lender = if (analysis.materialized_lenders.count() == 0) null else analysis.materialized_lenders.get(child_edge.local);
+            if (if (lender) |parent| parent == borrower else !analysis.read_through_view[child_edge.local]) {
                 try borrow_stack.append(gpa, child_edge.local);
             }
             child = child_edge.next;
@@ -3790,6 +3803,10 @@ pub fn compute(
     // mentions, and so does every binding borrowed onward from it.
     var borrow_child_edges = std.ArrayList(BorrowChildEdge).empty;
     defer borrow_child_edges.deinit(gpa);
+    // A candidate's settled projection aliases add temporary edges to the
+    // solved borrow graph. Remove them again if the SCC retracts its plan.
+    var added_alias_parents = std.ArrayList(u32).empty;
+    defer added_alias_parents.deinit(gpa);
     // Every borrowed local with a lender links into its lender's chain, so
     // the heads are written across the local domain.
     const borrow_child_heads = try denseIndexColumn(gpa, store.localCount());
@@ -4166,13 +4183,31 @@ pub fn compute(
                 // Every read of a view's container went through the view, so only
                 // views nested inside it can hold a read's slots.
                 const reads_stop: u32 = if (entry.view) candidate_index else no_index;
+                defer {
+                    while (added_alias_parents.pop()) |parent| {
+                        const edge = borrow_child_edges.pop().?;
+                        _ = analysis.materialized_lenders.remove(edge.local);
+                        borrow_child_heads[parent] = edge.next;
+                    }
+                }
                 if (!entry.view) {
                     // A deferred read whose representative holds a committed take is
                     // that representative's alias; every other one is an ordinary
                     // field read of this container.
                     candidate.reads.shrinkRetainingCapacity(candidate.own_read_count);
                     for (candidate.equivalenced_reads.items) |deferred| {
-                        if (representativeHoldsTake(store, layouts, &result, &path_takes, deferred.representative)) continue;
+                        if (representativeHoldsTake(store, layouts, &result, &path_takes, deferred.representative)) {
+                            if (solution.isBorrowed(deferred.read.target)) {
+                                const parent = @backingInt(deferred.representative);
+                                if (solution.borrowSourceOf(deferred.read.target) == deferred.representative) continue;
+                                try added_alias_parents.ensureUnusedCapacity(gpa, 1);
+                                try analysis.materialized_lenders.putNoClobber(gpa, @backingInt(deferred.read.target), parent);
+                                try borrow_child_edges.append(gpa, .{ .local = @backingInt(deferred.read.target), .next = borrow_child_heads[parent] });
+                                added_alias_parents.appendAssumeCapacity(parent);
+                                borrow_child_heads[parent] = .some(@intCast(borrow_child_edges.items.len - 1));
+                            }
+                            continue;
+                        }
                         path_takes.settleUnheld(deferred.representative);
                         try candidate.reads.append(gpa, deferred.read);
                     }
