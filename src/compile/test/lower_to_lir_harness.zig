@@ -1039,13 +1039,54 @@ pub fn expectTargetIndependentLir(app_body: []const u8) LowerToLirHarnessError!v
 /// other must expand every request.
 pub fn expectInterfaceSummaryReplayFaithfulLir(app_body: []const u8) LowerToLirHarnessError!void {
     var replayed: postcheck.Monotype.Lower.Diagnostics = .{};
+    try expectInterfaceSummaryReplayFaithful(AppBodyLowering{ .app_body = app_body }, &replayed);
+}
+
+/// `expectInterfaceSummaryReplayFaithfulLir`, also reporting the replaying
+/// run's Monotype work counters in `replayed`.
+pub fn expectInterfaceSummaryReplayFaithfulLirWithDiagnostics(
+    app_body: []const u8,
+    replayed: *postcheck.Monotype.Lower.Diagnostics,
+) LowerToLirHarnessError!void {
+    try expectInterfaceSummaryReplayFaithful(AppBodyLowering{ .app_body = app_body }, replayed);
+}
+
+/// `expectInterfaceSummaryReplayFaithfulLirWithDiagnostics` for the app at
+/// `app_path`.
+pub fn expectAppPathInterfaceSummaryReplayFaithfulLirWithDiagnostics(
+    app_path: []const u8,
+    replayed: *postcheck.Monotype.Lower.Diagnostics,
+) LowerToLirHarnessError!void {
+    try expectInterfaceSummaryReplayFaithful(AppPathLowering{ .app_path = app_path }, replayed);
+}
+
+const AppBodyLowering = struct {
+    app_body: []const u8,
+
+    fn run(self: AppBodyLowering, dump: ?*std.Io.Writer, opts: LirLoweringOptions) LowerToLirHarnessError!void {
+        try runToLir(self.app_body, dump, opts, null);
+    }
+};
+
+const AppPathLowering = struct {
+    app_path: []const u8,
+
+    fn run(self: AppPathLowering, dump: ?*std.Io.Writer, opts: LirLoweringOptions) LowerToLirHarnessError!void {
+        try lowerAppPathToLir(std.testing.allocator, self.app_path, dump, opts, null, null);
+    }
+};
+
+fn expectInterfaceSummaryReplayFaithful(
+    lowering: anytype,
+    replayed: *postcheck.Monotype.Lower.Diagnostics,
+) LowerToLirHarnessError!void {
     var expanded: postcheck.Monotype.Lower.Diagnostics = .{};
-    try runToLir(app_body, null, .{ .monotype_only = true, .monotype_diagnostics_out = &replayed }, null);
-    try runToLir(app_body, null, .{
+    try lowering.run(null, .{ .monotype_only = true, .monotype_diagnostics_out = replayed });
+    try lowering.run(null, .{
         .monotype_only = true,
         .monotype_diagnostics_out = &expanded,
         .replay_interface_summaries = false,
-    }, null);
+    });
     try std.testing.expect(replayed.specialization.interface_summary_hits > 0);
     try std.testing.expectEqual(@as(u64, 0), expanded.specialization.interface_summary_hits);
 
@@ -1057,11 +1098,11 @@ pub fn expectInterfaceSummaryReplayFaithfulLir(app_body: []const u8) LowerToLirH
     defer gpa.free(buf_b);
     var writer_a = std.Io.Writer.fixed(buf_a);
     var writer_b = std.Io.Writer.fixed(buf_b);
-    try runToLir(app_body, &writer_a, .{ .dump_proc_identities = true }, null);
-    try runToLir(app_body, &writer_b, .{
+    try lowering.run(&writer_a, .{ .dump_proc_identities = true });
+    try lowering.run(&writer_b, .{
         .dump_proc_identities = true,
         .replay_interface_summaries = false,
-    }, null);
+    });
     try std.testing.expectEqualStrings(writer_a.buffered(), writer_b.buffered());
 }
 

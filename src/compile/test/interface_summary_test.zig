@@ -4,9 +4,9 @@ const std = @import("std");
 const postcheck = @import("postcheck");
 const harness = @import("lower_to_lir_harness.zig");
 
-test "interface summaries replay independent generic inputs with fresh-expansion verification" {
+test "interface summaries replay independent generic inputs like a fresh expansion" {
     var diagnostics: postcheck.Monotype.Lower.Diagnostics = .{};
-    try harness.expectLowersToLirWithOptions(
+    try harness.expectInterfaceSummaryReplayFaithfulLirWithDiagnostics(
         \\identity = |value| value
         \\through = |value| identity(value)
         \\render = |value| Json.to_str(through(value))
@@ -17,15 +17,14 @@ test "interface summaries replay independent generic inputs with fresh-expansion
         \\    echo!(render({ name: "second", value: 43 }))
         \\    Ok({})
         \\}
-    , .{ .monotype_only = true, .monotype_diagnostics_out = &diagnostics });
+    , &diagnostics);
     try std.testing.expect(diagnostics.specialization.interface_summary_hits > 0);
     try std.testing.expect(diagnostics.specialization.interface_summary_unchanged_hits > 0);
-    try std.testing.expectEqual(std.debug.runtime_safety, diagnostics.specialization.interface_summary_verifications > 0);
 }
 
-test "interface summaries share one expansion across parametric instantiations" {
+test "interface summaries share one expansion across parametric instantiations and replay like a fresh expansion" {
     var diagnostics: postcheck.Monotype.Lower.Diagnostics = .{};
-    try harness.expectLowersToLirWithOptions(
+    try harness.expectInterfaceSummaryReplayFaithfulLirWithDiagnostics(
         \\count_items : List(a) -> U64
         \\count_items = |items| items.len()
         \\main! = |_args| {
@@ -33,15 +32,14 @@ test "interface summaries share one expansion across parametric instantiations" 
         \\    echo!(count_items(["a", "b", "c"]).to_str())
         \\    Ok({})
         \\}
-    , .{ .monotype_only = true, .monotype_diagnostics_out = &diagnostics });
+    , &diagnostics);
     try std.testing.expect(diagnostics.specialization.interface_parametric_requests >= 2);
     try std.testing.expect(diagnostics.specialization.interface_summary_hits > 0);
-    try std.testing.expectEqual(std.debug.runtime_safety, diagnostics.specialization.interface_summary_verifications > 0);
 }
 
-test "interface summaries finish mutually recursive components before reuse" {
+test "interface summaries finish mutually recursive components before reuse and replay like a fresh expansion" {
     var diagnostics: postcheck.Monotype.Lower.Diagnostics = .{};
-    try harness.expectLowersToLirWithOptions(
+    try harness.expectInterfaceSummaryReplayFaithfulLirWithDiagnostics(
         \\first : a, U64 -> Try(a, [Oops])
         \\first = |value, count| if count == 0 Ok(value) else second(value, count - 1)
         \\second : a, U64 -> Try(a, [Oops])
@@ -53,7 +51,7 @@ test "interface summaries finish mutually recursive components before reuse" {
         \\    echo!(Str.inspect(second({ label: "recursive" }, 3)))
         \\    Ok({})
         \\}
-    , .{ .monotype_only = true, .monotype_diagnostics_out = &diagnostics });
+    , &diagnostics);
     try std.testing.expect(diagnostics.specialization.interface_summary_hits > 0);
 }
 
@@ -79,9 +77,8 @@ test "interface summaries preserve open codec errors across worker store relocat
     );
 }
 
-test "interface summaries include codec constraints discovered after a recursive edge" {
-    var diagnostics: postcheck.Monotype.Lower.Diagnostics = .{};
-    try harness.expectLowersToLirWithOptions(
+test "interface summaries include codec constraints discovered after a recursive edge and replay like a fresh expansion" {
+    try harness.expectInterfaceSummaryReplayFaithfulLir(
         \\decode = |body| {
         \\    parsed : Try({ foo : Str }, _)
         \\    parsed = Json.parse(body)
@@ -101,13 +98,12 @@ test "interface summaries include codec constraints discovered after a recursive
         \\    second(body, 2)?
         \\    second(body, 3)
         \\}
-    , .{ .monotype_only = true, .monotype_diagnostics_out = &diagnostics });
-    try std.testing.expectEqual(std.debug.runtime_safety, diagnostics.specialization.interface_summary_verifications > 0);
+    );
 }
 
-test "interface summaries share one expansion across user nominal container instantiations" {
+test "interface summaries share one expansion across user nominal container instantiations and replay like a fresh expansion" {
     var diagnostics: postcheck.Monotype.Lower.Diagnostics = .{};
-    try harness.expectLowersToLirWithOptions(
+    try harness.expectInterfaceSummaryReplayFaithfulLirWithDiagnostics(
         \\Chain(a) := [End, Next(a, Chain(a))].{
         \\    length : Chain(a) -> U64
         \\    length = |chain| length_help(chain, 0)
@@ -126,13 +122,12 @@ test "interface summaries share one expansion across user nominal container inst
         \\    echo!(Chain.length(words).to_str())
         \\    Ok({})
         \\}
-    , .{ .monotype_only = true, .monotype_diagnostics_out = &diagnostics });
+    , &diagnostics);
     try std.testing.expect(diagnostics.specialization.interface_parametric_requests >= 2);
     try std.testing.expect(diagnostics.specialization.interface_summary_hits > 0);
-    try std.testing.expectEqual(std.debug.runtime_safety, diagnostics.specialization.interface_summary_verifications > 0);
 }
 
-test "interface summaries stay verified for mutually recursive methods of an imported parametric container" {
+test "interface summary replay of mutually recursive methods of an imported parametric container lowers like a fresh expansion" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp_dir = std.testing.tmpDir(.{});
@@ -204,9 +199,8 @@ test "interface summaries stay verified for mutually recursive methods of an imp
     const app_path = try tmp_dir.dir.realPathFileAlloc(io, "app.roc", gpa);
     defer gpa.free(app_path);
     var diagnostics: postcheck.Monotype.Lower.Diagnostics = .{};
-    try harness.expectAppPathLowersToLirWithOptions(app_path, .{ .monotype_only = true, .monotype_diagnostics_out = &diagnostics });
+    try harness.expectAppPathInterfaceSummaryReplayFaithfulLirWithDiagnostics(app_path, &diagnostics);
     try std.testing.expect(diagnostics.specialization.interface_parametric_requests >= 2);
-    try std.testing.expectEqual(std.debug.runtime_safety, diagnostics.specialization.interface_summary_verifications > 0);
 }
 
 // `run`'s `Ok` payload is a checked variable nothing constrains, whose
