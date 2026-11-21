@@ -1832,7 +1832,12 @@ pub const Instantiator = struct {
                 return self.pushLeafCopy(resolved_var, .{ .field_presence = field_presence }, flags);
             },
             .empty_record => return self.pushLeafCopy(resolved_var, Content{ .structure = FlatType.empty_record }, flags),
-            .empty_tag_union => return self.pushLeafCopy(resolved_var, Content{ .structure = FlatType.empty_tag_union }, flags),
+            .empty_tag_union => {
+                const copied = try self.pushLeafCopy(resolved_var, Content{ .structure = FlatType.empty_tag_union }, flags);
+                // A copy of a tail a match closed carries that closing.
+                if (flags.uncommitted_tag_tail) try self.store.carryTagTailClosing(resolved_var, self.scratch().value_stack.getLast());
+                return copied;
+            },
             .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union => {
                 const fresh_var = try self.store.fresh();
                 try self.var_map.put(resolved_var, fresh_var);

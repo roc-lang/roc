@@ -129,3 +129,4 @@ pub const VarWithSnapshot = types.VarWithSnapshot;
 pub const LocalTypeEscape = types.LocalTypeEscape;
 pub const LocalTypeEscapeCause = types.LocalTypeEscapeCause;
 pub const RecordTailRefusal = types.RecordTailRefusal;
+pub const TagTailClosing = types.TagTailClosing;

@@ -792,6 +792,23 @@ pub const TypeMismatch = struct {
     /// How the report suggests turning the actual value into the expected
     /// builtin `Str`.
     str_conversion: StrConversion = .none,
+    /// Set when the relation failed because a tag row a `match` closed by
+    /// inference refused a tag (design.md "Uncommitted Tag Tails"): the
+    /// report shows that match as the reason the row has only its tags.
+    tag_tail_closing: ?TagTailClosing = null,
+};
+
+/// A `match` that closed an inferred tag row to the tags its branches name.
+pub const TagTailClosing = struct {
+    match_expr: CIR.Expr.Idx,
+    /// The values no branch matches once the row holds a tag no branch
+    /// names, written as a pattern whose `<other>` stands for such a
+    /// tag, when that is why the match closed the row rather than its
+    /// branches naming every tag the row can hold.
+    uncovered_row: ?ExtraStringIdx,
+
+    /// What `uncovered_row` writes for a tag no branch names.
+    pub const other_tag = "<other>";
 };
 
 /// Two requirements of one method on the same type that cannot agree. A type

@@ -6683,6 +6683,16 @@ costs nothing. One that no scheme quantifies commits when the module
 finishes checking. Committing only clears the mark; the empty tag union
 stays.
 
+A tail a match closes also records that closing in the type store
+(`Store.tag_tail_closings`, by tail class): which match closed it and, when
+the match closed it because a row leaves the tail's open alternative
+uncovered, that row. Like the mark, a merge keeps the record and a copy
+carries it, so a use of the binding has it on its own copy of the tail.
+When a relation fails on a tag row ending in such a tail, the type mismatch
+carries the closing (`TypeMismatch.tag_tail_closing`) and its report shows
+the match and the row; the record is diagnostic-only and sealing releases
+it.
+
 Post-check stages read an uncommitted tag tail as the empty tag union it
 is (`CheckedTypeStoreView.payload`); the checked read form exposes the mark
 separately (`CheckedTypeStoreView.uncommittedTagTail`), and type keys ignore

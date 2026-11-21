@@ -1724,6 +1724,10 @@ tested_payload_vars: std.ArrayList(Var) = .empty,
 /// Union-find roots resolve at consumption time (eager roots would go stale).
 /// Duplicates are harmless—the consumer inserts into a set.
 checked_lambda_params: std.ArrayListUnmanaged(CIR.Pattern.Span) = .empty,
+/// Each match's closing of an inferred tag row, indexed by the
+/// `types_mod.TagTailClosing` the type store keeps for the tail class it
+/// closed and for every copy of it. Only a type mismatch's report reads it.
+tag_tail_closings: std.ArrayListUnmanaged(problem.TagTailClosing) = .empty,
 /// Every tag pattern of a user-written `match` branch, in check order. Each is
 /// judged once the module's types are settled (`reportPatternOnlyMatchTags`):
 /// whether its tag is still pattern-only depends on every later relation of
@@ -2252,6 +2256,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .collected_constructed_tags = .scratch,
     .tested_payload_vars = .scratch,
     .checked_lambda_params = .keyed,
+    .tag_tail_closings = .keyed,
     .match_tag_patterns = .settled,
     .useless_match_parts = .keyed,
     .matching_lambda_params = .settled,
@@ -9331,6 +9336,7 @@ fn appendTypeMismatch(
         .method_conflict = method_conflict,
         .local_type_escape = unifier.localTypeEscapeCause(&unify_env, expected, actual),
         .record_tail_refusal = self.unify_scratch.record_tail_refusal,
+        .tag_tail_closing = self.failedTagTailClosing(),
         .str_conversion = try self.strConversionFor(
             diagnostic_ctx,
             self.types.resolveThroughAliases(expected).desc.content,
@@ -9359,6 +9365,20 @@ fn refineMethodTypeMismatch(self: *Self, problem_idx: problem.Problem.Idx) Alloc
     const requirement = self.instantiatedDispatchCopy(requirement_fn_var) orelse return;
     const failure = try self.copiedRequirementFailure(requirement, ctx.method_type.owner_expr) orelse return;
     self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.context.method_type.copied = failure.copied;
+}
+
+/// The `match` that closed a tag row whose empty tail refused the other
+/// side's tags in the failed relation, when a match closed one.
+fn failedTagTailClosing(self: *const Self) ?problem.TagTailClosing {
+    const refused = self.unify_scratch.mismatch_evidence.refused_tag_tails;
+    // The expected side's row first: its closing is the demand the other
+    // side failed.
+    for ([_]?Var{ refused.a, refused.b }) |mb_tail| {
+        const tail = mb_tail orelse continue;
+        const closing = self.types.tagTailClosing(tail) orelse continue;
+        return self.tag_tail_closings.items[@backingInt(closing)];
+    }
+    return null;
 }
 
 /// The expression whose type variable is `var_`, when it is one.
@@ -37762,7 +37782,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             if (!try self.closeFreeUncoveredPayloadVars(branch_patterns.items, env, match_region)) break attempt;
         };
 
-        try self.closeExhaustiveVars(result, env, match_region);
+        try self.closeExhaustiveVars(result, env, match_region, expr_idx);
 
         // Report non-exhaustive match if any patterns are missing
         if (!result.is_exhaustive) {
@@ -37773,7 +37793,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             const missing_patterns_start = self.problems.missing_patterns_backing.items.len;
 
             for (result.missing_patterns) |pattern| {
-                const idx = try exhaustive.formatPattern(&self.problems.extra_strings_backing, &self.cir.common.idents, &self.cir.common.strings, pattern);
+                const idx = try exhaustive.formatPattern(&self.problems.extra_strings_backing, &self.cir.common.idents, &self.cir.common.strings, pattern, "_");
                 try self.problems.missing_patterns_backing.append(idx);
             }
 
@@ -38970,12 +38990,27 @@ fn closeExhaustiveVars(
     result: exhaustive.CheckResult,
     env: *Env,
     region: Region,
+    match_expr: ?CIR.Expr.Idx,
 ) std.mem.Allocator.Error!void {
     // An exhaustive match closes the inferred rows it covers, and a relation
-    // may still lift them (design.md "Uncommitted Tag Tails").
-    for (result.ext_vars_to_close) |ext_var| {
+    // may still lift them (design.md "Uncommitted Tag Tails"). The tail a
+    // match closes records the match, and the row no branch covers with
+    // another tag in the tail's place when that is why it closes, for a
+    // report of a use the closed row rejects.
+    for (result.ext_vars_to_close, result.uncovered_open_rows) |ext_var, uncovered| {
         const empty_tu_var = try self.freshUncommittedTagTail(env, region);
         _ = try self.unify(ext_var, empty_tu_var, env);
+        const expr = match_expr orelse continue;
+        if (!self.types.resolveVar(empty_tu_var).desc.flags.uncommitted_tag_tail) continue;
+        const closing: types_mod.TagTailClosing = @fromBackingInt(@intCast(self.tag_tail_closings.items.len));
+        try self.tag_tail_closings.append(self.gpa, .{
+            .match_expr = expr,
+            .uncovered_row = if (uncovered) |row|
+                try exhaustive.formatPattern(&self.problems.extra_strings_backing, &self.cir.common.idents, &self.cir.common.strings, row, problem.TagTailClosing.other_tag)
+            else
+                null,
+        });
+        try self.types.setTagTailClosing(empty_tu_var, closing);
     }
 }
 
@@ -39284,7 +39319,7 @@ fn checkPatternExhaustiveness(
         if (!try self.closeFreeUncoveredPayloadVars(&.{pattern_idx}, env, region)) break attempt;
     };
 
-    try self.closeExhaustiveVars(result, env, region);
+    try self.closeExhaustiveVars(result, env, region, null);
 
     if (!result.is_exhaustive) {
         const value_snapshot = try self.snapshotVarForError(value_var);
@@ -39296,6 +39331,7 @@ fn checkPatternExhaustiveness(
                 &self.cir.common.idents,
                 &self.cir.common.strings,
                 pattern,
+                "_",
             );
             try self.problems.missing_patterns_backing.append(idx);
         }
