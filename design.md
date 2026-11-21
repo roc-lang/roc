@@ -6269,6 +6269,25 @@ earlier use may already have added tags to it. Each copy is unified
 with that image. A relation can pin a receiver, so the boundary runs
 another round after relating any use.
 
+Each use is related before anything generalizes its copies, so a use's
+copies are never part of a finished scheme when they meet the body's slots.
+Two rules keep it so. First, static dispatch is type-directed and outside the
+check order, so a definition can dispatch to an annotated method whose group
+has not been checked yet. Such a dispatch use waits, owned by the innermost
+group frame, and every generalization boundary of that frame first checks the
+unchecked group of each target its waiting uses name, in a nested frame, the
+way it checks an unannotated dispatch target's group; the target's body
+records the use against its own scheme, and the target's boundary relates
+it, while the using definition is still open. Second, a use of a binding
+whose group is on the group stack is related by that group's boundary, so
+its copies are pinned at that boundary's rank, as a deferred dispatch
+obligation's vars are pinned at the boundary that resolves it. Nothing
+nested inside the boundary generalizes them first: neither a local definition
+in the binding's own body nor a group checked at the boundary whose
+definitions refer back to the binding, as a method `get` that a function
+`overlay` dispatches to and that calls `overlay` by name does. The pinned copies generalize with the binding, as
+the shared structure of an unannotated dispatch cycle does.
+
 A rejected relation is a Type Mismatch at the use, naming the use's type
 and the definition's final one; the use becomes a runtime error and the
 definition keeps its scheme, as for any other rejected use. A body slot
@@ -7847,14 +7866,17 @@ does not depend on whether the pattern contains a binder or whether any binder i
 later referenced. The checker records the complete checked source pattern and
 right-hand side as a deferred validation candidate, together with the prospective
 maximal expression root that can own its evaluation. The candidate retains a
-dedicated validation root until post-solve pruning proves that the expression
-owner or a concrete live-binder extraction was actually kept. This prevents a
+dedicated validation candidate until request eligibility establishes that the
+published expression owner or a live-binder extraction will run. This prevents a
 non-concrete or otherwise rejected prospective owner from losing the validation,
 while a kept owner prevents the right-hand side from evaluating twice.
 
 A surviving validation-only root evaluates the right-hand side and matches the
 complete source pattern, but its successful result is discarded rather than
-archived as a unit constant. A binder-free source declaration may then be erased
+archived as a unit constant. A failure is discarded only once it is reported.
+Where finalization reports nothing for the root's module, a failed validation
+records the `runtime` payload, guarded or not, and the destructure stays in
+the runtime body, which fails the same way when it is reached. A binder-free source declaration may then be erased
 from runtime lowering. The pending exhaustiveness site is explicitly classified
 for empirical compile-time validation when the eligible candidate is recorded.
 No candidate is recorded inside an ordinary top-level constant, because that
@@ -8048,7 +8070,12 @@ unannotated data root with a reachable callable slot remains specialization-owne
 because an explicit consumer relation may still determine types inside that
 callable graph; it cannot cross Monotype's relation-freeze boundary as a
 context-free compile-time request. Data roots with no reachable callable slots
-continue to use the ordinary concreteness proof.
+continue to use the ordinary concreteness proof. A selected data root that
+already proved its stored value free of callable slots carries that proof;
+it still needs resolved record field kinds. Without a producer proof, a
+nominal backing contributes its own callable slots and those of the arguments
+it actually stores, not those of unused parameters. This summary belongs to
+the declaration, so instances need no copied backing.
 
 Runtime lowering restores a selected hoisted root by checked expression id. While
 lowering the synthetic compile-time wrapper for that same root, lowering must
@@ -9480,6 +9507,9 @@ registry target as structural behavior.
 The method registry is an exact table keyed by `(MethodOwner, MethodNameId)`.
 It is not an owner-discovery mechanism. Post-check code may use it only after a
 concrete monomorphic dispatcher type has already determined the owner.
+A non-builtin owner is a published nominal declaration. A rejected owner has no
+dispatch entries; this does not suppress independently checked qualified values.
+A rejected method of an accepted owner still has an entry with no target.
 
 A type's methods are the functions declared in its own `.{ … }` block, so the
 module that declares a type is the only module whose registry holds that
@@ -18133,6 +18163,16 @@ A nominal whose overrides are instantiated at types that mention the nominal
 `Methods` record: the descriptor and the override callables that capture it
 are one group of recipes that lead back to one another, evaluated together.
 
+A nominal's descriptor holds every override instantiated at the nominal's
+arguments, including an override whose `where` clause those arguments do not
+satisfy (`to_hash` requiring `a.frob` on a `Nullable(Str)` that is only ever
+compared). Checking reports a missing method at any dispatch that reaches such
+an override, so a requirement over a resolved dispatcher with no method and no
+structural derivation resolves to a `checked_error` crash dictionary. So does
+a requirement on one of a body's own variables that its scopes hold no
+dictionary for, where the body composes such a nominal's descriptor over that
+variable without the override's `where` clause in scope.
+
 A type declared in a function body may name the body's type variables in its
 backing. Its occurrences are instantiated at those variables' types as well as
 at its own arguments: the converted nominal carries the body's variables its
@@ -24381,10 +24421,17 @@ proves; it is sound for these reasons:
 Ownership is explicit. Every type variable class has an owner
 (`Type.Store.owners`): the binding group whose solving created it, numbered
 from `first_group_owner`. Variables created before any group is solved
-(registered function types and local types) are `unowned` until a group's
-solving relates them; a lazy leaf's parts belong to the leaf's owner,
-whichever group expands it; variables created after solving belong to
-`global_owner`. A link gives the joined class the older owner. While a group
+(registered function types and local types) start `unowned`. A group's
+solving begins by claiming every unowned class its functions' registered
+types reach, their capture slots included (`claimFunctionTypes`). A later
+group that names a function of a monomorphic group relates that function's
+own type, which is part of the later group's environment; were it still
+unowned (its own group's solving may relate it only to other unowned
+variables, such as the function's argument locals), the later group would
+take it as its own and quantify it. Any other unowned variable belongs to
+the first group whose solving relates it; a lazy leaf's parts belong to the
+leaf's owner, whichever group expands it; variables created after solving
+belong to `global_owner`. A link gives the joined class the older owner. While a group
 is solved, every link that joins a class it owns to an older class is
 recorded (`Store.escapes`): the older class is the group's environment, in
 the paper's terms a type free in the context, and nothing it reaches can be
@@ -28265,8 +28312,11 @@ no layout shape is treated as evidence that a variant is active.
 
 Certification tracks field claims over the full committed layout ownership-slot
 domain. Scalar and padding slots require no RC claims, regardless
-of their indices. The required claim set is derived once per queried layout from
-its committed refcounted slots. A field read that holds no unit and has claimed
+of their indices. A read of a scalar, whether a struct field or a tag
+payload, needs only its container's inline representation, so it stays valid
+after every refcounted slot of the container has been claimed. The required
+claim set is derived once per queried layout from its committed refcounted
+slots. A field read that holds no unit and has claimed
 nothing of its own is a view of its parent struct's slots, so a claim through
 it is a claim of the parent's slots offset by its first slot, and a read
 through it of a slot already claimed is a read after a take unless the view's
@@ -30682,8 +30732,9 @@ image or a `.boxy` module object's `CodeLocations`:
 
 The compile-time host records a failure's point when it happens. A crash or a
 failed `expect` reaches the host through a fixed runtime symbol, possibly from
-inside a builtin; the host walks frame pointers from its own frame and records
-every return address into generated code, innermost first. Generated code, the
+inside a builtin; the host records the innermost generated call for its
+meaning and the first generated call with source information for its location.
+These can be different when a generated helper has no source span. Generated code, the
 builtins the compiler links in-process, and the host's callbacks keep frame
 pointers, so the chain is intact, and the walk reads only stack between the
 failing frame and the frame that entered generated code. On Windows x64,
@@ -30691,9 +30742,12 @@ compiled host and builtin code points its frame pointer into the middle of its
 frame rather than at a saved-frame-pointer record, so the host unwinds those
 frames with the system unwind tables until it reaches generated code, then
 walks the generated frame-pointer chain from there. A stack overflow is
-caught by the guard-page handler, which records the faulting frame pointer and
-stack pointer before escaping; the host walks the chain from the frame
-pointer. The faulting program counter is not part of an overflow's point:
+caught by the guard-page handler. The two return addresses must be captured
+before escaping, while the interrupted stack still owns its frames; merely
+retaining a pointer into mapped stack memory does not preserve them. The
+handler reads immutable code-location tables without allocating or locking;
+reporting and file translation remain ordinary post-recovery work.
+The faulting program counter is not part of an overflow's point:
 which instruction of the innermost frame touches the guard first depends on
 where the guard falls within that frame (a callee's frame-record push, a
 store to one of its slots, or an x86_64 `call` pushing its return address),

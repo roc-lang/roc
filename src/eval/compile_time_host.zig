@@ -97,10 +97,21 @@ pub const Termination = enum {
 /// through its line table and failure sites (design.md "Compile-Time Failure
 /// Sites").
 pub const FailurePoint = struct {
-    /// The return addresses into generated code on the frame-pointer chain,
-    /// innermost first: the generated call the failure came out of, then each
-    /// generated call enclosing it.
-    calls: []const usize = &.{},
+    /// Return addresses, not pointers into the evaluation stack. A generated
+    /// helper can supply the meaning while only its caller has a source span.
+    innermost: ?usize = null,
+    source: ?usize = null,
+};
+
+/// Whether a return address names a generated call and, if so, whether
+/// its instruction has a source span.
+pub const CallLocation = enum { outside, generated, source };
+
+/// Immutable program metadata borrowed for a run. Classification must be
+/// allocation-free, lock-free and safe to call from the overflow handler.
+pub const CodeView = struct {
+    context: *const anyopaque,
+    classify: *const fn (*const anyopaque, usize) CallLocation,
 };
 
 /// A failed inline `expect` observed during native compile-time evaluation,
@@ -132,12 +143,7 @@ free_lists: [small_class_count]?*FreeBlock = @splat(null),
 large_blocks: ?*LargeLinks = null,
 roc_ops: ?RocOps = null,
 events: std.ArrayListUnmanaged(HostEvent) = .empty,
-/// The address range of the generated code this host runs.
-code_start: usize = 0,
-code_end: usize = 0,
-/// The loaded objects a linked program's code calls into, which a failure's
-/// frames run through too. Borrowed from the evaluation.
-linked_code: []const []const u8 = &.{},
+code: ?CodeView = null,
 /// The frame that called into generated code; every generated frame lies
 /// below it on the stack.
 entry_frame: usize = 0,
@@ -196,63 +202,87 @@ pub fn resetForRun(self: *CompileTimeHost) void {
 /// setjmp/longjmp boundary for catching root-local crashes.
 pub const CrashBoundary = crash_boundary_mod.CrashBoundary(CompileTimeHost, true);
 
-/// Record a caught stack overflow exactly the way a Roc `crash` is recorded,
-/// so the finalizer reports it as this root's compile-time crash at the
-/// innermost generated call on the frame-pointer chain: the call that entered
-/// the innermost frame whose record was in place when the stack ran out.
-/// Which instruction touched the guard first depends on where the guard falls
-/// within a frame, so the faulting program counter takes no part in the
-/// location.
+/// Snapshot only the diagnostic's return addresses, while the interrupted
+/// frames are intact. Once the boundary escapes, even mapped stack bytes
+/// can already belong to a different call.
+pub fn captureOverflowPoint(self: *CompileTimeHost, frame: signal_handler.FaultFrame) void {
+    self.failure = self.walkFailurePoint(.{}, frame.fp, frame.low);
+}
+
+/// Only record the event after recovery, when using the allocator is safe.
 pub fn noteStackOverflow(self: *CompileTimeHost) void {
-    if (signal_handler.takeOverflowFrame()) |frame| {
-        self.failure = .{ .calls = self.generatedCalls(frame.fp, frame.sp) };
-    }
     self.appendEvent(.crashed, crash_boundary_mod.STACK_OVERFLOW_MESSAGE);
     self.termination = .crashed;
 }
 
-/// Set the generated code this host runs, for locating its failures, and
-/// the loaded objects it calls into.
-pub fn setGeneratedCode(self: *CompileTimeHost, code: []const u8, linked_code: []const []const u8) void {
-    self.code_start = @intFromPtr(code.ptr);
-    self.code_end = self.code_start + code.len;
-    self.linked_code = linked_code;
+fn recordCall(point: *FailurePoint, location: CallLocation, address: usize) void {
+    if (location == .outside) return;
+    if (point.innermost == null) point.innermost = address;
+    if (location == .source) point.source = address;
 }
 
-fn inGeneratedCode(self: *const CompileTimeHost, address: usize) bool {
-    if (address >= self.code_start and address < self.code_end) return true;
-    for (self.linked_code) |code| {
-        if (address >= @intFromPtr(code.ptr) and address < @intFromPtr(code.ptr) + code.len) return true;
-    }
-    return false;
-}
-
-/// Every return address into generated code on the frame-pointer chain that
-/// starts at `frame`, innermost first. Generated code and the builtins and
-/// host functions between it and a failure keep frame pointers, so the chain
-/// is intact; every record read lies between `low` and the frame that called
-/// into generated code, which is live stack.
-fn generatedCalls(self: *CompileTimeHost, frame: usize, low: usize) []const usize {
-    var calls = std.ArrayListUnmanaged(usize).empty;
-    self.appendGeneratedCalls(&calls, frame, low);
-    return calls.items;
-}
-
-fn appendGeneratedCalls(self: *CompileTimeHost, calls: *std.ArrayListUnmanaged(usize), frame: usize, low: usize) void {
+fn walkFailurePoint(self: *const CompileTimeHost, initial: FailurePoint, frame: usize, low: usize) FailurePoint {
+    const code = self.code orelse return initial;
+    var point = initial;
     var fp = frame;
-    while (fp % @alignOf(usize) == 0 and fp >= low and fp + 2 * @sizeOf(usize) <= self.entry_frame) {
+    while (point.source == null and frameRecordInRange(fp, low, self.entry_frame)) {
         const record: *const [2]usize = @ptrFromInt(fp);
-        if (self.inGeneratedCode(record[1])) calls.append(self.host_arena.allocator(), record[1]) catch self.jump(.host_oom);
+        recordCall(&point, code.classify(code.context, record[1]), record[1]);
         if (record[0] <= fp) break;
         fp = record[0];
     }
+    return point;
+}
+
+fn frameRecordInRange(fp: usize, low: usize, end: usize) bool {
+    return fp != 0 and fp % @alignOf(usize) == 0 and fp >= low and fp < end and end - fp >= 2 * @sizeOf(usize);
+}
+
+test "the complete frame record must lie on the readable stack" {
+    const word = @sizeOf(usize);
+    const low = 4 * word;
+    const end = 16 * word;
+    try std.testing.expect(frameRecordInRange(low, low, end));
+    try std.testing.expect(frameRecordInRange(end - 2 * word, low, end));
+    try std.testing.expect(!frameRecordInRange(low - word, low, end));
+    try std.testing.expect(!frameRecordInRange(end - word, low, end));
+    try std.testing.expect(!frameRecordInRange(std.math.maxInt(usize) - (word - 1), low, end));
+}
+
+test "overflow diagnostic survives stack reuse with distinct meaning and source frames" {
+    const Classifier = struct {
+        fn classify(_: *const anyopaque, address: usize) CallLocation {
+            return switch (address) {
+                11 => .generated,
+                22, 33 => .source,
+                else => .outside,
+            };
+        }
+    };
+    var records: [4][2]usize = undefined;
+    const low = @intFromPtr(&records);
+    records = .{
+        .{ @intFromPtr(&records[1]), 99 }, // host callback
+        .{ @intFromPtr(&records[2]), 11 }, // generated helper, no source
+        .{ @intFromPtr(&records[3]), 22 }, // innermost enclosing Roc statement
+        .{ 0, 33 },
+    };
+    var host = CompileTimeHost.init(std.testing.allocator);
+    defer host.deinit();
+    host.code = .{ .context = &records, .classify = Classifier.classify };
+    host.entry_frame = low + @sizeOf(@TypeOf(records));
+    host.captureOverflowPoint(.{ .fp = low, .low = low });
+    @memset(std.mem.asBytes(&records), 0);
+    host.noteStackOverflow();
+    try std.testing.expectEqual(Termination.crashed, host.termination);
+    try std.testing.expectEqual(FailurePoint{ .innermost = 11, .source = 22 }, host.failure.?);
 }
 
 /// Where in generated code the failure being reported from this host
 /// callback happened.
 fn currentFailurePoint(self: *CompileTimeHost, frame: usize) FailurePoint {
     if (comptime builtin.os.tag == .windows and builtin.cpu.arch == .x86_64) return self.windowsX64FailurePoint();
-    return .{ .calls = self.generatedCalls(frame, frame) };
+    return self.walkFailurePoint(.{}, frame, frame);
 }
 
 /// On Windows x64, compiled host and builtin code points its frame pointer
@@ -266,7 +296,14 @@ fn windowsX64FailurePoint(self: *CompileTimeHost) FailurePoint {
     windows.ntdll.RtlCaptureContext(&context);
     var history: windows.UNWIND_HISTORY_TABLE = undefined;
     @memset(@as(*[@sizeOf(windows.UNWIND_HISTORY_TABLE)]u8, @ptrCast(&history)), 0);
-    while (!self.inGeneratedCode(context.Rip)) {
+    const code = self.code orelse return .{};
+    while (true) {
+        const location = code.classify(code.context, context.Rip);
+        if (location != .outside) {
+            var point: FailurePoint = .{};
+            recordCall(&point, location, context.Rip);
+            return self.walkFailurePoint(point, context.Rbp, context.Rsp);
+        }
         if (context.Rsp >= self.entry_frame) return .{};
         var image_base: usize = undefined;
         if (windows.ntdll.RtlLookupFunctionEntry(context.Rip, &image_base, &history)) |function| {
@@ -278,10 +315,6 @@ fn windowsX64FailurePoint(self: *CompileTimeHost) FailurePoint {
             context.Rsp += @sizeOf(usize);
         }
     }
-    var calls = std.ArrayListUnmanaged(usize).empty;
-    calls.append(self.host_arena.allocator(), context.Rip) catch self.jump(.host_oom);
-    self.appendGeneratedCalls(&calls, context.Rbp, context.Rsp);
-    return .{ .calls = calls.items };
 }
 
 /// Install a crash boundary before calling generated root code.

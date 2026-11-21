@@ -118,6 +118,26 @@ test "offsetToPosition finds the line and column of an offset" {
     try std.testing.expectEqual(@as(u32, 0), start.character);
 }
 
+test "offsetToPosition counts columns as a scan of the line does" {
+    const allocator = std.testing.allocator;
+    // Multi-byte characters, invalid and cut-short UTF-8, and both line endings,
+    // so that offsets land inside sequences as well as between them.
+    const sources = [_][]const u8{ "aé😀x\nyz", "é\r\n😀b\r\n", "a\xffb\xe2\x82c\xe2\n\xf0\x9f", "\xc3\n\xa9é", "\n\n", "one line" };
+    for (sources) |source| {
+        const table = try position.LineOffsets.init(allocator, source);
+        defer table.deinit();
+
+        var offset: u32 = 0;
+        while (offset <= source.len) : (offset += 1) {
+            const line = table.lineAt(offset);
+            const text = position.lineText(source, table.offsets, line).?;
+            const found = position.offsetToPosition(offset, &table);
+            try std.testing.expectEqual(line, found.line);
+            try std.testing.expectEqual(position.byteOffsetToUtf16Column(text, offset - table.offsets[line]), found.character);
+        }
+    }
+}
+
 test "a position converts back to the offset it came from" {
     const allocator = std.testing.allocator;
     // Lines holding characters that are one, two and four bytes of UTF-8 but

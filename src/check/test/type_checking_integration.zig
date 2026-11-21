@@ -18,6 +18,12 @@ const testing = std.testing;
 
 const MethodRegistryTestCheckedTypes = struct {
     store: Store = .{},
+    owner: canonical.NominalTypeKey,
+
+    pub fn nominalMethodOwner(self: *const @This(), _: *const ModuleEnv, stmt: can.CIR.Statement.Idx) ?canonical.NominalTypeKey {
+        std.debug.assert(@backingInt(stmt) == self.owner.source_decl);
+        return self.owner;
+    }
 
     const Store = struct {
         pub fn typeCount(_: Store) usize {
@@ -3995,13 +4001,16 @@ test "checked artifact method registry skips nominal associated values" {
         .module_idx = module.moduleIndex(),
         .by_def = &.{},
     };
-    const checked_types = MethodRegistryTestCheckedTypes{};
     const module_index = MethodRegistryTestModuleIndex{};
     var referenced_targets = MethodRegistryTestReferencedTargets{};
 
     var names = canonical.CanonicalNameStore.init(testing.allocator);
     defer names.deinit();
 
+    const checked_types = MethodRegistryTestCheckedTypes{ .owner = .{
+        .module = try names.internModuleIdentity(module.moduleEnvConst().contentIdentityHash().?),
+        .source_decl = @backingInt(module.methodDefEntries()[0].key.owner),
+    } };
     var registry = try static_dispatch.MethodRegistry.fromModule(
         testing.allocator,
         module,

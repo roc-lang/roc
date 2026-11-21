@@ -549,7 +549,7 @@ jobs:
           restore-keys: |
             zig-deps-${{ runner.os }}-${{ runner.arch }}-
 
-      - name: build roc + repro executables for valgrind
+      - name: build roc, the snapshot tool, and test hosts for valgrind
         uses: ./.github/actions/flaky-retry
         with:
           # `-e .zig-cache` is load-bearing: `git clean -x` removes ignored
@@ -564,10 +564,10 @@ jobs:
           # Keep large ReleaseFast Zig compiler processes from overlapping and
           # exhausting the hosted runner's memory. This lane builds several
           # artifacts that individually peak at multiple GiB under valgrind.
-          # Test platform hosts live in the build cache; `roc` below reads
-          # test/str and test/int hosts from the checkout, so
-          # `update-test-fixtures` publishes the hosts this build produced.
-          command: git clean -fdx -e .zig-cache && zig build -j1 -Dvalgrind=true -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456 install update-test-fixtures
+          # `build-valgrind` builds only what the steps below run: `roc`, the
+          # snapshot tool, and the test/str and test/int hosts for `roc`'s
+          # target, which it copies into the checkout where `roc` reads them.
+          command: git clean -fdx -e .zig-cache && zig build -j1 -Dvalgrind=true -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456 build-valgrind
           retry_count: 3
 
       - name: install valgrind
@@ -583,6 +583,8 @@ jobs:
           ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/int/app.roc
 
       - name: valgrind snapshots
+        env:
+          SNAPSHOT_BIN: ./zig-out/bin/snapshot
         run: |
           ./ci/valgrind_snapshots.sh
 

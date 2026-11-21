@@ -1755,11 +1755,22 @@ const BoxyLinkedImages = struct {
     /// images, and every image reachable through code or data is included.
     const Selection = struct {
         indices: []const usize = &.{},
-        code: []const []const u8 = &.{},
+        images: []const Image = &.{},
+
+        const Image = struct { code: []const u8, locations: backend.dev.CodeLocations };
+
+        fn codeAt(self: Selection, address: usize) ?struct { locations: backend.dev.CodeLocations, offset: u32 } {
+            for (self.images) |image| {
+                const start = @intFromPtr(image.code.ptr);
+                if (address >= start and address - start < image.code.len)
+                    return .{ .locations = image.locations, .offset = @intCast(address - start) };
+            }
+            return null;
+        }
 
         fn deinit(self: Selection, allocator: Allocator) void {
             allocator.free(self.indices);
-            allocator.free(self.code);
+            allocator.free(self.images);
         }
     };
 
@@ -1844,7 +1855,12 @@ const BoxyLinkedImages = struct {
     fn select(self: *BoxyLinkedImages, allocator: Allocator, names: []const []const u8, timing: ?*Timing) FinalizeError!Selection {
         self.lock();
         defer self.mutex.unlock();
-        if (comptime boxy_object_code == .pieces) return .{ .code = try allocator.dupe([]const u8, self.code.items) };
+        if (comptime boxy_object_code == .pieces) {
+            const selected = try allocator.alloc(Selection.Image, self.code.items.len);
+            for (selected, self.code.items, self.locations.items) |*image, code, locations|
+                image.* = .{ .code = code, .locations = locations };
+            return .{ .images = selected };
+        }
         var needed = std.AutoArrayHashMapUnmanaged(usize, void).empty;
         defer needed.deinit(allocator);
         for (names) |name| if (self.providers.get(name)) |index| {
@@ -1860,10 +1876,10 @@ const BoxyLinkedImages = struct {
         const indices = try allocator.dupe(usize, needed.keys());
         errdefer allocator.free(indices);
         std.mem.sort(usize, indices, {}, std.sort.asc(usize));
-        const code = try allocator.alloc([]const u8, needed.count());
-        errdefer allocator.free(code);
+        const selected = try allocator.alloc(Selection.Image, needed.count());
+        errdefer allocator.free(selected);
         var newly_loaded: usize = 0;
-        for (indices, code) |*loaded_index, *code_range| {
+        for (indices, selected) |*loaded_index, *image| {
             const index = loaded_index.*;
             const candidate = &self.candidates.items[index];
             if (candidate.loaded_index == null) {
@@ -1875,12 +1891,12 @@ const BoxyLinkedImages = struct {
                 newly_loaded += 1;
             }
             loaded_index.* = candidate.loaded_index.?;
-            code_range.* = self.code.items[loaded_index.*];
+            image.* = .{ .code = self.code.items[loaded_index.*], .locations = self.locations.items[loaded_index.*] };
         }
         if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: CTFE images: {d} available, {d} reached, {d} newly loaded\n", .{ self.candidates.items.len, indices.len, newly_loaded });
         Timing.addCount(timing, .images_selected, indices.len);
         Timing.addCount(timing, .images_loaded, newly_loaded);
-        return .{ .indices = indices, .code = code };
+        return .{ .indices = indices, .images = selected };
     }
 
     fn load(self: *BoxyLinkedImages, objects: []const BoxyObject, timing: ?*Timing) FinalizeError!void {
@@ -1990,18 +2006,6 @@ const BoxyLinkedImages = struct {
         self.code.appendAssumeCapacity(image.code);
         self.locations.appendAssumeCapacity(.{ .bytes = locations });
         if (timing) |active| active.finishUnitStep(load_started_ns, &active.unit_load_ns);
-    }
-
-    /// The offset of `address` in a loaded image's code, and that image's
-    /// locations.
-    fn codeAt(self: *BoxyLinkedImages, address: usize) ?struct { locations: backend.dev.CodeLocations, offset: u32 } {
-        self.lock();
-        defer self.mutex.unlock();
-        for (self.code.items, self.locations.items) |code, locations| {
-            const start = @intFromPtr(code.ptr);
-            if (address >= start and address < start + code.len) return .{ .locations = locations, .offset = @intCast(address - start) };
-        }
-        return null;
     }
 
     /// The address an object's or a program's reference to `name` binds to.
@@ -5710,7 +5714,7 @@ fn evalDevLiteralRoot(
     @memset(ret_buf, 0);
     var host = CompileTimeHost.init(host_allocator);
     defer host.deinit();
-    host.setGeneratedCode(native.executable.generatedCode(), native.linkedCode());
+    host.code = native.failureCodeView();
     host.timing_io = if (options.timing) |timing| timing.std_io else null;
 
     host.resetForRun();
@@ -7013,9 +7017,25 @@ const DevProgram = struct {
     fn publishFailure(self: *DevProgram, lowered: *const lir.CheckedPipeline.LoweredProgram, module: lir.LIR.LoweringModuleId, producer: lir.LIR.ComptimeProducer, failure: ?SlotFailure) FinalizeError!void {
         try self.slots.publishFailure(lowered, module, producer, failure, .{ .context = self, .resolve = resolveFrozenFunction });
     }
-    /// The loaded objects this program's code calls into.
-    fn linkedCode(self: *const DevProgram) []const []const u8 {
-        return self.image_selection.code;
+    fn failureCodeView(self: *const DevProgram) CompileTimeHost.CodeView {
+        return .{ .context = self, .classify = classifyCall };
+    }
+
+    /// Signal-safe: both line tables and the selected images are immutable
+    /// for this run. File identity translation is deferred until reporting.
+    fn classifyCall(raw: *const anyopaque, return_address: usize) CompileTimeHost.CallLocation {
+        const self: *const DevProgram = @ptrCast(@alignCast(raw));
+        if (return_address == 0) return .outside;
+        const address = return_address - 1;
+        const code = self.executable.generatedCode();
+        const start = @intFromPtr(code.ptr);
+        if (address >= start and address - start < code.len) {
+            const line = self.codegen.lineEntryAt(address - start) orelse return .generated;
+            return if (line.loc.hasLocation() and !line.region.isEmpty()) .source else .generated;
+        }
+        const image = self.image_selection.codeAt(address) orelse return .outside;
+        const line = image.locations.lineEntryAt(image.offset) orelse return .generated;
+        return if (line.loc.hasLocation() and !line.region.isEmpty()) .source else .generated;
     }
 
     /// Where a failure the host located in this program's generated code
@@ -7025,13 +7045,10 @@ const DevProgram = struct {
     fn failedAt(self: *const DevProgram, point: ?CompileTimeHost.FailurePoint) FailedAt {
         const known = point orelse return .{};
         var failed_at = FailedAt{};
-        if (known.calls.len != 0) {
-            if (self.failureMeaningAt(known.calls[0])) |meaning| failed_at.meaning = self.lir_result.meaningByCheckedKey(meaning);
+        if (known.innermost) |address| {
+            if (self.failureMeaningAt(address)) |meaning| failed_at.meaning = self.lir_result.meaningByCheckedKey(meaning);
         }
-        const statement = for (known.calls) |address| {
-            // A return address follows its call instruction.
-            if (self.statementAt(address - 1)) |line| break line;
-        } else null;
+        const statement = if (known.source) |address| self.statementAt(address - 1) else null;
         if (statement) |line| {
             failed_at.region = line.region;
             failed_at.loc = line.loc;
@@ -7040,21 +7057,21 @@ const DevProgram = struct {
     }
 
     fn failureMeaningAt(self: *const DevProgram, return_address: usize) ?lir.LIR.FailureMeaning {
-        if (self.linked_images) |images| if (images.codeAt(return_address)) |at| return at.locations.failureMeaningAt(at.offset);
+        if (self.image_selection.codeAt(return_address - 1)) |at| return at.locations.failureMeaningAt(at.offset + 1);
         return self.codegen.failureMeaningAt(return_address - @intFromPtr(self.executable.codePtr()));
     }
 
     /// The statement whose code holds `address`, its location in terms of
     /// this program's source file table.
     fn statementAt(self: *const DevProgram, address: usize) ?backend.dev.LirCodeGenMod.LineEntry {
-        if (self.linked_images) |images| if (images.codeAt(address)) |at| {
+        if (self.image_selection.codeAt(address)) |at| {
             const line = at.locations.lineEntryAt(at.offset) orelse return null;
             if (line.region.isEmpty() or !line.loc.hasLocation()) return null;
             const identity = at.locations.sourceFile(line.loc.file).module_identity;
             var loc = line.loc;
             loc.file = self.sourceFileOf(identity);
             return .{ .offset = line.offset, .loc = loc, .region = line.region };
-        };
+        }
         const line = self.codegen.lineEntryAt(address - @intFromPtr(self.executable.codePtr())) orelse return null;
         if (line.region.isEmpty() or !line.loc.hasLocation()) return null;
         return line;
@@ -7175,7 +7192,7 @@ fn evalDevProgramRoots(
                 .host = CompileTimeHost.init(host_allocator),
                 .module = module,
             };
-            jobs[i].host.setGeneratedCode(native.executable.generatedCode(), native.linkedCode());
+            jobs[i].host.code = native.failureCodeView();
             jobs[i].host.timing_io = if (options.timing) |timing| timing.std_io else null;
             jobs_len += 1;
         }
@@ -7768,7 +7785,21 @@ fn unreportedFailedRootPayload(
     failure: RootFailure,
 ) Allocator.Error!checked.CompileTimeRootPayload {
     if (root.guarded) return .runtime;
-    return .{ .const_node = try appendFailureConst(module, message, failure) };
+    return switch (root.kind) {
+        // The validated destructure stays in the runtime body, where it fails
+        // the same way when reached, since no diagnostic reported it here.
+        .hoisted_validation => .runtime,
+        .constant,
+        .hoisted_constant,
+        .callable_binding,
+        .expect,
+        .numeral_conversion,
+        .quote_conversion,
+        .interpolation_conversion,
+        .repl_expr,
+        .literal_argument,
+        => .{ .const_node = try appendFailureConst(module, message, failure) },
+    };
 }
 
 fn appendCrashConst(
@@ -8629,7 +8660,10 @@ fn ctfeSelectionTest(allocator: Allocator, built: CtfeSelectionImages) (Finalize
     const second = try images.select(allocator, &.{"unused"}, null);
     defer second.deinit(allocator);
     // Growing the shared arrays must not invalidate the first program's ranges.
-    try std.testing.expectEqual(@as(usize, 2), first.code.len);
+    try std.testing.expectEqual(@as(usize, 2), first.images.len);
+    const leaf_location = first.codeAt(images.lookup("leaf").?) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(u8, objects[0].code.image.code_locations, leaf_location.locations.bytes);
+    try std.testing.expect(first.codeAt(images.lookup("unused").?) == null);
     try std.testing.expectEqual(@as(i32, 42), callback.*());
     const again = try images.select(allocator, &.{"callback"}, null);
     defer again.deinit(allocator);

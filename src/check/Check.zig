@@ -3503,6 +3503,14 @@ const GroupFrame = struct {
     /// targets, early annotated uses are a stack-owned suffix and must be
     /// replayed before this frame generalizes.
     pending_predeclared_uses_top: usize,
+    /// `waiting_predeclared_dispatch_uses` length on entry: entries at or
+    /// above this index belong to this frame (recorded while it was the
+    /// innermost frame, or left by a frame nested in it), and each of its
+    /// generalization boundaries checks their targets' unchecked groups
+    /// before generalizing (`waitingDispatchUseTargetGroup`).
+    /// Recording a waiting use's body slots removes it from the list and
+    /// moves every frame's index down with it.
+    waiting_dispatch_uses_top: usize,
     /// This frame's index in `try_row_fixpoints`.
     try_row_fixpoint: u32,
 };
@@ -3529,6 +3537,8 @@ comptime {
 /// annotation yet, waiting in `waiting_predeclared_dispatch_uses` to be
 /// recorded against the method's own scheme.
 const WaitingPredeclaredDispatchUse = struct {
+    /// The annotated method the use dispatched to, and its annotation.
+    target_def: CIR.Def.Idx,
     annotation: CIR.Annotation.Idx,
     node_idx: u32,
     constraint_fn_var: Var,
@@ -15679,36 +15689,6 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         }
     }
 
-    // A type nested in a block-local type's associated block is in
-    // `type_decls` but not `all_statements`, and its body is generated here
-    // like every other declaration's, whether or not anything references it.
-    // A module-level declaration is in both lists and is generated once.
-    for (self.cir.store.sliceStatements(self.cir.type_decls)) |stmt_idx| {
-        switch (self.cir.store.getStatement(stmt_idx)) {
-            .s_alias_decl, .s_nominal_decl => _ = try self.ensureTypeDeclGenerated(stmt_idx, &env),
-            .s_where_alias_decl,
-            .s_runtime_error,
-            .s_type_anno,
-            .s_decl,
-            .s_var,
-            .s_var_uninitialized,
-            .s_reassign,
-            .s_crash,
-            .s_dbg,
-            .s_expr,
-            .s_expect,
-            .s_for,
-            .s_while,
-            .s_infinite_loop,
-            .s_breakable_loop,
-            .s_break,
-            .s_return,
-            .s_import,
-            .s_type_var_alias,
-            => {},
-        }
-    }
-
     // With every declaration generated, validate nominal declaration
     // recursion before any value checking consumes the declarations.
     try self.finalizeTypeDeclarationValidity();
@@ -16552,38 +16532,6 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         if (reader.read_by_root or self.selectedHoistedRootIsTopLevel(reader)) self.selected_hoisted_roots.items[read].read_by_root = true;
     }
 
-    // A validation keeps its dedicated root until solving has proved that the
-    // prospective maximal expression root is itself publishable. Only a kept
-    // owner may subsume the validation.
-    for (self.selected_hoisted_roots.items, 0..) |root, validation_index| {
-        if (!keep_roots[validation_index]) continue;
-        if (root.body != .pattern_validation) continue;
-        const owner_expr = root.validation_owner_expr.get() orelse continue;
-        const owner_index = self.hoist_selected_exprs.get(owner_expr) orelse continue;
-        if (!keep_roots[owner_index]) continue;
-        keep_roots[validation_index] = false;
-        kept_count -= 1;
-        kept_validation_count -= 1;
-    }
-
-    // A kept extraction evaluates the same scrutinee and complete source
-    // pattern as its validation root. Let it own that exhaustiveness site so
-    // the right-hand side is not evaluated twice. If the extraction's result
-    // type is not concrete, pruning leaves the unit-valued validation root in
-    // place instead.
-    for (self.selected_hoisted_roots.items, 0..) |root, i| {
-        if (!keep_roots[i]) continue;
-        const extraction = switch (root.body) {
-            .pattern_extraction => |extraction| extraction,
-            .expr, .pattern_validation, .pattern_error, .valueless_binding => continue,
-        };
-        const validation_index = self.hoist_selected_pattern_validations.get(extraction.scrutinee_pattern) orelse continue;
-        if (!keep_roots[validation_index]) continue;
-        keep_roots[validation_index] = false;
-        kept_count -= 1;
-        kept_validation_count -= 1;
-    }
-
     try self.hoist_selected_exprs.ensureTotalCapacity(self.gpa, kept_expr_count);
     try self.hoist_selected_bindings.ensureTotalCapacity(self.gpa, kept_pattern_count);
     try self.hoist_selected_pattern_validations.ensureTotalCapacity(self.gpa, kept_validation_count);
@@ -16789,7 +16737,9 @@ fn hoistedRootIsIntrinsicallyKept(
     root.value_kind = .data_constant;
     if (self.cir.store.getExpr(root.expr) == .e_runtime_error) return true;
     if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(root.expr))) return false;
-    return try self.hoistedRootTypeIsConcrete(concreteness, .data_constant, type_var);
+    if (!try self.hoistedRootTypeIsConcrete(concreteness, .data_constant, type_var)) return false;
+    root.value_kind = .proven_data_constant;
+    return true;
 }
 
 fn debugVerifyKeptHoistedRootDependencies(self: *Self, concreteness: *HoistedTypeConcreteness) Allocator.Error!void {
@@ -16974,10 +16924,11 @@ fn hoistedConstTypeComponents(
                 switch (backing) {
                     .args_only, .template => {},
                     .invalid => return false,
+                    .intrinsic_callable => if (purpose == .data_constant) return false,
                 }
                 for (self.types.sliceNominalArgs(nominal)) |arg| try components.add(walk, arg);
                 switch (backing) {
-                    .args_only, .invalid => {},
+                    .args_only, .invalid, .intrinsic_callable => {},
                     .template => |template| try components.add(.decl_template, template),
                 }
             },
@@ -17029,25 +16980,22 @@ const HoistedConstTypeScan = struct {
 /// which copies it.
 const StoredNominalBacking = union(enum) {
     args_only,
+    intrinsic_callable,
     template: Var,
     /// The declaration is invalid or source-less, so it has no backing.
     invalid,
 };
 
 fn storedNominalBacking(self: *const Self, nominal: types_mod.NominalType) StoredNominalBacking {
-    if (self.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional())) |builtin_decl| switch (builtin_decl) {
-        .list,
-        .box,
-        .dict,
-        .set,
-        .fields,
-        .field,
-        .num,
-        => return .args_only,
-        .try_type,
-        .numeral,
-        => {},
-    };
+    // Declaration indices are module-local. A user declaration with the same
+    // index as a builtin still stores its own backing.
+    if (nominal.originIsBuiltin()) {
+        if (nominal.ident.ident_idx.eql(self.cir.idents.builtin_encoding_parse_tag_union_spec)) return .intrinsic_callable;
+        if (self.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional())) |builtin_decl| switch (builtin_decl) {
+            .list, .box, .dict, .set, .fields, .field, .num => return .args_only,
+            .try_type, .numeral => {},
+        };
+    }
     const template = self.nominalDeclBackingTemplate(nominal) orelse return .invalid;
     return .{ .template = template };
 }
@@ -17132,6 +17080,7 @@ const HeldFunctionScan = struct {
                     for (self.types.sliceNominalArgs(nominal)) |arg| try items.add(arg);
                     switch (self.storedNominalBacking(nominal)) {
                         .args_only, .invalid => {},
+                        .intrinsic_callable => return .{ .value = true },
                         .template => |template| try items.add(template),
                     }
                 },
@@ -17381,7 +17330,7 @@ fn hoistSelectionInvariant(comptime message: []const u8) noreturn {
 /// kept root reads its own binding or it binds a top-level name
 /// (`CompileTimeRootTable.fromModule`); its body reads the binding instead.
 fn selectedRootBindingRead(self: *const Self, root: hoist_roots.SelectedHoistedRoot, oracle: *const HoistedRootKeepOracle) ?u32 {
-    if (root.body != .expr or root.value_kind != .data_constant) return null;
+    if (root.body != .expr or (root.value_kind != .data_constant and root.value_kind != .proven_data_constant)) return null;
     var expr = root.expr;
     while (true) switch (self.cir.store.getExpr(expr)) {
         .e_block => |block| {
@@ -23234,8 +23183,15 @@ fn recordPredeclaredBodySlots(self: *Self, annotation_idx: CIR.Annotation.Idx) A
     }
     if (self.waiting_predeclared_dispatch_uses.items.len == 0) return;
 
+    // Each frame's index into the list moves down by the entries removed
+    // below it, so every frame keeps exactly its own entries.
+    const frames = self.group_stack.items;
+    var frame_index: usize = 0;
     var write: usize = 0;
-    for (self.waiting_predeclared_dispatch_uses.items) |waiting| {
+    for (self.waiting_predeclared_dispatch_uses.items, 0..) |waiting, read| {
+        while (frame_index < frames.len and frames[frame_index].waiting_dispatch_uses_top <= read) : (frame_index += 1) {
+            frames[frame_index].waiting_dispatch_uses_top = write;
+        }
         if (waiting.annotation != annotation_idx) {
             self.waiting_predeclared_dispatch_uses.items[write] = waiting;
             write += 1;
@@ -23255,6 +23211,7 @@ fn recordPredeclaredBodySlots(self: *Self, annotation_idx: CIR.Annotation.Idx) A
         // published by a boundary still ahead.
         try self.deferPredeclaredUse(annotation_idx, waiting.fresh.slice(self.predeclared_use_fresh_vars.items), waiting.site);
     }
+    for (frames[frame_index..]) |*frame| frame.waiting_dispatch_uses_top = write;
     self.waiting_predeclared_dispatch_uses.shrinkRetainingCapacity(write);
     self.reclaimPredeclaredUseFreshVars();
 }
@@ -23423,10 +23380,12 @@ fn writePredeclaredSchemeUse(
 /// Record a use of a predeclared scheme whose binding's body has already
 /// generated its annotation (a recursive reference made while that body, or
 /// its recursive group, is still being checked). Call immediately after the
-/// instantiation, while `var_map` still holds it.
+/// instantiation, while `var_map` still holds it. `target_def` is the
+/// binding's top-level definition, or null for a block-local binding.
 fn recordInFlightPredeclaredSchemeUse(
     self: *Self,
     annotation_idx: CIR.Annotation.Idx,
+    target_def: ?CIR.Def.Idx,
     slot: ModuleEnv.SchemeUseRecord.Slot,
     node_idx: u32,
     slot_data: u32,
@@ -23441,20 +23400,46 @@ fn recordInFlightPredeclaredSchemeUse(
     self.scratch_evidence_pairs.clearRetainingCapacity();
     try self.appendPredeclaredUsePairs(annotation_idx, use_copies.slice(self.predeclared_use_fresh_vars.items));
     try self.writePredeclaredSchemeUse(annotation_idx, slot, node_idx, slot_data, scheme_root, policy);
-    try self.relateOrDeferPredeclaredUse(annotation_idx, use_copies.slice(self.predeclared_use_fresh_vars.items), site, env);
+    try self.relateOrDeferPredeclaredUse(annotation_idx, target_def, use_copies.slice(self.predeclared_use_fresh_vars.items), site, env);
 }
 
 /// Relate a use of a predeclared scheme to its binding's own scheme now if
 /// that scheme is published, or keep it for the boundary that publishes it.
+///
+/// A kept use of a top-level binding whose group is on the stack is related
+/// by that group's boundary. Relating unifies the use's copy of a slot the
+/// body may solve, an implicitly opened row, so that copy is pinned at the
+/// boundary's rank (Invariant D): no boundary nested inside it, such as a
+/// group checked at it for a dispatch target that refers back to the binding,
+/// or a local definition in the binding's own body, generalizes it first. A
+/// copy of a written type variable is never unified by the relation, since
+/// the body cannot solve a rigid, so it stays as polymorphic as the code
+/// using it.
 fn relateOrDeferPredeclaredUse(
     self: *Self,
     annotation_idx: CIR.Annotation.Idx,
+    target_def: ?CIR.Def.Idx,
     use_copies: []const Var,
     site: PredeclaredUseSite,
     env: *Env,
 ) Allocator.Error!void {
     if (self.predeclaredSlotsPtr(annotation_idx).published) {
         return self.relatePredeclaredUse(annotation_idx, use_copies, site, null, env);
+    }
+    if (target_def) |def_idx| {
+        if (self.defGroupIndex(def_idx)) |group_index| {
+            if (self.activeGroupFrameIndex(group_index)) |frame_index| {
+                const boundary_rank = self.group_stack.items[frame_index].boundary_rank;
+                const body = try self.predeclaredBodySlots(annotation_idx);
+                for (body, use_copies[0..body.len]) |body_var, use_copy| {
+                    const written_type_variable = switch (self.types.resolveVar(body_var).desc.content) {
+                        .rigid => |rigid| !rigid.name.eql(self.cir.idents.polarity_var),
+                        .flex, .alias, .field_presence, .structure, .err => false,
+                    };
+                    if (!written_type_variable) try self.pinVarAtRank(use_copy, boundary_rank, env);
+                }
+            }
+        }
     }
     try self.deferPredeclaredUse(annotation_idx, use_copies, site);
 }
@@ -23542,6 +23527,11 @@ fn publishBoundaryPredeclaredSchemes(self: *Self, roots: []const BoundaryRoot) v
 /// first slot that reaches it, and every other slot's copy must equal that
 /// slot's image. A rejected use is reported and retired; the binding keeps its
 /// own scheme.
+///
+/// No copy the relation unifies is quantified yet: the using definition's
+/// boundary checks every unchecked target of its waiting dispatch uses first
+/// (`waitingDispatchUseTargetGroup`), and a use of a binding in flight is
+/// pinned at that binding's boundary (`relateOrDeferPredeclaredUse`).
 fn relatePredeclaredUse(
     self: *Self,
     annotation_idx: CIR.Annotation.Idx,
@@ -23560,6 +23550,13 @@ fn relatePredeclaredUse(
     }
     for (body, use_copies[0..body.len]) |body_var, use_copy| {
         const image = (try self.predeclaredSlotImage(body_var, use_copy, quantified_from, &images, site.region, env)) orelse continue;
+        if (builtin.mode == .debug) {
+            if (self.types.resolveVar(use_copy).desc.rank == .generalized or
+                self.types.resolveVar(image).desc.rank == .generalized)
+            {
+                base.invariant("type checker invariant violated: a use of a predeclared scheme was related after the using definition generalized it", .{});
+            }
+        }
         const result = try self.runUnify(use_copy, image, env, .{ .on_mismatch = .write_no_report, .row_width_relation = .exact });
         if (!result.isAccepted()) {
             try self.rejectPredeclaredUse(annotation_idx, site);
@@ -23635,7 +23632,7 @@ fn rejectPredeclaredUse(self: *Self, annotation_idx: CIR.Annotation.Idx, site: P
 /// method's body has not generated its annotation yet, the edge waits for it.
 fn recordPredeclaredDispatchUse(
     self: *Self,
-    annotation_idx: CIR.Annotation.Idx,
+    target_def: CIR.Def.Idx,
     node_idx: u32,
     constraint_fn_var: Var,
     scheme_root: Var,
@@ -23644,6 +23641,7 @@ fn recordPredeclaredDispatchUse(
     region: Region,
     env: *Env,
 ) Allocator.Error!void {
+    const annotation_idx = self.cir.store.getDef(target_def).annotation.?;
     const site: PredeclaredUseSite = .{
         .node_idx = node_idx,
         .use_var = use_var,
@@ -23652,9 +23650,10 @@ fn recordPredeclaredDispatchUse(
     };
     const target_slots = self.predeclaredSlotsPtr(annotation_idx);
     if (target_slots.body != null or target_slots.body_took_over) {
-        return self.recordInFlightPredeclaredSchemeUse(annotation_idx, .dispatch_target, node_idx, @backingInt(constraint_fn_var), scheme_root, policy, site, env);
+        return self.recordInFlightPredeclaredSchemeUse(annotation_idx, target_def, .dispatch_target, node_idx, @backingInt(constraint_fn_var), scheme_root, policy, site, env);
     }
     try self.waiting_predeclared_dispatch_uses.append(self.gpa, .{
+        .target_def = target_def,
         .annotation = annotation_idx,
         .node_idx = node_idx,
         .constraint_fn_var = constraint_fn_var,
@@ -24249,6 +24248,7 @@ fn beginGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.E
         .boundary_rank = boundary_rank,
         .pending_targets_top = self.pending_dispatch_targets.items.len,
         .pending_predeclared_uses_top = self.pending_predeclared_scheme_uses.items.len,
+        .waiting_dispatch_uses_top = self.waiting_predeclared_dispatch_uses.items.len,
         .try_row_fixpoint = state.try_row_fixpoint,
     });
     // An unannotated function member is reached monomorphically through its
@@ -24479,23 +24479,49 @@ fn finalizeFunctionEffectsAtBoundary(self: *Self, roots: []const BoundaryRoot) A
 /// group (nested, in its own frame, together with the unchecked groups it
 /// transitively name-depends on), then re-run dispatch constraint processing, which may
 /// pin further receivers and record further targets—loop to quiescence.
+/// The frame's waiting predeclared dispatch uses are resolved the same way:
+/// each unchecked target's group is checked, and its boundary relates the
+/// uses, before the boundary draining them generalizes.
 const PendingTargetsActivity = struct {
     top: ?usize = null,
 };
 
 fn stepPendingTargets(self: *Self, state: *PendingTargetsActivity, env: *Env) std.mem.Allocator.Error!CheckActivityStep {
-    const top = state.top orelse blk: {
-        const top = self.currentFramePendingTargetsTop();
-        state.top = top;
-        if (self.pending_dispatch_targets.items.len <= top) return checkActivityDone(.none);
-        break :blk top;
-    };
+    const resumed = state.top != null;
+    const top = state.top orelse self.currentFramePendingTargetsTop();
+    state.top = top;
     if (self.pending_dispatch_targets.items.len <= top) {
-        try self.checkStaticDispatchConstraints(env, false);
-        if (self.pending_dispatch_targets.items.len <= top) return checkActivityDone(.none);
+        if (resumed) try self.checkStaticDispatchConstraints(env, false);
+        if (self.pending_dispatch_targets.items.len <= top) {
+            const waiting_target_group = self.waitingDispatchUseTargetGroup() orelse return checkActivityDone(.none);
+            return ensureGroupStep(waiting_target_group, true);
+        }
     }
     const target_def = self.pending_dispatch_targets.pop().?;
     return ensureGroupStep(self.defGroupIndex(target_def).?, true);
+}
+
+/// The unchecked group of a top-level annotated method that one of the
+/// current frame's waiting predeclared dispatch uses targets, if any.
+///
+/// Static dispatch is type-directed, so the check order does not place a
+/// method's group before the definitions that dispatch to it. Such a use
+/// holds fresh copies of the method's annotation slots, and it is related to
+/// the method's own scheme by the boundary that publishes that scheme
+/// (design.md "Predeclared Scheme Uses"). The using definition must not
+/// generalize those copies first, so its boundary checks the method's group
+/// before generalizing. A target whose group is on the stack is in flight,
+/// and a block-local target has no group: neither is checked here.
+fn waitingDispatchUseTargetGroup(self: *const Self) ?u32 {
+    const top = if (self.group_stack.items.len == 0)
+        0
+    else
+        self.group_stack.items[self.group_stack.items.len - 1].waiting_dispatch_uses_top;
+    for (self.waiting_predeclared_dispatch_uses.items[top..]) |waiting| {
+        const group_index = self.defGroupIndex(waiting.target_def) orelse continue;
+        if (self.group_states.items[group_index] == .pending) return group_index;
+    }
+    return null;
 }
 
 /// Record that a dispatch obligation resolved to `target_def_idx`—an
@@ -25088,7 +25114,7 @@ fn replayPredeclaredSchemeUse(
 
     try self.appendSchemeRequirementEvidencePairs(self.instantiated_requirements_stack.items[requirements_start..]);
     try self.writePredeclaredSchemeUse(annotation_idx, .value_use, @backingInt(pending.source_expr), 0, scheme_root, .when_needed);
-    try self.relateOrDeferPredeclaredUse(annotation_idx, pending.fresh.slice(self.predeclared_use_fresh_vars.items), .{
+    try self.relateOrDeferPredeclaredUse(annotation_idx, pending.target_def, pending.fresh.slice(self.predeclared_use_fresh_vars.items), .{
         .node_idx = @backingInt(pending.source_expr),
         .use_var = pending.use_var,
         .region = self.cir.store.getExprRegion(pending.source_expr),
@@ -33123,6 +33149,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                             const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var, .none);
                             try self.recordInFlightPredeclaredSchemeUse(
                                 referenced_def.annotation.?,
+                                processing_def.def_idx,
                                 .value_use,
                                 @backingInt(expr_idx),
                                 0,
@@ -33185,6 +33212,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                                 const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var, .none);
                                 try self.recordInFlightPredeclaredSchemeUse(
                                     referenced_def.annotation.?,
+                                    processing_def.def_idx,
                                     .value_use,
                                     @backingInt(expr_idx),
                                     0,
@@ -33273,6 +33301,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                     const instantiated = try self.instantiateBindingVar(self.predeclaredSchemeVarForAnnotation(annotation_idx), env, .use_last_var, .none);
                     try self.recordInFlightPredeclaredSchemeUse(
                         annotation_idx,
+                        null,
                         .value_use,
                         @backingInt(expr_idx),
                         0,
@@ -52689,9 +52718,9 @@ fn instantiateDispatchTargetMethodVar(
         self.method_receiver_context = receiver_context.subs();
         break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region }, evidence);
     };
-    if (predeclared_annotation) |annotation_idx| {
+    if (predeclared_annotation != null) {
         try self.recordPredeclaredDispatchUse(
-            annotation_idx,
+            method_lookup.binding.def_idx,
             evidence.dispatch_target.node_idx,
             constraint.fn_var,
             method_type_var,
@@ -60695,6 +60724,7 @@ test "deferred dispatch obligation ownership is by group identity, not rank" {
         .boundary_rank = Rank.outermost.next(),
         .pending_targets_top = 0,
         .pending_predeclared_uses_top = 0,
+        .waiting_dispatch_uses_top = 0,
         .try_row_fixpoint = 0,
     });
     try checker.pushGroupFrame(.{
@@ -60704,6 +60734,7 @@ test "deferred dispatch obligation ownership is by group identity, not rank" {
         .boundary_rank = Rank.outermost.next(),
         .pending_targets_top = 0,
         .pending_predeclared_uses_top = 0,
+        .waiting_dispatch_uses_top = 0,
         .try_row_fixpoint = 0,
     });
 
@@ -60748,6 +60779,7 @@ test "an orphan dispatch obligation is adopted only by the outermost frame" {
         .boundary_rank = Rank.outermost.next(),
         .pending_targets_top = 0,
         .pending_predeclared_uses_top = 0,
+        .waiting_dispatch_uses_top = 0,
         .try_row_fixpoint = 0,
     });
 
@@ -60763,6 +60795,7 @@ test "an orphan dispatch obligation is adopted only by the outermost frame" {
         .boundary_rank = Rank.outermost.next().next(),
         .pending_targets_top = 0,
         .pending_predeclared_uses_top = 0,
+        .waiting_dispatch_uses_top = 0,
         .try_row_fixpoint = 0,
     });
 
@@ -62614,7 +62647,7 @@ fn instantiateGeneratedCodecMethodTarget(
 
     if (predeclared_scheme != null) {
         try self.recordPredeclaredDispatchUse(
-            self.cir.store.getDef(method_lookup.binding.def_idx).annotation.?,
+            method_lookup.binding.def_idx,
             0,
             evidence_var,
             method_type_var,

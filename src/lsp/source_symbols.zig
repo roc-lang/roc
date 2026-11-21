@@ -8,6 +8,7 @@ const can = @import("can");
 const parse = @import("parse");
 const collections = @import("collections");
 const queries = @import("cir_queries.zig");
+const position = @import("position.zig");
 const module_lookup = @import("module_lookup.zig");
 const CirVisitor = @import("cir_visitor.zig").CirVisitor;
 const VisitAction = @import("cir_visitor.zig").VisitAction;
@@ -142,9 +143,11 @@ pub const Index = struct {
     pub fn ranges(self: *const Index, pattern: CIR.Pattern.Idx, include_declaration: bool) Allocator.Error![]queries.LspRange {
         var result: std.ArrayList(queries.LspRange) = .empty;
         errdefer result.deinit(self.allocator);
+        const line_offsets = try position.LineOffsets.init(self.allocator, self.env.common.source);
+        defer line_offsets.deinit();
         for (self.occurrences.items) |item| {
             if (item.pattern != pattern or (!include_declaration and item.declaration)) continue;
-            if (queries.regionToRange(self.env, item.region)) |range| try result.append(self.allocator, range);
+            if (queries.regionToRangeIn(&line_offsets, item.region)) |range| try result.append(self.allocator, range);
         }
         return result.toOwnedSlice(self.allocator);
     }
