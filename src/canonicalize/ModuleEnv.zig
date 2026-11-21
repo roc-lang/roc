@@ -3439,12 +3439,12 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(").");
             try report.document.addLineBreaks(2);
 
-            try report.document.addReflowingText("Nominal types must be records or tag unions:");
+            try report.document.addReflowingText("Here are two examples of nominal type declarations:");
             try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("# Record example:");
             try report.document.addLineBreak();
-            const record_example = try std.fmt.allocPrint(allocator, "{s} := {{ data: List(U8) }}.{{}}", .{module_name_bytes});
+            const record_example = try std.fmt.allocPrint(allocator, "{s} := {{ data : List(U8) }}", .{module_name_bytes});
             defer allocator.free(record_example);
             const owned_record = try report.addOwnedString(record_example);
             try report.document.addInlineCode(owned_record);
@@ -3452,7 +3452,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             try report.document.addReflowingText("# Tag union example:");
             try report.document.addLineBreak();
-            const tag_example = try std.fmt.allocPrint(allocator, "{s} := [ State(List(U8)) ].{{}}", .{module_name_bytes});
+            const tag_example = try std.fmt.allocPrint(allocator, "{s} := [State(List(U8))]", .{module_name_bytes});
             defer allocator.free(tag_example);
             const owned_tag = try report.addOwnedString(tag_example);
             try report.document.addInlineCode(owned_tag);

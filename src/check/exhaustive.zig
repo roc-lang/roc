@@ -4207,7 +4207,7 @@ fn formatPatternNode(
                 try scratch.resize(40);
                 try writer.writeAll(i128h.u128_to_str(scratch.items, u).str);
             },
-            .bit => |b| try writer.writeAll(if (b) "Bool.true" else "Bool.false"),
+            .bit => |b| try writer.writeAll(if (b) "True" else "False"),
             .byte => |b| try writer.print("{}", .{b}),
             .float => |f| {
                 const float_val: f64 = @bitCast(f);
@@ -4287,8 +4287,9 @@ fn formatPatternNode(
                         },
                     }
                     if (c.args.len > 0) {
-                        try pending.append(gpa, .{ .text = " " });
+                        try writer.writeAll(".(");
                         try pending.append(gpa, .{ .pattern = c.args[0] });
+                        try pending.append(gpa, .{ .text = ")" });
                     }
                 },
             }

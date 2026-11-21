@@ -21112,16 +21112,11 @@ graph-local replay entries borrow their owning cache’s immutable summaries;
 temporary capture and replay mappings do not live as long as the graph. Active
 recursive entries remain graph-local. Replay must agree with fresh checked
 relation expansion, including unresolved state and relationships between roots.
-Agreement is judged up to what a producing graph chooses arbitrarily: local
-numbering, the order in which a row's members were joined, a named-instance
-group with a single member inside the interface, whether a class whose content
-is settled and carries no other evidence was captured as open structure or as
-its settled leaf, and whether an open class carries a finished-type witness.
-A witness is no evidence: replaying an unchanged summary relates nothing back,
-while a fresh expansion relates witnessed copies of its settled leaves, so
-whether a class acquired one records which history reached it (pinned by the
-monotype test "interface agreement ignores finished witnesses of open
-classes"). An unchanged summary stands for its input.
+The compile tests in `src/compile/test/interface_summary_test.zig` pin this by
+lowering each program with and without summary replay (the
+`replay_interface_summaries` test switch) and requiring identical
+specialization identities and LIR, over generic, parametric, user nominal,
+mutually recursive, codec, and imported-container programs.
 
 Digest discovery encodes each uncached node's scalar bytes once and retains
 ordered child offsets. Acyclic resolution and cyclic-group reduction replay
