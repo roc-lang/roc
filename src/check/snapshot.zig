@@ -334,6 +334,9 @@ pub const Store = struct {
     /// A completed node is shared throughout this capture. Back edges in its
     /// structural view are recursion markers with preserved graph identity.
     captured_nodes: std.AutoHashMapUnmanaged(CaptureKey, SnapshotContentIdx) = .empty,
+    /// The snapshot records the effect at capture time, not references into
+    /// a live formula which may change or be poisoned before display.
+    effects: types.effect_solver.Solver,
 
     /// Suspended steps of the snapshot walk, innermost last. The walk descends
     /// on this heap stack rather than the native one, so snapshot depth is
@@ -371,6 +374,7 @@ pub const Store = struct {
         return .{
             .gpa = gpa,
             .contents = try SnapshotContentList.initCapacity(gpa, capacity),
+            .effects = .init(gpa),
             .seen_vars = .empty,
             .frames = .empty,
             .pending_values = try base.Scratch(SnapshotContentIdx).init(gpa),
@@ -412,6 +416,7 @@ pub const Store = struct {
         }
 
         self.contents.deinit(self.gpa);
+        self.effects.deinit();
         self.seen_vars.deinit(self.gpa);
         self.captured_nodes.deinit(self.gpa);
         self.frames.deinit(self.gpa);
@@ -544,6 +549,7 @@ pub const Store = struct {
 
         const frames_base = self.frames.items.len;
         const values_base = self.pending_values.top();
+        self.effects.reset();
         self.captured_nodes.clearRetainingCapacity();
         const capture_mark = self.mark();
         errdefer self.truncateToMark(capture_mark);
@@ -753,7 +759,11 @@ pub const Store = struct {
                 },
                 .fn_pure => |func| return try self.pushFunc(store, fill, .pure, func),
                 .fn_effectful => |func| return try self.pushFunc(store, fill, .effectful, func),
-                .fn_unbound => |func| return try self.pushFunc(store, fill, .unbound, func),
+                .fn_unbound => |func| return self.pushFunc(store, fill, switch (try self.effects.resolve(store, resolved.var_)) {
+                    .pure => .pure,
+                    .effectful => .effectful,
+                    .unresolved => .unbound,
+                }, func),
                 .record => |record| {
                     try self.frames.append(self.gpa, .{ .record = .{
                         .fill = fill,

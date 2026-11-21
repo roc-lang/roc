@@ -1203,6 +1203,15 @@ is not a recursive-path assumption.
 
 Each query defines a finite monotone AND/OR graph: required fields, tuple
 components, and tag payloads are conjunctions; tag alternatives are disjunctions.
+Exhaustiveness and redundancy reason about the same inhabited constructor
+family. Naming a constructor does not cover every payload of that constructor.
+An unknown rigid extension represents possible additional constructors; an
+inference tail may instead close. If another position sharing the tail uses
+a wildcard and keeps it open, coverage must hold with that tail open in both
+positions. A zero-column product has one value, but a
+product with an uninhabited column has none. A guard can fail, so its branch
+is checked for reachability but never contributes unconditional coverage. A
+record rest binds the remainder rather than testing a field.
 Optional fields require no witness. Functions, recovery types, and
 field-presence terms are inhabited leaves. A nominal type has no leaf rule of
 its own: every nominal, builtin or not, is answered by its declared backing
@@ -6035,7 +6044,7 @@ from its low bit:
 |-------|-------|
 | 0-3   | content kind (`ContentKind`) |
 | 4-10  | the flags every kind can hold: `frozen`, `static_dispatch_rejected`, `default_decided`, `nominal_backing_structure`, `bounded_row_ext`, `deferred_callable`, `annotation_tag_ext` |
-| 11-15 | on a flex: `uncommitted_record_tail`, `uncommitted_copy`, `record_pattern_tail`, and the 2-bit literal marker (`Flex.Literal`); on every other kind: `host_fixed_row`, `compared_plain`, `annotation_tag_union`, `uncommitted_tag_tail` |
+| 11-15 | on a flex: its row-tail state (ordinary, tag row, or record tail with its copy/pattern marks) and the 2-bit literal marker (`Flex.Literal`); on every other kind: `host_fixed_row`, `compared_plain`, `annotation_tag_union`, `uncommitted_tag_tail`, `requires_tag_row` |
 | 16-17 | generalization's two scratch marks (`generalizing`, `rank_adjusted`) |
 | 18-31 | the 14-bit rank |
 
@@ -6629,9 +6638,12 @@ changes a layout, so neither costs anything at run time.
 A tag row the checker closes by inference, rather than an annotation
 closing it, ends in an *uncommitted tag tail*: an empty tag union carrying
 `DescriptorFlags.uncommitted_tag_tail`. An exhaustive match closes the
-inferred rows its patterns cover this way (`Check.closeExhaustiveVars`), a
-tag pattern with a closed row (an irrefutable destructure, an unannotated
-lambda's parameter) ends in one. A row a lift or a producer-owned single-tag
+inferred rows its patterns cover this way (`Check.closeExhaustiveVars`).
+An unannotated lambda's parameter pattern first meets its contextual type:
+its nominal backing may include uninhabited alternatives. Any still-inferred
+tag tail the parameter restricts closes before its owning scope quantifies,
+so the published callback cannot accept tags its pattern never handles.
+A tag pattern with a closed row ends in an uncommitted tail. A row a lift or a producer-owned single-tag
 construction closes against an opening of a nominal declaration's backing
 ends in the empty tag union that opening minted
 (`DescriptorFlags.nominal_backing_structure`), and lifts like an uncommitted
@@ -12507,7 +12519,12 @@ annotation by `annotation_implicit_open_exts`) is marked bounded
 bounded row may close or stay open, but the unifier refuses any relation that
 would add a tag to it, before any merge and exactly as a closed row refuses it;
 the bound travels with the row's equivalence class, and joining a tagless row
-hands it to that row's own extension. The refused relation is reported where it
+hands it to that row's own flexible extension. An arbitrary rigid input
+tail cannot satisfy that bound: it may stand for tags the output excludes.
+Separately, a variable used as a tag-row suffix must still be a tag row when
+it is instantiated in another position. A non-row argument is rejected at
+that argument, not during a later audit of the definition's result.
+The refused relation is reported where it
 happens, as a Type Mismatch that names the unlisted tag
 (`tag_not_in_annotation`), and its recovery is the one every rejected relation
 gets: the offending expression becomes a runtime error, and the definition
@@ -13005,6 +13022,12 @@ reported through that type. A copy whose rows settle closed with exactly the
 value's own tags is the value itself, and its record is dropped
 (`Check.settleUnwidenedResults`); a row whose tail is quantified with the
 function's result may widen in a specialization, so its record stays.
+
+The scope of an annotation's rigid variables is independent of this coercion
+reach. An enclosing weak class inside a function or a product cannot acquire
+an annotation-local rigid merely because the annotation is checked first. A
+result relation that would do so rolls back, rejects the producing expression,
+and leaves the enclosing binding available for its other uses.
 
 **Deferred result relations.** The coercion decides from the value's type,
 and a nested annotated function's body can have a type that is not yet
@@ -28879,6 +28902,8 @@ a known constant there and the backend folds the dispatch back to
 straight-line code.
 
 What makes the emitted dispatch certifiable is variant knowledge per path.
+Constructing a tag establishes the runtime discriminant on the tracked value;
+copying the value preserves that evidence without tying it to either local.
 Reading a variant's payload proves the container holds it (anything else is
 already undefined), and a switch arm on a discriminant read of that container
 proves the arm's variant where nothing did before. Arms a proven variant
@@ -28900,7 +28925,9 @@ Only a stamped read carries a claim target, so a borrowed payload read can
 never be mistaken for a take however it crosses the control-flow graph—
 which is also what keeps certification affordable: a stamped taker settles
 its claim at the first quotient where the transfer is fixed and continues as
-an ordinary owned value. A claim target or view that can still be observed
+an ordinary owned value. A quotient cannot settle even a stamped take while
+another relevant borrow still needs the stored unit. Carry the lender and
+selection provenance to the join instead. A claim target or view that can still be observed
 after the quotient remains only in the sparse, hash-consed lifetime
 provenance. A fully claimed container hashes as unbound in walk digests so
 the two sides of a death point re-converge instead of forking. A field read

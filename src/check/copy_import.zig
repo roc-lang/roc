@@ -128,6 +128,7 @@ const Fill = struct {
     compared_plain: bool,
     annotation_tag_union: bool,
     uncommitted_tag_tail: bool,
+    requires_tag_row: bool,
 };
 
 const IdentityResult = enum { flex, rigid };
@@ -389,6 +390,7 @@ fn request(ctx: *CopyContext, source_var: Var) std.mem.Allocator.Error!bool {
         .compared_plain = resolved.desc.flags.compared_plain,
         .annotation_tag_union = resolved.desc.flags.annotation_tag_union,
         .uncommitted_tag_tail = resolved.desc.flags.uncommitted_tag_tail,
+        .requires_tag_row = resolved.desc.flags.requires_tag_row,
     };
 
     // NOTE: a copied var whose content is a flex carrying a literal-conversion
@@ -558,6 +560,7 @@ fn finishFrame(ctx: *CopyContext, fill: Fill, content: Content) std.mem.Allocato
             .compared_plain = fill.compared_plain,
             .annotation_tag_union = fill.annotation_tag_union,
             .uncommitted_tag_tail = fill.uncommitted_tag_tail,
+            .requires_tag_row = fill.requires_tag_row,
         },
     });
     try ctx.scratch.values.append(ctx.allocator, fill.placeholder);

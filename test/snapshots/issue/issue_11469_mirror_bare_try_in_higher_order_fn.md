@@ -296,11 +296,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "(a -> Try(ok, err)), ({} -> Try(ok, err)) -> Try(ok, err) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
+		(patt (type "(a -> Try(_ok, err)), ({} -> Try(ok, err)) -> Try(ok, err) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
 		(patt (type "Error"))
 		(patt (type "Error")))
 	(expressions
-		(expr (type "(a -> Try(ok, err)), ({} -> Try(ok, err)) -> Try(ok, err) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
+		(expr (type "(a -> Try(_ok, err)), ({} -> Try(ok, err)) -> Try(ok, err) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
 		(expr (type "Error"))
 		(expr (type "Error"))))
 ~~~

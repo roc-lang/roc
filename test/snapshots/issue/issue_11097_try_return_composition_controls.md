@@ -748,17 +748,17 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "(c -> Try(ok, err)) -> Try({}, err) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
-		(patt (type "(c -> Try(ok, err)) -> Try({}, [WrappedA(err), WrappedB(err)]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
-		(patt (type "(c -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..err]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
-		(patt (type "(c -> Try(ok, err)), (d -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..err]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)]), d.from_quote : Str -> Try(d, [BadQuotedBytes(Str)])]"))
-		(patt (type "(c -> Try(ok, a)) -> Try({}, [PersistFailed(a), ..a]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
+		(patt (type "(c -> Try(_ok, err)) -> Try({}, err) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
+		(patt (type "(c -> Try(_ok, err)) -> Try({}, [WrappedA(err), WrappedB(err)]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
+		(patt (type "(c -> Try(_ok, err)) -> Try({}, [PersistFailed(err), ..err]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
+		(patt (type "(c -> Try(_ok, err)), (d -> Try(_f, g)) -> Try({}, [PersistFailed(g), ..err]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)]), d.from_quote : Str -> Try(d, [BadQuotedBytes(Str)])]"))
+		(patt (type "(c -> Try(_ok, a)) -> Try({}, [PersistFailed(a), ..a]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
 		(patt (type "(Str -> Try({}, e)) -> Try({}, [PersistFailed(e), ..e])")))
 	(expressions
-		(expr (type "(c -> Try(ok, err)) -> Try({}, err) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
-		(expr (type "(c -> Try(ok, err)) -> Try({}, [WrappedA(err), WrappedB(err)]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
-		(expr (type "(c -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..err]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
-		(expr (type "(c -> Try(ok, err)), (d -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..err]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)]), d.from_quote : Str -> Try(d, [BadQuotedBytes(Str)])]"))
-		(expr (type "(c -> Try(ok, a)) -> Try({}, [PersistFailed(a), ..a]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
+		(expr (type "(c -> Try(_ok, err)) -> Try({}, err) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
+		(expr (type "(c -> Try(_ok, err)) -> Try({}, [WrappedA(err), WrappedB(err)]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
+		(expr (type "(c -> Try(_ok, err)) -> Try({}, [PersistFailed(err), ..err]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
+		(expr (type "(c -> Try(_ok, err)), (d -> Try(_f, g)) -> Try({}, [PersistFailed(g), ..err]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)]), d.from_quote : Str -> Try(d, [BadQuotedBytes(Str)])]"))
+		(expr (type "(c -> Try(_ok, a)) -> Try({}, [PersistFailed(a), ..a]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
 		(expr (type "(Str -> Try({}, e)) -> Try({}, [PersistFailed(e), ..e])"))))
 ~~~

@@ -954,6 +954,17 @@ pub fn assertOneTypeErrorHighlightsWithin(self: *TestEnv, expected_title: []cons
 /// Assert that checking produced a single problem (error or warning) with the
 /// expected title, and that its rendered message contains `expected_substring`.
 pub fn assertOneTypeProblemMsgContains(self: *TestEnv, expected_title: []const u8, expected_substring: []const u8) TestEnvError!void {
+    const rendered = try self.allocOneTypeProblemMsg(expected_title);
+    defer self.gpa.free(rendered);
+
+    if (std.mem.find(u8, rendered, expected_substring) == null) {
+        std.debug.print("expected the report to contain:\n{s}\nbut it was:\n{s}\n", .{ expected_substring, rendered });
+        return error.TestUnexpectedResult;
+    }
+}
+
+/// Render the sole type problem, checking its title. The caller owns the text.
+pub fn allocOneTypeProblemMsg(self: *TestEnv, expected_title: []const u8) TestEnvError![]u8 {
     try self.assertNoParseProblems();
 
     try testing.expectEqual(1, self.checker.problems.problems.items.len);
@@ -971,23 +982,7 @@ pub fn assertOneTypeProblemMsgContains(self: *TestEnv, expected_title: []const u
     defer report_buf.deinit();
 
     try renderReportToMarkdownBuffer(&report_buf, &report);
-
-    const rendered = report_buf.items;
-    const contains = if (expected_substring.len > rendered.len) false else for (0..rendered.len - expected_substring.len + 1) |start| {
-        if (bytesEqual(rendered[start..][0..expected_substring.len], expected_substring)) break true;
-    } else false;
-    if (!contains) {
-        std.debug.print("expected the report to contain:\n{s}\nbut it was:\n{s}\n", .{ expected_substring, report_buf.items });
-        return error.TestUnexpectedResult;
-    }
-}
-
-fn bytesEqual(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |x, y| {
-        if (x != y) return false;
-    }
-    return true;
+    return report_buf.toOwnedSlice();
 }
 
 /// Assert that there was a single type error when checking the input. Assert

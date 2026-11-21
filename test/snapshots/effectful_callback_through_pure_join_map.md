@@ -54,7 +54,7 @@ TYPE MISMATCH - effectful_callback_through_pure_join_map.md:8:8:8:40
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "List(Str => List(Str)), ((a -> c) -> c) -> List(b)")
+			(text "List(Str => List(Str)), ((a -> c) -> c) -> List(_b)")
 			(line-break)
 			(indent 1)
 			(text "  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]")

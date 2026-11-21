@@ -180,7 +180,7 @@ expect f(["a"]) == "x"
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "c -> d where [c.map : c, (item -> e) -> item, d.from_interpolation : List(Str) -> Try(Iter(item) -> d, [InvalidInterpolation(Str)]), e.from_interpolation : List(Str) -> Try(Iter(item) -> e, [InvalidInterpolation(Str)])]")))
+		(patt (type "c -> d where [c.map : c, (item -> e) -> g, d.from_interpolation : List(Str) -> Try(Iter(g) -> d, [InvalidInterpolation(Str)]), e.from_interpolation : List(Str) -> Try(Iter(item) -> e, [InvalidInterpolation(Str)])]")))
 	(expressions
-		(expr (type "c -> d where [c.map : c, (item -> e) -> item, d.from_interpolation : List(Str) -> Try(Iter(item) -> d, [InvalidInterpolation(Str)]), e.from_interpolation : List(Str) -> Try(Iter(item) -> e, [InvalidInterpolation(Str)])]"))))
+		(expr (type "c -> d where [c.map : c, (item -> e) -> g, d.from_interpolation : List(Str) -> Try(Iter(g) -> d, [InvalidInterpolation(Str)]), e.from_interpolation : List(Str) -> Try(Iter(item) -> e, [InvalidInterpolation(Str)])]"))))
 ~~~

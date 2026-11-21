@@ -2214,6 +2214,29 @@ pub const Store = struct {
         try self.setDescWord(resolved.desc_idx, word);
     }
 
+    /// Record the kind of a variable used as an extension. Aliases are
+    /// transparent; a known non-row is rejected by the annotation checker.
+    pub fn requireTagRow(self: *Self, target_var: Var) Allocator.Error!void {
+        var current = target_var;
+        var remaining = self.len();
+        while (remaining > 0) : (remaining -= 1) {
+            const resolved = self.resolveVarWord(current);
+            const flags = resolved.word.flags();
+            if (flags.requires_tag_row) return;
+            switch (resolved.word.kind) {
+                .alias => current = self.aliasBackingVarAt(resolved.desc_idx),
+                .rigid, .flex, .tag_union => {
+                    if (flags.uncommitted_record_tail or flags.frozen) return;
+                    var word = resolved.word;
+                    word.setFlag(.requires_tag_row, true);
+                    try self.setDescWord(resolved.desc_idx, word);
+                    return;
+                },
+                .field_presence, .err, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return,
+            }
+        }
+    }
+
     /// End the bound on a row: a platform-required definition's rows are
     /// released where the platform relates them, and a bound an enclosing
     /// release cleared is applied again for the owners that still hold it.
@@ -2317,6 +2340,7 @@ pub const Store = struct {
     /// Make a tag union data type
     /// Does not insert content into the types store
     pub fn mkTagUnion(self: *Self, tags: []const Tag, ext_var: Var) std.mem.Allocator.Error!Content {
+        try self.requireTagRow(ext_var);
         const tags_range = try self.appendTags(tags);
         const tag_union = TagUnion{ .tags = tags_range, .ext = ext_var };
         return Content{ .structure = .{ .tag_union = tag_union } };
@@ -3432,6 +3456,7 @@ pub const Store = struct {
         flags.annotation_tag_ext = merged_kind == .flex and
             (a_flags.annotation_tag_ext or b_flags.annotation_tag_ext);
         flags.bounded_row_ext = a_flags.bounded_row_ext or b_flags.bounded_row_ext;
+        flags.requires_tag_row = a_flags.requires_tag_row or b_flags.requires_tag_row;
         flags.host_fixed_row = a_flags.host_fixed_row or b_flags.host_fixed_row;
         // A rejected dispatch edge is a fact about the constraint callable's
         // equivalence class, so merging two classes rejects the result if

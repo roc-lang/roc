@@ -73,7 +73,7 @@ const TypeDeclDependency = struct {
     dependency: u32,
 };
 
-const effect_solver = @import("effect_solver.zig");
+const effect_solver = @import("types").effect_solver;
 const FunctionEffectState = effect_solver.State;
 
 const ExpectEffectSlotId = enum(u32) { _ };
@@ -6200,7 +6200,7 @@ fn generalizeRank(self: *Self, env: *Env, roots: []const Var) Allocator.Error!vo
     // are generalized when that scope is.
     if (!env.var_pool.generalizesInnermostScope()) return;
     try self.generalizer.adjust(self.gpa, &env.var_pool, env.rank());
-    var committed = false;
+    var committed = try self.closeOwnedParameterRows(env);
     if (self.generalizer.owned_tails.items.len != 0) {
         const commit_all = self.rootsIncludeProvidedDef(roots);
         var tails: std.ArrayListUnmanaged(Var) = .empty;
@@ -6221,10 +6221,38 @@ fn generalizeRank(self: *Self, env: *Env, roots: []const Var) Allocator.Error!vo
     try self.generalizer.quantify(&env.var_pool, env.rank(), committed);
 }
 
+/// An irrefutable parameter pattern restricts its argument, not the nominal
+/// declaration it may lift into. Let the argument meet its contextual type
+/// first; never quantify an unmatched row tail into the callback's interface.
+fn closeOwnedParameterRows(self: *Self, env: *Env) Allocator.Error!bool {
+    const batch = env.parameter_rows.fetchRemove(env.rank()) orelse return false;
+    var rows = batch.value;
+    defer rows.deinit(self.gpa);
+    var closed = false;
+    for (rows.items) |row| {
+        const tail = self.types.resolveVar(self.tagRowTail(row));
+        if (tail.desc.content != .flex) continue;
+        if (@backingInt(tail.desc.rank) < @backingInt(env.rank())) {
+            if (tail.desc.rank != .generalized) try env.noteParameterRow(self.gpa, tail.desc.rank, tail.var_);
+            continue;
+        }
+        const empty = try self.freshUncommittedTagTail(env, self.getRegionAt(row));
+        _ = try self.unify(tail.var_, empty, env);
+        closed = true;
+    }
+    return closed;
+}
+
 /// Every class instantiating `roots` reaches: their types' components and
 /// the function types of the static-dispatch constraints those components
 /// carry.
 fn collectReachedVars(self: *Self, roots: []const Var, reached: *collections.DenseMapUnmanaged(Var, void)) Allocator.Error!void {
+    return self.collectRelationVars(roots, reached, false);
+}
+
+/// Scope verification includes solver-only dependencies: a rigid must
+/// not escape through a callback's effect formula or a field-kind slot.
+fn collectRelationVars(self: *Self, roots: []const Var, reached: *collections.DenseMapUnmanaged(Var, void), comptime scope: bool) Allocator.Error!void {
     var pending: std.ArrayListUnmanaged(Var) = .empty;
     defer pending.deinit(self.gpa);
     try pending.appendSlice(self.gpa, roots);
@@ -6246,9 +6274,13 @@ fn collectReachedVars(self: *Self, roots: []const Var, reached: *collections.Den
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
                     try pending.appendSlice(self.gpa, self.types.sliceVars(func.args));
                     try pending.append(self.gpa, func.ret);
+                    if (scope) try pending.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
                 },
                 .record => |record| {
-                    for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| try pending.append(self.gpa, presence.typeVar());
+                    for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                        try pending.append(self.gpa, presence.typeVar());
+                        if (scope) if (presence.presenceVar()) |kind| try pending.append(self.gpa, kind);
+                    }
                     try pending.append(self.gpa, record.ext);
                 },
                 .tag_union => |tag_union| {
@@ -8658,6 +8690,8 @@ const TupleAccessResolution = enum { resolved, pending, rejected };
 const Env = struct {
     /// Pool of variables created during solving, use by let-polymorphism
     var_pool: VarPool,
+    /// Pattern-created tag tails, indexed only at ranks with work to do.
+    parameter_rows: std.AutoHashMapUnmanaged(Rank, std.ArrayList(Var)) = .empty,
     /// Deferred static dispatch constraints - accumulated during type checking,
     /// then solved for at the end
     deferred_static_dispatch_constraints: DeferredConstraintCheck.SafeList,
@@ -8699,6 +8733,9 @@ const Env = struct {
     }
 
     fn deinit(self: *Env, gpa: std.mem.Allocator) void {
+        var rows = self.parameter_rows.valueIterator();
+        while (rows.next()) |batch| batch.deinit(gpa);
+        self.parameter_rows.deinit(gpa);
         self.var_pool.deinit();
         self.deferred_static_dispatch_constraints.deinit(gpa);
         self.clean_index.deinit(gpa);
@@ -8719,6 +8756,9 @@ const Env = struct {
 
     /// Resets internal state of env and set rank to generalized
     fn reset(self: *Env, to: Rank) Allocator.Error!void {
+        var rows = self.parameter_rows.valueIterator();
+        while (rows.next()) |batch| batch.deinit(self.var_pool.allocator);
+        self.parameter_rows.clearRetainingCapacity();
         self.var_pool.current_rank = to;
         self.var_pool.clearRetainingCapacity();
         try self.var_pool.ensureRanksThrough(to);
@@ -8728,6 +8768,12 @@ const Env = struct {
 
     fn rank(self: *const Env) Rank {
         return self.var_pool.current_rank;
+    }
+
+    fn noteParameterRow(self: *Env, gpa: Allocator, owner_rank: Rank, row: Var) Allocator.Error!void {
+        const entry = try self.parameter_rows.getOrPut(gpa, owner_rank);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(gpa, row);
     }
 };
 
@@ -26121,7 +26167,7 @@ fn codecDemandRejectsAuditedTag(
 /// position outside the reach is outside it, even when it is also reachable
 /// from a position inside, because the coercion must leave it unchanged at the
 /// outside position.
-fn computeCoercionReach(self: *Self, root: Var) std.mem.Allocator.Error!void {
+fn computeCoercionReach(self: *Self, root: Var, env: *const Env, scope: ?*ResultScope) std.mem.Allocator.Error!void {
     self.coercion_reach_stack.clearRetainingCapacity();
     self.coercion_reach_seen.clearRetainingCapacity();
     self.coercion_outside_stack.clearRetainingCapacity();
@@ -26157,7 +26203,10 @@ fn computeCoercionReach(self: *Self, root: Var) std.mem.Allocator.Error!void {
                 try self.coercion_outside_stack.append(self.gpa, self.types.getAliasBackingVar(alias));
             },
             .structure => |flat| try self.appendCoercionOutsideChildren(flat),
-            .flex, .rigid, .err, .field_presence => {},
+            .flex => if (scope) |s| {
+                if (self.reachedVarEscapesResultRelation(resolved, env)) try s.weak.append(self.gpa, resolved.var_);
+            },
+            .rigid, .err, .field_presence => {},
         }
     }
 }
@@ -26433,8 +26482,8 @@ fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allo
 /// reaches has a fresh open extension, every open row and every position
 /// outside the reach shared with the value. Null when the reach holds no
 /// closed row, so the value's own type is what relates.
-fn widenedClosedRowsCopy(self: *Self, value_var: Var, use_expr: CIR.Expr.Idx, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
-    try self.computeCoercionReach(value_var);
+fn widenedClosedRowsCopy(self: *Self, value_var: Var, use_expr: CIR.Expr.Idx, env: *Env, region: Region, scope: ?*ResultScope) std.mem.Allocator.Error!?Var {
+    try self.computeCoercionReach(value_var, env, scope);
     self.widened_use_copies.clearRetainingCapacity();
     self.widened_kept_tail_rows.clearRetainingCapacity();
     self.widen_closed_rows_only = true;
@@ -26468,7 +26517,7 @@ const ResultWidening = struct {
 /// closed row is widened like any other closed value flowing into a result:
 /// the copy widens the function's result, and the value's own row is
 /// untouched (design.md "Value Rows: Uses Share One Row").
-fn widenResultValue(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env) std.mem.Allocator.Error!?ResultWidening {
+fn widenResultValue(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, scope: *ResultScope) std.mem.Allocator.Error!?ResultWidening {
     try self.judgeRecordDestructBinds(env);
     const rows_start: u32 = @intCast(self.widened_use_rows.items.len);
     const deferred_start: u32 = @intCast(self.deferred_result_relations.items.len);
@@ -26477,6 +26526,7 @@ fn widenResultValue(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env) std.mem.Allo
         expr_idx,
         env,
         self.cir.store.getExprRegion(expr_idx),
+        if (self.result_relation_defers) scope else null,
     ) orelse return null;
     return .{
         .expr_idx = expr_idx,
@@ -29837,6 +29887,7 @@ fn stepTagUnionAnnoGen(self: *Self, frame: *AnnoGenFrame, tag_union: std.meta.fi
         };
     };
 
+    try self.types.requireTagRow(ext_var);
     // Set the anno's type
     try self.unifyWith(
         anno_var,
@@ -30403,7 +30454,11 @@ fn stepTagRow(self: *Self, frame: *TagRowFrame, env: *Env, region: Region) Alloc
                                 return try self.failAliasRow(.tag_union, current, env, region);
                             },
                         },
-                        .flex, .rigid, .field_presence, .err => return .finished,
+                        .flex, .rigid => {
+                            try self.types.requireTagRow(current);
+                            return .finished;
+                        },
+                        .field_presence, .err => return .finished,
                     }
                 }
             },
@@ -30743,6 +30798,7 @@ const RowOpenness = enum { open, closed };
 /// parameter.
 const PatternCtx = struct {
     row_openness: RowOpenness,
+    inferred_parameter: bool = false,
     failure_owner: CIR.Node.Idx,
     /// Whether the pattern's owner relates it to the value it matches and
     /// then calls `settlePendingPatternLiterals`, so its literals may wait
@@ -31021,6 +31077,7 @@ fn stepPatternCheck(
                 .open => try self.fresh(env, pattern_region),
                 .closed => try self.freshUncommittedTagTail(env, pattern_region),
             };
+            if (ctx.inferred_parameter) try env.noteParameterRow(self.gpa, env.rank(), ext_var);
 
             // A match branch's tag pattern asks for its tag without producing
             // it, so its tag is pattern-only (design.md "Pattern-Only Tags").
@@ -35619,7 +35676,10 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
     // This must happen *before* checking against the expected type so all
     // the pattern types are inferred
     const arg_count = lambda.args.span.len;
-    const pattern_ctx: PatternCtx = .{ .row_openness = if (state.mb_anno_func != null) .open else .closed, .failure_owner = ModuleEnv.nodeIdxFrom(task.function_owner) };
+    // Call operands have no independent scheme. Their argument rows meet
+    // the callee's parameter types, even if dispatch is still pending. Do
+    // not close those rows as if the callback were an isolated definition.
+    const pattern_ctx: PatternCtx = .{ .row_openness = .open, .inferred_parameter = state.mb_anno_func == null, .failure_owner = ModuleEnv.nodeIdxFrom(task.function_owner) };
     for (0..arg_count) |i| {
         const pattern_idx = self.cir.store.patternAt(lambda.args, i);
         if (!try self.checkPattern(pattern_idx, pattern_ctx, env)) {
@@ -49455,9 +49515,32 @@ fn relateWidenedResultValue(
 ) std.mem.Allocator.Error!?unifier.Result {
     std.debug.assert(!self.result_relation_defers);
     self.result_relation_defers = target == .annotated;
-    const widening = try self.widenResultValue(actual_expr, env);
+    var scope: ResultScope = .{};
+    defer scope.deinit(self.gpa);
+    const widening = try self.widenResultValue(actual_expr, env, &scope);
     self.result_relation_defers = false;
-    const result = try self.runUnify(expected, (widening orelse return null).wide_var, env, unifyOptionsForContext(ctx, .write_no_report));
+    try self.collectScopeRigids(&scope, expected, env);
+    const related = if (widening) |w| w.wide_var else ModuleEnv.varFrom(actual_expr);
+    if (scope.rigids.items.len != 0) {
+        var probe = try self.beginCommitProbe(env);
+        const result = try probe.unifyInContext(expected, related, ctx);
+        const accepted = result.isAccepted() and (widening == null or try self.liftKeptTailSources(env, ctx)) and !try scope.escapes(self);
+        if (accepted) {
+            try probe.commit();
+            if (widening) |w| try self.recordResultWidening(w, expected, ctx);
+            return result;
+        }
+        probe.rollback();
+        if (widening) |w| self.discardResultWidening(w);
+        const result_expr = self.resultValueExpr(actual_expr);
+        const idx = try self.appendTypeMismatch(expected, ModuleEnv.varFrom(result_expr), self.mismatchContext(ctx, ModuleEnv.varFrom(result_expr)));
+        try self.markErroneousValueExpr(result_expr);
+        self.call_operand_type_error_exprs.items[nodeSlot(result_expr)] = true;
+        self.call_operand_type_error_exprs.items[nodeSlot(actual_expr)] = true;
+        return .{ .problem = idx };
+    }
+    if (widening == null) return null;
+    const result = try self.runUnify(expected, related, env, unifyOptionsForContext(ctx, .write_no_report));
     if (!result.isAccepted()) {
         self.discardResultWidening(widening.?);
         return null;
@@ -49491,6 +49574,46 @@ const ResultTarget = enum {
     /// so it relates the value's type as it stands.
     inferred,
 };
+
+/// Row widening does not cross a function, record or nominal boundary.
+/// Skolem scope does: a nested class owned by the caller cannot acquire a
+/// rigid owned by this annotation. Collect candidates from the outside
+/// positions the row-coercion walk has already visited.
+const ResultScope = struct {
+    weak: std.ArrayList(Var) = .empty,
+    rigids: std.ArrayList(Var) = .empty,
+
+    fn deinit(scope: *ResultScope, gpa: Allocator) void {
+        scope.weak.deinit(gpa);
+        scope.rigids.deinit(gpa);
+    }
+
+    fn escapes(scope: *const ResultScope, checker: *Self) Allocator.Error!bool {
+        if (scope.rigids.items.len == 0) return false;
+        var reachable: collections.DenseMapUnmanaged(Var, void) = .empty;
+        defer reachable.deinit(checker.gpa);
+        try checker.collectRelationVars(scope.weak.items, &reachable, true);
+        for (scope.rigids.items) |rigid| {
+            if (reachable.contains(checker.types.resolveVar(rigid).var_)) return true;
+        }
+        return false;
+    }
+};
+
+fn collectScopeRigids(self: *Self, scope: *ResultScope, expected: Var, env: *Env) Allocator.Error!void {
+    if (scope.weak.items.len != 0) {
+        var reachable: collections.DenseMapUnmanaged(Var, void) = .empty;
+        defer reachable.deinit(self.gpa);
+        try self.collectRelationVars(&.{expected}, &reachable, true);
+        var it = reachable.keyIterator();
+        while (it.next()) |var_| {
+            const resolved = self.types.resolveVar(var_.*);
+            if (resolved.desc.content == .rigid and @backingInt(resolved.desc.rank) >= @backingInt(env.rank())) {
+                try scope.rigids.append(self.gpa, resolved.var_);
+            }
+        }
+    }
+}
 
 /// The target of a return inside the lambda `frame` describes.
 fn returnTargetOf(frame: ReturnConstraintFrame) ResultTarget {
@@ -49587,7 +49710,7 @@ fn dischargeDeferredResultRelation(self: *Self, pending: DeferredResultRelation,
     var probe = try self.beginCommitProbe(env);
     std.debug.assert(!self.result_relation_defers);
     self.result_relation_defers = true;
-    const copy = try self.widenedClosedRowsCopy(pending.escaped, pending.value_expr, env, region);
+    const copy = try self.widenedClosedRowsCopy(pending.escaped, pending.value_expr, env, region, null);
     self.result_relation_defers = false;
     const related = copy orelse pending.escaped;
     var accepted = (try self.runUnify(target, related, env, unifyOptionsForContext(pending.ctx, .write_no_report))).isAccepted();
@@ -65625,10 +65748,10 @@ fn recordRolledBackTypeMismatch(self: *Self, actual: Var, expected: Var, ctx: pr
 /// then always roll back. Nothing in the live solver state is disturbed. A
 /// relation stopped by an already-reported `.err` inside either type is
 /// accepted: that error owns the diagnostic, so the branch adds none.
-fn probeBranchCompatible(self: *Self, body_var: Var, target: Var) std.mem.Allocator.Error!bool {
+fn probeBranchCompatible(self: *Self, body_var: Var, target: Var, scope: *const ResultScope) std.mem.Allocator.Error!bool {
     var probe = try self.beginProbe(null);
     defer probe.rollback();
-    return (try self.probeUnifyResultWithoutRecordingProblems(body_var, target)).isAccepted();
+    return (try self.probeUnifyResultWithoutRecordingProblems(body_var, target)).isAccepted() and !try scope.escapes(self);
 }
 
 /// Record a branch-vs-`mismatch_against` diagnostic (actual = the expression
@@ -65719,13 +65842,16 @@ fn checkBranchBodyAgainstExpected(
     // reported through that own type.
     std.debug.assert(!self.result_relation_defers);
     self.result_relation_defers = target == .annotated;
-    const widening = try self.widenResultValue(body_expr_idx, env);
+    var scope: ResultScope = .{};
+    defer scope.deinit(self.gpa);
+    const widening = try self.widenResultValue(body_expr_idx, env, &scope);
     self.result_relation_defers = false;
     const related_var = if (widening) |w| w.wide_var else body_var;
 
     // Probe (1): does the body match the annotated return type? That relation
     // reads only this branch's value.
-    if (!try self.probeBranchCompatible(related_var, expected_ret)) {
+    try self.collectScopeRigids(&scope, expected_ret, env);
+    if (!try self.probeBranchCompatible(related_var, expected_ret, &scope)) {
         if (widening) |w| self.discardResultWidening(w);
         const previous_relation = try self.enterRelation(.of(.value, body_expr_idx, 0));
         try self.reportBranchMismatchAndPoison(body_expr_idx, expected_ret, ctx);

@@ -171,7 +171,7 @@ is_ok = |result| match result {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "ok -> MyTry(ok, err)"))
+		(patt (type "ok -> MyTry(ok, _err)"))
 		(patt (type "MyTry(_ok, _err) -> Bool")))
 	(type_decls
 		(nominal (type "MyTry(ok, err)")
@@ -180,6 +180,6 @@ is_ok = |result| match result {
 					(ty-rigid-var (name "ok"))
 					(ty-rigid-var (name "err"))))))
 	(expressions
-		(expr (type "ok -> MyTry(ok, err)"))
+		(expr (type "ok -> MyTry(ok, _err)"))
 		(expr (type "MyTry(_ok, _err) -> Bool"))))
 ~~~

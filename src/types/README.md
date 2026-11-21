@@ -16,6 +16,9 @@ This module serves as the backbone for:
 
 The types module is used extensively by the canonicalize, check, and eval stages of the compiler to ensure type safety and provide the necessary type information for compilation and execution.
 
+Rendering observes the same directed effect formulas as checking. A display
+name identifies a resolved type variable within one rendering, including its
+`where` clauses; a source spelling is a preference, not proof of sharing.
 
 The solved store's growing columns are independent reservations so adding
 variables does not repeatedly copy descriptor metadata. Logical indices

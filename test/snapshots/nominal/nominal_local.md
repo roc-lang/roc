@@ -177,12 +177,12 @@ test = |{}| {
 	(defs
 		(patt (type "Str => {}"))
 		(patt (type "_arg -> {}"))
-		(patt (type "{} -> Try(encoded, err)")))
+		(patt (type "{} -> Try(_encoded, _err)")))
 	(type_decls
 		(nominal (type "Utf8Format")
 			(ty-header (name "Utf8Format"))))
 	(expressions
 		(expr (type "Str => {}"))
 		(expr (type "_arg -> {}"))
-		(expr (type "{} -> Try(encoded, err)"))))
+		(expr (type "{} -> Try(_encoded, _err)"))))
 ~~~

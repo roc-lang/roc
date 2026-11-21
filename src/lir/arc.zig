@@ -17915,6 +17915,79 @@ test "RC specialization: owned-only field takes from different parameters into o
     try testing.expectEqual(@as(usize, 2), f.countRc(picked, .incref));
 }
 
+/// A synthetic body that spends one field of a tag's two-string payload.
+fn consumeTagField(f: *ArcTest, tag: LIR.LocalId, index: u32) Allocator.Error!LIR.CFStmtId {
+    const pair = try f.local(f.pair_str);
+    const field = try f.local(.str);
+    const result = try f.local(.i64);
+    const sink = try f.assignCall(result, &.{field}, try f.ret(result));
+    return f.store.addCFStmt(.{ .assign_ref = .{
+        .target = pair,
+        .op = .tagPayloadStruct(tag, 0, 0),
+        .next = try f.assignRefField(field, pair, index, sink),
+    } }, .test_fixture);
+}
+
+test "RC issue 13303 keeps a projected field live through its alias" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const tag_layout = try f.layouts.putTagUnion(&.{f.pair_str});
+    const wrapper_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = tag_layout }});
+
+    // Reading one of the two payload fields benefits from an owned call
+    // when the tag dies, but the base procedure can borrow a live tag.
+    const param = try f.local(tag_layout);
+    const callee = try f.addProc(&.{param}, try consumeTagField(&f, param, 0), .i64);
+
+    const tag = try f.local(tag_layout);
+    const wrapper = try f.local(wrapper_layout);
+    const projected = try f.local(tag_layout);
+    const alias = try f.local(tag_layout);
+    const cond = try f.local(.bool);
+    const wrapper_result = try f.local(.i64);
+    const projected_result = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    // The take in one arm lets dismantle alias the repeated projection.
+    // In the other arm, passing the wrapper and then the projected tag
+    // must leave a unit covering the final read through that alias.
+    const read = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = callee,
+        .args = try f.span(&.{alias}),
+        .next = try f.ret(result),
+    } }, .test_fixture);
+    const use_projected = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = projected_result,
+        .proc = callee,
+        .args = try f.span(&.{projected}),
+        .next = read,
+    } }, .test_fixture);
+    const consume_wrapper = try f.assignCall(wrapper_result, &.{wrapper}, use_projected);
+    const branch = try f.switchStmt(cond, try consumeTagField(&f, projected, 1), consume_wrapper, null);
+    const bind_alias = try f.assignRefField(alias, wrapper, 0, branch);
+    const project = try f.assignRefField(projected, wrapper, 0, bind_alias);
+    const body = try f.assignStruct(wrapper, &.{tag}, project);
+    _ = try f.addProc(&.{ tag, cond }, body, .i64);
+    try f.run();
+
+    // Release builds don't automatically certify. All results here are scalar:
+    // the emitted parameter modes (including variants) fully determine which
+    // calls borrow a unit and which spend one.
+    const sigs = try testing.allocator.alloc(arc_sig.RcSig, f.store.procSpecCount());
+    defer testing.allocator.free(sigs);
+    for (sigs, 0..) |*sig, i| {
+        const proc = f.store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(i)))));
+        sig.* = .{ .borrowed_params = @intCast(proc.rc_borrowed_params) };
+    }
+    var diag: arc_certify.Diagnostic = .{};
+    arc_certify.certifyStore(testing.allocator, &f.store, &f.layouts, .{ .sigs = sigs }, &.{}, &diag) catch |err| {
+        std.debug.print("{s}\n", .{diag.message()});
+        return err;
+    };
+}
+
 test "RC field takes through repeated dominating complete projections" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();

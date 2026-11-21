@@ -17225,6 +17225,10 @@ fn emitStrMatchFindDelimiter(
         try self.emitLocalGet(cursor);
         try self.emitLocalSet(pos);
 
+        // On a partial delimiter match restart after that candidate. `pos`
+        // stays a search position, not the committed pattern cursor.
+        if (delimiter.len > 1) try self.emitVoidLoop();
+
         // Sixteen bytes at a time where vector instructions exist; WebAssembly
         // 1.0 searches byte by byte below.
         if (self.cpu_level != .v1) {
@@ -17302,13 +17306,9 @@ fn emitStrMatchFindDelimiter(
         try self.emitBr(0);
 
         try self.emitOps(.{ Op.end, Op.end, Op.end });
-    }
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-
-    if (delimiter.len > 1) {
-        try self.emitLocalGet(found);
-        try self.emitVoidIf();
-        {
+        if (delimiter.len > 1) {
+            try self.emitLocalGet(found);
+            try self.emitVoidIf();
             const delimiter_matches = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitStaticBytesEqualAtOffset(source_bytes, found_pos, delimiter, delimiter_matches);
 
@@ -17317,11 +17317,16 @@ fn emitStrMatchFindDelimiter(
             try self.emitVoidIf();
             {
                 try self.emitSetI32Local(found, 0);
+                try self.emitLocalGet(found_pos);
+                try self.emitI32Const(1);
+                try self.emitOps(.{Op.i32_add});
+                try self.emitLocalSet(pos);
+                try self.emitBr(2);
             }
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+            try self.emitOps(.{ Op.end, Op.end, Op.end });
         }
-        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     }
+    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 }
 
 fn emitStoreSmallStrMatchCapture(
@@ -17446,7 +17451,19 @@ fn generateStrMatchWithSource(self: *Self, source: StrMatchSourceShape, str_matc
                 try self.emitLocalSet(cursor);
             } else {
                 const found_pos, const found = try self.allocAnonymousLocals(.i32, 2);
-                try self.emitStrMatchFindDelimiter(source.bytes, source.len, cursor, delimiter, found_pos, found);
+                if (delimiter.len > builtins.delimiter.max_inline_len) {
+                    const plan = builtins.delimiter.Plan.init(delimiter);
+                    try self.emitLocalGets(.{ source.bytes, source.len, cursor });
+                    try self.emitDataAddressConst(try self.staticStrDataOffset(step.delimiter.backing), @intCast(step.delimiter.offset));
+                    try self.emitI32Const(@intCast(delimiter.len));
+                    try self.emitI32Const(@intCast(plan.cut));
+                    try self.emitI32Const(@intCast(plan.period));
+                    try self.emitBuiltinCall(BuiltinSignatures.kindOf(.str_find_delimiter));
+                    try self.emitLocalSet(found_pos);
+                    try self.emitLocalGets(.{ found_pos, source.len });
+                    try self.emitOps(.{Op.i32_ne});
+                    try self.emitLocalSet(found);
+                } else try self.emitStrMatchFindDelimiter(source.bytes, source.len, cursor, delimiter, found_pos, found);
 
                 try self.emitLocalGet(found);
                 self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;

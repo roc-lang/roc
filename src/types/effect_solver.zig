@@ -1,4 +1,5 @@
-//! Sparse directed effect solving over the checker's explicit function formulas.
+//! Sparse directed effect solving over explicit function formulas, shared by
+//! type checking and the display of inferred types.
 //!
 //! A session borrows an immutable type graph. Discovery assigns dense slots only
 //! to reachable variables; reverse edges propagate each positive or unresolved
@@ -7,7 +8,7 @@
 
 const std = @import("std");
 const collections = @import("collections");
-const types = @import("types");
+const types = @import("mod.zig");
 
 /// The effect a function type's formula resolves to, ordered by strength.
 pub const State = enum(u2) { pure, unresolved, effectful };

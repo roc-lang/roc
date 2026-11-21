@@ -207,5 +207,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "ok"))
+(expr (type "_ok"))
 ~~~

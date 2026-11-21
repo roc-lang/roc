@@ -1115,6 +1115,12 @@ const Unifier = struct {
             const b = self.types_store.resolveVarWordAndCompressPath(b_var);
             if (a.desc_idx == b.desc_idx) return;
 
+            // Check kind before the plain-flex and same-content fast paths.
+            // The class may occur in another argument or in a result row;
+            // the relation that first fixes it to a non-row owns the error.
+            if (a.word.requiresTagRow()) try self.checkTagRowKind(b);
+            if (b.word.requiresTagRow()) try self.checkTagRowKind(a);
+
             // A deferred requirement callable is linked to its copy before
             // anything relates it.
             if (a.word.flags().deferred_callable or b.word.flags().deferred_callable) {
@@ -1568,6 +1574,27 @@ const Unifier = struct {
         return self.types_store.flagsOf(var_).bounded_row_ext;
     }
 
+    fn checkTagRowKind(self: *Self, other: ResolvedVarWord) Error!void {
+        if (other.word.requiresTagRow()) return;
+        var current = other;
+        var remaining = self.types_store.len();
+        while (remaining > 0) : (remaining -= 1) {
+            switch (current.word.kind) {
+                .flex, .rigid, .tag_union => {
+                    if (current.word.flags().uncommitted_record_tail) return error.TypeMismatch;
+                    // A transparent alias keeps its own spelling. The
+                    // obligation must reach its backing's independent uses.
+                    if (other.word.kind == .alias) try self.types_store.requireTagRow(current.var_);
+                    return;
+                },
+                .alias => current = self.types_store.resolveVarWord(self.types_store.aliasBackingVarAt(current.desc_idx)),
+                .empty_tag_union, .err => return,
+                .field_presence, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return error.TypeMismatch,
+            }
+        }
+        return error.TypeMismatch;
+    }
+
     /// The bounded extension a row reaches along its extension chain, so that
     /// tags added at the end of the chain would extend it; null when the chain
     /// reaches none.
@@ -1588,37 +1615,12 @@ const Unifier = struct {
         base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
     }
 
-    /// The first tag a row carries anywhere along its extension chain.
-    fn firstRowTag(self: *Self, start: Var) ?Ident.Idx {
-        var current = start;
-        var remaining = self.types_store.len();
-        while (remaining > 0) : (remaining -= 1) {
-            switch (self.types_store.resolveVar(current).desc.content) {
-                .alias => |alias| current = self.types_store.getAliasBackingVar(alias),
-                .structure => |flat_type| switch (flat_type) {
-                    .tag_union => |tag_union| {
-                        if (tag_union.tags.count != 0) return self.types_store.tags.get(tag_union.tags.start).name;
-                        current = tag_union.ext;
-                    },
-                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return null,
-                },
-                .flex, .rigid, .field_presence, .err => return null,
-            }
-        }
-        base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
-    }
-
     /// A bounded extension may close or stay open, never gain a tag. Joining
-    /// a tagless row hands the bound to that row's own extension.
+    /// a tagless row hands the bound to its flexible extension. A rigid tail
+    /// is the caller's choice: the definition cannot promise it adds no tags.
     fn refuseTagsIntoBoundedExt(self: *Self, ext: ResolvedVarDesc, other: Var) Error!void {
         if (ext.desc.content != .flex or !ext.desc.flags.bounded_row_ext) return;
-        if (self.firstRowTag(other)) |tag| return self.refuseBoundedRowTag(tag, ext.var_);
-        if (self.rowTail(other)) |tail| try self.types_store.markBoundedRowExt(tail);
-    }
-
-    /// The final extension of a tagless row, if `start` is one.
-    fn rowTail(self: *Self, start: Var) ?Var {
-        var current = start;
+        var current = other;
         var saw_row = false;
         var remaining = self.types_store.len();
         while (remaining > 0) : (remaining -= 1) {
@@ -1626,13 +1628,19 @@ const Unifier = struct {
                 .alias => |alias| current = self.types_store.getAliasBackingVar(alias),
                 .structure => |flat_type| switch (flat_type) {
                     .tag_union => |tag_union| {
+                        if (tag_union.tags.count != 0) return self.refuseBoundedRowTag(self.types_store.tags.get(tag_union.tags.start).name, ext.var_);
                         saw_row = true;
                         current = tag_union.ext;
                     },
-                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return null,
+                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return,
                 },
-                .flex => return if (saw_row) current else null,
-                .rigid, .field_presence, .err => return null,
+                .flex => {
+                    // Direct flex merges already propagate the descriptor flag.
+                    if (saw_row) try self.types_store.markBoundedRowExt(current);
+                    return;
+                },
+                .rigid => return error.TypeMismatch,
+                .field_presence, .err => return,
             }
         }
         base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
@@ -2724,6 +2732,7 @@ const Unifier = struct {
 
     /// A fresh row holding `entries` over `ext`.
     fn freshRow(self: *Self, comptime kind: RowKind, vars: *const ResolvedVarDescs, entries: []const kind.Entry(), ext: Var) std.mem.Allocator.Error!Var {
+        if (kind == .tag_union) try self.types_store.requireTagRow(ext);
         const range = try kind.appendToStore(self.types_store, entries);
         return try self.freshParent(vars, kind.content(kind.row(range, ext)));
     }

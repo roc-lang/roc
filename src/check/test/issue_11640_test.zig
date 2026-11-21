@@ -31,7 +31,7 @@ test "issue 11640 - local recursive closure tail-calls itself after propagating 
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try test_env.assertDefType("f", "Try(ok, err) -> Try(ok, [Bad, ..err])");
+    try test_env.assertDefType("f", "Try(_ok, err) -> Try(_a, [Bad, ..err])");
 }
 
 test "issue 11640 - top-level function tail-calls itself after a ? return" {
@@ -46,7 +46,7 @@ test "issue 11640 - top-level function tail-calls itself after a ? return" {
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try test_env.assertDefType("helper", "{} -> Try(ok, [Bad])");
+    try test_env.assertDefType("helper", "{} -> Try(_ok, [Bad])");
 }
 
 test "issue 11640 - mutually recursive functions tail-call each other after ? returns" {
@@ -66,8 +66,8 @@ test "issue 11640 - mutually recursive functions tail-call each other after ? re
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try test_env.assertDefType("f", "_arg -> Try(ok, [Bad, Other])");
-    try test_env.assertDefType("g", "_arg -> Try(ok, [Bad, Other])");
+    try test_env.assertDefType("f", "_arg -> Try(_ok, [Bad, Other])");
+    try test_env.assertDefType("g", "_arg -> Try(_ok, [Bad, Other])");
 }
 
 test "issue 11640 - local closure tail-calls its enclosing function after a ? return" {
@@ -85,7 +85,7 @@ test "issue 11640 - local closure tail-calls its enclosing function after a ? re
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try test_env.assertDefType("f", "_arg -> Try(ok, [A])");
+    try test_env.assertDefType("f", "_arg -> Try(_ok, [A])");
 }
 
 test "issue 11640 - closure tail-calling its enclosing function adds nothing to that function's errors" {
@@ -124,7 +124,7 @@ test "issue 11640 - body re-wraps the error of a recursive call after a ? return
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try test_env.assertDefType("f", "_arg -> Try(ok, [A])");
+    try test_env.assertDefType("f", "_arg -> Try(_ok, [A])");
 }
 
 test "issue 11640 - ? return then a tail method call whose target is checked at the caller's boundary" {
