@@ -411,19 +411,31 @@ test "issue 13291 - missing nested payload on an open union result" {
     try test_env.assertOneTypeProblemMsgContains("Non Exhaustive Match", "(A(Y), False)");
 }
 
-test "issue 13291 - a partial wildcard keeps an open remainder but does not cover it" {
-    const body =
+test "issue 13291 - a partial wildcard leaves an inferred tail closed to the named tags" {
+    const source =
         \\pick = |tag, flag| match (tag, flag) {
         \\    (A, _) => 1.U64
         \\    (_, True) => 2.U64
         \\}
         \\example = |_| pick(B, False)
     ;
-    inline for (.{ "", "pick : [A, ..], Bool -> U64\n" }) |annotation| {
-        var env = try TestEnv.init("Test", annotation ++ body);
-        defer env.deinit();
-        try env.assertOneTypeError("Non Exhaustive Match");
-    }
+    var env = try TestEnv.init("Test", source);
+    defer env.deinit();
+    try env.assertOneTypeErrorHighlightsWithin("Type Mismatch", .{ .line = 5, .start_column = 20, .end_column = 22 });
+}
+
+test "issue 13291 - a partial wildcard does not cover an annotated open remainder" {
+    const source =
+        \\pick : [A, ..], Bool -> U64
+        \\pick = |tag, flag| match (tag, flag) {
+        \\    (A, _) => 1.U64
+        \\    (_, True) => 2.U64
+        \\}
+        \\example = |_| pick(B, False)
+    ;
+    var env = try TestEnv.init("Test", source);
+    defer env.deinit();
+    try env.assertOneTypeError("Non Exhaustive Match");
 }
 
 test "exhaustive - tuple with Try" {
@@ -1718,4 +1730,81 @@ test "a top-level value's undecided Box(_) Err payload closes to Box([]) like a 
 
         try test_env.assertDefType("x", "Try(Str, " ++ wrapper[1] ++ "([]))");
     }
+}
+
+test "exhaustive - a call result's tags covered around a wildcard row" {
+    const source =
+        \\pick : U8 -> [A, B]
+        \\pick = |n| if n == 0 A else B
+        \\
+        \\describe : U8 -> U8
+        \\describe = |n|
+        \\    match (pick(n), n) {
+        \\        (A, _) => 1
+        \\        (_, 0) => 2
+        \\        (B, _) => 3
+        \\    }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "exhaustive - call results' nested tags covered beside a guarded row" {
+    const source =
+        \\held : U8 -> Try([A, B], Str)
+        \\held = |n| if n == 0 Ok(A) else Ok(B)
+        \\
+        \\digest : U8 -> Try(U8, [NoDigest])
+        \\digest = |n| Ok(n)
+        \\
+        \\describe : U8 -> U8
+        \\describe = |n|
+        \\    match (held(n), digest(n)) {
+        \\        (Ok(A), _) => 1
+        \\        (Ok(B), _) => 2
+        \\        (Err(message), _) if message != "not held" => 3
+        \\        (_, Ok(x)) => x
+        \\        (_, Err(NoDigest)) => 4
+        \\    }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "non-exhaustive - an inferred tail a wildcard row misses closes" {
+    const source =
+        \\describe = |g, n|
+        \\    match (g, n) {
+        \\        (A, _) => 1
+        \\        (_, 0) => 2
+        \\        (B, _) => 3
+        \\    }
+        \\
+        \\result = describe(C, 5)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "exhaustive - a wildcard covering an inferred tail keeps it open" {
+    const source =
+        \\describe = |g|
+        \\    match g {
+        \\        A => 1
+        \\        _ => 2
+        \\    }
+        \\
+        \\result : U8
+        \\result = describe(C)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
 }

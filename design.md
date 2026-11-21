@@ -1208,7 +1208,10 @@ family. Naming a constructor does not cover every payload of that constructor.
 An unknown rigid extension represents possible additional constructors; an
 inference tail may instead close. If another position sharing the tail uses
 a wildcard and keeps it open, coverage must hold with that tail open in both
-positions. A zero-column product has one value, but a
+positions. A wildcard keeps the tail open only if the rows cover its open
+alternative; when some combination of the open alternative is missed, the
+match closes the tail at every position sharing it, as it closes a tail whose
+tags every row names. A zero-column product has one value, but a
 product with an uninhabited column has none. A guard can fail, so its branch
 is checked for reachability but never contributes unconditional coverage. A
 record rest binds the remainder rather than testing a field.

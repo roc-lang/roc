@@ -3042,6 +3042,10 @@ const ExhaustiveCtx = struct {
     ext_vars_to_close: *std.ArrayList(Var),
     ext_vars_to_keep_open: *std.ArrayList(Var),
     kept_open: *const collections.DenseMapUnmanaged(Var, void),
+    /// Inference tails this check closes because coverage needs them closed.
+    closed_for_coverage: *const collections.DenseMapUnmanaged(Var, void),
+    /// Inference tails whose open alternative some row of the walk misses.
+    open_misses: *std.ArrayList(Var),
 };
 
 /// One specialized matrix to check.
@@ -3134,6 +3138,10 @@ pub fn checkExhaustiveSketched(
 ) PatternResolveError!MissingRows {
     var kept_open: collections.DenseMapUnmanaged(Var, void) = .empty;
     defer kept_open.deinit(allocator);
+    var closed_for_coverage: collections.DenseMapUnmanaged(Var, void) = .empty;
+    defer closed_for_coverage.deinit(allocator);
+    var open_misses: std.ArrayList(Var) = .empty;
+    defer open_misses.deinit(allocator);
     const ctx: ExhaustiveCtx = .{
         .allocator = allocator,
         .type_store = type_store,
@@ -3141,18 +3149,33 @@ pub fn checkExhaustiveSketched(
         .ext_vars_to_close = ext_vars_to_close,
         .ext_vars_to_keep_open = ext_vars_to_keep_open,
         .kept_open = &kept_open,
+        .closed_for_coverage = &closed_for_coverage,
+        .open_misses = &open_misses,
     };
     // A wildcard in one specialization can keep open a tail that another
     // specialization assumed it could close. Only replay if a newly
     // discovered keep-open fact invalidated an actual closure assumption.
+    // A wildcard keeps an inference tail open only where it covers the
+    // tail's open alternative. When some row misses that alternative, the
+    // match closes the tail at every position sharing it, and the walk
+    // replays with the tail closed.
     while (true) {
         ext_vars_to_close.clearRetainingCapacity();
         ext_vars_to_keep_open.clearRetainingCapacity();
+        open_misses.clearRetainingCapacity();
         const missing = try walkExhaustiveness(ctx, matrix, column_types, constructed_tags);
+        if (missing.len != 0) {
+            var closed_more = false;
+            for (open_misses.items) |ext| {
+                const entry = try closed_for_coverage.getOrPut(allocator, ext);
+                if (!entry.found_existing) closed_more = true;
+            }
+            if (closed_more) continue;
+        }
         if (ext_vars_to_close.items.len == 0 or ext_vars_to_keep_open.items.len == 0) return missing;
         for (ext_vars_to_keep_open.items) |ext| try kept_open.put(allocator, ext, {});
         for (ext_vars_to_close.items) |ext| {
-            if (kept_open.contains(ext)) break;
+            if (kept_open.contains(ext) and !closed_for_coverage.contains(resolveRoot(type_store, ext))) break;
         } else return missing;
     }
 }
@@ -3245,7 +3268,8 @@ fn exhaustiveEnter(
             // If the union is open and has wildcards, mark its ext var as
             // keep-open to prevent a different specialized branch from closing it.
             const flex = ctor_info.union_info.flex_extension;
-            if (flex) |ext| if (ctor_info.has_wildcards) try ctx.ext_vars_to_keep_open.append(allocator, ext);
+            const closed_for_coverage = if (flex) |ext| ctx.closed_for_coverage.contains(resolveRoot(type_store, ext)) else false;
+            if (flex) |ext| if (ctor_info.has_wildcards and !closed_for_coverage) try ctx.ext_vars_to_keep_open.append(allocator, ext);
 
             // Detect exhaustive open unions: all real tags covered, no wildcards.
             // The only "missing" constructor is the synthetic #Open.
@@ -3260,9 +3284,11 @@ fn exhaustiveEnter(
             else
                 ctor_info.union_info.alternatives;
             var all_inhabited_real_ctors_found = true;
-            const can_close = flex != null and !ctor_info.has_wildcards and !ctx.kept_open.contains(flex.?);
+            const can_close = closed_for_coverage or (flex != null and !ctor_info.has_wildcards and !ctx.kept_open.contains(flex.?));
             const omit_open = has_open_synthetic and (can_close or close_open_extension);
-            if (can_close) {
+            if (closed_for_coverage) {
+                try ctx.ext_vars_to_close.append(allocator, flex.?);
+            } else if (can_close) {
                 for (real_alternatives) |alt| {
                     if (ctor_info.found_set.contains(alt.tag_id)) continue;
                     if (ctorNeverConstructed(call.constructed_tags, ctor_info.union_info, alt)) continue;
@@ -3334,6 +3360,12 @@ fn exhaustiveResume(
         .ctors => |*ctors| {
             if (input) |rows| {
                 const alt = ctors.alt;
+                if (rows.len != 0 and ctors.union_info.render_as == .tag and switch (alt.name) {
+                    .tag => |tag| tag.isNone(),
+                    .opaque_type => false,
+                }) {
+                    if (ctors.union_info.flex_extension) |ext| try ctx.open_misses.append(allocator, resolveRoot(ctx.type_store, ext));
+                }
                 for (rows) |missing| {
                     const split = splitMissingRow(missing, alt.arity, ctors.column_types.len());
                     const missing_pattern = Pattern{ .ctor = .{
