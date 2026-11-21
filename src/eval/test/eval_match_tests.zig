@@ -709,6 +709,51 @@ pub const tests = [_]TestCase{
         .expected = .{ .problem = {} },
     },
 
+    .{
+        .name = "issue 13302: string capture ends at the first complete delimiter",
+        .source_kind = .module,
+        .source =
+        \\split : Str -> Str
+        \\split = |s| match s {
+        \\    "${x}--${y}" => "${x}|${y}"
+        \\    _ => "miss"
+        \\}
+        \\
+        \\main = split("a-b--c")
+        ,
+        .expected = .{ .inspect_str = "\"a-b|c\"" },
+    },
+
+    .{
+        .name = "issue 13302: overlapping delimiter candidates cross scan words",
+        .source_kind = .module,
+        .source =
+        \\split : Str -> Str
+        \\split = |s| match s {
+        \\    "${x}aab${y}" => "${x}|${y}"
+        \\    _ => "miss"
+        \\}
+        \\
+        \\main = split("01234567890123aaab")
+        ,
+        .expected = .{ .inspect_str = "\"01234567890123a|\"" },
+    },
+
+    .{
+        .name = "issue 13302: long delimiters preserve captures after a partial match",
+        .source_kind = .module,
+        .source =
+        \\split : Str -> Str
+        \\split = |s| match s {
+        \\    "${x}aaaaaaaaaaaaaaaaab${y}" => "${x}|${y}"
+        \\    _ => "miss"
+        \\}
+        \\
+        \\main = split("preaaaaaaaaaaaaaaaaacaaaaaaaaaaaaaaaaabpost")
+        ,
+        .expected = .{ .inspect_str = "\"preaaaaaaaaaaaaaaaaac|post\"" },
+    },
+
     // Regression coverage for the chain's string-group hazard: a guard failure
     // inside a string arm must retry later branches with the same string
     // pattern in source order (the deleted group special case jumped past the

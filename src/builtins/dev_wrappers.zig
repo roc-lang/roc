@@ -387,6 +387,12 @@ pub fn roc_builtins_str_substring_unsafe(out: *RocStr, str_bytes: ?[*]u8, str_le
     out.* = str.substringUnsafeC(s, start, length, roc_ops);
 }
 
+/// Search borrowed bytes with the literal's compiled Two-Way plan.
+pub fn roc_builtins_str_find_delimiter(bytes: [*]const u8, len: usize, start: usize, needle: [*]const u8, needle_len: usize, cut: usize, period: usize) callconv(.c) usize {
+    const plan = @import("delimiter.zig").Plan{ .cut = cut, .period = period };
+    return plan.find(bytes[0..len], start, needle[0..needle_len]);
+}
+
 /// Wrapper: splitFirst(RocStr, RocStr, *RocOps) -> { before, found, after }
 pub fn roc_builtins_str_split_first(out: *anyopaque, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, layout: *const StrSplitFirstLayout) callconv(.c) void {
     const roc_ops = in_process_host.ops();

@@ -8950,8 +8950,18 @@ pub const MonoLlvmCodeGen = struct {
         if (delimiter.len == 0) return;
         const builder, const wip = try self.builderAndWip();
         const usize_ty = self.ptrSizedIntType();
-        const width = self.strMatchScanWidth();
         const delimiter_len = builder.intValue(usize_ty, delimiter.len) catch return error.OutOfMemory;
+        if (delimiter.len > builtins.delimiter.max_inline_len) {
+            const plan = builtins.delimiter.Plan.init(delimiter);
+            const ptr = try self.ptrType();
+            const pos = try self.callBuiltin(.str_find_delimiter, usize_ty, &.{ ptr, usize_ty, usize_ty, ptr, usize_ty, usize_ty, usize_ty }, &.{
+                bytes,                                                               len,                                                                    try self.loadUsize(cursor_ptr), try self.staticBytes(delimiter), delimiter_len,
+                builder.intValue(usize_ty, plan.cut) catch return error.OutOfMemory, builder.intValue(usize_ty, plan.period) catch return error.OutOfMemory,
+            });
+            try self.emitStrMatchFailIf(wip.icmp(.eq, pos, len, "") catch return error.OutOfMemory, miss_block);
+            return self.storeUsize(cursor_ptr, pos);
+        }
+        const width = self.strMatchScanWidth();
         try self.emitStrMatchFailIf(wip.icmp(.ult, len, delimiter_len, "") catch return error.OutOfMemory, miss_block);
         const limit = wip.bin(.sub, len, delimiter_len, "") catch return error.OutOfMemory;
 
@@ -8996,10 +9006,17 @@ pub const MonoLlvmCodeGen = struct {
 
         wip.cursor = .{ .block = found_block };
         if (delimiter.len > 1) {
+            const retry_block = wip.block(0, "str_match_scan_retry") catch return error.OutOfMemory;
             const found_cursor = try self.loadUsize(cursor_ptr);
             const found_candidate = try self.offsetPtrValue(bytes, found_cursor);
             const tail_ptr = try self.offsetPtrValue(found_candidate, builder.intValue(usize_ty, 1) catch return error.OutOfMemory);
-            try self.emitStrMatchCompareLiteral(tail_ptr, delimiter[1..], miss_block);
+            try self.emitStrMatchCompareLiteral(tail_ptr, delimiter[1..], retry_block);
+            const matched = wip.cursor;
+            wip.cursor = .{ .block = retry_block };
+            const next = wip.bin(.add, found_cursor, builder.intValue(usize_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+            try self.storeUsize(cursor_ptr, next);
+            _ = wip.br(decide_block) catch return error.OutOfMemory;
+            wip.cursor = matched;
         }
     }
 
