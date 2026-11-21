@@ -374,6 +374,7 @@ pub const ProcedureUse = struct {
     external_call_owner: ?SpecFnId = null,
     value_refs: usize = 0,
     contains_return: bool = false,
+    is_root: bool = false,
 };
 
 /// The use of every spec function, counted as SpecConstr counts uses of
@@ -398,6 +399,7 @@ pub fn procedureUsage(
             .external_call_owner = if (use.external_call_owner) |owner| @fromBackingInt(@backingInt(owner)) else null,
             .value_refs = use.value_refs,
             .contains_return = use.contains_return,
+            .is_root = use.is_root,
         };
         return uses;
     }
@@ -456,7 +458,7 @@ pub fn procedureUsage(
             },
         };
     }
-    for (program_lifted.rootsView()) |root| uses[@backingInt(root.fn_id)].value_refs += 1;
+    for (program_lifted.rootsView()) |root| uses[@backingInt(root.fn_id)].is_root = true;
     return uses;
 }
 

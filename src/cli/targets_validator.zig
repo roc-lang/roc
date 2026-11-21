@@ -242,11 +242,11 @@ pub fn createValidationReport(
 
             try report.document.addText("The targets section declares:");
             try report.document.addLineBreak();
-            try report.document.addText("  - `files`: Directory containing target-specific files");
+            try report.document.addText("  - `inputs_dir`: Directory containing target-specific files");
             try report.document.addLineBreak();
-            try report.document.addText("  - `exe`: Targets that build executables");
+            try report.document.addText("  - Each target has its own entry, such as `arm64mac`");
             try report.document.addLineBreak();
-            try report.document.addText("  - Each target lists files to link in order, with `app` for the Roc application");
+            try report.document.addText("  - `inputs`: Files to link in order, with `app` for the Roc application");
             try report.document.addLineBreak();
 
             return report;

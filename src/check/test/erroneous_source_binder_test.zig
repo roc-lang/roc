@@ -24,6 +24,73 @@ test "a name unwrapped by `?` from an erroneous value adds no method report" {
     , "Name Not In Scope");
 }
 
+test "error recovery: direct rejected try payload" {
+    try expectOnlyCanError("size = || Ok(unknown?.len())", "Name Not In Scope");
+}
+
+test "error recovery: no branch supplies a receiver" {
+    try expectOnlyCanError(
+        \\size = |b| {
+        \\    x = unknown
+        \\    v = if b x else x
+        \\    v.len()
+        \\}
+    , "Name Not In Scope");
+    try expectOnlyCanError(
+        \\size = |b| {
+        \\    x = unknown
+        \\    v = match b {
+        \\        Bool.True => x
+        \\        Bool.False => x
+        \\    }
+        \\    v.len()
+        \\}
+    , "Name Not In Scope");
+}
+
+test "error recovery: late rejected try payload has no receiver" {
+    var env = try TestEnv.init("Test",
+        \\size = || {
+        \\    s = "abc"
+        \\    Ok(s?.len())
+        \\}
+    );
+    defer env.deinit();
+    try env.assertTypeErrorTitles(&.{"Type Mismatch"});
+}
+
+test "error recovery: a valid sibling or annotation still supplies a receiver" {
+    const sources = .{
+        "run = |b| (if b unknown else [1.U64]).no_such()",
+        "run = |b| {\n v : U64\n v = if b unknown else unknown\n v.no_such()\n}",
+    };
+    inline for (sources) |source| {
+        var env = try TestEnv.init("Test", source);
+        defer env.deinit();
+        try env.assertTypeErrorTitles(&.{"Missing Method"});
+    }
+}
+
+test "error recovery: short circuit warnings respect the evaluated operand" {
+    const cases = .{
+        .{ "if unknown and Bool.True 1 else 0", false },
+        .{ "if unknown or Bool.False 1 else 0", false },
+        .{ "if Bool.True and unknown 1 else 0", false },
+        .{ "if Bool.False or unknown 1 else 0", false },
+        .{ "if Bool.False and unknown 1 else 0", true },
+        .{ "if Bool.True or unknown 1 else 0", true },
+        .{ "{ b = unknown and Bool.True\n if b 1 else 0 }", false },
+    };
+    inline for (cases) |case| {
+        var env = try TestEnv.init("Test", "choose = || " ++ case[0]);
+        defer env.deinit();
+        try env.assertOneCanError("Name Not In Scope");
+        errdefer std.debug.print("short-circuit case: {s}\n", .{case[0]});
+        try std.testing.expectEqual(@as(usize, @intFromBool(case[1])), env.checker.problems.problems.items.len);
+        if (case[1]) try std.testing.expect(env.checker.problems.problems.items[0] == .comptime_condition);
+    }
+}
+
 test "a match branch binder of an erroneous scrutinee adds no method report" {
     try expectOnlyCanError(
         \\run = |x| {

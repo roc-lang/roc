@@ -69,7 +69,6 @@ pub const Counters = struct {
     /// Relation requests whose settled parametric instantiations were captured as holes.
     interface_parametric_requests: u64 = 0,
     interface_summary_expansions: u64 = 0,
-    interface_summary_verifications: u64 = 0,
     interface_relation_requests: u64 = 0,
     interface_replay_hits: u64 = 0,
     interface_closed_expansions: u64 = 0,

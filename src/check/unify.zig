@@ -124,19 +124,11 @@ const RawMismatchEvidence = struct {
     local_context: ?types_mod.NominalDecl.Idx = null,
 };
 
-/// Exact checker evidence produced when a fresh record construction omits a
-/// defaulted field through width absorption. `record_var` is the original
-/// source-backed variable for the empty record operand, before union-find
-/// resolution can redirect it away from its expression node.
+/// The whole record on the absorbing side, not its row extension or an outer literal.
 pub const AbsorbedRecordDefault = struct {
     record_var: Var,
     name: Ident.Idx,
     default: types_mod.DefaultId,
-    /// The record pair enclosing this absorption, when it happened inside a
-    /// record-vs-record relation. One side is the construction whose omission
-    /// this default fills.
-    enclosing_records: ?[2]Var,
-
     pub const SafeList = MkSafeList(@This());
 };
 
@@ -200,11 +192,6 @@ pub const Env = struct {
     type_writer: *types_mod.TypeWriter,
     unify_scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
-    /// Answers whether a var is the type var of a record-construction
-    /// expression. A defaulted field's value is materialized at the
-    /// construction that omitted it, so absorbing a defaulted row into an empty
-    /// one is only meaningful when such a construction owns the omission.
-    construction_probe: ?ConstructionProbe = null,
     /// Links a deferred requirement callable to its copy before the unifier
     /// relates it (design.md "Whole-use replay").
     deferred_callables: ?DeferredCallableHook = null,
@@ -230,17 +217,6 @@ pub const DeferredCallableHook = struct {
     /// Links every deferred callable not yet linked, before an error report
     /// snapshots types that may reach them.
     link_all: *const fn (ctx: *anyopaque) std.mem.Allocator.Error!void,
-};
-
-/// Lets the unifier ask the checker whether a var belongs to a record
-/// construction, without the unifier itself depending on the CIR.
-pub const ConstructionProbe = struct {
-    ctx: *const anyopaque,
-    isRecordConstruction: *const fn (ctx: *const anyopaque, var_: Var) bool,
-
-    fn matches(self: ConstructionProbe, var_: Var) bool {
-        return self.isRecordConstruction(self.ctx, var_);
-    }
 };
 
 /// The semantic relation applied to the initial pair of a unification call.
@@ -347,11 +323,6 @@ pub const Options = struct {
     /// type, so a mismatch is reported as that type needing two different
     /// methods of one name.
     method_requirements: ?MethodRequirements = null,
-    /// Source-backed record construction whose omission decisions this
-    /// relation owns. The checker publishes successful default absorptions
-    /// against this exact expression when the empty row operand is an
-    /// internal extension variable rather than the expression's own var.
-    record_construction_var: ?Var = null,
     /// What a relation does when a row repeats a label whose occurrences do
     /// not relate.
     repeated_label_rows: RepeatedLabelRows = .mismatch,
@@ -409,10 +380,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         opts.row_width_relation,
         opts.field_presence_relation,
         opts.nominal_record_mismatch_role,
-        env.construction_probe,
-        opts.record_construction_var,
     );
-    unifier.root_operands = .{ a, b };
     unifier.deferred_callables = env.deferred_callables;
     const root_mismatch: MismatchHandling = if (opts.method_requirements) |requirements| .{ .record_method_conflict = .{
         .method_name = requirements.method_name,
@@ -496,8 +464,6 @@ pub fn relateFunctionKind(env: *const Env, kind_source: Var, target: Var) std.me
         .construction,
         .ordinary,
         .none,
-        env.construction_probe,
-        null,
     );
     const vars = ResolvedVarDescs{
         .a = env.types.resolveVar(kind_source),
@@ -644,14 +610,7 @@ const Unifier = struct {
     /// rather than the literal's own var; the enclosing pair is how the checker
     /// gets back to the construction expression that owns the omission.
     enclosing_records: ?[2]Var,
-    construction_probe: ?ConstructionProbe,
-    record_construction_var: ?Var,
     deferred_callables: ?DeferredCallableHook = null,
-    /// The operands this unification started from. They are the outermost
-    /// candidates for owning an absorbed omission, and keep the absorption gate
-    /// in step with how the checker later attributes it.
-    root_operands: ?[2]Var,
-
     /// Init unifier
     pub fn init(
         ident_store: *const Ident.Store,
@@ -662,8 +621,6 @@ const Unifier = struct {
         row_width_relation: RowWidthRelation,
         field_presence_relation: FieldPresenceRelation,
         nominal_record_mismatch_role: NominalRecordMismatchRole,
-        construction_probe: ?ConstructionProbe,
-        record_construction_var: ?Var,
     ) Unifier {
         return .{
             .ident_store = ident_store,
@@ -677,28 +634,7 @@ const Unifier = struct {
             .unresolved_a = null,
             .unresolved_b = null,
             .enclosing_records = null,
-            .construction_probe = construction_probe,
-            .record_construction_var = record_construction_var,
-            .root_operands = null,
         };
-    }
-
-    /// Whether some record construction owns an omission absorbed at this point.
-    /// Without a probe the checker is not tracking constructions, so absorption
-    /// keeps its prior behavior.
-    fn absorptionOwnerExists(self: *const Self, record_var: Var) bool {
-        const probe = self.construction_probe orelse return true;
-        if (probe.matches(record_var)) return true;
-        if (self.enclosing_records) |pair| {
-            if (probe.matches(pair[1]) or probe.matches(pair[0])) return true;
-        }
-        if (self.record_construction_var) |owner| {
-            if (probe.matches(owner)) return true;
-        }
-        if (self.root_operands) |pair| {
-            if (probe.matches(pair[1]) or probe.matches(pair[0])) return true;
-        }
-        return false;
     }
 
     fn getTypeIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
@@ -3063,7 +2999,6 @@ const Unifier = struct {
                         .record_var = record_var,
                         .name = field.name,
                         .default = default,
-                        .enclosing_records = self.enclosing_records,
                     });
                 },
                 .required => unreachable, // validateAbsorbableRecordRow rejects required presences before recording
@@ -3204,8 +3139,15 @@ const Unifier = struct {
                         return error.TypeMismatch;
                     }
                     if (self.row_width_relation == .exact) return error.TypeMismatch;
-                    try self.validateAbsorbableRecordRow(record.fields, record.ext, self.absorptionOwnerExists(tail_var));
-                    try self.recordAbsorbedRecordDefaults(tail_var, record.fields, record.ext);
+                    // Only a construction (not a pattern or generalized copy) can
+                    // provide a default. The row relation names its whole record;
+                    // the extension's variable does not identify a literal.
+                    const owner: ?Var = if (self.enclosing_records) |pair|
+                        if (tail.desc.flags.record_pattern_tail) null else pair[@intFromBool(side == .b)]
+                    else
+                        null;
+                    try self.validateAbsorbableRecordRow(record.fields, record.ext, owner != null);
+                    if (owner) |whole| try self.recordAbsorbedRecordDefaults(whole, record.fields, record.ext);
                 }
                 try self.recordDeferredConstraintOn(tail_var, constraints);
                 const rest = try self.types_store.register(.{
@@ -5262,7 +5204,7 @@ pub fn partitionRow(
     a_range: kind.Entry().SafeList.Range,
     b_range: kind.Entry().SafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedRow(kind) {
-    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, .none, null, null);
+    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, .none);
     return try unifier.partitionRow(kind, scratch, a_range, b_range);
 }
 

@@ -339,7 +339,20 @@ test "non-exhaustive - nested Try missing inner Err" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("Non Exhaustive Match");
+    try test_env.assertOneTypeProblemMsgContains("Non Exhaustive Match", "Ok(Err(_))");
+}
+
+test "non-exhaustive - missing tag with multiple payloads" {
+    const source =
+        \\classify : [Empty, Pair(Bool, Bool)] -> Str
+        \\classify = |value| match value {
+        \\    Empty => "empty"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeProblemMsgContains("Non Exhaustive Match", "Pair(_, _)");
 }
 
 // Tuple exhaustiveness

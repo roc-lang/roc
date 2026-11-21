@@ -898,6 +898,8 @@ pub const GeneralizationNestingTooDeep = struct {
 
 /// A conditional expression was known while checking, so it will always make the same choice.
 pub const ComptimeCondition = struct {
+    /// The checked value whose evaluation must succeed for this warning to stand.
+    expr: CIR.Expr.Idx,
     kind: enum {
         if_condition,
         if_guard,
