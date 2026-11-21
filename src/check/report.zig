@@ -6385,7 +6385,7 @@ pub const ReportBuilder = struct {
         }
 
         const name = name_text orelse return report;
-        const type_text = self.source[data.type_region.start.offset..data.type_region.end.offset];
+        const type_text = self.problems.getExtraString(data.thunk_result);
         const rhs_text = self.source[data.rhs_region.start.offset..data.rhs_region.end.offset];
 
         try report.document.addLineBreak();
