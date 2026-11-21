@@ -1949,30 +1949,19 @@ pub fn decode(b: *body.Builder, recipe: []const u8) Allocator.Error!Decoded {
 
 test "stored type metadata preserves field defaults across module reindexing" {
     const allocator = std.testing.allocator;
-    var source: Program = undefined;
-    source.allocator = allocator;
-    source.modules = .{ .allocator = allocator };
-    defer source.modules.deinit();
-    source.store = types.Store.init(allocator);
-    defer source.store.deinit();
-    var destination: Program = undefined;
-    destination.allocator = allocator;
-    destination.modules = .{ .allocator = allocator };
-    defer destination.modules.deinit();
-    destination.store = types.Store.init(allocator);
-    defer destination.store.deinit();
-    destination.arena = std.heap.ArenaAllocator.init(allocator);
-    defer destination.arena.deinit();
+    var source_program: lower.TestProgram = undefined;
+    try source_program.init(allocator, .program);
+    defer source_program.deinit();
+    const source = source_program.program;
+    var destination_program: lower.TestProgram = undefined;
+    try destination_program.init(allocator, .program);
+    defer destination_program.deinit();
+    const destination = destination_program.program;
     var source_modules: [2]types.ModuleIndex = undefined;
     var destination_modules: [2]types.ModuleIndex = undefined;
     for (0..2) |index| {
-        var view: checked.ImportedModuleView = undefined;
-        view.key = .{ .bytes = @splat(@intCast(index + 1)) };
-        view.module_identity.stable_hash = view.key.bytes;
-        source_modules[index] = try source.modules.add(view);
-        view.key.bytes = @splat(@intCast(2 - index));
-        view.module_identity.stable_hash = view.key.bytes;
-        destination_modules[index] = try destination.modules.add(view);
+        source_modules[index] = try source.modules.add(source_program.view(@intCast(index + 1)));
+        destination_modules[index] = try destination.modules.add(destination_program.view(@intCast(2 - index)));
     }
     const name = try source.store.internName("count");
     const number = try source.store.primitive(.u8);
@@ -1981,7 +1970,7 @@ test "stored type metadata preserves field defaults across module reindexing" {
     fields[0].default = .some(.{ .module = source_modules[0], .ordinal = 10 });
     const defaulted = try source.store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
     const root = try source.store.intern(.{ .tuple = &.{ required, defaulted } });
-    var encoder: Encoder = .{ .allocator = allocator, .program = &source };
+    var encoder: Encoder = .{ .allocator = allocator, .program = source };
     defer encoder.deinit();
     const root_index = try encoder.tableIndex(root);
     const bytes = try encoder.finish();
@@ -2005,7 +1994,7 @@ test "stored type metadata preserves field defaults across module reindexing" {
         try std.testing.expectError(error.InvalidMetadata, result);
     }
 
-    var decoder: Decoder = .{ .program = &destination, .bytes = bytes };
+    var decoder: Decoder = .{ .program = destination, .bytes = bytes };
     decoder.readModules();
     try decoder.readTable();
     defer allocator.free(decoder.table);
@@ -2431,34 +2420,16 @@ fn selectedCaptureMetadataForTest(allocator: Allocator, retained: *Retained) (Al
 
 fn captureSerializationScratchCase(allocator: Allocator) (Allocator.Error || error{ InvalidMetadata, TestExpectedEqual })!void {
     const setup = std.testing.allocator;
-    // The test installs explicit producer records; no runtime code or
-    // checked module is needed to encode this graph.
-    var program: Program = undefined;
-    program.allocator = setup;
-    program.input = .{ .modules = undefined, .roots = undefined, .target_usize = .u64 };
-    program.modules = .{ .allocator = setup };
-    defer program.modules.deinit();
-    var view: checked.ImportedModuleView = undefined;
-    view.key = .{ .bytes = @splat(9) };
-    view.module_identity.stable_hash = @splat(9);
-    const module = try program.modules.add(view);
-    program.arena = std.heap.ArenaAllocator.init(setup);
-    defer program.arena.deinit();
-    program.store = types.Store.init(setup);
-    defer program.store.deinit();
-    program.result = try LirProgram.Result.init(setup, .u64);
-    defer program.result.deinit();
-    program.static_descs = StaticDescs.init(setup, &program.store, &program.layouts, &program.result, .u64);
-    defer program.static_descs.deinit();
-    program.workers = .empty;
-    defer program.workers.deinit(setup);
-    program.worker_ids = .empty;
-    defer program.worker_ids.deinit(setup);
-    program.worklist = .empty;
-    defer program.worklist.deinit(setup);
+    // The test installs explicit producer records; no runtime code is
+    // needed to encode this graph.
+    var test_program: lower.TestProgram = undefined;
+    try test_program.init(setup, .program);
+    defer test_program.deinit();
+    const program = test_program.program;
+    const module = try program.modules.add(test_program.view(9));
     const worker_id = try program.crashDictionaryWorker(module, .checked_error);
     const identity = program.result.store.getProcSpec(program.worker(worker_id).proc).identity;
-    var retained = Retained{ .allocator = allocator, .program = &program };
+    var retained = Retained{ .allocator = allocator, .program = program };
     defer retained.workers.deinit(setup);
     try retained.workers.put(setup, identity, worker_id);
     const ty = try program.store.emptyRecord();
@@ -2485,6 +2456,7 @@ fn captureSerializationScratchCase(allocator: Allocator) (Allocator.Error || err
 
     // Failure injection covers serialization, after producer setup completes.
     program.allocator = allocator;
+    defer program.allocator = setup;
     for (0..3) |_| {
         const bytes = encodeMetadata(&retained, &program.result, &.{}) catch |err| {
             try std.testing.expectEqual(@as(usize, 0), program.arena.queryCapacity());

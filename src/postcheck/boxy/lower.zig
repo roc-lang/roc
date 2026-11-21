@@ -5461,37 +5461,56 @@ const HostBoundaryGraph = struct {
     }
 };
 
+/// Test scaffolding: a Program from the real `createProgram` over an empty
+/// checked-module set, with no module registered. Tests register the module
+/// views they need, made by `view`. It is initialized in place because the
+/// Program's input points at the set it holds.
+pub const TestProgram = struct {
+    allocator: Allocator,
+    empty: Common.EmptyCheckedModulesForTest,
+    program: *Program,
+
+    pub fn init(self: *TestProgram, allocator: Allocator, unit: Unit) Allocator.Error!void {
+        self.allocator = allocator;
+        try self.empty.init(allocator);
+        errdefer self.empty.deinit(allocator);
+        self.program = try createProgram(allocator, .{
+            .modules = self.empty.modules(),
+            .roots = .{},
+            .target_usize = .u64,
+            .unit = unit,
+        });
+    }
+
+    pub fn deinit(self: *TestProgram) void {
+        destroySchemaProgram(self.program);
+        self.empty.deinit(self.allocator);
+    }
+
+    /// The empty module's view under the identity whose bytes are all `byte`.
+    pub fn view(self: *const TestProgram, byte: u8) checked.ImportedModuleView {
+        var result = self.empty.view();
+        result.key = .{ .bytes = @splat(byte) };
+        result.module_identity.stable_hash = @splat(byte);
+        return result;
+    }
+};
+
 test "a generated worker's identity is its content, whatever lowering reaches it" {
     const allocator = std.testing.allocator;
-    const unit: Unit = .{ .module = .{ .imports = undefined, .root = false, .names = undefined } };
+    var export_interfaces = ExportInterfaces.init(allocator, std.testing.io);
+    defer export_interfaces.deinit();
+    var module_names: types.ModuleNames = .{};
+    defer module_names.deinit(allocator);
+    const unit: Unit = .{ .module = .{ .imports = &export_interfaces, .root = false, .names = &module_names } };
     var identities: [2][4]LIR.ProcIdentity = undefined;
     var record_ids: [2]TypeId = undefined;
     for (0..2) |round| {
-        // Initialize the owners used by module registration, worker
-        // production and identity generation; unrelated state stays unread.
-        var program: Program = undefined;
-        program.allocator = allocator;
-        program.input = .{ .modules = undefined, .roots = undefined, .target_usize = .u64, .unit = unit };
-        program.store = types.Store.init(allocator);
-        defer program.store.deinit();
-        program.result = try LirProgram.Result.init(allocator, .u64);
-        defer program.result.deinit();
-        program.modules = .{ .allocator = allocator };
-        defer program.modules.deinit();
-        var module_view: checked.ImportedModuleView = undefined;
-        module_view.key = .{ .bytes = @splat(7) };
-        module_view.module_identity.stable_hash = @splat(7);
-        const module_index = try program.modules.add(module_view);
-        program.arena = std.heap.ArenaAllocator.init(allocator);
-        defer program.arena.deinit();
-        program.worker_ids = .empty;
-        defer program.worker_ids.deinit(allocator);
-        program.worklist = .empty;
-        defer program.worklist.deinit(allocator);
-        program.workers = .empty;
-        defer program.workers.deinit(allocator);
-        program.type_contents = .empty;
-        defer program.type_contents.deinit(allocator);
+        var test_program: TestProgram = undefined;
+        try test_program.init(allocator, unit);
+        defer test_program.deinit();
+        const program = test_program.program;
+        const module_index = try program.modules.add(test_program.view(7));
         const store = &program.store;
         const number = try store.primitive(.u64);
         // The second lowering interns another type first, so the same
@@ -5527,19 +5546,12 @@ test "Boxy field default identity survives substitution and stable type digests"
     const allocator = std.testing.allocator;
     var digests: [2][3][32]u8 = undefined;
     for (0..2) |round| {
-        var program: Program = undefined;
-        program.allocator = allocator;
-        program.store = types.Store.init(allocator);
-        defer program.store.deinit();
-        program.modules = .{ .allocator = allocator };
-        defer program.modules.deinit();
-        program.type_contents = .empty;
-        defer program.type_contents.deinit(allocator);
+        var test_program: TestProgram = undefined;
+        try test_program.init(allocator, .program);
+        defer test_program.deinit();
+        const program = test_program.program;
         for (0..2) |index| {
-            var view: checked.ImportedModuleView = undefined;
-            view.key = .{ .bytes = @splat(@intCast(if (round == 0) index + 1 else 2 - index)) };
-            view.module_identity.stable_hash = view.key.bytes;
-            _ = try program.modules.add(view);
+            _ = try program.modules.add(test_program.view(@intCast(if (round == 0) index + 1 else 2 - index)));
         }
         const store = &program.store;
         const name = try store.internName("count");
@@ -5569,18 +5581,14 @@ test "Boxy error reachability Program owns one lazy memo and releases it before 
     checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(allocator, std.testing.io, 0));
     const bad = try checked_types.appendSyntheticPayloadRoot(allocator, .err);
     const root = try checked_types.appendSyntheticPayloadRoot(allocator, .{ .tuple = try allocator.dupe(checked.CheckedTypeId, &.{bad}) });
-    var view: checked.ImportedModuleView = undefined;
-    view.key = .{ .bytes = @splat(1) };
-    view.module_identity.stable_hash = @splat(1);
+    // Exercise the actual consumer API and lowering's completion cleanup.
+    var test_program: TestProgram = undefined;
+    try test_program.init(allocator, .program);
+    defer test_program.deinit();
+    const program = test_program.program;
+    var view = test_program.view(1);
     view.checked_types = checked_types.view();
-    // Exercise the actual consumer API and lowering's completion cleanup;
-    // unrelated worker/LIR state is never accessed by either operation.
-    var program: Program = undefined;
-    program.allocator = allocator;
-    program.modules = .{ .allocator = allocator };
-    defer program.modules.deinit();
     const module = try program.modules.add(view);
-    program.error_types = null;
     defer program.releaseErrorTypes();
     try std.testing.expect(program.error_types == null);
     // Even a lowering that never queried errors can finish without a memo.
