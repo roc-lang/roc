@@ -1,5 +1,5 @@
 /-
-  RocArc.Machine — executable small-step semantics with a refcounted heap.
+  RocArc.Machine: executable small-step semantics with a refcounted heap.
 
   * Values are scalars (possibly unknown), handles to heap cells, inline
     aggregates (structs and tags, which LIR keeps by value), or `uninit`.

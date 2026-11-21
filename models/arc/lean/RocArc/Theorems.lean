@@ -1,5 +1,5 @@
 /-
-  RocArc.Theorems — what the model claims, stated over the executable
+  RocArc.Theorems: what the model claims, stated over the executable
   definitions. Proofs are a stretch goal; the statements fix what the bug-finding
   runs check on each input, and what a counterexample to each would mean.
 

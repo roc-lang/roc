@@ -1,5 +1,5 @@
 /-
-  RocArc.Parse — the abstraction function α: `ROC_LIR_DUMP` text → `Program`.
+  RocArc.Parse: the abstraction function α: `ROC_LIR_DUMP` text → `Program`.
 
   The grammar is the one `src/lir/debug_print.zig` writes (see ../FORMAT.md).
   Anything the model does not interpret becomes `Stmt.unsupported` /

@@ -1,5 +1,5 @@
 /-
-  RocArc.Syntax — the first-order statement IR the model runs.
+  RocArc.Syntax: the first-order statement IR the model runs.
 
   It mirrors final (post-ARC) Roc LIR as printed by `src/lir/debug_print.zig`
   (`ROC_LIR_DUMP`). Locals are procedure-wide mutable slots, exactly as in LIR:

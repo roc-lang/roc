@@ -1,5 +1,5 @@
 /-
-  RocArc.Certify — the debug borrow certifier's judgment, as an executable
+  RocArc.Certify: the debug borrow certifier's judgment, as an executable
   abstract interpretation (design.md "Debug Borrow Certifier", ~28671;
   `src/lir/arc_certify.zig` module header).
 
