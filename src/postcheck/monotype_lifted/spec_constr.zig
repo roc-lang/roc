@@ -279,6 +279,8 @@ pub const ProcedureUse = struct {
     external_call_owner: ?Ast.FnId = null,
     value_refs: usize = 0,
     contains_return: bool = false,
+    /// A root needs one procedure body but is not an indirect dispatch site.
+    is_root: bool = false,
 };
 
 /// Read-only exact procedure-use inventory produced after all SpecConstr graph
@@ -2131,7 +2133,7 @@ const Pass = struct {
             if (!tail.valid or tail.count == 0) continue;
 
             const uses = program_usage.fn_uses[worker_index];
-            if (uses.external_calls != 1 or uses.value_refs != 0) continue;
+            if (uses.external_calls != 1 or uses.value_refs != 0 or uses.is_root) continue;
             const call_expr = uses.external_call_expr orelse
                 Common.invariant("single-use specialized worker had no external call expression");
             const caller_id = uses.external_call_owner orelse
@@ -14666,7 +14668,7 @@ const ProgramProcedureUsage = struct {
             try collectAllFnUsesInExpr(allocator, program, body, owner, fn_uses, &reached, &pending);
         }
         for (program.rootsView()) |root| {
-            fn_uses[@backingInt(root.fn_id)].value_refs += 1;
+            fn_uses[@backingInt(root.fn_id)].is_root = true;
         }
         return .{
             .tail_self_calls = tail_self_calls,

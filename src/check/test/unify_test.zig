@@ -1502,7 +1502,9 @@ test "unify - issue 11024 - empty nominal row absorption respects field kinds an
                 const omissions = env.scratch.absorbed_record_defaults.items();
                 try std.testing.expectEqual(@as(usize, if (accepts and kind == .defaulted) 1 else 0), omissions.len);
                 if (omissions.len != 0) {
-                    try std.testing.expectEqual(tail, omissions[0].record_var);
+                    // Publication groups by the whole construction, not its
+                    // internal extension or the nominal on the other side.
+                    try std.testing.expectEqual(empty, omissions[0].record_var);
                     try std.testing.expectEqual(default_id, omissions[0].default);
                 }
 

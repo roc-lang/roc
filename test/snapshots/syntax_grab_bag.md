@@ -274,8 +274,6 @@ TYPE MISMATCH - syntax_grab_bag.md:150:3:150:6
 TOO FEW ARGS - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:167:3:167:3
 DECLARATION HAS NO VALUE - syntax_grab_bag.md:201:1:201:25
-MISSING METHOD - syntax_grab_bag.md:189:26:189:40
-MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 # PROBLEMS
 ~~~clojure
 (reports
@@ -1198,56 +1196,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 			(source-region (file "syntax_grab_bag.md") (start 201 1) (end 201 25) (annotation error) (line-text "tuple : Value((a, b, c))"))
 			(line-break)
 			(line-break)
-			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
-	(report
-		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 189 26) (end 189 40))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "static_dispatch_method")
-			(reflow " ")
-			(reflow "call is on")
-			(reflow " ")
-			(reflow "a value whose type never resolved to a concrete type,")
-			(reflow " ")
-			(reflow "so it has no")
-			(reflow " ")
-			(annotated code "static_dispatch_method")
-			(reflow " ")
-			(reflow "method."))
-		(document
-			(source-region (file "syntax_grab_bag.md") (start 189 26) (end 189 40) (annotation error) (line-text "\tstatic_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?"))
-			(line-break)
-			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one.")))
-	(report
-		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 189 26) (end 189 66))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "next_static_dispatch_method")
-			(reflow " ")
-			(reflow "call is on")
-			(reflow " ")
-			(reflow "a value of type")
-			(reflow " ")
-			(annotated code "ok")
-			(reflow ",")
-			(reflow " ")
-			(reflow "which never resolved to a concrete type,")
-			(reflow " ")
-			(reflow "so it has no")
-			(reflow " ")
-			(annotated code "next_static_dispatch_method")
-			(reflow " ")
-			(reflow "method."))
-		(document
-			(source-region (file "syntax_grab_bag.md") (start 189 26) (end 189 66) (annotation error) (line-text "\tstatic_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?"))
-			(line-break)
-			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary."))))
 ~~~
 # TOKENS
 ~~~zig
