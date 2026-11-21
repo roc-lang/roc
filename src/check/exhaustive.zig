@@ -4328,7 +4328,7 @@ fn formatPatternNode(
                 try scratch.resize(40);
                 try writer.writeAll(i128h.u128_to_str(scratch.items, u).str);
             },
-            .bit => |b| try writer.writeAll(if (b) "Bool.true" else "Bool.false"),
+            .bit => |b| try writer.writeAll(if (b) "True" else "False"),
             .byte => |b| try writer.print("{}", .{b}),
             .float => |f| {
                 const float_val: f64 = @bitCast(f);
@@ -4367,10 +4367,13 @@ fn formatPatternNode(
                             try writer.writeAll(ident_store.getText(o));
                         },
                     }
-                    // Add arguments
-                    for (c.args) |arg| {
-                        try pending.append(gpa, .{ .text = " " });
-                        try pending.append(gpa, .{ .pattern = arg });
+                    if (c.args.len > 0) {
+                        try writer.writeAll("(");
+                        for (c.args, 0..) |arg, i| {
+                            if (i > 0) try pending.append(gpa, .{ .text = ", " });
+                            try pending.append(gpa, .{ .pattern = arg });
+                        }
+                        try pending.append(gpa, .{ .text = ")" });
                     }
                 },
 
@@ -4395,10 +4398,9 @@ fn formatPatternNode(
                 },
 
                 .guard => {
-                    // Unwrap the guard - show the actual pattern (second arg)
+                    // Report the unguarded pattern that covers this case.
                     if (c.args.len >= 2) {
                         try pending.append(gpa, .{ .pattern = c.args[1] });
-                        try pending.append(gpa, .{ .text = " (with guard)" });
                     }
                 },
 
@@ -4413,8 +4415,9 @@ fn formatPatternNode(
                         },
                     }
                     if (c.args.len > 0) {
-                        try pending.append(gpa, .{ .text = " " });
+                        try writer.writeAll(".(");
                         try pending.append(gpa, .{ .pattern = c.args[0] });
+                        try pending.append(gpa, .{ .text = ")" });
                     }
                 },
             }
