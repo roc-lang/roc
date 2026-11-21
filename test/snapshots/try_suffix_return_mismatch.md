@@ -507,7 +507,7 @@ TYPE MISMATCH - try_suffix_return_mismatch.md:29:2:29:2
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "List(U64) -> Try(b, err)")
+			(text "List(U64) -> Try(_b, _err)")
 			(annotation-end))))
 ~~~
 # TOKENS
@@ -878,12 +878,12 @@ closure_arg = |xs| {
 		(patt (type "Str -> Try(Str, [BadInput])"))
 		(patt (type "Str -> Str"))
 		(patt (type "Str -> Str"))
-		(patt (type "List(item) -> U64"))
+		(patt (type "List(_item) -> U64"))
 		(patt (type "List(List(U64)) -> _ret")))
 	(expressions
 		(expr (type "Str -> Try(Str, [BadInput])"))
 		(expr (type "Str -> Str"))
 		(expr (type "Str -> Str"))
-		(expr (type "List(item) -> U64"))
+		(expr (type "List(_item) -> U64"))
 		(expr (type "List(List(U64)) -> _ret"))))
 ~~~

@@ -760,7 +760,13 @@ pub fn strMatchStep(source: []const u8, cursor: usize, delimiter: []const u8, ta
         };
     }
 
-    const found = strMatchDelimiter(source, cursor, delimiter) orelse return null;
+    const search = @import("builtins").delimiter;
+    const found = if (delimiter.len <= search.max_inline_len)
+        std.mem.findPos(u8, source, cursor, delimiter) orelse return null
+    else blk: {
+        const pos = search.Plan.init(delimiter).find(source, cursor, delimiter);
+        break :blk if (pos != source.len) pos else return null;
+    };
     return .{
         .capture_start = cursor,
         .capture_end = found,
@@ -774,16 +780,6 @@ pub fn strMatchEndMatches(source_len: usize, cursor: usize, end: StrPatternEnd) 
         .exact => cursor == source_len,
         .tail => cursor <= source_len,
     };
-}
-
-fn strMatchDelimiter(source: []const u8, cursor: usize, delimiter: []const u8) ?usize {
-    if (delimiter.len == 0) return cursor;
-    if (delimiter.len > source.len - cursor) return null;
-
-    const candidate = std.mem.findScalarPos(u8, source, cursor, delimiter[0]) orelse return null;
-    if (delimiter.len > source.len - candidate) return null;
-    if (!std.mem.eql(u8, source[candidate..][0..delimiter.len], delimiter)) return null;
-    return candidate;
 }
 
 /// Span into flat string-match-step storage.

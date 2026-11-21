@@ -169,13 +169,13 @@ main = {
 (inferred-types
 	(defs
 		(patt (type "List(a) -> U64"))
-		(patt (type "List(a) -> U64"))
+		(patt (type "List(_a) -> U64"))
 		(patt (type "(U64, U64)")))
 	(type_decls
 		(nominal (type "FooBar")
 			(ty-header (name "FooBar"))))
 	(expressions
 		(expr (type "List(a) -> U64"))
-		(expr (type "List(a) -> U64"))
+		(expr (type "List(_a) -> U64"))
 		(expr (type "(U64, U64)"))))
 ~~~

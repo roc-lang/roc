@@ -119,6 +119,59 @@ test "an instantiated method constraint fails at its instantiating use, not insi
     try std.testing.expect(found_expect);
 }
 
+const extend_error_row =
+    \\f = |x| {
+    \\    _v = x?
+    \\    Err(B)
+    \\}
+;
+
+test "issue 13296: a non-row error argument is rejected at the call" {
+    var env = try TestEnv.init("Test", extend_error_row ++ "\n" ++
+        \\u = |_| f(Err(1.U64))
+    );
+    defer env.deinit();
+    try env.assertOneTypeErrorHighlightsWithin("Type Mismatch", .{ .line = 5, .start_column = 11, .end_column = 21 });
+}
+
+test "issue 13296: the matched call with a non-row error argument is retired before lowering" {
+    var env = try TestEnv.init("Test", extend_error_row ++ "\n" ++
+        \\u = |_| match f(Err(1.U64)) { _ => 2.U64 }
+    );
+    defer env.deinit();
+    // The invalid scrutinee retires its enclosing match as well. Locate the
+    // original call through the source view, then inspect its checked node.
+    const store = &env.module_env.store;
+    const def = store.getSourceExpr(try env.defExpr("u"));
+    const lambda = if (def == .e_closure) store.getSourceExpr(def.e_closure.lambda_idx) else def;
+    const match = store.getSourceExpr(lambda.e_lambda.body).e_match;
+    const scrutinee = store.getExpr(match.cond);
+    try std.testing.expectEqual(std.meta.Tag(CIR.Expr).e_runtime_error, std.meta.activeTag(scrutinee));
+}
+
+test "issue 13296: checking a row argument leaves valid uses of the same scheme intact" {
+    var env = try TestEnv.init("Test",
+        \\f : [D, ..b], b -> [D, ..b]
+        \\f = |x, _other| x
+        \\good = |_| f(D, E)
+        \\bad = |_| match f(D, 1.U64) { _ => 0.U64 }
+    );
+    defer env.deinit();
+    try env.assertOneTypeErrorHighlightsWithin("Type Mismatch", .{ .line = 4, .start_column = 22, .end_column = 27 });
+    try std.testing.expect(try lambdaBody(&env, "good") == .e_call);
+}
+
+test "issue 13296: an alias preserves the kind of its row parameter at a call" {
+    var env = try TestEnv.init("Test",
+        \\Row(t) : [D, ..t]
+        \\f : Row(b), b -> Row(b)
+        \\f = |x, _other| x
+        \\bad = |_| f(D, 1.U64)
+    );
+    defer env.deinit();
+    try env.assertOneTypeErrorHighlightsWithin("Type Mismatch", .{ .line = 4, .start_column = 16, .end_column = 21 });
+}
+
 test "a non-Bool right operand of and retires the operator and leaves its callee's type intact" {
     const source =
         \\describe : U64 -> [Verbose(U64)]

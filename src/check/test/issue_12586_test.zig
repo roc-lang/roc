@@ -59,7 +59,7 @@ test "issue 12586: a function from an annotated list is accepted by a generic fu
 test "issue 12586: a forwarded callback error row is the result row's residual tail" {
     var env = try TestEnv.init("Test", generic_fetch);
     defer env.deinit();
-    try env.assertDefType("fetch", "(a -> Try(ok, err)), a -> Try(ok, [Bad(a), ..err])");
+    try env.assertDefType("fetch", "(a -> Try(_ok, err)), a -> Try(_b, [Bad(a), ..err])");
 }
 
 test "issue 12586: the inferred signature is as general as the annotation that spells it" {

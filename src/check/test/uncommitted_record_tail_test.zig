@@ -701,3 +701,24 @@ test "a plain record with a field the nominal lacks carries no plain-row refusal
         \\n = take(r)
     );
 }
+
+test "a returned callback's tag pattern parameter lifts into its nominal type in an importer" {
+    var wrap = try TestEnv.init("Wrap",
+        \\Wrap := [W].{
+        \\    mk = |_n| |W, s| s
+        \\}
+    );
+    defer wrap.deinit();
+    try wrap.assertNoErrors();
+
+    var main = try TestEnv.initWithImport("Main",
+        \\import Wrap
+        \\
+        \\Main := [].{
+        \\    five : U64
+        \\    five = Wrap.mk(1)(Wrap.W, 5)
+        \\}
+    , "Wrap", &wrap);
+    defer main.deinit();
+    try main.assertNoErrors();
+}

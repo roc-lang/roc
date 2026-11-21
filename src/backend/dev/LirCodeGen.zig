@@ -21915,13 +21915,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const capture_alloc = capture_sfa.allocator();
             const capture_offsets = try capture_alloc.alloc(?i32, steps.len);
             defer capture_alloc.free(capture_offsets);
+            var calls_search = false;
             for (0..steps.len) |step_index| {
                 const step = GuardedList.at(steps, step_index);
+                calls_search = calls_search or step.delimiter.len > builtins.delimiter.max_inline_len;
                 capture_offsets[step_index] = switch (step.capture) {
                     .discard => null,
                     .view => self.codegen.allocStackSlot(roc_str_size),
                 };
             }
+            if (calls_search) try self.spillAllVectorLocals();
 
             const cursor_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(cursor_reg);
@@ -21951,7 +21954,37 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     continue;
                 }
 
-                try self.emitFindDelimiter(source.bytes, source.len, cursor_reg, delimiter, miss_patches);
+                if (delimiter.len > builtins.delimiter.max_inline_len) {
+                    // The search is an ordinary C call. Preserve the source
+                    // shape and original capture cursor across its clobbers.
+                    const live = [_]GeneralReg{ source.bytes, source.len, source.is_small, source.allocation, capture_start_reg };
+                    const spill = self.codegen.allocStackSlot(live.len * target_ptr_size);
+                    for (live, 0..) |reg, i| try self.emitStore(.w64, frame_ptr, spill + @as(i32, @intCast(i * target_ptr_size)), reg);
+                    const needle = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(needle);
+                    switch (self.generation_mode) {
+                        .native_execution => try self.codegen.emitLoadImm(needle, @bitCast(@as(u64, @intFromPtr(self.staticStringEntry(step.delimiter.backing).bytes.ptr + step.delimiter.offset)))),
+                        .shim_execution, .object_file => {
+                            try self.codegen.emitLoadDataAddress(needle, try self.staticStringSymbol(step.delimiter.backing));
+                            try self.emitAddUsizeImm(needle, needle, step.delimiter.offset);
+                        },
+                    }
+                    const plan = builtins.delimiter.Plan.init(delimiter);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
+                    try builder.addRegArg(source.bytes);
+                    try builder.addRegArg(source.len);
+                    try builder.addRegArg(cursor_reg);
+                    try builder.addRegArg(needle);
+                    try builder.addImmArg(@intCast(delimiter.len));
+                    try builder.addImmArg(@intCast(plan.cut));
+                    try builder.addImmArg(@intCast(plan.period));
+                    try self.callBuiltin(&builder, .str_find_delimiter);
+                    try self.emitMovRegReg(cursor_reg, ret_reg_0);
+                    for (live, 0..) |reg, i| try self.emitLoad(.w64, reg, frame_ptr, spill + @as(i32, @intCast(i * target_ptr_size)));
+                    try self.emitCmpReg(cursor_reg, source.len);
+                    try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condCode(.equal)));
+                } else try self.emitFindDelimiter(source.bytes, source.len, cursor_reg, delimiter, miss_patches);
 
                 if (capture_offsets[step_i]) |capture_offset| {
                     try self.emitStoreStrCapture(capture_offset, source.bytes, source.allocation, source.is_small, capture_start_reg, cursor_reg);
@@ -22091,14 +22124,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 break :blk try self.codegen.emitCondJump(condCode(.not_equal));
             };
 
-            if (delimiter.len > 1) {
-                try self.emitCompareLiteralAtPtr(candidate_reg, delimiter, miss_patches);
-            }
+            var partial_mismatches: std.ArrayList(usize) = .empty;
+            defer partial_mismatches.deinit(self.allocator);
+            if (delimiter.len > 1) try self.emitCompareLiteralAtPtr(candidate_reg, delimiter, &partial_mismatches);
 
             const found_patch = try self.codegen.emitJump();
 
             const retry_offset = self.codegen.currentOffset();
             try self.codegen.patchJump(retry_patch, retry_offset);
+            for (partial_mismatches.items) |patch| try self.codegen.patchJump(patch, retry_offset);
             try self.emitAddUsizeImm(cursor_reg, cursor_reg, 1);
             const back_patch = try self.codegen.emitJump();
             try self.codegen.patchJump(back_patch, loop_start);

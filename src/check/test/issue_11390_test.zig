@@ -53,7 +53,7 @@ test "issue 11390 recursive call to a lambda annotated with a nominal type repor
         \\
         \\It has the type:
         \\
-        \\    RBMut(k)
+        \\    RBMut(_k)
         \\
         \\
         ,

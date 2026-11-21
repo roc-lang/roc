@@ -4254,7 +4254,7 @@ test "check type - nominal - local method type - fail" {
         \\
         \\But I need it to have the type:
         \\
-        \\    Utf8Format, Str -> Try(encoded, err)
+        \\    Utf8Format, Str -> Try(_encoded, _err)
         \\
         \\
         ,
@@ -7548,7 +7548,7 @@ test "check type - record extension - named flex ext from instantiation" {
         \\
         \\bar = use_record
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "bar" } }, "{ name: Str, ..others } -> Str");
+    try checkTypesModule(source, .{ .pass = .{ .def = "bar" } }, "{ name: Str, .._others } -> Str");
 }
 
 test "check type - record extension - mismatch should fail" {
@@ -11289,7 +11289,7 @@ test "check type - exhaustive match is inferred as closed" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Red] -> Try([Red], err)" },
+            .{ .def = "test", .expected = "[Red] -> Try([Red], _err)" },
         },
     );
 }
@@ -11609,12 +11609,14 @@ test "check type - exhaustive match closes tag union through tag then record" {
 
 test "check type - exhaustive match opens and closes tag unions through tag then record then tuple" {
     // Two record fields inside Ok's payload: `status` is exhaustively matched (On/Off)
-    // so it should be closed, while `mode` always has a wildcard so it stays open.
+    // so it should be closed. Both statuses cover arbitrary speed tags, so
+    // the speed position stays open even though one arm names Fast.
     // Tests that closure traverses tag -> record -> field independently per field.
     const source =
         \\test = |x| {
         \\  match(x) {
         \\    Ok({ status: On, mode: (Big, Fast) }) => "ok-on"
+        \\    Ok({ status: On, mode: (Big, _) }) => "ok-on-other-speed"
         \\    Ok({ status: Off, mode: (Big, _) }) => "ok-off"
         \\    Err(_e) => "err"
         \\  }
@@ -15585,6 +15587,27 @@ test "check type - row subsumption - a call widens a forwarded closed result row
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try test_env.assertNoErrors();
+}
+
+test "issue 13297: a bounded output cannot forward an arbitrary input row" {
+    var env = try TestEnv.init("Test",
+        \\forward : [B, ..] -> [B]
+        \\forward = |x| x
+    );
+    defer env.deinit();
+    try env.assertOneTypeError("Type Mismatch");
+}
+
+test "issue 13297: try propagation cannot forward an arbitrary input row into a bounded error" {
+    var env = try TestEnv.init("Test",
+        \\forward : Try(U64, [E, ..]) -> Try(U64, [E])
+        \\forward = |t| {
+        \\    v = t?
+        \\    Ok(v)
+        \\}
+    );
+    defer env.deinit();
+    try env.assertOneTypeError("Type Mismatch");
 }
 
 test "check type - row subsumption - a forwarder's input row stays closed" {

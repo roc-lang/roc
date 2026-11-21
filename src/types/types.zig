@@ -186,7 +186,10 @@ pub const DescriptorFlags = packed struct(u16) {
     /// "Uncommitted Tag Tails"). Copies carry it; a merge keeps it unless the
     /// other side is an empty tag union without it.
     uncommitted_tag_tail: bool = false,
-    _padding: u2 = 0,
+    /// This class occurs as a tag row's suffix, including when another
+    /// position of a scheme names the same variable as an ordinary value.
+    requires_tag_row: bool = false,
+    _padding: u1 = 0,
 
     /// The flags a copy of this class carries: those that describe its type.
     /// The others record what happened to this class itself—a rejection, a
@@ -205,6 +208,7 @@ pub const DescriptorFlags = packed struct(u16) {
             .compared_plain = self.compared_plain,
             .annotation_tag_union = self.annotation_tag_union,
             .uncommitted_tag_tail = self.uncommitted_tag_tail,
+            .requires_tag_row = self.requires_tag_row,
         };
     }
 
@@ -308,6 +312,10 @@ pub const Descriptor = struct {
             return if (self.kind == .flex) self.bits.flexBits().literal else .none;
         }
 
+        pub fn requiresTagRow(self: Word) bool {
+            return if (self.kind == .flex) self.bits.flexBits().tail == .tag else self.bits.otherBits().requires_tag_row;
+        }
+
         /// Whether either generalization mark is set.
         pub fn marked(self: Word) bool {
             return self.generalizing or self.rank_adjusted;
@@ -353,10 +361,30 @@ pub const Descriptor = struct {
 
         /// The bits only a flex has.
         pub const FlexBits = packed struct(u5) {
-            uncommitted_record_tail: bool = false,
-            uncommitted_copy: bool = false,
-            record_pattern_tail: bool = false,
+            tail: Tail = .ordinary,
             literal: Flex.Literal = .none,
+
+            // A record tail's copy and pattern marks qualify the record
+            // state; neither is an independent property of a non-record.
+            pub const Tail = enum(u3) {
+                ordinary = 0,
+                record = 1,
+                record_copy = 3,
+                record_pattern = 5,
+                tag = 6,
+                record_pattern_copy = 7,
+
+                fn of(flags: DescriptorFlags) Tail {
+                    if (!flags.uncommitted_record_tail) {
+                        std.debug.assert(!flags.uncommitted_copy and !flags.record_pattern_tail);
+                        return if (flags.requires_tag_row) .tag else .ordinary;
+                    }
+                    std.debug.assert(!flags.requires_tag_row);
+                    return if (flags.record_pattern_tail)
+                        if (flags.uncommitted_copy) .record_pattern_copy else .record_pattern
+                    else if (flags.uncommitted_copy) .record_copy else .record;
+                }
+            };
         };
 
         /// The bits every kind but a flex has.
@@ -365,7 +393,7 @@ pub const Descriptor = struct {
             compared_plain: bool = false,
             annotation_tag_union: bool = false,
             uncommitted_tag_tail: bool = false,
-            _padding: u1 = 0,
+            requires_tag_row: bool = false,
         };
 
         /// `flags` and a flex's `literal` packed for a word of kind `kind`.
@@ -382,15 +410,14 @@ pub const Descriptor = struct {
                 .deferred_callable = flags.deferred_callable,
                 .annotation_tag_ext = flags.annotation_tag_ext,
                 .by_kind = if (kind == .flex) @bitCast(FlexBits{
-                    .uncommitted_record_tail = flags.uncommitted_record_tail,
-                    .uncommitted_copy = flags.uncommitted_copy,
-                    .record_pattern_tail = flags.record_pattern_tail,
+                    .tail = FlexBits.Tail.of(flags),
                     .literal = literal,
                 }) else @bitCast(OtherBits{
                     .host_fixed_row = flags.host_fixed_row,
                     .compared_plain = flags.compared_plain,
                     .annotation_tag_union = flags.annotation_tag_union,
                     .uncommitted_tag_tail = flags.uncommitted_tag_tail,
+                    .requires_tag_row = flags.requires_tag_row,
                 }),
             };
         }
@@ -408,15 +435,17 @@ pub const Descriptor = struct {
             };
             if (kind == .flex) {
                 const flex = self.flexBits();
-                flags.uncommitted_record_tail = flex.uncommitted_record_tail;
-                flags.uncommitted_copy = flex.uncommitted_copy;
-                flags.record_pattern_tail = flex.record_pattern_tail;
+                flags.requires_tag_row = flex.tail == .tag;
+                flags.uncommitted_record_tail = flex.tail != .ordinary and flex.tail != .tag;
+                flags.uncommitted_copy = flex.tail == .record_copy or flex.tail == .record_pattern_copy;
+                flags.record_pattern_tail = flex.tail == .record_pattern or flex.tail == .record_pattern_copy;
             } else {
                 const other = self.otherBits();
                 flags.host_fixed_row = other.host_fixed_row;
                 flags.compared_plain = other.compared_plain;
                 flags.annotation_tag_union = other.annotation_tag_union;
                 flags.uncommitted_tag_tail = other.uncommitted_tag_tail;
+                flags.requires_tag_row = other.requires_tag_row;
             }
             return flags;
         }
@@ -2045,7 +2074,7 @@ const FlagDomain = enum { every_kind, flex_only, non_flex_only };
 
 fn flagDomain(comptime flag: std.meta.FieldEnum(DescriptorFlags)) FlagDomain {
     return switch (flag) {
-        .frozen, .static_dispatch_rejected, .default_decided, .nominal_backing_structure, .bounded_row_ext, .deferred_callable, .annotation_tag_ext => .every_kind,
+        .frozen, .static_dispatch_rejected, .default_decided, .nominal_backing_structure, .bounded_row_ext, .deferred_callable, .annotation_tag_ext, .requires_tag_row => .every_kind,
         .uncommitted_record_tail, .uncommitted_copy, .record_pattern_tail => .flex_only,
         .host_fixed_row, .compared_plain, .annotation_tag_union, .uncommitted_tag_tail => .non_flex_only,
         ._padding => unreachable, // the padding is no flag
@@ -2063,7 +2092,8 @@ test "a descriptor word keeps each flag alone on every kind it applies to" {
                 .non_flex_only => kind != .flex,
             };
             if (!applies) continue;
-            var flags: DescriptorFlags = .{};
+            const base_flags: DescriptorFlags = .{ .uncommitted_record_tail = flag == .uncommitted_copy or flag == .record_pattern_tail };
+            var flags = base_flags;
             @field(flags, field_name) = true;
             const literals: []const Flex.Literal = if (kind == .flex) std.enums.values(Flex.Literal) else &.{.none};
             for (literals) |literal| {
@@ -2073,7 +2103,7 @@ test "a descriptor word keeps each flag alone on every kind it applies to" {
                 try std.testing.expectEqual(kind, word.kind);
                 try std.testing.expectEqual(Rank.outermost, word.rank);
                 word.setFlag(flag, false);
-                try std.testing.expectEqual(DescriptorFlags{}, word.flags());
+                try std.testing.expectEqual(base_flags, word.flags());
                 try std.testing.expectEqual(literal, word.literal());
                 word.setFlag(flag, true);
                 try std.testing.expectEqual(flags, word.flags());
@@ -2095,6 +2125,8 @@ test "a descriptor word keeps every flag its kind holds at once" {
             };
             if (applies) @field(all, field_name) = true;
         }
+        // A flex cannot be both a record tail and a tag tail.
+        if (kind == .flex) all.requires_tag_row = false;
         const literal: Flex.Literal = if (kind == .flex) .quote else .none;
         const word = Descriptor.Word.init(kind, all, literal, Rank.deepest);
         try std.testing.expectEqual(all, word.flags());

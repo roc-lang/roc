@@ -380,7 +380,7 @@ NON EXHAUSTIVE MATCH - everything.md:90:2:90:7
 			(reflow "The value being matched on has type:")
 			(line-break)
 			(text "        ")
-			(annotated type "[Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c))]")
+			(annotated type "[Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field2 }), Z4(List(c))]")
 			(line-break)
 			(line-break)
 			(reflow "Missing patterns:")

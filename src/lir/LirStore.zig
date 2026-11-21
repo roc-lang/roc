@@ -796,8 +796,8 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
     if (T == CFStmtId) return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.cf_stmts, bases.cf_stmts)));
     if (T == ErasedCallArgsPlanId) return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.erased_call_arg_plans, bases.erased_call_arg_plans)));
     if (T == base.StringLiteral.Idx) {
-        if (value == base.StringLiteral.Idx.none) return value;
-        return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.string_bytes, bases.string_bytes)));
+        if (value.isNone() or value.isInPrefix(prefix.string_bytes)) return value;
+        return @fromBackingInt(bases.string_bytes + (@backingInt(value) - prefix.string_bytes));
     }
     if (T == StmtSourceId) return @fromBackingInt(movedIndex(@backingInt(value), prefix.stmt_sources, bases.stmt_sources));
     if (T == InlineScopeId) {
@@ -1725,7 +1725,7 @@ pub fn insertStringViewAligned(
 pub fn getString(self: *const Self, idx: base.StringLiteral.Idx) []const u8 {
     const raw = @backingInt(idx);
     if (self.body_coordinator) |coordinator| {
-        if (raw < self.body_prefix.string_bytes) return coordinator.getString(idx);
+        if (idx.isInPrefix(self.body_prefix.string_bytes)) return coordinator.getString(idx);
         return self.strings.get(@fromBackingInt(@intCast(raw - self.body_prefix.string_bytes)));
     }
     return self.strings.get(idx);
@@ -2727,6 +2727,30 @@ test "body shard appends after its coordinator allocated a symbol" {
     _ = coordinator.freshSyntheticSymbol();
     const appended = try coordinator.appendBodyShard(try worker.captureBodyShard(prefix), root, .empty(), null);
     try std.testing.expect(coordinator.getCFStmtImmediate(appended.root.?).* == .ret);
+}
+
+test "body shard preserves a trailing coordinator empty literal backing index" {
+    var coordinator = Self.init(std.testing.allocator);
+    defer coordinator.deinit();
+    const literal = try coordinator.insertStringView("", 0, 0);
+
+    var worker = try coordinator.cloneForBodyShard(std.testing.allocator);
+    defer worker.deinit();
+    try std.testing.expectEqualStrings("", worker.getString(literal.backing));
+    const local = try worker.addLocal(.{ .layout_idx = .str });
+    const ret = try worker.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+    const root = try worker.addCFStmt(.{ .assign_literal = .{
+        .target = local,
+        .value = .{ .str_literal = literal },
+        .next = ret,
+    } }, .test_fixture);
+    const shard = try worker.captureBodyShard(worker.captureBodyPrefix());
+
+    // An earlier commit advanced the destination, but this backing belongs to the frozen prefix.
+    _ = try coordinator.insertString("x");
+    const appended = try coordinator.appendBodyShard(shard, root, .empty(), null);
+    const relocated = coordinator.getCFStmt(appended.root.?).assign_literal.value.str_literal;
+    try std.testing.expectEqual(literal.backing, relocated.backing);
 }
 
 test "body shard relocates nonzero local and body suffixes" {
