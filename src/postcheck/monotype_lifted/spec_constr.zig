@@ -227,6 +227,7 @@ const SourceLoc = @import("base").SourceLoc;
 const Region = @import("base").Region;
 const Common = @import("../common.zig");
 const Ast = @import("ast.zig");
+const body_copy = @import("body_copy.zig");
 const Lift = @import("lift.zig");
 const Mono = @import("../monotype/ast.zig");
 const Type = @import("../monotype/type.zig");
@@ -279,6 +280,8 @@ pub const ProcedureUse = struct {
     external_call_owner: ?Ast.FnId = null,
     value_refs: usize = 0,
     contains_return: bool = false,
+    /// A root needs one procedure body but is not an indirect dispatch site.
+    is_root: bool = false,
 };
 
 /// Read-only exact procedure-use inventory produced after all SpecConstr graph
@@ -2131,7 +2134,7 @@ const Pass = struct {
             if (!tail.valid or tail.count == 0) continue;
 
             const uses = program_usage.fn_uses[worker_index];
-            if (uses.external_calls != 1 or uses.value_refs != 0) continue;
+            if (uses.external_calls != 1 or uses.value_refs != 0 or uses.is_root) continue;
             const call_expr = uses.external_call_expr orelse
                 Common.invariant("single-use specialized worker had no external call expression");
             const caller_id = uses.external_call_owner orelse
@@ -6265,7 +6268,7 @@ const Cloner = struct {
                     .payloads = input.?.get(.expr_span),
                 } });
             },
-            .static_data_candidate, .comptime_value => return self.finishPlainExpr(task, expr_id),
+            .static_data_candidate, .comptime_value => return self.finishPlainExpr(task, try self.placeSourceExpr(expr_id)),
             .typed_boundary => |boundary| {
                 if (cursor == 0) return .{ .call = .{ .expr = boundary.value } };
                 return self.finishPlainData(task, expr, .{ .typed_boundary = .{ .value = input.?.get(.expr) } });
@@ -10939,9 +10942,9 @@ const Cloner = struct {
         if (frame.cursor == 0) {
             frame.cursor = 1;
             const child_count: usize = switch (value) {
-                .expr => |expr| return retExpr(expr),
+                .expr => |expr| return retExpr(try self.placeSourceExpr(expr)),
                 .runtime_anchor => |anchor| return retExpr(anchor.runtime),
-                .static_data_candidate => |candidate| return retExpr(candidate.expr),
+                .static_data_candidate => |candidate| return retExpr(try self.placeSourceExpr(candidate.expr)),
                 .tag => |tag| tag.payloads.len,
                 .record => |record| record.fields.len,
                 .tuple => |tuple| tuple.items.len,
@@ -12187,6 +12190,25 @@ const Cloner = struct {
 
     fn exprCanSubstitute(self: *Cloner, expr_id: Ast.ExprId) Allocator.Error!bool {
         return exprIsSubstitutable(self.pass.program, self.pass.allocator, expr_id);
+    }
+
+    /// `expr_id` placed in this clone's output. An expression the clone
+    /// emitted, or one with no expressions inside it, is named as it is. A
+    /// source expression with expressions inside it reaches a placement on
+    /// its own, rather than as a clone of its source position, only as a
+    /// closed expression: a static data candidate, a compile-time value
+    /// read, or an opaque part of a candidate's initializer
+    /// (`Pass.staticDataStructure`). A rewrite of the body that holds it,
+    /// outside any inline frame, keeps it; any other clone writes a body
+    /// that does not hold it, which gets a copy binding locals of its own
+    /// (`body_copy.copyBindingOwnLocals`), so no two bodies hold one
+    /// expression with expressions inside it or name one local (design.md
+    /// "Operand Sequencing", "Lambda Set Generalization").
+    fn placeSourceExpr(self: *Cloner, expr_id: Ast.ExprId) Allocator.Error!Ast.ExprId {
+        if (@backingInt(expr_id) >= self.output_start) return expr_id;
+        if (self.pass.program.getExpr(expr_id).data.isLeaf()) return expr_id;
+        if (self.source_reuse == .original_body and self.inline_stack.items.len == 0) return expr_id;
+        return try body_copy.copyBindingOwnLocals(self.pass.program, expr_id, &self.pass.symbols);
     }
 
     fn canReuseOriginalExpr(self: *const Cloner, expr_id: Ast.ExprId) bool {
@@ -13739,7 +13761,7 @@ const Cloner = struct {
                         .structure = try self.copyValue(children[0]),
                     } },
                     .static_data_candidate => |candidate| .{ .runtime_anchor = .{
-                        .runtime = try self.addExpr(.{ .ty = step.dest, .data = .{ .row_widen = .{ .value = candidate.expr } } }),
+                        .runtime = try self.addExpr(.{ .ty = step.dest, .data = .{ .row_widen = .{ .value = try self.placeSourceExpr(candidate.expr) } } }),
                         .structure = try self.copyValue(children[0]),
                     } },
                     .expr, .record, .tuple, .callable => unreachable, // only tag, nominal and anchored steps are expanded with children below
@@ -13754,7 +13776,7 @@ const Cloner = struct {
             }
             const expanded: Step = .{ .value = step.value, .dest = step.dest, .results_start = results.items.len, .expanded = true };
             switch (step.value) {
-                .expr => |expr| try results.append(gpa, .{ .expr = try self.addExpr(.{ .ty = step.dest, .data = .{ .row_widen = .{ .value = expr } } }) }),
+                .expr => |expr| try results.append(gpa, .{ .expr = try self.addExpr(.{ .ty = step.dest, .data = .{ .row_widen = .{ .value = try self.placeSourceExpr(expr) } } }) }),
                 .runtime_anchor => |anchor| {
                     try steps.append(gpa, expanded);
                     try steps.append(gpa, .{ .value = anchor.structure.*, .dest = step.dest });
@@ -14666,7 +14688,7 @@ const ProgramProcedureUsage = struct {
             try collectAllFnUsesInExpr(allocator, program, body, owner, fn_uses, &reached, &pending);
         }
         for (program.rootsView()) |root| {
-            fn_uses[@backingInt(root.fn_id)].value_refs += 1;
+            fn_uses[@backingInt(root.fn_id)].is_root = true;
         }
         return .{
             .tail_self_calls = tail_self_calls,
@@ -16020,7 +16042,11 @@ test "compile-time root reads remain opaque through specialization and cloning" 
     try std.testing.expect(value.bindings.isEmpty());
     try std.testing.expect(value.value == .expr);
     try std.testing.expectEqual(read, value.value.expr);
-    try std.testing.expectEqual(read, try cloner.cloneExprPlain(read));
+    // The rewrite writes a body that does not hold the read, so it places
+    // a copy of its own.
+    const placed = try cloner.cloneExprPlain(read);
+    try std.testing.expect(placed != read);
+    try std.testing.expectEqual(root_id, program.getExpr(placed).data.comptime_value.root);
     try std.testing.expect(!try cloner.crossingKnownAt(read, &.{}, .full));
     try std.testing.expect((try cloner.peekKnownValue(read)) == null);
     try std.testing.expect((try pass.staticDataStructure(read)).* == .expr);
@@ -16062,35 +16088,65 @@ test "a constant read counts as one expression in either form" {
     try std.testing.expectEqual(BodySize{ .exact = 1 }, try exprBodySizeWithin(allocator, &program, candidate, spec_constr_body_expr_threshold));
 }
 
-test "static candidate clones share closed initializers without emitting caller work" {
+test "static candidates stay in their own body and are copied with locals of their own elsewhere" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
     defer program.deinit();
     const item_ty = try program.types.add(.{ .primitive = .u8 });
     const list_ty = try program.types.add(.{ .list = item_ty });
-    const item = try program.addExpr(.{ .ty = item_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(u128, 7)), .kind = .u128 } } });
-    const list = try program.addExpr(.{ .ty = list_ty, .data = .{ .list = try program.addExprSpan(&.{item}) } });
+    // The initializer binds a local of its own: `x = 7` then `[x]`.
+    const local = try program.addLocal(@fromBackingInt(@intCast(1)), item_ty);
+    const seven = try program.addExpr(.{ .ty = item_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(u128, 7)), .kind = .u128 } } });
+    const read = try program.addExpr(.{ .ty = item_ty, .data = .{ .local = local } });
+    const list = try program.addExpr(.{ .ty = list_ty, .data = .{ .list = try program.addExprSpan(&.{read}) } });
+    const initializer = try program.addExpr(.{ .ty = list_ty, .data = .{ .let_ = .{
+        .bind = try program.addPat(.{ .ty = item_ty, .data = .{ .bind = local } }),
+        .value = seven,
+        .rest = list,
+    } } });
+    const static_data = try addStaticDataIdentityForTest(&program);
     const candidate = try program.addExpr(.{ .ty = list_ty, .data = .{ .static_data_candidate = .{
         .storage = .aggregate,
-        .static_data = try addStaticDataIdentityForTest(&program),
-        .value = .{ .runtime = list },
+        .static_data = static_data,
+        .value = .{ .runtime = initializer },
     } } });
     var pass = try Pass.init(allocator, &program);
     defer pass.deinit();
-    const before = program.markSpecConstrAnalysis();
-    for (0..64) |_| {
-        var rewrite = Cloner.initForRewrite(&pass);
-        defer rewrite.deinit();
-        var exit = Cloner.initForLoopExitSelection(&pass);
-        defer exit.deinit();
-        const cloned = try exit.cloneExprValueDemandingShape(candidate);
-        try std.testing.expect(cloned.bindings.isEmpty());
-        try std.testing.expectEqual(candidate, try exit.materialize(cloned.value));
-        try std.testing.expectEqual(candidate, try rewrite.cloneExpr(candidate));
-        try std.testing.expectEqual(candidate, try rewrite.cloneExprPlain(candidate));
-    }
-    try std.testing.expectEqualDeep(before, program.markSpecConstrAnalysis());
-    // The shape reader treats the list as opaque; its element needs no view.
+
+    // A rewrite of the body that holds the candidate keeps it.
+    var original_body = Cloner.initForOriginalBodyRewrite(&pass);
+    defer original_body.deinit();
+    try std.testing.expectEqual(candidate, try original_body.cloneExpr(candidate));
+    try std.testing.expectEqual(candidate, try original_body.cloneExprPlain(candidate));
+
+    // Every other clone writes a body that does not hold it, which gets a
+    // copy of the closed initializer reading a local of its own.
+    const Copy = struct {
+        fn expectOwnCopy(p: *const Ast.Program, source: Ast.ExprId, copy: Ast.ExprId, source_local: Ast.LocalId, data: Common.StaticDataId) error{ TestUnexpectedResult, TestExpectedEqual }!void {
+            try std.testing.expect(copy != source);
+            const copied = p.getExpr(copy).data.static_data_candidate;
+            try std.testing.expectEqual(data, copied.static_data);
+            const binding = p.getExpr(copied.value.runtime).data.let_;
+            const own = p.getPat(binding.bind).data.bind;
+            try std.testing.expect(own != source_local);
+            const items = p.exprSpan(p.getExpr(binding.rest).data.list);
+            try std.testing.expectEqual(own, p.getExpr(GuardedList.at(items, 0)).data.local);
+        }
+    };
+    var rewrite = Cloner.initForRewrite(&pass);
+    defer rewrite.deinit();
+    try Copy.expectOwnCopy(&program, candidate, try rewrite.cloneExpr(candidate), local, static_data);
+    try Copy.expectOwnCopy(&program, candidate, try rewrite.cloneExprPlain(candidate), local, static_data);
+    var exit = Cloner.initForLoopExitSelection(&pass);
+    defer exit.deinit();
+    const cloned = try exit.cloneExprValueDemandingShape(candidate);
+    try std.testing.expect(cloned.bindings.isEmpty());
+    try Copy.expectOwnCopy(&program, candidate, try exit.materialize(cloned.value), local, static_data);
+
+    // The source is unchanged.
+    try std.testing.expectEqual(initializer, program.getExpr(candidate).data.static_data_candidate.value.runtime);
+    try std.testing.expectEqual(local, program.getExpr(read).data.local);
+    // The shape reader treats the initializer as opaque.
     try std.testing.expectEqual(@as(usize, 2), pass.static_data_structure.count());
 }
 
@@ -16156,7 +16212,15 @@ test "static candidate match rebinding preserves the initializer and its private
     var bindings: BindingChain = .{};
     const prepared = (try cloner.bindPatToMatchValue(pat, cloned.value, literal, &bindings)).?;
     try std.testing.expect(!bindings.isEmpty());
-    try std.testing.expectEqual(candidate, try cloner.materialize(prepared));
+    // The rewrite writes a body that does not hold the candidate, so it
+    // places a copy whose private scope binds a local of its own.
+    const placed = try cloner.materialize(prepared);
+    try std.testing.expect(placed != candidate);
+    const placed_tuple = program.getExpr(placed).data.static_data_candidate.value.runtime;
+    const placed_private = program.getExpr(GuardedList.at(program.exprSpan(program.getExpr(placed_tuple).data.tuple), 0)).data.let_;
+    const placed_local = program.getPat(placed_private.bind).data.bind;
+    try std.testing.expect(placed_local != local);
+    try std.testing.expectEqual(placed_local, program.getExpr(placed_private.rest).data.local);
     try std.testing.expectEqual(private, itemFromValue(cloned.value, 0).?.expr);
     const selected = try cloner.materialize(itemFromValue(prepared, 0).?);
     try std.testing.expect(program.getExpr(selected).data.local != local);

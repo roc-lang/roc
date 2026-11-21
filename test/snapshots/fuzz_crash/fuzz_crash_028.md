@@ -264,13 +264,9 @@ DECLARATION HAS NO VALUE - fuzz_crash_028.md:95:1:95:34
 TYPE MISMATCH - fuzz_crash_028.md:102:8:102:11
 TOO FEW ARGS - fuzz_crash_028.md:104:2:106:3
 REFERENCE HAS NO VALUE - fuzz_crash_028.md:115:3:115:10
-TYPE MISMATCH - fuzz_crash_028.md:133:5:133:18
-TYPE MISMATCH - fuzz_crash_028.md:133:5:133:25
 TYPE MISMATCH - fuzz_crash_028.md:133:5:133:31
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:141:1:141:7
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:144:1:144:13
-MISSING METHOD - fuzz_crash_028.md:133:5:133:12
-MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 # PROBLEMS
 ~~~clojure
 (reports
@@ -2299,90 +2295,6 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 133 5) (end 133 18))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "?")
-			(reflow " ")
-			(reflow "may return early with a type that doesn't match the function body."))
-		(document
-			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 18) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
-			(line-break)
-			(reflow "On error, this")
-			(reflow " ")
-			(annotated code "?")
-			(reflow " ")
-			(reflow "returns an")
-			(reflow " ")
-			(annotated code "Err")
-			(reflow ", so this function must return a")
-			(reflow " ")
-			(annotated code "Try")
-			(reflow ".")
-			(line-break)
-			(line-break)
-			(reflow "But its body evaluates to:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "[Blue]")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "The error types from all")
-			(reflow " ")
-			(annotated code "?")
-			(reflow " ")
-			(reflow "operators and the function body must be compatible, since any of them could be the actual return value.")))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 133 5) (end 133 25))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "?")
-			(reflow " ")
-			(reflow "may return early with a type that doesn't match the function body."))
-		(document
-			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 25) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
-			(line-break)
-			(reflow "On error, this")
-			(reflow " ")
-			(annotated code "?")
-			(reflow " ")
-			(reflow "returns an")
-			(reflow " ")
-			(annotated code "Err")
-			(reflow ", so this function must return a")
-			(reflow " ")
-			(annotated code "Try")
-			(reflow ".")
-			(line-break)
-			(line-break)
-			(reflow "But its body evaluates to:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "[Blue]")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "The error types from all")
-			(reflow " ")
-			(annotated code "?")
-			(reflow " ")
-			(reflow "operators and the function body must be compatible, since any of them could be the actual return value.")))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
 		(region (start 133 5) (end 133 31))
 		(headline
 			(reflow "This")
@@ -2443,56 +2355,7 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(source-region (file "fuzz_crash_028.md") (start 144 1) (end 144 13) (annotation error) (line-text "t : V((a,c))"))
 			(line-break)
 			(line-break)
-			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
-	(report
-		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 133 5) (end 133 12))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "od")
-			(reflow " ")
-			(reflow "call is on")
-			(reflow " ")
-			(reflow "a value whose type never resolved to a concrete type,")
-			(reflow " ")
-			(reflow "so it has no")
-			(reflow " ")
-			(annotated code "od")
-			(reflow " ")
-			(reflow "method."))
-		(document
-			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 12) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
-			(line-break)
-			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one.")))
-	(report
-		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 133 5) (end 133 18))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "ned")
-			(reflow " ")
-			(reflow "call is on")
-			(reflow " ")
-			(reflow "a value of type")
-			(reflow " ")
-			(annotated code "ok")
-			(reflow ",")
-			(reflow " ")
-			(reflow "which never resolved to a concrete type,")
-			(reflow " ")
-			(reflow "so it has no")
-			(reflow " ")
-			(annotated code "ned")
-			(reflow " ")
-			(reflow "method."))
-		(document
-			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 18) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
-			(line-break)
-			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -3198,7 +3061,7 @@ EndOfFile,
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1261) (dispatcher-var 281)
+						(e-interpolation (constraint-fn-var 1262) (dispatcher-var 281)
 							(first
 								(e-literal (string "H, ")))
 							(parts
@@ -3255,15 +3118,7 @@ EndOfFile,
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 1351)
-									(receiver
-										(e-runtime-error (tag "erroneous_value_expr")))
-									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 1348)
-											(receiver
-												(e-num (value "5")))
-											(args
-												(e-num (value "5"))))))
+								(e-runtime-error (tag "erroneous_value_expr"))
 								(e-nominal-external
 									(builtin)
 									(e-tag (name "True")))))
@@ -3274,18 +3129,18 @@ EndOfFile,
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 1363)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1361)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 1360)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1358)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 1369)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1367)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 1366)
+															(e-dispatch-call (method "minus") (constraint-fn-var 1364)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -3300,11 +3155,11 @@ EndOfFile,
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 1387)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1385)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 1384)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 1382)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -3316,52 +3171,7 @@ EndOfFile,
 							(cond
 								(e-field-access
 									(receiver
-										(e-match
-											(match
-												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 1453)
-														(receiver
-															(e-match
-																(match
-																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 1423)
-																			(receiver
-																				(e-runtime-error (tag "erroneous_value_expr")))
-																			(args)))
-																	(branches
-																		(branch
-																			(patterns
-																				(pattern (degenerate false)
-																					(p-nominal-external (builtin)
-																						(p-applied-tag))))
-																			(value
-																				(e-runtime-error (tag "erroneous_value_expr"))))
-																		(branch
-																			(patterns
-																				(pattern (degenerate false)
-																					(p-nominal-external (builtin)
-																						(p-applied-tag))))
-																			(value
-																				(e-return
-																					(e-runtime-error (tag "erroneous_value_expr")))))))))
-														(args)))
-												(branches
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-lookup-local
-																(p-assign (ident "#ok")))))
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-return
-																(e-runtime-error (tag "erroneous_value_expr")))))))))
+										(e-runtime-error (tag "erroneous_value_expr")))
 									(segments
 										(segment (name "recd") (mode "required")))))
 							(branches

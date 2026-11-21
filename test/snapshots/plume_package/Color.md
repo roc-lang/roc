@@ -1177,7 +1177,7 @@ is_named_color = |str| {
 											(p-assign (ident "#interp_9"))
 											(e-lookup-local
 												(p-assign (ident "str"))))
-										(e-interpolation (constraint-fn-var 1059) (dispatcher-var 353)
+										(e-interpolation (constraint-fn-var 1060) (dispatcher-var 353)
 											(first
 												(e-literal (string "Unknown color ")))
 											(parts
@@ -1200,7 +1200,7 @@ is_named_color = |str| {
 			(e-block
 				(s-let
 					(p-assign (ident "colors"))
-					(e-call (constraint-fn-var 1102)
+					(e-call (constraint-fn-var 1103)
 						(e-lookup-external
 							(builtin))
 						(e-list
@@ -1211,7 +1211,7 @@ is_named_color = |str| {
 									(e-literal (string "AntiqueWhite")))
 								(e-string
 									(e-literal (string "Aqua")))))))
-				(e-dispatch-call (method "contains") (constraint-fn-var 1105)
+				(e-dispatch-call (method "contains") (constraint-fn-var 1106)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "colors"))))
@@ -1238,7 +1238,7 @@ is_named_color = |str| {
 		(e-method-eq (negated "false")
 			(lhs
 				(e-runtime-error (tag "erroneous_value_expr")
-					(e-call (constraint-fn-var 1149)
+					(e-call (constraint-fn-var 1150)
 						(e-lookup-local
 							(p-assign (ident "rgb")))
 						(e-num (value "124"))
@@ -1251,7 +1251,7 @@ is_named_color = |str| {
 		(e-method-eq (negated "false")
 			(lhs
 				(e-runtime-error (tag "erroneous_value_expr")
-					(e-call (constraint-fn-var 1163)
+					(e-call (constraint-fn-var 1164)
 						(e-lookup-local
 							(p-assign (ident "rgba")))
 						(e-num (value "124"))
@@ -1264,9 +1264,9 @@ is_named_color = |str| {
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-dispatch-call (method "map_ok") (constraint-fn-var 1178)
+				(e-dispatch-call (method "map_ok") (constraint-fn-var 1179)
 					(receiver
-						(e-call (constraint-fn-var 1175)
+						(e-call (constraint-fn-var 1176)
 							(e-lookup-local
 								(p-assign (ident "hex")))
 							(e-string

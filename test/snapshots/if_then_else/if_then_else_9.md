@@ -14,27 +14,12 @@ if bool {
 }
 ~~~
 # EXPECTED
-UNCONDITIONAL CONDITION - if_then_else_9.md:3:11:3:13
 TYPE MISMATCH - if_then_else_9.md:3:11:3:13
 TYPE MISMATCH - if_then_else_9.md:2:2:2:3
 TYPE MISMATCH - if_then_else_9.md:6:2:6:3
 # PROBLEMS
 ~~~clojure
 (reports
-	(report
-		(severity warning)
-		(title "Unconditional Condition")
-		(region (start 3 11) (end 3 13))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(reflow "if condition")
-			(reflow " ")
-			(reflow "is known at compile time, so")
-			(reflow " ")
-			(reflow "this conditional will always make the same choice."))
-		(document
-			(source-region (file "if_then_else_9.md") (start 3 11) (end 3 13) (annotation warning) (line-text "} else if 10 { # Comment after else open"))))
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")

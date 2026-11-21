@@ -3565,6 +3565,58 @@ test "single-use block helper nested in a multi-use wrapper is not duplicated" {
     , "helper", false);
 }
 
+test "a wrapper selected as a function value does not duplicate its single-use callee" {
+    const allocator = std.testing.allocator;
+    var source = try lowerModule(allocator,
+        \\word : U64 -> Str
+        \\word = |n| if n == 42 "yes" else "no"
+        \\wrap = |n| word(n)
+        \\other = |_| "other"
+        \\main : U64 -> Str
+        \\main = |n| {
+        \\    f = if n > 9 wrap else other
+        \\    Str.concat(f(n), f(n + 1))
+        \\}
+    , .wrappers);
+    defer source.deinit(allocator);
+
+    // `word` has one direct caller, but `wrap` can be selected at both calls
+    // of `f`. Its comparison must not be copied into both dispatches.
+    const store = &source.lowered.lir_result.store;
+    var comparisons: usize = 0;
+    for (0..store.procSpecCount()) |i| {
+        const proc: LIR.LirProcSpecId = @fromBackingInt(@as(u32, @intCast(i)));
+        if (store.getProcSpecImmediate(proc).body == .none) continue;
+        const stmts = try procStmts(allocator, store, proc);
+        defer allocator.free(stmts);
+        for (stmts) |id| {
+            const stmt = store.getCFStmtImmediate(id);
+            if (stmt.* == .assign_low_level and stmt.assign_low_level.op == .num_is_eq) comparisons += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), comparisons);
+}
+
+test "inlined helper locals do not leak between callable specializations" {
+    // The two curried calls enter the same source body. Its local record
+    // holds a callable with a different captured value in each copy.
+    _ = try lowerAndRunUserIter(
+        \\make = |f, captured| {
+        \\    invoke = |n| f(n, captured)
+        \\    bound = { invoke: invoke }
+        \\    |n| (bound.invoke)(n)
+        \\}
+        \\main : I64
+        \\main = {
+        \\    left = make(|x, n| x + n, 3.I64)
+        \\    right = make(|x, s| if s == "ab" x * 2 else 0, "ab")
+        \\    result = left(4) * 10 + right(4)
+        \\    dbg result
+        \\    result
+        \\}
+    , .wrappers, "78");
+}
+
 test "bodies on interlocking call cycles are decided alike in every definition order" {
     // `a` and `b` call each other, and so do `b` and `c`. Which of them are
     // inlined depends on the call graph alone, never on the order the

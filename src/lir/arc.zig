@@ -1986,16 +1986,21 @@ fn intersectOwnedSetChanged(target: *OwnedSet, other: *const OwnedSet) ResourceE
 /// Sentinel outside the compact plan-index domain.
 const no_plan: u32 = std.math.maxInt(u32);
 
+/// A field difference reconciles paths while the container is still
+/// present. Only its eventual death releases a different tag's whole unit.
+const ReleaseExtent = enum { fields, container };
+
 /// Concrete release form selected during planning. Materialization does not
 /// consult solved maybe-initialized metadata to decide which LIR statement to
 /// emit.
 const ReleaseDecision = union(enum) {
     initialized: LIR.LocalId,
-    /// Release exactly these committed aggregate field places. A zero mask
-    /// settles a representation shell without emitting RC statements.
+    /// Release these committed field places. When the container itself
+    /// dies, another variant's intact unit must also be released.
     residual: struct {
         value: LIR.LocalId,
         field_mask: u64,
+        extent: ReleaseExtent = .container,
     },
     maybe_initialized: struct {
         value: LIR.LocalId,
@@ -2627,6 +2632,7 @@ const Inserter = struct {
                 residual.value,
                 self.dismantleFor(residual.value) orelse arcInvariant("ARC residual release named a container without a committed field domain"),
                 residual.field_mask,
+                residual.extent,
                 cause,
                 next,
             ),
@@ -2963,6 +2969,15 @@ const Inserter = struct {
                     .construct => {
                         const operands = try self.dynOperands(op);
                         const transferred = step.transfer_positions.of(u32, &self.arc_plans.positions);
+                        if (op == .record_update) {
+                            // The helper releases the base before it returns.
+                            // That release may also be the last reference to a
+                            // borrowed replacement projected from the base.
+                            // Supply only the units the ARC plan did not transfer.
+                            const cause: RcCause = .{ .stmt = at, .reason = .stored_in_aggregate };
+                            const update = try self.addWithNext(stmt, next, origin);
+                            break :blk try self.retainLocalsExceptPositions(operands, transferred, cause, update);
+                        }
                         if (op == .closure and op.closure.reuse != null) {
                             // The capture record is retained after the
                             // closure takes it, like any construction's
@@ -3785,6 +3800,7 @@ const Inserter = struct {
                 try self.releases.append(self.inserter.solve_allocator, .{ .residual = .{
                     .value = self.inserter.domain().resourceLocalAt(bit),
                     .field_mask = residual_difference,
+                    .extent = .fields,
                 } });
             }
         }
@@ -7898,7 +7914,7 @@ const Inserter = struct {
         }
         if (owned.residualMask(root) != container.full_mask) return null;
         try owned.takeResidualField(root, plan.field_mask);
-        return .{ .residual = .{ .value = root, .field_mask = plan.field_mask } };
+        return .{ .residual = .{ .value = root, .field_mask = plan.field_mask, .extent = .fields } };
     }
 
     /// Moves the committed field unit out of the container's residual mask
@@ -7954,7 +7970,7 @@ const Inserter = struct {
     fn releaseLocalIfRc(self: *Inserter, local: LIR.LocalId, cause: RcCause, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         if (!self.localContainsRefcounted(local)) return next;
         if (self.dismantleFor(local)) |container| {
-            return try self.dismantleContainer(local, container, container.full_mask, cause, next);
+            return try self.dismantleContainer(local, container, container.full_mask, .container, cause, next);
         }
         const rc = self.rcHelperForLocal(.decref, local);
         return try self.store.addCFStmt(.{ .decref = .{
@@ -7971,9 +7987,9 @@ const Inserter = struct {
     /// solved arrays never meet: field layouts drive the helpers directly,
     /// and the container's atomicity covers its stored payloads exactly as
     /// the whole-struct helper would have.
-    fn dismantleContainer(self: *Inserter, local: LIR.LocalId, container: arc_dismantle.Container, residual_mask: u64, cause: RcCause, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+    fn dismantleContainer(self: *Inserter, local: LIR.LocalId, container: arc_dismantle.Container, residual_mask: u64, extent: ReleaseExtent, cause: RcCause, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         if ((residual_mask & ~container.full_mask) != 0) arcInvariant("ARC residual release exceeded its committed aggregate field domain");
-        if (container.payload_view) |view| return try self.dismantleUnion(local, container, view, residual_mask, cause, next);
+        if (container.payload_view) |view| return try self.dismantleUnion(local, container, view, residual_mask, extent, cause, next);
         return try self.releaseResidualFields(local, local, container, residual_mask, cause, next);
     }
 
@@ -7993,16 +8009,17 @@ const Inserter = struct {
         container: arc_dismantle.Container,
         view: arc_dismantle.PayloadView,
         residual_mask: u64,
+        extent: ReleaseExtent,
         cause: RcCause,
         next: LIR.CFStmtId,
     ) ResourceError!LIR.CFStmtId {
-        const whole = try self.store.addCFStmt(.{ .decref = .{
+        const other_variant = if (extent == .fields) next else try self.store.addCFStmt(.{ .decref = .{
             .value = local,
             .rc = try self.store.addRcHelperRef(self.rcHelperForLocal(.decref, local)),
             .atomicity = self.rcAtomicity(local),
             .next = next,
         } }, self.rcOrigin(cause, .decref, local));
-        if (residual_mask == container.full_mask) return whole;
+        if (extent == .container and residual_mask == container.full_mask) return other_variant;
 
         const arm = try self.releaseResidualFields(local, view.view, container, residual_mask, cause, next);
         const discriminant = try self.store.addLocal(.{ .layout_idx = .u32 });
@@ -8013,7 +8030,7 @@ const Inserter = struct {
         const dispatch = try self.store.addCFStmt(.{ .switch_stmt = .{
             .cond = discriminant,
             .branches = branches,
-            .default_branch = whole,
+            .default_branch = other_variant,
             .default_is_cold = false,
             .continuation = next,
         } }, self.dismantleOrigin(cause, local));
@@ -12681,6 +12698,52 @@ test "RC tag union dismantles through its payload view when the payload dies fie
     try testing.expectEqual(@as(usize, 0), f.countRc(tag_value, .incref));
     try testing.expectEqual(@as(usize, 2), f.countRc(tag_value, .decref));
     try testing.expectEqual(@as(usize, 2), f.countAllRc());
+}
+
+test "RC balancing a tagged field before a join leaves the other variant owned" {
+    try checkTaggedFieldJoin(false);
+    try checkTaggedFieldJoin(true);
+}
+
+fn checkTaggedFieldJoin(project_in_default: bool) (Allocator.Error || error{TestExpectedEqual})!void {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const layout = try f.layouts.putTagUnion(&.{ .str, f.pair_str });
+    const tagged = try f.local(layout);
+    const disc = try f.local(.u32);
+    const result = try f.local(.u32);
+    const payload = try f.local(f.pair_str);
+    const taken = try f.local(.str);
+    const sink = try f.local(.i64);
+    const id = f.freshJoinPointId();
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = id } }, .test_fixture);
+    const take = try f.assignRefField(taken, payload, 1, try f.assignCall(sink, &.{taken}, jump));
+    const project = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = payload,
+        .op = .tagPayloadStruct(tagged, 1, 1),
+        .next = take,
+    } }, .test_fixture);
+    const select = try f.store.addCFStmt(.{ .switch_stmt = .{
+        .cond = disc,
+        .branches = try f.store.addCFSwitchBranches(&.{.{
+            .value = @intFromBool(!project_in_default),
+            .body = if (project_in_default) jump else project,
+        }}),
+        .default_branch = if (project_in_default) project else jump,
+    } }, .test_fixture);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = id,
+        .params = .empty(),
+        .remainder = try f.assignDiscriminant(disc, tagged, select),
+        .body = try f.assignDiscriminant(result, tagged, try f.ret(result)),
+    } }, .test_fixture);
+    _ = try f.addProc(&.{}, try f.assignCall(tagged, &.{}, join), .u32);
+    try f.run();
+    // The String in variant 0 belongs to the whole union. Unlike the
+    // projected fields of variant 1 it is not partially released at the
+    // incoming edge as well as at the eventual death.
+    try testing.expectEqual(@as(usize, 1), f.countRc(tagged, .decref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(taken, .incref));
 }
 
 test "RC tag union dismantles through its payload view when one field remains for residual release" {
@@ -20571,6 +20634,71 @@ test "ARC dyn field views supply ownership to consuming low-level operations" {
     try d.f.expectRc(view, 2, 0, 0);
     try d.f.expectRc(param, 0, 1, 0);
     try d.expectDynamicRcShape();
+}
+
+test "ARC supplies a borrowed record update base before the update" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const parent_desc = try d.desc();
+    const record_desc = try d.desc();
+    const plan = try d.desc();
+    const parent = try d.value(parent_desc, .param);
+    const base = try d.value(record_desc, .view);
+    const replacement = try d.value(record_desc, .view);
+    const updated = try d.value(record_desc, .frame);
+    const equal = try d.f.local(.bool);
+
+    // Compare a nested record with its updated copy. The runtime update
+    // releases one base unit before returning; a later retain cannot
+    // supply that unit. Inspect the ARC schedule, never run the program.
+    const ret = try d.f.ret(equal);
+    const compare = try d.op(equal, .{ .eq = .{ .lhs = base, .rhs = updated, .desc = record_desc } }, ret);
+    const update = try d.op(updated, .{ .record_update = .{
+        .base = base,
+        .base_desc = record_desc,
+        .desc = record_desc,
+        .plan = plan,
+        .values = try d.f.span(&.{replacement}),
+    } }, compare);
+    const project = try d.op(replacement, .{ .field_addr = .{ .base = base, .desc = record_desc, .field_index = .{ .immediate = 0 } } }, update);
+    const read = try d.op(base, .{ .field_addr = .{ .base = parent, .desc = parent_desc, .field_index = .{ .immediate = 0 } } }, project);
+    const proc = try d.proc(&.{ parent_desc, record_desc, plan, parent }, read, .bool, null);
+    try d.run(&.{proc});
+
+    var cursor = d.f.store.getProcSpecImmediate(proc).body.get().?;
+    var supplied = false;
+    var supplied_field = false;
+    while (true) {
+        const stmt = d.f.store.getCFStmtImmediate(cursor).*;
+        if (stmt == .incref and stmt.incref.value == base) supplied = true;
+        if (stmt == .incref and stmt.incref.value == replacement) supplied_field = true;
+        if (stmt == .dyn and d.f.store.stmtRow(stmt.dyn.data) == .record_update) break;
+        cursor = body_clone.linearNextOrNull(stmt) orelse return error.ExpectedRecordUpdate;
+    }
+    try testing.expectEqual(true, supplied);
+    try testing.expectEqual(true, supplied_field);
+}
+
+test "ARC transfers an owned last-use dynamic record to its update" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const desc = try d.desc();
+    const plan = try d.desc();
+    const original = try d.value(desc, .frame);
+    const updated = try d.value(desc, .result);
+    const component = try d.f.local(.str);
+    const ret = try d.f.ret(updated);
+    const update = try d.op(updated, .{ .record_update = .{
+        .base = original,
+        .base_desc = desc,
+        .desc = desc,
+        .plan = plan,
+        .values = try d.f.span(&.{}),
+    } }, ret);
+    const make = try d.op(original, .{ .record = .{ .desc = desc, .fields = try d.f.span(&.{component}) } }, update);
+    const proc = try d.proc(&.{ desc, plan, component }, make, d.dynamic, updated);
+    try d.run(&.{proc});
+    try d.f.expectRc(original, 0, 0, 0);
 }
 
 test "ARC dyn eq and inspect borrow their operand" {

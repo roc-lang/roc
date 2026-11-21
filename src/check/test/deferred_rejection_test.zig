@@ -86,6 +86,46 @@ test "a name bound through a chain of aliases from a literal a later `?` rejects
     , &.{"Type Mismatch"});
 }
 
+test "error recovery: late rejected binder supplies neither branch of a join" {
+    try expectOnlyTypeProblems(
+        \\run = |b| {
+        \\    for y in 5 {
+        \\        v = if b y else y
+        \\        a = List.len(v)
+        \\        c = Str.concat(v, "x")
+        \\        _ = (a, c)
+        \\    }
+        \\    {}
+        \\}
+    , &.{"Missing Method"});
+    try expectOnlyTypeProblems(
+        \\run = |b| {
+        \\    for y in 5 {
+        \\        v = match b {
+        \\            Bool.True => y
+        \\            Bool.False => y
+        \\        }
+        \\        _ = v.len()
+        \\    }
+        \\    {}
+        \\}
+    , &.{"Missing Method"});
+}
+
+test "error recovery: late rejected try scrutinee supplies no payload" {
+    try expectOnlyTypeProblems(
+        \\run = || {
+        \\    for y in 5 {
+        \\        v = y?
+        \\        a = List.len(v)
+        \\        c = Str.concat(v, "x")
+        \\        _ = (a, c)
+        \\    }
+        \\    Ok({})
+        \\}
+    , &.{"Missing Method"});
+}
+
 test "a name bound through a destructure of an alias of a rejected literal adds no method report" {
     try expectOnlyTypeProblems(
         \\run = |_x| {

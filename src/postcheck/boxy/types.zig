@@ -20,6 +20,7 @@ const std = @import("std");
 const collections = @import("collections");
 const base = @import("base");
 const check = @import("check");
+const Common = @import("../common.zig");
 const boxy_runtime = @import("boxy_runtime");
 
 const Allocator = std.mem.Allocator;
@@ -2344,9 +2345,12 @@ test "interning shares structurally equal nodes" {
 test "record interning preserves immutable field default identities" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
+    var empty_modules: Common.EmptyCheckedModulesForTest = undefined;
+    try empty_modules.init(std.testing.allocator);
+    defer empty_modules.deinit(std.testing.allocator);
     var modules: Modules = .{ .allocator = std.testing.allocator };
     defer modules.deinit();
-    var view: checked.ImportedModuleView = undefined;
+    var view = empty_modules.view();
     view.key = .{ .bytes = @splat(1) };
     view.module_identity.stable_hash = view.key.bytes;
     const first_module = try modules.add(view);
@@ -2572,15 +2576,15 @@ fn hasErrorUnmemoized(allocator: Allocator, modules: *const Modules, module: Mod
     return false;
 }
 
-/// Register a distinct fixture module through the real module-ID producer.
-/// Only identity and checked types are consumed by these reachability tests.
-fn addErrorTestModule(modules: *Modules, store: *checked.CheckedTypeStore) Allocator.Error!ModuleIndex {
+/// Register a distinct fixture module through the real module-ID producer:
+/// `empty`'s module under its own identity, holding `store`'s types.
+fn addErrorTestModule(empty: *const Common.EmptyCheckedModulesForTest, modules: *Modules, store: *checked.CheckedTypeStore) Allocator.Error!ModuleIndex {
     if (store.synthesized_keys == null) {
         store.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(modules.allocator, std.testing.io, store.roots.items().len));
     }
     var identity: [32]u8 = @splat(0);
     std.mem.writeInt(u64, identity[0..8], @intCast(modules.views.items.len), .little);
-    var view: checked.ImportedModuleView = undefined;
+    var view = empty.view();
     view.key = .{ .bytes = identity };
     view.module_identity.stable_hash = identity;
     view.checked_types = store.view();
@@ -2610,9 +2614,12 @@ test "Boxy literal substitution visits only demanded substitutions and preserves
     // Converting this unused argument would violate the record-row invariant.
     const unrelated = try checked_store.appendSyntheticPayloadRoot(a, .{ .record = .{ .fields = &.{}, .ext = tags } });
     const pair = try checked_store.appendSyntheticPayloadRoot(a, .{ .tuple = try a.dupe(checked.CheckedTypeId, &.{ first, second }) });
+    var empty_modules: Common.EmptyCheckedModulesForTest = undefined;
+    try empty_modules.init(a);
+    defer empty_modules.deinit(a);
     var modules = Modules{ .allocator = a };
     defer modules.deinit();
-    const module = try addErrorTestModule(&modules, &checked_store);
+    const module = try addErrorTestModule(&empty_modules, &modules, &checked_store);
     var store = Store.init(a);
     defer store.deinit();
     const converter: Converter = .{ .store = &store, .modules = &modules };
@@ -2652,9 +2659,12 @@ test "Boxy literal substitution shares conversion row flattening and binds field
         .ext = empty_record,
     } });
     const whole = try checked_store.appendSyntheticPayloadRoot(a, .{ .record = .{ .fields = &.{}, .ext = row } });
+    var empty_modules: Common.EmptyCheckedModulesForTest = undefined;
+    try empty_modules.init(a);
+    defer empty_modules.deinit(a);
     var modules = Modules{ .allocator = a };
     defer modules.deinit();
-    const module = try addErrorTestModule(&modules, &checked_store);
+    const module = try addErrorTestModule(&empty_modules, &modules, &checked_store);
     modules.views.items[@backingInt(module)].view.canonical_names = &canonical_names;
     var store = Store.init(a);
     defer store.deinit();
@@ -2685,9 +2695,12 @@ test "Boxy literal substitution composes deep chains without native recursion" {
     const variable = try checked_store.reserveSyntheticTypeRoot(a);
     try checked_store.declareIdentityInstance(a, variable);
     try checked_store.fillSyntheticTypeRoot(a, variable, .{ .flex = .{} });
+    var empty_modules: Common.EmptyCheckedModulesForTest = undefined;
+    try empty_modules.init(a);
+    defer empty_modules.deinit(a);
     var modules = Modules{ .allocator = a };
     defer modules.deinit();
-    const module = try addErrorTestModule(&modules, &checked_store);
+    const module = try addErrorTestModule(&empty_modules, &modules, &checked_store);
     var store = Store.init(a);
     defer store.deinit();
     const converter: Converter = .{ .store = &store, .modules = &modules };
@@ -2708,10 +2721,13 @@ test "Boxy error reachability separates modules and preserves proofs across appe
     const bad = try first.appendSyntheticPayloadRoot(a, .err);
     const good = try second.appendSyntheticPayloadRoot(a, .empty_record);
     try std.testing.expectEqual(bad, good); // IDs alone cannot identify a node.
+    var empty_modules: Common.EmptyCheckedModulesForTest = undefined;
+    try empty_modules.init(a);
+    defer empty_modules.deinit(a);
     var modules = Modules{ .allocator = a };
     defer modules.deinit();
-    const first_module = try addErrorTestModule(&modules, &first);
-    const second_module = try addErrorTestModule(&modules, &second);
+    const first_module = try addErrorTestModule(&empty_modules, &modules, &first);
+    const second_module = try addErrorTestModule(&empty_modules, &modules, &second);
     const errors = try ErrorTypes.create(a, &modules);
     defer errors.destroy();
     try std.testing.expect(try errors.hasError(first_module, bad));
@@ -2746,9 +2762,12 @@ test "Boxy error reachability matches old traversal for late-positive cycles and
             try store.fillSyntheticTypeRoot(a, id, .{ .tuple = items });
         }
     }
+    var empty_modules: Common.EmptyCheckedModulesForTest = undefined;
+    try empty_modules.init(a);
+    defer empty_modules.deinit(a);
     var modules = Modules{ .allocator = a };
     defer modules.deinit();
-    const module = try addErrorTestModule(&modules, &store);
+    const module = try addErrorTestModule(&empty_modules, &modules, &store);
     for (0..2) |order| {
         const errors = try ErrorTypes.create(a, &modules);
         defer errors.destroy();
@@ -2834,9 +2853,12 @@ test "Boxy error reachability preserves value-error edges and field-kind semanti
     tags[0] = .{ .name = tag, .args = try a.dupe(checked.CheckedTypeId, &.{bad}) };
     const tag_bad = try store.appendSyntheticPayloadRoot(a, .{ .tag_union = .{ .tags = tags, .ext = empty_tags } });
     const tag_ext_bad = try store.appendSyntheticPayloadRoot(a, .{ .tag_union = .{ .tags = &.{}, .ext = bad } });
+    var empty_modules: Common.EmptyCheckedModulesForTest = undefined;
+    try empty_modules.init(a);
+    defer empty_modules.deinit(a);
     var modules = Modules{ .allocator = a };
     defer modules.deinit();
-    const module = try addErrorTestModule(&modules, &store);
+    const module = try addErrorTestModule(&empty_modules, &modules, &store);
     const errors = try ErrorTypes.create(a, &modules);
     defer errors.destroy();
     for ([_]checked.CheckedTypeId{ good, empty_tags, pending, flex, rigid, alias_good, nominal_good, kind_only }) |id| {
@@ -2864,9 +2886,12 @@ test "Boxy error reachability propagates OOM and retries without stale proofs" {
     const second = try store.reserveSyntheticTypeRoot(a);
     try store.fillSyntheticTypeRoot(a, first, .{ .tuple = try a.dupe(checked.CheckedTypeId, &.{ second, bad }) });
     try store.fillSyntheticTypeRoot(a, second, .{ .tuple = try a.dupe(checked.CheckedTypeId, &.{first}) });
+    var empty_modules: Common.EmptyCheckedModulesForTest = undefined;
+    try empty_modules.init(a);
+    defer empty_modules.deinit(a);
     var modules = Modules{ .allocator = a };
     defer modules.deinit();
-    const module = try addErrorTestModule(&modules, &store);
+    const module = try addErrorTestModule(&empty_modules, &modules, &store);
     try std.testing.checkAllAllocationFailures(a, errorTypesAllocationCase, .{ &modules, module, @as([]const checked.CheckedTypeId, &.{ first, second, bad }) });
     // Fail during edge expansion after retaining a completed leaf proof.
     var failing = std.testing.FailingAllocator.init(a, .{});
@@ -2897,9 +2922,12 @@ test "Boxy error reachability work stays bounded by shared graph nodes" {
             try store.fillSyntheticTypeRoot(a, id, .{ .tuple = try a.dupe(checked.CheckedTypeId, &.{ child, child }) });
         }
         try store.fillSyntheticTypeRoot(a, ids[count - 1], .empty_record);
+        var empty_modules: Common.EmptyCheckedModulesForTest = undefined;
+        try empty_modules.init(a);
+        defer empty_modules.deinit(a);
         var modules = Modules{ .allocator = a };
         defer modules.deinit();
-        const module = try addErrorTestModule(&modules, &store);
+        const module = try addErrorTestModule(&empty_modules, &modules, &store);
         const errors = try ErrorTypes.create(a, &modules);
         defer errors.destroy();
         try std.testing.expect(!try errors.hasError(module, ids[0]));

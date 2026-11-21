@@ -204,8 +204,6 @@ TYPE MISMATCH - fuzz_crash_020.md:86:11:86:17
 REFERENCE HAS NO VALUE - fuzz_crash_020.md:89:3:89:6
 TYPE MISMATCH - fuzz_crash_020.md:105:2:105:54
 DECLARATION HAS NO VALUE - fuzz_crash_020.md:116:1:116:13
-MISSING METHOD - fuzz_crash_020.md:105:55:105:66
-MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 # PROBLEMS
 ~~~clojure
 (reports
@@ -1338,56 +1336,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 			(source-region (file "fuzz_crash_020.md") (start 116 1) (end 116 13) (annotation error) (line-text "t : V((a,c))"))
 			(line-break)
 			(line-break)
-			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
-	(report
-		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 105 55) (end 105 66))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "od")
-			(reflow " ")
-			(reflow "call is on")
-			(reflow " ")
-			(reflow "a value whose type never resolved to a concrete type,")
-			(reflow " ")
-			(reflow "so it has no")
-			(reflow " ")
-			(annotated code "od")
-			(reflow " ")
-			(reflow "method."))
-		(document
-			(source-region (file "fuzz_crash_020.md") (start 105 55) (end 105 66) (annotation error) (line-text "\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?"))
-			(line-break)
-			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one.")))
-	(report
-		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 105 55) (end 105 72))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "ned")
-			(reflow " ")
-			(reflow "call is on")
-			(reflow " ")
-			(reflow "a value of type")
-			(reflow " ")
-			(annotated code "ok")
-			(reflow ",")
-			(reflow " ")
-			(reflow "which never resolved to a concrete type,")
-			(reflow " ")
-			(reflow "so it has no")
-			(reflow " ")
-			(annotated code "ned")
-			(reflow " ")
-			(reflow "method."))
-		(document
-			(source-region (file "fuzz_crash_020.md") (start 105 55) (end 105 72) (annotation error) (line-text "\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?"))
-			(line-break)
-			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary."))))
 ~~~
 # TOKENS
 ~~~zig

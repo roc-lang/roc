@@ -285,7 +285,7 @@ const InlineAnalyzer = struct {
 
     fn singleUseCandidate(self: *const InlineAnalyzer, fn_id: SpecFnId) ?Lifted.ExprId {
         const fn_use = self.use(fn_id);
-        if (fn_use.external_calls != 1 or fn_use.value_refs != 0) return null;
+        if (fn_use.external_calls != 1 or fn_use.value_refs != 0 or fn_use.is_root) return null;
 
         const call_expr_id = fn_use.external_call_expr orelse
             Common.invariant("single-use function had no external call expression");
@@ -732,7 +732,11 @@ const InlineAnalyzer = struct {
                     }
 
                     const fn_use = self.use(fn_id);
-                    const settled: ?bool = if (fn_use.external_calls == 0)
+                    // One reference to a wrapper as a value can lead to many
+                    // dispatch sites, each materializing the wrapper's body.
+                    const settled: ?bool = if (fn_use.value_refs != 0)
+                        false
+                    else if (fn_use.external_calls == 0)
                         true
                     else if (fn_use.external_calls != 1)
                         false
@@ -744,7 +748,7 @@ const InlineAnalyzer = struct {
                             Common.invariant("single-call inline owner use was not a direct call expression");
                         }
                         if (call_expr.data.call_proc.is_cold) break :blk true;
-                        if (fn_use.value_refs != 0) break :blk false;
+                        if (fn_use.is_root) break :blk false;
                         break :blk null;
                     };
                     if (settled) |once| {
