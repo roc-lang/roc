@@ -1,0 +1,557 @@
+{
+ "ageron/roclet|demos/01-reactivity.roc": {
+  "raw": [
+   "Application: 29 | 10 without comments or blank lines",
+   "Counted in 0ms"
+  ],
+  "Application": [
+   29,
+   10
+  ]
+ },
+ "ageron/roclet-display|package/main.roc": {
+  "raw": [
+   "Package: 101 | 83 without comments or blank lines",
+   "Counted in 0ms"
+  ],
+  "Package": [
+   101,
+   83
+  ]
+ },
+ "grayrest/roc-markdown|package/LocTest.roc": {
+  "raw": [
+   "Module: 8,252 | 5,977 without comments or blank lines",
+   "Counted in 1ms"
+  ],
+  "Module": [
+   8252,
+   5977
+  ]
+ },
+ "grayrest/roc-markdown|package/SchemesTest.roc": {
+  "raw": [
+   "Module: 8,053 | 5,837 without comments or blank lines",
+   "Counted in 1ms"
+  ],
+  "Module": [
+   8053,
+   5837
+  ]
+ },
+ "grayrest/roc-markdown|package/Test.roc": {
+  "raw": [
+   "Module: 8,649 | 6,086 without comments or blank lines",
+   "Counted in 1ms"
+  ],
+  "Module": [
+   8649,
+   6086
+  ]
+ },
+ "grayrest/roc-regex|examples/readme.roc": {
+  "raw": [
+   "Application: 31 | 19 without comments or blank lines",
+   "Local Dependencies: 8,319 | 6,355 without comments or blank lines",
+   "HTTPS Dependencies: 9,058 | 5,763 without comments or blank lines",
+   "Total: 17,408 | 12,137 without comments or blank lines",
+   "Counted in 2ms"
+  ],
+  "Application": [
+   31,
+   19
+  ],
+  "Local Dependencies": [
+   8319,
+   6355
+  ],
+  "HTTPS Dependencies": [
+   9058,
+   5763
+  ],
+  "Total": [
+   17408,
+   12137
+  ]
+ },
+ "grayrest/roc-regex|examples/smoke.roc": {
+  "raw": [
+   "Application: 80 | 69 without comments or blank lines",
+   "Local Dependencies: 4,346 | 3,189 without comments or blank lines",
+   "HTTPS Dependencies: 9,058 | 5,763 without comments or blank lines",
+   "Total: 13,484 | 9,021 without comments or blank lines",
+   "Counted in 1ms"
+  ],
+  "Application": [
+   80,
+   69
+  ],
+  "Local Dependencies": [
+   4346,
+   3189
+  ],
+  "HTTPS Dependencies": [
+   9058,
+   5763
+  ],
+  "Total": [
+   13484,
+   9021
+  ]
+ },
+ "grayrest/roc-regex|package-dfa/main.roc": {
+  "raw": [
+   "Package: 4,346 | 3,189 without comments or blank lines",
+   "Counted in 0ms"
+  ],
+  "Package": [
+   4346,
+   3189
+  ]
+ },
+ "grayrest/roc-regex|package-http/main.roc": {
+  "raw": [
+   "Package: 757 | 542 without comments or blank lines",
+   "Local Dependencies: 8,319 | 6,355 without comments or blank lines",
+   "Total: 9,076 | 6,897 without comments or blank lines",
+   "Counted in 1ms"
+  ],
+  "Package": [
+   757,
+   542
+  ],
+  "Local Dependencies": [
+   8319,
+   6355
+  ],
+  "Total": [
+   9076,
+   6897
+  ]
+ },
+ "grayrest/roc-regex|package/main.roc": {
+  "raw": [
+   "Package: 8,319 | 6,355 without comments or blank lines",
+   "Counted in 1ms"
+  ],
+  "Package": [
+   8319,
+   6355
+  ]
+ },
+ "lukewilliamboswell/plume|examples/hello.roc": {
+  "raw": [
+   "Application: 55 | 51 without comments or blank lines",
+   "Local Dependencies: 3,838 | 2,693 without comments or blank lines",
+   "HTTPS Dependencies: 9,058 | 5,763 without comments or blank lines",
+   "Total: 12,951 | 8,507 without comments or blank lines",
+   "Counted in 1ms"
+  ],
+  "Application": [
+   55,
+   51
+  ],
+  "Local Dependencies": [
+   3838,
+   2693
+  ],
+  "HTTPS Dependencies": [
+   9058,
+   5763
+  ],
+  "Total": [
+   12951,
+   8507
+  ]
+ },
+ "lukewilliamboswell/plume|package/main.roc": {
+  "raw": [
+   "Package: 3,838 | 2,693 without comments or blank lines",
+   "Counted in 0ms"
+  ],
+  "Package": [
+   3838,
+   2693
+  ]
+ },
+ "lukewilliamboswell/roc-automation|tools/downstream-regressions/main.roc": {
+  "raw": [
+   "Application: 181 | 166 without comments or blank lines",
+   "HTTPS Dependencies: 9,058 | 5,763 without comments or blank lines",
+   "Total: 9,239 | 5,929 without comments or blank lines",
+   "Counted in 1ms"
+  ],
+  "Application": [
+   181,
+   166
+  ],
+  "HTTPS Dependencies": [
+   9058,
+   5763
+  ],
+  "Total": [
+   9239,
+   5929
+  ]
+ },
+ "lukewilliamboswell/roc-blueprint|blueprint-core/main.roc": {
+  "raw": [
+   "Package: 10,265 | 8,301 without comments or blank lines",
+   "HTTPS Dependencies: 4,195 | 2,875 without comments or blank lines",
+   "Total: 14,460 | 11,176 without comments or blank lines",
+   "Counted in 1ms"
+  ],
+  "Package": [
+   10265,
+   8301
+  ],
+  "HTTPS Dependencies": [
+   4195,
+   2875
+  ],
+  "Total": [
+   14460,
+   11176
+  ]
+ },
+ "lukewilliamboswell/roc-font|examples/shape.roc": {
+  "raw": [
+   "Application: 65 | 38 without comments or blank lines",
+   "Local Dependencies: 19,995 | 15,072 without comments or blank lines",
+   "HTTPS Dependencies: 9,058 | 5,763 without comments or blank lines",
+   "Total: 29,118 | 20,873 without comments or blank lines",
+   "Counted in 2ms"
+  ],
+  "Application": [
+   65,
+   38
+  ],
+  "Local Dependencies": [
+   19995,
+   15072
+  ],
+  "HTTPS Dependencies": [
+   9058,
+   5763
+  ],
+  "Total": [
+   29118,
+   20873
+  ]
+ },
+ "lukewilliamboswell/roc-font|package/main.roc": {
+  "raw": [
+   "Package: 19,995 | 15,072 without comments or blank lines",
+   "Counted in 1ms"
+  ],
+  "Package": [
+   19995,
+   15072
+  ]
+ },
+ "lukewilliamboswell/roc-graph-layout|examples/build_pipeline/main.roc": {
+  "raw": [
+   "Application: 120 | 95 without comments or blank lines",
+   "Local Dependencies: 20,072 | 17,196 without comments or blank lines",
+   "HTTPS Dependencies: 9,058 | 5,763 without comments or blank lines",
+   "Total: 29,250 | 23,054 without comments or blank lines",
+   "Counted in 2ms"
+  ],
+  "Application": [
+   120,
+   95
+  ],
+  "Local Dependencies": [
+   20072,
+   17196
+  ],
+  "HTTPS Dependencies": [
+   9058,
+   5763
+  ],
+  "Total": [
+   29250,
+   23054
+  ]
+ },
+ "lukewilliamboswell/roc-graph-layout|examples/mermaid_sequence/main.roc": {
+  "raw": [
+   "Application: 22 | 17 without comments or blank lines",
+   "Local Dependencies: 37,093 | 32,217 without comments or blank lines",
+   "HTTPS Dependencies: 29,053 | 20,835 without comments or blank lines",
+   "Total: 66,168 | 53,069 without comments or blank lines",
+   "Counted in 5ms"
+  ],
+  "Application": [
+   22,
+   17
+  ],
+  "Local Dependencies": [
+   37093,
+   32217
+  ],
+  "HTTPS Dependencies": [
+   29053,
+   20835
+  ],
+  "Total": [
+   66168,
+   53069
+  ]
+ },
+ "lukewilliamboswell/roc-graph-layout|package-mermaid/main.roc": {
+  "raw": [
+   "Package: 17,204 | 15,146 without comments or blank lines",
+   "Local Dependencies: 19,889 | 17,071 without comments or blank lines",
+   "HTTPS Dependencies: 19,995 | 15,072 without comments or blank lines",
+   "Total: 57,088 | 47,289 without comments or blank lines",
+   "Counted in 4ms"
+  ],
+  "Package": [
+   17204,
+   15146
+  ],
+  "Local Dependencies": [
+   19889,
+   17071
+  ],
+  "HTTPS Dependencies": [
+   19995,
+   15072
+  ],
+  "Total": [
+   57088,
+   47289
+  ]
+ },
+ "lukewilliamboswell/roc-graph-layout|package/main.roc": {
+  "raw": [
+   "Package: 32,306 | 26,664 without comments or blank lines",
+   "Counted in 2ms"
+  ],
+  "Package": [
+   32306,
+   26664
+  ]
+ },
+ "lukewilliamboswell/roc-platform-template-zig|examples/hello_world/main.roc": {
+  "raw": [
+   "Application: 9 | 7 without comments or blank lines",
+   "Local Dependencies: 97 | 70 without comments or blank lines",
+   "Total: 106 | 77 without comments or blank lines",
+   "Counted in 0ms"
+  ],
+  "Application": [
+   9,
+   7
+  ],
+  "Local Dependencies": [
+   97,
+   70
+  ],
+  "Total": [
+   106,
+   77
+  ]
+ },
+ "lukewilliamboswell/roc-platform-template-zig|examples/tests/main.roc": {
+  "raw": [
+   "Application: 42 | 16 without comments or blank lines",
+   "Local Dependencies: 97 | 70 without comments or blank lines",
+   "Total: 139 | 86 without comments or blank lines",
+   "Counted in 0ms"
+  ],
+  "Application": [
+   42,
+   16
+  ],
+  "Local Dependencies": [
+   97,
+   70
+  ],
+  "Total": [
+   139,
+   86
+  ]
+ },
+ "lukewilliamboswell/roc-ray|examples/hello_world/main.roc": {
+  "raw": [
+   "Application: 106 | 65 without comments or blank lines",
+   "Local Dependencies: 17,034 | 9,696 without comments or blank lines",
+   "HTTPS Dependencies: 1,716 | 1,151 without comments or blank lines",
+   "Total: 18,856 | 10,912 without comments or blank lines",
+   "Counted in 2ms"
+  ],
+  "Application": [
+   106,
+   65
+  ],
+  "Local Dependencies": [
+   17034,
+   9696
+  ],
+  "HTTPS Dependencies": [
+   1716,
+   1151
+  ],
+  "Total": [
+   18856,
+   10912
+  ]
+ },
+ "lukewilliamboswell/roc-time|examples/repeated_local_time/main.roc": {
+  "raw": [
+   "Application: 59 | 54 without comments or blank lines",
+   "Local Dependencies: 13,763 | 10,651 without comments or blank lines",
+   "Total: 13,822 | 10,705 without comments or blank lines",
+   "Counted in 1ms"
+  ],
+  "Application": [
+   59,
+   54
+  ],
+  "Local Dependencies": [
+   13763,
+   10651
+  ],
+  "Total": [
+   13822,
+   10705
+  ]
+ },
+ "lukewilliamboswell/roc-time|package/main.roc": {
+  "raw": [
+   "Package: 19,374 | 14,942 without comments or blank lines",
+   "Counted in 2ms"
+  ],
+  "Package": [
+   19374,
+   14942
+  ]
+ },
+ "lukewilliamboswell/weaver|examples/basic.roc": {
+  "raw": [
+   "Application: 80 | 72 without comments or blank lines",
+   "Local Dependencies: 4,710 | 3,774 without comments or blank lines",
+   "HTTPS Dependencies: 10,680 | 7,101 without comments or blank lines",
+   "Total: 15,470 | 10,947 without comments or blank lines",
+   "Counted in 2ms"
+  ],
+  "Application": [
+   80,
+   72
+  ],
+  "Local Dependencies": [
+   4710,
+   3774
+  ],
+  "HTTPS Dependencies": [
+   10680,
+   7101
+  ],
+  "Total": [
+   15470,
+   10947
+  ]
+ },
+ "lukewilliamboswell/weaver|package/main.roc": {
+  "raw": [
+   "Package: 5,568 | 4,482 without comments or blank lines",
+   "HTTPS Dependencies: 1,622 | 1,338 without comments or blank lines",
+   "Total: 7,190 | 5,820 without comments or blank lines",
+   "Counted in 1ms"
+  ],
+  "Package": [
+   5568,
+   4482
+  ],
+  "HTTPS Dependencies": [
+   1622,
+   1338
+  ],
+  "Total": [
+   7190,
+   5820
+  ]
+ },
+ "lyceum-quest/study|packages/json/main.roc": {
+  "raw": [
+   "Package: 348 | 302 without comments or blank lines",
+   "Counted in 0ms"
+  ],
+  "Package": [
+   348,
+   302
+  ]
+ },
+ "showell/roc-apps|fasttrack/RulesTests.roc": {
+  "raw": [
+   "Module: 1,804 | 1,414 without comments or blank lines",
+   "Counted in 0ms"
+  ],
+  "Module": [
+   1804,
+   1414
+  ]
+ },
+ "showell/roc-apps|fasttrack/SearchTests.roc": {
+  "raw": [
+   "Module: 2,798 | 2,207 without comments or blank lines",
+   "Counted in 0ms"
+  ],
+  "Module": [
+   2798,
+   2207
+  ]
+ },
+ "showell/roc-apps|fasttrack/TeamTests.roc": {
+  "raw": [
+   "Module: 2,869 | 2,278 without comments or blank lines",
+   "Counted in 0ms"
+  ],
+  "Module": [
+   2869,
+   2278
+  ]
+ },
+ "showell/roc-apps|fasttrack/web.roc": {
+  "raw": [
+   "Application: 4,259 | 3,428 without comments or blank lines",
+   "Local Dependencies: 112 | 71 without comments or blank lines",
+   "Total: 4,371 | 3,499 without comments or blank lines",
+   "Counted in 1ms"
+  ],
+  "Application": [
+   4259,
+   3428
+  ],
+  "Local Dependencies": [
+   112,
+   71
+  ],
+  "Total": [
+   4371,
+   3499
+  ]
+ },
+ "showell/roc-markdown|package/Specs.roc": {
+  "raw": [
+   "Application: 6,223 | 4,803 without comments or blank lines",
+   "Local Dependencies: 18 | 9 without comments or blank lines",
+   "Total: 6,241 | 4,812 without comments or blank lines",
+   "Counted in 1ms"
+  ],
+  "Application": [
+   6223,
+   4803
+  ],
+  "Local Dependencies": [
+   18,
+   9
+  ],
+  "Total": [
+   6241,
+   4812
+  ]
+ }
+}

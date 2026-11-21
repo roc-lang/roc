@@ -1,0 +1,49 @@
+# Roc build timings
+
+Timings of `roc check`, `roc build --opt=dev` and `roc test` on downstream Roc projects, measured with a ReleaseFast compiler built from PR #13339 merged with `origin/main` (`release-fast-1cc72190`).
+
+Each project/command pair ran four scenarios, five repetitions each, and the figures are medians. "Cold" clears the compiled-module cache (downloaded packages are kept) and warms the builtins with a hello-world check first. "Warm" repeats the command straight after. "Root changed" appends a comment to the root file, and "import changed" appends a comment to the local module imported by the most files. Lines of code come from `roc loc`: "own" is the root's own count and "with deps" is its total.
+
+Study, Kanban, roc-parser and roc-pdf are not included, because this compiler hangs on them in Boxy lowering of record defaults. The other unmeasured pairs, with their first error, are in `roc-build-timings-unmeasured.csv`.
+
+![Wall time against lines of code](roc-build-timings.png)
+
+| Project | Command | Root | LOC (own) | LOC (with deps) | Cold | Warm | Root changed | Import changed | Edited import |
+|---|---|---|---:|---:|---:|---:|---:|---:|---|
+| ageron/roclet | check | `demos/01-reactivity.roc` | 29 | 29 | 10.8 ms | 4.4 ms | 9.7 ms | — | — (no local imports) |
+| lukewilliamboswell/roc-platform-template-zig | check | `examples/hello_world/main.roc` | 9 | 106 | 7.6 ms | 4.4 ms | 5.7 ms | — | — (no local imports) |
+| showell/roc-apps | check | `fasttrack/web.roc` | 4,259 | 4,371 | 344 ms | 6.3 ms | 52.5 ms | 81.6 ms | `fasttrack/Type.roc` (15 importers) |
+| showell/roc-markdown | check | `package/Specs.roc` | 6,223 | 6,241 | 329 ms | 6.5 ms | 8.6 ms | 83.7 ms | `package/MdText.roc` (19 importers) |
+| lukewilliamboswell/roc-automation | check | `tools/downstream-regressions/main.roc` | 181 | 9,239 | 294 ms | 8.3 ms | 26.9 ms | — | — (no local imports) |
+| lukewilliamboswell/plume | check | `examples/hello.roc` | 55 | 12,951 | 319 ms | 10.2 ms | 18.9 ms | 61.0 ms | `package/InternalJson.roc` (17 importers) |
+| lukewilliamboswell/roc-time | check | `examples/repeated_local_time/main.roc` | 59 | 13,822 | 249 ms | 9.7 ms | 23.8 ms | 88.1 ms | `package/PosixBoundary.roc` (27 importers) |
+| lukewilliamboswell/weaver | check | `examples/basic.roc` | 80 | 15,470 | 399 ms | 9.9 ms | 30.6 ms | 59.7 ms | `package/Base.roc` (11 importers) |
+| grayrest/roc-regex | check | `examples/readme.roc` | 31 | 17,408 | 509 ms | 9.5 ms | 201 ms | 218 ms | `package/Utf8.roc` (9 importers) |
+| lukewilliamboswell/roc-ray | check | `examples/hello_world/main.roc` | 106 | 18,856 | 398 ms | 9.9 ms | 28.6 ms | — | — (no local imports) |
+| lukewilliamboswell/roc-font | check | `examples/shape.roc` | 65 | 29,118 | 489 ms | 12.2 ms | 48.5 ms | 185 ms | `package/Bytes.roc` (16 importers) |
+| lukewilliamboswell/roc-graph-layout | check | `examples/mermaid_sequence/main.roc` | 22 | 66,168 | 874 ms | 20.8 ms | 62.3 ms | 79.3 ms | `package-mermaid/Drawing.roc` (22 importers) |
+| ageron/roclet | build | `demos/01-reactivity.roc` | 29 | 29 | 14.2 ms | 8.5 ms | 13.4 ms | — | — (no local imports) |
+| lukewilliamboswell/roc-automation | build | `tools/downstream-regressions/main.roc` | 181 | 9,239 | 334 ms | 16.3 ms | 86.2 ms | — | — (no local imports) |
+| lukewilliamboswell/plume | build | `examples/hello.roc` | 55 | 12,951 | 332 ms | 16.9 ms | 38.3 ms | 58.1 ms | `package/InternalJson.roc` (17 importers) |
+| lukewilliamboswell/roc-time | build | `examples/repeated_local_time/main.roc` | 59 | 13,822 | 271 ms | 18.0 ms | 26.9 ms | 94.8 ms | `package/PosixBoundary.roc` (27 importers) |
+| lukewilliamboswell/weaver | build | `examples/basic.roc` | 80 | 15,470 | 441 ms | 21.5 ms | 63.4 ms | 84.6 ms | `package/Base.roc` (11 importers) |
+| grayrest/roc-regex | build | `examples/readme.roc` | 31 | 17,408 | 527 ms | 17.8 ms | 207 ms | 226 ms | `package/Utf8.roc` (9 importers) |
+| lukewilliamboswell/roc-font | build | `examples/shape.roc` | 65 | 29,118 | 559 ms | 55.7 ms | 81.4 ms | 204 ms | `package/Bytes.roc` (16 importers) |
+| lukewilliamboswell/roc-graph-layout | build | `examples/mermaid_sequence/main.roc` | 22 | 66,168 | 985 ms | 80.1 ms | 98.6 ms | 115 ms | `package-mermaid/Drawing.roc` (22 importers) |
+| ageron/roclet | test | `demos/01-reactivity.roc` | 29 | 29 | 9.3 ms | 3.9 ms | 10.0 ms | — | — (no local imports) |
+| ageron/roclet-display | test | `package/main.roc` | 101 | 101 | 14.3 ms | 4.1 ms | 4.8 ms | 14.4 ms | `package/Display.roc` (2 importers) |
+| lukewilliamboswell/roc-platform-template-zig | test | `examples/tests/main.roc` | 42 | 139 | 14.9 ms | 4.4 ms | 12.2 ms | — | — (no local imports) |
+| lyceum-quest/study | test | `packages/json/main.roc` | 348 | 348 | 27.6 ms | 3.9 ms | 4.8 ms | — | — (no local imports) |
+| showell/roc-apps | test | `fasttrack/TeamTests.roc` | 2,869 | 2,869 | 115 ms | 6.5 ms | 26.0 ms | 51.7 ms | `fasttrack/Type.roc` (10 importers) |
+| lukewilliamboswell/plume | test | `package/main.roc` | 3,838 | 3,838 | 132 ms | 5.7 ms | 6.8 ms | 56.0 ms | `package/InternalJson.roc` (17 importers) |
+| showell/roc-markdown | test | `package/Specs.roc` | 6,223 | 6,241 | 366 ms | 7.0 ms | 8.0 ms | 83.7 ms | `package/MdText.roc` (19 importers) |
+| lukewilliamboswell/weaver | test | `package/main.roc` | 5,568 | 7,190 | 457 ms | 6.2 ms | 7.0 ms | 65.6 ms | `package/Base.roc` (11 importers) |
+| grayrest/roc-markdown | test | `package/Test.roc` | 8,649 | 8,649 | 1,621 ms | 6.0 ms | 1,567 ms | 1,608 ms | `package/Inl.roc` (9 importers) |
+| grayrest/roc-regex | test | `package-http/main.roc` | 757 | 9,076 | 261 ms | 6.2 ms | 6.9 ms | 147 ms | `package/Utf8.roc` (9 importers) |
+| lukewilliamboswell/roc-blueprint | test | `blueprint-core/main.roc` | 10,265 | 14,460 | 2,242 ms | 7.8 ms | 9.1 ms | 1,744 ms | `blueprint-core/Project.roc` (9 importers) |
+| lukewilliamboswell/roc-ray | test | `examples/hello_world/main.roc` | 106 | 18,856 | 432 ms | 10.9 ms | 41.2 ms | — | — (no local imports) |
+| lukewilliamboswell/roc-time | test | `package/main.roc` | 19,374 | 19,374 | 580 ms | 13.0 ms | 13.7 ms | 110 ms | `package/PosixBoundary.roc` (26 importers) |
+| lukewilliamboswell/roc-font | test | `package/main.roc` | 19,995 | 19,995 | 1,621 ms | 11.1 ms | 12.9 ms | 198 ms | `package/Bytes.roc` (16 importers) |
+| lukewilliamboswell/roc-graph-layout | test | `package-mermaid/main.roc` | 17,204 | 57,088 | 1,800 ms | 19.3 ms | 22.6 ms | 700 ms | `package-mermaid/Drawing.roc` (22 importers) |
+
+Files: `roc-build-timings-raw.csv` has every run, `roc-build-timings-summary.csv` has medians, ranges, CPU time and peak memory, and `scripts/` holds the harness (`measure.py plan.json results.jsonl 5`, then `report.py`).

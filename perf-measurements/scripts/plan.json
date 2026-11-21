@@ -1,0 +1,177 @@
+[
+ {
+  "repo": "ageron/roclet",
+  "cmd": "check",
+  "root": "demos/01-reactivity.roc"
+ },
+ {
+  "repo": "ageron/roclet",
+  "cmd": "build",
+  "root": "demos/01-reactivity.roc"
+ },
+ {
+  "repo": "grayrest/roc-regex",
+  "cmd": "check",
+  "root": "examples/readme.roc"
+ },
+ {
+  "repo": "grayrest/roc-regex",
+  "cmd": "build",
+  "root": "examples/readme.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/plume",
+  "cmd": "check",
+  "root": "examples/hello.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/plume",
+  "cmd": "build",
+  "root": "examples/hello.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/roc-automation",
+  "cmd": "check",
+  "root": "tools/downstream-regressions/main.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/roc-automation",
+  "cmd": "build",
+  "root": "tools/downstream-regressions/main.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/roc-font",
+  "cmd": "check",
+  "root": "examples/shape.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/roc-font",
+  "cmd": "build",
+  "root": "examples/shape.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/roc-graph-layout",
+  "cmd": "check",
+  "root": "examples/mermaid_sequence/main.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/roc-graph-layout",
+  "cmd": "build",
+  "root": "examples/mermaid_sequence/main.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/roc-platform-template-zig",
+  "cmd": "check",
+  "root": "examples/hello_world/main.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/roc-ray",
+  "cmd": "check",
+  "root": "examples/hello_world/main.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/roc-time",
+  "cmd": "check",
+  "root": "examples/repeated_local_time/main.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/roc-time",
+  "cmd": "build",
+  "root": "examples/repeated_local_time/main.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/weaver",
+  "cmd": "check",
+  "root": "examples/basic.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/weaver",
+  "cmd": "build",
+  "root": "examples/basic.roc"
+ },
+ {
+  "repo": "showell/roc-apps",
+  "cmd": "check",
+  "root": "fasttrack/web.roc"
+ },
+ {
+  "repo": "showell/roc-markdown",
+  "cmd": "check",
+  "root": "package/Specs.roc"
+ },
+ {
+  "repo": "ageron/roclet",
+  "cmd": "test",
+  "root": "demos/01-reactivity.roc"
+ },
+ {
+  "repo": "ageron/roclet-display",
+  "cmd": "test",
+  "root": "package/main.roc"
+ },
+ {
+  "repo": "grayrest/roc-markdown",
+  "cmd": "test",
+  "root": "package/Test.roc"
+ },
+ {
+  "repo": "grayrest/roc-regex",
+  "cmd": "test",
+  "root": "package-http/main.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/plume",
+  "cmd": "test",
+  "root": "package/main.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/roc-blueprint",
+  "cmd": "test",
+  "root": "blueprint-core/main.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/roc-font",
+  "cmd": "test",
+  "root": "package/main.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/roc-graph-layout",
+  "cmd": "test",
+  "root": "package-mermaid/main.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/roc-platform-template-zig",
+  "cmd": "test",
+  "root": "examples/tests/main.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/roc-ray",
+  "cmd": "test",
+  "root": "examples/hello_world/main.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/roc-time",
+  "cmd": "test",
+  "root": "package/main.roc"
+ },
+ {
+  "repo": "lukewilliamboswell/weaver",
+  "cmd": "test",
+  "root": "package/main.roc"
+ },
+ {
+  "repo": "lyceum-quest/study",
+  "cmd": "test",
+  "root": "packages/json/main.roc"
+ },
+ {
+  "repo": "showell/roc-apps",
+  "cmd": "test",
+  "root": "fasttrack/TeamTests.roc"
+ },
+ {
+  "repo": "showell/roc-markdown",
+  "cmd": "test",
+  "root": "package/Specs.roc"
+ }
+]

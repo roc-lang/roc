@@ -1,0 +1,46 @@
+project,command,roots_tried,reason
+KouYuume/roxum,build,examples/hello/app.roc examples/middleware/app.roc,error: missing target file
+KouYuume/roxum,check,examples/hello/app.roc examples/middleware/app.roc,error: missing method (examples/middleware/app.roc:41:23); error: unmatchable pattern (platform/Config.roc:83:3)
+KouYuume/roxum,test,examples/hello/app.roc,error: unmatchable pattern (platform/Config.roc:83:3)
+grayrest/roc-markdown,build,examples/md2html.roc,error: type mismatch (examples/md2html.roc:31:9)
+grayrest/roc-markdown,check,examples/md2html.roc,error: type mismatch (examples/md2html.roc:31:9)
+lukewilliamboswell/basic-ssg,build,examples-release/article-inspector/main.roc,error: type mismatch (examples-release/article-inspector/main.roc:10:9)
+lukewilliamboswell/basic-ssg,check,examples-release/article-inspector/main.roc,error: type mismatch (examples-release/article-inspector/main.roc:10:9)
+lukewilliamboswell/basic-ssg,test,examples-release/article-inspector/main.roc,error: type mismatch (examples-release/article-inspector/main.roc:10:9)
+lukewilliamboswell/roc-automation,test,tools/roc-policy/test_constants.roc tools/roc-docs/test_assets.roc,error: type mismatch ─ ../../../xdg-survey/roc/packages/CZsY7tYZwR3rj9kYbpaCfxki2yVAaRL8bBwMLvB2xkbA/main.roc:146:14; error: type mismatch ─ ../../../xdg-survey/roc/packages/Gj3zVDr3qrQa6aTh7Z1zgUfe9NeBE6R76T5ho3xrc8af/main.roc:157:14
+lukewilliamboswell/roc-blueprint,build,blueprint-cli/main.roc,error: file not found (blueprint-cli/main.roc:48:1)
+lukewilliamboswell/roc-blueprint,check,blueprint-cli/main.roc,error: file not found (blueprint-cli/main.roc:48:1)
+lukewilliamboswell/roc-docx,build,examples/agreement/main.roc examples/inspect/main.roc,error: type mismatch ─ ../../../xdg-survey/roc/packages/2yhxoR7cZPSYbyUzPWULFw8AA6QEcdsgFNRmzu7pZbst/main.roc:178:14
+lukewilliamboswell/roc-docx,check,examples/agreement/main.roc examples/inspect/main.roc,error: type mismatch ─ ../../../xdg-survey/roc/packages/2yhxoR7cZPSYbyUzPWULFw8AA6QEcdsgFNRmzu7pZbst/main.roc:178:14
+lukewilliamboswell/roc-docx,test,package/main.roc,error: duplicate definition (package/Build.roc:155:3)
+lukewilliamboswell/roc-parser,build,examples/csv-movies.roc,hang: still running after 20 min; stuck in Boxy lowering (finishRecord looking up an omitted field default)
+lukewilliamboswell/roc-parser,check,examples/csv-movies.roc,hang: still running after 20 min; stuck in Boxy lowering (finishRecord looking up an omitted field default)
+lukewilliamboswell/roc-parser,test,package/main.roc,hang: still running after 20 min; stuck in Boxy lowering (finishRecord looking up an omitted field default)
+lukewilliamboswell/roc-pdf,build,examples/business-report/main.roc,hang: still running after 20 min; stuck in Boxy lowering (finishRecord looking up an omitted field default)
+lukewilliamboswell/roc-pdf,check,examples/business-report/main.roc,hang: still running after 20 min; stuck in Boxy lowering (finishRecord looking up an omitted field default)
+lukewilliamboswell/roc-pdf,test,package/main.roc,hang: still running after 20 min; stuck in Boxy lowering (finishRecord looking up an omitted field default)
+lukewilliamboswell/roc-platform-template-zig,build,examples/hello_world/main.roc,error: missing target file
+lukewilliamboswell/roc-ray,build,examples/hello_world/main.roc,error: missing target file
+lukewilliamboswell/roc-signals,build,examples/kanban-board/main.roc,error: missing target file
+lukewilliamboswell/roc-signals,check,examples/kanban-board/main.roc,hang: still running after 20 min; stuck in Boxy lowering (finishRecord looking up an omitted field default)
+lukewilliamboswell/roc-signals,test,platform/main.roc,hang: still running after 20 min; stuck in Boxy lowering (finishRecord looking up an omitted field default)
+lyceum-quest/apo,build,cli/main.roc tests/echo-model.roc,error: type mismatch (cli/main.roc:47:9); error: type mismatch ─ ../../../xdg-survey/roc/packages/GddgvsGjiNXrHFW6au5i5dUDbTs8FinQdrgE2Gqmw53t/main.roc:177:14
+lyceum-quest/apo,check,cli/main.roc tests/echo-model.roc,error: type mismatch (cli/main.roc:47:9); error: type mismatch ─ ../../../xdg-survey/roc/packages/GddgvsGjiNXrHFW6au5i5dUDbTs8FinQdrgE2Gqmw53t/main.roc:177:14
+lyceum-quest/apo,test,package/main.roc,error: duplicate definition (package/Conllu.roc:11:11)
+lyceum-quest/study,build,signals/main.roc,hang: still running after 20 min; stuck in Boxy lowering (finishRecord looking up an omitted field default)
+lyceum-quest/study,check,signals/main.roc,hang: still running after 20 min; stuck in Boxy lowering (finishRecord looking up an omitted field default)
+obust/terrocotta,build,examples/counter.roc,error: type mismatch ─ ../../../xdg-survey/roc/packages/A8Dt5CorYsEtHFh8h7SfMtpzSy73UWbaB5Twy9JoYS1U/main.roc:332:24
+obust/terrocotta,check,examples/counter.roc,error: type mismatch ─ ../../../xdg-survey/roc/packages/A8Dt5CorYsEtHFh8h7SfMtpzSy73UWbaB5Twy9JoYS1U/main.roc:332:24
+obust/terrocotta,test,package/main.roc,error: type mismatch (package/Layout.roc:453:58)
+scottc/roc-build,build,examples/hello_build.roc,error: missing target file
+scottc/roc-build,check,examples/hello_build.roc,error: does not exist (examples/hello_build.roc:28:17)
+scottc/roc-build,test,examples/hello_build.roc,error: does not exist (examples/hello_build.roc:28:17)
+showell/roc-apps,build,canvas_apps/safari/main.roc basic/roc/BasicApp.roc fasttrack/web.roc building-books/app/main.roc,error: invalid package dependency; error: missing target file
+showell/roc-markdown,build,package/Specs.roc,error: missing targets section
+thebrandonlucas/kai,build,cli/main.roc,error: type mismatch (cli/main.roc:45:9)
+thebrandonlucas/kai,check,cli/main.roc,error: type mismatch (cli/main.roc:45:9)
+thebrandonlucas/kai,test,cli/main.roc,error: type mismatch (cli/main.roc:45:9)
+zhenweigc/birbGBA,build,runner.roc window.roc,error: type not exposed (src/Cpu.roc:11:16); error: type not exposed (src/Machine.roc:290:37)
+zhenweigc/birbGBA,check,runner.roc window.roc,error: type not exposed (src/Cpu.roc:11:16); error: type not exposed (src/Machine.roc:290:37)
+zhenweigc/birbGBA,test,runner.roc,error: type not exposed (src/Cpu.roc:11:16)
+exercism/roc,check/build/test,,not attempted: no single root (per-exercise layout); the sweep only runs its own verifier
