@@ -94,7 +94,8 @@ for row in summary:
 # Charts: one SVG panel per command, a polyline per scenario, in each axis-scale variant.
 W, H = 560, 420
 ML, MR, MT, MB = 70, 20, 44, 56
-VARIANTS = [("", True, True), ("-linear-time", True, False), ("-linear", False, False)]
+# (file suffix, log x, log y, marker scale, marker ring width, line width) in SVG units; PNGs render at 2x.
+VARIANTS = [("", True, True, 1.0, 2, 2), ("-linear-time", True, False, 1.0, 2, 2), ("-linear", False, False, 0.6, 0.5, 1)]
 
 
 def nice_step(span, target=5):
@@ -126,16 +127,16 @@ def scaler(lo, hi, log, a, b):
     return lambda v: a + (v - lo) / (hi - lo) * (b - a)
 
 
-def marker(s, x, y):
+def marker(s, x, y, k=1.0, ring_width=2):
     c = COLORS[s]
-    ring = 'stroke="#fcfcfb" stroke-width="2"'
+    ring = f'stroke="#fcfcfb" stroke-width="{ring_width}"'
     if s == "cold":
-        return f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="{c}" {ring}/>'
+        return f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{5 * k:.2f}" fill="{c}" {ring}/>'
     if s == "warm":
-        return f'<rect x="{x - 4.5:.1f}" y="{y - 4.5:.1f}" width="9" height="9" rx="1" fill="{c}" {ring}/>'
+        return f'<rect x="{x - 4.5 * k:.1f}" y="{y - 4.5 * k:.1f}" width="{9 * k:.2f}" height="{9 * k:.2f}" rx="{k:.2f}" fill="{c}" {ring}/>'
     if s == "root_changed":
-        return f'<polygon points="{x:.1f},{y - 6:.1f} {x + 5.5:.1f},{y + 4:.1f} {x - 5.5:.1f},{y + 4:.1f}" fill="{c}" {ring}/>'
-    return f'<polygon points="{x:.1f},{y - 6:.1f} {x + 6:.1f},{y:.1f} {x:.1f},{y + 6:.1f} {x - 6:.1f},{y:.1f}" fill="{c}" {ring}/>'
+        return f'<polygon points="{x:.1f},{y - 6 * k:.1f} {x + 5.5 * k:.1f},{y + 4 * k:.1f} {x - 5.5 * k:.1f},{y + 4 * k:.1f}" fill="{c}" {ring}/>'
+    return f'<polygon points="{x:.1f},{y - 6 * k:.1f} {x + 6 * k:.1f},{y:.1f} {x:.1f},{y + 6 * k:.1f} {x - 6 * k:.1f},{y:.1f}" fill="{c}" {ring}/>'
 
 
 def time_label(v):
@@ -153,7 +154,7 @@ def loc_label(v):
 xs_all = [r["total"] for r in summary]
 ys_all = [r[f"{s}_median"] for r in summary for s in SCENARIOS if r.get(f"{s}_median")]
 
-for suffix, xlog, ylog in VARIANTS:
+for suffix, xlog, ylog, mk, ring_w, line_w in VARIANTS:
     panels = []
     for cmd in CMDS:
         rows = sorted((r for r in summary if r["command"] == cmd), key=lambda r: r["total"])
@@ -183,11 +184,11 @@ for suffix, xlog, ylog in VARIANTS:
             pts = [(sx(r["total"]), sy(r[f"{s}_median"])) for r in rows if r.get(f"{s}_median")]
             if len(pts) > 1:
                 d = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
-                parts.append(f'<polyline points="{d}" fill="none" stroke="{COLORS[s]}" stroke-width="2" stroke-linejoin="round" opacity="0.75"/>')
+                parts.append(f'<polyline points="{d}" fill="none" stroke="{COLORS[s]}" stroke-width="{line_w}" stroke-linejoin="round" opacity="0.75"/>')
         for s in SCENARIOS:
             for r in rows:
                 if r.get(f"{s}_median"):
-                    parts.append(marker(s, sx(r["total"]), sy(r[f"{s}_median"])))
+                    parts.append(marker(s, sx(r["total"]), sy(r[f"{s}_median"]), mk, ring_w))
         lx = ML + 8
         for s in SCENARIOS:
             parts.append(marker(s, lx + 6, MT + 12))
