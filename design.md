@@ -24469,7 +24469,13 @@ own group and its lambda-set polymorphism: a SpecConstr specialization copies
 its source function's capture slots (`addLocalCopy`, keeping each slot's capture identity, so the
 capture operands that supply the source supply the copy unchanged) and binds
 them in its cloned body, as its arguments, callable workers, and prefix
-functions already get fresh locals. Debug builds check the rule when Lambda
+functions already get fresh locals. A closed expression a clone places
+rather than clones (a static data candidate, a compile-time value read, or an
+opaque part of a candidate's initializer, which may bind locals of its own)
+stays itself only in a rewrite of the body that holds it, outside any inline
+frame; every other placement, such as a callee's constant read inlined into
+its caller, gets a copy whose binders bind fresh copies of their locals
+(`body_copy.copyBindingOwnLocals`). Debug builds check the rule when Lambda
 Solved starts (`verifyGroupOwnedLocals`). LIR `LocalId`s are a separate id
 space with no such rule: specialized LIR procedures, such as the ARC variants
 of one procedure, share them, and the backends and the certifier scope their
