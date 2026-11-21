@@ -11970,6 +11970,14 @@ test "check type - exhaustive match close with value reuse after match" {
         \\
         \\    [Blue, Red]
         \\
+        \\This `match` limits the tag union to the tags its branches name, because no branch handles any other tag:
+        \\```roc
+        \\  _narrow_result = match val {
+        \\    Red => "red"
+        \\  }
+        \\```
+        \\
+        \\
         \\
     );
 }
@@ -12012,6 +12020,14 @@ test "check type - exhaustive match close with value reuse - no static dispatch"
         \\But `accept_broad` needs the first argument to be:
         \\
         \\    [Blue, Red]
+        \\
+        \\This `match` limits the tag union to the tags its branches name, because no branch handles any other tag:
+        \\```roc
+        \\  _narrow_result = match val {
+        \\    Red => "red"
+        \\  }
+        \\```
+        \\
         \\
         \\
     );
@@ -12150,6 +12166,14 @@ test "check type - annotated open return type still closed by exhaustive match w
         \\But `accept_broad` needs the first argument to be:
         \\
         \\    [Blue, Red]
+        \\
+        \\This `match` limits the tag union to the tags its branches name, because no branch handles any other tag:
+        \\```roc
+        \\  _narrow_result = match val {
+        \\    Red => "red"
+        \\  }
+        \\```
+        \\
         \\
         \\
     );

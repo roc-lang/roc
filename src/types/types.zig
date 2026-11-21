@@ -2005,6 +2005,14 @@ pub const StaticDispatchConstraint = struct {
     pub const SafeMultiList = MkSafeMultiList(Self);
 };
 
+/// The checking step that closed an inferred tag row to an uncommitted tag
+/// tail (design.md "Uncommitted Tag Tails"): an index into the checker's own
+/// list of closings, which says which match closed the row and which
+/// combination of its patterns no branch covers. The type store keeps one
+/// for each tail class a match closed (`Store.tag_tail_closings`). Only a
+/// type mismatch's report reads it.
+pub const TagTailClosing = enum(u32) { _ };
+
 /// Source-type identity for the payload slot selected by derived mapping.
 /// The type store keeps one for each class of relation callables
 /// (`Store.derived_map_plans`). The checked artifact translates `tag_name`

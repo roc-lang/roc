@@ -1021,6 +1021,7 @@ pub const ReportBuilder = struct {
                 try self.addStrConversionHint(&report, mismatch.str_conversion, false);
                 if (mismatch.host_fixed_row) try self.appendHostFixedRowHint(&report, mismatch.host_fixed_origin, mismatch.types.actual_snapshot);
                 if (mismatch.record_tail_refusal) |refusal| try self.appendRecordTailRefusal(&report, refusal);
+                if (mismatch.tag_tail_closing) |closing| try self.appendTagTailClosing(&report, closing);
                 return report;
             },
             .type_apply_mismatch_arities => |data| {
@@ -5726,6 +5727,31 @@ pub const ReportBuilder = struct {
     /// a use may close the record a function built or takes apart, or make
     /// it a nominal type with exactly its fields stored the same way, and
     /// nothing more (design.md "Uncommitted Record Tails").
+    /// Show the `match` that closed the tag row the relation failed on, and
+    /// the case its branches leave open when that is why it closed it.
+    fn appendTagTailClosing(self: *Self, report: *Report, closing: problem_mod.TagTailClosing) Allocator.Error!void {
+        try report.document.addLineBreaks(2);
+        if (closing.uncovered_row) |row| {
+            try D.renderSlice(&.{
+                D.bytes("This"),
+                D.bytes("match").withAnnotation(.inline_code),
+                D.bytes("limits the tag union to the tags its branches name, because no branch handles"),
+                D.bytes(try report.addOwnedString(self.problems.getExtraString(row))).withAnnotation(.inline_code),
+                D.bytes(", where").withNoPrecedingSpace(),
+                D.bytes(problem_mod.TagTailClosing.other_tag).withAnnotation(.inline_code),
+                D.bytes("is a tag no branch names:"),
+            }, self, report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("This"),
+                D.bytes("match").withAnnotation(.inline_code),
+                D.bytes("limits the tag union to the tags its branches name, because no branch handles any other tag:"),
+            }, self, report);
+        }
+        try report.document.addLineBreak();
+        try self.addSourceRegionOf(&report.document, self.can_ir.store.getExprRegion(closing.match_expr), .dimmed);
+    }
+
     fn appendRecordTailRefusal(self: *Self, report: *Report, refusal: problem_mod.RecordTailRefusal) Allocator.Error!void {
         try report.document.addLineBreaks(2);
         switch (refusal) {

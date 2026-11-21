@@ -44,7 +44,8 @@ const TypeView = @import("type_view.zig");
 const TypeStore = TypeView;
 // Every Var below the public integration boundary is in
 // TypeView's analysis namespace, including Pattern, Union, assumptions and
-// traversal keys. Only exportBlockers converts back to mutable source roots.
+// traversal keys. Only exportBlockers and exportClosedTails convert back to
+// mutable source roots.
 const Var = types.Var;
 const inhabitedness_memo = @import("inhabitedness_memo.zig");
 const InhabitednessMemo = inhabitedness_memo.Memo;
@@ -67,6 +68,29 @@ fn exportBlockers(store: *TypeStore, blockers: *std.ArrayList(Var)) void {
         }
     }
     blockers.shrinkRetainingCapacity(count);
+}
+
+/// `exportBlockers` for the tails a match closes, each with the row that
+/// misses its open alternative (`uncovered_rows`, by view root) when that is
+/// why it closes. Returns the rows aligned with the exported tails.
+fn exportClosedTails(
+    allocator: Allocator,
+    store: *TypeStore,
+    tails: *std.ArrayList(Var),
+    uncovered_rows: *const collections.DenseMapUnmanaged(Var, Pattern),
+) Allocator.Error![]const ?Pattern {
+    const rows = try allocator.alloc(?Pattern, tails.items.len);
+    var count: usize = 0;
+    for (tails.items) |view| {
+        const source = store.sourceVar(view) orelse continue;
+        var row = uncovered_rows.get(resolveRoot(store, view));
+        if (row) |*pattern| try pattern.detachAnalysisTypes(allocator);
+        tails.items[count] = source;
+        rows[count] = row;
+        count += 1;
+    }
+    tails.shrinkRetainingCapacity(count);
+    return rows[0..count];
 }
 
 fn exhaustiveInvariant(comptime message: []const u8, args: anytype) noreturn {
@@ -3134,6 +3158,7 @@ pub fn checkExhaustiveSketched(
     column_types: ColumnTypes,
     ext_vars_to_close: *std.ArrayList(Var),
     ext_vars_to_keep_open: *std.ArrayList(Var),
+    uncovered_rows: *collections.DenseMapUnmanaged(Var, Pattern),
     constructed_tags: ?[]const Ident.Idx,
 ) PatternResolveError!MissingRows {
     var kept_open: collections.DenseMapUnmanaged(Var, void) = .empty;
@@ -3167,8 +3192,11 @@ pub fn checkExhaustiveSketched(
         if (missing.len != 0) {
             var closed_more = false;
             for (open_misses.items) |ext| {
-                const entry = try closed_for_coverage.getOrPut(allocator, ext);
-                if (!entry.found_existing) closed_more = true;
+                if (closed_for_coverage.contains(ext)) continue;
+                const row = try uncoveredOpenRow(allocator, type_store, missing, ext) orelse continue;
+                try closed_for_coverage.put(allocator, ext, {});
+                try uncovered_rows.put(allocator, ext, row);
+                closed_more = true;
             }
             if (closed_more) continue;
         }
@@ -3178,6 +3206,37 @@ pub fn checkExhaustiveSketched(
             if (kept_open.contains(ext) and !closed_for_coverage.contains(resolveRoot(type_store, ext))) break;
         } else return missing;
     }
+}
+
+/// The first of `missing`, the rows a walk left uncovered, that leaves the
+/// open alternative of the inferred tail `ext` uncovered, if one does. A row
+/// has the walk's one scrutinee column.
+fn uncoveredOpenRow(allocator: std.mem.Allocator, type_store: *TypeStore, missing: MissingRows, ext: Var) Allocator.Error!?Pattern {
+    var pending: std.ArrayList(Pattern) = .empty;
+    defer pending.deinit(allocator);
+    for (missing) |row| {
+        std.debug.assert(row.len == 1);
+        pending.clearRetainingCapacity();
+        try pending.append(allocator, row[0]);
+        while (pending.pop()) |pattern| switch (pattern) {
+            .anything, .literal => {},
+            .list => |list| try pending.appendSlice(allocator, list.elements),
+            .ctor => |ctor| {
+                const alt = ctor.union_info.alternatives[ctor.tag_id.toInt()];
+                const open = ctor.union_info.render_as == .tag and switch (alt.name) {
+                    .tag => |tag| tag.isNone(),
+                    .opaque_type => false,
+                };
+                if (open) {
+                    if (ctor.union_info.flex_extension) |flex| {
+                        if (resolveRoot(type_store, flex) == ext) return row[0];
+                    }
+                }
+                try pending.appendSlice(allocator, ctor.args);
+            },
+        };
+    }
+    return null;
 }
 
 fn walkExhaustiveness(ctx: ExhaustiveCtx, matrix: SketchedMatrix, column_types: ColumnTypes, constructed_tags: ?[]const Ident.Idx) PatternResolveError!MissingRows {
@@ -3360,12 +3419,10 @@ fn exhaustiveResume(
         .ctors => |*ctors| {
             if (input) |rows| {
                 const alt = ctors.alt;
-                if (rows.len != 0 and ctors.union_info.render_as == .tag and switch (alt.name) {
+                const open_ext: ?Var = if (ctors.union_info.render_as == .tag and switch (alt.name) {
                     .tag => |tag| tag.isNone(),
                     .opaque_type => false,
-                }) {
-                    if (ctors.union_info.flex_extension) |ext| try ctx.open_misses.append(allocator, resolveRoot(ctx.type_store, ext));
-                }
+                }) ctors.union_info.flex_extension else null;
                 for (rows) |missing| {
                     const split = splitMissingRow(missing, alt.arity, ctors.column_types.len());
                     const missing_pattern = Pattern{ .ctor = .{
@@ -3375,6 +3432,7 @@ fn exhaustiveResume(
                     } };
                     if (try missing_pattern.isInhabited(ctors.column_types.type_store, ctors.column_types.builtin_idents)) {
                         try ctors.found_rows.append(allocator, try missingRowWithHead(allocator, missing_pattern, split.rest));
+                        if (open_ext) |ext| try ctx.open_misses.append(allocator, resolveRoot(ctx.type_store, ext));
                     }
                 }
             }
@@ -4005,8 +4063,13 @@ pub const CheckResult = struct {
     unmatchable_rows: []const UselessRow,
     /// Flex ext vars to close via unification with empty_tag_union.
     /// These are tag union positions where all constructors were exhaustively
-    /// covered without wildcards.
+    /// covered without wildcards, or whose open alternative some row misses.
     ext_vars_to_close: []const Var,
+    /// For each of `ext_vars_to_close`, at the same index: the row that
+    /// misses the tail's open alternative, when that is why the match closes
+    /// it (no branch covers that row with another tag in the tail's place).
+    /// Diagnostic-only, like `missing_patterns`.
+    uncovered_open_rows: []const ?Pattern,
 };
 
 /// Perform full exhaustiveness and redundancy checking on a match expression.
@@ -4078,6 +4141,7 @@ fn finishCoverage(arena_alloc: Allocator, type_store: *TypeStore, builtin_idents
     const sketched_matrix = SketchedMatrix.init(arena_alloc, redundancy.non_redundant_rows);
     var ext_vars_to_close: std.ArrayList(Var) = .empty;
     var ext_vars_to_keep_open: std.ArrayList(Var) = .empty;
+    var uncovered_rows: collections.DenseMapUnmanaged(Var, Pattern) = .empty;
     const missing = try checkExhaustiveSketched(
         arena_alloc,
         type_store,
@@ -4086,10 +4150,11 @@ fn finishCoverage(arena_alloc: Allocator, type_store: *TypeStore, builtin_idents
         column_types,
         &ext_vars_to_close,
         &ext_vars_to_keep_open,
+        &uncovered_rows,
         scrutinee_constructed_tags,
     );
 
-    exportBlockers(type_store, &ext_vars_to_close);
+    const uncovered_open_rows = try exportClosedTails(arena_alloc, type_store, &ext_vars_to_close, &uncovered_rows);
     const missing_patterns = try singleColumnMissingPatterns(arena_alloc, missing);
     for (missing_patterns) |*pattern| try pattern.detachAnalysisTypes(arena_alloc);
     return .{
@@ -4098,6 +4163,7 @@ fn finishCoverage(arena_alloc: Allocator, type_store: *TypeStore, builtin_idents
         .redundant_rows = redundancy.redundant_rows,
         .unmatchable_rows = redundancy.unmatchable_rows,
         .ext_vars_to_close = ext_vars_to_close.items,
+        .uncovered_open_rows = uncovered_open_rows,
     };
 }
 
@@ -4157,13 +4223,16 @@ pub fn checkDestructure(
 const ByteList = std.array_list.Managed(u8);
 const ByteListRange = problem.ExtraStringIdx;
 
-/// Format a pattern as a string, into the provided buffer
-/// Returns a rank of the inserted text
+/// Format a pattern as a string, into the provided buffer, and return the
+/// range of the inserted text. An open union's synthetic alternative (the
+/// tags the union's patterns do not name) is written as `open_alternative`:
+/// `_` the way a branch would cover it, or a placeholder a report explains.
 pub fn formatPattern(
     buf: *ByteList,
     ident_store: *const Ident.Store,
     string_store: *const StringLiteral.Store,
     pattern: Pattern,
+    open_alternative: []const u8,
 ) error{OutOfMemory}!ByteListRange {
     const start = buf.items.len;
 
@@ -4174,7 +4243,7 @@ pub fn formatPattern(
     var scratch = try ByteList.initCapacity(buf.allocator, 400);
     defer scratch.deinit();
 
-    formatPatternInto(&writer_alloc.writer, ident_store, string_store, &scratch, pattern) catch return error.OutOfMemory;
+    formatPatternInto(&writer_alloc.writer, ident_store, string_store, &scratch, pattern, open_alternative) catch return error.OutOfMemory;
 
     unmanaged = writer_alloc.toArrayList();
     buf.* = unmanaged.toManaged(buf.allocator);
@@ -4195,6 +4264,7 @@ fn formatPatternInto(
     string_store: *const StringLiteral.Store,
     scratch: *ByteList,
     pattern: Pattern,
+    open_alternative: []const u8,
 ) error{ OutOfMemory, WriteFailed }!void {
     const gpa = scratch.allocator;
     var pending: std.ArrayList(FormatPatternItem) = .empty;
@@ -4205,7 +4275,7 @@ fn formatPatternInto(
             .text => |text| try writer.writeAll(text),
             .pattern => |next| {
                 const start = pending.items.len;
-                try formatPatternNode(writer, ident_store, string_store, scratch, next, &pending);
+                try formatPatternNode(writer, ident_store, string_store, scratch, next, open_alternative, &pending);
                 std.mem.reverse(FormatPatternItem, pending.items[start..]);
             },
         }
@@ -4224,6 +4294,7 @@ fn formatPatternNode(
     string_store: *const StringLiteral.Store,
     scratch: *ByteList,
     pattern: Pattern,
+    open_alternative: []const u8,
     pending: *std.ArrayList(FormatPatternItem),
 ) error{ OutOfMemory, WriteFailed }!void {
     const gpa = scratch.allocator;
@@ -4268,8 +4339,8 @@ fn formatPatternNode(
                     switch (alt.name) {
                         .tag => |t| {
                             if (t.eql(Ident.Idx.NONE)) {
-                                // This is the #Open synthetic tag - show as wildcard
-                                try writer.writeAll("_");
+                                // This is the #Open synthetic tag.
+                                try writer.writeAll(open_alternative);
                                 return;
                             }
                             try writer.writeAll(ident_store.getText(t));
@@ -4387,6 +4458,7 @@ fn resultAllocationFailureCase(gpa: Allocator) (Allocator.Error || Ident.Error |
         .redundant_rows = try arena_alloc.dupe(UselessRow, &.{.{ .branch_index = 1, .pattern = @fromBackingInt(1) }}),
         .unmatchable_rows = try arena_alloc.dupe(UselessRow, &.{.{ .branch_index = 2, .pattern = @fromBackingInt(2) }}),
         .ext_vars_to_close = try arena_alloc.dupe(Var, &vars),
+        .uncovered_open_rows = try arena_alloc.dupe(?Pattern, &.{null}),
     };
     try std.testing.expectEqual(@as(?Var, null), result.missing_patterns[0].ctor.args[0].anything);
     try std.testing.expectEqual(@as(usize, 0), result.missing_patterns[0].ctor.union_info.render_as.record.types.len);
