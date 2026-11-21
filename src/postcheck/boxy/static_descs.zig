@@ -27,6 +27,7 @@ const layout = @import("layout");
 const lir_core = @import("lir_core");
 const boxy_runtime = @import("boxy_runtime");
 const types = @import("types.zig");
+const Common = @import("../common.zig");
 const Layouts = @import("layouts.zig").Layouts;
 const lower = @import("lower.zig");
 
@@ -2419,22 +2420,29 @@ test "override scopes are interned by content and restricted to a type's reach" 
     const allocator = std.testing.allocator;
     var declarations: checked.CheckedTypeStore = .{};
     defer declarations.deinit(allocator);
+    declarations.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(allocator, std.testing.io, 0));
+    // These opaque nominals are compared by identity only: scope traversal
+    // never opens a backing for these has_backing=false nodes.
+    const unit = try declarations.appendSyntheticPayloadRoot(allocator, .empty_record);
+    var empty: Common.EmptyCheckedModulesForTest = undefined;
+    try empty.init(allocator);
+    defer empty.deinit(allocator);
+    // The nominals are declared by the empty module, under its own identity.
+    const declaring_module = try empty.artifact.canonical_names.internModuleIdentity(&empty.artifact.module_identity.stable_hash);
     var declaration_ids: [2]checked.CheckedNominalDeclarationId = undefined;
-    for (&declaration_ids) |*id| {
+    for (&declaration_ids, 0..) |*id, index| {
         id.* = @fromBackingInt(@intCast(declarations.nominal_declarations.items().len));
-        // These opaque nominals are compared by identity only. No backing,
-        // declaration root, source statement, or name metadata is inspected.
-        var declaration: checked.CheckedNominalDeclaration = undefined;
-        declaration.id = id.*;
-        _ = try declarations.nominal_declarations.append(allocator, declaration);
+        _ = try declarations.nominal_declarations.append(allocator, .{
+            .id = id.*,
+            .nominal = .{ .module = declaring_module, .source_decl = @intCast(index) },
+            .source_statement = @intCast(index),
+            .declaration_root = unit,
+            .backing = unit,
+        });
     }
-    const module: types.ModuleIndex = @fromBackingInt(@intCast(fixture.modules.views.items.len));
-    // Scope traversal never opens a backing for these has_backing=false nodes.
-    // Only the module index and its declaration table belong to this fixture.
-    var view: types.ModuleView = undefined;
-    view.index = module;
-    view.view.checked_types = declarations.view();
-    try fixture.modules.views.append(allocator, view);
+    var module_view = empty.view();
+    module_view.checked_types = declarations.view();
+    const module = try fixture.modules.add(module_view);
     const name = try store.internName("Local");
     const local = try store.intern(.{ .nominal = .{
         .decl = .{ .module = module, .decl = declaration_ids[0] },

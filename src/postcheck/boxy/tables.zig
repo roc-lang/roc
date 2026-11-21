@@ -36,7 +36,6 @@ const StaticDescs = static_descs_file.StaticDescs;
 
 const Allocator = std.mem.Allocator;
 const LIR = lir_core.LIR;
-const LirProgram = lir_core.Program;
 const TypeId = types.TypeId;
 const NameId = types.NameId;
 const WorkerId = lower.WorkerId;
@@ -1139,37 +1138,27 @@ test "recipes are interned by content, reserved ones included" {
 
 test "a cyclic group has the same words whichever member its evaluation enters by" {
     const allocator = std.testing.allocator;
-    // An evaluation reads the program's allocator, store, layouts, result,
-    // static data and workers; every other field stays unread.
-    var program: lower.Program = undefined;
-    program.allocator = allocator;
-    program.store = types.Store.init(allocator);
-    defer program.store.deinit();
-    program.modules = .{ .allocator = allocator };
-    defer program.modules.deinit();
-    program.result = try LirProgram.Result.init(allocator, .u64);
-    defer program.result.deinit();
-    program.layouts = .{
-        .allocator = allocator,
-        .store = &program.store,
-        .converter = .{ .store = &program.store, .modules = &program.modules },
-        .layouts = &program.result.layouts,
-    };
-    defer program.layouts.deinit();
-    program.static_descs = StaticDescs.init(allocator, &program.store, &program.layouts, &program.result, .u64);
-    defer program.static_descs.deinit();
-    program.workers = .empty;
-    defer program.workers.deinit(allocator);
+    var test_program: lower.TestProgram = undefined;
+    try test_program.init(allocator, .program);
+    defer test_program.deinit();
+    const program = test_program.program;
 
     const store = &program.result.store;
     const target = try store.addLocal(.{ .layout_idx = .u8 });
     const ret = try store.addCFStmt(.{ .ret = .{ .value = target } }, .test_fixture);
     const proc = try store.addProcSpec(.{ .name = .fromRaw(0), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try store.addLocalSpan(&.{target}), .body = .some(ret), .ret_layout = .u8 }, .none);
     // The evaluation reads a callable's worker for its procedure alone.
-    var entry: lower.Worker = undefined;
-    entry.proc = proc;
+    const module = try program.modules.add(test_program.view(1));
     const entry_id: WorkerId = @fromBackingInt(@intCast(program.workers.items.len));
-    try program.workers.append(allocator, entry);
+    try program.workers.append(allocator, .{
+        .key = .{ .structural = .is_eq },
+        .proc = proc,
+        .module = module,
+        .scheme_vars = &.{},
+        .dictionary_params = &.{},
+        .params = &.{},
+        .ret = try program.store.primitive(.u8),
+    });
 
     // A dictionary capturing a table whose input is that dictionary.
     var recipes = Recipes.init(allocator);
@@ -1178,12 +1167,12 @@ test "a cyclic group has the same words whichever member its evaluation enters b
     const table = try recipes.intern(.{ .table = .{ .worker = @fromBackingInt(1), .inputs = &.{.{ .recipe = callable }} } });
     try recipes.set(callable, .{ .callable = .{ .entry = entry_id, .captures = &.{.{ .recipe = table }} } });
 
-    var from_callable = Evaluation.init(&program, .{ .building = &recipes }, &.{}, .{}, null);
+    var from_callable = Evaluation.init(program, .{ .building = &recipes }, &.{}, .{}, null);
     defer from_callable.deinit();
     const callable_word = try from_callable.word(callable);
     const table_word = try from_callable.word(table);
 
-    var from_table = Evaluation.init(&program, .{ .building = &recipes }, &.{}, .{}, null);
+    var from_table = Evaluation.init(program, .{ .building = &recipes }, &.{}, .{}, null);
     defer from_table.deinit();
     try std.testing.expect(StaticDescs.captureWordsEqual(table_word, try from_table.word(table)));
     try std.testing.expect(StaticDescs.captureWordsEqual(callable_word, try from_table.word(callable)));
@@ -1191,25 +1180,10 @@ test "a cyclic group has the same words whichever member its evaluation enters b
 
 test "position and plan recipes evaluate to the instantiation's positions and plans" {
     const allocator = std.testing.allocator;
-    // An evaluation of these recipes reads the program's allocator, store,
-    // layouts, result, and static data; every other field stays unread.
-    var program: lower.Program = undefined;
-    program.allocator = allocator;
-    program.store = types.Store.init(allocator);
-    defer program.store.deinit();
-    program.modules = .{ .allocator = allocator };
-    defer program.modules.deinit();
-    program.result = try LirProgram.Result.init(allocator, .u64);
-    defer program.result.deinit();
-    program.layouts = .{
-        .allocator = allocator,
-        .store = &program.store,
-        .converter = .{ .store = &program.store, .modules = &program.modules },
-        .layouts = &program.result.layouts,
-    };
-    defer program.layouts.deinit();
-    program.static_descs = StaticDescs.init(allocator, &program.store, &program.layouts, &program.result, .u64);
-    defer program.static_descs.deinit();
+    var test_program: lower.TestProgram = undefined;
+    try test_program.init(allocator, .program);
+    defer test_program.deinit();
+    const program = test_program.program;
     const store = &program.store;
     const desc_format = @import("boxy_runtime").desc;
 
@@ -1238,7 +1212,7 @@ test "position and plan recipes evaluate to the instantiation's positions and pl
     const update = try recipes.intern(.{ .update_plan = .{ .base = .{ .static = .{ .desc = record } }, .result = .{ .static = .{ .desc = record } }, .names = &.{y} } });
     const widen = try recipes.intern(.{ .adapt_plan = .{ .from = .{ .static = .{ .desc = narrow } }, .to = .{ .recipe = input } } });
 
-    var evaluation = Evaluation.init(&program, .{ .building = &recipes }, &.{.{ .desc = wide }}, InputLayout.flat(.{ .descs = 1 }), null);
+    var evaluation = Evaluation.init(program, .{ .building = &recipes }, &.{.{ .desc = wide }}, InputLayout.flat(.{ .descs = 1 }), null);
     defer evaluation.deinit();
     try std.testing.expectEqual(@as(u32, 1), (try evaluation.word(static_tag)).int);
     try std.testing.expectEqual(@as(u32, 2), (try evaluation.word(input_tag)).int);
@@ -1278,7 +1252,7 @@ test "position and plan recipes evaluate to the instantiation's positions and pl
     try std.testing.expectEqual(@as(u8, @backingInt(desc_format.AdaptKind.copy)), payload_plan.bytes[plan_layout.of(.kind)]);
 
     // A recipe over no input folds where it is lowered: a static position.
-    var fold = Evaluation.init(&program, .{ .building = &recipes }, &.{}, .{}, null);
+    var fold = Evaluation.init(program, .{ .building = &recipes }, &.{}, .{}, null);
     defer fold.deinit();
     try std.testing.expectEqual(@as(u32, 1), (try fold.word(static_tag)).int);
 }
