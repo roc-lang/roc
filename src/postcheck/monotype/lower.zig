@@ -70000,10 +70000,12 @@ test "queued specialization skips a body claimed immediately before dispatch" {
 
     var diagnostics: Diagnostics = .{};
     var builder: Builder = undefined;
+    builder.allocator = allocator;
     builder.app_module_identity = null;
     builder.active_graph = null;
     builder.active_body_draft = null;
     builder.post_check_executor = null;
+    builder.demand_driven_comptime_roots = false;
     builder.pending_spec_jobs = .empty;
     defer builder.pending_spec_jobs.deinit(allocator);
     builder.discovery_specs = .empty;
