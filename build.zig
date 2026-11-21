@@ -1583,6 +1583,17 @@ const PrintBuildSuccessStep = struct {
 const TestPlatformSteps = struct {
     wasm32: *Step,
     wasm32v1: *Step,
+    /// For each of `all_test_platform_dirs`, the step producing that
+    /// platform's host for the `roc` under test's own Roc target (and its
+    /// `v1` twin), or null when `-Dplatform` filtered the platform out.
+    native: [all_test_platform_dirs.len]?*Step,
+
+    fn nativeHost(self: TestPlatformSteps, platform_dir: []const u8) ?*Step {
+        for (all_test_platform_dirs, self.native) |dir, step| {
+            if (std.mem.eql(u8, dir, platform_dir)) return step;
+        }
+        std.debug.panic("not a test platform: {s}", .{platform_dir});
+    }
 };
 
 /// Fixture platforms that reuse another platform's host targets. The prepared
@@ -1662,9 +1673,10 @@ fn setupTestPlatforms(
     const native_in_matrix = for (linux_cross_targets ++ windows_cross_targets) |cross_target| {
         if (std.mem.eql(u8, native_target_name, cross_target.name)) break true;
     } else false;
+    var native_hosts: [all_test_platform_dirs.len]?*Step = @splat(null);
 
     // Build native hosts only when the cross-target matrix does not cover them.
-    for (if (native_in_matrix) &.{} else &all_test_platform_dirs) |platform_dir| {
+    for (if (native_in_matrix) &.{} else &all_test_platform_dirs, 0..) |platform_dir, platform_index| {
         if (platform_filter) |filter| {
             if (!std.mem.eql(u8, platform_dir, filter)) continue;
         }
@@ -1679,6 +1691,7 @@ fn setupTestPlatforms(
             omit_frame_pointer,
         );
         prepared_hosts_step.dependOn(copy_step);
+        native_hosts[platform_index] = copy_step;
     }
 
     // Cross-compile for all Linux targets. `roc build` selects the host
@@ -1687,7 +1700,7 @@ fn setupTestPlatforms(
     for (linux_cross_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
-        for (all_test_platform_dirs) |platform_dir| {
+        for (all_test_platform_dirs, 0..) |platform_dir, platform_index| {
             if (platform_filter) |filter| {
                 if (!std.mem.eql(u8, platform_dir, filter)) continue;
             }
@@ -1702,6 +1715,7 @@ fn setupTestPlatforms(
                 omit_frame_pointer,
             );
             prepared_hosts_step.dependOn(copy_step);
+            if (std.mem.eql(u8, cross_target.name, native_target_name)) native_hosts[platform_index] = copy_step;
 
             // Allocation-sensitive test platforms declare fx's musl runtime
             // objects as link inputs; copy them alongside their host library
@@ -1727,7 +1741,7 @@ fn setupTestPlatforms(
     for (windows_cross_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
-        for (all_test_platform_dirs) |platform_dir| {
+        for (all_test_platform_dirs, 0..) |platform_dir, platform_index| {
             if (platform_filter) |filter| {
                 if (!std.mem.eql(u8, platform_dir, filter)) continue;
             }
@@ -1742,6 +1756,7 @@ fn setupTestPlatforms(
                 omit_frame_pointer,
             );
             prepared_hosts_step.dependOn(copy_step);
+            if (std.mem.eql(u8, cross_target.name, native_target_name)) native_hosts[platform_index] = copy_step;
 
             // Windows targets link only what the platform declares, so each
             // one needs its C runtime alongside its host library.
@@ -1819,7 +1834,7 @@ fn setupTestPlatforms(
 
     b.getInstallStep().dependOn(prepared_hosts_step);
 
-    return .{ .wasm32 = wasm_host_step, .wasm32v1 = wasm_v1_host_step };
+    return .{ .wasm32 = wasm_host_step, .wasm32v1 = wasm_v1_host_step, .native = native_hosts };
 }
 
 /// Makes `roc_cache_dir` the whole environment of a cached `roc build` step.
@@ -2123,6 +2138,7 @@ pub fn build(b: *std.Build) void {
     const run_check_baseline_codegen_step = b.step("run-check-baseline-codegen", "Check that v1 targets emit no instruction above the architecture baseline");
     const run_check_str_eq_same_allocation_step = b.step("run-check-str-eq-same-allocation", "Check that comparing a string against itself does not read its bytes");
     const build_snapshot_tool_step = b.step("build-snapshot-tool", "Build the snapshot tool");
+    const build_valgrind_step = b.step("build-valgrind", "Build roc and the snapshot tool, and copy the native str and int test hosts into the checkout, for the CI Valgrind job");
     const run_check_snapshots_step = b.step("run-check-snapshots", "Regenerate snapshots and fail if tracked snapshots changed");
     const build_test_zig_step = b.step("build-test-zig", "Build Zig unit-test binaries");
     const run_test_zig_step = b.step("run-test-zig", "Run Zig unit tests");
@@ -2823,8 +2839,18 @@ pub fn build(b: *std.Build) void {
     roc_modules.eval.addImport("wasm32v1_builtins", wasm32v1_builtins_module);
 
     // Setup test platform host libraries
-    const wasm_test_hosts = setupTestPlatforms(b, target, optimize, roc_modules, build_test_hosts_step, strip, omit_frame_pointer, platform_filter);
-    const wasm_host_step = wasm_test_hosts.wasm32;
+    const test_platform_hosts = setupTestPlatforms(b, target, optimize, roc_modules, build_test_hosts_step, strip, omit_frame_pointer, platform_filter);
+    // The Valgrind job runs `roc` on test/str/app.roc and test/int/app.roc
+    // from the checkout, which link the hosts for `roc`'s own target, and
+    // runs the snapshot tool over every snapshot.
+    build_valgrind_step.dependOn(build_roc_step);
+    build_valgrind_step.dependOn(build_snapshot_tool_step);
+    for ([_][]const u8{ "str", "int" }) |platform_dir| {
+        if (test_platform_hosts.nativeHost(platform_dir)) |host_step| {
+            build_valgrind_step.dependOn(test_fixtures.publication(&.{host_step}));
+        }
+    }
+    const wasm_host_step = test_platform_hosts.wasm32;
     const wasm_host_fixture_files = b.addWriteFiles();
     _ = wasm_host_fixture_files.addCopyFile(
         test_fixtures.output(wasm_host_step, "test/wasm/platform/targets/wasm32/host.wasm"),
@@ -4084,11 +4110,11 @@ pub fn build(b: *std.Build) void {
             .include_extensions = &.{".roc"},
         });
         _ = wasm_app_sources.addCopyFile(test_fixtures.output(wasm_host_step, "test/wasm/platform/targets/wasm32/host.wasm"), "platform/targets/wasm32/host.wasm");
-        _ = wasm_app_sources.addCopyFile(test_fixtures.output(wasm_test_hosts.wasm32v1, "test/wasm/platform/targets/wasm32v1/host.wasm"), "platform/targets/wasm32v1/host.wasm");
+        _ = wasm_app_sources.addCopyFile(test_fixtures.output(test_platform_hosts.wasm32v1, "test/wasm/platform/targets/wasm32v1/host.wasm"), "platform/targets/wasm32v1/host.wasm");
         _ = wasm_app_sources.addCopyFile(test_fixtures.output(wasm_host_step, "test/wasm/platform/targets/wasm32/host.wasm"), "static-lib-platform/targets/wasm32/host.wasm");
-        _ = wasm_app_sources.addCopyFile(test_fixtures.output(wasm_test_hosts.wasm32v1, "test/wasm/platform/targets/wasm32v1/host.wasm"), "static-lib-platform/targets/wasm32v1/host.wasm");
+        _ = wasm_app_sources.addCopyFile(test_fixtures.output(test_platform_hosts.wasm32v1, "test/wasm/platform/targets/wasm32v1/host.wasm"), "static-lib-platform/targets/wasm32v1/host.wasm");
         _ = wasm_app_sources.addCopyFile(test_fixtures.output(wasm_host_step, "test/wasm/platform/targets/wasm32/host.wasm"), "reserved-low-memory-platform/targets/wasm32/host.wasm");
-        _ = wasm_app_sources.addCopyFile(test_fixtures.output(wasm_test_hosts.wasm32v1, "test/wasm/platform/targets/wasm32v1/host.wasm"), "reserved-low-memory-platform/targets/wasm32v1/host.wasm");
+        _ = wasm_app_sources.addCopyFile(test_fixtures.output(test_platform_hosts.wasm32v1, "test/wasm/platform/targets/wasm32v1/host.wasm"), "reserved-low-memory-platform/targets/wasm32v1/host.wasm");
         wasm_app_sources.step.dependOn(wasm_host_step);
 
         const build_wasm_provided_callable_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, provided_callable_app_sources, "app.roc", &.{}, "app.wasm", "wasm32");
