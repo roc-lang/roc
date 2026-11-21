@@ -128,16 +128,22 @@ pub const Plan = struct {
 
     /// Publication into the checkout is an explicit maintenance operation.
     pub fn addUpdateStep(self: *Plan, deps: []const *Step) void {
+        self.b.step("update-test-fixtures", "Copy generated test hosts into the checkout for manual use").dependOn(self.publication(deps));
+    }
+
+    /// A step that copies the generated files reachable from `deps` into the
+    /// checkout at their fixture paths.
+    pub fn publication(self: *Plan, deps: []const *Step) *Step {
         var visited: std.AutoHashMapUnmanaged(*Step, void) = .empty;
         for (deps) |dep| collectDependencies(self.b, dep, &visited);
-        const publication = self.b.addUpdateSourceFiles();
+        const update = self.b.addUpdateSourceFiles();
         var paths: std.StringHashMapUnmanaged(LazyPath) = .empty;
         for (self.outputs.items) |item| {
             if (visited.contains(item.step)) paths.put(self.b.allocator, item.path, item.source) catch @panic("OOM");
         }
         var iter = paths.iterator();
-        while (iter.next()) |entry| publication.addCopyFileToSource(entry.value_ptr.*, entry.key_ptr.*);
-        self.b.step("update-test-fixtures", "Copy generated test hosts into the checkout for manual use").dependOn(&publication.step);
+        while (iter.next()) |entry| update.addCopyFileToSource(entry.value_ptr.*, entry.key_ptr.*);
+        return &update.step;
     }
 
     /// Copies the checked-in inputs of the target directories `alias` covers.

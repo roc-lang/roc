@@ -18,6 +18,12 @@ const testing = std.testing;
 
 const MethodRegistryTestCheckedTypes = struct {
     store: Store = .{},
+    owner: canonical.NominalTypeKey,
+
+    pub fn nominalMethodOwner(self: *const @This(), _: *const ModuleEnv, stmt: can.CIR.Statement.Idx) ?canonical.NominalTypeKey {
+        std.debug.assert(@backingInt(stmt) == self.owner.source_decl);
+        return self.owner;
+    }
 
     const Store = struct {
         pub fn typeCount(_: Store) usize {
@@ -3995,13 +4001,16 @@ test "checked artifact method registry skips nominal associated values" {
         .module_idx = module.moduleIndex(),
         .by_def = &.{},
     };
-    const checked_types = MethodRegistryTestCheckedTypes{};
     const module_index = MethodRegistryTestModuleIndex{};
     var referenced_targets = MethodRegistryTestReferencedTargets{};
 
     var names = canonical.CanonicalNameStore.init(testing.allocator);
     defer names.deinit();
 
+    const checked_types = MethodRegistryTestCheckedTypes{ .owner = .{
+        .module = try names.internModuleIdentity(module.moduleEnvConst().contentIdentityHash().?),
+        .source_decl = @backingInt(module.methodDefEntries()[0].key.owner),
+    } };
     var registry = try static_dispatch.MethodRegistry.fromModule(
         testing.allocator,
         module,
@@ -15763,6 +15772,60 @@ test "methods on open rows - the requirement is written on the row variable for 
         .{ .def = "is_red", .expected =
         \\[Red, ..a] -> Bool where [a.is_eq : a, a -> Bool]
         },
+    });
+}
+
+test "methods on open rows - a captured callback result can gain tags after local function generalization" {
+    var test_env = try TestEnv.init("Test",
+        \\check = |field| {
+        \\    on = |p| field(p) == On
+        \\    match field({}) {
+        \\        Unset => on({})
+        \\        _ => False
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "methods on open rows - a captured record's method is selected by its enclosing binding" {
+    var test_env = try TestEnv.init("Test",
+        \\Named := { name : Str }.{
+        \\    ok : Named -> Bool
+        \\    ok = |_| True
+        \\}
+        \\check = |get| {
+        \\    ask = |p| {
+        \\        r = get(p)
+        \\        _ = r.name
+        \\        r.ok()
+        \\    }
+        \\    named : Named
+        \\    named = get({})
+        \\    (ask({}), named.name)
+        \\}
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "methods on open rows - an escaped row's equality requirement rejects a function payload at the call" {
+    var test_env = try TestEnv.init("Test",
+        \\check = |field| {
+        \\    on = |p| field(p) == On
+        \\    match field({}) {
+        \\        Unset => on({})
+        \\        _ => False
+        \\    }
+        \\}
+        \\bad = check(|_| Fn(|x| x))
+    );
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorHighlightsWithin("Type Does Not Support Equality", .{
+        .line = 8,
+        .start_column = 7,
+        .end_column = 12,
     });
 }
 

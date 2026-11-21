@@ -176,26 +176,18 @@ fn fieldAccessSegmentReceiverVar(
 }
 
 /// Convert a Region to an LspRange using line starts from ModuleEnv.
+///
+/// This counts the UTF-16 columns of the region's lines up to its ends; a
+/// caller converting many regions builds a `pos.LineOffsets` once and uses
+/// `regionToRangeIn`.
 pub fn regionToRange(module_env: *const ModuleEnv, region: Region) ?LspRange {
     const line_starts = module_env.getLineStartsAll();
     if (line_starts.len == 0) return null;
 
     const start_offset = region.start.offset;
     const end_offset = region.end.offset;
-
-    // Find line for start offset
-    var start_line: u32 = 0;
-    for (line_starts, 0..) |ls, i| {
-        if (ls > start_offset) break;
-        start_line = @intCast(i);
-    }
-
-    // Find line for end offset
-    var end_line: u32 = 0;
-    for (line_starts, 0..) |ls, i| {
-        if (ls > end_offset) break;
-        end_line = @intCast(i);
-    }
+    const start_line = pos.lineContaining(line_starts, start_offset);
+    const end_line = pos.lineContaining(line_starts, end_offset);
 
     // LSP columns are UTF-16 code units, not bytes. The two agree until a line
     // holds a character outside ASCII, after which every column to its right
@@ -211,6 +203,20 @@ pub fn regionToRange(module_env: *const ModuleEnv, region: Region) ?LspRange {
         .start_col = start_col,
         .end_line = end_line,
         .end_col = end_col,
+    };
+}
+
+/// Convert a Region to an LspRange against a table of the module's source,
+/// for a caller converting many regions of one module.
+pub fn regionToRangeIn(line_offsets: *const pos.LineOffsets, region: Region) ?LspRange {
+    if (line_offsets.offsets.len == 0) return null;
+    const start = pos.offsetToPosition(region.start.offset, line_offsets);
+    const end = pos.offsetToPosition(region.end.offset, line_offsets);
+    return .{
+        .start_line = start.line,
+        .start_col = start.character,
+        .end_line = end.line,
+        .end_col = end.character,
     };
 }
 
@@ -372,7 +378,7 @@ const FindLookupContext = struct {
 /// Context for collecting all references to a specific pattern.
 const CollectReferencesContext = struct {
     store: *const NodeStore,
-    module_env: *const ModuleEnv,
+    line_offsets: *const pos.LineOffsets,
     target_pattern: CIR.Pattern.Idx,
     allocator: std.mem.Allocator,
     results: *std.ArrayList(LspRange),
@@ -386,7 +392,7 @@ const CollectReferencesContext = struct {
     fn visitExprPre(ctx: *CollectReferencesContext, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
         if (std.meta.activeTag(expr) == .e_lookup_local and @backingInt(expr.e_lookup_local.pattern_idx) == @backingInt(ctx.target_pattern)) {
             const region = ctx.store.getExprRegion(expr_idx);
-            if (regionToRange(ctx.module_env, region)) |range| {
+            if (regionToRangeIn(ctx.line_offsets, region)) |range| {
                 ctx.results.append(ctx.allocator, range) catch |err| {
                     ctx.oom = err;
                     return .stop;
@@ -902,10 +908,12 @@ pub fn collectReferences(
 ) std.mem.Allocator.Error!std.ArrayList(LspRange) {
     var results: std.ArrayList(LspRange) = .empty;
     errdefer results.deinit(allocator);
+    const line_offsets = try pos.LineOffsets.init(allocator, module_env.common.source);
+    defer line_offsets.deinit();
 
     for (module_env.store.write_occurrences.items()) |write| {
         if (write.pattern_idx == target_pattern) {
-            if (regionToRange(module_env, write.region())) |range| {
+            if (regionToRangeIn(&line_offsets, write.region())) |range| {
                 try results.append(allocator, range);
             }
         }
@@ -913,7 +921,7 @@ pub fn collectReferences(
 
     var ctx = CollectReferencesContext{
         .store = &module_env.store,
-        .module_env = module_env,
+        .line_offsets = &line_offsets,
         .target_pattern = target_pattern,
         .allocator = allocator,
         .results = &results,
@@ -1041,6 +1049,7 @@ const PatternSet = struct {
 const CollectBindingsContext = struct {
     store: *const NodeStore,
     module_env: *const ModuleEnv,
+    line_offsets: *const pos.LineOffsets,
     start_offset: u32,
     end_offset: u32,
     allocator: std.mem.Allocator,
@@ -1097,7 +1106,7 @@ const CollectBindingsContext = struct {
             return .continue_traversal;
         }
 
-        const range = regionToRange(ctx.module_env, region) orelse return .continue_traversal;
+        const range = regionToRangeIn(ctx.line_offsets, region) orelse return .continue_traversal;
         ctx.results.append(ctx.allocator, .{
             .pattern = pattern_idx,
             .range = range,
@@ -1137,10 +1146,13 @@ pub fn collectUnannotatedBindings(
 
     var results: std.ArrayList(UnannotatedBinding) = .empty;
     errdefer results.deinit(allocator);
+    const line_offsets = try pos.LineOffsets.init(allocator, module_env.common.source);
+    defer line_offsets.deinit();
 
     var ctx = CollectBindingsContext{
         .store = &module_env.store,
         .module_env = module_env,
+        .line_offsets = &line_offsets,
         .start_offset = start_offset,
         .end_offset = end_offset,
         .allocator = allocator,
@@ -1232,6 +1244,8 @@ pub fn collectTopLevelDefinitionsInRange(
     errdefer results.deinit(allocator);
 
     const source = module_env.common.source;
+    const line_offsets = try pos.LineOffsets.init(allocator, source);
+    defer line_offsets.deinit();
     const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
     for (defs_slice) |def_idx| {
         const def = module_env.store.getDef(def_idx);
@@ -1254,7 +1268,7 @@ pub fn collectTopLevelDefinitionsInRange(
         // generated `expect` and read as a remark about it.
         var insertion_region = body_region;
         insertion_region.end.offset = lineEndAfter(source, body_region.end.offset);
-        const body_range = regionToRange(module_env, insertion_region) orelse continue;
+        const body_range = regionToRangeIn(&line_offsets, insertion_region) orelse continue;
         try results.append(allocator, .{
             .pattern = def.pattern,
             .name = name,
