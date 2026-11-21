@@ -736,6 +736,7 @@ const CustomCase = enum {
     default_platform_stack_overflow_arm64mac,
     default_platform_stack_overflow_x64win,
     default_platform_stack_overflow_arm64win,
+    issue_13338_coff_host_dwarf_sections_contiguous,
     bidi_source_security,
     fmt_reformats_file,
     fmt_does_not_change_file,
@@ -4286,6 +4287,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on arm64mac", .body = .{ .custom = .default_platform_crash_arm64mac } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on x64win", .body = .{ .custom = .default_platform_crash_x64win } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on arm64win", .body = .{ .custom = .default_platform_crash_arm64win } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13338: a fast dev link of a Windows host with DWARF keeps section addresses contiguous", .body = .{ .custom = .issue_13338_coff_host_dwarf_sections_contiguous } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform stack overflow prints debug backtrace on x64musl", .body = .{ .custom = .default_platform_stack_overflow_x64musl } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform stack overflow prints debug backtrace on arm64musl", .body = .{ .custom = .default_platform_stack_overflow_arm64musl } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform stack overflow prints debug backtrace on x64mac", .body = .{ .custom = .default_platform_stack_overflow_x64mac } },
@@ -7423,6 +7425,7 @@ fn runCustomCase(
         .default_platform_crash_arm64mac => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .arm64mac, .crash),
         .default_platform_crash_x64win => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .x64win, .crash),
         .default_platform_crash_arm64win => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .arm64win, .crash),
+        .issue_13338_coff_host_dwarf_sections_contiguous => customIssue13338CoffHostDwarfSectionsContiguous(io, allocator, &env, &timer, timeout_ms),
         .default_platform_stack_overflow_x64musl => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .x64musl, .stack_overflow),
         .default_platform_stack_overflow_arm64musl => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .arm64musl, .stack_overflow),
         .default_platform_stack_overflow_x64mac => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .x64mac, .stack_overflow),
@@ -10124,6 +10127,138 @@ fn customHotReloadDefaultApp(
         },
     })) |message| return failureFromRun(allocator, timer, result, message);
 
+    return null;
+}
+
+const issue_13338_host_c_source =
+    \\typedef unsigned long long U64;
+    \\extern U64 roc_debug_probe(void);
+    \\
+    \\int mainCRTStartup(void) { return roc_debug_probe() == 42 ? 0 : 1; }
+    \\void roc_alloc(void) {}
+    \\void roc_crashed(void) {}
+    \\void roc_dbg(void) {}
+    \\void roc_dealloc(void) {}
+    \\void roc_expect_failed(void) {}
+    \\void roc_realloc(void) {}
+    \\
+;
+
+const issue_13338_platform_source =
+    \\platform ""
+    \\    requires { main : U64 }
+    \\    exposes []
+    \\    packages {}
+    \\    provides { "roc_debug_probe": main_for_host }
+    \\    targets: { inputs_dir: "targets/", x64mingw: { inputs: ["host.obj", app] } }
+    \\
+    \\main_for_host : U64
+    \\main_for_host = main
+    \\
+;
+
+const issue_13338_app_source =
+    \\app [main] { pf: platform "platform/main.roc" }
+    \\
+    \\main : U64
+    \\main = 42
+    \\
+;
+
+/// A host compiled with DWARF has more debug sections than the three the
+/// app's fragments extend; the fast dev link must move all of them after
+/// the app, or the loaded sections are no longer adjacent and Windows
+/// refuses to load the executable.
+fn customIssue13338CoffHostDwarfSectionsContiguous(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const platform_dir = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "platform" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform dir: {}", .{err});
+    const target_dir = std.fs.path.join(allocator, &.{ platform_dir, "targets", "x64mingw" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform target dir: {}", .{err});
+    const platform_path = std.fs.path.join(allocator, &.{ platform_dir, "main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform path: {}", .{err});
+    const host_c_path = std.fs.path.join(allocator, &.{ platform_dir, "host.c" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate host C path: {}", .{err});
+    const host_obj_path = std.fs.path.join(allocator, &.{ target_dir, "host.obj" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate host object path: {}", .{err});
+    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
+    const exe_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "probe.exe" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate executable path: {}", .{err});
+    const output_arg = std.fmt.allocPrint(allocator, "--output={s}", .{exe_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
+    std.Io.Dir.cwd().createDirPath(io, target_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create platform target dir: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = platform_path, .data = issue_13338_platform_source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write platform source: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = host_c_path, .data = issue_13338_host_c_source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write host C source: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = issue_13338_app_source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write app source: {}", .{err});
+
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig",
+        "cc",
+        "-target",
+        "x86_64-windows-gnu",
+        "-gdwarf-4",
+        "-g",
+        "-c",
+        host_c_path,
+        "-o",
+        host_obj_path,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        roc_binary_path,
+        "build",
+        "--no-cache",
+        "--opt=dev",
+        "--specialize=no",
+        "--target=x64mingw",
+        output_arg,
+        app_path,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+
+    const exe = std.Io.Dir.cwd().readFileAlloc(io, exe_path, allocator, .limited(64 * 1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read linked executable: {}", .{err});
+    if (issue13338SectionGap(allocator, exe)) |message| return customFailure(allocator, timer, "{s}", .{message});
+    return null;
+}
+
+/// A description of the first pair of adjacent section headers whose
+/// addresses leave a hole, or of a malformed header, if any.
+fn issue13338SectionGap(allocator: Allocator, exe: []const u8) ?[]const u8 {
+    if (exe.len < 0x40) return "linked executable is too short";
+    const pe = std.mem.readInt(u32, exe[0x3c..0x40], .little);
+    const coff = @as(usize, pe) + 4;
+    if (coff + 20 + 240 > exe.len) return "linked executable has no optional header";
+    const section_count = std.mem.readInt(u16, exe[coff + 2 ..][0..2], .little);
+    const optional_size = std.mem.readInt(u16, exe[coff + 16 ..][0..2], .little);
+    const optional = exe[coff + 20 ..][0..240];
+    const section_alignment = std.mem.readInt(u32, optional[32..36], .little);
+    const size_of_image = std.mem.readInt(u32, optional[56..60], .little);
+    const headers = coff + 20 + optional_size;
+    if (headers + @as(usize, section_count) * 40 > exe.len) return "linked executable's section headers run past its end";
+    var expected: u64 = 0;
+    for (0..section_count) |index| {
+        const header = exe[headers + index * 40 ..][0..40];
+        const virtual_size = std.mem.readInt(u32, header[8..12], .little);
+        const rva = std.mem.readInt(u32, header[12..16], .little);
+        if (index != 0 and rva != expected) {
+            return std.fmt.allocPrint(allocator, "section {d} ({s}) starts at RVA 0x{x}, but the previous section ends at 0x{x}", .{ index, std.mem.sliceTo(header[0..8], 0), rva, expected }) catch "section addresses leave a hole";
+        }
+        expected = std.mem.alignForward(u64, @as(u64, rva) + virtual_size, section_alignment);
+    }
+    if (expected != size_of_image) {
+        return std.fmt.allocPrint(allocator, "the sections end at 0x{x}, but SizeOfImage is 0x{x}", .{ expected, size_of_image }) catch "SizeOfImage does not match the sections";
+    }
     return null;
 }
 

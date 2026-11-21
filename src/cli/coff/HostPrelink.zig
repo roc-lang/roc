@@ -169,7 +169,7 @@ const brk_instruction: u32 = 0xd420_0000;
 const int3_instruction: u8 = 0xcc;
 
 /// The record format; bumped whenever `finish`'s output changes.
-pub const format_version: u32 = 1;
+pub const format_version: u32 = 2;
 const magic = "RHSC".*;
 
 /// One symbol the app region may import, as the host defines it.
@@ -240,6 +240,12 @@ pub fn finish(allocator: Allocator, exe: []const u8, provides: []const Provide, 
     if (strtab_size < 4 or strtab_offset + strtab_size > exe.len) return error.UnexpectedHostLayout;
     if (exe.len - (strtab_offset + strtab_size) >= page_size) return error.UnexpectedHostLayout;
     const strtab = exe[strtab_offset..][0..strtab_size];
+    // The patch link moves the host's DWARF sections after the app, which
+    // leaves the loaded sections contiguous only when the DWARF sections
+    // follow every other section.
+    for (image.sections[image.debugSectionsStart()..]) |section| {
+        if (!isDebugSection(section.name)) return error.UnexpectedHostLayout;
+    }
 
     // The windows, where LLD placed the sections.
     var procedure_section_index: ?usize = null;
@@ -535,6 +541,15 @@ pub const Executable = struct {
         return end;
     }
 
+    /// The index of the first DWARF section; the section count when there
+    /// is none.
+    pub fn debugSectionsStart(self: Executable) usize {
+        for (self.sections, 0..) |section, index| {
+            if (isDebugSection(section.name)) return index;
+        }
+        return self.sections.len;
+    }
+
     /// The section holding `rva`, if any.
     pub fn sectionOf(self: Executable, rva: u64) ?usize {
         for (self.sections, 0..) |section, index| {
@@ -543,6 +558,11 @@ pub const Executable = struct {
         return null;
     }
 };
+
+/// Whether a section holds DWARF, which the loader never maps.
+pub fn isDebugSection(name: []const u8) bool {
+    return std.mem.startsWith(u8, name, ".debug_");
+}
 
 /// A section header's name: inline, or a "/decimal" offset into the string
 /// table.
@@ -650,6 +670,17 @@ test "a record reads back its symbols and provides" {
     try std.testing.expectEqual(@as(usize, 4), image.sections.len);
     try std.testing.expectEqualStrings(".debug_abbrev", image.sections[3].name);
     try std.testing.expectEqual(view.trailer.sections_end, image.sectionsEnd());
+}
+
+test "a host whose DWARF sections do not end its section table is not admitted" {
+    const allocator = std.testing.allocator;
+    const exe = try TestExecutable.encode(allocator, &.{
+        .{ .name = ".text", .bytes = &@as([16]u8, @splat(0x90)), .characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ },
+        .{ .name = ".debug_str", .bytes = "str", .characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ },
+        .{ .name = ".data", .bytes = &@as([16]u8, @splat(0)), .characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE },
+    }, &.{});
+    defer allocator.free(exe);
+    try std.testing.expectError(error.UnexpectedHostLayout, finish(allocator, exe, &.{}, &.{}));
 }
 
 /// A minimal PE32+ executable for tests: one page of headers, each section
