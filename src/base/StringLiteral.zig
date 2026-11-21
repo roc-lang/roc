@@ -17,6 +17,13 @@ pub const Idx = enum(u32) {
     pub fn isNone(self: Idx) bool {
         return self == .none;
     }
+
+    /// The index points *after* its entry header. For a trailing empty entry
+    /// the content offset is exactly the byte length of the prefix.
+    pub fn isInPrefix(self: Idx, byte_count: u32) bool {
+        std.debug.assert(self != .none);
+        return @backingInt(self) <= byte_count;
+    }
 };
 
 /// Durable storage for string literals.
