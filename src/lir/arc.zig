@@ -18583,6 +18583,79 @@ test "RC field takes through a nested complete projection whose outer read repea
     try testing.expectEqual(first_middle, second_projection_stmt.assign_ref.op.source);
 }
 
+test "RC repeated union projections keep their field across a result join" {
+    // `model.map(first)` and later `model.map(second)` over a captured
+    // `[Fixed(record), Varies(Str)]`: the first match lends the record to
+    // calls and the second, after a join, reads the same field again. The
+    // second read is materialized as an alias of the first, so its uses must
+    // keep the captured field alive past the first match's calls on every
+    // path into the join.
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    // A record with more refcounted fields than a field mask covers, so its
+    // payload view never dismantles on its own: every read of it is a read
+    // of the captured field.
+    var record_fields: [65]layout_mod.StructField = undefined;
+    for (&record_fields, 0..) |*record_field, index| record_field.* = .{ .index = @intCast(index), .layout = .str };
+    const record_layout = try f.layouts.putStructFields(&record_fields);
+    const tagged_layout = try f.layouts.putTagUnion(&.{ record_layout, .str });
+    const wrapper_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = tagged_layout }});
+    const wrapper = try f.local(wrapper_layout);
+    const before = try f.local(tagged_layout);
+    const before_alias = try f.local(tagged_layout);
+    const after = try f.local(tagged_layout);
+    const after_alias = try f.local(tagged_layout);
+    const first_pair = try f.local(record_layout);
+    const first_lent = try f.local(record_layout);
+    const first_moved = try f.local(record_layout);
+    const second_pair = try f.local(record_layout);
+    const second_lent = try f.local(record_layout);
+    const first_other = try f.local(.str);
+    const second_other = try f.local(.str);
+    const first_tag = try f.local(.u32);
+    const second_tag = try f.local(.u32);
+    const label = try f.local(.str);
+    const second_label = try f.local(.str);
+    const field = try f.local(.str);
+    const first_result = try f.local(.str);
+    const second_result = try f.local(.str);
+    const id = f.freshJoinPointId();
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = id } }, .test_fixture);
+    const borrowed_param = try f.local(record_layout);
+    const borrowed_result = try f.local(.str);
+    const lend = try f.addProc(&.{borrowed_param}, try f.assignStr(borrowed_result, "label", try f.ret(borrowed_result)), .str);
+    const call = struct {
+        fn to(fix: *ArcTest, target: LIR.LocalId, proc: LIR.LirProcSpecId, args: []const LIR.LocalId, next: LIR.CFStmtId) !LIR.CFStmtId {
+            return fix.store.addCFStmt(.{ .assign_call = .{ .target = target, .proc = proc, .args = try fix.span(args), .next = next } }, .test_fixture);
+        }
+    }.to;
+    const project = struct {
+        fn pair(fix: *ArcTest, target: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) !LIR.CFStmtId {
+            return fix.store.addCFStmt(.{ .assign_ref = .{ .target = target, .op = .tagPayloadStruct(source, 0, 0), .next = next } }, .test_fixture);
+        }
+    }.pair;
+    // A callee that reads one field of the record and hands it on. It
+    // borrows the record, and its owned variant takes that field instead.
+    const summary_record = try f.local(record_layout);
+    const summary_label = try f.local(.str);
+    const summary_field = try f.local(.str);
+    const summary_result = try f.local(.str);
+    const summarize = try f.addProc(&.{ summary_record, summary_label }, try f.assignRefField(summary_field, summary_record, 1, try f.assignCall(summary_result, &.{ summary_field, summary_label }, try f.ret(summary_result))), .str);
+    // Fixed: lend the record, then hand it to the summary.
+    const consume_first = try f.assignRefLocal(first_moved, first_pair, try call(&f, first_result, summarize, &.{ first_moved, label }, jump));
+    const read_first = try project(&f, first_pair, before_alias, try f.assignRefLocal(first_lent, first_pair, try call(&f, label, lend, &.{first_lent}, consume_first)));
+    const other_first = try f.assignTagPayload(first_other, before_alias, try f.assignStr(first_result, "varies", jump));
+    // Fixed again after the join: lend the record and take one of its fields.
+    const consume_second = try project(&f, second_pair, after_alias, try f.assignRefLocal(second_lent, second_pair, try call(&f, second_label, lend, &.{second_lent}, try f.assignRefField(field, second_pair, 1, try f.assignCall(second_result, &.{ field, second_label }, try f.ret(second_result))))));
+    const other_second = try f.assignTagPayload(second_other, after_alias, try f.ret(first_result));
+    const body = try f.assignRefField(after, wrapper, 0, try f.assignRefLocal(after_alias, after, try f.assignDiscriminant(second_tag, after_alias, try f.switchStmt(second_tag, other_second, consume_second, null))));
+    const remainder = try f.assignRefField(before, wrapper, 0, try f.assignRefLocal(before_alias, before, try f.assignDiscriminant(first_tag, before_alias, try f.switchStmt(first_tag, other_first, read_first, null))));
+    const join = try f.store.addCFStmt(.{ .join = .{ .id = id, .params = try f.span(&.{first_result}), .body = body, .remainder = remainder } }, .test_fixture);
+    const proc = try f.addProc(&.{wrapper}, join, .str);
+    f.store.getProcSpecPtr(proc).exported = true;
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
+}
+
 test "RC complete projection after a rebind of its root keeps its own read" {
     try checkProjectionAfterRebind(false);
     try checkProjectionAfterRebind(true);

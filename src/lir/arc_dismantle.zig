@@ -4455,44 +4455,63 @@ pub fn compute(
                         const target_index = @backingInt(read.target);
                         if (!solution.isBorrowed(read.target)) continue;
                         if (demanded and !declined_takes.contains(target_index)) continue;
-                        try collectBorrowForest(gpa, store, &analysis, borrow_child_heads, borrow_child_edges.items, &borrow_stack, &forest, forest_mark, target_index);
-                        for (forest.items) |borrower| {
-                            for (analysis.mentions.group(borrower)) |mention| {
-                                const stmt: LIR.CFStmtId = @fromBackingInt(mention);
-                                // An operand whose value reaches it through a
-                                // binding holding a unit of its own consumes
-                                // that unit, so it only observes this field.
-                                const site_use = if (operandSiteUse(store, solution, &analysis, @fromBackingInt(@intCast(owner)), operand_benefits, rc_local, forest_mark, target_index, stmt)) |use|
-                                    if (valuePathHoldsUnit(&analysis, solution, &result, use.operand, target_index)) null else use
-                                else
-                                    null;
-                                const slot = try read_kinds.getOrPut(stmt);
-                                if (site_use) |use| {
-                                    if (!slot.found_existing) {
-                                        slot.value_ptr.* = .{ .bit = bit, .consuming = true, .site = true };
-                                        try operand_sites.append(gpa, .{ .stmt = stmt, .next = use.next, .position = use.position, .bit = bit });
-                                    } else if (slot.value_ptr.site and slot.value_ptr.consuming and (slot.value_ptr.bit & bit) == 0) {
-                                        // Another field of this container consumed
-                                        // at a different position of the same statement.
-                                        slot.value_ptr.bit |= bit;
-                                        try operand_sites.append(gpa, .{ .stmt = stmt, .next = use.next, .position = use.position, .bit = bit });
+                        // A later complete read materialized as this read's
+                        // alias names the same stored unit, so the mentions of
+                        // everything borrowed from it observe this field too,
+                        // although its solved borrow source is the root.
+                        var alias_cursor: usize = 0;
+                        var forest_root: u32 = target_index;
+                        forests: while (true) {
+                            try collectBorrowForest(gpa, store, &analysis, borrow_child_heads, borrow_child_edges.items, &borrow_stack, &forest, forest_mark, forest_root);
+                            for (forest.items) |borrower| {
+                                for (analysis.mentions.group(borrower)) |mention| {
+                                    const stmt: LIR.CFStmtId = @fromBackingInt(mention);
+                                    // An operand whose value reaches it through a
+                                    // binding holding a unit of its own consumes
+                                    // that unit, so it only observes this field.
+                                    const site_use = if (operandSiteUse(store, solution, &analysis, @fromBackingInt(@intCast(owner)), operand_benefits, rc_local, forest_mark, forest_root, stmt)) |use|
+                                        if (valuePathHoldsUnit(&analysis, solution, &result, use.operand, forest_root)) null else use
+                                    else
+                                        null;
+                                    const slot = try read_kinds.getOrPut(stmt);
+                                    if (site_use) |use| {
+                                        if (!slot.found_existing) {
+                                            slot.value_ptr.* = .{ .bit = bit, .consuming = true, .site = true };
+                                            try operand_sites.append(gpa, .{ .stmt = stmt, .next = use.next, .position = use.position, .bit = bit });
+                                        } else if (slot.value_ptr.site and slot.value_ptr.consuming and (slot.value_ptr.bit & bit) == 0) {
+                                            // Another field of this container consumed
+                                            // at a different position of the same statement.
+                                            slot.value_ptr.bit |= bit;
+                                            try operand_sites.append(gpa, .{ .stmt = stmt, .next = use.next, .position = use.position, .bit = bit });
+                                        } else {
+                                            slot.value_ptr.consuming = false;
+                                            slot.value_ptr.site = false;
+                                            slot.value_ptr.bit |= bit;
+                                        }
+                                    } else if (!slot.found_existing) {
+                                        slot.value_ptr.* = .{ .bit = bit, .consuming = false };
+                                    } else if (slot.value_ptr.consuming and !slot.value_ptr.site) {
+                                        forced_poison |= bit;
                                     } else {
                                         slot.value_ptr.consuming = false;
                                         slot.value_ptr.site = false;
                                         slot.value_ptr.bit |= bit;
                                     }
-                                } else if (!slot.found_existing) {
-                                    slot.value_ptr.* = .{ .bit = bit, .consuming = false };
-                                } else if (slot.value_ptr.consuming and !slot.value_ptr.site) {
-                                    forced_poison |= bit;
-                                } else {
-                                    slot.value_ptr.consuming = false;
-                                    slot.value_ptr.site = false;
-                                    slot.value_ptr.bit |= bit;
                                 }
                             }
+                            for (forest.items) |borrower| forest_mark[borrower] = false;
+                            if (entry.view) break :forests;
+                            while (alias_cursor < candidate.equivalenced_reads.items.len) {
+                                const deferred = candidate.equivalenced_reads.items[alias_cursor];
+                                alias_cursor += 1;
+                                if (deferred.representative != read.target) continue;
+                                if (!solution.isBorrowed(deferred.read.target)) continue;
+                                if (!representativeHoldsTake(store, layouts, &result, &path_takes, deferred.representative)) continue;
+                                forest_root = @backingInt(deferred.read.target);
+                                continue :forests;
+                            }
+                            break :forests;
                         }
-                        for (forest.items) |borrower| forest_mark[borrower] = false;
                     }
 
                     var candidate_mask: u64 = 0;
