@@ -2020,7 +2020,7 @@ test "post-check lowerers define no helper twice with near-identical bodies" {
         "tagUnionEnter",
         "tagUnionExit",
         // Conventional method names on unrelated types (sort orders,
-        // lifecycle, map access, timing scopes, worker task entry points).
+        // lifecycle, map access, timing scopes).
         "lessThan",
         "init",
         "deinit",
@@ -2029,7 +2029,6 @@ test "post-check lowerers define no helper twice with near-identical bodies" {
         "contains",
         "get",
         "childCount",
-        "run",
         // Hash map context equality over two key representations.
         "eql",
     };

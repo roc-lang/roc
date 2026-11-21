@@ -405,8 +405,8 @@ test "test metadata uses explicit union request positions across equal root orde
         .order = 0,
         .module_idx = 0,
         .kind = .test_expect,
-        .source = .{ .def = @enumFromInt(0) },
-        .checked_type = @enumFromInt(0),
+        .source = .{ .def = @fromBackingInt(@intCast(0)) },
+        .checked_type = @fromBackingInt(@intCast(0)),
         .abi = .test_expect,
         .exposure = .private,
     };

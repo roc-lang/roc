@@ -2429,7 +2429,7 @@ test "override scopes are interned by content and restricted to a type's reach" 
         id.* = @fromBackingInt(@intCast(declarations.nominal_declarations.items().len));
         _ = try declarations.nominal_declarations.append(allocator, .{
             .id = id.*,
-            .nominal = .{ .module = @enumFromInt(0), .source_decl = @intCast(index) },
+            .nominal = .{ .module = @fromBackingInt(@intCast(0)), .source_decl = @intCast(index) },
             .source_statement = @intCast(index),
             .declaration_root = unit,
             .backing = unit,

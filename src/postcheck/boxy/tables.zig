@@ -36,7 +36,6 @@ const StaticDescs = static_descs_file.StaticDescs;
 
 const Allocator = std.mem.Allocator;
 const LIR = lir_core.LIR;
-const LirProgram = lir_core.Program;
 const TypeId = types.TypeId;
 const NameId = types.NameId;
 const WorkerId = lower.WorkerId;
