@@ -54,6 +54,31 @@ pub fn copyRenamingReads(program: *Ast.Program, root: Ast.ExprId, renames: *cons
     return try copier.copyOne(root);
 }
 
+/// A copy of the expression rooted at `root` that binds locals of its own,
+/// for placing a closed expression in a body other than the one that holds
+/// it. Every expression with expressions inside it is added again, and every
+/// local a binder inside `root` binds (a pattern, a loop or join point
+/// parameter, a `Try` sequence's payload) is replaced, at its binder and at
+/// every read, by a fresh copy carrying its complete identity
+/// (`Program.addLocalCopy`). Locals bound outside `root` stay the ones it
+/// names. Lambda Solved gives each local one type, which only functions of
+/// one binding group may name (design.md "Lambda Set Generalization").
+pub fn copyBindingOwnLocals(program: *Ast.Program, root: Ast.ExprId, symbols: *Common.SymbolGen) Allocator.Error!Ast.ExprId {
+    var own: OwnLocals = .{ .symbols = symbols };
+    defer own.renames.deinit(program.allocator);
+    var copier: Copier = .{ .program = program, .own_locals = &own };
+    defer copier.deinit();
+    const position = copier.savePosition();
+    defer copier.restorePosition(position);
+    return try copier.copyOne(root);
+}
+
+/// The locals a `copyBindingOwnLocals` copy binds in place of its source's.
+const OwnLocals = struct {
+    symbols: *Common.SymbolGen,
+    renames: Renames = .empty,
+};
+
 /// Give `parent` a copy of its own of each expression in `shared`, which are
 /// expressions directly inside it that another parent also holds. An
 /// expression listed twice is copied at two of the places `parent` names it.
@@ -86,6 +111,18 @@ pub fn copyInside(program: *Ast.Program, parent: Ast.ExprId, shared: []const Ast
     program.setExprData(parent, try copier.assembledData(data, inside));
 }
 
+/// Adds an own local for each local a `copyBindingOwnLocals` copy binds.
+const OwnBinder = struct {
+    program: *Ast.Program,
+    own: *OwnLocals,
+
+    pub fn bindLocal(self: OwnBinder, local: Ast.LocalId) Allocator.Error!void {
+        const entry = try self.own.renames.getOrPut(self.program.allocator, local);
+        if (entry.found_existing) return;
+        entry.value_ptr.* = try self.program.addLocalCopy(local, self.own.symbols.fresh());
+    }
+};
+
 const Copier = struct {
     program: *Ast.Program,
     work: std.ArrayList(Work) = .empty,
@@ -104,6 +141,9 @@ const Copier = struct {
     renames: ?*const Renames = null,
     renamed_paths: collections.DenseMapUnmanaged(Ast.ExprId, void) = .empty,
     typed_local_scratch: std.ArrayList(Ast.TypedLocal) = .empty,
+    /// For `copyBindingOwnLocals`: the locals the copy binds in place of
+    /// its source's, each added when the copy reaches its binder.
+    own_locals: ?*OwnLocals = null,
 
     fn deinit(self: *Copier) void {
         const allocator = self.program.allocator;
@@ -232,6 +272,26 @@ const Copier = struct {
                 return;
             }
         }
+        if (self.own_locals) |own| {
+            const renamed: ?Ast.ExprData = switch (data) {
+                .local => |local| if (own.renames.get(local)) |own_local| .{ .local = own_local } else null,
+                .uninitialized_payload => |payload| if (own.renames.get(payload.condition)) |own_local| .{ .uninitialized_payload = .{
+                    .condition = own_local,
+                    .mask = payload.mask,
+                } } else null,
+                .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => null,
+            };
+            if (renamed) |renamed_data| {
+                self.program.current_loc = self.program.exprLoc(expr);
+                self.program.current_region = self.program.exprRegion(expr);
+                self.program.current_inline_scope = self.program.exprInlineScope(expr);
+                try self.delivered.append(allocator, try self.program.addExpr(.{ .ty = source.ty, .data = renamed_data }));
+                return;
+            }
+            // A binder's scope lies inside the expression that holds it, so
+            // its own local exists before any read of it is copied.
+            if (!data.isLeaf()) try self.bindOwnLocals(own, data);
+        }
         if (data.isLeaf()) {
             try self.delivered.append(allocator, expr);
             return;
@@ -244,6 +304,188 @@ const Copier = struct {
         while (index > 0) {
             index -= 1;
             try self.work.append(allocator, .{ .copy = self.children.items[index] });
+        }
+    }
+
+    /// Add an own local for every local `data` binds directly, including in
+    /// its statements and its match branches' patterns.
+    fn bindOwnLocals(self: *Copier, own: *OwnLocals, data: Ast.ExprData) Allocator.Error!void {
+        const program = self.program;
+        const binder: OwnBinder = .{ .program = program, .own = own };
+        switch (data) {
+            .let_ => |binding| try Ast.forEachBoundLocal(program.allocator, program, binding.bind, binder),
+            .match_ => |match| for (0..match.branches.len) |index| {
+                const branch = GuardedList.at(program.branchSpan(match.branches), index);
+                try Ast.forEachBoundLocal(program.allocator, program, branch.pat, binder);
+                try self.bindStatementLocals(binder, branch.bindings);
+            },
+            .block => |block| try self.bindStatementLocals(binder, block.statements),
+            .loop_ => |loop| try self.bindTypedLocals(binder, loop.params),
+            .join_point => |join| try self.bindTypedLocals(binder, join.params),
+            .try_sequence => |sequence| try binder.bindLocal(sequence.ok_local),
+            .try_record_sequence => |sequence| {
+                try binder.bindLocal(sequence.value_local);
+                try binder.bindLocal(sequence.rest_local);
+            },
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .break_, .continue_, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
+        }
+    }
+
+    fn bindStatementLocals(self: *Copier, binder: OwnBinder, span: Ast.Span(Ast.StmtId)) Allocator.Error!void {
+        const program = self.program;
+        for (0..span.len) |index| {
+            switch (program.getStmt(GuardedList.at(program.stmtSpan(span), index))) {
+                .let_ => |binding| try Ast.forEachBoundLocal(program.allocator, program, binding.pat, binder),
+                .uninitialized => |pat| try Ast.forEachBoundLocal(program.allocator, program, pat, binder),
+                .expr, .expect, .dbg, .return_, .crash, .checked_error => {},
+            }
+        }
+    }
+
+    fn bindTypedLocals(self: *Copier, binder: OwnBinder, span: Ast.Span(Ast.TypedLocal)) Allocator.Error!void {
+        for (0..span.len) |index| try binder.bindLocal(GuardedList.at(self.program.typedLocalSpan(span), index).local);
+    }
+
+    /// The own local of `local` when the copy binds one, or `local` itself
+    /// when it is bound outside the copied expression.
+    fn ownLocal(self: *const Copier, local: Ast.LocalId) Ast.LocalId {
+        const own = self.own_locals orelse return local;
+        return own.renames.get(local) orelse local;
+    }
+
+    fn ownTypedLocals(self: *Copier, span: Ast.Span(Ast.TypedLocal)) Allocator.Error!Ast.Span(Ast.TypedLocal) {
+        if (span.len == 0) return span;
+        self.typed_local_scratch.clearRetainingCapacity();
+        for (0..span.len) |index| {
+            var typed = GuardedList.at(self.program.typedLocalSpan(span), index);
+            typed.local = self.ownLocal(typed.local);
+            try self.typed_local_scratch.append(self.program.allocator, typed);
+        }
+        return try self.program.addTypedLocalSpan(self.typed_local_scratch.items);
+    }
+
+    /// Name the own locals in every local `data` holds as a local rather
+    /// than as an expression: its binders and its embedded reads.
+    fn nameOwnLocals(self: *Copier, data: *Ast.ExprData) Allocator.Error!void {
+        switch (data.*) {
+            .let_ => |*binding| binding.bind = try self.ownPat(binding.bind),
+            .loop_ => |*loop| loop.params = try self.ownTypedLocals(loop.params),
+            .join_point => |*join| {
+                join.params = try self.ownTypedLocals(join.params);
+                join.retained = try self.ownTypedLocals(join.retained);
+            },
+            .jump => |*transfer| transfer.loop_params = try self.ownTypedLocals(transfer.loop_params),
+            .try_sequence => |*sequence| sequence.ok_local = self.ownLocal(sequence.ok_local),
+            .try_record_sequence => |*sequence| {
+                sequence.value_local = self.ownLocal(sequence.value_local);
+                sequence.rest_local = self.ownLocal(sequence.rest_local);
+            },
+            .if_initialized_payload => |*conditional| conditional.payload = self.ownLocal(conditional.payload),
+            // Match branch patterns are named as the branches are added again.
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .block, .break_, .continue_, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
+        }
+    }
+
+    /// `root` itself, or for a `copyBindingOwnLocals` copy, `root` added
+    /// again with every local it binds replaced by its own local. Each
+    /// pattern is added after its subpatterns, from an explicit stack.
+    fn ownPat(self: *Copier, root: Ast.PatId) Allocator.Error!Ast.PatId {
+        if (self.own_locals == null) return root;
+        const program = self.program;
+        const allocator = program.allocator;
+        const Visit = struct { pat: Ast.PatId, inside_done: bool };
+        var stack: std.ArrayList(Visit) = .empty;
+        defer stack.deinit(allocator);
+        // The copies delivered and not yet taken by the pattern holding them.
+        var copies: std.ArrayList(Ast.PatId) = .empty;
+        defer copies.deinit(allocator);
+        var inside: std.ArrayList(Ast.PatId) = .empty;
+        defer inside.deinit(allocator);
+        try stack.append(allocator, .{ .pat = root, .inside_done = false });
+        while (stack.pop()) |visit| {
+            const pat = program.getPat(visit.pat);
+            inside.clearRetainingCapacity();
+            try patChildren(program, pat.data, &inside);
+            if (!visit.inside_done) {
+                try stack.append(allocator, .{ .pat = visit.pat, .inside_done = true });
+                // The stack hands the subpatterns back first to last.
+                var index = inside.items.len;
+                while (index > 0) {
+                    index -= 1;
+                    try stack.append(allocator, .{ .pat = inside.items[index], .inside_done = false });
+                }
+                continue;
+            }
+            const first = copies.items.len - inside.items.len;
+            const taken = try allocator.dupe(Ast.PatId, copies.items[first..]);
+            defer allocator.free(taken);
+            copies.shrinkRetainingCapacity(first);
+            const data: Ast.PatData = switch (pat.data) {
+                .bind => |local| .{ .bind = self.ownLocal(local) },
+                .as => |as| .{ .as = .{ .pattern = taken[0], .local = self.ownLocal(as.local) } },
+                .record => |fields| blk: {
+                    const destructs = try allocator.alloc(Ast.RecordDestruct, fields.len);
+                    defer allocator.free(destructs);
+                    for (destructs, taken, 0..) |*destruct, pattern, index| destruct.* = .{
+                        .name = GuardedList.at(program.recordDestructSpan(fields), index).name,
+                        .pattern = pattern,
+                    };
+                    break :blk .{ .record = try program.addRecordDestructSpan(destructs) };
+                },
+                .tuple => .{ .tuple = try program.addPatSpan(taken) },
+                .tag => |tag| .{ .tag = .{ .name = tag.name, .payloads = try program.addPatSpan(taken) } },
+                .nominal => .{ .nominal = taken[0] },
+                .list => |list| .{ .list = .{
+                    .patterns = try program.addPatSpan(taken[0..list.patterns.len]),
+                    .rest = .of(if (list.rest.get()) |rest| .{
+                        .index = rest.index,
+                        .pattern = if (rest.pattern != .none) .some(taken[list.patterns.len]) else .none,
+                    } else null),
+                } },
+                .str_pattern => |str| blk: {
+                    const steps = try allocator.alloc(Ast.StrPatternStep, str.steps.len);
+                    defer allocator.free(steps);
+                    var captured: usize = 0;
+                    for (steps, 0..) |*step, index| {
+                        const source = GuardedList.at(program.strPatternStepSpan(str.steps), index);
+                        step.* = .{ .capture = .none, .delimiter = source.delimiter };
+                        if (source.capture != .none) {
+                            step.capture = .some(taken[captured]);
+                            captured += 1;
+                        }
+                    }
+                    break :blk .{ .str_pattern = .{
+                        .prefix = str.prefix,
+                        .steps = try program.addStrPatternStepSpan(steps),
+                        .end = str.end,
+                    } };
+                },
+                .wildcard, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => pat.data,
+            };
+            try copies.append(allocator, try program.addPat(.{ .ty = pat.ty, .data = data }));
+        }
+        return copies.pop().?;
+    }
+
+    /// Append every subpattern directly inside `data` to `out`, in order.
+    fn patChildren(program: *const Ast.Program, data: Ast.PatData, out: *std.ArrayList(Ast.PatId)) Allocator.Error!void {
+        const allocator = program.allocator;
+        switch (data) {
+            .as => |as| try out.append(allocator, as.pattern),
+            .nominal => |backing| try out.append(allocator, backing),
+            .record => |fields| for (0..fields.len) |index| {
+                try out.append(allocator, GuardedList.at(program.recordDestructSpan(fields), index).pattern);
+            },
+            .tuple => |items| for (0..items.len) |index| try out.append(allocator, GuardedList.at(program.patSpan(items), index)),
+            .tag => |tag| for (0..tag.payloads.len) |index| try out.append(allocator, GuardedList.at(program.patSpan(tag.payloads), index)),
+            .list => |list| {
+                for (0..list.patterns.len) |index| try out.append(allocator, GuardedList.at(program.patSpan(list.patterns), index));
+                if (list.rest.get()) |rest| if (rest.pattern.get()) |pattern| try out.append(allocator, pattern);
+            },
+            .str_pattern => |str| for (0..str.steps.len) |index| {
+                if (GuardedList.at(program.strPatternStepSpan(str.steps), index).capture.get()) |capture| try out.append(allocator, capture);
+            },
+            .bind, .wildcard, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => {},
         }
     }
 
@@ -406,10 +648,14 @@ const Copier = struct {
             const source = GuardedList.at(program.stmtSpan(span), index);
             var stmt = program.getStmt(source);
             switch (stmt) {
-                .let_ => |*binding| binding.value = taken.one(),
+                .let_ => |*binding| {
+                    binding.value = taken.one();
+                    binding.pat = try self.ownPat(binding.pat);
+                },
+                .uninitialized => |*pat| pat.* = try self.ownPat(pat.*),
                 .expr, .expect, .dbg => |*value| value.* = taken.one(),
                 .return_ => |*ret| ret.value = taken.one(),
-                .uninitialized, .crash, .checked_error => {},
+                .crash, .checked_error => {},
             }
             program.current_loc = program.stmtLoc(source);
             program.current_region = program.stmtRegion(source);
@@ -433,6 +679,7 @@ const Copier = struct {
         self.delivered.shrinkRetainingCapacity(first);
         var data = try self.assembledData(source.data, copies);
         if (self.renames) |renames| try self.renameEmbeddedReads(&data, renames);
+        if (self.own_locals != null) try self.nameOwnLocals(&data);
 
         program.current_loc = program.exprLoc(expr);
         program.current_region = program.exprRegion(expr);
@@ -556,6 +803,7 @@ const Copier = struct {
                 defer program.allocator.free(branches);
                 for (branches, 0..) |*branch, index| {
                     branch.* = GuardedList.at(program.branchSpan(match.branches), index);
+                    branch.pat = try self.ownPat(branch.pat);
                     branch.bindings = try self.takeStatements(&taken, branch.bindings);
                     if (branch.guard != .none) branch.guard = .some(taken.one());
                     branch.body = taken.one();
@@ -759,4 +1007,72 @@ test "a renaming copy renames reads under a `let` that a SpecConstr body can hol
     try std.testing.expectEqual(bind, copied.bind);
     try std.testing.expectEqual(rest, copied.rest);
     try std.testing.expectEqual(own, t.program.getExpr(copied.value).data.local);
+}
+
+test "a copy binding locals of its own names no local its source binds" {
+    const allocator = std.testing.allocator;
+    var t = try sequenced.TestProgram.init(allocator);
+    defer t.deinit();
+    // A closed initializer: a block binding a local, and a match whose
+    // branch pattern binds another, both read inside.
+    const binding = try t.bind(try t.int(7));
+    const bound = t.program.getPat(t.program.getStmt(binding).let_.pat).data.bind;
+    const read_bound = try t.expr(.{ .local = bound });
+    const scrutinee = try t.tuple(&.{read_bound});
+    const branch_local = try t.program.addLocal(@fromBackingInt(@intCast(50)), t.ty);
+    const branch_pat = try t.program.addPat(.{ .ty = t.ty, .data = .{ .tuple = try t.program.addPatSpan(&.{
+        try t.program.addPat(.{ .ty = t.ty, .data = .{ .bind = branch_local } }),
+    }) } });
+    const branch_body = try t.expr(.{ .local = branch_local });
+    const match = try t.expr(.{ .match_ = .{
+        .scrutinee = scrutinee,
+        .branches = try t.program.addBranchSpan(&.{.{ .pat = branch_pat, .body = branch_body }}),
+    } });
+    const initializer = try t.block(&.{binding}, match);
+    _ = try t.function(initializer);
+    const second = try t.function(initializer);
+
+    var groups = try t.program.bindingGroups(allocator);
+    try std.testing.expect((try t.program.localSharedAcrossGroups(allocator, groups)) != null);
+    groups.deinit(allocator);
+
+    var symbols: Common.SymbolGen = .{ .next = t.program.next_symbol };
+    var function = t.program.getFn(second);
+    function.body = .{ .roc = try copyBindingOwnLocals(&t.program, initializer, &symbols) };
+    t.program.setFn(second, function);
+    t.program.next_symbol = symbols.next;
+
+    try std.testing.expectEqual(@as(?sequenced.Violation, null), try sequenced.check(&t.program));
+    groups = try t.program.bindingGroups(allocator);
+    defer groups.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 2), groups.count());
+    try std.testing.expectEqual(@as(?Ast.SharedLocal, null), try t.program.localSharedAcrossGroups(allocator, groups));
+
+    // The copy reads the locals it binds, each carrying its source's identity.
+    const copied = t.program.getExpr(function.body.roc).data.block;
+    const copied_bound = t.program.getPat(t.program.getStmt(GuardedList.at(t.program.stmtSpan(copied.statements), 0)).let_.pat).data.bind;
+    try std.testing.expect(copied_bound != bound);
+    try std.testing.expectEqualDeep(t.program.getLocal(bound).identity, t.program.getLocal(copied_bound).identity);
+    const copied_match = t.program.getExpr(copied.final_expr).data.match_;
+    const copied_scrutinee = t.program.exprSpan(t.program.getExpr(copied_match.scrutinee).data.tuple);
+    try std.testing.expectEqual(copied_bound, t.program.getExpr(GuardedList.at(copied_scrutinee, 0)).data.local);
+    const copied_branch = GuardedList.at(t.program.branchSpan(copied_match.branches), 0);
+    const copied_branch_local = t.program.getPat(GuardedList.at(t.program.patSpan(t.program.getPat(copied_branch.pat).data.tuple), 0)).data.bind;
+    try std.testing.expect(copied_branch_local != branch_local);
+    try std.testing.expectEqual(copied_branch_local, t.program.getExpr(copied_branch.body).data.local);
+    // The source keeps its own locals.
+    try std.testing.expectEqual(bound, t.program.getExpr(read_bound).data.local);
+    try std.testing.expectEqual(branch_local, t.program.getExpr(branch_body).data.local);
+}
+
+test "a copy binding locals of its own keeps reading the locals bound around it" {
+    var t = try sequenced.TestProgram.init(std.testing.allocator);
+    defer t.deinit();
+    const outer = try t.program.addLocal(@fromBackingInt(@intCast(50)), t.ty);
+    const read_outer = try t.expr(.{ .local = outer });
+    const root = try t.tuple(&.{read_outer});
+    var symbols: Common.SymbolGen = .{ .next = t.program.next_symbol };
+    const copied = try copyBindingOwnLocals(&t.program, root, &symbols);
+    try std.testing.expect(copied != root);
+    try std.testing.expectEqual(read_outer, GuardedList.at(t.program.exprSpan(t.program.getExpr(copied).data.tuple), 0));
 }
