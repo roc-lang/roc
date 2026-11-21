@@ -22,7 +22,7 @@ code, which measure the lowering, not a compiler. They stand only until
 ReleaseFast benchmarks on a reference host replace them.
 
 > Note that the prototype models the update form and the crash rule from
-> commit 5c09149b97, but not the probe form: its probes run the waiter's
+> commit 8052017d92, but not the probe form: its probes run the waiter's
 > function as written.
 
 ## What Is Modeled
@@ -111,7 +111,7 @@ C9 compared 1,964 programs; the other 36 crash inside `supervise!`, where a
 `None` build stops the whole program by design. The run takes about 220
 seconds.
 
-**The latest run.** `python3 check.py 2000 1` passed at commit 003f009461,
+**The latest run.** `python3 check.py 2000 1` passed at commit 525cf43d4b,
 which composes spawns under a root limit, background entries and
 `plan.all!()`. 963 programs that can't wait agreed between coroutines and one
 stack, over 8,000 coroutine runs. Finding 24 in the README reports that

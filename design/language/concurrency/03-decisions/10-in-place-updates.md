@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Settled by argument (commit `5c09149b97`, which closed what earlier drafts called open decision (f)). Modeled in the prototype; not measured |
+| Status | Settled by argument (commit `8052017d92`, which closed what earlier drafts called open decision (f)). Modeled in the prototype; not measured |
 | Builds on | [Shared state](06-shared-state.md), [Waking waiters](07-waking-waiters.md) |
 | Detail | [Large states change in place](../../concurrency-shared-variables.md#large-states-change-in-place), [`update!`](../../concurrency-shared-variables.md#update), [Lowering](../../concurrency-shared-variables.md#lowering), [Crashes](../../concurrency-shared-variables.md#crashes), [Decisions left to review](../../concurrency-shared-variables.md#decisions-left-to-review) |
 
