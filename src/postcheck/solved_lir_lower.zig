@@ -16640,8 +16640,9 @@ test "an inlined header-only operand keeps its concrete element layout" {
     defer solved.deinit();
     const hole = try solved.types.add(.hole);
     const header = try solved.types.add(.{ .list = hole });
-    const formal: Lifted.LocalId = @fromBackingInt(0);
     const lifted_header = try solved.lifted.types.add(.{ .list = try solved.lifted.types.add(.hole) });
+    var symbols: Common.SymbolGen = .{};
+    const formal = try solved.lifted.addLocal(symbols.fresh(), lifted_header);
     const read = try solved.lifted.addExpr(.{ .ty = lifted_header, .data = .{ .local = formal } });
     try solved.expr_tys.append(allocator, header);
     var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
@@ -16663,6 +16664,12 @@ test "a lexical parameter read converts from the argument's bound encoding" {
         .{ .name = a, .checked_name = a, .payloads = .empty() },
         .{ .name = b, .checked_name = b, .payloads = .empty() },
     }) });
+    const lifted_declared = try solved.lifted.types.add(.{ .tag_union = try solved.lifted.types.addTags(&.{
+        .{ .name = a, .checked_name = a, .payloads = .empty() },
+        .{ .name = b, .checked_name = b, .payloads = .empty() },
+    }) });
+    var symbols: Common.SymbolGen = .{};
+    const formal = try solved.lifted.addLocal(symbols.fresh(), lifted_declared);
     try solved.local_tys.append(allocator, declared);
     var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
     defer lowerer.deinit();
@@ -16671,7 +16678,6 @@ test "a lexical parameter read converts from the argument's bound encoding" {
         .{ .name = b, .checked_name = b, .payloads = .empty() },
         .{ .name = a, .checked_name = a, .payloads = .empty() },
     }) });
-    const formal: Lifted.LocalId = @fromBackingInt(0);
     const argument = try lowerer.addTemp(bound);
     const result = try lowerer.addTemp(requested);
     try lowerer.local_map.put(formal, argument);

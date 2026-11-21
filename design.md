@@ -22536,7 +22536,7 @@ or when both are structs of one shape whose fields accept pairwise. Direct LIR l
 its local assignments and representation boundaries accept a value at a
 hole-holding layout; an inlined shaped body binds its parameters to the
 caller's locals directly. When a header-only operand is snapshotted inside
-that body, its temporary keeps the concrete binding's element layout. The
+that body, its temporary keeps the concrete binding's item layout. The
 snapshot can then own a reference if its source does not outlive it.
 
 No refcount plan exists for a value holding a hole. ARC borrows every such

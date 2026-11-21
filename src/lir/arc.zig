@@ -12705,7 +12705,7 @@ test "RC balancing a tagged field before a join leaves the other variant owned" 
     try checkTaggedFieldJoin(true);
 }
 
-fn checkTaggedFieldJoin(project_in_default: bool) !void {
+fn checkTaggedFieldJoin(project_in_default: bool) (Allocator.Error || error{TestExpectedEqual})!void {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
     const layout = try f.layouts.putTagUnion(&.{ .str, f.pair_str });

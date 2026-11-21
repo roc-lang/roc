@@ -8951,7 +8951,7 @@ test "certify rejects the same borrow after the parent slot was also spent" {
     try checkProjectedRecordBorrow(true);
 }
 
-fn checkProjectedRecordBorrow(spend_parent: bool) !void {
+fn checkProjectedRecordBorrow(spend_parent: bool) (CertifyError || error{ TestExpectedError, TestUnexpectedError, TestUnexpectedResult })!void {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
     const record_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = .str }});
