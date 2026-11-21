@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Settled, with parts open. The API, cleanups and poisoning are checked by the prototype; contention under `ParallelTasks` is open, and poisoning by a crashing update isn't modeled yet |
+| Status | Settled, with parts open. The API, cleanups and poisoning are checked by the prototype; contention under `ParallelTasks` is open |
 | Builds on | [Structured tasks](03-structured-tasks.md), [One meaning per build](04-one-meaning-per-build.md), [Refcount atomicity](05-refcount-atomicity.md) |
 | Detail | [Motivation](../../concurrency-shared-variables.md#motivation), [Atomic updates](../../concurrency-shared-variables.md#atomic-updates), [`update!`](../../concurrency-shared-variables.md#update), [`finally!` and `on_failure!`](../../concurrency-shared-variables.md#finally-and-on_failure), [Poisoning](../../concurrency-shared-variables.md#poisoning), [Drawbacks](../../concurrency-shared-variables.md#drawbacks), [Rationale and alternatives](../../concurrency-shared-variables.md#rationale-and-alternatives) |
 
@@ -112,4 +112,4 @@ The prototype spells the API as primitive operations (`shared.py`) and rewrites 
 - 2,000 fuzzed programs, 628 of them using shared state, ran under every schedule, both lowerings, a `None` build and cancellation at every suspension point, with exact heap accounting: 63,926 runs and 164,554 updates, of which 3,726 ran again after a `Wait` and 6,208 cleanups ran at a drop. Every check passed.
 - For 30 clients of a one-permit semaphore, the sessions RFC's server task spawns 93 tasks and sends 90 messages; `Shared` spawns 30 and sends none. These are operation counts in Python, not timings.
 
-Not measured: contention in a real `ParallelTasks` runtime. Not modeled: poisoning when an update, rather than a cleanup, crashes; the prototype still checks the earlier rule that a crashing update stores nothing.
+Not measured: contention in a real `ParallelTasks` runtime. Poisoning by a crashing update is modeled: a restart's read crashes with the update's poison message under every schedule, a parked waiter crashes too, and the state the crashed update held is counted as a crashed-frame leak in the exact heap check.

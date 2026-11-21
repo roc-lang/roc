@@ -21,8 +21,8 @@ that acquire a permit, work, and release it, crash holding it, or drop it
 at once), shared variables (workers that capture one or two and run atomic
 steps on them: increments, peeks, takes that wait for a nonzero value, moves
 between two variables, reads; takes paired with a deferred or errdeferred
-give, with work, crashes and cancellation in between; deferred steps that
-crash and poison), cells whose states hold handles to cells, their own
+give, with work, crashes and cancellation in between; updates and deferred
+steps that crash and poison), cells whose states hold handles to cells, their own
 included, and jobs that capture cells (workers and jobs that link, push
 jobs, pop and run the newest item, clear, and make cells of their own: the
 shapes that form reference cycles through states, which the runtime breaks
@@ -58,12 +58,21 @@ STEP_PROCS = parse(r"""
   (let z (eq a 0))
   (if z (block (ret (tag Wait))) (block (ret (tag Set a (sub a 1) (add b 1))))))
 (proc gs_bad (n) pure (crash "a deferred step crashed"))
+(proc gs_inc_bad (n k) pure
+  (let m (add n k))
+  (let big (lt 3 m))
+  (if big (block (crash "an update crashed")) (block (ret (tag Set n m)))))
+(proc gs_fail (x) pure (crash "an update crashed"))
 (proc gs_cons (s x) pure (ret (tag Set 0 (tag Cons x s))))
 (proc gs_clear (s) pure (ret (tag Set 0 (tag Nil))))
 (proc gs_pop (s) pure
   (match s
     (Nil () (block (ret (tag Keep (tag Empty)))))
     (Cons (x rest) (block (ret (tag Set (tag Got x) rest))))))
+(proc gs_pop_bad (s) pure
+  (match s
+    (Nil () (block (ret (tag Keep (tag Empty)))))
+    (Cons (x rest) (block (let z (call gs_fail x)) (ret (tag Keep z))))))
 """)
 
 # Run a popped item: a job is called; a handle's cell has its newest item
@@ -659,8 +668,9 @@ class Gen:
             out.append(("let", self.fresh("u"), ("undefer",)))
         elif r < 0.65:
             k = self.let(out, env, "I", ("int", rng.randint(1, 3)))
-            self.let(out, env, "I", ("step", "gs_inc", [cs[0]], [k]))
-            self.features.add("shared increment")
+            inc = "gs_inc_bad" if rng.random() < self.crash_rate * 2 else "gs_inc"
+            self.let(out, env, "I", ("step", inc, [cs[0]], [k]))
+            self.features.add("shared update crash" if inc == "gs_inc_bad" else "shared increment")
         elif r < 0.75:
             self.let(out, env, "I", ("step", "gs_peek", [cs[0]], []))
             self.features.add("shared peek")
@@ -735,9 +745,12 @@ class Gen:
             self.let(out, env, "I", ("step", "gs_cons", [a], [i]))
             self.features.add("job captures its own cell" if a in caps else "job captures a cell")
         elif r < 0.86:
-            p = self.let(out, env, "NP", ("step", "gs_pop", [a], []))
+            pop = "gs_pop_bad" if rng.random() < self.crash_rate * 2 else "gs_pop"
+            p = self.let(out, env, "NP", ("step", pop, [a], []))
             self.let(out, env, "I", ("call", "sn_run", [p]))
-            self.features.add("item popped and run")
+            # gs_pop_bad crashes holding the state, which its Keep needs, so
+            # the cells in it are reachable only from crashed frames (V9).
+            self.features.add("shared update crash holding the state" if pop == "gs_pop_bad" else "item popped and run")
         else:
             self.let(out, env, "I", ("step", "gs_clear", [a], []))
             self.features.add("cell cleared")

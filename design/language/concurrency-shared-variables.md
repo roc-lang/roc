@@ -1202,9 +1202,17 @@ and `CellRelease`):
 - The breaker opens after the third failure, rejects four requests without
   calling through, probes and closes; a cancelled probe reopens it, and
   without its cleanup it stays `Probing`.
-- An update that crashes stores nothing. This checks the earlier rule; an
-  update that crashes now poisons its handle, which the prototype does not
-  model yet.
+- An update moves the state into its function's update form, which the
+  prototype makes before ARC by rewriting tails as "Lowering" describes. Every
+  `Keep` and `Wait` is checked to put back the very state it was given, and a
+  waiter that a probe readied is checked not to wait when it runs on the
+  state the probe saw. Probes run the function as written; the probe form is
+  not modeled. An update that crashes poisons its handle: a restart's read
+  crashes with a message that names an update, and a waiter parked on the
+  handle crashes, under every schedule. The state the update held is in its
+  crashed frames, and the exact heap finds it there. With the earlier rule,
+  which kept the state, the restart reads the old state and the waiter
+  deadlocks.
 - 20 clients contend for one permit. Readying only the oldest waiter that a
   probe finds would not wait takes 80 task resumes and runs 19 updates again,
   as most recent first did; readying every waiter, the regression switch,

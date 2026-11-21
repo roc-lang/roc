@@ -21,9 +21,9 @@ copies. The only timings come from separate C microbenchmarks of hand-lowered
 code, which measure the lowering, not a compiler. They stand only until
 ReleaseFast benchmarks on a reference host replace them.
 
-> Note that the prototype predates commit 5c09149b97: an update that crashes
-> stores nothing there, instead of poisoning its handle, and its coverage
-> matrix stops at V9, before V10's update and probe forms.
+> Note that the prototype models the update form and the crash rule from
+> commit 5c09149b97, but not the probe form: its probes run the waiter's
+> function as written.
 
 ## What Is Modeled
 
@@ -117,6 +117,15 @@ which composes spawns under a root limit, background entries and
 stack, over 8,000 coroutine runs. Finding 24 in the README reports that
 generator's totals: 64,086 runs, 1,960 compared under C9, 16,086
 cancellations, and 22,112 entries spawned under a root limit.
+
+**Crashing updates.** Once the prototype modeled updates that move the state
+in and poison on a crash, the generator gained updates that crash. That
+shifts every generated program, so the counts change. In a 2,000-program run,
+392 updates crashed, 1,190 cells were poisoned, and C9 compared 1,961
+programs over 64,096 runs. In a `links` run, 1,556 updates crashed and 2,576
+cells were poisoned, and in 278 programs an update crashed while its `Keep`
+still needed the state. Every heap was exact. With the old generator, the new
+runtime gives the same counts as before on every line.
 
 What the prototype found or settled:
 

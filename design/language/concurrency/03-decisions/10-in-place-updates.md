@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Settled by argument (commit `5c09149b97`, which closed what earlier drafts called open decision (f)). Not measured, and the prototype doesn't model it yet |
+| Status | Settled by argument (commit `5c09149b97`, which closed what earlier drafts called open decision (f)). Modeled in the prototype; not measured |
 | Builds on | [Shared state](06-shared-state.md), [Waking waiters](07-waking-waiters.md) |
 | Detail | [Large states change in place](../../concurrency-shared-variables.md#large-states-change-in-place), [`update!`](../../concurrency-shared-variables.md#update), [Lowering](../../concurrency-shared-variables.md#lowering), [Crashes](../../concurrency-shared-variables.md#crashes), [Decisions left to review](../../concurrency-shared-variables.md#decisions-left-to-review) |
 
@@ -79,4 +79,11 @@ Putting the state back in the compiler, instead of asking the function to return
 
 ## Evidence
 
-Argued, not measured. The prototype counts operations, not copies, so it couldn't decide between moving and lending. It doesn't model moving yet: its test that an update which crashes stores nothing checks the earlier lending rule, it doesn't poison a handle when an update crashes, and its probes call the waiter's whole function rather than a probe form.
+Argued, not measured: the prototype counts operations, not copies, so it couldn't decide between moving and lending. It does model the rule:
+
+- **Update forms.** Every function an update or cleanup calls gets an update form, made by rewriting its tails as above, before reference counting runs. A test covers a tail that calls another function returning the tag.
+- **Moving.** The cell is empty while the function runs. `Keep` and `Wait` put the state back, and an assertion checks it's the same object (V10).
+- **Crashes.** A crashing update leaves the cell empty and poisoned, and readies its waiters so they crash. Under the earlier rule, a parked waiter deadlocked instead. The state the crashed function held counts as a crashed-frame leak, and the exact heap check passes in both lowerings.
+- **Fuzzing.** The generator now makes updates that crash, including pops that crash while a `Keep` still needs the state. 2,000 programs in each of two runs pass, with 392 and 1,556 crashed updates; in 278 programs an update crashed while its `Keep` needed the state, and every heap was exact.
+
+The probe form isn't modeled: probes run the function as written on a state the cell keeps, and a check confirms that a waiter a probe readied doesn't answer `Wait` on the state the probe saw.

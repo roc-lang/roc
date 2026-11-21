@@ -7,14 +7,15 @@ from combinators import BUILTINS
 from host import SUSPENDING
 from ir import Program, parse
 from lower import Lowering
-from shared import certify_defers
+from shared import certify_defers, update_forms
 
 
 def build(user, entry="main"):
     """`user` is IR source text or a dict of procedures."""
     procs = dict(BUILTINS)
     procs.update(parse(user) if isinstance(user, str) else user)
-    arc = Arc(Program(procs, entry))
+    certify_defers(Program(procs, entry))
+    arc = Arc(Program(update_forms(procs), entry))
     certify(arc)
     certify_defers(arc.prog)
     lows = {}

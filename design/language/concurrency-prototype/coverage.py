@@ -211,9 +211,9 @@ MATRIX = {
            "rejected statically otherwise",
            ["SharedVariables.test_static_checks"]),
     "V2": ("A step's pure procedure runs on one snapshot and its result is committed whole; a step that crashes "
-           "commits nothing; the lock protocol explored over every interleaving, where dropping the locks "
-           "loses updates",
-           ["SharedVariables.test_a_step_that_crashes_commits_nothing",
+           "commits nothing and poisons its cells, so no task reads a half-made state; the lock protocol "
+           "explored over every interleaving, where dropping the locks loses updates",
+           ["SharedVariables.test_an_update_that_crashes_poisons_its_variable",
             "SharedModel.test_every_interleaving_of_the_lock_protocol", FUZZ]),
     "V3": ("Every step and deferred step calls a pure procedure, checked statically; pure procedures cannot "
            "reach a suspension point (C2)",
@@ -229,11 +229,15 @@ MATRIX = {
            ["SharedVariables.test_static_checks", "SharedVariables.test_a_crash_while_holding_runs_the_deferred_step",
             "SharedVariables.test_every_permit_comes_back_however_its_holder_ends",
             "SharedVariables.test_a_cancelled_probe_reopens_the_breaker", FUZZ]),
-    "V6": ("A cleanup that crashes poisons its handle: later updates (and the tests' reads) and parked waiters crash; "
-           "a handle created inside the supervised function is new after a restart; poisoning nothing "
-           "is caught",
+    "V6": ("An update or a cleanup that crashes poisons its handle, and the poison names which: later updates "
+           "(and the tests' reads) and parked waiters crash; a handle created inside the supervised function "
+           "is new after a restart; the state the crashed update held is a crashed-frame leak in the exact "
+           "heap accounting; poisoning nothing, keeping the state as the earlier rule did, is caught",
            ["SharedVariables.test_a_deferred_step_that_crashes_poisons_its_variable",
             "SharedVariables.test_a_waiter_on_a_poisoned_variable_crashes",
+            "SharedVariables.test_an_update_that_crashes_poisons_its_variable",
+            "SharedVariables.test_a_waiter_on_a_variable_an_update_poisoned_crashes",
+            "SharedVariables.test_the_state_of_an_update_that_crashes_leaks_with_its_frames",
             "SharedVariables.test_a_cancelled_task_whose_deferred_step_crashes_crashes"]),
     "V7": ("Waiters register before the cell is released: no lost wakeup in any interleaving, and "
            "registering late is caught; in the runtime, a commit readies its waiters, and readying none is "
@@ -253,6 +257,11 @@ MATRIX = {
             "CellRelease.test_a_cycle_made_in_a_task_is_released_when_it_finishes",
             "CellRelease.test_a_stored_cell_gains_the_holders_of_the_cell_that_holds_it",
             "CellRelease.test_generated_programs_that_form_cycles"]),
+    "V10": ("Every step runs its function's update form, made before ARC by rewriting tails, and every Keep "
+            "and Wait is asserted to put back the very state it was given; a waiter that a probe readied "
+            "is asserted not to wait when it runs on the state the probe saw. Probes run the function as "
+            "written, the reference for the probe form, which is not modeled",
+            ["SharedVariables.test_update_forms_put_back_the_state_they_were_given", FUZZ]),
 }
 
 # Rows the prototype does not establish yet.

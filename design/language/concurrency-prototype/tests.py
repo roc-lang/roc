@@ -1739,6 +1739,7 @@ class Fuzz(unittest.TestCase):
         self.assertGreater(stats["cancel-at runs"], 0)
         self.assertGreater(stats["shared: waits"], 0)
         self.assertGreater(stats["shared: deferred steps run at drop"], 0)
+        self.assertGreater(stats["shared: cells poisoned by an update"], 0)
         for f in ("background", "loop spawn under a root limit", "plan.all!", "plan.all_ok!"):
             self.assertGreater(stats["feature " + f], 5, f)
         self.assertGreater(stats["loop: loops ended with background entries left"], 0)
@@ -2008,7 +2009,7 @@ class SharedVariables(unittest.TestCase):
     def test_a_deferred_step_that_crashes_poisons_its_variable(self):
         # The permit's release crashes, so the variable is poisoned: the
         # restart's read crashes, and the restarts run out.
-        poisoned = ("crashed", ("str", shared_mod.POISONED))
+        poisoned = ("crashed", ("str", shared_mod.POISONED_BY_CLEANUP))
         lows = self.build(self.POISON)
         self.assertEqual(everywhere(lows), {poisoned})
         # Declared inside the supervised function, the restart gets a fresh one.
@@ -2046,7 +2047,7 @@ class SharedVariables(unittest.TestCase):
         # holder, the poisoning readies it and it crashes, instead of waiting
         # for a permit that will never come back. If it went first, it
         # finished before the permit was lost.
-        poisoned = ("crashed", ("str", shared_mod.POISONED))
+        poisoned = ("crashed", ("str", shared_mod.POISONED_BY_CLEANUP))
         lows = self.build(self.WAITERS_POISONED)
         self.assertEqual(everywhere(lows), {poisoned, ("done", ("list", None, (0, 102)))})
 
@@ -2229,12 +2230,113 @@ class SharedVariables(unittest.TestCase):
       (ret r))
     """
 
-    def test_a_step_that_crashes_commits_nothing(self):
-        # The first attempt's step crashes; the restart reads the value the
-        # variable had before it.
+    def test_an_update_that_crashes_poisons_its_variable(self):
+        # The first attempt's update crashes with the state moved out, so the
+        # cell stays empty and is poisoned: the restart's read crashes, and
+        # the poison names an update.
+        poisoned = ("crashed", ("str", shared_mod.POISONED_BY_UPDATE))
         lows = self.build(self.STEP_CRASH)
-        self.assertEqual(everywhere(lows), {("done", 5)})
-        self.assertEqual(tasks(lows, PausePolicy()).runtime["steps crashed"], 1)
+        self.assertEqual(everywhere(lows), {poisoned})
+        r = tasks(lows, PausePolicy())
+        self.assertEqual((r.runtime["steps crashed"], r.runtime["cells poisoned by an update"]), (1, 1))
+        # The earlier rule, which borrowed the state and kept it when the
+        # update crashed: the restart reads the value from before the crash.
+        with switches(shared={"no_poison": True}):
+            self.assertEqual(everywhere(lows), {("done", 5)})
+
+    STEP_CRASH_HEAP = """
+    (proc check (n) pure
+      (let big (lt 2 n))
+      (if big (block (crash "too long")) (block (ret n))))
+    (proc first_or_crash (xs) pure
+      (let n (len xs))
+      (let m (call check n))
+      (ret (tag Keep m)))
+    (proc main () eff
+      (let xs (list 1 2 3))
+      (let s (shared xs))
+      (do (step first_or_crash (s)))
+      (ret 0))
+    """
+
+    def test_the_state_of_an_update_that_crashes_leaks_with_its_frames(self):
+        # The update form keeps the list across the call, for its Keep, so
+        # when the call crashes the update's frame holds the only reference:
+        # a crashed-frame leak (R5). Exact heap accounting finds it held by
+        # the crashed frame, not missing a free, and the empty, poisoned cell
+        # is freed with its last handle.
+        lows = self.build(self.STEP_CRASH_HEAP)
+        for mode in ("lss", "boxy"):
+            r = tasks(lows, PausePolicy(), mode)
+            self.assertEqual(r.result, ("crashed", ("str", "too long")))
+            self.assertEqual(r.leaked_live, 1)  # the list
+
+    UPDATE_CRASH_WAITERS = """
+    (proc need (n) pure
+      (let z (eq n 0))
+      (if z (block (ret (tag Wait))) (block (ret (tag Keep n)))))
+    (proc explode (n) pure (crash "update failed"))
+    (proc waiter (s) eff (let v (step need (s))) (ret v))
+    (proc attempt (s) eff
+      (let c (host nth 0))
+      (let first (eq c 0))
+      (if first (block (let a (host work 1)) (do (step explode (s))) (ret a)) (block (ret 0))))
+    (proc supervised (s) eff (let v (call supervise! 1 (clo attempt s))) (ret v))
+    (proc main () eff
+      (let s (shared 0))
+      (let r (call all! (list (clo supervised s) (clo waiter s))))
+      (ret r))
+    """
+
+    def test_a_waiter_on_a_variable_an_update_poisoned_crashes(self):
+        # The waiter waits for a state that never comes. The crashing update
+        # poisons the cell and readies the parked waiter, which crashes,
+        # under every schedule.
+        poisoned = ("crashed", ("str", shared_mod.POISONED_BY_UPDATE))
+        lows = self.build(self.UPDATE_CRASH_WAITERS)
+        self.assertEqual(everywhere(lows), {poisoned})
+        r = tasks(lows, PausePolicy())
+        self.assertEqual((r.runtime["waits"], r.runtime["poisoned steps"]), (1, 1))
+        # Under the earlier rule the waiter is never readied: a deadlock.
+        with switches(shared={"no_poison": True}):
+            self.assertNotIn(poisoned, everywhere(lows))
+
+    UPDATE_FORM = """
+    (proc decide (xs k) pure
+      (let n (len xs))
+      (let full (lt k n))
+      (if full (block (ret (tag Wait))) (block (ret (tag Keep n)))))
+    (proc push_or_wait (xs k) pure
+      (let n (len xs))
+      (let room (lt n k))
+      (if room (block (let ys (push xs n)) (ret (tag Set n ys))) (block (tail decide xs k))))
+    (proc pusher (s) eff (let v (step push_or_wait (s) 3)) (ret v))
+    (proc reader (s) eff (let v (step decide (s) 9)) (ret v))
+    (proc main () eff
+      (let xs (list))
+      (let s (shared xs))
+      (let a (call pusher s))
+      (let b (call pusher s))
+      (let c (call reader s))
+      (let d (call pusher s))
+      (let e (call reader s))
+      (ret (list a b c d e)))
+    """
+
+    def test_update_forms_put_back_the_state_they_were_given(self):
+        # push_or_wait builds Set in place and tail-calls decide for Keep, so
+        # its update form matches on decide's tag (V10). The runtime asserts
+        # that every Keep and Wait puts back the very state it moved out.
+        lows = self.build(self.UPDATE_FORM)
+        self.assertEqual(everywhere(lows), {("done", ("list", None, (0, 1, 2, 2, 3)))})
+        arc, _ = build(library.SOURCE + library.SHARED_SOURCE + self.UPDATE_FORM)
+        procs = arc.prog.procs
+        self.assertIn(shared_mod.update_form("push_or_wait", 1), procs)
+        self.assertIn(shared_mod.update_form("decide", 1), procs)
+        # On the path that pushes, the list is consumed by the push, not
+        # duplicated: it changes in place when nothing else holds it.
+        upd = procs[shared_mod.update_form("push_or_wait", 1)]
+        self.assertNotIn(("dup", "xs"), upd.body.term[2].stmts)
 
     def test_static_checks(self):
         cases = {
@@ -2534,7 +2636,7 @@ class Coverage(unittest.TestCase):
     def test_every_rfc_invariant_and_obligation_is_pinned(self):
         import coverage
         rows = coverage.rows()
-        self.assertEqual(len(rows), 57)  # G1-G9, C1-C11, R1-R8, P1-P10; S1-S10; V1-V9
+        self.assertEqual(len(rows), 58)  # G1-G9, C1-C11, R1-R8, P1-P10; S1-S10; V1-V10
         self.assertEqual(set(rows), set(coverage.MATRIX) | set(coverage.PENDING),
                          "the RFCs' tables and the matrix differ")
         self.assertFalse(set(coverage.MATRIX) & set(coverage.PENDING))
