@@ -182,15 +182,16 @@ pub const RootTestPlanMetadata = struct {
     root_index: u32,
 };
 
-/// Return the command-level test-plan metadata for a checked root request.
+/// Return the command-level test-plan metadata for the checked root request at
+/// `request_index`, whose root order is `root_order`.
 pub fn testPlanMetadataForRoot(
     roots: RootRequests,
-    root: checked.RootRequest,
+    root_order: u32,
     request_index: usize,
 ) ?lir_core.RootMetadata.RootMetadata.TestPlanMetadata {
     for (roots.test_plan_metadata) |metadata| {
         if (metadata.request_index != request_index) continue;
-        std.debug.assert(metadata.root_order == root.order);
+        std.debug.assert(metadata.root_order == root_order);
         return .{
             .result_index = metadata.result_index,
             .module_index = metadata.module_index,
@@ -401,25 +402,17 @@ test "string storage metadata applies the target threshold only at layout loweri
 }
 
 test "test metadata uses explicit union request positions across equal root orders" {
-    const root: checked.RootRequest = .{
-        .order = 0,
-        .module_idx = 0,
-        .kind = .test_expect,
-        .source = .{ .def = @fromBackingInt(@intCast(0)) },
-        .checked_type = @fromBackingInt(@intCast(0)),
-        .abi = .test_expect,
-        .exposure = .private,
-    };
+    const root_order: u32 = 0;
     const roots: RootRequests = .{ .test_plan_metadata = &.{
         .{ .request_index = 2, .root_order = 0, .result_index = 11, .module_index = 4, .root_index = 3 },
         .{ .request_index = 3, .root_order = 0, .result_index = 29, .module_index = 7, .root_index = 5 },
     } };
-    try std.testing.expect(testPlanMetadataForRoot(roots, root, 0) == null);
-    try std.testing.expectEqual(@as(u32, 4), testPlanMetadataForRoot(roots, root, 2).?.module_index);
-    try std.testing.expectEqual(@as(u32, 7), testPlanMetadataForRoot(roots, root, 3).?.module_index);
-    try std.testing.expectEqual(@as(u32, 11), testPlanMetadataForRoot(roots, root, 2).?.result_index);
-    try std.testing.expectEqual(@as(u32, 29), testPlanMetadataForRoot(roots, root, 3).?.result_index);
-    try std.testing.expectEqual(@as(u32, 5), testPlanMetadataForRoot(roots, root, 3).?.root_index);
+    try std.testing.expect(testPlanMetadataForRoot(roots, root_order, 0) == null);
+    try std.testing.expectEqual(@as(u32, 4), testPlanMetadataForRoot(roots, root_order, 2).?.module_index);
+    try std.testing.expectEqual(@as(u32, 7), testPlanMetadataForRoot(roots, root_order, 3).?.module_index);
+    try std.testing.expectEqual(@as(u32, 11), testPlanMetadataForRoot(roots, root_order, 2).?.result_index);
+    try std.testing.expectEqual(@as(u32, 29), testPlanMetadataForRoot(roots, root_order, 3).?.result_index);
+    try std.testing.expectEqual(@as(u32, 5), testPlanMetadataForRoot(roots, root_order, 3).?.root_index);
 }
 
 /// Test scaffolding: a checked-module set whose only module declares

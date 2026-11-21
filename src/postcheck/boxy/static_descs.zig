@@ -2424,20 +2424,22 @@ test "override scopes are interned by content and restricted to a type's reach" 
     // These opaque nominals are compared by identity only: scope traversal
     // never opens a backing for these has_backing=false nodes.
     const unit = try declarations.appendSyntheticPayloadRoot(allocator, .empty_record);
+    var empty: Common.EmptyCheckedModulesForTest = undefined;
+    try empty.init(allocator);
+    defer empty.deinit(allocator);
+    // The nominals are declared by the empty module, under its own identity.
+    const declaring_module = try empty.artifact.canonical_names.internModuleIdentity(&empty.artifact.module_identity.stable_hash);
     var declaration_ids: [2]checked.CheckedNominalDeclarationId = undefined;
     for (&declaration_ids, 0..) |*id, index| {
         id.* = @fromBackingInt(@intCast(declarations.nominal_declarations.items().len));
         _ = try declarations.nominal_declarations.append(allocator, .{
             .id = id.*,
-            .nominal = .{ .module = @fromBackingInt(@intCast(0)), .source_decl = @intCast(index) },
+            .nominal = .{ .module = declaring_module, .source_decl = @intCast(index) },
             .source_statement = @intCast(index),
             .declaration_root = unit,
             .backing = unit,
         });
     }
-    var empty: Common.EmptyCheckedModulesForTest = undefined;
-    try empty.init(allocator);
-    defer empty.deinit(allocator);
     var module_view = empty.view();
     module_view.checked_types = declarations.view();
     const module = try fixture.modules.add(module_view);

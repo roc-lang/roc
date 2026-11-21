@@ -4871,7 +4871,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             });
         }
         var metadata = RootMetadata.fromCheckedRoot(request);
-        metadata.test_plan = Common.testPlanMetadataForRoot(input.roots, request, index);
+        metadata.test_plan = Common.testPlanMetadataForRoot(input.roots, request.order, index);
         if (input.host_boundary_digests and request.abi == .platform) {
             metadata.host_boundary_digest = try hostBoundaryDigest(program, request, source_module);
         }

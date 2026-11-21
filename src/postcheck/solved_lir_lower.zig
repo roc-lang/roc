@@ -4310,7 +4310,7 @@ const Lowerer = struct {
             const proc = try self.markReachableFn(root.fn_id);
             try self.result.root_procs.append(self.allocator, proc);
             var metadata = RootMetadata.fromCheckedRoot(root.request);
-            metadata.test_plan = Common.testPlanMetadataForRoot(self.root_requests, root.request, root.request_index);
+            metadata.test_plan = Common.testPlanMetadataForRoot(self.root_requests, root.request.order, root.request_index);
             if (self.host_boundary_digests and root.request.abi == .platform) {
                 metadata.host_boundary_digest = try self.hostBoundaryDigest(entry);
             }

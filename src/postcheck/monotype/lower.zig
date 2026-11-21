@@ -10931,7 +10931,7 @@ const Builder = struct {
             }
             try body_ctx.seedSubstitution(schema, live);
         } else if (retained_topology == null) {
-            body_ctx.evidence = try body_ctx.rootEvidenceAtOwnScheme(template, spec_evidence);
+            body_ctx.evidence = try body_ctx.rootEvidenceAtOwnScheme(templateSchemaIn(body_ctx.view, &template), spec_evidence);
         }
 
         const graph_fn_ty = try body_ctx.importProgramType(lower_fn_ty);
@@ -55019,10 +55019,9 @@ const BodyContext = struct {
     /// them back into this context would only repeat the lookups.
     fn rootEvidenceAtOwnScheme(
         self: *BodyContext,
-        template: checked.CheckedProcedureTemplate,
+        schema: SchemeRequirements,
         vector: []const SpecEvidence,
     ) Allocator.Error!EvidenceChain {
-        const schema = templateSchemaIn(self.view, &template);
         // These cells and their slot array live only as long as the body graph.
         // Stored function evidence retains the vector and scope, never slots.
         const slots = try self.graph.arena().alloc(SubstSlot, schema.scheme_vars.len);
@@ -70941,24 +70940,6 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     try checked_types.fillSyntheticTypeRoot(gpa, outer_ty, .{ .flex = .{} });
     try checked_types.fillSyntheticTypeRoot(gpa, inner_ty, .{ .flex = .{} });
     const fn_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{outer_ty}, outer_ty);
-    var scheme_vars = [_]checked.CheckedTypeId{outer_ty};
-    const templates = checked.CheckedProcedureTemplateTable{ .scheme_vars_pool = .fromBorrowedSlice(&scheme_vars) };
-    // Only the template's checked root and scheme variables are read here.
-    const template: checked.CheckedProcedureTemplate = .{
-        .proc_base = @fromBackingInt(0),
-        .template_id = @fromBackingInt(0),
-        .body = .{ .checked_body = @fromBackingInt(0) },
-        .checked_fn_scheme = @fromBackingInt(0),
-        .checked_fn_root = fn_ty,
-        .static_dispatch_plans = .{},
-        .direct_dispatch_plans = .{},
-        .dispatch_relations = .{},
-        .resolved_value_refs = .{},
-        .top_level_value_uses = .{},
-        .nested_proc_sites = .{},
-        .target = .roc,
-        .scheme_vars = .{ .start = 0, .len = 1 },
-    };
 
     // Only type instantiation and lexical binding are exercised here.
     var program = Ast.Program.init(std.testing.allocator);
@@ -70969,11 +70950,19 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     const builder = &lowering.builder;
     lowering.view_data.key = .{ .bytes = @splat(0) };
     lowering.view_data.types = checked_types.view();
-    lowering.view_data.templates = &templates;
     var ctx = try lowering.bodyContext(graph);
     defer ctx.deinit();
+    // The scheme of a template whose checked root is `fn_ty`, generalized
+    // over `outer_ty`.
+    const schema: SchemeRequirements = .{
+        .view = ctx.view,
+        .root = fn_ty,
+        .scheme_vars = &.{outer_ty},
+        .params = &.{},
+        .params_start = 0,
+    };
 
-    const root = try ctx.rootEvidenceAtOwnScheme(template, &.{});
+    const root = try ctx.rootEvidenceAtOwnScheme(schema, &.{});
     const outer_node = root.subst[0].node;
     const root_node = try ctx.instNode(fn_ty);
     const str_node = try graph.newNode(.{ .primitive = .str });
@@ -71000,7 +70989,7 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     var sibling = ctx;
     sibling.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
     defer sibling.instantiation.deinit();
-    const sibling_root = try sibling.rootEvidenceAtOwnScheme(template, &.{});
+    const sibling_root = try sibling.rootEvidenceAtOwnScheme(schema, &.{});
     const sibling_node = try sibling.instNode(fn_ty);
     const sibling_request = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{inner_node}), .ret = inner_node } });
     try relateConstructionFunctionRequestInterface(graph, sibling_node, sibling_request);
