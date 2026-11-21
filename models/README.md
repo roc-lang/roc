@@ -11,6 +11,7 @@ None of this runs in CI or `minici`. Each model is run by hand, from its own dir
 | Model | Stage it checks | How | Toolchain | Compiler hook |
 |---|---|---|---|---|
 | [arc](arc/) | ARC insertion, reuse and dismantle in LIR; the debug ARC certifier | oracle on LIR dumps, generator | Lean 4, Python | `ROC_LIR_DUMP`, `ROC_VERIFY_ARC` |
+| [exhaustive](exhaustive/) | match exhaustiveness and redundancy in the checker | generator, differential against `roc check` | Python | none |
 
 Every hook is a developer diagnostic (`base.dev_diagnostics`), so the models need a Debug `roc` (`zig build roc`) or one built
 with `-Ddev-diagnostics`.
