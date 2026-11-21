@@ -13,6 +13,7 @@ None of this runs in CI or `minici`. Each model is run by hand, from its own dir
 | [arc](arc/) | ARC insertion, reuse and dismantle in LIR; the debug ARC certifier | oracle on LIR dumps, generator | Lean 4, Python | `ROC_LIR_DUMP`, `ROC_VERIFY_ARC` |
 | [exhaustive](exhaustive/) | match exhaustiveness and redundancy in the checker | generator, differential against `roc check` | Python | none |
 | [infer](infer/) | type inference and the type printer | generator, differential against `roc check` | Python | none |
+| [rows-evidence](rows-evidence/) | rows, dispatch evidence, and Lifted IR typing | generator, oracle on Lifted IR dumps | Lean 4 | `ROC_LIFTED_IR_EXPORT` ([#13403](https://github.com/roc-lang/roc/pull/13403)) |
 | [specconstr](specconstr/) | SpecConstr termination and growth | Maude model, generator | Maude, Python | none |
 
 Every hook is a developer diagnostic (`base.dev_diagnostics`), so the models need a Debug `roc` (`zig build roc`) or one built

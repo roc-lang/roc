@@ -1,0 +1,136 @@
+roc-lifted-ir 2
+stage after_lift
+types 14
+t 0 prim u64
+t 1 prim str
+t 2 tags 2 A 1 0 B 0
+t 3 record 2 a 0 b 1
+t 4 tuple 2 0 1
+t 5 list 0
+t 6 box 0
+t 7 func 1 0 0
+t 8 named nominal 0123abcd:7 My%20T 0 2
+t 9 zst
+t 10 list 11
+t 11 hole
+t 12 erased
+t 13 prim bool
+locals 12
+l 0 0 -
+l 1 0 3221225473
+l 2 0 -
+l 3 3 -
+l 4 0 -
+l 5 1 -
+l 6 0 -
+l 7 0 -
+l 8 0 -
+l 9 0 -
+l 10 0 -
+l 11 3 -
+fns 5
+f 0 2 0 0 3 3 0 0 1
+e 1 0 block 3 0 1 2 3
+s 0 let_ 0 2 0
+p 0 0 bind 2
+e 2 0 call_proc 1 0 1 4 1 3221225473 47
+e 47 0 local 0
+e 4 0 local 0
+s 1 expr 5
+e 5 3 record 2 b 6 a 7
+e 6 1 str_lit
+e 7 0 int_lit
+s 2 dbg 8
+e 8 1 str_lit
+e 3 0 match_ 9 3 1 0 - 10 2 1 3 13 11 3 0 - 12
+e 9 8 nominal 14
+e 14 2 tag A 1 15
+e 15 0 local 2
+p 1 8 nominal 4
+p 4 2 tag A 1 5
+p 5 0 as 6 4
+p 6 0 wildcard
+e 10 0 if_ 1 16 17 18
+e 16 13 structural_eq 19 20 0
+e 19 0 local 4
+e 20 0 int_lit
+e 17 0 local 4
+e 18 0 field_access 21 1 a
+e 21 3 local 3
+p 2 8 nominal 7
+p 7 2 tag B 0
+s 3 let_ 8 22 0
+p 8 3 record 2 a 9 b 10
+p 9 0 bind 6
+p 10 1 str_pattern 2 - 11
+p 11 1 bind 5
+e 22 3 record_update 23 1 a 24
+e 23 3 local 3
+e 24 0 int_lit
+e 13 13 low_level bool_true 0
+e 11 0 tuple_access 25 0
+e 25 4 tuple 2 26 27
+e 26 0 int_lit
+e 27 1 str_lit
+p 3 8 wildcard
+e 12 0 loop_ 1 7 0 1 28 29
+e 28 0 int_lit
+e 29 0 join_point 3 1 8 0 30 31
+e 30 0 break_ 32
+e 32 0 local 8
+e 31 0 jump 3 1 33 1 7 0 1 34
+e 33 0 local 7
+e 34 0 local 7
+f 1 1 2 0 1 1 0 0 35
+e 35 0 block 2 4 5 36
+s 4 expr 37
+e 37 5 list 1 38
+e 38 0 call_value 39 1 40
+e 39 7 fn_ref 1 1 3221225473 41
+e 41 0 local 2
+e 40 0 local 2
+s 5 return_ 42 0
+e 42 0 local 1
+e 36 0 row_widen 43
+e 43 0 try_sequence 44 2 - 45
+e 44 0 unreachable
+e 45 0 return_ 46 0
+e 46 0 local 2
+f 2 1 9 0 0 0 60
+e 60 0 block 5 10 11 12 13 14 61
+s 10 uninitialized 20
+p 20 4 tuple 2 21 22
+p 21 0 int_lit
+p 22 1 str_lit
+s 11 expect 62
+e 62 13 structural_hash 63 64
+e 63 0 local 9
+e 64 0 unit
+s 12 crash
+s 13 checked_error
+s 14 expr 65
+e 65 5 list 0
+e 61 0 if_initialized_payload 66 10 67 68
+e 66 13 uninitialized_payload 10
+e 67 0 static_data_candidate 69
+e 69 0 comptime_value 70
+e 70 0 typed_boundary 71
+e 71 0 local 9
+e 68 0 static_data_candidate -
+f 3 1 10 0 0 0 80
+e 80 0 match_ 81 1 23 0 - 82
+e 81 5 list 0
+p 23 5 list 1 24 1 25
+p 24 0 int_lit
+p 25 5 wildcard
+e 82 0 try_record_sequence 83 10 val 11 rest - 84
+e 83 0 crash
+e 84 0 loop_ 0 0 85
+e 85 0 if_ 1 86 87 88
+e 86 13 expect_err 89
+e 89 1 str_lit
+e 87 0 continue_ 0
+e 88 0 literal_rejected 90
+e 90 1 str_lit
+f 4 1 11 3 0 1 hosted
+end

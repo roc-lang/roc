@@ -1,0 +1,21 @@
+roc-lifted-ir 2
+stage after_lift
+types 3
+t 0 prim u64
+t 1 tags 2 Err 1 0 Ok 1 0
+t 2 named nominal 0123abcd:- Try 0 1
+locals 1
+l 0 1 -
+fns 2
+f 0 0 0 2 0
+e 0 2 nominal 1
+e 1 1 tag Ok 1 2
+e 2 0 int_lit
+f 1 0 0 2 3
+e 3 2 block 1 0 5
+s 0 let_ 0 4 0
+p 0 1 bind 0
+e 4 1 call_proc 0 0 0 0
+e 5 2 nominal 6
+e 6 1 local 0
+end
