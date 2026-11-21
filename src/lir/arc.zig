@@ -18625,12 +18625,12 @@ test "RC repeated union projections keep their field across a result join" {
     const borrowed_result = try f.local(.str);
     const lend = try f.addProc(&.{borrowed_param}, try f.assignStr(borrowed_result, "label", try f.ret(borrowed_result)), .str);
     const call = struct {
-        fn to(fix: *ArcTest, target: LIR.LocalId, proc: LIR.LirProcSpecId, args: []const LIR.LocalId, next: LIR.CFStmtId) !LIR.CFStmtId {
+        fn to(fix: *ArcTest, target: LIR.LocalId, proc: LIR.LirProcSpecId, args: []const LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
             return fix.store.addCFStmt(.{ .assign_call = .{ .target = target, .proc = proc, .args = try fix.span(args), .next = next } }, .test_fixture);
         }
     }.to;
     const project = struct {
-        fn pair(fix: *ArcTest, target: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) !LIR.CFStmtId {
+        fn pair(fix: *ArcTest, target: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
             return fix.store.addCFStmt(.{ .assign_ref = .{ .target = target, .op = .tagPayloadStruct(source, 0, 0), .next = next } }, .test_fixture);
         }
     }.pair;
