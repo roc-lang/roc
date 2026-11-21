@@ -6330,7 +6330,6 @@ const Builder = struct {
     nominal_parameter_value_masks: std.AutoHashMapUnmanaged(NominalDeclarationKey, ?[]const bool) = .empty,
     coordinator_interface_summaries: ?*const SharedSummaries = null,
     coordinator_interface_summary_end: usize = 0,
-    interface_summary_checks: u32 = 0,
     spec_store: specialize.SpecBuilder,
     lowered_templates: collections.DenseMap(Ast.FnId, LoweredTemplate),
     /// `monoTypeMentionsFunction`'s answers, indexed by program type id. A
@@ -22118,21 +22117,6 @@ const InterfaceSummary = union(enum) {
             .constraints => |constraints| .{ .constraints = try constraints.copy(allocator, context) },
         };
     }
-
-    /// Whether two expansions of the request whose input was `input`
-    /// constrain its interface identically. An unchanged summary stands for
-    /// that input itself.
-    fn equivalent(self: InterfaceSummary, other: InterfaceSummary, input: InterfaceConstraints, graph: *InstGraph, allocator: Allocator) Allocator.Error!bool {
-        const left = switch (self) {
-            .unchanged => input,
-            .constraints => |constraints| constraints,
-        };
-        const right = switch (other) {
-            .unchanged => input,
-            .constraints => |constraints| constraints,
-        };
-        return std.mem.eql(u8, try left.equivalenceIdentityInto(graph, allocator), try right.equivalenceIdentityInto(graph, allocator));
-    }
 };
 
 /// An interface summary a body found for replay, with the store domain its
@@ -22358,15 +22342,11 @@ const InterfaceReplayEntry = struct {
     hole_cells: []const NodeId,
     roots: []const NodeId,
     summary: ?InterfaceSummary = null,
-    verify_summary: ?InterfaceSummary = null,
-    /// The request's input, kept while `verify_summary` awaits comparison.
-    verify_input: ?InterfaceConstraints = null,
     status: InterfaceReplayStatus = .expanding,
     lowlink: usize,
 };
 
 const InterfaceReplayState = struct {
-    use_finished_summaries: bool = true,
     entries: std.ArrayList(InterfaceReplayEntry),
     buckets: InterfaceReplayBuckets = .empty,
     stack: std.ArrayList(usize) = .empty,
@@ -29972,15 +29952,6 @@ const BodyContext = struct {
         };
     }
 
-    /// A found summary expressed in this body's own domain, for comparison
-    /// against a fresh expansion.
-    fn graphDomainSummary(self: *BodyContext, found: FoundInterfaceSummary) Allocator.Error!InterfaceSummary {
-        return switch (found.domain) {
-            .graph => found.summary,
-            .program => try found.summary.copy(self.graph.arena(), self.programSummaryDomain()),
-        };
-    }
-
     fn insertInterfaceSummary(self: *BodyContext, entry: InterfaceSummaryEntry) Allocator.Error!InterfaceSummary {
         const binding = self.interfaceSummaryCache();
         if (binding.types_are_durable) {
@@ -30331,7 +30302,7 @@ const BodyContext = struct {
                     return null;
                 },
                 .ready => {
-                    if (!replay_state.use_finished_summaries or !self.builder.replay_interface_summaries.enabled()) continue;
+                    if (!self.builder.replay_interface_summaries.enabled()) continue;
                     // Read the summary before writing `cached`, which the
                     // result location would otherwise leave half-written.
                     const summary = entry.summary orelse continue;
@@ -30340,19 +30311,10 @@ const BodyContext = struct {
                 },
             }
         }
-        if (cached == null and replay_state.use_finished_summaries) cached = try self.findMemoryInterfaceSummary(address, stored_evidence, request);
-        var verify_summary: ?InterfaceSummary = null;
-        const saved_use_summaries = replay_state.use_finished_summaries;
-        expansion.saved_use_summaries = saved_use_summaries;
-        expansion.restores_use_summaries = true;
+        if (cached == null) cached = try self.findMemoryInterfaceSummary(address, stored_evidence, request);
         if (cached) |found| {
             self.builder.count("interface_summary_hits");
-            if (std.debug.runtime_safety and self.builder.diagnostics != null and self.builder.interface_summary_checks < 16) {
-                self.builder.interface_summary_checks += 1;
-                self.builder.count("interface_summary_verifications");
-                verify_summary = try self.graphDomainSummary(found);
-                replay_state.use_finished_summaries = false;
-            } else switch (found.summary) {
+            switch (found.summary) {
                 .unchanged => {
                     self.builder.count("interface_summary_unchanged_hits");
                     return null;
@@ -30392,8 +30354,6 @@ const BodyContext = struct {
             },
             .roots = roots,
             .lowlink = replay_index,
-            .verify_summary = verify_summary,
-            .verify_input = if (verify_summary != null) try input.copy(self.graph.arena(), InterfaceSummaryCopy{}) else null,
         });
         try replay_state.stack.append(self.allocator, replay_index);
         const parent = replay_state.current;
@@ -30452,8 +30412,6 @@ const BodyContext = struct {
         /// frame before the expansion finishes.
         open_scope: ?struct { template: checked.CheckedProcedureTemplate, root_node: NodeId } = null,
         active_local_scopes: ?collections.DenseMap(checked.DispatchScopeId, NodeId) = null,
-        saved_use_summaries: bool = undefined,
-        restores_use_summaries: bool = false,
         parent: ?usize = null,
         restores_current: bool = false,
         replay_index: usize = undefined,
@@ -30484,7 +30442,6 @@ const BodyContext = struct {
             if (expansion.active_local_scopes) |*scopes| scopes.deinit();
             if (expansion.callee_ctx_live) expansion.callee_ctx.deinit();
             if (expansion.restores_current) expansion.replay_state.current = expansion.parent;
-            if (expansion.restores_use_summaries) expansion.replay_state.use_finished_summaries = expansion.saved_use_summaries;
             expansion.caller.graph.releaseArena(expansion.input_arena);
             expansion.request_roots.deinit(allocator);
             allocator.destroy(expansion);
@@ -30501,7 +30458,6 @@ const BodyContext = struct {
             const roots = expansion.roots;
             const request_roots = &expansion.request_roots;
             const parent = expansion.parent;
-            const saved_use_summaries = expansion.saved_use_summaries;
             // A component of one request is complete before it relates back to
             // that request. A parametric request's summary is therefore taken
             // from its expansion alone, so relating back cannot fill its holes.
@@ -30550,19 +30506,13 @@ const BodyContext = struct {
                     else
                         .{ .constraints = constraints };
                     entry.status = .ready;
-                    if (entry.verify_summary) |expected| {
-                        if (!try expected.equivalent(summary, entry.verify_input.?, self.graph, scratch.allocator())) {
-                            Common.compilerBug("cached interface constraints disagreed with fresh checked relation expansion");
-                        }
-                    }
-                    // Completed replay entries borrow the durable cache's immutable
-                    // storage; only uncached verification expansions remain graph-local.
-                    entry.summary = if (saved_use_summaries) try self.insertInterfaceSummary(.{
+                    // Completed replay entries borrow the durable cache's immutable storage.
+                    entry.summary = try self.insertInterfaceSummary(.{
                         .address = entry.address,
                         .evidence = entry.evidence,
                         .request = entry.request,
                         .summary = summary,
-                    }) else try summary.copy(self.graph.arena(), InterfaceSummaryCopy{});
+                    });
                     if (index == replay_index) break;
                 }
             }
@@ -55762,7 +55712,7 @@ const BodyContext = struct {
         var roots = std.ArrayList(NodeId).empty;
         defer roots.deinit(self.allocator);
         for (subst) |slot| if (slot == .node) try roots.append(self.allocator, slot.node);
-        if (roots.items.len == 0 or !self.draft.interface_replay.use_finished_summaries) {
+        if (roots.items.len == 0) {
             return try self.relateEvidenceContractsAt(schema, subst, contract);
         }
         const pool = schema.view.templates.evidence_params_pool.items();
@@ -55792,24 +55742,17 @@ const BodyContext = struct {
             .evidence_digest = evidence.digest.bytes,
             .input_digest = interfaceRequestBucket(request.bytes),
         };
-        var verify_summary: ?InterfaceSummary = null;
         if (try self.findMemoryInterfaceSummary(address, evidence, request)) |found| {
             self.builder.count("interface_summary_hits");
-            if (std.debug.runtime_safety and self.builder.diagnostics != null and self.builder.interface_summary_checks < 16) {
-                self.builder.interface_summary_checks += 1;
-                self.builder.count("interface_summary_verifications");
-                verify_summary = try self.graphDomainSummary(found);
-            } else {
-                switch (found.summary) {
-                    .unchanged => self.builder.count("interface_summary_unchanged_hits"),
-                    .constraints => |constraints| {
-                        for (try self.instantiateFoundConstraints(found.domain, constraints), roots.items) |produced, root| {
-                            try self.graph.unify(produced, root);
-                        }
-                    },
-                }
-                return;
+            switch (found.summary) {
+                .unchanged => self.builder.count("interface_summary_unchanged_hits"),
+                .constraints => |constraints| {
+                    for (try self.instantiateFoundConstraints(found.domain, constraints), roots.items) |produced, root| {
+                        try self.graph.unify(produced, root);
+                    }
+                },
             }
+            return;
         }
         self.builder.count("interface_summary_expansions");
         // Relate independent copies of the substitution's cells, so unrelated
@@ -55827,18 +55770,12 @@ const BodyContext = struct {
             .unchanged
         else
             .{ .constraints = constraints };
-        if (verify_summary) |expected| {
-            if (!try expected.equivalent(summary, input, self.graph, scratch.allocator())) {
-                Common.compilerBug("cached evidence contract relations disagreed with a fresh expansion");
-            }
-        } else {
-            _ = try self.insertInterfaceSummary(.{
-                .address = address,
-                .evidence = evidence,
-                .request = request,
-                .summary = summary,
-            });
-        }
+        _ = try self.insertInterfaceSummary(.{
+            .address = address,
+            .evidence = evidence,
+            .request = request,
+            .summary = summary,
+        });
         for (detached, roots.items) |produced, root| try self.graph.unify(produced, root);
     }
 
@@ -55913,15 +55850,12 @@ const BodyContext = struct {
             .evidence_digest = @splat(0),
             .input_digest = interfaceRequestBucket(request.bytes),
         };
-        const use_summaries = self.draft.interface_replay.use_finished_summaries;
-        if (use_summaries) {
-            if (try self.findMemoryInterfaceSummary(address, evidence, request)) |found| {
-                switch (found.summary) {
-                    .unchanged => {},
-                    .constraints => |constraints| try self.graph.unify((try self.instantiateFoundConstraints(found.domain, constraints))[0], constraint_node),
-                }
-                return;
+        if (try self.findMemoryInterfaceSummary(address, evidence, request)) |found| {
+            switch (found.summary) {
+                .unchanged => {},
+                .constraints => |constraints| try self.graph.unify((try self.instantiateFoundConstraints(found.domain, constraints))[0], constraint_node),
             }
+            return;
         }
         // Relate an independent copy, so unrelated caller state cannot enter
         // the retained result. Open variables remain fresh on each replay.
@@ -55938,19 +55872,17 @@ const BodyContext = struct {
         };
         const target_node = try self.instantiateEvidenceTargetSignature(target, address.family, detached_subst);
         try self.relateEvidenceTargetRootToRequest(root_view, root_fn_ty, target_node, detached);
-        if (use_summaries) {
-            const constraints = try InterfaceConstraints.capture(self.graph, scratch.allocator(), &.{detached});
-            const summary: InterfaceSummary = if (try constraints.identityEql(self.graph, request))
-                .unchanged
-            else
-                .{ .constraints = constraints };
-            _ = try self.insertInterfaceSummary(.{
-                .address = address,
-                .evidence = evidence,
-                .request = request,
-                .summary = summary,
-            });
-        }
+        const constraints = try InterfaceConstraints.capture(self.graph, scratch.allocator(), &.{detached});
+        const summary: InterfaceSummary = if (try constraints.identityEql(self.graph, request))
+            .unchanged
+        else
+            .{ .constraints = constraints };
+        _ = try self.insertInterfaceSummary(.{
+            .address = address,
+            .evidence = evidence,
+            .request = request,
+            .summary = summary,
+        });
         try self.graph.unify(detached, constraint_node);
     }
 
@@ -55965,7 +55897,7 @@ const BodyContext = struct {
         family: DraftTemplateFamilyAddress,
         subst: SpecSubstitution,
     ) Allocator.Error!NodeId {
-        const cacheable = subst.len == 0 and target.target.kind == .procedure and self.draft.interface_replay.use_finished_summaries;
+        const cacheable = subst.len == 0 and target.target.kind == .procedure;
         const address: InterfaceReplayAddress = .{
             .kind = .method_signature,
             .family = family,
