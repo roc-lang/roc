@@ -14,10 +14,11 @@
 //! directory: the host's blocks and one entry for every absolute word the
 //! app holds, so the executable keeps its dynamic base. A `provides`
 //! symbol's window in the host is filled too: a jump to the entry wrapper,
-//! or the value's bytes with their relocations. The host's debug sections,
-//! which LLD places last, move after the app with the images' fragments
-//! appended; the symbol table follows with the app's symbols appended and
-//! the host's entries renumbered for the inserted sections. When the host's
+//! or the value's bytes with their relocations. The host's DWARF sections,
+//! which LLD places last, all move after the app, each image's fragments
+//! appended to the section of their region; the symbol table follows with
+//! the app's symbols appended and the host's entries renumbered for the
+//! inserted sections. When the host's
 //! header page has no room for the inserted section headers, its section
 //! contents move one page down the file.
 //!
@@ -139,18 +140,17 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     defer gpa.free(reached_atoms);
     for (walk.states, reached_atoms) |state, *atoms| atoms.* = if (state) |placed| placed.atoms else &.{};
 
-    // The host's debug sections move after the app; every other host
-    // section stays where it is.
+    // The host's DWARF sections, which end its section table, move after
+    // the app; every other host section stays where it is.
+    const host_debug_start = exe.debugSectionsStart();
     var debug_host_index = [_]?usize{ null, null, null };
-    var app_rva: u64 = 0;
-    for (exe.sections, 0..) |section, index| {
-        const slot = for (debug_section_names, 0..) |name, slot| {
-            if (std.mem.eql(u8, section.name, name)) break slot;
-        } else null;
-        if (slot) |found| {
-            debug_host_index[found] = index;
-            continue;
+    for (exe.sections[host_debug_start..], host_debug_start..) |section, index| {
+        for (debug_section_names, &debug_host_index) |name, *host_index| {
+            if (std.mem.eql(u8, section.name, name)) host_index.* = index;
         }
+    }
+    var app_rva: u64 = 0;
+    for (exe.sections[0..host_debug_start]) |section| {
         app_rva = @max(app_rva, @as(u64, section.rva) + @max(section.virtual_size, section.raw_size));
     }
     app_rva = std.mem.alignForward(u64, app_rva, page_size);
@@ -303,44 +303,41 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     const relocation_rva = sections.items[unwind_index].end();
     const relocation_index = try addSection(gpa, &sections, relocation_section_name, relocation_rva, relocation_blocks.items.len, relocation_blocks.items.len, IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_DISCARDABLE);
 
-    // The debug sections: the host's bytes, then the images' fragments.
+    // The DWARF sections, contiguous after the app: the host's in their
+    // order, each with the images' fragments of its region appended, then
+    // one for each region with fragments that the host lacks.
     var debug_rva = sections.items[relocation_index].end();
     var debug_index = [_]?usize{ null, null, null };
-    var debug_host_size = [_]u64{ 0, 0, 0 };
-    for (debug_regions, debug_host_index, 0..) |region, host_index, slot| {
-        var size: u64 = if (host_index) |index| exe.sections[index].virtual_size else 0;
-        debug_host_size[slot] = size;
-        for (order.items) |index| {
-            const fragment = images.items[index].view.regionBytes(region);
-            places[index].debug[slot] = size;
-            size += fragment.len;
+    const host_debug_out = try gpa.alloc(usize, exe.sections.len - host_debug_start);
+    defer gpa.free(host_debug_out);
+    for (exe.sections[host_debug_start..], host_debug_out, host_debug_start..) |section, *out_index, index| {
+        var size: u64 = section.virtual_size;
+        for (debug_regions, debug_host_index, &debug_index, 0..) |region, host_index, *slot_index, slot| {
+            if (host_index != index) continue;
+            size = placeFragments(images.items, order.items, places, region, slot, size);
+            slot_index.* = sections.items.len;
         }
+        out_index.* = try addSection(gpa, &sections, section.name, debug_rva, size, size, section.characteristics);
+        sections.items[out_index.*].host_index = index;
+        debug_rva = sections.items[out_index.*].end();
+    }
+    for (debug_regions, debug_host_index, &debug_index, 0..) |region, host_index, *slot_index, slot| {
+        if (host_index != null) continue;
+        const size = placeFragments(images.items, order.items, places, region, slot, 0);
         if (size == 0) continue;
-        debug_index[slot] = try addSection(gpa, &sections, debug_section_names[slot], debug_rva, size, size, IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_DISCARDABLE);
-        debug_rva = sections.items[debug_index[slot].?].end();
+        slot_index.* = try addSection(gpa, &sections, debug_section_names[slot], debug_rva, size, size, IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_DISCARDABLE);
+        debug_rva = sections.items[slot_index.*.?].end();
     }
     if (debug_rva > std.math.maxInt(u32)) return error.ProgramTooLarge;
 
-    // Section numbers: the host's sections other than its debug ones keep
-    // theirs, the app's follow, the debug sections come last.
+    // Section numbers: the host's sections before its DWARF keep theirs,
+    // the app's follow, the DWARF sections come last.
     const host_number = try gpa.alloc(u16, exe.sections.len);
     defer gpa.free(host_number);
-    var kept_host_sections: u16 = 0;
-    for (exe.sections, host_number, 0..) |_, *number, index| {
-        const is_debug = for (debug_host_index) |host_index| {
-            if (host_index != null and host_index.? == index) break true;
-        } else false;
-        if (is_debug) continue;
-        kept_host_sections += 1;
-        number.* = kept_host_sections;
-    }
+    const kept_host_sections: u16 = @intCast(host_debug_start);
+    for (host_number[0..host_debug_start], 1..) |*number, kept| number.* = @intCast(kept);
     const section_count = numberSections(sections.items, kept_host_sections);
-    for (debug_host_index, debug_index) |host_index, out_index| {
-        if (host_index) |index| {
-            const kept_index = out_index orelse unreachable; // a host debug section is kept with its contents
-            host_number[index] = sections.items[kept_index].number;
-        }
-    }
+    for (host_number[host_debug_start..], host_debug_out) |*number, out_index| number.* = sections.items[out_index].number;
     const headers_needed: u64 = exe.section_headers_offset + @as(u64, section_count) * section_header_size;
     // When the header page cannot hold the headers, the host's section
     // contents move one page down the file.
@@ -383,20 +380,18 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     const symtab_offset = file_at;
     const symbol_count = exe.symbol_count + app_symbol_count;
     const strtab_offset = symtab_offset + symbol_count * symbol_size;
-    // Section names longer than the header's field: a host debug section
-    // keeps its string table reference, a new one gets its name appended.
+    // Section names: a moved host section keeps its header's name field,
+    // and a new one longer than the field gets its name appended to the
+    // string table.
     var long_names: std.ArrayList(u8) = .empty;
     defer long_names.deinit(gpa);
     for (sections.items) |*section| {
-        if (section.name.len <= 8) {
-            @memcpy(section.header_name[0..section.name.len], section.name);
+        if (section.host_index) |index| {
+            @memcpy(&section.header_name, host.host()[exe.section_headers_offset + index * section_header_size ..][0..8]);
             continue;
         }
-        const host_index = for (debug_section_names, debug_host_index) |name, host_index| {
-            if (std.mem.eql(u8, section.name, name)) break host_index;
-        } else null;
-        if (host_index) |index| {
-            @memcpy(&section.header_name, host.host()[exe.section_headers_offset + index * section_header_size ..][0..8]);
+        if (section.name.len <= 8) {
+            @memcpy(section.header_name[0..section.name.len], section.name);
             continue;
         }
         const offset = host_strtab.len + app_strings + long_names.items.len;
@@ -490,11 +485,9 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     // sections, symbols and strings.
     try fanout.addCopies(gpa, &copy_list, hostDirectory(host, exe, host_exceptions), sections.items[unwind_index].raw_offset);
     try fanout.addCopies(gpa, &copy_list, relocation_blocks.items, sections.items[relocation_index].raw_offset);
-    for (debug_host_index, debug_index) |host_index, out_index| {
-        const index = host_index orelse continue;
-        const section = exe.sections[index];
+    for (exe.sections[host_debug_start..], host_debug_out) |section, out_index| {
         const bytes = host.host()[section.raw_offset..][0..@min(section.virtual_size, section.raw_size)];
-        try fanout.addCopies(gpa, &copy_list, bytes, sections.items[out_index.?].raw_offset);
+        try fanout.addCopies(gpa, &copy_list, bytes, sections.items[out_index].raw_offset);
     }
     try fanout.addCopies(gpa, &copy_list, host.host()[@intCast(host.trailer.sections_end)..][0 .. exe.symbol_count * symbol_size], symtab_offset);
     try fanout.addCopies(gpa, &copy_list, host_strtab, strtab_offset);
@@ -571,6 +564,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         .file_shift = file_shift,
         .size_of_headers = size_of_headers,
         .section_count = section_count,
+        .kept_host_sections = host_debug_start,
         .host_number = host_number,
         .sections = sections.items,
         .size_of_image = std.mem.alignForward(u64, debug_rva, exe.section_alignment),
@@ -643,6 +637,8 @@ const OutSection = struct {
     content_size: u64,
     characteristics: u32,
     raw_offset: u64 = 0,
+    /// The host section this one moves, whose header name field it keeps.
+    host_index: ?usize = null,
     /// One-based PE section number; zero when the region has no virtual extent.
     number: u16 = 0,
 
@@ -672,6 +668,17 @@ fn numberSections(sections: []OutSection, kept_host_sections: u16) u16 {
 fn addSection(gpa: Allocator, sections: *std.ArrayList(OutSection), name: []const u8, rva: u64, virtual_size: u64, content_size: u64, characteristics: u32) Allocator.Error!usize {
     try sections.append(gpa, .{ .name = name, .rva = rva, .virtual_size = virtual_size, .content_size = content_size, .characteristics = characteristics });
     return sections.items.len - 1;
+}
+
+/// Place every placed image's fragment of `region` after `start` bytes of
+/// the output debug section in `slot`; returns the section's size.
+fn placeFragments(images: []const ImageInput, order: []const u32, places: []Place, region: UnitImage.Region, slot: usize, start: u64) u64 {
+    var size = start;
+    for (order) |index| {
+        places[index].debug[slot] = size;
+        size += images[index].view.regionBytes(region).len;
+    }
+    return size;
 }
 
 /// The atom of `view` holding block offset `offset`.
@@ -743,6 +750,9 @@ const HeaderLayout = struct {
     file_shift: u64,
     size_of_headers: u64,
     section_count: u16,
+    /// How many of the host's sections keep their places: those before its
+    /// DWARF sections.
+    kept_host_sections: usize,
     host_number: []const u16,
     sections: []const OutSection,
     size_of_image: u64,
@@ -768,12 +778,9 @@ fn writeHeaders(out: []u8, exe: HostPrelink.Executable, layout: HeaderLayout) vo
     var size_of_uninitialized: u64 = 0;
     const headers = out[exe.section_headers_offset..][0 .. @as(usize, layout.section_count) * section_header_size];
     @memset(headers, 0);
-    for (exe.sections, layout.host_number, 0..) |section, number, index| {
+    const kept = layout.kept_host_sections;
+    for (exe.sections[0..kept], layout.host_number[0..kept], 0..) |section, number, index| {
         const entry = headers[(number - 1) * section_header_size ..][0..section_header_size];
-        const kept_in_place = for (debug_section_names) |name| {
-            if (std.mem.eql(u8, section.name, name)) break false;
-        } else true;
-        if (!kept_in_place) continue;
         const raw_offset = if (section.raw_size == 0) 0 else section.raw_offset + layout.file_shift;
         writeSectionHeader(entry, layout.host_section_headers[index * section_header_size ..][0..8], section.rva, section.virtual_size, section.raw_size, raw_offset, section.characteristics);
         countSection(section.characteristics, section.virtual_size, section.raw_size, &size_of_code, &size_of_initialized, &size_of_uninitialized);
@@ -1045,6 +1052,7 @@ test "PE headers omit empty regions and retain zero-fill-only sections" {
         .file_shift = 0,
         .size_of_headers = 4096,
         .section_count = count,
+        .kept_host_sections = 0,
         .host_number = &.{},
         .sections = &sections,
         .size_of_image = 0x4000,
