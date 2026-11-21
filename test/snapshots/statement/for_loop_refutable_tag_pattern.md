@@ -35,7 +35,7 @@ NON EXHAUSTIVE DESTRUCTURE - for_loop_refutable_tag_pattern.md:2:9:2:19
 			(text "    ")
 			(annotation-start code-block)
 			(indent 1)
-			(text "Err _")
+			(text "Err(_)")
 			(annotation-end)
 			(line-break))))
 ~~~
