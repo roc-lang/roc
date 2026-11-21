@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const can = @import("can");
 const check = @import("check");
 const layout = @import("layout");
 const lir_core = @import("lir_core");
@@ -400,8 +401,15 @@ test "string storage metadata applies the target threshold only at layout loweri
 }
 
 test "test metadata uses explicit union request positions across equal root orders" {
-    var root: checked.RootRequest = undefined;
-    root.order = 0;
+    const root: checked.RootRequest = .{
+        .order = 0,
+        .module_idx = 0,
+        .kind = .test_expect,
+        .source = .{ .def = @enumFromInt(0) },
+        .checked_type = @enumFromInt(0),
+        .abi = .test_expect,
+        .exposure = .private,
+    };
     const roots: RootRequests = .{ .test_plan_metadata = &.{
         .{ .request_index = 2, .root_order = 0, .result_index = 11, .module_index = 4, .root_index = 3 },
         .{ .request_index = 3, .root_order = 0, .result_index = 29, .module_index = 7, .root_index = 5 },
@@ -412,6 +420,44 @@ test "test metadata uses explicit union request positions across equal root orde
     try std.testing.expectEqual(@as(u32, 11), testPlanMetadataForRoot(roots, root, 2).?.result_index);
     try std.testing.expectEqual(@as(u32, 29), testPlanMetadataForRoot(roots, root, 3).?.result_index);
     try std.testing.expectEqual(@as(u32, 5), testPlanMetadataForRoot(roots, root, 3).?.root_index);
+}
+
+/// Test scaffolding: a checked-module set whose only module declares
+/// nothing. Tests that drive a post-check stage without source code take
+/// their checked-module inputs from it, so every input they hand the stage
+/// is fully defined. It is initialized in place because its artifact points
+/// at its own module environment.
+pub const EmptyCheckedModulesForTest = struct {
+    env: can.ModuleEnv,
+    artifact: checked.CheckedModuleArtifact,
+
+    pub fn init(self: *EmptyCheckedModulesForTest, allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
+        self.env = try can.ModuleEnv.init(allocator, "");
+        errdefer self.env.deinit();
+        self.artifact = try checked.emptyArtifactForTest(allocator, &self.env, 0);
+    }
+
+    pub fn deinit(self: *EmptyCheckedModulesForTest, allocator: std.mem.Allocator) void {
+        self.artifact.deinitRetainingModuleEnv(allocator);
+        self.env.deinit();
+    }
+
+    pub fn modules(self: *const EmptyCheckedModulesForTest) CheckedModules {
+        return .{ .root = .{ .module = &self.artifact, .roots = &self.artifact.root_requests } };
+    }
+
+    pub fn view(self: *const EmptyCheckedModulesForTest) checked.ImportedModuleView {
+        return checked.importedView(&self.artifact);
+    }
+};
+
+test "empty checked-module test set exposes its one module as the root" {
+    var empty: EmptyCheckedModulesForTest = undefined;
+    try empty.init(std.testing.allocator);
+    defer empty.deinit(std.testing.allocator);
+    const modules = empty.modules();
+    try std.testing.expect(modules.moduleByKey(empty.view().key.digest()) != null);
+    try std.testing.expectEqual(@as(usize, 0), modules.imports.len);
 }
 
 /// A checked compile-time root, named by its module's identity bytes.

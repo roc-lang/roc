@@ -25205,6 +25205,66 @@ fn testCheckedModuleKey(byte: u8) CheckedModuleArtifactKey {
     return key;
 }
 
+/// Test scaffolding: the fully defined artifact of a module that declares
+/// nothing, over `module_env`, which the caller owns and which must outlive
+/// the artifact. Tests that drive post-check stages without source code
+/// build their checked-module inputs from this. Release it with
+/// `deinitRetainingModuleEnv`.
+pub fn emptyArtifactForTest(allocator: Allocator, module_env: *ModuleEnv, key_byte: u8) Allocator.Error!CheckedModuleArtifact {
+    if (!builtin.is_test) unreachable; // test scaffolding: only test blocks call this
+
+    var canonical_names = canonical.CanonicalNameStore.init(allocator);
+    const module_name = canonical_names.internModuleName(module_env.module_name) catch |err| {
+        canonical_names.deinit();
+        return err;
+    };
+    var artifact: CheckedModuleArtifact = .{
+        .key = testCheckedModuleKey(key_byte),
+        .source_hash = @splat(0),
+        .canonical_names = canonical_names,
+        .module_identity = .{
+            .module_idx = 0,
+            .module_name = module_name,
+            .display_module_name = module_name,
+            .kind = module_env.module_kind,
+        },
+        .checking_context_identity = .{},
+        .module_env = .{ .checked_source = module_env },
+        .exports = .{},
+        .provides_requires = .{},
+        .method_registry = .{},
+        .static_dispatch_plans = .{},
+        .resolved_value_refs = .{},
+        .checked_procedure_templates = .{},
+        .top_level_procedure_bindings = .initEmpty(),
+        .root_requests = .{},
+        .hosted_procs = .{},
+        .platform_required_declarations = .{},
+        .platform_required_bindings = .{},
+        .interface_capabilities = .{},
+        .compile_time_roots = .{},
+        .top_level_values = .{},
+        .hoisted_constants = .{},
+        .const_templates = .{},
+        .const_store = ConstStore.init(allocator),
+    };
+    errdefer artifact.deinitRetainingModuleEnv(allocator);
+    try artifact.attachSealedTypes(allocator, std.testing.io);
+    return artifact;
+}
+
+test "empty test artifact publishes and releases a module without declarations" {
+    const allocator = std.testing.allocator;
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+    var artifact = try emptyArtifactForTest(allocator, &env, 1);
+    defer artifact.deinitRetainingModuleEnv(allocator);
+    const view = importedView(&artifact);
+    try std.testing.expect(view.key.eql(testCheckedModuleKey(1)));
+    try std.testing.expectEqual(@as(usize, 0), view.checked_bodies.nodeCount());
+    try std.testing.expectEqual(@as(usize, 0), view.direct_import_module_keys.len);
+}
+
 const CallableRootTraversal = checked_reachability.AnyReachable(CheckedTypeId, CallableRootScan);
 
 /// Whether no type reachable from `root` holds a callable. One-off consumers
