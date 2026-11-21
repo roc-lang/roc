@@ -544,7 +544,7 @@ it is an update.
 
 These types are libraries over `Shared`. Each is written with the functions
 above, and needs nothing else from the runtime. `Queue` and `Reply` are given
-in full; the others are in [the examples](concurrency-examples.md) or below.
+in full; the others are in [the examples](concurrency/examples.md) or below.
 
 ```roc
 Queue(a) :: Shared({ items : List(a), capacity : U64, closed : Bool }).{
@@ -750,7 +750,7 @@ take_token! = |bucket| {
 `Semaphore.with!` is `with_permit!` above, and `Pool.with!` is `with_conn!`.
 `Latch.counting_down!(latch, f)` is `cell.finally!(|n| n - 1, f)`.
 `Latch`, `Barrier`, `Watch` and `RwLock` are in [the
-examples](concurrency-examples.md), section 2, and `Memo.get!` is `cached!` in
+examples](concurrency/examples.md), section 2, and `Memo.get!` is `cached!` in
 section 6.
 
 ## Reference-level explanation

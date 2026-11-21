@@ -1,22 +1,14 @@
-# Concurrency examples
+# Concurrency Examples
 
-These examples test whether Roc's concurrency design covers the programs people
-write, and whether it covers them the Roc way: fast, friendly and functional.
-They follow the catalog of concurrent and distributed patterns that most
-programs draw from, and they use the APIs of two RFCs:
-
-- [Suspendable effects and platform-scheduled concurrency](concurrency-explicit-suspension.md):
-  concurrent loops over plans, `spawn` and the `Concurrent` module.
-- [Shared state](concurrency-shared-variables.md): `Shared(s)`, `update!`,
-  `finally!` and `on_failure!`, and the library written with them, such as
-  `Queue`, which `for!` reads as a stream, and `Reply`.
-
-The sessions RFC's channels and mailboxes are superseded by that library, and
-appear nowhere below.
+These examples test whether the proposal covers the programs people write, and
+whether it covers them the Roc way: fast, friendly and functional. They follow
+the catalog of concurrent and distributed patterns that most programs draw
+from. [The tour](01-tour.md) introduces the API they use, and [the API](02-api.md)
+lists it.
 
 No compiler checks these examples yet. Modules such as `Http`, `Sleep`,
 `Clock`, `Fs`, `Net`, `Kv`, `Db` and `Rand` stand for platform functions that
-suspend. All spellings are the RFCs' placeholders.
+suspend. All names are placeholders.
 
 ## What to look for
 
@@ -48,7 +40,7 @@ examples expose" at the end.
 | Undo a change however a task ends | `finally!`, `on_failure!` |
 | Restart work after a bug | `Concurrent.supervise!` |
 
-The shared-state RFC's two shorthands recur below: `h.get!()` is
+Two shorthands recur below: `h.get!()` is
 `h.update!(|s| Keep(s))`, and `h.modify!(g)` is `h.update!(|s| Set(g(s), {}))`.
 
 ## 1. Fan-out and fan-in
@@ -118,7 +110,7 @@ disk_usage! = |handles, path|
 ```
 
 Each directory fans out to its children. Tasks are cheap, but file handles are
-not, so a semaphore (`with_permit!`, from the shared-state RFC) bounds the open
+not, so a semaphore (`with_permit!`, from [the tour](01-tour.md#waiting-for-state-to-change)) bounds the open
 handles across the whole tree. A `limit` would bound only one level.
 
 ### First success
@@ -198,6 +190,9 @@ Latch :: Shared(U64).{
 
     count_down! : Latch => {}
     count_down! = |Latch.(left)| left.modify!(|n| n - 1)
+
+    counting_down! : Latch, (() => a) => a
+    counting_down! = |Latch.(left), f| left.finally!(|n| n - 1, f)
 
     wait! : Latch => {}
     wait! = |Latch.(left)| left.update!(|n| if n == 0 { Keep({}) } else { Wait })
@@ -293,8 +288,8 @@ and it never misses the latest value, although it may skip the ones in between.
 
 ### A bounded queue
 
-The shared-state RFC's library `Queue` is this, with the state behind an
-opaque type:
+The library's `Queue` ([the API](02-api.md#the-library)) is this, with the
+state behind an opaque type:
 
 ```roc
 push! : Shared({ items : List(a), capacity : U64, closed : Bool }), a => [Pushed, Closed]
@@ -432,8 +427,8 @@ events behind is told so and skips ahead.
 
 ## 4. Resource control
 
-The shared-state RFC already has a semaphore (`with_permit!`), a connection
-pool (`with_conn!`) and a token-bucket rate limiter (`take_token!`). These add
+The library already has a semaphore, a connection pool and a token-bucket
+rate limiter ([the API](02-api.md#the-library)). These add
 the rest of the usual set.
 
 ### Load shedding
@@ -536,8 +531,9 @@ cancellation to reach them, because the task tree already does it.
 
 ### Hedging and circuit breaking
 
-Hedged requests are in the main RFC (`hedged_get!`), and the circuit breaker
-is in the shared-state RFC (`guarded!`).
+Hedged requests are in [the tour](01-tour.md#adding-work-from-inside-a-loop)
+(`hedged_get!`), and the circuit breaker is `Breaker.guarded!` in
+[the API](02-api.md#the-library).
 
 ### Supervision trees
 
@@ -720,7 +716,7 @@ quorum_read! = |replicas, key, needed| {
 The read returns after `needed` replies and cancels the slower replicas. The
 repair finishes before the call returns. To return sooner, the stale replicas
 go onto a repair queue served alongside, as in the background refresh above.
-The write side is the main RFC's `write_quorum!`.
+The write side is `write_quorum!` in [the tour](01-tour.md#reacting-as-results-arrive).
 
 ### Two-phase commit
 
@@ -764,7 +760,10 @@ fencing tokens, as it does in any language.
 Replication : { log : List(Entry), matched : Dict(Peer, U64), commit : U64 }
 
 append! = |rep, entry| {
-    index = rep.update!(|r| Set({ ..r, log: r.log.append(entry) }, r.log.len() + 1))
+    index = rep.update!(|r| {
+        next = r.log.len() + 1
+        Set({ ..r, log: r.log.append(entry) }, next)
+    })
     rep.update!(|r| if r.commit >= index { Keep({}) } else { Wait })
 }
 
@@ -935,12 +934,12 @@ timer needs. Throttling is the rate limiter, and timeouts are deadlines.
 | Area | Patterns | Shown by |
 |---|---|---|
 | Fan-out and fan-in | parallel calls, bounded map, map-reduce, recursive fan-out, first success, scatter-gather | Section 1 |
-| Coordination | mutex, semaphore, latch, barrier, readers–writer lock, condition variable, watch, bounded queue | Section 2, shared-state RFC |
-| Dataflow | worker pool, producer–consumer, pipeline, fan-in, fan-out, broadcast, queues as streams | Section 3, shared-state RFC |
-| Resource control | semaphore, pool, rate limiter, load shedding, bulkhead, adaptive limit | Section 4, shared-state RFC |
-| Fault tolerance | retry, deadline, timeout, hedging, circuit breaker, supervision, graceful shutdown, saga | Section 5, main RFC |
+| Coordination | mutex, semaphore, latch, barrier, readers–writer lock, condition variable, watch, bounded queue | Section 2, the library |
+| Dataflow | worker pool, producer–consumer, pipeline, fan-in, fan-out, broadcast, queues as streams | Section 3, the library |
+| Resource control | semaphore, pool, rate limiter, load shedding, bulkhead, adaptive limit | Section 4, the library |
+| Fault tolerance | retry, deadline, timeout, hedging, circuit breaker, supervision, graceful shutdown, saga | Section 5, the tour |
 | Caching | single-flight, TTL, background refresh, idempotent handling | Section 6 |
-| Distributed systems | quorum read and write, read repair, two-phase commit, leases, log replication, services | Section 7, main RFC |
+| Distributed systems | quorum read and write, read repair, two-phase commit, leases, log replication, services | Section 7, the tour |
 | Classic problems | dining philosophers, crawler, bounded buffer, sleeping barber, readers–writers | Section 8 |
 | Time | periodic task, debounce, throttle, timeout | Section 9 |
 
@@ -956,7 +955,7 @@ slower, wordier or weaker than it could be, roughly in order of importance.
    `n` dispatches one after another, and a `ParallelTasks` build cannot release
    them in parallel. Readying at once every waiter whose probe would `Keep`,
    together with the first that would `Set`, would fix this at the cost of
-   probing every waiter. The shared-state RFC lists it under open decision (c).
+   probing every waiter. It's part of [open decision (c)](08-open-questions.md#open-decisions).
 2. **Waiters on unrelated keys are probed.** In `cached!`, every store to the
    dictionary probes the waiters for every other key. Holding one handle per
    key inside an outer handle (`Shared(Dict(k, Shared(Entry(v))))`) avoids it,
@@ -970,26 +969,26 @@ slower, wordier or weaker than it could be, roughly in order of importance.
    not hold the loop open.
 4. **Compensation cannot run on cancellation.** Cleanups are pure, so a saga
    whose caller cancels it cannot undo the bookings it made. This follows from
-   silent cancellation, which the main RFC chose deliberately. A saga must
+   silent cancellation, which [decision 3](03-decisions/03-structured-tasks.md) chose deliberately. A saga must
    either run where nothing cancels it, or record each step durably so that a
    recovery task compensates later, as sagas do in practice.
 5. **One handle per update.** The philosophers and the replication record fit
    in one handle. A transfer between two accounts held in separate handles
-   does not, so it must use a record of both, which is the shared-state RFC's
-   `update2!` future possibility.
+   does not, so it must use a record of both. An update over two handles is a
+   future possibility ([open questions](08-open-questions.md#future-possibilities)).
 6. **Supervision has no restart window or backoff.** OTP limits restarts per
    period of time, and production supervisors wait between restarts.
-   `supervise!` counts restarts for its whole life. The main RFC settled this
+   `supervise!` counts restarts for its whole life. [Decision 3](03-decisions/03-structured-tasks.md) settled this
    deliberately: in its prototype, supervising each unit of work with a
    lifetime limit served every request, while a whole server under one limit
    died after a few transient crashes. A window matters for long-lived
    processes, which the task tree makes rare. Backoff between restarts is
    still missing, and would be a field of the configuration record.
 7. **Pure parallel computation is out of scope.** Sorting or transforming
-   large data in parallel, without effects, is the main RFC's future
-   deterministic parallelism, not something these features give.
+   large data in parallel, without effects, is a separate, future
+   deterministic feature, not something these features give.
 
-Four earlier gaps are now closed in the RFCs. The prototype models the first
+Four earlier gaps are now closed. The prototype models the first
 three:
 
 - **Fairness.** `None` builds now pause a waiting task instead of running
