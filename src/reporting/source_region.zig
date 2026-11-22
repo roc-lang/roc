@@ -101,13 +101,15 @@ pub const Snippet = struct {
         const rows = try gpa.alloc(Row, row_count);
         errdefer gpa.free(rows);
 
-        var common: usize = std.math.maxInt(usize);
+        // The narrowest indent of a row with text; null while every row so
+        // far is blank.
+        var common: ?usize = null;
         var offset: usize = 0;
         var iter = std.mem.splitScalar(u8, text, '\n');
         var row_index: usize = 0;
         while (iter.next()) |source_line| : (row_index += 1) {
             const indent = leadingIndent(source_line);
-            if (indent.original < source_line.len) common = @min(common, indent.expanded);
+            if (indent.original < source_line.len) common = @min(common orelse indent.expanded, indent.expanded);
             const row = bytes[offset..][0 .. indent.expanded + source_line.len - indent.original];
             @memset(row[0..indent.expanded], ' ');
             @memcpy(row[indent.expanded..], source_line[indent.original..]);
@@ -118,8 +120,7 @@ pub const Snippet = struct {
             offset += row.len;
         }
         std.debug.assert(row_index == row_count and offset == total_len);
-        if (common == std.math.maxInt(usize)) common = 0;
-        return .{ .allocator = gpa, .bytes = bytes, .rows = rows, .common = common };
+        return .{ .allocator = gpa, .bytes = bytes, .rows = rows, .common = common orelse 0 };
     }
     /// A row's leading whitespace: its length in the source, and its width
     /// once each tab is expanded to four spaces.

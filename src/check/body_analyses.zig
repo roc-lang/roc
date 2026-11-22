@@ -2291,8 +2291,7 @@ const ConstantGraph = struct {
     fn enter(self: *ConstantGraph, raw: u32) Allocator.Error!?u32 {
         const previous = self.current;
         if (previous) |parent| {
-            const index = std.math.cast(u32, self.edges.items.len) orelse return error.OutOfMemory;
-            if (index == std.math.maxInt(u32)) return error.OutOfMemory;
+            const index = try collections.nextBiasedId(self.edges.items.len);
             const head = try self.heads.getOrPut(raw);
             const next: collections.OptionalU32 = if (head.found_existing) .some(head.value_ptr.*) else .none;
             try self.edges.append(self.allocator, .{ .parent = parent, .next = next });

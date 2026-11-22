@@ -2727,14 +2727,19 @@ pub const Store = struct {
         return @intCast(self.vars.items.len);
     }
 
+    /// What a stored descriptor keeps of `Range.empty()`. Every range
+    /// `appendVars` makes starts after its length slot, so no such range
+    /// starts at zero.
+    pub const stored_empty_var_range: u32 = 0;
+
     /// What a stored descriptor keeps of the vars range `range`: its start,
-    /// or the empty range's start for `Range.empty()`. Every other range of
+    /// or `stored_empty_var_range` for `Range.empty()`. Every other range of
     /// a stored descriptor came from `appendVars`, so its length is in the
     /// slot before its start.
     pub inline fn storedVarRange(self: *const Self, range: VarSafeList.Range) u32 {
-        if (range.start == VarSafeList.Range.empty_start) {
+        if (@backingInt(range.start) == stored_empty_var_range) {
             std.debug.assert(range.count == 0);
-            return @backingInt(range.start);
+            return stored_empty_var_range;
         }
         const start: u32 = @backingInt(range.start);
         if (std.debug.runtime_safety) {
@@ -2747,7 +2752,7 @@ pub const Store = struct {
 
     /// The vars range a stored descriptor keeps as `stored` (`storedVarRange`).
     pub inline fn varRange(self: *const Self, stored: u32) VarSafeList.Range {
-        if (stored == @backingInt(VarSafeList.Range.empty_start)) return .empty();
+        if (stored == stored_empty_var_range) return .empty();
         return .{ .start = @fromBackingInt(stored), .count = @backingInt(self.vars.items[stored - 1]) & ~range_length_bit };
     }
 

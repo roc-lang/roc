@@ -403,7 +403,8 @@ fn hashModuleSourceInputs(module_env: *const ModuleEnv) [32]u8 {
     if (staged) |map| {
         hasher.update(&.{1});
         hashU32(&hasher, map.header_lines);
-        hashU32(&hasher, map.footer_start);
+        hasher.update(&.{@intFromBool(map.footer_start != null)});
+        if (map.footer_start) |footer_start| hashU32(&hasher, footer_start);
     } else hasher.update(&.{0});
     hashU32(&hasher, @intCast(deps.len));
     for (deps) |dep| {
@@ -1802,8 +1803,8 @@ const CompileTimeRequestScheduler = struct {
         defer reached.deinit(self.allocator);
         var pending = std.ArrayList(u32).empty;
         defer pending.deinit(self.allocator);
-        var best: ?usize = null;
-        var best_count: usize = std.math.maxInt(usize);
+        const Best = struct { start: usize, count: usize };
+        var best: ?Best = null;
         for (self.emitted, 0..) |emitted, start| {
             if (emitted) continue;
             reached.reset();
@@ -1817,12 +1818,9 @@ const CompileTimeRequestScheduler = struct {
                     try pending.append(self.allocator, dependency);
                 }
             }
-            if (count < best_count) {
-                best = start;
-                best_count = count;
-            }
+            if (best == null or count < best.?.count) best = .{ .start = start, .count = count };
         }
-        return best orelse checkedArtifactInvariant("request scheduling looked for a group with every request emitted", .{});
+        return (best orelse checkedArtifactInvariant("request scheduling looked for a group with every request emitted", .{})).start;
     }
 
     fn buildEdges(self: *CompileTimeRequestScheduler) Allocator.Error!void {
@@ -4424,8 +4422,7 @@ const CheckedTypePairSet = struct {
 
     /// Add `pair`, reporting whether it was already present.
     fn insert(self: *CheckedTypePairSet, pair: CheckedTypeExactPair) Allocator.Error!bool {
-        const row_index = std.math.cast(u32, self.rows.items.len) orelse return error.OutOfMemory;
-        if (row_index == std.math.maxInt(u32)) return error.OutOfMemory;
+        const row_index = try collections.nextBiasedId(self.rows.items.len);
         try self.rows.ensureUnusedCapacity(self.first_by_left.allocator, 1);
         const head = try self.first_by_left.getOrPut(pair.left);
         const first: collections.OptionalU32 = if (head.found_existing) .some(head.value_ptr.*) else .none;
@@ -16944,8 +16941,7 @@ const EvidencePass = struct {
         var hasher = std.hash.Wyhash.init(0);
         for (entries) |entry| std.hash.autoHash(&hasher, entry);
         const bucket_key = hasher.final();
-        const row_index = std.math.cast(u32, self.callable_contracts.items.len) orelse return error.OutOfMemory;
-        if (row_index == std.math.maxInt(u32)) return error.OutOfMemory;
+        const row_index = try collections.nextBiasedId(self.callable_contracts.items.len);
         try self.callable_contracts.ensureUnusedCapacity(self.allocator, 1);
         const bucket = try self.callable_contract_buckets.getOrPut(self.allocator, bucket_key);
         const newest: collections.OptionalU32 = if (bucket.found_existing) .some(bucket.value_ptr.*) else .none;
@@ -33885,7 +33881,6 @@ pub const CheckedModuleArtifact = struct {
     pub fn verifyReadyForCompileTimeLowering(self: *const CheckedModuleArtifact) void {
         if (builtin.mode != .debug) return;
 
-        std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
         std.debug.assert(self.checked_types.roots.items().len == self.checked_types.payloads.items().len);
         verifyRootRequestSubsets(self.root_requests);
 
@@ -34956,7 +34951,6 @@ pub const CheckedModuleArtifact = struct {
         self.compile_time_debug.validate(self.compile_time_roots.roots.items().len) catch checkedArtifactInvariant("compile-time debug observation has an invalid root or message range", .{});
         if (builtin.mode != .debug) return;
 
-        std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
         verifyRootRequestSubsets(self.root_requests);
         self.verifyMethodIntrinsicRuntimeTargets();
 

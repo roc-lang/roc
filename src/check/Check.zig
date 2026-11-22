@@ -3140,8 +3140,7 @@ fn recordSchemeRequirementCandidate(
     if (self.constraintIsLiteralConversion(constraint)) return;
     std.debug.assert((source == .creation) == (structural_origin == null));
     const owner_root = self.prospectiveSchemeOwner(self.active_scheme_root) orelse return;
-    const candidate_idx = std.math.cast(u32, self.scheme_requirement_candidates.items.len) orelse return error.OutOfMemory;
-    if (candidate_idx == std.math.maxInt(u32)) return error.OutOfMemory;
+    const candidate_idx = try collections.nextBiasedId(self.scheme_requirement_candidates.items.len);
     try self.scheme_requirement_candidates.ensureUnusedCapacity(self.gpa, 1);
     const owner_entry = try self.scheme_requirement_candidate_chains_by_owner.getOrPut(self.gpa, owner_root);
     const prev_of_owner: collections.OptionalU32 = if (owner_entry.found_existing) blk: {
@@ -5369,9 +5368,13 @@ fn finalizeLocalTypeContexts(self: *Self) Allocator.Error!void {
     while (ranges.next()) |entry| {
         const decl = entry.key_ptr.*;
         const context = self.localTypeContext(decl);
-        var depth: u32 = std.math.maxInt(u32);
-        for (context) |rigid| depth = @min(depth, self.rigidVarCandidateDepth(rigid));
-        try self.local_type_contexts.put(gpa, decl, depth);
+        // An empty context makes no candidate contextual, so it records no
+        // depth.
+        if (context.len != 0) {
+            var depth = self.rigidVarCandidateDepth(context[0]);
+            for (context[1..]) |rigid| depth = @min(depth, self.rigidVarCandidateDepth(rigid));
+            try self.local_type_contexts.put(gpa, decl, depth);
+        }
         if (self.cir.store.getStatement(decl) != .s_nominal_decl) continue;
         for (context) |rigid| {
             try self.local_type_context_owners.append(gpa, .{ .decl = decl, .rigid = rigid, .owner = self.rigidVarOwner(rigid) });
@@ -6615,8 +6618,7 @@ const LocalFunctionCaptures = struct {
             const referenced = self.checker.localLookupPattern(expr) orelse continue;
             if (!self.isOuterRef(&self.scope, referenced)) continue;
             if (owner) |function| {
-                const link = std.math.cast(u32, self.ref_links.items.len) orelse return error.OutOfMemory;
-                if (link == std.math.maxInt(u32)) return error.OutOfMemory;
+                const link = try collections.nextBiasedId(self.ref_links.items.len);
                 try self.ref_links.append(gpa, .{ .referenced = referenced, .next = .none });
                 const chain = self.refs.getPtr(function).?;
                 if (chain.last.get()) |last| {
@@ -54342,8 +54344,7 @@ const UsePositions = struct {
     }
 
     fn append(self: *UsePositions, gpa: Allocator, use_idx: u32, position: usize) Allocator.Error!void {
-        const link = std.math.cast(u32, self.links.items.len) orelse return error.OutOfMemory;
-        if (link == std.math.maxInt(u32)) return error.OutOfMemory;
+        const link = try collections.nextBiasedId(self.links.items.len);
         try self.links.ensureUnusedCapacity(gpa, 1);
         const chain = try self.chains.getOrPut(gpa, use_idx);
         if (chain.found_existing) {

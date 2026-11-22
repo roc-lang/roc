@@ -115,7 +115,6 @@ pub const HashedProbeTable = struct {
     /// Record `entry`, whose hash is `hash`, which no entry of the table
     /// equals. On failure the table is unchanged.
     pub fn insertNew(self: *Self, gpa: Allocator, hash: u32, entry: u32) Allocator.Error!void {
-        std.debug.assert(entry != std.math.maxInt(u32));
         if ((@as(usize, self.len) + 1) * 2 > self.cells.items().len) try self.grow(gpa);
         const slot = self.emptySlot(hash);
         self.cells.items()[slot] = .{ .entry_plus_one = entry + 1, .hash = hash };

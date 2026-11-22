@@ -6,8 +6,8 @@
 //! stamp is never initialized: it is read only when its stamp matches, which
 //! makes it a write-before-read table.
 //!
-//! The wrap rule is defined once, here: when the epoch would reach
-//! `maxInt(u32)`, the stamps are cleared once and the epoch restarts at 1.
+//! The wrap rule is defined once, here: when advancing the epoch would
+//! overflow `u32`, the stamps are cleared once and the epoch restarts at 1.
 //! Stamp 0 is never an epoch, so a cleared or newly grown stamp is never
 //! valid.
 //!
@@ -57,12 +57,13 @@ const Epoch = struct {
     /// cleared because the epoch wrapped.
     fn advance(self: *Epoch) bool {
         storage_work.add(.epoch_resets, 1);
-        if (self.current + 1 == std.math.maxInt(u32)) {
+        const next, const overflowed = @addWithOverflow(self.current, 1);
+        if (overflowed != 0) {
             storage_work.add(.epoch_wraps, 1);
             self.current = first_epoch;
             return true;
         }
-        self.current += 1;
+        self.current = next;
         return false;
     }
 
@@ -507,10 +508,11 @@ test "the wrap clears every stamp and restarts at one" {
     var set = try EpochSet(TestKey, .stamps, .internal).init(testing.allocator, 4);
     defer set.deinit(testing.allocator);
     set.insert(testKey(0));
-    set.epoch.current = std.math.maxInt(u32) - 2;
+    set.epoch.current = std.math.maxInt(u32) - 1;
     set.insert(testKey(1));
     set.reset();
-    try testing.expectEqual(std.math.maxInt(u32) - 1, set.epoch.current);
+    try testing.expectEqual(std.math.maxInt(u32), set.epoch.current);
+    try testing.expect(!set.contains(testKey(1)));
     set.insert(testKey(2));
     set.reset();
     try testing.expectEqual(@as(u32, 1), set.epoch.current);
@@ -559,7 +561,7 @@ test "a wide column keeps separate stamps and survives a wrap" {
     var column = try EpochColumn(TestKey, u64, .internal).init(testing.allocator, 3);
     defer column.deinit(testing.allocator);
     column.set(testKey(0), 7);
-    column.epoch.current = std.math.maxInt(u32) - 1;
+    column.epoch.current = std.math.maxInt(u32);
     column.reset();
     try testing.expectEqual(@as(u32, 1), column.epoch.current);
     try testing.expectEqual(@as(?u64, null), column.get(testKey(0)));
@@ -685,7 +687,7 @@ test "borrowed epoch cursors never free their owner's stamps" {
     defer set.deinit(testing.allocator);
     set.insert(2);
     try testing.expect(set.contains(2));
-    set.epoch.current = std.math.maxInt(u32) - 1;
+    set.epoch.current = std.math.maxInt(u32);
     set.reset();
     try testing.expect(!set.contains(2));
     try testing.expectEqualSlices(u32, &.{ 0, 0, 0, 0 }, &stamps);

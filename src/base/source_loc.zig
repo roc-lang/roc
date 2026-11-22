@@ -56,16 +56,19 @@ pub const SourceFileEntry = struct {
 /// How a staged copy of a file lines up with the file the user wrote. The CLI
 /// compiles a default app from such a copy (see `cli/default_app.zig`): the
 /// staging prepends `header_lines` whole lines, appends wiring from byte
-/// `footer_start` of the copy on, and leaves every line in between as the user
-/// wrote it.
+/// `footer_start` of the copy on (null when it appends none), and leaves every
+/// line in between as the user wrote it.
 pub const StagedSourceMap = struct {
     header_lines: u32,
-    footer_start: u32,
+    footer_start: ?u32,
 
     /// The user's 0-based line for 0-based line `line_idx` of the staged copy,
     /// at byte `offset` of it; null for the wiring the staging wrote.
     pub fn userLineIdx(self: StagedSourceMap, line_idx: u32, offset: u32) ?u32 {
-        if (line_idx < self.header_lines or offset >= self.footer_start) return null;
+        if (line_idx < self.header_lines) return null;
+        if (self.footer_start) |footer_start| {
+            if (offset >= footer_start) return null;
+        }
         return line_idx - self.header_lines;
     }
 };
@@ -76,4 +79,6 @@ test "StagedSourceMap maps the user's lines and drops the staged wiring" {
     try std.testing.expectEqual(@as(?u32, 0), map.userLineIdx(6, 60));
     try std.testing.expectEqual(@as(?u32, 3), map.userLineIdx(9, 99));
     try std.testing.expectEqual(@as(?u32, null), map.userLineIdx(10, 100));
+    const unwired: StagedSourceMap = .{ .header_lines = 6, .footer_start = null };
+    try std.testing.expectEqual(@as(?u32, 4), unwired.userLineIdx(10, 100));
 }

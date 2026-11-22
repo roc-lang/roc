@@ -123,8 +123,7 @@ const Policy = struct {
         // Ids, byte offsets, and lengths are 32-bit, and index cells store
         // `id + 1`; an interner past that range has exhausted the
         // representable memory.
-        const id = std.math.cast(u32, self.ends.items().len) orelse return error.OutOfMemory;
-        if (id == std.math.maxInt(u32)) return error.OutOfMemory;
+        const id = try collections.nextBiasedId(self.ends.items().len);
         const start = std.math.cast(u32, self.bytes.items().len) orelse return error.OutOfMemory;
         const len = std.math.cast(u32, string.len) orelse return error.OutOfMemory;
         const end = std.math.add(u32, start, len) catch return error.OutOfMemory;

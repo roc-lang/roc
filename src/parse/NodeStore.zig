@@ -345,8 +345,7 @@ fn extraDataStart(token: u32) u32 {
 }
 
 fn packNonNullOptionalU32(value: u32) std.mem.Allocator.Error!u32 {
-    if (value == std.math.maxInt(u32)) return error.OutOfMemory;
-    return @backingInt(OptionalU32.some(value));
+    return @backingInt(OptionalU32.some(try collections.nextBiasedId(value)));
 }
 
 fn packOptionalIndex(value: anytype) std.mem.Allocator.Error!u32 {
@@ -1389,9 +1388,8 @@ pub fn addFieldAccessSegment(
     store: *NodeStore,
     segment: AST.FieldAccessSegment,
 ) std.mem.Allocator.Error!u32 {
-    const start = std.math.cast(u32, store.field_access_segments.items.len) orelse return error.OutOfMemory;
     // Keep `start + len` representable for every non-empty DataSpan consumer.
-    if (start == std.math.maxInt(u32)) return error.OutOfMemory;
+    const start = try collections.nextBiasedId(store.field_access_segments.items.len);
     try store.field_access_segments.append(store.gpa, segment);
     return start;
 }
@@ -1427,9 +1425,9 @@ pub fn addOrExtendFieldAccess(
             regions[node_index].start == region.start;
 
         if (path_is_open_tail) {
-            if (main_tokens[node_index] == std.math.maxInt(u32)) return error.OutOfMemory;
+            const extended_len = std.math.add(u32, main_tokens[node_index], 1) catch return error.OutOfMemory;
             try store.field_access_segments.append(store.gpa, segment);
-            main_tokens[node_index] += 1;
+            main_tokens[node_index] = extended_len;
             regions[node_index].end = region.end;
             return receiver;
         }
