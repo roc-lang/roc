@@ -33,7 +33,6 @@
 //!
 //! This file depends on `std` alone.
 const std = @import("std");
-const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 
 const magic = "RBWU".*;
@@ -131,6 +130,29 @@ pub const segment_zero_fill: u32 = 1;
 /// `Header.flags` bit: the unit's code checks stack bounds, and every
 /// function carries its stack frame facts.
 pub const image_stack_checks: u32 = 1;
+
+/// An optional signature index in four bytes: zero is absent, and any other
+/// word stores the index plus one. This file depends on `std` alone, so it
+/// carries its own form of `collections.OptionalU32`.
+pub const OptionalType = enum(u32) {
+    none = 0,
+    _,
+
+    pub fn some(index: u32) OptionalType {
+        std.debug.assert(index < std.math.maxInt(u32));
+        return @fromBackingInt(index + 1);
+    }
+
+    pub fn of(index: ?u32) OptionalType {
+        return if (index) |present| some(present) else .none;
+    }
+
+    /// The signature index, or null when absent.
+    pub fn get(self: OptionalType) ?u32 {
+        if (self == .none) return null;
+        return @backingInt(self) - 1;
+    }
+};
 
 /// One function signature: its value types, parameters then results, in
 /// the value-type blob.
@@ -246,7 +268,7 @@ pub const Import = extern struct {
     /// For a function: its signature; absent for a function whose signature
     /// the unit does not know (one only named by a table slot in a data
     /// segment) and for every other kind.
-    type: collections.OptionalU32,
+    type: OptionalType,
     kind: u8,
     /// For a global: its value type and whether it is mutable.
     valtype: u8,
