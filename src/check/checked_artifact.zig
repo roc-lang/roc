@@ -116,7 +116,7 @@ pub fn forEachCheckedSourceTypeRoot(
     const module_index = inputs.module_index;
     const module_env = module.moduleEnvConst();
 
-    var node_idx: u32 = 0;
+    var node_idx: u32 = CIR.Node.first_idx;
     while (node_idx < module.nodeCount()) : (node_idx += 1) {
         // Every reached expr/pattern node gets a published type root,
         // because the body reader reports each one's type. That includes
@@ -5804,6 +5804,24 @@ pub const CheckedTypeStore = struct {
         return self.view().nominalDeclarationForPayload(nominal);
     }
 
+    /// The arguments of a nominal application that a source type writes:
+    /// every argument but the trailing context arguments its declaration
+    /// takes (design.md "Body-Local Type Context"), which no printed type
+    /// shows. A type with no declaration backing takes no context.
+    pub fn nominalDeclaredArgs(
+        self: *const CheckedTypeStore,
+        nominal: CheckedNominalType,
+    ) []const CheckedTypeId {
+        if (nominal.representation == .opaque_without_backing) return nominal.args;
+        if (nominal.builtin) |builtin_nominal| {
+            if (!builtinNominalHasDeclarationBacking(builtin_nominal)) return nominal.args;
+        }
+        const declaration = self.nominalDeclarationForPayload(nominal) orelse {
+            checkedArtifactInvariant("checked nominal payload referenced a missing nominal declaration", .{});
+        };
+        return nominal.args[0 .. nominal.args.len - declaration.context_len];
+    }
+
     pub fn nominalBackingTemplateForPayload(
         self: *const CheckedTypeStore,
         nominal: CheckedNominalType,
@@ -8859,7 +8877,7 @@ fn forEachStaticDispatchTypeRoot(
     module_index: *const ModuleIndex,
     visitor: anytype,
 ) Allocator.Error!void {
-    var node_idx: u32 = 0;
+    var node_idx: u32 = CIR.Node.first_idx;
     while (node_idx < module.nodeCount()) : (node_idx += 1) {
         const tag = module.nodeTag(@fromBackingInt(@intCast(node_idx)));
         if (tag != .expr_dispatch_call and
@@ -10037,7 +10055,7 @@ test "checked binder mutability comes from the CIR var tag, not identifier spell
 
     var saw_mutable = false;
     var saw_immutable = false;
-    var raw_node: u32 = 0;
+    var raw_node: u32 = CIR.Node.first_idx;
     while (raw_node < module.nodeCount()) : (raw_node += 1) {
         const source_pattern: CIR.Pattern.Idx = @fromBackingInt(@intCast(raw_node));
         const tag = module.moduleEnvConst().store.nodes.get(@fromBackingInt(@intCast(raw_node))).tag;
@@ -12220,7 +12238,7 @@ pub const ResolvedValueRefTable = struct {
             try recursive_reference_nodes.put(record.node_idx, {});
         }
 
-        var node_idx: u32 = 0;
+        var node_idx: u32 = CIR.Node.first_idx;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const tag = module.nodeTag(@fromBackingInt(@intCast(node_idx)));
             // Unreached source nodes can still contain unresolved lookups
@@ -13075,7 +13093,7 @@ const LocalPatternRoleIndex = struct {
         @memset(lambda_args, false);
         @memset(statement_roles, .none);
 
-        var node_idx: u32 = 0;
+        var node_idx: u32 = CIR.Node.first_idx;
         while (node_idx < node_count) : (node_idx += 1) {
             const node: CIR.Node.Idx = @fromBackingInt(@intCast(node_idx));
             const node_tag = module.nodeTag(node);
@@ -13415,7 +13433,7 @@ fn collectCallableDerivedSchemes(
     // A closure's scope belongs to the closure, never to the lambda it wraps.
     var closure_lambdas = collections.DenseMap(CIR.Expr.Idx, void).init(allocator);
     defer closure_lambdas.deinit();
-    var raw_node: u32 = 0;
+    var raw_node: u32 = CIR.Node.first_idx;
     while (raw_node < module.nodeCount()) : (raw_node += 1) {
         if (module.nodeTag(@fromBackingInt(@intCast(raw_node))) != .expr_closure) continue;
         const closure_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node));
@@ -13426,7 +13444,7 @@ fn collectCallableDerivedSchemes(
     defer scratch.deinit(allocator);
     var params = std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam).empty;
     defer params.deinit(allocator);
-    raw_node = 0;
+    raw_node = CIR.Node.first_idx;
     while (raw_node < module.nodeCount()) : (raw_node += 1) {
         const tag = module.nodeTag(@fromBackingInt(@intCast(raw_node)));
         if (tag != .expr_lambda and tag != .expr_closure) continue;
@@ -13515,7 +13533,7 @@ fn sealCheckedProcedureTemplateRefs(
         defer promoted_patterns.deinit();
         for (templates.promoted.items()) |promoted| try promoted_patterns.put(promoted.pattern, {});
 
-        var raw_node: u32 = 0;
+        var raw_node: u32 = CIR.Node.first_idx;
         while (raw_node < module.nodeCount()) : (raw_node += 1) {
             if (module.nodeTag(@fromBackingInt(@intCast(raw_node))) != .statement_decl) continue;
             const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(raw_node));
@@ -14902,7 +14920,7 @@ const EvidencePass = struct {
         {
             var scheme_params = std.ArrayListUnmanaged(EvidenceParam).empty;
             defer scheme_params.deinit(self.allocator);
-            var raw_node: u32 = 0;
+            var raw_node: u32 = CIR.Node.first_idx;
             while (raw_node < self.module.nodeCount()) : (raw_node += 1) {
                 if (self.module.nodeTag(@fromBackingInt(@intCast(raw_node))) != .statement_decl) continue;
                 const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(raw_node));
@@ -25261,7 +25279,8 @@ test "empty test artifact publishes and releases a module without declarations" 
     defer artifact.deinitRetainingModuleEnv(allocator);
     const view = importedView(&artifact);
     try std.testing.expect(view.key.eql(testCheckedModuleKey(1)));
-    try std.testing.expectEqual(@as(usize, 0), view.checked_bodies.nodeCount());
+    // The module's only node is its store's reserved node.
+    try std.testing.expectEqual(@as(usize, checked_bodies_mod.first_node), view.checked_bodies.nodeCount());
     try std.testing.expectEqual(@as(usize, 0), view.direct_import_module_keys.len);
 }
 
@@ -36446,7 +36465,7 @@ fn verifyLoweringVisibleNamesInterned(
 
 fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allocator.Error!void {
     const store = &module_env.store;
-    var raw_node_idx: u32 = 0;
+    var raw_node_idx: u32 = CIR.Node.first_idx;
     while (raw_node_idx < store.nodes.len()) : (raw_node_idx += 1) {
         const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         const tag = store.nodes.get(node_idx).tag;
@@ -36620,6 +36639,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
                 try visitor.exportName(item.name);
                 if (item.alias) |alias| try visitor.exportName(alias);
             },
+            .reserved,
             .statement_decl,
             .statement_var,
             .statement_var_uninitialized,
@@ -37231,7 +37251,7 @@ const MethodBindingTargets = struct {
         if (self.decl_statements) |*statements| return statements.view();
         const node_count = self.module.nodeCount();
         var statements = try collections.OptionalIndexColumn(CIR.Statement.Idx).initFilled(self.allocator, node_count);
-        var raw_node: u32 = 0;
+        var raw_node: u32 = CIR.Node.first_idx;
         while (raw_node < node_count) : (raw_node += 1) {
             if (self.module.nodeTag(@fromBackingInt(@intCast(raw_node))) != .statement_decl) continue;
             const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(raw_node));
