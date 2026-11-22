@@ -106,6 +106,10 @@ const PlatformRequiredDef = struct {
     required_ident: Ident.Idx,
     /// Where the platform's requires clause declares this requirement.
     platform_region: Region,
+    /// The annotated definition is a scheme and its requirement relation to
+    /// an instance of that scheme was established. The platform's invocation
+    /// instance is then related to the requirement the same way.
+    relates_scheme_instances: bool = false,
 };
 
 /// A platform requirement type instantiated into this module's store, plus
@@ -22060,6 +22064,20 @@ fn instantiatePlatformRequirementUses(self: *Self, env: *Env) Allocator.Error!vo
         }
         self.gpa.free(solution.identity_vars);
         solution.identity_vars = identities;
+        // An annotated scheme definition's requirement was related to one
+        // instance of its scheme (`finishDef`). This invocation is another
+        // instance, so the requirement constrains it the same way; the
+        // relation already held for an alpha-equivalent instance.
+        const required = self.platform_required_defs.get(solution.def).?;
+        if (required.relates_scheme_instances) {
+            const relation = try self.unifyInContext(
+                solution.solved_var,
+                instance,
+                env,
+                .{ .platform_requirement = .{ .required_ident = required.required_ident, .platform_region = required.platform_region } },
+            );
+            std.debug.assert(relation.isEstablished());
+        }
         solution.solved_var = instance;
     }
 }
@@ -22639,12 +22657,33 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
             // The platform uses the definition as a caller does, so it may
             // relate the definition's rows at a wider union.
             try self.releaseBoundedAnnotationRows(annotation_idx);
-            _ = try self.unifyInContext(
+            // A singleton definition's body boundary has already generalized
+            // it, so the requirement relates to an instance of its scheme,
+            // exactly as a caller's use does. The requirement holds the
+            // for-clause binders, outermost-rank variables shared by every
+            // requirement; relating them to the generalized graph itself
+            // would merge them into the scheme's quantified classes, and
+            // every definition the binders reach afterwards would share
+            // generalized variables without being a scheme.
+            const definition_var = ModuleEnv.varFrom(def.expr);
+            const previous_source = self.instantiation_source_expr;
+            self.instantiation_source_expr = def.expr;
+            const definition_use = try self.instantiateBindingVar(
+                definition_var,
+                env,
+                .use_root_instantiated,
+                .none,
+            );
+            self.instantiation_source_expr = previous_source;
+            const relation = try self.unifyInContext(
                 required.expected_var,
-                ModuleEnv.varFrom(def.expr),
+                definition_use,
                 env,
                 .{ .platform_requirement = .{ .required_ident = required.required_ident, .platform_region = required.platform_region } },
             );
+            if (definition_use != definition_var and relation.isEstablished()) {
+                self.platform_required_defs.getPtr(def_idx).?.relates_scheme_instances = true;
+            }
         }
     }
     // A rejected annotation retires its binding: the right-hand side, checked

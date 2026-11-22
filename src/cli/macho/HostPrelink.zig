@@ -472,7 +472,7 @@ pub fn finish(allocator: Allocator, exe: []const u8, provides: []const Provide, 
     @memcpy(out[@intCast(provides_offset)..][0 .. provide_records.len * @sizeOf(ProvideRecord)], std.mem.sliceAsBytes(provide_records));
     @memcpy(out[@intCast(strings_offset)..][0..strings.items.len], strings.items);
     for (0..page_count) |page| {
-        std.crypto.hash.sha2.Sha256.hash(exe[@intCast(page * page_size)..][0..@intCast(page_size)], out[@intCast(page_hashes_offset + page * 32)..][0..32], .{});
+        @import("base").Sha256.hash(exe[@intCast(page * page_size)..][0..@intCast(page_size)], out[@intCast(page_hashes_offset + page * 32)..][0..32], .{});
     }
     var host_digest: [32]u8 = undefined;
     std.crypto.hash.Blake3.hash(exe[0..@intCast(host_size)], &host_digest, .{});

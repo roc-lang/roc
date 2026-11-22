@@ -6996,7 +6996,14 @@ pub const Builder = struct {
         const ty = try self.structuralType(raw_ty);
         const key: lower.Program.StoredValueKey = .{ .module = source.module, .node = node, .ty = raw_ty };
         if (self.program.stored_value_slots.get(key)) |slot| return try self.static_parts.append(self.allocator, slot);
-        switch (const_store.get(node)) {
+        const data = const_store.get(node);
+        // A value that is data alone is one slot, frozen from the store
+        // through its type's const plan, however many values it holds.
+        switch (data) {
+            .nominal, .box, .tuple, .record, .tag, .list => if (try self.program.storedDataAlone(source, node)) return try self.pushStoredDataPart(source, node, raw_ty),
+            .pending, .scalar, .zst, .str, .crash, .checked_error, .boxy_fn, .fn_value => {},
+        }
+        switch (data) {
             .pending => invariant("a stored constant was never filled"),
             .scalar, .zst, .str => try self.pushStoredDataPart(source, node, raw_ty),
             // A function value is built by its own restore, and a failed
@@ -7077,7 +7084,7 @@ pub const Builder = struct {
                             self.tasks.appendAssumeCapacity(.{ .restore_part = .{ .source = source, .node = nodes[index], .ty = elem } });
                         }
                     },
-                    .empty, .packed_bytes => try self.pushStoredDataPart(source, node, raw_ty),
+                    .empty, .packed_bytes => invariant("a stored list without item nodes is not data alone"),
                 }
             },
         }

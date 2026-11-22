@@ -715,8 +715,10 @@ pub const RocModules = struct {
         self.embedded_lld.addImport("collections", self.collections);
 
         // The vendored Mach-O code-signing helpers use the build-time `tracy`
-        // tracing shim.
+        // tracing shim and the compiler's SHA-256 (`base.Sha256`), which
+        // hashes on the CPU's instructions where the host has them.
         self.vendor_macho.addImport("tracy", self.tracy);
+        self.vendor_macho.addImport("base", self.base);
 
         return self;
     }

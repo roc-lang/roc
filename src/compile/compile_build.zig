@@ -3559,6 +3559,16 @@ pub const BuildEnv = struct {
         return self.builtCoordinator().boxyLinkDigests();
     }
 
+    /// The modules whose units `artifact`'s unit waits for
+    /// (`Coordinator.unitDependencyKeys`). The caller owns the result.
+    pub fn unitDependencyKeys(
+        self: *BuildEnv,
+        allocator: Allocator,
+        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error![]const [32]u8 {
+        return self.builtCoordinator().unitDependencyKeys(allocator, artifact);
+    }
+
     /// Collect published checked artifacts available to post-check lowering.
     pub fn collectImportedArtifactViews(
         self: *BuildEnv,

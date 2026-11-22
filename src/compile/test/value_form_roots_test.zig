@@ -140,6 +140,12 @@ const corpus =
     \\singles = [0.1, 0.2]
     \\decs : List(Dec)
     \\decs = [1.5, -2.25]
+    \\long_fraction_f64 : F64
+    \\long_fraction_f64 = 0.12345678901234567890123
+    \\long_fractions : List(F32)
+    \\long_fractions = [0.0024237840729631533, -1.0000000000000000001, 0.5]
+    \\long_fraction_products : List({ id : U64, weight : F32 })
+    \\long_fraction_products = [{ id: 1, weight: 0.0024237840729631533 }, { id: 2, weight: 0.25 }]
     \\strings = ["a", "a string long enough that no target holds it inline", "a string long enough that no target holds it inline"]
     \\shared_lists : List(List(U8))
     \\shared_lists = [[1, 2, 3], [1, 2, 3], [4]]
@@ -562,7 +568,7 @@ fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) WriterMat
             return err;
         };
     }
-    try std.testing.expectEqual(@as(usize, 76), constants);
+    try std.testing.expectEqual(@as(usize, 79), constants);
     // `base` and `read_base` in `measure`, which the root computing `total`
     // reads.
     try std.testing.expectEqual(@as(usize, 2), hoisted);
