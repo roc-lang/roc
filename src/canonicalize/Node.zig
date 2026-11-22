@@ -34,8 +34,19 @@ pub fn setPayload(self: *@This(), p: Payload) void {
 /// in the tree.
 pub const Idx = List.Idx;
 
+/// The raw index of the first node a store issues. Index zero holds the
+/// reserved node (`Tag.reserved`), which every walk over a store's nodes
+/// leaves out by starting here.
+pub const first_idx: u32 = 1;
+
 /// This is the tag associated with a raw Node in the list
 pub const Tag = enum {
+    /// The node every store holds at index zero. No statement, expression,
+    /// pattern, annotation or diagnostic is ever stored there, so a zero
+    /// index stored in a node-index field means "absent". It is the first
+    /// tag so that an all-zero node is this node.
+    reserved,
+
     // Statements
     statement_decl,
     statement_var,

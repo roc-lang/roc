@@ -78,7 +78,7 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 											(p-applied-tag))))
 								(value
 									(e-num (value "12")))))))
-				(e-dispatch-call (method "times") (constraint-fn-var 276)
+				(e-dispatch-call (method "times") (constraint-fn-var 277)
 					(receiver
 						(e-num (value "5")))
 					(args
@@ -93,18 +93,18 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_lt") (constraint-fn-var 288)
+								(e-dispatch-call (method "is_lt") (constraint-fn-var 289)
 									(receiver
-										(e-dispatch-call (method "plus") (constraint-fn-var 285)
+										(e-dispatch-call (method "plus") (constraint-fn-var 286)
 											(receiver
 												(e-num (value "13")))
 											(args
 												(e-num (value "2")))))
 									(args
 										(e-num (value "5"))))
-								(e-dispatch-call (method "is_gte") (constraint-fn-var 294)
+								(e-dispatch-call (method "is_gte") (constraint-fn-var 295)
 									(receiver
-										(e-dispatch-call (method "minus") (constraint-fn-var 291)
+										(e-dispatch-call (method "minus") (constraint-fn-var 292)
 											(receiver
 												(e-num (value "10")))
 											(args
@@ -119,11 +119,11 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 						(builtin)
 						(e-tag (name "True")))))
 			(if-else
-				(e-dispatch-call (method "is_lte") (constraint-fn-var 312)
+				(e-dispatch-call (method "is_lte") (constraint-fn-var 313)
 					(receiver
 						(e-num (value "12")))
 					(args
-						(e-dispatch-call (method "div_by") (constraint-fn-var 309)
+						(e-dispatch-call (method "div_by") (constraint-fn-var 310)
 							(receiver
 								(e-num (value "3")))
 							(args

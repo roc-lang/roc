@@ -422,6 +422,10 @@ pub const Binder = struct {
     recursive_value: bool,
 };
 
+/// The first node id of a module. Id zero is the node store's reserved node,
+/// which a walk over a module's nodes leaves out.
+pub const first_node: u32 = can.CIR.Node.first_idx;
+
 /// The publication tables a reader answers by-node questions from. A reader
 /// built before a table exists reports that table's facts as absent; the
 /// body-level analyses read every table and require them all.

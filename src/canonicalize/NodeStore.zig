@@ -1233,7 +1233,17 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         @field(store, name) = try @FieldType(NodeStore, name).initCapacity(gpa, capacity / @field(nodes_per_list_entry, name));
     }
     store.scratch = try Scratch.init(gpa);
+    try store.appendReservedNode();
     return store;
+}
+
+/// Write the reserved node and its region at index zero of a fresh store.
+/// Every node the store issues afterwards has a nonzero index.
+fn appendReservedNode(store: *NodeStore) Allocator.Error!void {
+    std.debug.assert(store.nodes.len() == 0);
+    std.debug.assert(store.regions.len() == 0);
+    _ = try store.nodes.append(store.gpa, Node.init(.reserved));
+    _ = try store.regions.append(store.gpa, Region.zero());
 }
 
 /// Public function `clone`.
@@ -1975,7 +1985,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
             const p = payload.expr_record;
             // Retrieve fields span and ext from span_with_node_data
             const fields_ext = store.span_with_node_data.items()[p.fields_ext_idx];
-            const ext = if (fields_ext.node == 0) null else @as(CIR.Expr.Idx, @fromBackingInt(@intCast(fields_ext.node)));
+            const ext = @as(collections.ZeroSentinelId(CIR.Expr.Idx), @fromBackingInt(fields_ext.node)).get();
             const unsets = store.span2_data.items()[p.unsets_span2_idx];
 
             return CIR.Expr{
@@ -2883,7 +2893,7 @@ pub fn getMatchBranch(store: *const NodeStore, branch: CIR.Expr.Match.Branch.Idx
     return CIR.Expr.Match.Branch{
         .patterns = .{ .span = .{ .start = mbd.patterns_start, .len = mbd.patterns_len } },
         .value = @fromBackingInt(@intCast(mbd.value)),
-        .guard = if (mbd.guard == 0) null else @fromBackingInt(@intCast(mbd.guard)),
+        .guard = @as(collections.ZeroSentinelId(CIR.Expr.Idx), @fromBackingInt(mbd.guard)).get(),
         .redundant = @fromBackingInt(@intCast(mbd.redundant)),
     };
 }
@@ -3705,7 +3715,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_record => |e| {
             node.tag = .expr_record;
             const fields_ext_idx: u32 = @intCast(store.span_with_node_data.len());
-            const ext_value = if (e.ext) |ext| @backingInt(ext) else 0;
+            const ext_value = @backingInt(collections.ZeroSentinelId(CIR.Expr.Idx).of(e.ext));
             _ = try store.span_with_node_data.append(store.gpa, .{
                 .start = e.fields.span.start,
                 .len = e.fields.span.len,
@@ -3871,7 +3881,7 @@ pub fn addCapture(store: *NodeStore, capture: CIR.Expr.Capture, region: base.Reg
 /// corresponding function in `ModuleEnv`.
 pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: base.Region) Allocator.Error!CIR.Expr.Match.Branch.Idx {
     const match_branch_idx: u32 = @intCast(store.match_branch_data.len());
-    const guard_idx = if (branch.guard) |g| @backingInt(g) else 0;
+    const guard_idx = @backingInt(collections.ZeroSentinelId(CIR.Expr.Idx).of(branch.guard));
     _ = try store.match_branch_data.append(store.gpa, .{
         .patterns_start = branch.patterns.span.start,
         .patterns_len = branch.patterns.span.len,
@@ -4460,7 +4470,7 @@ pub fn addDef(store: *NodeStore, def: CIR.Def, region: base.Region) Allocator.Er
 
     const def_data_idx: u32 = @intCast(store.def_data.len());
     const kind_encoded = def.kind.encode();
-    const anno_idx = if (def.annotation) |anno| @backingInt(anno) else 0;
+    const anno_idx = @backingInt(collections.ZeroSentinelId(CIR.Annotation.Idx).of(def.annotation));
     _ = try store.def_data.append(store.gpa, .{
         .pattern = @backingInt(def.pattern),
         .expr = @backingInt(def.expr),
@@ -4490,7 +4500,7 @@ pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
     const dd = store.def_data.items()[payload.def.def_data_idx];
 
     const kind = CIR.Def.Kind.decode(.{ dd.kind_0, dd.kind_1 });
-    const annotation = if (dd.anno_idx == 0) null else @as(CIR.Annotation.Idx, @fromBackingInt(@intCast(dd.anno_idx)));
+    const annotation = @as(collections.ZeroSentinelId(CIR.Annotation.Idx), @fromBackingInt(dd.anno_idx)).get();
 
     return CIR.Def{
         .pattern = @fromBackingInt(@intCast(dd.pattern)),
@@ -5852,9 +5862,10 @@ test "NodeStore empty CompactWriter roundtrip" {
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
     const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
 
-    // Verify empty
-    try testing.expectEqual(@as(usize, 0), deserialized.nodes.len());
-    try testing.expectEqual(@as(usize, 0), deserialized.regions.len());
+    // A store with no issued nodes holds only its reserved node.
+    try testing.expectEqual(@as(usize, 1), deserialized.nodes.len());
+    try testing.expectEqual(Node.Tag.reserved, deserialized.nodes.field(.tag)[0]);
+    try testing.expectEqual(@as(usize, 1), deserialized.regions.len());
     try testing.expectEqual(@as(usize, 0), deserialized.int128_values.len());
 }
 
@@ -5918,8 +5929,9 @@ test "NodeStore basic CompactWriter roundtrip" {
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
     const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
 
-    // Verify nodes
-    try testing.expectEqual(@as(usize, 1), deserialized.nodes.len());
+    // Verify nodes: the reserved node and the one added above.
+    try testing.expectEqual(@as(usize, 2), deserialized.nodes.len());
+    try testing.expect(@backingInt(node1_idx) != 0);
     const retrieved_node = deserialized.nodes.get(node1_idx);
     try testing.expectEqual(Node.Tag.expr_num, retrieved_node.tag);
     try testing.expectEqual(@as(u32, 0), retrieved_node.getPayload().expr_num.int128_idx);
@@ -5937,7 +5949,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     try testing.expectEqual(@as(?types.Var, @fromBackingInt(13)), literal_plan.patternContext(&deserialized).?.equality_fn_var.get());
 
     // Verify regions
-    try testing.expectEqual(@as(usize, 1), deserialized.regions.len());
+    try testing.expectEqual(@as(usize, 2), deserialized.regions.len());
     const retrieved_region = deserialized.regions.get(region1_idx);
     try testing.expectEqual(region.start.offset, retrieved_region.start.offset);
     try testing.expectEqual(region.end.offset, retrieved_region.end.offset);
@@ -6085,8 +6097,8 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
     const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
 
-    // Verify nodes
-    try testing.expectEqual(@as(usize, 5), deserialized.nodes.len());
+    // Verify nodes: the reserved node and the five added above.
+    try testing.expectEqual(@as(usize, 6), deserialized.nodes.len());
 
     // Verify var node using captured index
     const retrieved_var = deserialized.nodes.get(var_node_idx);
@@ -6116,7 +6128,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     try testing.expectEqual(CIR.Expr.FieldAccessMode.optional, optional_segment.mode);
 
     // Verify regions using captured indices
-    try testing.expectEqual(@as(usize, 5), deserialized.regions.len());
+    try testing.expectEqual(@as(usize, 6), deserialized.regions.len());
     const retrieved_region1 = deserialized.regions.get(region1_idx);
     try testing.expectEqual(region1.start.offset, retrieved_region1.start.offset);
     try testing.expectEqual(region1.end.offset, retrieved_region1.end.offset);
