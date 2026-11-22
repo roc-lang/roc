@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 const types = @import("types");
 
 const Allocator = std.mem.Allocator;
@@ -29,8 +30,10 @@ covered: u32,
 firsts: std.ArrayListUnmanaged(u32) = .empty,
 /// What each segment's variables report, parallel to `firsts`.
 sources: std.ArrayListUnmanaged(Source) = .empty,
-/// For the segments of copied variables, the variable each was copied from.
-origins: std.ArrayListUnmanaged(Var) = .empty,
+/// For the segments of copied variables, the variable each was copied from;
+/// absent for a copy that was copied from no variable, which reads as the
+/// zero region.
+origins: std.ArrayListUnmanaged(collections.OptionalId(Var)) = .empty,
 
 const Source = union(enum) {
     /// Every variable of the segment has this region.
@@ -39,10 +42,6 @@ const Source = union(enum) {
     /// region of `origins[start + i]`.
     copies: u32,
 };
-
-/// The origin of a copy that was copied from no variable; it reads as the
-/// zero region.
-pub const no_origin: Var = @fromBackingInt(std.math.maxInt(u32));
 
 /// The variables one instantiation copied: `len` of them from `first` on.
 pub const Copies = struct {
@@ -94,8 +93,7 @@ pub fn get(self: *const Self, var_: Var, node_regions: []const Region) Region {
         switch (self.sources.items[segment]) {
             .region => |region| return region,
             .copies => |start| {
-                const origin = self.origins.items[start + (current - self.firsts.items[segment])];
-                if (origin == no_origin) return Region.zero();
+                const origin = self.origins.items[start + (current - self.firsts.items[segment])].get() orelse return Region.zero();
                 // A copy is made after the variable it copies.
                 std.debug.assert(@backingInt(origin) < current);
                 current = @backingInt(origin);
@@ -154,7 +152,7 @@ pub fn addCopies(self: *Self, gpa: Allocator, first: u32, end: u32) Allocator.Er
     try self.cover(gpa, first);
     try self.firsts.ensureUnusedCapacity(gpa, 1);
     try self.sources.ensureUnusedCapacity(gpa, 1);
-    try self.origins.appendNTimes(gpa, no_origin, end - first);
+    try self.origins.appendNTimes(gpa, .none, end - first);
     self.firsts.appendAssumeCapacity(first);
     self.sources.appendAssumeCapacity(.{ .copies = start });
     self.covered = end;
@@ -167,7 +165,7 @@ pub fn addCopies(self: *Self, gpa: Allocator, first: u32, end: u32) Allocator.Er
 pub fn setOrigin(self: *Self, copies: Copies, copy: Var, origin: Var) void {
     const index: u32 = @backingInt(copy);
     if (index < copies.first or index - copies.first >= copies.len) return;
-    self.origins.items[copies.start + (index - copies.first)] = origin;
+    self.origins.items[copies.start + (index - copies.first)] = .some(origin);
 }
 
 /// Cover the variables between `covered` and `first`, which were created

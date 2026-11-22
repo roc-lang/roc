@@ -3467,7 +3467,7 @@ pub const ReportBuilder = struct {
         // A rejected literal and its access are replaced by runtime errors, so
         // both are read as written in source.
         const store = &self.can_ir.store;
-        var raw: u32 = 0;
+        var raw: u32 = CIR.Node.first_idx;
         while (raw < store.nodes.len()) : (raw += 1) {
             const node_idx: CIR.Node.Idx = @fromBackingInt(raw);
             if (store.sourceNode(node_idx).tag != .expr_field_access) continue;

@@ -463,7 +463,7 @@ pub fn finish(allocator: Allocator, exe: []const u8, provides: []const Provide, 
     const trailer_offset = end;
     end += @sizeOf(Trailer);
     const total = std.mem.alignForward(u64, end, 16);
-    if (total > std.math.maxInt(u32)) return error.HostTooLarge;
+    if (std.math.cast(u32, total) == null) return error.HostTooLarge;
 
     const out = try allocator.alignedAlloc(u8, .@"16", @intCast(total));
     @memset(out, 0);

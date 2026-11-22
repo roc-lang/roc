@@ -148,10 +148,11 @@ pub const PackedListLiteral = struct {
 /// Span into one of this IR's flat side tables.
 pub const Span = Common.Span;
 
-/// Source-level name of a local, interned in a `LocalNameTable`.
+/// Source-level name of a local, interned in a `LocalNameTable`. The table
+/// issues ids from one: a name's id is its `spans` row plus one.
 pub const LocalNameId = enum(u32) {
     /// A compiler-generated temporary with no source-level name.
-    none = std.math.maxInt(u32),
+    none = 0,
     _,
 };
 
@@ -201,12 +202,12 @@ pub const LocalNameTable = struct {
         );
         if (entry.found_existing) return @fromBackingInt(entry.key_ptr.*);
         errdefer self.index.removeByPtr(entry.key_ptr);
-        if (self.spans.items.len >= @backingInt(LocalNameId.none)) return error.OutOfMemory;
+        const id_raw = std.math.cast(u32, self.spans.items.len + 1) orelse return error.OutOfMemory;
         const start = std.math.cast(u32, self.bytes.items.len) orelse return error.OutOfMemory;
         const len = std.math.cast(u32, name.len) orelse return error.OutOfMemory;
         try self.spans.ensureUnusedCapacity(allocator, 1);
         try self.bytes.appendSlice(allocator, name);
-        const id: LocalNameId = @fromBackingInt(@intCast(self.spans.items.len));
+        const id: LocalNameId = @fromBackingInt(id_raw);
         self.spans.appendAssumeCapacity(.{ .start = start, .len = len });
         entry.key_ptr.* = @backingInt(id);
         return id;
@@ -215,7 +216,7 @@ pub const LocalNameTable = struct {
     /// The text of `id`; empty for `none`.
     pub fn text(self: *const LocalNameTable, id: LocalNameId) []const u8 {
         if (id == .none) return "";
-        const span = self.spans.items[@backingInt(id)];
+        const span = self.spans.items[@backingInt(id) - 1];
         return self.bytes.items[span.start .. span.start + span.len];
     }
 
@@ -227,7 +228,7 @@ pub const LocalNameTable = struct {
         var result: LocalNameTable = .{ .bytes = bytes, .spans = spans };
         try result.index.ensureTotalCapacityContext(allocator, @intCast(spans.items.len), IdContext{ .table = &result });
         for (0..spans.items.len) |index| {
-            result.index.putAssumeCapacityNoClobberContext(@intCast(index), {}, IdContext{ .table = &result });
+            result.index.putAssumeCapacityNoClobberContext(@intCast(index + 1), {}, IdContext{ .table = &result });
         }
         return result;
     }

@@ -1155,7 +1155,7 @@ const Inspector = struct {
             }
             const item = items[frame.item];
             frame.item += 1;
-            if (item.isChild()) try self.visit(item.child);
+            if (item.child.get()) |child| try self.visit(child);
         }
         if (self.adapter.duplicate_row) |row| {
             if (self.duplicate_row == null) self.duplicate_row = row;

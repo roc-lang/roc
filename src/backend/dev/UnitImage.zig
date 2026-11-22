@@ -39,7 +39,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RBXU".*;
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 7;
+pub const format_version: u32 = 8;
 /// Alignment of the code block inside an image, and of every region the
 /// linker places.
 pub const page_size: u32 = 4096;
@@ -137,28 +137,49 @@ pub const Import = extern struct {
     flags: u32,
 };
 
+/// An optional atom index in four bytes: zero is no atom, and any other word
+/// stores the atom's index plus one. This file is also built standalone for
+/// the support-image tool, so it carries its own form of
+/// `collections.OptionalU32`.
+pub const OptionalAtom = enum(u32) {
+    none = 0,
+    _,
+
+    pub fn some(atom: u32) OptionalAtom {
+        return @fromBackingInt(atom + 1);
+    }
+
+    pub fn of(atom: ?u32) OptionalAtom {
+        return if (atom) |present| some(present) else .none;
+    }
+
+    /// The atom, or null when absent.
+    pub fn get(self: OptionalAtom) ?u32 {
+        if (self == .none) return null;
+        return @backingInt(self) - 1;
+    }
+};
+
 /// One field to fill once the image is placed.
 pub const Site = extern struct {
     /// Offset of the field in `region`.
     offset: u32,
     /// The import index, for an import site; for a local site, the atom its
-    /// target is in when `target_region` is the block, else `no_atom`.
+    /// target is in when `target_region` is the block, else zero, which no
+    /// reader takes as an atom.
     target: u32,
     /// Added to the target address; for a local site the target's offset
     /// in `target_region` is folded in.
     addend: i64,
-    /// The atom holding the field, for a field in the block; `no_atom`
-    /// for a field the link always places.
-    atom: u32,
+    /// The atom holding the field, for a field in the block; absent for a
+    /// field the link always places.
+    atom: OptionalAtom,
     region: u8,
     kind: u8,
     /// A `Region`, or `import_target`.
     target_region: u8,
     reserved: u8 = 0,
 };
-
-/// `Site.atom` of a field outside the block.
-pub const no_atom: u32 = std.math.maxInt(u32);
 
 /// How a reference the image resolved inside its block encodes its target.
 pub const RefKind = enum(u8) {
@@ -285,7 +306,7 @@ const Header = extern struct {
     /// at 0; an atom runs to the next one's start or the block's end.
     atoms_offset: u32,
     atom_count: u32,
-    /// For each symbol, the atom holding it (`no_atom` outside the block).
+    /// For each symbol, the atom holding it (absent outside the block).
     symbol_atoms_offset: u32,
     /// For each atom, the start of its outgoing edges, and one end entry.
     edge_starts_offset: u32,
@@ -435,8 +456,8 @@ pub const View = struct {
         return .{ .start = starts[index], .end = if (index + 1 < starts.len) starts[index + 1] else self.header.block_size };
     }
     /// For each symbol, the atom holding it.
-    pub fn symbolAtoms(self: View) []const u32 {
-        return table(u32, self.bytes, self.header.symbol_atoms_offset, self.header.symbol_count);
+    pub fn symbolAtoms(self: View) []const OptionalAtom {
+        return table(OptionalAtom, self.bytes, self.header.symbol_atoms_offset, self.header.symbol_count);
     }
     /// The outgoing edges of atom `index`: atom indices, and import indices
     /// marked with `edge_import`.
@@ -930,9 +951,9 @@ pub fn buildObjects(allocator: Allocator, parsed: []const Object, options: Build
         roots_kept += 1;
     }
     root_atoms.shrinkRetainingCapacity(roots_kept);
-    const symbol_atoms = try arena.alloc(u32, symbol_records.items.len);
+    const symbol_atoms = try arena.alloc(OptionalAtom, symbol_records.items.len);
     for (symbol_records.items, symbol_atoms) |symbol, *atom| {
-        atom.* = if (symbol.region == @backingInt(Region.block)) atom_list.of(symbol.value) else no_atom;
+        atom.* = if (symbol.region == @backingInt(Region.block)) .some(atom_list.of(symbol.value)) else .none;
     }
 
     // Exports in name order.
@@ -1309,13 +1330,13 @@ const Sites = struct {
     /// admit none from the block. `point` is the block offset the field
     /// reaches when its target is in the block (`targetPoint`).
     fn noteEdge(self: *Sites, site_place: Place, site_offset: u64, target: ?Definition, symbol: ObjectSymbol, point: i64, import: *?u32) BuildError!void {
-        const site_atom: u32 = if (site_place.region == .block) self.atom_list.of(site_offset) else no_atom;
+        const site_atom: ?u32 = if (site_place.region == .block) self.atom_list.of(site_offset) else null;
         if (target) |local| {
             if (local.region == .block and self.options.atoms != .whole) {
                 if (symbol.kind == .section and site_place.region == .block) return error.UnsupportedRelocation;
                 const to = try self.atomAt(point);
                 switch (site_place.region) {
-                    .block => try self.edge_pairs.append(self.arena, .{ .from = site_atom, .to = to }),
+                    .block => try self.edge_pairs.append(self.arena, .{ .from = site_atom.?, .to = to }),
                     .data => try self.root_atoms.append(self.arena, to),
                     // An unwind entry names its function without reaching
                     // it: a link keeps the entries of the atoms it places.
@@ -1324,7 +1345,7 @@ const Sites = struct {
             }
         } else if (site_place.region.isAllocated()) {
             const to = edge_import | try self.importIndex(symbol.name, import);
-            if (site_place.region == .block) try self.edge_pairs.append(self.arena, .{ .from = site_atom, .to = to }) else try self.root_atoms.append(self.arena, to);
+            if (site_place.region == .block) try self.edge_pairs.append(self.arena, .{ .from = site_atom.?, .to = to }) else try self.root_atoms.append(self.arena, to);
         }
     }
 
@@ -1349,25 +1370,25 @@ const Sites = struct {
     /// else record it as a local or import site. `point` is the block
     /// offset the field reaches when its target is in the block.
     fn add(self: *Sites, site_place: Place, site_offset: u64, kind: SiteKind, target: ?Definition, symbol_name: []const u8, weak_reference: bool, addend: i64, point: i64, import: *?u32) BuildError!void {
-        const site_atom: u32 = if (site_place.region == .block) self.atom_list.of(site_offset) else no_atom;
+        const site_atom: ?u32 = if (site_place.region == .block) self.atom_list.of(site_offset) else null;
         if (target) |local| {
             const total = addend + @as(i64, @intCast(local.offset));
-            const target_atom: u32 = if (local.region == .block) try self.atomAt(point) else no_atom;
+            const target_atom: ?u32 = if (local.region == .block) try self.atomAt(point) else null;
             const relative = kind.isPcRelative() or kind == .pageoff12;
             if (relative and site_place.region == .block and local.region == .block) {
                 // The block is placed page aligned, so page and low-bit
                 // arithmetic over block offsets holds wherever it lands.
                 const field = self.block_bytes[@intCast(site_offset)..][0..@intCast(kindWidth(kind))];
                 if (!applySite(field, kind, total, site_offset)) return error.RelocationOutOfRange;
-                try self.noteRef(site_atom, site_offset, RefKind.ofSite(kind), target_atom, total);
+                try self.noteRef(site_atom.?, site_offset, RefKind.ofSite(kind), target_atom.?, total);
                 return;
             }
             if (relative and !(site_place.region.isAllocated() and local.region.isAllocated())) return error.UnsupportedRelocation;
             try self.local_sites.append(self.arena, .{
                 .offset = @intCast(site_offset),
-                .target = target_atom,
+                .target = target_atom orelse 0,
                 .addend = total,
-                .atom = site_atom,
+                .atom = .of(site_atom),
                 .region = @backingInt(site_place.region),
                 .kind = @backingInt(kind),
                 .target_region = @backingInt(local.region),
@@ -1381,7 +1402,7 @@ const Sites = struct {
             .offset = @intCast(site_offset),
             .target = 0,
             .addend = addend,
-            .atom = site_atom,
+            .atom = .of(site_atom),
             .region = @backingInt(site_place.region),
             .kind = @backingInt(kind),
             .target_region = import_target,
@@ -3537,8 +3558,8 @@ test "atoms by symbol record every reference between them" {
     try std.testing.expectEqualSlices(u32, &.{0}, view.atomEdges(2));
     try std.testing.expectEqualSlices(u32, &.{}, view.atomEdges(3));
     try std.testing.expectEqualSlices(u32, &.{2}, view.roots());
-    try std.testing.expectEqual(@as(u32, 1), view.importSites(view.imports()[0])[0].atom);
-    try std.testing.expectEqual(no_atom, view.localSites()[0].atom);
+    try std.testing.expectEqual(@as(?u32, 1), view.importSites(view.imports()[0])[0].atom.get());
+    try std.testing.expectEqual(@as(?u32, null), view.localSites()[0].atom.get());
     // The data word refers into third's atom.
     try std.testing.expectEqual(@as(u32, 2), view.localSites()[0].target);
     try std.testing.expectEqual(@as(u32, 24), view.atomRange(3).start);

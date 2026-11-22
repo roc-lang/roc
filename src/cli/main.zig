@@ -14653,7 +14653,7 @@ const LirExpectSites = struct {
     fn lessThan(self: LirExpectSites, lhs: u32, rhs: u32) bool {
         const a = self.sites[lhs];
         const b = self.sites[rhs];
-        if (a.loc.file != b.loc.file) return a.loc.file < b.loc.file;
+        if (a.loc.file != b.loc.file) return @backingInt(a.loc.file) < @backingInt(b.loc.file);
         if (a.region.start.offset != b.region.start.offset) return a.region.start.offset < b.region.start.offset;
         return a.region.end.offset < b.region.end.offset;
     }
@@ -14661,7 +14661,7 @@ const LirExpectSites = struct {
     fn module(self: LirExpectSites, index: u32) [32]u8 {
         const site = self.sites[index];
         if (!site.loc.hasLocation()) base.invariant("test expect site has no source location", .{});
-        return self.store.sourceFileModuleIdentity(site.loc.file);
+        return self.store.sourceFileModuleIdentity(site.loc.fileIndex());
     }
 
     fn region(self: LirExpectSites, index: u32) base.Region {

@@ -429,9 +429,9 @@ const Scratch = struct {
         self.new_locals.clearRetainingCapacity();
         self.moves.clearRetainingCapacity();
         self.ready_moves.clearRetainingCapacity();
-        if (self.generation >= std.math.maxInt(u32) - 2) {
-            // ~2 billion procs in one run; unreachable in practice, but wrap
-            // would make stale stamps read as visited.
+        // The next generation stamps up to its value plus two. Wrapping
+        // would make stale stamps read as visited.
+        if (@addWithOverflow(self.generation, 3 + 2)[1] != 0) {
             self.stamps.clearRetainingCapacity();
             self.generation = 0;
         }

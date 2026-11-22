@@ -42,13 +42,6 @@ pub const Hash = [32]u8;
 /// requires a rebase through the 32-byte hash.
 pub const Idx = enum(u32) {
     _,
-
-    /// Sentinel for "not yet assigned". Never valid as a table index.
-    pub const NONE: Idx = @fromBackingInt(@intCast(std.math.maxInt(u32)));
-
-    pub fn isNone(self: Idx) bool {
-        return self == NONE;
-    }
 };
 
 /// Domain separator so module identity hashes can never collide with other

@@ -10409,13 +10409,13 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
             );
         }
     }
-    if (builtin.mode == .debug and (c.capture != null) != (c.capture_layout != null)) {
+    if (builtin.mode == .debug and (c.capture != .none) != (c.capture_layout != .none)) {
         base.invariant("WasmCodeGen invariant violated: packed erased fn capture value/layout presence differed", .{});
     }
 
-    const capture_size = if (c.capture_layout) |capture_layout| try self.layoutStorageByteSize(capture_layout) else 0;
+    const capture_size = if (c.capture_layout.get()) |capture_layout| try self.layoutStorageByteSize(capture_layout) else 0;
     if (builtin.mode == .debug) {
-        if (c.capture_layout) |capture_layout| {
+        if (c.capture_layout.get()) |capture_layout| {
             const capture_align = try self.layoutStorageByteAlign(capture_layout);
             if (capture_align > builtins.erased_callable.capture_alignment) {
                 base.invariant(
@@ -10444,7 +10444,7 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
         try self.emitFpOffset(offset + prefix - wasm_word_size);
         try self.emitI32Const(@intCast(builtins.utils.targetRefcountFrame(wasm_word_size)));
         try self.emitStoreOpSized(.i32, 4, 0);
-    } else if (c.reuse) |reuse| {
+    } else if (c.reuse.get()) |reuse| {
         const reuse_ptr = try self.emitProcLocalToNewLocal(reuse, .i32);
 
         try self.emitLocalGet(reuse_ptr);
@@ -10506,8 +10506,8 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
     try self.emitI32Const(@intCast(capture_size));
     try self.emitStoreOpSized(.i32, 4, 12);
 
-    if (c.capture) |capture| {
-        const capture_layout = c.capture_layout orelse unreachable; // capture and capture_layout are present together (asserted at function entry)
+    if (c.capture.get()) |capture| {
+        const capture_layout = c.capture_layout.get() orelse unreachable; // capture and capture_layout are present together (asserted at function entry)
         if (capture_size > 0) {
             const capture_value = try self.emitProcLocalToNewLocal(capture, try self.procLocalValType(capture));
 

@@ -76,7 +76,7 @@ pub fn CsrGroups(comptime Item: type) type {
             }
 
             fn buildOrdered(self: *const Builder, gpa: Allocator, comptime reverse: bool) Allocator.Error!Self {
-                if (self.pairs.items.len > std.math.maxInt(u32)) return error.OutOfMemory;
+                if (std.math.cast(u32, self.pairs.items.len) == null) return error.OutOfMemory;
                 const starts = try zeroedStarts(gpa, self.key_count);
                 errdefer gpa.free(starts);
                 for (self.pairs.items) |pair| starts[pair.key + 1] += 1;
@@ -98,7 +98,7 @@ pub fn CsrGroups(comptime Item: type) type {
         /// `keyOf` returns null for source entries that belong to no group.
         pub fn fromIndices(gpa: Allocator, key_count: usize, item_count: usize, context: anytype, comptime keyOf: anytype, comptime reverse: bool) Allocator.Error!Self {
             if (Item != u32) @compileError("indexed groups store source u32 indices");
-            if (item_count > std.math.maxInt(u32)) return error.OutOfMemory;
+            if (std.math.cast(u32, item_count) == null) return error.OutOfMemory;
             const starts = try zeroedStarts(gpa, key_count);
             errdefer gpa.free(starts);
             for (0..item_count) |i| if (keyOf(context, i)) |key| {
@@ -123,7 +123,7 @@ pub fn CsrGroups(comptime Item: type) type {
             if (Item != u32) @compileError("adjacency groups store u32 nodes");
             std.debug.assert(source_starts.len != 0);
             const count = source_starts.len - 1;
-            if (targets.len > std.math.maxInt(u32)) return error.OutOfMemory;
+            if (std.math.cast(u32, targets.len) == null) return error.OutOfMemory;
             const starts = try zeroedStarts(gpa, count);
             errdefer gpa.free(starts);
             for (targets) |target| starts[target + 1] += 1;
@@ -146,7 +146,7 @@ pub fn CsrGroups(comptime Item: type) type {
         /// straight from the key column, with no pair list.
         pub fn fromKeyColumn(gpa: Allocator, key_count: usize, keys: []const u32, absent: u32) Allocator.Error!Self {
             if (Item != u32) @compileError("a key column groups u32 item indices");
-            if (keys.len > std.math.maxInt(u32)) return error.OutOfMemory;
+            if (std.math.cast(u32, keys.len) == null) return error.OutOfMemory;
             const starts = try zeroedStarts(gpa, key_count);
             errdefer gpa.free(starts);
             for (keys) |key| {
@@ -171,7 +171,7 @@ pub fn CsrGroups(comptime Item: type) type {
 }
 
 fn zeroedStarts(gpa: Allocator, key_count: usize) Allocator.Error![]u32 {
-    if (key_count > std.math.maxInt(u32)) return error.OutOfMemory;
+    if (std.math.cast(u32, key_count) == null) return error.OutOfMemory;
     const len = std.math.add(usize, key_count, 1) catch return error.OutOfMemory;
     const starts = try gpa.alloc(u32, len);
     @memset(starts, 0);

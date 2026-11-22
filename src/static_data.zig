@@ -1608,15 +1608,15 @@ const StaticInitializerMachine = struct {
         assign: anytype,
         target_layout: layout.Idx,
     ) MaterializationError!*SymbolicValue {
-        if (assign.reuse != null) {
+        if (assign.reuse != .none) {
             staticDataInvariant("erased callable allocation reuse reached closed static initializer");
         }
-        const capture = if (assign.capture) |capture_local|
-            try self.cloneValueAs(local(locals, capture_local), assign.capture_layout orelse staticDataInvariant("static callable capture has no layout"))
+        const capture = if (assign.capture.get()) |capture_local|
+            try self.cloneValueAs(local(locals, capture_local), assign.capture_layout.get() orelse staticDataInvariant("static callable capture has no layout"))
         else
             null;
         var on_drop = assign.on_drop;
-        if (assign.frozen_capture_layout) |frozen_layout| {
+        if (assign.frozen_capture_layout.get()) |frozen_layout| {
             if (on_drop == .rc_helper) on_drop.rc_helper.layout_idx = frozen_layout;
         }
         return self.freezeCallable(assign.proc, capture, on_drop, target_layout);

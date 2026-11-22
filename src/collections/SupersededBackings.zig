@@ -63,7 +63,7 @@ pub fn ensureUnusedSafeListCapacity(
 ) Allocator.Error!bool {
     const needed = std.math.add(usize, list.length, additional) catch return error.OutOfMemory;
     if (needed <= @max(list.capacity, list.length)) return false;
-    if (needed > std.math.maxInt(u32)) return error.OutOfMemory;
+    if (std.math.cast(u32, needed) == null) return error.OutOfMemory;
     try self.backings.ensureUnusedCapacity(allocator, 1);
     const capacity = @min(std.ArrayList(T).growCapacity(needed), std.math.maxInt(u32));
     const memory = try allocator.alloc(T, capacity);

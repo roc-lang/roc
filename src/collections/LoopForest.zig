@@ -15,6 +15,7 @@
 const std = @import("std");
 const SingleThreadArena = @import("SingleThreadArena.zig");
 const OptionalIndexColumn = @import("OptionalIndexColumn.zig").OptionalIndexColumn;
+const OptionalU32 = @import("optional_id.zig").OptionalU32;
 const Allocator = std.mem.Allocator;
 
 const LoopForest = @This();
@@ -25,13 +26,11 @@ const LoopIndex = enum(u32) { _ };
 const PreorderNumber = enum(u32) { _ };
 const PreorderColumn = OptionalIndexColumn(PreorderNumber);
 
-/// No loop, or no node.
-pub const none = std.math.maxInt(u32);
-
 /// One loop of the forest.
 pub const Loop = struct {
     header: u32,
-    parent: u32 = none,
+    /// The loop immediately around this one, absent for an outermost loop.
+    parent: OptionalU32 = .none,
     depth: u32 = 0,
     /// Preorder interval of the loop in the loop tree: a loop contains
     /// another exactly when its interval contains the other's `enter`.
@@ -48,8 +47,8 @@ innermost: OptionalIndexColumn(LoopIndex),
 /// Loop indices in loop-tree preorder (parents before children).
 preorder: []u32,
 /// `lift[level * loops.len + loop]` is the loop's ancestor 2^level levels up,
-/// or `none`.
-lift: []u32,
+/// absent when it has none.
+lift: []OptionalU32,
 lift_levels: usize,
 
 /// Building a forest only allocates.
@@ -154,7 +153,7 @@ pub fn build(
         for (body.items) |member| {
             union_parent[member] = header;
             if (loop_of_header.get(member)) |inner_loop| {
-                loops.items[@backingInt(inner_loop)].parent = loop_index;
+                loops.items[@backingInt(inner_loop)].parent = .some(loop_index);
             } else {
                 innermost.set(member, loop_id);
             }
@@ -167,21 +166,21 @@ pub fn build(
     {
         const child_starts = try scratch.alloc(u32, loop_count + 1);
         @memset(child_starts, 0);
-        for (loops.items) |loop| if (loop.parent != none) {
-            child_starts[loop.parent + 1] += 1;
+        for (loops.items) |loop| if (loop.parent.get()) |parent| {
+            child_starts[parent + 1] += 1;
         };
         for (1..loop_count + 1) |index| child_starts[index] += child_starts[index - 1];
         const children = try scratch.alloc(u32, child_starts[loop_count]);
         const fill = try scratch.dupe(u32, child_starts[0..loop_count]);
-        for (loops.items, 0..) |loop, index| if (loop.parent != none) {
-            children[fill[loop.parent]] = @intCast(index);
-            fill[loop.parent] += 1;
+        for (loops.items, 0..) |loop, index| if (loop.parent.get()) |parent| {
+            children[fill[parent]] = @intCast(index);
+            fill[parent] += 1;
         };
         const Frame = struct { loop: u32, next: u32 };
         var frames = std.ArrayList(Frame).empty;
         var counter: u32 = 0;
         for (0..loop_count) |root| {
-            if (loops.items[root].parent != none) continue;
+            if (loops.items[root].parent != .none) continue;
             loops.items[root].enter = counter;
             preorder[counter] = @intCast(root);
             counter += 1;
@@ -206,13 +205,13 @@ pub fn build(
 
     var lift_levels: usize = 1;
     while ((@as(usize, 1) << @intCast(lift_levels)) <= loop_count) lift_levels += 1;
-    const lift = try allocator.alloc(u32, lift_levels * loop_count);
+    const lift = try allocator.alloc(OptionalU32, lift_levels * loop_count);
     errdefer allocator.free(lift);
     for (loops.items, 0..) |loop, index| lift[index] = loop.parent;
     for (1..lift_levels) |level| {
         for (0..loop_count) |index| {
             const mid = lift[(level - 1) * loop_count + index];
-            lift[level * loop_count + index] = if (mid == none) none else lift[(level - 1) * loop_count + mid];
+            lift[level * loop_count + index] = if (mid.get()) |ancestor| lift[(level - 1) * loop_count + ancestor] else .none;
         }
     }
 
@@ -234,9 +233,9 @@ pub fn deinit(self: *LoopForest) void {
     self.allocator.free(self.loops);
 }
 
-/// The innermost loop containing `node`, or `none`.
-pub inline fn innermostOf(self: *const LoopForest, node: usize) u32 {
-    return self.innermost.rawOrMaxInt(node);
+/// The innermost loop containing `node`, or null when no loop contains it.
+pub inline fn innermostOf(self: *const LoopForest, node: usize) ?u32 {
+    return if (self.innermost.get(node)) |loop| @backingInt(loop) else null;
 }
 
 /// Whether loop `outer` contains loop `inner` (or is it).
@@ -246,8 +245,8 @@ pub fn contains(self: *const LoopForest, outer: u32, inner: u32) bool {
 
 /// Whether loop `loop` contains node `node`.
 pub fn containsNode(self: *const LoopForest, loop: u32, node: u32) bool {
-    const inner = self.innermostOf(node);
-    return inner != none and self.contains(loop, inner);
+    const inner = self.innermostOf(node) orelse return false;
+    return self.contains(loop, inner);
 }
 
 /// The outermost ancestor-or-self of `loop` satisfying `keep`, given that
@@ -258,8 +257,8 @@ pub fn outermostWhile(self: *const LoopForest, loop: u32, context: anytype, comp
     var level = self.lift_levels;
     while (level > 0) {
         level -= 1;
-        const ancestor = self.lift[level * self.loops.len + current];
-        if (ancestor == none or !keep(context, ancestor)) continue;
+        const ancestor = self.lift[level * self.loops.len + current].get() orelse continue;
+        if (!keep(context, ancestor)) continue;
         current = ancestor;
     }
     return current;
@@ -321,14 +320,14 @@ test "nested loops nest in the forest" {
     var forest = try testForest(&.{ .{ 0, 1 }, .{ 1, 2 }, .{ 2, 3 }, .{ 3, 2 }, .{ 3, 4 }, .{ 4, 1 }, .{ 1, 5 } }, 6);
     defer forest.deinit();
     try std.testing.expectEqual(@as(usize, 2), forest.loops.len);
-    const outer = forest.innermostOf(1);
-    const inner = forest.innermostOf(2);
-    try std.testing.expect(outer != none and inner != none and outer != inner);
-    try std.testing.expectEqual(outer, forest.loops[inner].parent);
-    try std.testing.expectEqual(inner, forest.innermostOf(3));
-    try std.testing.expectEqual(outer, forest.innermostOf(4));
-    try std.testing.expectEqual(none, forest.innermostOf(0));
-    try std.testing.expectEqual(none, forest.innermostOf(5));
+    const outer = forest.innermostOf(1).?;
+    const inner = forest.innermostOf(2).?;
+    try std.testing.expect(outer != inner);
+    try std.testing.expectEqual(@as(?u32, outer), forest.loops[inner].parent.get());
+    try std.testing.expectEqual(@as(?u32, inner), forest.innermostOf(3));
+    try std.testing.expectEqual(@as(?u32, outer), forest.innermostOf(4));
+    try std.testing.expectEqual(@as(?u32, null), forest.innermostOf(0));
+    try std.testing.expectEqual(@as(?u32, null), forest.innermostOf(5));
     try std.testing.expect(forest.contains(outer, inner));
     try std.testing.expect(!forest.contains(inner, outer));
     try std.testing.expect(forest.containsNode(outer, 3));
@@ -341,5 +340,5 @@ test "a cycle entered at two nodes is one irreducible loop" {
     try std.testing.expectEqual(@as(usize, 1), forest.loops.len);
     try std.testing.expect(forest.loops[0].irreducible);
     try std.testing.expectEqual(forest.innermostOf(1), forest.innermostOf(2));
-    try std.testing.expectEqual(none, forest.innermostOf(0));
+    try std.testing.expectEqual(@as(?u32, null), forest.innermostOf(0));
 }

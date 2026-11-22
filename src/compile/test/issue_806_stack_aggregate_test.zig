@@ -349,10 +349,10 @@ fn hasLargeClosureCapture(
     for (store.getCFStmts()) |stmt| {
         if (stmt != .assign_packed_erased_fn) continue;
         const assign = store.stmtRow(stmt.assign_packed_erased_fn.data);
-        if (assign.capture) |capture| {
+        if (assign.capture.get()) |capture| {
             if (isUnsafeLargeAggregateLocal(store, layouts, capture)) return true;
         }
-        if (assign.capture_layout) |capture_layout| {
+        if (assign.capture_layout.get()) |capture_layout| {
             if (isUnsafeLargeAggregateLayoutIdx(layouts, capture_layout)) return true;
         }
     }

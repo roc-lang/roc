@@ -242,7 +242,7 @@ pub fn SerializedSlice(comptime T: type) type {
         /// reaching outside the `backing_len`-byte buffer (truncated/corrupt blob).
         pub fn validateRelocations(self: *const Self, backing_len: u64) error{CorruptArtifact}!void {
             // A store loads a slice as a `SafeList`, whose length is a `u32`.
-            if (self.len > std.math.maxInt(u32)) return error.CorruptArtifact;
+            if (std.math.cast(u32, self.len) == null) return error.CorruptArtifact;
             try validateOffsetLen(@sizeOf(T), @alignOf(T), self.offset, self.len, backing_len);
         }
     };
@@ -527,7 +527,7 @@ pub fn appendSpan(
     const current_len: usize = if (safe_list) pool.length else pool.items.len;
     const start = std.math.cast(u32, current_len) orelse return error.OutOfMemory;
     const len = std.math.cast(u32, items.len) orelse return error.OutOfMemory;
-    if (len > std.math.maxInt(u32) - start) return error.OutOfMemory;
+    _ = std.math.add(u32, start, len) catch return error.OutOfMemory;
     if (safe_list) {
         _ = try pool.appendSlice(allocator, items);
     } else {

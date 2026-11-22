@@ -192,7 +192,7 @@ fn buildLineSection(
     var line: i64 = 1;
     var column: u64 = 0;
     for (line_entries) |entry| {
-        const entry_file: u64 = @as(u64, entry.loc.file) + 1;
+        const entry_file: u64 = @as(u64, entry.loc.fileIndex()) + 1;
         if (entry_file != file) {
             try buf.append(gpa, DW_LNS_set_file);
             try appendUleb(&buf, gpa, entry_file);
@@ -354,7 +354,7 @@ fn buildInfoSection(
         try appendInt(&buf, gpa, u64, 0); // low_pc
         try appendInt(&buf, gpa, u64, proc.code_size); // high_pc (length form)
         if (proc.loc.hasLocation()) {
-            try appendUleb(&buf, gpa, @as(u64, proc.loc.file) + 1);
+            try appendUleb(&buf, gpa, @as(u64, proc.loc.fileIndex()) + 1);
             try appendUleb(&buf, gpa, proc.loc.line);
         }
     }
@@ -370,11 +370,11 @@ test "DWARF sections expose every linker-owned reference" {
     const gpa = std.testing.allocator;
     const files = [_][]const u8{"main"};
     const entries = [_]LineEntry{
-        .{ .offset = 0, .loc = .{ .file = 0, .line = 3, .column = 1 }, .region = base.Region.zero() },
-        .{ .offset = 16, .loc = .{ .file = 0, .line = 4, .column = 5 }, .region = base.Region.zero() },
+        .{ .offset = 0, .loc = .{ .file = .some(0), .line = 3, .column = 1 }, .region = base.Region.zero() },
+        .{ .offset = 16, .loc = .{ .file = .some(0), .line = 4, .column = 5 }, .region = base.Region.zero() },
     };
     const procs = [_]ProcEntry{
-        .{ .name = "roc_proc_0", .code_start = 0, .code_size = 32, .loc = .{ .file = 0, .line = 3, .column = 1 } },
+        .{ .name = "roc_proc_0", .code_start = 0, .code_size = 32, .loc = .{ .file = .some(0), .line = 3, .column = 1 } },
     };
     var sections = try build(gpa, "roc test", &files, &entries, &procs, 32);
     defer sections.deinit(gpa);
@@ -432,7 +432,7 @@ test "issue 12943: a subprogram with a source name states its symbol as the link
     const files = [_][]const u8{"main"};
     const entries = [_]LineEntry{};
     const procs = [_]ProcEntry{
-        .{ .name = "App.answer", .linkage_name = "roc__p00", .code_start = 0, .code_size = 16, .loc = .{ .file = 0, .line = 7, .column = 1 } },
+        .{ .name = "App.answer", .linkage_name = "roc__p00", .code_start = 0, .code_size = 16, .loc = .{ .file = .some(0), .line = 7, .column = 1 } },
         .{ .name = "App.helper", .linkage_name = "roc__p01", .code_start = 16, .code_size = 16, .loc = base.SourceLoc.none },
     };
     var sections = try build(gpa, "roc test", &files, &entries, &procs, 32);

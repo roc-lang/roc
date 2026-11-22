@@ -5069,7 +5069,7 @@ test "LIR statements and procs carry resolved source locations" {
         if (loc.hasLocation()) {
             located += 1;
             try std.testing.expect(!region.isEmpty());
-            try std.testing.expect(loc.file < store.sourceFileCount());
+            try std.testing.expect(loc.fileIndex() < store.sourceFileCount());
             try std.testing.expect(loc.line >= 1);
             try std.testing.expect(loc.column >= 1);
         }
@@ -5080,7 +5080,7 @@ test "LIR statements and procs carry resolved source locations" {
     for (store.proc_locs.unsafeRawItemsForView()) |loc| {
         if (loc.hasLocation()) {
             located_procs += 1;
-            try std.testing.expect(loc.file < store.sourceFileCount());
+            try std.testing.expect(loc.fileIndex() < store.sourceFileCount());
         }
     }
     try std.testing.expect(located_procs > 0);

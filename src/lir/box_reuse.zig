@@ -448,16 +448,16 @@ const Transform = struct {
         if (old_node.* != .assign_packed_erased_fn) return false;
         const old_stmt = old_node.assign_packed_erased_fn;
         const old_data = self.store.stmtRow(old_stmt.data);
-        if (old_data.reuse != null) return false;
+        if (old_data.reuse != .none) return false;
 
         const new_stmt_id = self.skipLocalAliasesAndZsts(old_stmt.next);
         const new_node = self.store.getCFStmtImmediate(new_stmt_id);
         if (new_node.* != .assign_packed_erased_fn) return false;
         const new_stmt = new_node.assign_packed_erased_fn;
         const new_data = self.store.stmtRow(new_stmt.data);
-        if (new_data.reuse != null) return false;
+        if (new_data.reuse != .none) return false;
         if (old_stmt.target == new_stmt.target) return false;
-        if (new_data.capture != null and new_data.capture.? == old_stmt.target) return false;
+        if (new_data.capture != .none and new_data.capture.get().? == old_stmt.target) return false;
 
         var return_chain = std.ArrayList(LocalId).empty;
         defer return_chain.deinit(self.scratch_allocator);
@@ -478,7 +478,7 @@ const Transform = struct {
         if (self.store.getProcSpecImmediate(self.proc_id).ret_layout != erased_layout) return false;
         if (self.layouts.getLayout(erased_layout).tag != .erased_callable) return false;
 
-        if (!self.samePackedErasedPayloadShape(old_data.capture_layout, new_data.capture_layout)) return false;
+        if (!self.samePackedErasedPayloadShape(old_data.capture_layout.get(), new_data.capture_layout.get())) return false;
 
         // The first pack's allocation becomes the reuse target, so its result
         // must have no other consumer: any read would still be live after the
@@ -499,7 +499,7 @@ const Transform = struct {
             .on_drop = new_data.on_drop,
             .on_copy = new_data.on_copy,
             .frozen_capture_layout = new_data.frozen_capture_layout,
-            .reuse = old_stmt.target,
+            .reuse = .some(old_stmt.target),
         });
         self.store.getCFStmtPtr(new_stmt_id).* = .{ .assign_packed_erased_fn = .{
             .target = new_stmt.target,
@@ -688,8 +688,8 @@ fn testPackedErased(
         .target = target,
         .data = try store.addStmtRow(LIR.PackedErasedFnData, .{
             .proc = proc,
-            .capture = capture,
-            .capture_layout = capture_layout,
+            .capture = .of(capture),
+            .capture_layout = .of(capture_layout),
             .on_drop = .none,
         }),
         .next = next,
@@ -1128,8 +1128,8 @@ test "erased callable reuse rewrites adjacent same-shape repack" {
         .target = new_callable,
         .data = try store.addStmtRow(LIR.PackedErasedFnData, .{
             .proc = new_proc,
-            .capture = new_capture,
-            .capture_layout = .u64,
+            .capture = .some(new_capture),
+            .capture_layout = .some(.u64),
             .on_drop = .none,
         }),
         .next = ret,
@@ -1138,8 +1138,8 @@ test "erased callable reuse rewrites adjacent same-shape repack" {
         .target = old_callable,
         .data = try store.addStmtRow(LIR.PackedErasedFnData, .{
             .proc = old_proc,
-            .capture = old_capture,
-            .capture_layout = .u64,
+            .capture = .some(old_capture),
+            .capture_layout = .some(.u64),
             .on_drop = .none,
         }),
         .next = new_pack,
@@ -1156,7 +1156,7 @@ test "erased callable reuse rewrites adjacent same-shape repack" {
     try run(&store, &layouts);
 
     const rewritten = store.stmtRow(store.getCFStmtImmediate(new_pack).assign_packed_erased_fn.data);
-    try std.testing.expectEqual(old_callable, rewritten.reuse.?);
+    try std.testing.expectEqual(old_callable, rewritten.reuse.get().?);
     try std.testing.expect(!rewritten.reuse_unique);
 
     const frame_locals = store.getLocalSpan(store.getProcSpecImmediate(caller).frame_locals);
@@ -1223,7 +1223,7 @@ test "erased callable reuse forwards through aliases between the packs" {
     try run(&store, &layouts);
 
     const rewritten = store.stmtRow(store.getCFStmtImmediate(new_pack).assign_packed_erased_fn.data);
-    try std.testing.expectEqual(old_callable, rewritten.reuse.?);
+    try std.testing.expectEqual(old_callable, rewritten.reuse.get().?);
     try std.testing.expect(!rewritten.reuse_unique);
 }
 
@@ -1285,7 +1285,7 @@ test "erased callable reuse declines when an alias of the old pack is read elsew
     try run(&store, &layouts);
 
     const unchanged = store.stmtRow(store.getCFStmtImmediate(new_pack).assign_packed_erased_fn.data);
-    try std.testing.expectEqual(@as(?LocalId, null), unchanged.reuse);
+    try std.testing.expect(unchanged.reuse == .none);
 }
 
 test "erased callable reuse forwards through the aliased return path" {
@@ -1343,6 +1343,6 @@ test "erased callable reuse forwards through the aliased return path" {
     try run(&store, &layouts);
 
     const rewritten = store.stmtRow(store.getCFStmtImmediate(new_pack).assign_packed_erased_fn.data);
-    try std.testing.expectEqual(old_callable, rewritten.reuse.?);
+    try std.testing.expectEqual(old_callable, rewritten.reuse.get().?);
     try std.testing.expect(!rewritten.reuse_unique);
 }

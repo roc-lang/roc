@@ -30,7 +30,7 @@ pub fn branchReaches(site: u64, target: u64) bool {
 pub fn importNeedsVeneer(view: UnitImage.View, import: UnitImage.Import, reached_atoms: []const bool) bool {
     for (view.importSites(import)) |site| {
         if (@as(UnitImage.SiteKind, @fromBackingInt(site.kind)) != .branch26) continue;
-        if (site.atom == UnitImage.no_atom or reached_atoms[site.atom]) return true;
+        if (if (site.atom.get()) |atom| reached_atoms[atom] else true) return true;
     }
     return false;
 }

@@ -9049,7 +9049,7 @@ pub const Builder = struct {
                 try writer.writeAll("]");
             },
             .nominal => |nominal| {
-                try writer.print("{s}#{d}.{d}{s}{s}(", .{ store.nameText(nominal.name), @backingInt(nominal.decl.module), @backingInt(nominal.decl.decl), if (nominal.is_opaque) "!" else "", if (nominal.has_backing) "" else "?" });
+                try writer.print("{s}#{d}.{?d}{s}{s}(", .{ store.nameText(nominal.name), @backingInt(nominal.decl.module), if (nominal.decl.decl.get()) |decl| @backingInt(decl) else null, if (nominal.is_opaque) "!" else "", if (nominal.has_backing) "" else "?" });
                 for (store.nominalArgs(nominal), 0..) |arg, index| {
                     if (index != 0) try writer.writeAll(", ");
                     try self.debugTypeText(arg, writer, depth + 1);
@@ -9502,7 +9502,7 @@ pub const Builder = struct {
             .rc_effect = try self.store.addRcEffect(LIR.LowLevel.list_map_can_reuse.rcEffect()),
             .extra = try self.store.addStmtRow(LIR.LowLevelExtra, .{
                 .interchangeable = decision.widths,
-                .map_output_elem = decision.output_elem.?,
+                .map_output_elem = .some(decision.output_elem.?),
             }),
             .args = try self.store.addLocalSpan(args),
             .next = undefined,
@@ -9729,15 +9729,15 @@ pub const Builder = struct {
             .target = target,
             .data = try self.store.addStmtRow(LIR.PackedErasedFnData, .{
                 .proc = self.program.worker(callee).proc,
-                .capture = capture,
-                .capture_layout = capture_layout,
+                .capture = .of(capture),
+                .capture_layout = .of(capture_layout),
                 .on_drop = on_drop,
                 .on_copy = on_drop.copyCallback(),
                 .frozen_capture_layout = switch (on_drop) {
-                    .none => null,
-                    .rc_helper => |helper| try self.program.result.layouts.putPrefixedCaptureLayout(helper.layout_idx, self.program.result.erased_capture_prefix),
+                    .none => .none,
+                    .rc_helper => |helper| .some(try self.program.result.layouts.putPrefixedCaptureLayout(helper.layout_idx, self.program.result.erased_capture_prefix)),
                 },
-                .reuse = reuse,
+                .reuse = .of(reuse),
             }),
             .next = undefined,
         } });
@@ -9860,7 +9860,7 @@ pub const Builder = struct {
         try self.emitDyn(target, .{ .call_erased = .{
             .closure = closure,
             .args = record,
-            .reuse_source = closure,
+            .reuse_source = .some(closure),
             .result_reuse = try self.program.converter().erasedResultSlots(result_ty) == .single,
         } });
         return target;

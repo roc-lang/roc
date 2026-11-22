@@ -6947,6 +6947,25 @@ Checked CIR may contain source-level forms such as static-dispatch calls,
 method equality, type-dispatch calls, and source `for` loops because those are
 part of the checked source module.
 
+Index zero of a module's `NodeStore` is a reserved node (`Node.Tag.reserved`,
+the tag whose value is zero, with an empty region) that a fresh store writes
+before issuing any other node. No statement, expression, pattern, annotation
+or diagnostic is ever stored there, and node indices are otherwise unbiased
+(Optional-index columns, above). A zero in a field holding a node index
+therefore means "absent": `TypeAnno.Idx.placeholder` for a type declaration
+whose annotation a forward reference has not filled yet, a record's missing
+extension, a match branch's missing guard, a definition's missing annotation,
+and the node of a scheme use that no source node introduced. Such fields
+encode and decode through `collections.ZeroSentinelId` where the in-memory
+form is an optional, which asserts that a present index is nonzero. A walk
+over a store's nodes starts at `Node.first_idx`. Source-reference relocation
+is the one walk that reads the reserved node: it visits `nodes` and
+`replaced_source_nodes` alike, the second of which reserves nothing, and the
+reserved tag has nothing to relocate. Columns indexed by node, such as type
+variables and the body index's node kinds, keep slot zero, which describes
+no node. Clones and deserialized stores carry the reserved node with the
+rest of their nodes.
+
 Rejected code is replaced in place with a runtime error node: an expression,
 statement, or literal pattern checking rejects, and a read of a `var` before it
 is initialized, which canonicalization rejects. Every later stage reads the
@@ -8453,6 +8472,50 @@ templates reachable from exported templates, static-dispatch targets, and
 compile-time checked callable leaves. Privacy affects source
 name lookup and diagnostics. It must not hide checked bodies from whole-program
 post-check specialization.
+
+### Platform Abstract Types In Type Contexts
+
+A platform's requires clause binds abstract types (`[Model : model]`) that
+are in scope in the whole platform module and stand for whatever the app
+provides. A type declaration whose backing names one therefore depends on
+it exactly as a body-local declaration depends on an enclosing function's
+type variable: `S := { model : Model }` has different contents for every app
+the platform is paired with. So the same context rule applies, with the
+module in the place of the enclosing function.
+
+In a module with at least one for-clause alias, `decideLocalTypeContexts`
+decides a context for module-level declarations too. A module-level
+declaration's only part is its annotation. A reference to a for-clause alias
+in a declaration's parts is a lookup of the alias's rigid binder, and a
+reference to another declaration contributes that declaration's context by
+the same least fixpoint, so `T := [T(S)]` depends on `Model` through `S`, and
+so does a declaration that reaches it through an alias. This holds for
+body-local declarations of the platform as well. In every other module no
+module-level declaration has a context and nothing here does any work.
+
+From there the declaration is an ordinary declaration with a context. Its
+formals are its header's variables followed by the binders
+(`NominalDecl.flags.context_len`), the shell reserved for it before type
+bodies are generated already lists them, every application of it lists the
+platform's shared rigid identities after its declared arguments, and checked
+output publishes those arguments and the matching
+`CheckedNominalDeclaration.context_len`. A type that mentions `S` therefore
+reaches the requirement's identity variable: it is a scheme variable of every
+template whose type mentions `S`, a pairing gives `S` an image at the app's
+solved type, the type's key differs between apps, and binding the
+declaration's formals to an application's arguments substitutes the app's
+type into the backing like any other formal. Source types never write the
+argument and printed types never show it.
+
+A platform abstract type is a variable of the module rather than of a
+binding, so the rules that tie a body-local context to its enclosing
+functions do not apply to it: it makes no local function contextual, no
+binding owns it, and the escape rule below never rejects a type on its
+account, because no binding of the module is outside its scope.
+
+This is declaration analysis over canonical IR that runs before any type is
+generated. It reads no solved type and rewrites none, so it is no
+solver-mutating rewrite.
 
 ### Body-Local Types Stay In Their Context
 

@@ -45,8 +45,8 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call (constraint-fn-var 222)
-	(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "19210") (target-def "19210"))
+(e-call (constraint-fn-var 223)
+	(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "19211") (target-def "19211"))
 	(e-runtime-error (tag "erroneous_value_expr")))
 ~~~
 # TYPES

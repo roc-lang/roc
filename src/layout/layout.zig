@@ -197,10 +197,6 @@ pub const Idx = enum(@Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag))) {
     // num_primitives in store.zig must refer to how many variants we had up to this point.
     _,
 
-    /// Sentinel value representing "not present" / "no layout".
-    /// Used by ArrayListMap as the empty slot marker.
-    pub const none: Idx = @fromBackingInt(@intCast(std.math.maxInt(@typeInfo(Idx).@"enum".tag_type)));
-
     /// Returns true if this layout represents a signed integer type.
     /// Used for determining signed vs unsigned operations (sdiv vs udiv, etc.)
     pub fn isSigned(self: Idx) bool {
@@ -216,7 +212,7 @@ pub const Idx = enum(@Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag))) {
     /// of the fixed scalar layouts above. Every aggregate, list, box, closure
     /// and pointer layout is interned.
     pub fn isInterned(self: Idx) bool {
-        return self != Idx.none and @backingInt(self) > @backingInt(Idx.i64x2);
+        return @backingInt(self) > @backingInt(Idx.i64x2);
     }
 };
 

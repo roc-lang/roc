@@ -2124,7 +2124,7 @@ test "TypeWriter renders every shape the walk descends through" {
         .{ .ident_idx = alias_name },
         closed,
         &.{ empty_record, empty_tag_union },
-        base.ModuleIdentity.Idx.NONE,
+        @as(base.ModuleIdentity.Idx, @fromBackingInt(1)),
     ));
     try env.expectRender(alias, "Al({}, [])");
     const nominal_name = try env.ident("Builtin.Str");
@@ -2132,7 +2132,7 @@ test "TypeWriter renders every shape the walk descends through" {
         try env.types.freshFromContent(try env.types.mkNominal(
             .{ .ident_idx = nominal_name },
             &.{},
-            base.ModuleIdentity.Idx.NONE,
+            @as(base.ModuleIdentity.Idx, @fromBackingInt(1)),
             false,
         )),
         "Str",

@@ -1243,8 +1243,8 @@ test "position and plan recipes evaluate to the instantiation's positions and pl
         if (relocation.offset == plan_layout.of(.entries)) break program.static_descs.exports.items[@backingInt(relocation.target.data_symbol)];
     } else return error.TestUnexpectedResult;
     const variant_layout = desc_format.AdaptVariant.layout(.u64);
-    try std.testing.expectEqual(@as(u32, 0), std.mem.readInt(u32, entries_node.bytes[variant_layout.of(.discriminant)..][0..4], .little));
-    try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, entries_node.bytes[variant_layout.size + variant_layout.of(.discriminant) ..][0..4], .little));
+    try std.testing.expectEqual(@backingInt(desc_format.TargetDiscriminant.of(0)), std.mem.readInt(u32, entries_node.bytes[variant_layout.of(.discriminant)..][0..4], .little));
+    try std.testing.expectEqual(@backingInt(desc_format.TargetDiscriminant.of(2)), std.mem.readInt(u32, entries_node.bytes[variant_layout.size + variant_layout.of(.discriminant) ..][0..4], .little));
     // A has no payload plan; C's is a copy.
     try std.testing.expectEqual(@as(usize, 1), entries_node.relocations.len);
     try std.testing.expectEqual(variant_layout.size + variant_layout.of(.plan), entries_node.relocations[0].offset);

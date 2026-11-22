@@ -1407,7 +1407,7 @@ test "snapshotting a spine deeper than any native-stack budget" {
             .{ .ident_idx = alias_ident },
             current,
             &.{},
-            base.ModuleIdentity.Idx.NONE,
+            @as(base.ModuleIdentity.Idx, @fromBackingInt(1)),
         ));
     }
 
@@ -1515,7 +1515,7 @@ test "diagnostic snapshots render frozen identities after poisoning and naming s
         .{ .ident_idx = alias_name },
         root,
         &.{},
-        base.ModuleIdentity.Idx.NONE,
+        @as(base.ModuleIdentity.Idx, @fromBackingInt(1)),
     ));
     const later = try snapshots.snapshotVarForError(&store, &writer, alias);
     try std.testing.expectEqualStrings(&long_name, try snapshots.formatType(later));
