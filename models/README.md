@@ -11,6 +11,7 @@ None of this runs in CI or `minici`. Each model is run by hand, from its own dir
 | Model | Stage it checks | How | Toolchain | Compiler hook |
 |---|---|---|---|---|
 | [arc](arc/) | ARC insertion, reuse and dismantle in LIR; the debug ARC certifier | oracle on LIR dumps, generator | Lean 4, Python | `ROC_LIR_DUMP`, `ROC_VERIFY_ARC` |
+| [backend-diff](backend-diff/) | backends on programs split across modules | generator, differential across interpreter, dev, speed and wasm32 against a reference evaluator | Python, Node | none |
 | [exhaustive](exhaustive/) | match exhaustiveness and redundancy in the checker | generator, differential against `roc check` | Python | none |
 | [infer](infer/) | type inference and the type printer | generator, differential against `roc check` | Python | none |
 | [specconstr](specconstr/) | SpecConstr termination and growth | Maude model, generator | Maude, Python | none |
