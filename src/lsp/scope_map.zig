@@ -71,17 +71,20 @@ pub const ScopeMap = struct {
             .visit_stmt_pre = ScopeWalk.visitStmt,
         });
         const store = &module_env.store;
+        // One past the last cursor offset, which may sit at the end of the
+        // source.
+        const module_end = std.math.cast(u32, module_env.common.source.len + 1) orelse return error.OutOfMemory;
 
         // Top-level defs are visible from their definition to the end of the module
         for (store.sliceDefs(module_env.all_defs)) |def_idx| {
             const def = store.getDef(def_idx);
-            try self.extractBindingsFromPattern(module_env, def.pattern, 0, std.math.maxInt(u32), .{ .def = def_idx });
+            try self.extractBindingsFromPattern(module_env, def.pattern, 0, module_end, .{ .def = def_idx });
             visitor.walkExpr(store, def.expr);
             if (walk.oom) |err| return err;
         }
 
         for (store.sliceStatements(module_env.all_statements)) |stmt_idx| {
-            try self.extractStatementBindings(module_env, stmt_idx, std.math.maxInt(u32));
+            try self.extractStatementBindings(module_env, stmt_idx, module_end);
             visitor.walkStatement(store, stmt_idx);
             if (walk.oom) |err| return err;
         }

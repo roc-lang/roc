@@ -22,7 +22,7 @@ test "OrderedSink: prefix gating and drain order" {
 
     const pkg_names = [_][]const u8{ "pkg", "pkg" };
     const module_names = [_][]const u8{ "First", "Second" };
-    const depths = [_]u32{ 1, 1 };
+    const depths = [_]?u32{ 1, 1 };
     try sink.buildOrder(&pkg_names, &module_names, &depths);
 
     // Emit Second first; should not emit anything yet due to prefix gating (First not ready).
@@ -69,7 +69,7 @@ test "OrderedSink: early emit before order still drains after order build" {
     // Build order with the module
     const pkg_names = [_][]const u8{"pkg"};
     const module_names = [_][]const u8{"M"};
-    const depths = [_]u32{1};
+    const depths = [_]?u32{1};
     try sink.buildOrder(&pkg_names, &module_names, &depths);
 
     // Emit again to trigger tryEmitLocked; now drain should return the module
@@ -100,7 +100,7 @@ test "OrderedSink: case-insensitive sort of fq names at same depth" {
 
     const pkg_names = [_][]const u8{ "pkg", "pkg" };
     const module_names = [_][]const u8{ "B", "a" };
-    const depths = [_]u32{ 0, 0 };
+    const depths = [_]?u32{ 0, 0 };
     try sink.buildOrder(&pkg_names, &module_names, &depths);
 
     const r_b = try Report.init(gpa, "Beta", "", .runtime_error);

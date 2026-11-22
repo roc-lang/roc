@@ -672,8 +672,9 @@ pub const ModuleState = struct {
     /// borrowed from that entry, which the module's checked artifact keeps
     /// alive. Evaluation that reopens the module continues from them.
     cached_reports: check.CheckedReports = .{},
-    /// Minimum dependency depth from root
-    depth: u32,
+    /// Minimum dependency depth from root, or null while no module the root
+    /// reaches imports it.
+    depth: ?u32,
     /// Accumulated compile time for this module (parse + canonicalize + type-check)
     compile_time_ns: u64,
     /// Time this build spent type checking this module and publishing its
@@ -694,7 +695,7 @@ pub const ModuleState = struct {
             .dependents = std.ArrayList(ModuleId).empty,
             .external_dependents = std.ArrayList(ModuleRef).empty,
             .reports = std.ArrayList(Report).empty,
-            .depth = std.math.maxInt(u32),
+            .depth = null,
             .compile_time_ns = 0,
         };
     }
@@ -6282,9 +6283,11 @@ pub const Coordinator = struct {
 
             const child = pkg.getModule(child_id).?;
             try child.dependents.append(self.gpa, module_id);
-            const new_depth = current_mod.depth +| 1;
-            if (new_depth < child.depth) {
-                child.depth = new_depth;
+            if (current_mod.depth) |current_depth| {
+                const new_depth = current_depth + 1;
+                if (child.depth == null or new_depth < child.depth.?) {
+                    child.depth = new_depth;
+                }
             }
 
             if (child.phase == .Parse) {

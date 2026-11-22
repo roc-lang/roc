@@ -935,11 +935,8 @@ else
     2 * 1024 * 1024 * 1024 * 1024; // 2TB for 64-bit Linux
 
 fn configuredSharedMemorySize() usize {
-    if (comptime build_options.shared_memory_size > std.math.maxInt(usize)) {
+    return comptime std.math.cast(usize, build_options.shared_memory_size) orelse
         @compileError("-Dshared-memory-size does not fit in usize for this target");
-    }
-
-    return @intCast(build_options.shared_memory_size);
 }
 
 /// Floor for the retry loop in `createSharedMemory`. Set to the
@@ -20067,7 +20064,7 @@ fn finishFrontEndPhaseExcluding(gpa: Allocator, config: reporting.ReportingConfi
         reporter.recordCompletedWithBreakdown(
             "Shared Lowering + Compile-Time Eval",
             timing.program_finalization_ns,
-            .{ .min = compile_time.mem_min, .max = compile_time.mem_max },
+            if (compile_time.mem) |mem| .{ .min = mem.min, .max = mem.max } else .{},
             measuredSubTimings(&subs_buf, &compileTimeEvaluationBreakdown(compile_time)),
         );
         // The shared program's Monotype sub-phases, as the runtime program's
@@ -20078,7 +20075,7 @@ fn finishFrontEndPhaseExcluding(gpa: Allocator, config: reporting.ReportingConfi
             reporter.recordCompletedWithBreakdown(
                 "Shared Monotype Lowering Detail",
                 compile_time.lowering.monotype_ns,
-                .{ .min = compile_time.mem_min, .max = compile_time.mem_max },
+                if (compile_time.mem) |mem| .{ .min = mem.min, .max = mem.max } else .{},
                 measuredSubTimings(&monotype_buf, rows[0..monotype_breakdown_rows]),
             );
         }

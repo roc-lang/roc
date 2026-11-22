@@ -641,7 +641,7 @@ pub const BuildEnv = struct {
     /// follows it is appended wiring.
     fn syntheticRootSourceMap(self: *const BuildEnv) base.StagedSourceMap {
         const original = self.synthetic_root_original_source orelse
-            return .{ .header_lines = self.synthetic_root_header_lines, .footer_start = std.math.maxInt(u32) };
+            return .{ .header_lines = self.synthetic_root_header_lines, .footer_start = null };
         return .{
             .header_lines = self.synthetic_root_header_lines,
             .footer_start = @intCast(self.synthetic_root_header_len + original.len),
@@ -1605,7 +1605,7 @@ pub const BuildEnv = struct {
                 },
             };
             try self.sink.emitReport("main", file_abs, report);
-            try self.sink.buildOrder(&[_][]const u8{"main"}, &[_][]const u8{file_abs}, &[_]u32{0});
+            try self.sink.buildOrder(&[_][]const u8{"main"}, &[_][]const u8{file_abs}, &[_]?u32{0});
             self.sink.tryEmit();
             return err;
         };
@@ -1640,7 +1640,7 @@ pub const BuildEnv = struct {
             }
 
             // Build the order so drainReports can find these reports
-            try self.sink.buildOrder(&[_][]const u8{pkg_name}, &[_][]const u8{module_name}, &[_]u32{0});
+            try self.sink.buildOrder(&[_][]const u8{pkg_name}, &[_][]const u8{module_name}, &[_]?u32{0});
 
             // Emit ready entries (marks them as emitted so they can be drained)
             self.sink.tryEmit();
@@ -1697,7 +1697,7 @@ pub const BuildEnv = struct {
                         const pkg_name = "main";
                         const report = try config_diagnostic.toReport(self.gpa, &parsed.module_env.common, file_abs);
                         try self.sink.emitReport(pkg_name, file_abs, report);
-                        try self.sink.buildOrder(&[_][]const u8{pkg_name}, &[_][]const u8{file_abs}, &[_]u32{0});
+                        try self.sink.buildOrder(&[_][]const u8{pkg_name}, &[_][]const u8{file_abs}, &[_]?u32{0});
                         self.sink.tryEmit();
                         return error.UnsupportedHeader;
                     },
@@ -2155,12 +2155,12 @@ pub const BuildEnv = struct {
                     try self.emitSyntaxReports("main", parsed);
                     self.discovered_root_syntax_reported = true;
                 }
-                try self.sink.buildOrder(&[_][]const u8{ "main", "workspace" }, &[_][]const u8{ parsed.path, "root" }, &[_]u32{ 0, 0 });
+                try self.sink.buildOrder(&[_][]const u8{ "main", "workspace" }, &[_][]const u8{ parsed.path, "root" }, &[_]?u32{ 0, 0 });
                 self.sink.tryEmit();
                 return;
             }
         }
-        try self.sink.buildOrder(&[_][]const u8{"workspace"}, &[_][]const u8{"root"}, &[_]u32{0});
+        try self.sink.buildOrder(&[_][]const u8{"workspace"}, &[_][]const u8{"root"}, &[_]?u32{0});
         self.sink.tryEmit();
     }
 
@@ -2334,7 +2334,7 @@ pub const BuildEnv = struct {
         defer pkg_names.deinit(self.gpa);
         var module_names = std.ArrayList([]const u8).empty;
         defer module_names.deinit(self.gpa);
-        var depths = std.ArrayList(u32).empty;
+        var depths = std.ArrayList(?u32).empty;
         defer depths.deinit(self.gpa);
 
         const coord = self.coordinator orelse return;
@@ -2974,8 +2974,8 @@ pub const BuildEnv = struct {
         is_app: bool,
         /// True if this is a platform sibling module (e.g., Stdout, Stderr)
         is_platform_sibling: bool,
-        /// Dependency depth from root
-        depth: u32,
+        /// Dependency depth from root, or null when the root does not reach it
+        depth: ?u32,
         /// Platform provides entries (only populated for platform main modules)
         provides_entries: []const ProvidesEntry = &.{},
     };
@@ -3452,7 +3452,7 @@ pub const BuildEnv = struct {
         // Sort platform siblings by depth then name
         const SortContext = struct {
             pub fn lessThan(_: void, a: CompiledModuleInfo, b: CompiledModuleInfo) bool {
-                if (a.depth != b.depth) return a.depth < b.depth;
+                if (a.depth != b.depth) return depthLessThan(a.depth, b.depth);
                 return std.mem.order(u8, a.name, b.name) == .lt;
             }
         };
@@ -4204,6 +4204,14 @@ test "BuildEnv header watch state hashes raw CRLF source bytes" {
     }
 }
 
+/// Order dependency depths shallowest first, with modules the root does not
+/// reach after every reached one.
+fn depthLessThan(a: ?u32, b: ?u32) bool {
+    const a_depth = a orelse return false;
+    const b_depth = b orelse return true;
+    return a_depth < b_depth;
+}
+
 // OrderedSink buffers reports and emits them in a deterministic global order.
 // - Sorting key: (min dependency depth from root app, then package and module names for internal sorting only)
 // - Reporting: per-module report aggregation; file paths are provided by BuildEnv at sink time
@@ -4241,7 +4249,7 @@ pub const OrderedSink = struct {
     const Entry = struct {
         pkg_name: []const u8, // borrowed from BuildEnv.packages
         module_name: []const u8, // borrowed from Coordinator module state
-        depth: u32, // min dependency depth
+        depth: ?u32, // min dependency depth; null until known or when unreached
         reports: std.array_list.Managed(Report), // zero or more reports for this module
         ready: bool,
         emitted: bool,
@@ -4293,7 +4301,7 @@ pub const OrderedSink = struct {
     }
 
     // Build deterministic order once: caller provides package names, module names, and depths
-    pub fn buildOrder(self: *OrderedSink, pkg_names: []const []const u8, module_names: []const []const u8, depths: []const u32) Allocator.Error!void {
+    pub fn buildOrder(self: *OrderedSink, pkg_names: []const []const u8, module_names: []const []const u8, depths: []const ?u32) Allocator.Error!void {
         if (comptime trace_build) {
             std.debug.print("[SINK] buildOrder: {} modules\n", .{pkg_names.len});
         }
@@ -4307,13 +4315,13 @@ pub const OrderedSink = struct {
         var i: usize = 0;
         while (i < pkg_names.len) : (i += 1) {
             if (comptime trace_build) {
-                std.debug.print("[SINK] buildOrder: checking pkg=\"{s}\" module=\"{s}\" depth={}\n", .{ pkg_names[i], module_names[i], depths[i] });
+                std.debug.print("[SINK] buildOrder: checking pkg=\"{s}\" module=\"{s}\" depth={?d}\n", .{ pkg_names[i], module_names[i], depths[i] });
             }
             const key = ModuleKey{ .pkg = pkg_names[i], .module = module_names[i] };
             var entry_index: usize = undefined;
             if (self.index.get(key)) |idx| {
                 if (comptime trace_build) {
-                    std.debug.print("[SINK] buildOrder: found entry at idx={}, ready={} depth={}\n", .{ idx, self.entries.items[idx].ready, depths[i] });
+                    std.debug.print("[SINK] buildOrder: found entry at idx={}, ready={} depth={?d}\n", .{ idx, self.entries.items[idx].ready, depths[i] });
                 }
                 entry_index = idx;
                 // Update depth
@@ -4355,7 +4363,7 @@ pub const OrderedSink = struct {
                 const ea = ctx.entries.items[a_idx];
                 const eb = ctx.entries.items[b_idx];
                 if (ea.depth != eb.depth) {
-                    return ea.depth < eb.depth;
+                    return depthLessThan(ea.depth, eb.depth);
                 }
                 // Case-insensitive compare to be safe on Windows-like filesystems
                 // First compare packages
@@ -4392,7 +4400,7 @@ pub const OrderedSink = struct {
             try self.entries.append(.{
                 .pkg_name = pkg_name,
                 .module_name = module_name,
-                .depth = std.math.maxInt(u32),
+                .depth = null,
                 .reports = reports_list,
                 .ready = false,
                 .emitted = false,

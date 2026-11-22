@@ -116,8 +116,8 @@ pub const ParseTask = struct {
     package_root: []const u8,
     /// Compiler role for this source module
     module_role: ModuleEnv.ModuleRole,
-    /// Dependency depth from root
-    depth: u32,
+    /// Dependency depth from root, or null when the root does not reach it
+    depth: ?u32,
     /// Post-canonicalization validation this module receives. A
     /// canonicalization input, so the parse task's cache probe keys on it.
     validation: can.Can.Validation,
@@ -143,8 +143,8 @@ pub const CanonicalizeTask = struct {
     /// Source-relative base directory this module's `import "path" as name`
     /// file imports resolve against.
     source_dir: []const u8,
-    /// Dependency depth
-    depth: u32,
+    /// Dependency depth, or null when the root does not reach it
+    depth: ?u32,
     /// Module environment borrowed from the coordinator
     module_env: *ModuleEnv,
     /// Cached AST from parsing (ownership transferred)
