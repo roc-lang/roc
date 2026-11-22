@@ -1245,8 +1245,8 @@ const Walk = struct {
     const Entry = struct {
         fn_id: Ast.FnId,
         /// For a root entry, the number of inline frames beneath its body;
-        /// null for an entry a call made.
-        root_depth: ?u32,
+        /// absent for an entry a call made.
+        root_depth: collections.OptionalU32,
         callers: std.ArrayList(Caller) = .empty,
         exits: std.ArrayList(Exit) = .empty,
     };
@@ -1338,7 +1338,7 @@ const Walk = struct {
         const gop = try self.entry_map.getOrPut(self.alloc(), key);
         if (!gop.found_existing) {
             gop.value_ptr.* = @intCast(self.entries.items.len);
-            try self.entries.append(self.alloc(), .{ .fn_id = fn_id, .root_depth = @intCast(depth) });
+            try self.entries.append(self.alloc(), .{ .fn_id = fn_id, .root_depth = .some(@intCast(depth)) });
         }
         return gop.value_ptr.*;
     }
@@ -1386,7 +1386,7 @@ const Walk = struct {
         const entry: u32 = if (gop.found_existing) gop.value_ptr.* else blk: {
             const id: u32 = @intCast(self.entries.items.len);
             gop.value_ptr.* = id;
-            try self.entries.append(self.alloc(), .{ .fn_id = callee, .root_depth = null });
+            try self.entries.append(self.alloc(), .{ .fn_id = callee, .root_depth = .none });
             const f = self.session.program.getFn(callee);
             const local = switch (slot.kind) {
                 .arg => GuardedList.at(self.session.program.typedLocalSpan(f.args), slot.index).local,
@@ -1409,7 +1409,7 @@ const Walk = struct {
         if ((try self.exit_set.getOrPut(self.alloc(), .{ .entry = entry, .path = path, .node = node })).found_existing) return;
         const e = &self.entries.items[entry];
         try e.exits.append(self.alloc(), .{ .path = path, .node = node });
-        if (e.root_depth) |depth| {
+        if (e.root_depth.get()) |depth| {
             // The result of a root body is the result of the innermost
             // inline frame beneath it, read at that frame's call.
             if (depth == 0) return;

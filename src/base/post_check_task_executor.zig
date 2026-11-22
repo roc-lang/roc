@@ -822,10 +822,13 @@ pub const ThreadedTestExecutor = struct {
     threads: []std.Thread = &.{},
     lanes: []LaneState = &.{},
     closing: bool = false,
-    /// Submissions accepted before every further one fails, or null to
-    /// accept every submission.
-    submit_limit: ?usize = null,
+    /// Submissions accepted before every further one fails; `unlimited`
+    /// accepts every submission.
+    submit_limit: usize = unlimited,
     submitted: usize = 0,
+
+    /// A `submit_limit` above every submission count.
+    const unlimited: usize = std.math.maxInt(usize);
 
     pub fn start(self: *ThreadedTestExecutor, thread_count: usize) (std.mem.Allocator.Error || std.Thread.SpawnError)!void {
         self.lanes = try std.testing.allocator.alloc(LaneState, thread_count + 1);
@@ -895,7 +898,7 @@ pub const ThreadedTestExecutor = struct {
         const self: *ThreadedTestExecutor = @ptrCast(@alignCast(context));
         self.mutex.lockUncancelable(io);
         defer self.mutex.unlock(io);
-        if (self.submit_limit) |limit| if (self.submitted == limit) return error.OutOfMemory;
+        if (self.submitted >= self.submit_limit) return error.OutOfMemory;
         self.submitted += 1;
         try self.tasks.append(std.testing.allocator, task);
         self.task_ready.signal(io);

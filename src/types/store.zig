@@ -2904,10 +2904,9 @@ pub const Store = struct {
         return .some(try self.interpolation_metadata.append(self.gpa, metadata));
     }
 
-    /// A constraint's interpolation metadata, or `.none` when it has none.
+    /// The interpolation metadata of a constraint that has some.
     pub fn getInterpolationMetadata(self: *const Self, idx: InterpolationMetadata.OptIdx) InterpolationMetadata {
-        const pooled = idx.get() orelse return .none;
-        return self.interpolation_metadata.get(pooled).*;
+        return self.interpolation_metadata.get(idx.get().?).*;
     }
 
     /// Record a numeric literal conversion's facts, for a constraint's

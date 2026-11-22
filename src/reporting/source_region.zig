@@ -101,15 +101,16 @@ pub const Snippet = struct {
         const rows = try gpa.alloc(Row, row_count);
         errdefer gpa.free(rows);
 
-        // The narrowest indent of a row with text; null while every row so
-        // far is blank.
-        var common: ?usize = null;
+        // The narrowest indent of a row with text. A row with text is wider
+        // than its indent and no wider than `total_len`, so the seed survives
+        // only when every row is blank.
+        var common: usize = total_len;
         var offset: usize = 0;
         var iter = std.mem.splitScalar(u8, text, '\n');
         var row_index: usize = 0;
         while (iter.next()) |source_line| : (row_index += 1) {
             const indent = leadingIndent(source_line);
-            if (indent.original < source_line.len) common = @min(common orelse indent.expanded, indent.expanded);
+            if (indent.original < source_line.len) common = @min(common, indent.expanded);
             const row = bytes[offset..][0 .. indent.expanded + source_line.len - indent.original];
             @memset(row[0..indent.expanded], ' ');
             @memcpy(row[indent.expanded..], source_line[indent.original..]);
@@ -120,7 +121,7 @@ pub const Snippet = struct {
             offset += row.len;
         }
         std.debug.assert(row_index == row_count and offset == total_len);
-        return .{ .allocator = gpa, .bytes = bytes, .rows = rows, .common = common orelse 0 };
+        return .{ .allocator = gpa, .bytes = bytes, .rows = rows, .common = if (common < total_len) common else 0 };
     }
     /// A row's leading whitespace: its length in the source, and its width
     /// once each tab is expanded to four spaces.

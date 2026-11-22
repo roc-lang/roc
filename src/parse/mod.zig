@@ -1615,3 +1615,32 @@ test "a malformed header node spans from the header keyword through the token wh
         try std.testing.expectEqual(case.tokens_through_error, malformed.region.end);
     }
 }
+
+test "a header that fails at end of file spans its tokens, so tokenizer errors inside it are header errors" {
+    const gpa = std.testing.allocator;
+    // Each header runs into the end of the file after a tokenizer problem
+    // inside it: an ASCII control character, or an invalid string escape.
+    const sources = [_][]const u8{
+        "module [foo,\x07 bar",
+        "app [main!] { pf: platform \"pf\\q.roc\"",
+        "platform \"\" requires {\x07} exposes [foo",
+    };
+    for (sources) |source| {
+        errdefer std.debug.print("\nheader source:\n{s}\n", .{source});
+
+        var env = try CommonEnv.init(gpa, source);
+        defer env.deinit(gpa);
+        const ast = try header(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 1), ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 1), ast.parse_diagnostics.items.len);
+        const parse_region = ast.tokenizedRegionToRegion(ast.parse_diagnostics.items[0].region);
+        try std.testing.expectEqual(source.len, @as(usize, parse_region.start.offset));
+
+        const file_header = ast.store.getHeader(@fromBackingInt(@intCast(ast.root_node_idx)));
+        try std.testing.expect(file_header == .malformed);
+        try std.testing.expect(ast.tokenize_diagnostics.items[0].region.start.offset < ast.headerEndOffset(file_header));
+        try std.testing.expect(ast.headerHasTokenizeErrors(file_header));
+    }
+}

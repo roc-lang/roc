@@ -1616,10 +1616,15 @@ const SummaryPairs = struct {
 
     const Pair = struct { dense: u32, a: LocalSummary, b: LocalSummary };
 
+    /// The dense position of an exhausted side: past every real position,
+    /// so `@min` keeps the other side's.
+    const exhausted: u32 = std.math.maxInt(u32);
+
     fn next(self: *SummaryPairs) ?Pair {
-        const a_dense: ?u32 = if (self.i < self.a.len) self.a[self.i].dense else null;
-        const b_dense: ?u32 = if (self.j < self.b.len) self.b[self.j].dense else null;
-        const dense = if (a_dense) |a| (if (b_dense) |b| @min(a, b) else a) else b_dense orelse return null;
+        const a_dense = if (self.i < self.a.len) self.a[self.i].dense else exhausted;
+        const b_dense = if (self.j < self.b.len) self.b[self.j].dense else exhausted;
+        const dense = @min(a_dense, b_dense);
+        if (dense >= exhausted) return null;
         var pair = Pair{ .dense = dense, .a = unbound_summary, .b = unbound_summary };
         if (a_dense == dense) {
             pair.a = self.a[self.i];

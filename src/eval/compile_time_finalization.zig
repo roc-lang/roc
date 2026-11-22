@@ -4660,12 +4660,8 @@ pub const Timing = struct {
     /// evaluation runs as bursts interleaved with checking, so the progress
     /// reporter cannot window-sample it; the brackets that already time each
     /// burst fold a footprint reading at the same points.
-    /// The sampled footprint range. `mem_min` starts above every sample so
-    /// sampling folds branch-free; `mem_sampled` says whether any sample
-    /// landed.
-    mem_min: MemMinCounter = MemMinCounter.init(std.math.maxInt(u64)),
+    mem_min: MemMinCounter = MemMinCounter.init(unsampled_mem_min),
     mem_max: MemMaxCounter = .{},
-    mem_sampled: std.atomic.Value(bool) = .init(false),
     native_emission_mutex: std.atomic.Mutex = .unlocked,
     native_emission: NativeProcCompiler.Metrics = .{},
     /// Detailed step durations and work counts (`Step`, `Count`), recorded
@@ -4804,7 +4800,8 @@ pub const Timing = struct {
             .roots_declared = self.roots_declared.load(),
             .roots_evaluated = self.roots_evaluated.load(),
             .roots_completed_directly = self.roots_completed_directly.load(),
-            .mem = if (self.mem_sampled.load(.monotonic)) .{ .min = self.mem_min.load(), .max = self.mem_max.load() } else null,
+            .mem_min = self.mem_min.load(),
+            .mem_max = self.mem_max.load(),
             .native_emission = self.native_emission,
             .steps_ns = loadAll(step_count, &self.steps_ns),
             .counts = loadAll(count_count, &self.counts),
@@ -4839,7 +4836,8 @@ pub const Timing = struct {
         self.roots_declared.add(snapshot_value.roots_declared);
         self.roots_evaluated.add(snapshot_value.roots_evaluated);
         self.roots_completed_directly.add(snapshot_value.roots_completed_directly);
-        if (snapshot_value.mem) |mem| self.addMemory(mem.min, mem.max);
+        self.mem_min.min(snapshot_value.mem_min);
+        self.mem_max.max(snapshot_value.mem_max);
         for (&self.steps_ns, snapshot_value.steps_ns) |*counter, value| counter.add(value);
         for (&self.counts, snapshot_value.counts) |*counter, value| counter.add(value);
         for (&self.roots_by_kind, snapshot_value.roots_by_kind) |*counter, value| counter.add(value);
@@ -4863,13 +4861,8 @@ pub const Timing = struct {
 
     fn sampleMemory(self: *Timing) void {
         const bytes = base.process_memory.currentBytes() orelse return;
-        self.addMemory(bytes, bytes);
-    }
-
-    fn addMemory(self: *Timing, min_bytes: u64, max_bytes: u64) void {
-        self.mem_min.min(min_bytes);
-        self.mem_max.max(max_bytes);
-        self.mem_sampled.store(true, .monotonic);
+        self.mem_min.min(bytes);
+        self.mem_max.max(bytes);
     }
 
     fn finishExecution(self: *Timing, started_ns: i64) void {
@@ -4902,8 +4895,9 @@ const MemMinCounter = base.ConcurrentU64;
 const MemMaxCounter = base.ConcurrentU64;
 const TimingCounter = base.ConcurrentU64;
 
-/// A sampled process footprint range, in bytes.
-pub const MemoryRange = struct { min: u64, max: u64 };
+/// The `mem_min` before any footprint sample: above every footprint, so
+/// folding a sample in with `min` keeps the sample.
+pub const unsampled_mem_min: u64 = std.math.maxInt(u64);
 
 /// Immutable compile-time finalization timings for progress reporting.
 pub const TimingSnapshot = struct {
@@ -4921,9 +4915,9 @@ pub const TimingSnapshot = struct {
     roots_declared: u64 = 0,
     roots_evaluated: u64 = 0,
     roots_completed_directly: u64 = 0,
-    /// The smallest and largest sampled process footprint, or null when no
-    /// sample landed.
-    mem: ?MemoryRange = null,
+    /// The smallest sampled process footprint, or `unsampled_mem_min`.
+    mem_min: u64 = unsampled_mem_min,
+    mem_max: u64 = 0,
     native_emission: NativeProcCompiler.Metrics = .{},
     steps_ns: [Timing.step_count]u64 = @splat(0),
     counts: [Timing.count_count]u64 = @splat(0),
@@ -4961,7 +4955,8 @@ test "shared lowering timing preserves full snapshots through aggregation" {
         .store_results_ns = 113,
         .unit_compose_ns = 117,
         .unit_load_ns = 119,
-        .mem = .{ .min = 127, .max = 131 },
+        .mem_min = 127,
+        .mem_max = 131,
         .native_emission = .{ .tasks_submitted = 3, .procedures_emitted = 5, .procedures_reused = 7, .peak_inflight_fragments = 2 },
     };
     var first = Timing.init(std.testing.io);
@@ -4977,8 +4972,8 @@ test "shared lowering timing preserves full snapshots through aggregation" {
     const result = second.snapshot();
     try std.testing.expectEqualDeep(expected_lowering.snapshot(), result.lowering);
     try std.testing.expectEqual(@as(u64, 202), result.total_ns);
-    try std.testing.expectEqual(@as(u64, 127), result.mem.?.min);
-    try std.testing.expectEqual(@as(u64, 131), result.mem.?.max);
+    try std.testing.expectEqual(@as(u64, 127), result.mem_min);
+    try std.testing.expectEqual(@as(u64, 131), result.mem_max);
     try std.testing.expectEqual(@as(u64, 6), result.native_emission.tasks_submitted);
     try std.testing.expectEqual(@as(u64, 10), result.native_emission.procedures_emitted);
     try std.testing.expectEqual(@as(u64, 14), result.native_emission.procedures_reused);

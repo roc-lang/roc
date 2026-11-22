@@ -559,12 +559,15 @@ const TestExecutor = struct {
     len: usize = 0,
     submitted: usize = 0,
     received: usize = 0,
-    /// Submissions accepted before every further one fails, or null to accept
-    /// every submission.
-    fail_after: ?usize = null,
+    /// Submissions accepted before every further one fails; `unlimited`
+    /// accepts every submission.
+    fail_after: usize = unlimited,
     fail_output: bool = false,
     fail_scratch: bool = false,
     lanes: usize,
+
+    /// A `fail_after` above every submission count.
+    const unlimited: usize = std.math.maxInt(usize);
 
     fn executor(self: *@This()) tasks.Executor {
         return .{ .context = self, .worker_count = self.lanes, .lane_count = self.lanes, .beginFn = begin, .submitFn = submit, .receiveFn = receive, .tryReceiveFn = tryReceive, .endFn = end };
@@ -574,7 +577,7 @@ const TestExecutor = struct {
     }
     fn submit(context: *anyopaque, _: *anyopaque, task: tasks.Task) Allocator.Error!void {
         const self: *@This() = @ptrCast(@alignCast(context));
-        if (self.fail_after) |limit| if (self.submitted == limit) return error.OutOfMemory;
+        if (self.submitted >= self.fail_after) return error.OutOfMemory;
         std.debug.assert(self.len < self.lanes);
         self.pending[self.len] = task;
         self.len += 1;
@@ -698,7 +701,7 @@ test "native driver drains submission output and scratch OOM before cleanup" {
             .allocator = a,
             .lane = tasks.LaneState.init(if (failure == 2) std.testing.failing_allocator else a),
             .lanes = 4,
-            .fail_after = if (failure == 0) 0 else null,
+            .fail_after = if (failure == 0) 0 else TestExecutor.unlimited,
             .fail_output = failure == 1,
             .fail_scratch = failure == 2,
         };

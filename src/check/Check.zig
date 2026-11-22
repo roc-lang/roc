@@ -1496,7 +1496,8 @@ local_type_references: std.ArrayListUnmanaged(LocalTypeReference) = .empty,
 local_type_reference_frame_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
 /// For each type declared in a function body that has a context (design.md
 /// "Body-Local Type Context"), the shallowest candidate depth of its
-/// variables. Final once `finalizeLocalTypeContexts` runs.
+/// variables, or `no_context_depth`. Final once `finalizeLocalTypeContexts`
+/// runs.
 local_type_contexts: collections.DenseMapUnmanaged(CIR.Statement.Idx, u32) = .empty,
 local_type_contexts_final: bool = false,
 /// For each nominal type declared in a function body that has a context, a
@@ -5356,6 +5357,11 @@ fn appendLocalProcedureDispatchRefs(self: *Self, dispatch_refs: *std.ArrayListUn
     }
 }
 
+/// The local type context depth of a type with no variable but platform
+/// abstract types: no shallower than any reference's enclosing frames, so it
+/// makes no candidate contextual.
+const no_context_depth: u32 = std.math.maxInt(u32);
+
 /// Settle what checking reads from body-local type contexts once every body
 /// is checked (design.md "Body-Local Type Context"): each recorded reference
 /// to a type with a context makes the candidates enclosing it from the
@@ -5374,15 +5380,13 @@ fn finalizeLocalTypeContexts(self: *Self) Allocator.Error!void {
         const context = self.localTypeContext(decl);
         // A platform abstract type is a variable of the module, not of an
         // enclosing function: it makes no candidate contextual and no
-        // binding owns it, so a type can never leave its scope. A context
-        // with no other variable records no depth.
-        var depth: ?u32 = null;
+        // binding owns it, so a type can never leave its scope.
+        var depth: u32 = no_context_depth;
         for (context) |rigid| {
             if (self.isPlatformAbstractTypeBinder(rigid)) continue;
-            const rigid_depth = self.rigidVarCandidateDepth(rigid);
-            depth = if (depth) |shallowest| @min(shallowest, rigid_depth) else rigid_depth;
+            depth = @min(depth, self.rigidVarCandidateDepth(rigid));
         }
-        if (depth) |shallowest| try self.local_type_contexts.put(gpa, decl, shallowest);
+        try self.local_type_contexts.put(gpa, decl, depth);
         if (self.cir.store.getStatement(decl) != .s_nominal_decl) continue;
         for (context) |rigid| {
             if (self.isPlatformAbstractTypeBinder(rigid)) continue;

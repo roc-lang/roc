@@ -5302,7 +5302,7 @@ const UniquenessComponentTask = struct {
                     .unresolved = self.component.unresolved,
                 },
                 .marks = try .init(persistent, self.component.stmts.len),
-                .marked_local = null,
+                .marked_local = .none,
                 .marked_uses = false,
                 .work = .empty,
             };
@@ -7257,7 +7257,7 @@ test "uniqueness workspace reuses topology and exact use queries across signatur
         if (round == 2) try testing.expect(actual.unique.isSet(@backingInt(taken)));
         // Evict the current generation's local, not the immutable answers.
         // Re-querying all recorded edges must not walk a single predecessor.
-        workspace.order.marked_local = null;
+        workspace.order.marked_local = .none;
         const visits = workspace.order.backward_visits;
         for (workspace.use_answers.entries.items) |entry| {
             try testing.expectEqual(entry.answer, try workspace.order.usesAfter(@backingInt(entry.stmt), entry.local));

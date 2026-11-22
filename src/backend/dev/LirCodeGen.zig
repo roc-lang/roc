@@ -827,9 +827,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub const CompiledProc = struct {
             /// The compiled LIR proc-spec id
             id: lir.LIR.LirProcSpecId,
-            /// Offset into the code buffer where this procedure starts, or
-            /// null while the procedure is registered but not yet emitted.
-            code_start: ?usize,
+            /// Offset into the code buffer where this procedure starts;
+            /// absent while the procedure is registered but not yet emitted.
+            code_start: collections.OptionalU32,
             /// Offset where this procedure ends
             code_end: usize,
             /// The symbol this procedure is bound to
@@ -13900,7 +13900,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (self.proc_registry.get(@backingInt(proc_id))) |compiled| return compiled;
             if (self.fragment_mode) return .{
                 .id = proc_id,
-                .code_start = null,
+                .code_start = .none,
                 .code_end = 0,
                 .name = proc.name,
                 .args = proc.args,
@@ -14265,7 +14265,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     try self.codegen.emitLoadImm(tail_call_delta_reg, delta);
                     const anchor = self.codegen.currentOffset();
-                    if (proc.code_start) |code_start| {
+                    if (proc.code_start.get()) |code_start| {
                         try self.emitAarch64PcRelAddress(tail_call_target_reg, .IP0, anchor, code_start);
                         try self.internal_addr_patches.append(self.allocator, .{ .instr_offset = anchor, .target_offset = code_start });
                         try self.code_refs.append(self.allocator, .{ .site = anchor, .form = .addr, .target = .{ .proc = proc.id } });
@@ -14300,7 +14300,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emit.movMemReg(.w64, .RSP, 0, .R10);
                         try self.codegen.emit.movRegReg(.w64, .RBP, .RAX);
                     }
-                    if (proc.code_start) |code_start| {
+                    if (proc.code_start.get()) |code_start| {
                         try self.emitInternalCodeAddress(.{ .proc = proc.id }, code_start, tail_call_target_reg);
                     } else {
                         try self.emitPendingProcAddress(call.proc, tail_call_target_reg);
@@ -14667,7 +14667,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 {
                     const proc_addr = try self.allocTempGeneral();
                     const proc = try self.compiledProcForId(proc_id);
-                    if (proc.code_start) |code_start|
+                    if (proc.code_start.get()) |code_start|
                         try self.emitInternalCodeAddress(.{ .proc = proc.id }, code_start, proc_addr)
                     else
                         try self.emitPendingProcAddress(proc_id, proc_addr);
@@ -14759,7 +14759,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const proc_addr = try self.allocTempGeneral();
             const proc = try self.compiledProcForId(proc_id);
-            if (proc.code_start) |code_start|
+            if (proc.code_start.get()) |code_start|
                 try self.emitInternalCodeAddress(.{ .proc = proc.id }, code_start, proc_addr)
             else
                 try self.emitPendingProcAddress(proc_id, proc_addr);
@@ -15268,7 +15268,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .callee_owns_block = true,
             });
             switch (callee) {
-                .compiled => |proc| if (proc.code_start) |code_start| {
+                .compiled => |proc| if (proc.code_start.get()) |code_start| {
                     try self.emitCallToOffset(.{ .proc = proc.id }, code_start);
                 } else {
                     try self.emitPendingCallToProc(proc.id);
@@ -18203,7 +18203,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitLinkedProcAddress(spec.identity, reg);
             } else {
                 const proc = try self.compiledProcForId(proc_id);
-                if (proc.code_start) |code_start|
+                if (proc.code_start.get()) |code_start|
                     try self.emitInternalCodeAddress(.{ .proc = proc.id }, code_start, reg)
                 else
                     try self.emitPendingProcAddress(proc_id, reg);
@@ -18825,7 +18825,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub fn patchPendingCalls(self: *Self) Allocator.Error!void {
             for (self.pending_calls.items) |pending| {
                 const proc = self.proc_registry.get(@backingInt(pending.target_proc)) orelse base.invariant("LIR/codegen invariant violated: pending call targets uncompiled proc {d}", .{@backingInt(pending.target_proc)});
-                try self.patchCallTarget(pending.call_site, proc.code_start orelse base.invariant("LIR/codegen invariant violated: pending call target proc {d} was never emitted", .{@backingInt(pending.target_proc)}));
+                try self.patchCallTarget(pending.call_site, proc.code_start.get() orelse base.invariant("LIR/codegen invariant violated: pending call target proc {d} was never emitted", .{@backingInt(pending.target_proc)}));
                 try self.code_refs.append(self.allocator, .{ .site = pending.call_site, .form = .call, .target = .{ .proc = pending.target_proc } });
             }
             self.pending_calls.clearRetainingCapacity();
@@ -18834,7 +18834,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub fn patchPendingProcAddrs(self: *Self) Allocator.Error!void {
             for (self.pending_proc_addrs.items) |pending| {
                 const proc = self.proc_registry.get(@backingInt(pending.target_proc)) orelse base.invariant("LIR/codegen invariant violated: pending proc address targets uncompiled proc {d}", .{@backingInt(pending.target_proc)});
-                self.patchInternalCodeAddress(pending.instr_offset, proc.code_start orelse base.invariant("LIR/codegen invariant violated: pending proc address target {d} was never emitted", .{@backingInt(pending.target_proc)}));
+                self.patchInternalCodeAddress(pending.instr_offset, proc.code_start.get() orelse base.invariant("LIR/codegen invariant violated: pending proc address target {d} was never emitted", .{@backingInt(pending.target_proc)}));
                 try self.code_refs.append(self.allocator, .{ .site = pending.instr_offset, .form = .addr, .target = .{ .proc = pending.target_proc } });
             }
             self.pending_proc_addrs.clearRetainingCapacity();
@@ -18988,7 +18988,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (self.proc_registry.contains(@backingInt(proc_id))) continue;
                 try self.proc_registry.put(@backingInt(proc_id), .{
                     .id = proc_id,
-                    .code_start = null,
+                    .code_start = .none,
                     .code_end = 0,
                     .name = proc.name,
                     .args = proc.args,
@@ -18998,7 +18998,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (proc_specs, 0..) |proc, i| {
                 if (proc.is_static_initializer) continue;
                 if (self.proc_registry.get(@intCast(i))) |registered| {
-                    if (registered.code_start != null) continue;
+                    if (registered.code_start != .none) continue;
                 }
                 if (proc.linked) {
                     base.invariant("Dev/codegen invariant violated: an image compiles procedure {d}, which another object of a link defines", .{i});
@@ -19090,7 +19090,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// already have been compiled by `compileAllProcSpecs`.
         pub fn compiledProcSymbol(self: *const Self, proc_id: lir.LIR.LirProcSpecId) ?CompiledProcSymbol {
             const proc = self.proc_registry.get(@backingInt(proc_id)) orelse return null;
-            const code_start = proc.code_start orelse return null;
+            const code_start = proc.code_start.get() orelse return null;
             return .{
                 .name = proc.name,
                 .code_start = code_start,
@@ -19194,7 +19194,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (self.proc_registry.getPtr(key)) |entry| {
                 entry.* = .{
                     .id = proc_id,
-                    .code_start = null,
+                    .code_start = .none,
                     .code_end = 0,
                     .name = proc.name,
                     .args = proc.args,
@@ -19202,7 +19202,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             } else {
                 try self.proc_registry.put(key, .{
                     .id = proc_id,
-                    .code_start = null,
+                    .code_start = .none,
                     .code_end = 0,
                     .name = proc.name,
                     .args = proc.args,
@@ -19414,7 +19414,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 // Update procedure registry with correct code_start (prologue_start)
                 if (self.proc_registry.getPtr(key)) |entry| {
-                    entry.code_start = prologue_start;
+                    entry.code_start = .some(std.math.cast(u32, prologue_start) orelse return error.OutOfMemory);
                     entry.code_end = self.codegen.currentOffset();
                     entry.prologue_size = @intCast(prologue_size);
                     entry.stack_alloc = actual_locals;
@@ -19463,7 +19463,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.vector_local_by_reg = saved_vector_local_by_reg;
             self.vector_local_mask = saved_vector_local_mask;
 
-            try self.registerAssembledProc(proc.identity, self.proc_registry.get(key).?.code_start.?);
+            try self.registerAssembledProc(proc.identity, self.proc_registry.get(key).?.code_start.get().?);
             try self.maybeDrainRcHelpers();
         }
 
@@ -21149,7 +21149,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                         break :blk .{ .general_reg = reg };
                                     }
                                     const proc = try self.compiledProcForId(proc_id);
-                                    if (proc.code_start) |code_start|
+                                    if (proc.code_start.get()) |code_start|
                                         try self.emitInternalCodeAddress(.{ .proc = proc.id }, code_start, reg)
                                     else
                                         try self.emitPendingProcAddress(proc_id, reg);
@@ -23002,7 +23002,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .pass_by_ptr = pbp_plan.slice,
                 .callee_owns_block = true,
             });
-            try self.emitCallToOffset(.{ .proc = compiled.id }, compiled.code_start.?);
+            try self.emitCallToOffset(.{ .proc = compiled.id }, compiled.code_start.get().?);
 
             if (placed_call.stack_spill_size > 0) {
                 try self.emitAddStackPtr(placed_call.stack_spill_size);
@@ -23056,7 +23056,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             incoming_stack_copies: *std.ArrayList(EntryStackCopy),
         ) Allocator.Error!void {
             const compiled = try self.compiledProcForId(entry_proc);
-            if (compiled.code_start == null) {
+            if (compiled.code_start == .none) {
                 base.invariant(
                     "entrypoint proc {d} was not compiled before wrapper generation",
                     .{@backingInt(entry_proc)},
@@ -23414,7 +23414,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             args_ptr_reg: GeneralReg,
         ) Allocator.Error!void {
             const compiled = try self.compiledProcForId(entry_proc);
-            if (compiled.code_start == null) {
+            if (compiled.code_start == .none) {
                 base.invariant(
                     "entrypoint proc {d} was not compiled before wrapper generation",
                     .{@backingInt(entry_proc)},
@@ -23565,7 +23565,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const frame_info = frame orelse base.invariant("LIR/codegen invariant violated: assembled proc region has no frame", .{});
                     try self.proc_registry.put(@backingInt(proc_id), .{
                         .id = proc_id,
-                        .code_start = start,
+                        .code_start = .some(std.math.cast(u32, start) orelse return error.OutOfMemory),
                         .code_end = end,
                         .name = proc.name,
                         .args = proc.args,
@@ -24266,7 +24266,7 @@ fn compileProcSpecsInOrder(cg: anytype, demand: []const lir.LIR.LirProcSpecId) A
         if (cg.proc_registry.contains(@backingInt(proc_id))) continue;
         try cg.proc_registry.put(@backingInt(proc_id), .{
             .id = proc_id,
-            .code_start = null,
+            .code_start = .none,
             .code_end = 0,
             .name = proc.name,
             .args = proc.args,
@@ -24275,7 +24275,7 @@ fn compileProcSpecsInOrder(cg: anytype, demand: []const lir.LIR.LirProcSpecId) A
     for (demand) |proc_id| {
         const proc = cg.store.getProcSpec(proc_id);
         if (cg.proc_registry.get(@backingInt(proc_id))) |registered| {
-            if (registered.code_start != null) continue;
+            if (registered.code_start != .none) continue;
         }
         std.debug.assert(!proc.external);
         switch (comptime isaOf(@TypeOf(cg.*).roc_target)) {

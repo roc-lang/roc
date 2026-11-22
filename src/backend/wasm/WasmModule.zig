@@ -2896,12 +2896,12 @@ fn traceLiveFunctions(
 ) Allocator.Error![]bool {
     const gpa = self.allocator;
 
-    // Build symbol_index → function_index lookup; null for a symbol that
+    // Build symbol_index → function_index lookup; absent for a symbol that
     // names no function, which a direct call site never reaches.
-    const sym_fn_indices = try gpa.alloc(?u32, self.linking.symbol_table.items.len);
+    const sym_fn_indices = try gpa.alloc(collections.OptionalU32, self.linking.symbol_table.items.len);
     defer gpa.free(sym_fn_indices);
     for (self.linking.symbol_table.items, 0..) |sym, i| {
-        sym_fn_indices[i] = if (sym.isFunction()) sym.index else null;
+        sym_fn_indices[i] = if (sym.isFunction()) .some(sym.index) else .none;
     }
 
     // Each direct call and indirect call site, by its offset in the code
@@ -2991,7 +2991,7 @@ fn traceLiveFunctions(
         while (site_index < call_sites.items.len and call_sites.items[site_index].offset < code_end) : (site_index += 1) {
             const site = call_sites.items[site_index];
             switch (site.kind) {
-                .direct => if (sym_fn_indices[site.target]) |callee| try tracer.mark(gpa, callee),
+                .direct => if (sym_fn_indices[site.target].get()) |callee| try tracer.mark(gpa, callee),
                 .indirect => {
                     const type_idx = site.target;
                     if ((try traced_indirect_types.getOrPut(type_idx)).found_existing) continue;

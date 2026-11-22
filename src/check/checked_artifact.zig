@@ -403,8 +403,7 @@ fn hashModuleSourceInputs(module_env: *const ModuleEnv) [32]u8 {
     if (staged) |map| {
         hasher.update(&.{1});
         hashU32(&hasher, map.header_lines);
-        hasher.update(&.{@intFromBool(map.footer_start != null)});
-        if (map.footer_start) |footer_start| hashU32(&hasher, footer_start);
+        hashU32(&hasher, map.footer_start);
     } else hasher.update(&.{0});
     hashU32(&hasher, @intCast(deps.len));
     for (deps) |dep| {

@@ -20064,7 +20064,7 @@ fn finishFrontEndPhaseExcluding(gpa: Allocator, config: reporting.ReportingConfi
         reporter.recordCompletedWithBreakdown(
             "Shared Lowering + Compile-Time Eval",
             timing.program_finalization_ns,
-            if (compile_time.mem) |mem| .{ .min = mem.min, .max = mem.max } else .{},
+            .{ .min = compile_time.mem_min, .max = compile_time.mem_max },
             measuredSubTimings(&subs_buf, &compileTimeEvaluationBreakdown(compile_time)),
         );
         // The shared program's Monotype sub-phases, as the runtime program's
@@ -20075,7 +20075,7 @@ fn finishFrontEndPhaseExcluding(gpa: Allocator, config: reporting.ReportingConfi
             reporter.recordCompletedWithBreakdown(
                 "Shared Monotype Lowering Detail",
                 compile_time.lowering.monotype_ns,
-                if (compile_time.mem) |mem| .{ .min = mem.min, .max = mem.max } else .{},
+                .{ .min = compile_time.mem_min, .max = compile_time.mem_max },
                 measuredSubTimings(&monotype_buf, rows[0..monotype_breakdown_rows]),
             );
         }

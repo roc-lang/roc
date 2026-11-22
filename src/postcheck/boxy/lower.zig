@@ -887,9 +887,6 @@ pub const DictionaryNode = struct {
     /// The requirement this entry resolves; null for a tree's root target.
     requirement: ?DictRequirement,
     kind: Kind,
-    /// The shallowest target on this entry's path that some back edge below
-    /// it returns to, if any.
-    reaches: collections.OptionalU32 = .none,
 
     pub const Kind = union(enum) {
         /// A requirement no method target resolves.
@@ -905,8 +902,6 @@ pub const DictionaryNode = struct {
         instance: TargetInstance,
         /// The node of each of `instance.requirements`.
         children: []const u32,
-        /// How many targets are above this one on its path.
-        depth: u32,
         /// Whether a back edge returns to this target.
         recursive: bool = false,
     };
@@ -3242,8 +3237,6 @@ pub const Program = struct {
             const done = walk.frames.pop().?;
             const entry = &walk.nodes.items[done.node];
             entry.kind.target.children = done.children.items;
-            entry.reaches = .of(done.reaches);
-            if (walk.frames.items.len > 0) if (done.reaches) |depth| walk.reach(depth);
         }
         return walk.nodes.items;
     }
@@ -3267,7 +3260,6 @@ pub const Program = struct {
         const Frame = struct {
             node: u32,
             next: usize = 0,
-            reaches: ?u32 = null,
             children: std.ArrayList(u32) = .empty,
         };
 
@@ -3283,11 +3275,6 @@ pub const Program = struct {
             return index;
         }
 
-        fn reach(self: *DictionaryWalk, depth: u32) void {
-            const top = &self.frames.items[self.frames.items.len - 1];
-            top.reaches = if (top.reaches) |reaches| @min(reaches, depth) else depth;
-        }
-
         fn visit(self: *DictionaryWalk, requirement: DictRequirement) Allocator.Error!void {
             const resolution = try self.program.resolveRequirement(requirement);
             switch (resolution) {
@@ -3301,16 +3288,13 @@ pub const Program = struct {
                 const on_path = &self.nodes.items[frame.node].kind.target;
                 if (on_path.target != target or !std.mem.eql(TypeId, on_path.instance.bound, instance.bound)) continue;
                 on_path.recursive = true;
-                const depth = on_path.depth;
-                _ = try self.add(.{ .requirement = requirement, .kind = .{ .back_edge = frame.node }, .reaches = .some(depth) });
-                return self.reach(depth);
+                _ = try self.add(.{ .requirement = requirement, .kind = .{ .back_edge = frame.node } });
+                return;
             }
-            const depth: u32 = @intCast(self.frames.items.len);
             const node = try self.add(.{ .requirement = requirement, .kind = .{ .target = .{
                 .target = target,
                 .instance = instance,
                 .children = &.{},
-                .depth = depth,
             } } });
             try self.frames.append(self.program.allocator, .{ .node = node });
         }
