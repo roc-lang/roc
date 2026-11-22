@@ -5804,6 +5804,24 @@ pub const CheckedTypeStore = struct {
         return self.view().nominalDeclarationForPayload(nominal);
     }
 
+    /// The arguments of a nominal application that a source type writes:
+    /// every argument but the trailing context arguments its declaration
+    /// takes (design.md "Body-Local Type Context"), which no printed type
+    /// shows. A type with no declaration backing takes no context.
+    pub fn nominalDeclaredArgs(
+        self: *const CheckedTypeStore,
+        nominal: CheckedNominalType,
+    ) []const CheckedTypeId {
+        if (nominal.representation == .opaque_without_backing) return nominal.args;
+        if (nominal.builtin) |builtin_nominal| {
+            if (!builtinNominalHasDeclarationBacking(builtin_nominal)) return nominal.args;
+        }
+        const declaration = self.nominalDeclarationForPayload(nominal) orelse {
+            checkedArtifactInvariant("checked nominal payload referenced a missing nominal declaration", .{});
+        };
+        return nominal.args[0 .. nominal.args.len - declaration.context_len];
+    }
+
     pub fn nominalBackingTemplateForPayload(
         self: *const CheckedTypeStore,
         nominal: CheckedNominalType,

@@ -1,6 +1,7 @@
 //! Regression test for issue #13347.
 
 const std = @import("std");
+const base = @import("base");
 const harness = @import("lower_to_lir_harness.zig");
 
 test "issue 13347: platform nominal backed by a for-clause abstract type checks and lowers" {
@@ -44,4 +45,113 @@ test "issue 13347: platform nominal backed by a for-clause abstract type checks 
     defer gpa.free(app_path);
 
     try harness.expectAppPathLowersToLir(app_path);
+}
+
+test "issue 13347: provided function returning a platform nominal over a for-clause abstract type lowers" {
+    // Repro for the follow-on in https://github.com/roc-lang/roc/issues/13347.
+    // The platform has an import, and its provided function returns a nominal
+    // whose backing mentions the for-clause abstract type. The app's inferred
+    // type for that binder must reach the nominal's backing when lowering.
+    const gpa = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.createDirPath(std.testing.io, "platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app.roc",
+        .data =
+        \\app [main] { pf: platform "./platform/main.roc" }
+        \\
+        \\Model : U64
+        \\
+        \\main = 0
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "platform/Extra.roc",
+        .data =
+        \\Extra := [Extra]
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {
+        \\        [Model : model] for main : model
+        \\    }
+        \\    exposes [Extra]
+        \\    packages {}
+        \\    provides { "entry": entry }
+        \\
+        \\import Extra
+        \\
+        \\S := { model : Model }
+        \\
+        \\entry : {} -> S
+        \\entry = |{}| { model: main }
+        ,
+    });
+
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "app.roc", gpa);
+    defer gpa.free(app_path);
+
+    try harness.expectAppPathLowersToLir(app_path);
+}
+
+/// Lower a platform whose declarations depend on the abstract type through
+/// an alias (`Inner`), beside a declared parameter (`S(a)`), and through
+/// another nominal (`T`).
+fn expectNestedPlatformNominalsLower(strategy: base.SpecializationStrategy) harness.LowerToLirHarnessError!void {
+    const gpa = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.createDirPath(std.testing.io, "platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app.roc",
+        .data =
+        \\app [main] { pf: platform "./platform/main.roc" }
+        \\
+        \\main : Str
+        \\main = "a string long enough to live on the heap"
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {
+        \\        [Model : model] for main : model
+        \\    }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "entry": entry }
+        \\
+        \\Inner : { model : Model }
+        \\
+        \\S(a) := { inner : Inner, extra : a }
+        \\
+        \\T := [Wrapped(S(U64))]
+        \\
+        \\wrap : U64 -> T
+        \\wrap = |extra| Wrapped({ inner: { model: main }, extra })
+        \\
+        \\entry : U64 -> T
+        \\entry = |n| wrap(n)
+        ,
+    });
+
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "app.roc", gpa);
+    defer gpa.free(app_path);
+
+    try harness.expectAppPathLowersToLirWithOptions(app_path, .{ .specialization_strategy = strategy });
+}
+
+test "issue 13347: platform nominals reach a for-clause abstract type through parameters, aliases and other nominals" {
+    try expectNestedPlatformNominalsLower(.lss);
+}
+
+test "issue 13347: platform nominals over a for-clause abstract type lower without specialization" {
+    try expectNestedPlatformNominalsLower(.boxy);
 }

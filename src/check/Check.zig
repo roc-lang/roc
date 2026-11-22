@@ -5375,11 +5375,18 @@ fn finalizeLocalTypeContexts(self: *Self) Allocator.Error!void {
     while (ranges.next()) |entry| {
         const decl = entry.key_ptr.*;
         const context = self.localTypeContext(decl);
+        // A platform abstract type is a variable of the module, not of an
+        // enclosing function: it makes no candidate contextual and no
+        // binding owns it, so a type can never leave its scope.
         var depth: u32 = std.math.maxInt(u32);
-        for (context) |rigid| depth = @min(depth, self.rigidVarCandidateDepth(rigid));
+        for (context) |rigid| {
+            if (self.isPlatformAbstractTypeBinder(rigid)) continue;
+            depth = @min(depth, self.rigidVarCandidateDepth(rigid));
+        }
         try self.local_type_contexts.put(gpa, decl, depth);
         if (self.cir.store.getStatement(decl) != .s_nominal_decl) continue;
         for (context) |rigid| {
+            if (self.isPlatformAbstractTypeBinder(rigid)) continue;
             try self.local_type_context_owners.append(gpa, .{ .decl = decl, .rigid = rigid, .owner = self.rigidVarOwner(rigid) });
         }
     }
@@ -5405,9 +5412,11 @@ fn typeDeclTemplateContext(self: *const Self, var_: Var) []const CIR.TypeAnno.Id
 }
 
 /// The context of a type declaration (design.md "Body-Local Type Context"):
-/// the rigid type variable annotations of enclosing functions its identity
-/// depends on, in source order. Empty for a module-level declaration and for
-/// a body-local one that depends on none.
+/// the rigid type variable annotations its identity depends on, in source
+/// order. They are those of enclosing functions and, in a platform, the
+/// binders of the platform abstract types it depends on (design.md "Platform
+/// Abstract Types In Type Contexts"). Empty for a declaration that depends
+/// on none, which every module-level declaration outside a platform is.
 fn localTypeContext(self: *const Self, decl: CIR.Statement.Idx) []const CIR.TypeAnno.Idx {
     std.debug.assert(self.local_type_contexts_decided);
     const range = self.local_type_context_ranges.get(decl) orelse return &.{};
@@ -5511,7 +5520,7 @@ fn decideLocalTypeContexts(self: *Self) Allocator.Error!void {
             .s_runtime_error,
             => continue,
         }
-        if (try self.isModuleTypeDecl(statement)) continue;
+        if (!self.moduleTypeDeclsTakeContext() and try self.isModuleTypeDecl(statement)) continue;
         try inputs.put(gpa, statement, .{});
     }
     if (inputs.count() == 0) return;
@@ -5561,13 +5570,18 @@ fn decideLocalTypeContexts(self: *Self) Allocator.Error!void {
             .s_runtime_error,
             => unreachable, // only type declarations were gathered above
         }
-        for (self.cir.method_defs.entries.items()) |method_entry| {
-            if (method_entry.key.owner != decl) continue;
-            if (self.cir.store.nodes.get(method_entry.value.type_node_idx).tag != .statement_decl) continue;
-            const method = self.cir.store.getStatement(@fromBackingInt(@intCast(@backingInt(method_entry.value.type_node_idx)))).s_decl;
-            try walked_bindings.put(gpa, method.pattern, {});
-            if (method.anno) |annotation| try work.append(gpa, .{ .annotation = annotation });
-            try work.append(gpa, .{ .expr = method.expr });
+        // A module-level declaration's only part is its annotation: its
+        // methods are top-level procedures, whose own types name the
+        // platform abstract types they depend on.
+        if (!try self.isModuleTypeDecl(decl)) {
+            for (self.cir.method_defs.entries.items()) |method_entry| {
+                if (method_entry.key.owner != decl) continue;
+                if (self.cir.store.nodes.get(method_entry.value.type_node_idx).tag != .statement_decl) continue;
+                const method = self.cir.store.getStatement(@fromBackingInt(@intCast(@backingInt(method_entry.value.type_node_idx)))).s_decl;
+                try walked_bindings.put(gpa, method.pattern, {});
+                if (method.anno) |annotation| try work.append(gpa, .{ .annotation = annotation });
+                try work.append(gpa, .{ .expr = method.expr });
+            }
         }
         while (work.pop()) |item| try self.walkLocalTypeContextItem(item, decl, input, &work, &walked_bindings, &scratch_patterns);
     }
@@ -5826,8 +5840,13 @@ fn noteLocalTypeContextDecl(
     decl: CIR.Statement.Idx,
     input: *LocalTypeContextInputs,
 ) Allocator.Error!void {
+    // Naming a platform abstract type looks up its binder.
+    if (self.platformAbstractTypeBinder(named)) |binder| {
+        try input.lookups.append(self.gpa, binder);
+        return;
+    }
     if (named == decl) return;
-    if (try self.isModuleTypeDecl(named)) return;
+    if (!self.moduleTypeDeclsTakeContext() and try self.isModuleTypeDecl(named)) return;
     try input.named.append(self.gpa, named);
 }
 
@@ -6063,6 +6082,9 @@ fn probeContextVariable(ctx: *const anyopaque, var_: Var) ?Var {
     for (self.local_type_context_rigids.items) |rigid| {
         const variable = ModuleEnv.varFrom(rigid);
         if (self.types.resolveVar(variable).var_ != resolved.var_) continue;
+        // A platform abstract type is in scope in the whole module, so a
+        // relation against it is never an escape.
+        if (self.isPlatformAbstractTypeBinder(rigid)) return null;
         // Inside the body of the binding that owns it, the variable is that
         // body's own, and a relation against it is the body's.
         if (!self.checked_polymorphic_bindings.contains(self.rigidVarOwner(rigid))) return null;
@@ -13351,6 +13373,12 @@ fn instantiateVarHelpFromScheme(
     // function generalizes its rigid variable, an instance copies it like
     // any other generalized variable.
     for (self.typeDeclTemplateContext(var_to_instantiate)) |rigid| {
+        // A platform abstract type is a rigid of the module's outermost
+        // rank from before any template is generated, so an instance
+        // shares it by rank. It is no variable of the instantiating rank to
+        // register there: a declaration body instantiates at the
+        // generalized rank, below it.
+        if (self.isPlatformAbstractTypeBinder(rigid)) continue;
         const context = self.types.resolveVar(ModuleEnv.varFrom(rigid));
         if (context.desc.content == .rigid and context.desc.rank == .generalized) continue;
         try instantiator.var_map.put(context.var_, context.var_);
@@ -22283,6 +22311,34 @@ fn isForClauseAliasStatement(self: *Self, stmt_idx: CIR.Statement.Idx) bool {
     return false;
 }
 
+/// The rigid binder annotation of the platform abstract type that the
+/// for-clause alias statement `stmt_idx` declares (`model` for
+/// `[Model : model]`), or null when `stmt_idx` is no such statement.
+fn platformAbstractTypeBinder(self: *const Self, stmt_idx: CIR.Statement.Idx) ?CIR.TypeAnno.Idx {
+    for (self.cir.for_clause_aliases.items()) |for_clause| {
+        if (stmt_idx == for_clause.alias_stmt_idx) {
+            return self.cir.store.getStatement(stmt_idx).s_alias_decl.anno;
+        }
+    }
+    return null;
+}
+
+/// Whether `rigid` is the binder annotation of a platform abstract type.
+fn isPlatformAbstractTypeBinder(self: *const Self, rigid: CIR.TypeAnno.Idx) bool {
+    for (self.cir.for_clause_aliases.items()) |for_clause| {
+        if (self.cir.store.getStatement(for_clause.alias_stmt_idx).s_alias_decl.anno == rigid) return true;
+    }
+    return false;
+}
+
+/// Whether this module's module-level type declarations can have a context
+/// (design.md "Platform Abstract Types In Type Contexts"): only a platform
+/// whose requires clause binds an abstract type has a variable for one to
+/// depend on.
+fn moduleTypeDeclsTakeContext(self: *const Self) bool {
+    return self.cir.for_clause_aliases.len() != 0;
+}
+
 fn generateForClauseAliasApplication(
     self: *Self,
     anno_var: Var,
@@ -25427,17 +25483,14 @@ fn predeclareNominalDecl(
     const header_args = self.cir.store.sliceTypeAnnos(header.args);
     const header_vars = try self.generateHeaderVars(header_args, env);
     const backing_var: Var = ModuleEnv.varFrom(nominal.anno);
+    const decl_idx: CIR.Statement.Idx = @fromBackingInt(@backingInt(decl_var));
 
+    // A platform's module-level declaration lists the platform abstract
+    // types it depends on after its header's variables (design.md "Platform
+    // Abstract Types In Type Contexts").
     try self.unifyWithTargetRank(
         decl_var,
-        try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
-            .{ .ident_idx = header.relative_name },
-            header_vars,
-            self.cir.selfModuleIdentity(),
-            @backingInt(decl_var),
-            nominal.is_opaque,
-            self.cir.module_role == .builtin,
-        ),
+        try self.mkSelfNominalApplication(decl_idx, header.relative_name, header_vars, nominal.is_opaque),
         env,
     );
 
@@ -25445,7 +25498,7 @@ fn predeclareNominalDecl(
         @backingInt(decl_var),
         header.relative_name,
         header_vars,
-        &.{},
+        self.localTypeContext(decl_idx),
         backing_var,
         nominal.is_opaque,
     );
@@ -28998,9 +29051,10 @@ fn beginNominalDeclBody(
     const header = self.cir.store.getTypeHeader(nominal.header);
     const header_args = self.cir.store.sliceTypeAnnos(header.args);
 
-    // Next, generate the provided arg types and build the map of rigid variables in the header
+    // Next, generate the provided arg types and build the map of rigid variables in the header.
+    // A predeclared shell lists its context variables after its header's.
     const predeclared_header_vars = self.predeclaredNominalArgs(decl_var);
-    const header_vars = if (predeclared_header_vars) |vars| vars else try self.generateHeaderVars(header_args, env);
+    const header_vars = if (predeclared_header_vars) |vars| vars[0..header_args.len] else try self.generateHeaderVars(header_args, env);
     for (header_args) |header_arg_idx| {
         if (self.cir.store.getTypeAnno(header_arg_idx) == .malformed) {
             self.markTypeDeclInvalid(decl_idx);

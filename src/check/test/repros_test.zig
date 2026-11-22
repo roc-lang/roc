@@ -4,6 +4,70 @@ const std = @import("std");
 const CIR = @import("can").CIR;
 const TestEnv = @import("./TestEnv.zig");
 
+// https://github.com/roc-lang/roc/issues/13347
+test "check - issue 13347 - a platform nominal over the platform abstract type prints without its context" {
+    var env = try TestEnv.init("Platform",
+        \\platform ""
+        \\    requires { [Model : model] for main : model }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "entry": entry }
+        \\
+        \\S := { model : Model }
+        \\
+        \\entry : {} -> S
+        \\entry = |{}| { model: main }
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+    try env.assertDefType("entry", "{} -> S");
+}
+
+test "check - issue 13347 - a platform nominal's declared parameter stays independent of its context" {
+    var env = try TestEnv.init("Platform",
+        \\platform ""
+        \\    requires { [Model : model] for main : model }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "entry": entry }
+        \\
+        \\P(a) := { model : Model, extra : a }
+        \\
+        \\with_num : P(U64)
+        \\with_num = { model: main, extra: 1 }
+        \\
+        \\with_str : P(Str)
+        \\with_str = { model: main, extra: "s" }
+        \\
+        \\entry : {} -> P(Str)
+        \\entry = |{}| with_str
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+    try env.assertDefType("with_num", "P(U64)");
+    try env.assertDefType("with_str", "P(Str)");
+}
+
+test "check - issue 13347 - a platform nominal's field of the platform abstract type is not another type" {
+    var env = try TestEnv.init("Platform",
+        \\platform ""
+        \\    requires { [Model : model] for main : model }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "entry": entry }
+        \\
+        \\S := { model : Model }
+        \\
+        \\f : S -> Str
+        \\f = |s| s.model
+        \\
+        \\entry : U64 -> U64
+        \\entry = |n| n
+    );
+    defer env.deinit();
+    try env.assertOneTypeError("Type Mismatch");
+}
+
 // https://github.com/roc-lang/roc/issues/13263
 test "check - repro - issue 13263 - chained aliases preserve the platform abstract type" {
     var env = try TestEnv.init("Platform",
