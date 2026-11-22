@@ -569,6 +569,9 @@ pub const NumeralLiteral = extern struct {
 /// checking settles to decide how each callee dispatch requirement was
 /// satisfied at this site.
 pub const SchemeUseRecord = extern struct {
+    /// The node the scheme is used at, or zero, the node store's reserved
+    /// node, for a `dispatch_target` or `where_method_use` edge that no
+    /// source node introduced; such an edge is identified by `slot_data`.
     node_idx: u32,
     /// `Slot`—distinguishes several schemes instantiated at one node (a value
     /// use, an expression-position function stored as a value, the target of
@@ -5180,6 +5183,8 @@ fn storeAdder(comptime name: []const u8) fn (*Self, StoreValue(name), Region) st
     return struct {
         fn add(self: *Self, value: StoreValue(name), region: Region) std.mem.Allocator.Error!StoreIdx(name) {
             const idx = try @field(NodeStore, name)(&self.store, value, region);
+            // Index zero is the store's reserved node.
+            std.debug.assert(@backingInt(idx) != 0);
             self.debugAssertArraysInSync();
             return idx;
         }
@@ -5190,6 +5195,7 @@ fn storeAdder(comptime name: []const u8) fn (*Self, StoreValue(name), Region) st
 /// This function asserts that the nodes and regions are in sync.
 pub fn addDiagnostic(self: *Self, reason: CIR.Diagnostic) std.mem.Allocator.Error!CIR.Diagnostic.Idx {
     const expr_idx = try self.store.addDiagnostic(reason);
+    std.debug.assert(@backingInt(expr_idx) != 0);
     self.debugAssertArraysInSync();
     return expr_idx;
 }

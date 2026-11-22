@@ -6947,6 +6947,20 @@ Checked CIR may contain source-level forms such as static-dispatch calls,
 method equality, type-dispatch calls, and source `for` loops because those are
 part of the checked source module.
 
+Index zero of a module's `NodeStore` is a reserved node (`Node.Tag.reserved`,
+the tag whose value is zero, with an empty region) that a fresh store writes
+before issuing any other node. No statement, expression, pattern, annotation
+or diagnostic is ever stored there, and node indices are otherwise unbiased
+(Optional-index columns, above). A zero in a field holding a node index
+therefore means "absent": `TypeAnno.Idx.placeholder` for a type declaration
+whose annotation a forward reference has not filled yet, a record's missing
+extension, a match branch's missing guard, a definition's missing annotation,
+and the node of a scheme use that no source node introduced. Such fields
+encode and decode through `collections.ZeroSentinelId` where the in-memory
+form is an optional, which asserts that a present index is nonzero. Every
+walk over a store's nodes starts at `Node.first_idx`. Clones and deserialized
+stores carry the reserved node with the rest of their nodes.
+
 Rejected code is replaced in place with a runtime error node: an expression,
 statement, or literal pattern checking rejects, and a read of a `var` before it
 is initialized, which canonicalization rejects. Every later stage reads the

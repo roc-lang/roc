@@ -269,7 +269,7 @@ run = |num| {
 									(e-num (value "0"))))
 							(e-tag (name "Ok")
 								(args
-									(e-call (constraint-fn-var 398)
+									(e-call (constraint-fn-var 399)
 										(e-lookup-external
 											(builtin))
 										(e-lookup-local
@@ -277,14 +277,14 @@ run = |num| {
 										(e-string
 											(e-literal (string ""))))))))
 					(if-else
-						(e-call (constraint-fn-var 409)
+						(e-call (constraint-fn-var 410)
 							(e-lookup-local
 								(p-assign (ident "mutual_recursive_methods_underscore_hole_pinned_mismatch_issue_11605.Client.second")))
 							(e-lookup-local
 								(p-assign (ident "client")))
 							(e-lookup-local
 								(p-assign (ident "items")))
-							(e-dispatch-call (method "minus") (constraint-fn-var 407)
+							(e-dispatch-call (method "minus") (constraint-fn-var 408)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "n"))))
@@ -310,7 +310,7 @@ run = |num| {
 				(p-assign (ident "client"))
 				(p-assign (ident "items"))
 				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 428)
+			(e-call (constraint-fn-var 429)
 				(e-lookup-local
 					(p-assign (ident "mutual_recursive_methods_underscore_hole_pinned_mismatch_issue_11605.Client.first")))
 				(e-lookup-local

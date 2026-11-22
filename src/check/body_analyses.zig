@@ -397,7 +397,7 @@ pub const ModuleIndex = struct {
             // definition reaches; lowering materializes each at every
             // construction site that omits its field.
             const node_count: u32 = @intCast(store.nodes.len());
-            var raw: u32 = 0;
+            var raw: u32 = CIR.Node.first_idx;
             while (raw < node_count) : (raw += 1) {
                 const default_raw = fieldDefault(store, raw) orelse continue;
                 try self.defaults.append(self.allocator, default_raw);
@@ -881,7 +881,7 @@ pub fn defaultExprCount(allocator: Allocator, env: *const ModuleEnv) Allocator.E
     var defaults: std.ArrayList(u32) = .empty;
     defer defaults.deinit(allocator);
     const node_count: u32 = @intCast(env.store.nodes.len());
-    var raw: u32 = 0;
+    var raw: u32 = CIR.Node.first_idx;
     while (raw < node_count) : (raw += 1) {
         try defaults.append(allocator, fieldDefault(&env.store, raw) orelse continue);
     }

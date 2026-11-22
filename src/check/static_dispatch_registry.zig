@@ -1853,7 +1853,7 @@ pub const StaticDispatchPlanTable = struct {
         var constraint_index = try StaticDispatchConstraintIndex.fromModule(allocator, module, bodies);
         defer constraint_index.deinit(allocator);
 
-        var node_idx: u32 = 0;
+        var node_idx: u32 = CIR.Node.first_idx;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const tag = module.nodeTag(@fromBackingInt(@intCast(node_idx)));
             if (tag != .expr_dispatch_call and
@@ -2532,7 +2532,7 @@ const StaticDispatchConstraintIndex = struct {
         var live_fn_vars: collections.DenseMapUnmanaged(Var, void) = .empty;
         defer live_fn_vars.deinit(allocator);
 
-        var node_idx: u32 = 0;
+        var node_idx: u32 = CIR.Node.first_idx;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
             const node_tag = module.nodeTag(@fromBackingInt(@intCast(node_idx)));

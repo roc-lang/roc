@@ -2741,6 +2741,10 @@ const InstantiationEvidence = union(enum) {
         record: *?u32,
     },
     dispatch_target: struct {
+        /// The node the edge is recorded at: the expression that introduced
+        /// the constraint or the pattern of the definition it selects. Zero,
+        /// the node store's reserved node, when no source node introduced
+        /// the edge, which `constraint_fn_var` then identifies alone.
         node_idx: u32,
         constraint_fn_var: Var,
         /// Derived-shape validation preserves a shared receiver's original
@@ -7325,7 +7329,7 @@ fn localDeclExprForPattern(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Erro
 /// The `s_decl` statement binding `pattern`.
 fn localDeclForPattern(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!?CIR.Statement.Idx {
     if (!self.local_decls_indexed) {
-        var raw_node: u32 = 0;
+        var raw_node: u32 = CIR.Node.first_idx;
         const node_count: u32 = @intCast(self.cir.store.nodes.len());
         while (raw_node < node_count) : (raw_node += 1) {
             if (self.cir.store.nodes.get(@fromBackingInt(@intCast(raw_node))).tag != .statement_decl) continue;
@@ -8304,7 +8308,7 @@ const HoistSelectionTestState = struct {
 };
 
 fn firstHoistSelectionTestExpr(checker: *Self) error{ExpectedHoistSelectionTestExpr}!CIR.Expr.Idx {
-    var raw_node_idx: u32 = 0;
+    var raw_node_idx: u32 = CIR.Node.first_idx;
     while (raw_node_idx < checker.cir.store.nodes.len()) : (raw_node_idx += 1) {
         const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         if (!isExprNodeTag(checker.cir.store.nodes.get(node_idx).tag)) continue;
@@ -10034,7 +10038,7 @@ fn validateSettledValueRows(self: *Self, env: *Env, walk: *SettledWalk) std.mem.
     const seeder = SettledRootSeeder{ .gpa = self.gpa, .seeds = &seeds };
     // Seeding reads the node store without changing it, so the tag column
     // stays valid throughout.
-    for (self.cir.store.nodes.field(.tag), 0..) |tag, node_slot| {
+    for (self.cir.store.nodes.field(.tag)[CIR.Node.first_idx..], CIR.Node.first_idx..) |tag, node_slot| {
         const raw_node_idx: u32 = @intCast(node_slot);
         if (isExprNodeTag(tag)) {
             const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node_idx));
@@ -10964,7 +10968,7 @@ fn appendRuntimeTypeVars(self: *Self, root: Var, out: *std.ArrayListUnmanaged(Va
 fn infiniteTypeSourceVar(self: *Self, cycle: SettledCycle, err_var: Var) Var {
     const head = self.types.resolveVar(cycle.head).var_;
     const reported = self.types.resolveVar(err_var).var_;
-    for (self.cir.store.nodes.field(.tag), 0..) |tag, node_slot| {
+    for (self.cir.store.nodes.field(.tag)[CIR.Node.first_idx..], CIR.Node.first_idx..) |tag, node_slot| {
         if (!isExprNodeTag(tag) and !isPatternNodeTag(tag)) continue;
         const node_var: Var = @fromBackingInt(@intCast(node_slot));
         const resolved = self.types.resolveVar(node_var).var_;
@@ -16113,7 +16117,7 @@ fn recordErroneousNodes(self: *Self) Allocator.Error!void {
     }
     var erroneous: std.ArrayList(u32) = .empty;
     defer erroneous.deinit(self.gpa);
-    var raw_node: u32 = 0;
+    var raw_node: u32 = CIR.Node.first_idx;
     const node_count: u32 = @intCast(store.nodes.len());
     while (raw_node < node_count) : (raw_node += 1) {
         const node: CIR.Node.Idx = @fromBackingInt(raw_node);
@@ -20472,7 +20476,7 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
             primary = self.getRegionAt(verdict.var_);
         }
     } else {
-        var raw_node_idx: u32 = 0;
+        var raw_node_idx: u32 = CIR.Node.first_idx;
         while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
             const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
             if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
@@ -20852,7 +20856,7 @@ fn applyCreationAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
     // verdict receiver. Dedup by resolved var id (using the set shared with
     // the instantiation verdicts) so a value flowing through multiple
     // expressions—or already reported per-instantiation—is reported once.
-    var raw_node_idx: u32 = 0;
+    var raw_node_idx: u32 = CIR.Node.first_idx;
     while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
         const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
@@ -66640,8 +66644,11 @@ pub fn createImportMapping(
             inline for (CIR.builtin_type_specs) |spec| {
                 const stmt_idx: CIR.Statement.Idx = @field(indices, spec.type_field);
 
-                // Skip invalid statement indices (index 0 is typically invalid/sentinel)
-                if (@backingInt(stmt_idx) != 0) {
+                // Every builtin index names a statement of the Builtin
+                // module (`validateBuiltinIndices`), never its node store's
+                // reserved node.
+                std.debug.assert(@backingInt(stmt_idx) != 0);
+                {
                     const stmt = builtin_env.store.getStatement(stmt_idx);
                     const header_idx = switch (stmt) {
                         .s_nominal_decl => |decl| decl.header,
