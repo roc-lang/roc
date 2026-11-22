@@ -697,7 +697,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         proc_has_dyn_region: bool = false,
 
         /// Where the proc being compiled keeps its tail carry, when it has
-        /// one (see `procCarriesTailArgs`).
+        /// one (`LirProcSpec.takesTailCarry`).
         carry_slot: ?i32 = null,
         /// The stack slot holding the address of the current procedure's
         /// pending cell (`LirProcSpec.uses_pending_cell`).
@@ -13989,7 +13989,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 "Dev/codegen invariant violated: call to proc {d} passed {d} args but callee expects {d}",
                 .{ @backingInt(proc_id), arg_refs.len, param_refs.len },
             );
-            const carries = procCarriesTailArgs(self.store, callee);
+            const carries = callee.takesTailCarry();
             const takes_pending = callee.takesPendingCell();
             const count = arg_refs.len + @intFromBool(callee.dyn_result != .none) + @intFromBool(carries) + @intFromBool(takes_pending);
             const arg_locs = try self.allocator.alloc(ValueLocation, count);
@@ -14100,7 +14100,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // procedure's own carry, which they may have lived in, is released.
             const moved = try self.allocator.alloc(i32, arg_refs.len);
             defer self.allocator.free(moved);
-            const carry_arg: ?i32 = if (procCarriesTailArgs(self.store, proc_spec))
+            const carry_arg: ?i32 = if (proc_spec.takesTailCarry())
                 try self.emitTailCarry(arg_refs, param_refs, moved)
             else
                 null;
@@ -19276,7 +19276,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Bind parameters to argument registers. Large returns use a hidden
                 // first argument register for the return buffer.
                 const initial_param_reg_idx: u8 = if (needs_ret_ptr) 1 else 0;
-                try self.bindProcParams(proc.args, initial_param_reg_idx, proc.dyn_result.get(), procCarriesTailArgs(self.store, proc), proc.takesPendingCell());
+                try self.bindProcParams(proc.args, initial_param_reg_idx, proc.dyn_result.get(), proc.takesTailCarry(), proc.takesPendingCell());
             }
             if (proc.uses_pending_cell and !proc.takesPendingCell()) try self.emitOwnPendingCell(invocation_slot);
 
@@ -19466,21 +19466,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             try self.registerAssembledProc(proc.identity, self.proc_registry.get(key).?.code_start);
             try self.maybeDrainRcHelpers();
-        }
-
-        /// Whether `proc` takes a tail carry: a last hidden parameter holding
-        /// the storage a frame-replacing call moved its dynamic arguments
-        /// into, because their bytes lived in the frame it replaced. Such a
-        /// procedure has a dynamic parameter and can receive frame-replacing
-        /// calls; it releases its carry when it returns or replaces its own
-        /// frame. Every other caller passes none.
-        fn procCarriesTailArgs(store: *const LirStore, proc: LirProcSpec) bool {
-            if (proc.abi != .roc or proc.tail_group == .none) return false;
-            const params = store.getLocalSpan(proc.args);
-            for (0..params.len) |i| {
-                if (store.getLocal(GuardedList.at(params, i)).dyn != null) return true;
-            }
-            return false;
         }
 
         /// Release this procedure's tail carry, if it has one.
@@ -20309,7 +20294,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             trailing: ?LocalId,
             /// Whether a hidden parameter follows: the tail carry of a
             /// procedure that receives frame-replacing calls with dynamic
-            /// arguments (see `procCarriesTailArgs`).
+            /// arguments (`LirProcSpec.takesTailCarry`).
             carry: bool,
             /// Whether a last hidden parameter follows: the caller's pending
             /// cell (`LirProcSpec.takesPendingCell`).

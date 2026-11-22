@@ -2310,11 +2310,20 @@ fn qualifierTypePath(
     return self.visibleParserTypePathForSegments(self.scratch_idents.sliceFromStart(top));
 }
 
+/// Whether `key.item` is declared in an associated block that gets
+/// canonicalized: one whose owner, and every owner above it, is the type
+/// declaration selected for its path. A redeclared type's associated block is
+/// never canonicalized, so its items must not satisfy lookups.
 fn associatedValueExists(
-    self: *const Self,
+    self: *Self,
     key: AST.DeclIndex.AssocValue,
-) bool {
-    return self.parse_ir.decl_index.hasAssocValueDecl(key.owner, key.item);
+) std.mem.Allocator.Error!bool {
+    var iter = self.parse_ir.decl_index.assocValueDecls(key.owner, key.item).iter();
+    while (iter.next()) |decl_idx| {
+        const decl = self.parse_ir.decl_index.decls.items[@backingInt(decl_idx)];
+        if (try self.parserScopeCanSupplyForwardTypeDecl(decl.scope)) return true;
+    }
+    return false;
 }
 
 fn associatedOwnerIsModuleVisible(
@@ -2364,7 +2373,7 @@ fn lookupOrCreateAssocValuePattern(
         .owner = owner_path,
         .item = item_ident,
     };
-    if (!self.associatedValueExists(key)) return null;
+    if (!try self.associatedValueExists(key)) return null;
     return try self.getOrCreateAssocForwardPattern(
         key,
         pattern_ident,

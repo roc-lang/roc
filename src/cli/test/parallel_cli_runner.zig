@@ -2814,6 +2814,9 @@ const echo_cases = [_]CliCase{
     // anchor on the shallowest unit-carrying lender, which a join body can
     // release); re-enable the dev entry when that lands.
 
+    .{ .id = 0, .suite = .echo, .name = "issue 13340: a call from another module to a generic function in a cycle of tail calls passes every parameter it reads (dev, --specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=no" }, .roc_file = "test/echo/issue_13340_imported_tail_group_call.roc", .stdout_exact = "even 36 0\n", .not_contains = &no_panic_or_invariant_needles } } },
+    .{ .id = 0, .suite = .echo, .name = "issue 13340: a call from another module to a generic function in a cycle of tail calls passes every parameter it reads (dev, --specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=yes" }, .roc_file = "test/echo/issue_13340_imported_tail_group_call.roc", .stdout_exact = "even 36 0\n", .not_contains = &no_panic_or_invariant_needles } } },
+    .{ .id = 0, .suite = .echo, .name = "issue 13340: a call from another module to a generic function in a cycle of tail calls passes every parameter it reads (interpreter, --specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache", "--specialize=no" }, .roc_file = "test/echo/issue_13340_imported_tail_group_call.roc", .stdout_exact = "even 36 0\n", .not_contains = &no_panic_or_invariant_needles } } },
 };
 
 // Glue suite cases

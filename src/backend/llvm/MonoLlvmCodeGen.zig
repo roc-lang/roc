@@ -361,7 +361,7 @@ pub const MonoLlvmCodeGen = struct {
     /// result is dynamic (`LirProcSpec.dyn_result`).
     current_dyn_result: ?LocalId = null,
     /// The tail carry the procedure being compiled receives, when it takes
-    /// one (`procCarriesTailArgs`).
+    /// one (`LirProcSpec.takesTailCarry`).
     current_carry: ?LlvmBuilder.Value = null,
     /// The frame locals of the procedure being compiled, whose `frame`
     /// dynamic locals `frame_alloc` places.
@@ -2006,21 +2006,6 @@ pub const MonoLlvmCodeGen = struct {
         return if (proc.dyn_result != .none) .zst else proc.ret_layout;
     }
 
-    /// Whether `proc` takes a tail carry: a hidden parameter after its
-    /// arguments holding the storage a frame-replacing call moved its dynamic
-    /// arguments into, because their bytes lived in the frame it replaced.
-    /// Such a procedure has a dynamic parameter and can receive
-    /// frame-replacing calls; it releases its carry when it returns or
-    /// replaces its own frame. Every other caller passes none.
-    fn procCarriesTailArgs(store: *const lir.LirStore, proc: LirProcSpec) bool {
-        if (proc.abi != .roc or proc.tail_group == .none) return false;
-        const params = store.getLocalSpan(proc.args);
-        for (0..params.len) |i| {
-            if (store.getLocal(GuardedList.at(params, i)).dyn != null) return true;
-        }
-        return false;
-    }
-
     /// The signature of a procedure's register-passing function: its C-ABI
     /// classification of arguments and result. The classification only decides how a
     /// value splits into scalars; `fastCallConv` leaves register assignment to
@@ -2033,7 +2018,7 @@ pub const MonoLlvmCodeGen = struct {
         /// Parameter index of the address of the caller's result storage,
         /// for a procedure whose result is dynamic (`LirProcSpec.dyn_result`).
         dyn_result_index: ?u32,
-        /// Parameter index of the tail carry (`procCarriesTailArgs`).
+        /// Parameter index of the tail carry (`LirProcSpec.takesTailCarry`).
         carry_index: ?u32,
         /// Parameter index of the caller's pending cell
         /// (`LirProcSpec.takesPendingCell`).
@@ -2096,7 +2081,7 @@ pub const MonoLlvmCodeGen = struct {
             cursor += 1;
             break :blk cursor - 1;
         } else null;
-        const carry_index: ?u32 = if (procCarriesTailArgs(self.store, proc)) blk: {
+        const carry_index: ?u32 = if (proc.takesTailCarry()) blk: {
             cursor += 1;
             break :blk cursor - 1;
         } else null;
@@ -2140,7 +2125,7 @@ pub const MonoLlvmCodeGen = struct {
         // The dynamic result address, the tail carry, the pending cell, and
         // the storage pointer follow the arguments, so their registers are
         // reserved up front.
-        const trailing_pointers: u32 = @as(u32, @intFromBool(proc.dyn_result != .none)) + @intFromBool(procCarriesTailArgs(self.store, proc)) + @intFromBool(proc.takesPendingCell());
+        const trailing_pointers: u32 = @as(u32, @intFromBool(proc.dyn_result != .none)) + @intFromBool(proc.takesTailCarry()) + @intFromBool(proc.takesPendingCell());
         if (self.usesTailDrivers()) {
             // Only a signature past the wasm parameter limit takes a storage
             // pointer, which then counts against the limit too.
@@ -2471,7 +2456,7 @@ pub const MonoLlvmCodeGen = struct {
         const carry_offset = self.tailArgOffsets(arg_layouts, offsets);
         const moved = try self.allocator.alloc(LlvmBuilder.Value, arg_locals.len);
         defer self.allocator.free(moved);
-        const carry: ?LlvmBuilder.Value = if (procCarriesTailArgs(self.store, proc)) try self.emitTailCarry(proc, arg_locals, moved) else null;
+        const carry: ?LlvmBuilder.Value = if (proc.takesTailCarry()) try self.emitTailCarry(proc, arg_locals, moved) else null;
         const param_locals = self.store.getLocalSpan(proc.args);
         for (arg_layouts, offsets, 0..) |arg_layout, offset, i| {
             const dst = try self.offsetPtr(self.tail_args_ptr.?, offset);

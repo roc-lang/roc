@@ -34140,6 +34140,10 @@ fn resumeTupleAccessCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck
         return .{ .child = .{ .expr = tuple_access.tuple, .expected = frame.nested_expected.forStatement() } };
     }
 
+    // An erroneous tuple crashes before any item is read, so the access
+    // relates nothing to it.
+    if (try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, &.{tuple_access.tuple})) return .done;
+
     const tuple_var = ModuleEnv.varFrom(tuple_access.tuple);
     const pending = PendingTupleAccess{
         .tuple_var = self.types.resolveVar(tuple_var).var_,
@@ -36506,6 +36510,10 @@ fn resumeFieldAccessCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck
         // Check the receiver (LHS)
         return .{ .child = .{ .expr = field_access.receiver, .expected = frame.nested_expected.forStatement() } };
     }
+
+    // An erroneous receiver crashes before any field is read, so the access
+    // relates no row to it and its segments are never checked.
+    if (try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, &.{field_access.receiver})) return .done;
 
     // The var that's receiving the record field
     var acc_receiver_var = ModuleEnv.varFrom(field_access.receiver);

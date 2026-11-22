@@ -2086,6 +2086,12 @@ pub const LirProcSpec = struct {
     /// being replaced, so a backend that passes arguments that way gives
     /// every member of a group one storage contract for them.
     tail_group: collections.OptionalId(TailGroupId) = .none,
+    /// Whether this procedure takes a tail carry (`takesTailCarry`). ARC sets
+    /// it on every Roc-ABI member of a `tail_group` with a dynamic parameter,
+    /// since a frame-replacing call can enter exactly those; a body-less
+    /// `external` proc gets the value its object published, because the
+    /// group is a fact of bodies only the defining unit holds.
+    tail_carry: bool = false,
     /// What the body contains, for pass admission.
     shapes: ProcShapes = .{},
     /// Explicit native-stack probing requirement for this proc.
@@ -2149,6 +2155,15 @@ pub const LirProcSpec = struct {
     /// calls, and an erased-callable one reads the cell from its invocation.
     pub fn takesPendingCell(self: LirProcSpec) bool {
         return self.abi == .roc and self.may_leave_pending;
+    }
+
+    /// Whether this procedure takes a tail carry: a hidden parameter after
+    /// its arguments and dynamic result holding the storage a frame-replacing
+    /// call moved its dynamic arguments into, because their bytes lived in
+    /// the frame it replaced. The procedure releases its carry when it
+    /// returns or replaces its own frame. Every other caller passes none.
+    pub fn takesTailCarry(self: LirProcSpec) bool {
+        return self.abi == .roc and self.tail_carry;
     }
 };
 

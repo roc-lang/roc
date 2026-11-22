@@ -9322,6 +9322,12 @@ placeholder whose instantiated callable is valid. Its arguments consume
 its message's `Str` demand the same way: an erroneous message retires the
 crash, and a message whose own type is not `Str` is rejected by an owned
 relation that retires the crash while the message keeps its solved type.
+A record field access and a tuple access consume their receiver the same way.
+An erroneous receiver retires the access before the access relates a row or a
+tuple shape to it, so the access never takes an error-free type from a field
+or item of an erroneous value: in `{ bad: nope, n: 5 }.n` the record is
+erroneous, and the access is the runtime error that evaluates it. A retired
+field access checks none of its segments and records no `.?` judgment.
 Statement-owned iterator loops have no parent expression to mark; they consume
 the same operand record and leave the erroneous iterable expression in
 `erroneous_value_exprs`. Checked for-nodes require a topology plan even on
@@ -9347,8 +9353,8 @@ checker records, in `retired_operand_sequences`, its operands in evaluation
 order up to and including the first erroneous one: a call's callee then its
 arguments, a method call's receiver then its arguments, a binary operator's
 two operands, an interpolation's parts, a tuple's, list's, or tag's items, a
-record's update base then its fields in source order, and a `for` loop's
-iterable. The erroneous-value sweep records that sequence as the runtime
+record's update base then its fields in source order, a field or tuple
+access's receiver, and a `for` loop's iterable. The erroneous-value sweep records that sequence as the runtime
 error's `evaluated` operands (`CIR.Expr.e_runtime_error.evaluated`, checked
 `CheckedRuntimeError.evaluated`) and keeps those operands' subtrees live;
 only the operands after the erroneous one are invalidated. An operand whose
@@ -19335,7 +19341,11 @@ Nothing a module emits depends on a module that imports it:
 - each exported worker's non-escaping and capture-reusing function
   parameters (`nonescaping_fn_params`, `capture_reuse_fn_params`, Frame
   Callables) are functions of its body and its callees' published masks, and whether a caller in another module
-  passes it a frame callable changes nothing in the worker's object.
+  passes it a frame callable changes nothing in the worker's object;
+- whether an exported worker takes a tail carry (`tail_carry`,
+  Frame-Replacing Calls) is a function of its signature and of the same-SCC
+  tail calls among its own module's bodies, none of which another module can
+  make.
 
 This is the invariant the per-module Boxy cache (Caching Under `.boxy`) rests
 on, and it is the reason modules can be lowered independently and in
@@ -19490,7 +19500,8 @@ and Per-Module Output is the invariant that makes it possible:
   lowered for the module, through the object's machine code, and the few
   words of ARC interface a downstream module compiles against (each exported
   procedure's solved ownership signature and uniqueness data, its
-  non-escaping and capture-reusing function parameters, and the outcome table of the
+  non-escaping and capture-reusing function parameters, whether it may leave
+  a call pending and whether it takes a tail carry, and the outcome table of the
   outcome-restitution variant it publishes, which is an exported procedure
   with a record of its own; Per-Module Output makes all of it a function of
   the module and its imports), with
@@ -27142,7 +27153,14 @@ descriptor with it. Emission checks that the statement after such a call is
 the return of its target with no ownership statement between them. Every
 procedure that makes or receives a same-SCC tail call also carries a
 `tail_group`: the connected component of those calls, which ownership variants
-inherit from their source procedure.
+inherit from their source procedure. ARC also commits `LirProcSpec.tail_carry`
+on every Roc-ABI member of a group with a dynamic parameter: a frame-replacing
+call can enter exactly those, so each takes a tail carry
+(`LirProcSpec.takesTailCarry`, Frame-Replacing Calls). The carry is a hidden
+parameter, so it is part of the procedure's calling contract. Variants inherit
+it, a module unit publishes it in each exported worker's export record, and an
+importer binds it onto the worker's body-less procedure, whose group only the
+defining unit's bodies show. Backends read the fact and never derive it.
 
 ### Frame-Replacing Calls
 
@@ -27172,10 +27190,11 @@ caller's frame is gone.
   A `.boxy` procedure's dynamic parameters are addresses whose bytes have
   sizes only descriptors know, so they cannot sit in the block. A procedure
   with a dynamic parameter and a `tail_group` takes a hidden carry after its
-  other parameters: a frame-replacing call copies every argument of a
-  dynamic parameter into one fresh carry allocation and passes those
-  addresses, an ordinary call passes none, and the callee releases its carry
-  when it returns or replaces its own frame.
+  other parameters (`LirProcSpec.takesTailCarry`): a frame-replacing call
+  copies every argument of a dynamic parameter into one fresh carry
+  allocation and passes those addresses, an ordinary call passes none, from
+  another unit included, and the callee releases its carry when it returns or
+  replaces its own frame.
 - The LLVM backend emits `musttail` calls between `tailcc` functions. An
   argument passed in memory cannot point into the caller's frame, so each tail
   group whose members take such arguments shares one block of storage for
@@ -27757,9 +27776,12 @@ field-take variant exactly as a direct call written in the module does. A functi
 with the ownership a direct call would. A module's object therefore
 carries only its published outcome variants and the variants its own calls
 demanded, and a procedure's solved base signature, uniqueness data,
-published outcome table and function parameter masks (Frame
-Callables)—functions of its body and its callees—are the whole of what
-another module compiles against (Per-Module Output). Imports are acyclic, so no same-SCC tail call crosses a unit.
+published outcome table, function parameter masks (Frame
+Callables), tail-drive summary and tail carry—functions of its body and its
+callees—are the whole of what another module compiles against (Per-Module
+Output). Imports are acyclic, so no same-SCC tail call crosses a unit: a
+worker's tail group lies within its module, and an importer's ordinary call
+passes a carry-taking worker no carry.
 Variants inherit their source's unit.
 
 Ownership solving and field-take analysis finish before parallel emission
@@ -31035,8 +31057,8 @@ can call a test unit whose inline expects are observed. Paired platform root
 units retain their explicit test mode because they also lower the paired
 modules' bodies. Reusing an object already prepared by compile-time evaluation
 also transfers its exported calling contracts into the consumer's interface
-table before lowering importers: ownership conditions and `may_leave_pending`
-must match the reused machine code. Consumers already sharing the producer's
+table before lowering importers: ownership conditions, `may_leave_pending`
+and `tail_carry` must match the reused machine code. Consumers already sharing the producer's
 table need no copy. A test unit records its own replacement contracts before
 its importers start. Beside the image, the
 entry files the unit's expect-site table (each site's module digest and

@@ -107,7 +107,9 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      combined with the v79-v81 changes.
 /// v83: procedure specs name their body chunks, and the store carries the
 ///      chunk column, combined with the v79-v82 changes.
-pub const FORMAT_VERSION: u32 = 83;
+/// v84: procedure specs record whether they take a tail carry
+///      (`tail_carry`).
+pub const FORMAT_VERSION: u32 = 84;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
