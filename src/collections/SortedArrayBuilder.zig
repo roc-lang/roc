@@ -294,7 +294,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             /// reaches outside the `backing_len`-byte buffer, before `deserializeInto`
             /// dereferences it.
             pub fn validateRelocations(self: *const Serialized, backing_len: u64) error{CorruptArtifact}!void {
-                if (self.entries_len > std.math.maxInt(u32)) return error.CorruptArtifact;
+                if (std.math.cast(u32, self.entries_len) == null) return error.CorruptArtifact;
                 const span_bytes = std.math.mul(u64, self.entries_len, @sizeOf(Entry)) catch return error.CorruptArtifact;
                 try validateRelocatedSpan(@alignOf(Entry), self.entries_offset, span_bytes, backing_len);
             }

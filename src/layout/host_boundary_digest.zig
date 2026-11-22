@@ -60,11 +60,6 @@ const LayoutHashContext = struct {
         hasher: *base.Sha256,
         idx: Idx,
     ) Allocator.Error!void {
-        if (idx == Idx.none) {
-            updateHashBytes(hasher, "layout-none");
-            return;
-        }
-
         if (self.seen.get(idx)) |seen_index| {
             updateHashBytes(hasher, "layout-ref");
             updateHashU32(hasher, seen_index);

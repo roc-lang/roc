@@ -98,9 +98,9 @@ pub const Plan = struct {
     /// For each entrypoint ordinal, its wrapper's offset in the code.
     entry_offsets: []u64,
     /// Per image, for each entry of its function table, the entry's slot
-    /// in the run image's function table, or `no_slot` for a function the
+    /// in the run image's function table, absent for a function the
     /// composition leaves out. Empty for an image without unwind tables.
-    table_slots: [][]u32,
+    table_slots: [][]collections.OptionalU32,
     function_table_entry_size: u32,
     layout_ns: u64,
 
@@ -123,8 +123,6 @@ pub const Plan = struct {
         self.* = undefined;
     }
 };
-
-const no_slot: u32 = std.math.maxInt(u32);
 
 /// Where one image's regions go: its block's offset in the code region,
 /// its data's and zero-fill's offsets in the writable region, and its
@@ -236,7 +234,7 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
     // An entry's first field names the start of its function, so the
     // atom that field's site targets decides whether it is kept.
     const entry_size = inputs.function_table_entry_size;
-    const table_slots = try gpa.alloc([]u32, images.len);
+    const table_slots = try gpa.alloc([]collections.OptionalU32, images.len);
     @memset(table_slots, &.{});
     errdefer {
         for (table_slots) |slots| gpa.free(slots);
@@ -249,17 +247,25 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
         const state = walk.states[index].?;
         if (view.pdata().len != 0) {
             std.debug.assert(view.pdata().len % entry_size == 0);
-            const slots = try gpa.alloc(u32, view.pdata().len / entry_size);
+            const entry_count = view.pdata().len / entry_size;
+            const slots = try gpa.alloc(collections.OptionalU32, entry_count);
             table_slots[index] = slots;
-            @memset(slots, 0);
+            // Every entry is kept unless a site shows its function left out;
+            // the kept entries are then numbered in order.
+            const kept = try gpa.alloc(bool, entry_count);
+            defer gpa.free(kept);
+            @memset(kept, true);
             for (view.localSites()) |site| {
                 if (@as(UnitImage.Region, @fromBackingInt(site.region)) != .pdata or site.offset % entry_size != 0) continue;
                 if (@as(UnitImage.Region, @fromBackingInt(site.target_region)) != .block) continue;
-                if (!state.atoms[site.target]) slots[site.offset / entry_size] = no_slot;
+                if (!state.atoms[site.target]) kept[site.offset / entry_size] = false;
             }
-            for (slots) |*slot| {
-                if (slot.* == no_slot) continue;
-                slot.* = table_entry_count;
+            for (slots, kept) |*slot, is_kept| {
+                if (!is_kept) {
+                    slot.* = .none;
+                    continue;
+                }
+                slot.* = .some(table_entry_count);
                 table_entry_count += 1;
             }
         }
@@ -397,11 +403,11 @@ fn hostTarget(state: unit_walk.Walk.State, site: UnitImage.Site) ?usize {
 /// unwind information, in a kept entry of its function table (`slots`),
 /// or in a reached atom of the block. Sites in debug fragments are never
 /// placed.
-fn placedSite(state: unit_walk.Walk.State, slots: []const u32, entry_size: u32, site: UnitImage.Site) bool {
+fn placedSite(state: unit_walk.Walk.State, slots: []const collections.OptionalU32, entry_size: u32, site: UnitImage.Site) bool {
     const region: UnitImage.Region = @fromBackingInt(site.region);
     if (!region.isAllocated()) return false;
-    if (region == .pdata) return slots[site.offset / entry_size] != no_slot;
-    return site.atom == UnitImage.no_atom or state.atoms[site.atom];
+    if (region == .pdata) return slots[site.offset / entry_size] != .none;
+    return if (site.atom.get()) |atom| state.atoms[atom] else true;
 }
 
 fn findHostSymbol(context: *const anyopaque, name: []const u8) ?u64 {
@@ -447,8 +453,8 @@ pub fn write(self: *const Plan, std_io: std.Io, inputs: Inputs, composed: RunIma
             @memcpy(composed.writable[@intCast(place.data)..][0..view.data().len], view.data());
             timing.bytes_written += view.data().len;
         }
-        for (self.table_slots[index], 0..) |slot, entry| {
-            if (slot == no_slot) continue;
+        for (self.table_slots[index], 0..) |table_slot, entry| {
+            const slot = table_slot.get() orelse continue;
             @memcpy(composed.function_table[slot * entry_size ..][0..entry_size], view.pdata()[entry * entry_size ..][0..entry_size]);
             timing.bytes_written += entry_size;
         }
@@ -475,7 +481,7 @@ pub fn write(self: *const Plan, std_io: std.Io, inputs: Inputs, composed: RunIma
             const in_part: u64, const part: []u8, const part_base: u64 = switch (region) {
                 .block => .{ place.block + site.offset, composed.code, 0 },
                 .data => .{ place.data + site.offset, composed.writable, bases.writable },
-                .pdata => .{ @as(u64, slots[site.offset / entry_size]) * entry_size + site.offset % entry_size, composed.function_table, bases.function_table },
+                .pdata => .{ @as(u64, slots[site.offset / entry_size].get().?) * entry_size + site.offset % entry_size, composed.function_table, bases.function_table },
                 .xdata => .{ place.xdata + site.offset, composed.unwind_info, bases.unwind_info },
                 .bss, .debug_line, .debug_info, .debug_abbrev => unreachable, // a placed site is a field with bytes: in the block, the data or the unwind tables
             };

@@ -4247,8 +4247,8 @@ const Subst = struct {
     changes: std.ArrayList(BindingChange),
     allocator: Allocator,
 
-    const no_slot: u32 = std.math.maxInt(u32);
-    const SlotNode = struct { identity: BinderIdentity, next: u32 };
+    /// `next` is the chain's next slot, absent at the chain's end.
+    const SlotNode = struct { identity: BinderIdentity, next: collections.OptionalU32 };
 
     fn init(allocator: Allocator) Subst {
         return .{
@@ -4303,11 +4303,11 @@ const Subst = struct {
     /// The slot of `identity`, or null when this substitution has never
     /// written under it.
     fn slotOf(self: *const Subst, identity: BinderIdentity) ?BinderSlot {
-        var cursor = self.binder_heads.get(identity.binder) orelse return null;
-        while (cursor != no_slot) {
+        var link: collections.OptionalU32 = .some(self.binder_heads.get(identity.binder) orelse return null);
+        while (link.get()) |cursor| {
             const node = self.binder_slots.items[cursor];
             if (std.mem.eql(u8, &node.identity.digest.bytes, &identity.digest.bytes)) return @fromBackingInt(cursor);
-            cursor = node.next;
+            link = node.next;
         }
         return null;
     }
@@ -4315,10 +4315,10 @@ const Subst = struct {
     fn internSlot(self: *Subst, identity: BinderIdentity) Allocator.Error!BinderSlot {
         if (self.slotOf(identity)) |slot| return slot;
         const index = std.math.cast(u32, self.binder_slots.items.len) orelse return error.OutOfMemory;
-        if (index == no_slot) return error.OutOfMemory;
+        if (index == std.math.maxInt(u32)) return error.OutOfMemory;
         try self.binder_slots.ensureUnusedCapacity(self.allocator, 1);
         const head = try self.binder_heads.getOrPut(identity.binder);
-        const next = if (head.found_existing) head.value_ptr.* else no_slot;
+        const next: collections.OptionalU32 = if (head.found_existing) .some(head.value_ptr.*) else .none;
         head.value_ptr.* = index;
         self.binder_slots.appendAssumeCapacity(.{ .identity = identity, .next = next });
         return @fromBackingInt(index);
@@ -16689,14 +16689,14 @@ test "SpecConstr residual block destructures preserve statement source context" 
         .name = present,
         .payloads = try program.addPatSpan(&.{payload_pat}),
     } } });
-    const stmt_loc: SourceLoc = .{ .file = 1, .line = 3, .column = 5 };
+    const stmt_loc: SourceLoc = .{ .file = .some(1), .line = 3, .column = 5 };
     const stmt_region = Region.from_raw_offsets(20, 40);
     const site: Ast.ComptimeSiteId = @fromBackingInt(@intCast(program.comptime_sites.len()));
     try program.comptime_sites.append(allocator, .{ .kind = .destructure, .owner = .first, .region = stmt_region });
     program.current_loc = stmt_loc;
     program.current_region = stmt_region;
     const binding = try program.addStmt(.{ .let_ = .{ .pat = pattern, .value = input_expr, .comptime_site = .some(site) } });
-    program.current_loc = .{ .file = 1, .line = 1, .column = 1 };
+    program.current_loc = .{ .file = .some(1), .line = 1, .column = 1 };
     program.current_region = Region.from_raw_offsets(0, 80);
     const body = try program.addExpr(.{ .ty = str_ty, .data = .{ .block = .{
         .statements = try program.addStmtSpan(&.{binding}),

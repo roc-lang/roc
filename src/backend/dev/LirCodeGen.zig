@@ -983,17 +983,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub const JumpRecord = struct {
             /// Offset of the jump instruction
             location: usize,
-            /// The next jump to the same join point, or `no_jump`.
-            next: u32,
+            /// The next jump to the same join point, if any.
+            next: collections.OptionalU32,
         };
 
-        /// The first and last of a join point's jumps in `join_jump_records`.
+        /// The first and last of a join point's jumps in `join_jump_records`,
+        /// absent before its first jump.
         pub const JumpChain = struct {
-            first: u32 = no_jump,
-            last: u32 = no_jump,
+            first: collections.OptionalU32 = .none,
+            last: collections.OptionalU32 = .none,
         };
-
-        const no_jump = std.math.maxInt(u32);
 
         /// The tables one procedure's compilation binds. `compileProcSpec`
         /// exchanges the generator's tables with `spare_proc_scope` for the
@@ -8596,7 +8595,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (assign.frame) {
                             // The 16-byte prefix ending in the refcount word,
                             // then the payload with any hot-reload header.
-                            const capture_size: u32 = if (assign.capture_layout) |layout_idx| self.getLayoutSize(layout_idx) else 0;
+                            const capture_size: u32 = if (assign.capture_layout.get()) |layout_idx| self.getLayoutSize(layout_idx) else 0;
                             const payload_size = builtins.erased_callable.payloadSize(self.erased_capture_prefix + capture_size);
                             const size: u32 = @intCast(builtins.erased_callable.payload_alignment + payload_size);
                             try self.stack_alloca_slots.put(s.target, self.codegen.allocStackSlot(size));
@@ -21209,12 +21208,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const assign = self.store.stmtRow(assign_stmt.data);
                             const value_loc = try self.generatePackedErasedFn(
                                 assign.proc,
-                                assign.capture,
+                                assign.capture.get(),
                                 self.localLayout(assign_stmt.target),
-                                assign.capture_layout,
+                                assign.capture_layout.get(),
                                 assign.on_drop,
                                 assign.on_copy,
-                                assign.reuse,
+                                assign.reuse.get(),
                                 assign.reuse_unique,
                                 if (assign.frame) self.stack_alloca_slots.get(assign_stmt.target) orelse unreachable // the proc prescan reserves a slot for every frame packing's target
                                 else null,
@@ -21416,12 +21415,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                             const jp_key = @backingInt(jmp.target);
                             if (self.join_point_jumps.getPtr(jp_key)) |jumps| {
-                                const record: u32 = std.math.cast(u32, self.join_jump_records.items.len) orelse return error.OutOfMemory;
-                                try self.join_jump_records.append(self.allocator, .{ .location = jump_location, .next = no_jump });
-                                if (jumps.last == no_jump) {
-                                    jumps.first = record;
+                                const record_index = self.join_jump_records.items.len;
+                                // `OptionalU32` stores the index plus one.
+                                if (std.math.cast(u32, record_index + 1) == null) return error.OutOfMemory;
+                                const record: collections.OptionalU32 = .some(@intCast(record_index));
+                                try self.join_jump_records.append(self.allocator, .{ .location = jump_location, .next = .none });
+                                if (jumps.last.get()) |last| {
+                                    self.join_jump_records.items[last].next = record;
                                 } else {
-                                    self.join_jump_records.items[jumps.last].next = record;
+                                    jumps.first = record;
                                 }
                                 jumps.last = record;
                             }
@@ -21676,8 +21678,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.current_stmt_id = c.owner;
                     try self.codegen.patchJump(c.skip_patch, self.codegen.currentOffset());
                     if (self.join_point_jumps.get(c.jp_key)) |jumps| {
-                        var record = jumps.first;
-                        while (record != no_jump) : (record = self.join_jump_records.items[record].next) {
+                        var next_record = jumps.first;
+                        while (next_record.get()) |record| : (next_record = self.join_jump_records.items[record].next) {
                             try self.codegen.patchJump(self.join_jump_records.items[record].location, c.join_location);
                         }
                     }
@@ -26463,7 +26465,7 @@ test "independent fragment emits only requested procedure with unresolved self a
         var store = LirStore.init(allocator);
         defer store.deinit();
         var origin = LIR.StmtOrigin.test_fixture;
-        origin.loc = .{ .file = 0, .line = 11, .column = 2 };
+        origin.loc = .{ .file = .some(0), .line = 11, .column = 2 };
         var layouts = try TestLayoutState.init(allocator);
         defer layouts.deinit();
         const other = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, .i64);

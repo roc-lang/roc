@@ -13,13 +13,13 @@ const types = @import("mod.zig");
 /// The effect a function type's formula resolves to, ordered by strength.
 pub const State = enum(u2) { pure, unresolved, effectful };
 const SlotId = enum(u32) { _ };
-const no_edge = std.math.maxInt(u32);
 const Slot = struct {
     var_: types.Var,
     state: State = .pure,
-    callers: u32 = no_edge,
+    /// The first edge of the slot's caller list, if any.
+    callers: collections.OptionalU32 = .none,
 };
-const Edge = struct { caller: SlotId, next: u32 };
+const Edge = struct { caller: SlotId, next: collections.OptionalU32 };
 
 /// Solves directed function-effect formulas over sparse slots with an
 /// iterative worklist, reusing its storage across sessions.
@@ -78,7 +78,7 @@ pub const Solver = struct {
         const callee_index = @backingInt(callee);
         const edge_index: u32 = @intCast(self.edges.items.len);
         try self.edges.append(self.gpa, .{ .caller = caller, .next = self.slots.items[callee_index].callers });
-        self.slots.items[callee_index].callers = edge_index;
+        self.slots.items[callee_index].callers = .some(edge_index);
         try self.promote(caller, self.slots.items[callee_index].state);
     }
 
@@ -126,11 +126,11 @@ pub const Solver = struct {
         while (next < self.worklist.items.len) : (next += 1) {
             const id = self.worklist.items[next];
             const state = self.slots.items[@backingInt(id)].state;
-            var edge_index = self.slots.items[@backingInt(id)].callers;
-            while (edge_index != no_edge) {
+            var next_edge = self.slots.items[@backingInt(id)].callers;
+            while (next_edge.get()) |edge_index| {
                 const edge = self.edges.items[edge_index];
                 try self.promote(edge.caller, state);
-                edge_index = edge.next;
+                next_edge = edge.next;
             }
         }
         self.worklist.clearRetainingCapacity();

@@ -88,8 +88,8 @@ pub const RetainedBytes = struct {
     }
 };
 
-/// No node, class, or map entry.
-pub const nil: u32 = std.math.maxInt(u32);
+/// A node, class, map entry, or other engine index, or none.
+const Ref = collections.OptionalU32;
 
 /// A persistent (path-copying) treap from `u32` keys to `u32` values. Maps
 /// share structure, so a node's variable order map is reused by every walk
@@ -100,13 +100,13 @@ pub const PersistentMap = struct {
         key: u32,
         value: u32,
         prio: u32,
-        left: u32,
-        right: u32,
+        left: Ref,
+        right: Ref,
         size: u32,
     };
 
     pub const Handle = struct {
-        root: u32 = nil,
+        root: Ref = .none,
         delta: u32 = 0,
 
         pub fn shifted(self: Handle, by: u32) Handle {
@@ -129,15 +129,15 @@ pub const PersistentMap = struct {
     }
 
     pub fn count(self: *const PersistentMap, handle: Handle) u32 {
-        return if (handle.root == nil) 0 else self.nodes.items[handle.root].size;
+        return self.sizeOf(handle.root);
     }
 
     pub fn get(self: *const PersistentMap, handle: Handle, key: u32) ?u32 {
-        var index = handle.root;
-        while (index != nil) {
+        var next = handle.root;
+        while (next.get()) |index| {
             const node = self.nodes.items[index];
             if (key == node.key) return node.value +% handle.delta;
-            index = if (key < node.key) node.left else node.right;
+            next = if (key < node.key) node.left else node.right;
         }
         return null;
     }
@@ -162,16 +162,16 @@ pub const PersistentMap = struct {
     /// Append every entry of `handle`'s map to `out`, in key order.
     pub fn appendEntries(self: *PersistentMap, gpa: Allocator, handle: Handle, out: *std.ArrayListUnmanaged(Entry)) Allocator.Error!void {
         self.walk_stack.clearRetainingCapacity();
-        var index = handle.root;
+        var next = handle.root;
         while (true) {
-            while (index != nil) {
+            while (next.get()) |index| {
                 try self.walk_stack.append(gpa, index);
-                index = self.nodes.items[index].left;
+                next = self.nodes.items[index].left;
             }
             const top = self.walk_stack.pop() orelse return;
             const node = self.nodes.items[top];
             try out.append(gpa, .{ .key = node.key, .value = node.value +% handle.delta });
-            index = node.right;
+            next = node.right;
         }
     }
 
@@ -179,11 +179,12 @@ pub const PersistentMap = struct {
         return std.hash.int(key);
     }
 
-    fn sizeOf(self: *const PersistentMap, index: u32) u32 {
-        return if (index == nil) 0 else self.nodes.items[index].size;
+    fn sizeOf(self: *const PersistentMap, ref: Ref) u32 {
+        const index = ref.get() orelse return 0;
+        return self.nodes.items[index].size;
     }
 
-    fn newNode(self: *PersistentMap, gpa: Allocator, key: u32, value: u32, prio: u32, left: u32, right: u32) Allocator.Error!u32 {
+    fn newNode(self: *PersistentMap, gpa: Allocator, key: u32, value: u32, prio: u32, left: Ref, right: Ref) Allocator.Error!Ref {
         const index: u32 = @intCast(self.nodes.items.len);
         try self.nodes.append(gpa, .{
             .key = key,
@@ -193,19 +194,19 @@ pub const PersistentMap = struct {
             .right = right,
             .size = 1 + self.sizeOf(left) + self.sizeOf(right),
         });
-        return index;
+        return .some(index);
     }
 
     fn higher(prio: u32, key: u32, other: Node) bool {
         return prio > other.prio or (prio == other.prio and key < other.key);
     }
 
-    const Split = struct { lo: u32, hi: u32 };
+    const Split = struct { lo: Ref, hi: Ref };
 
     /// Split a subtree that does not contain `key` into keys below and above
     /// it. Depth is the treap's expected logarithmic height.
-    fn split(self: *PersistentMap, gpa: Allocator, index: u32, key: u32) Allocator.Error!Split {
-        if (index == nil) return .{ .lo = nil, .hi = nil };
+    fn split(self: *PersistentMap, gpa: Allocator, ref: Ref, key: u32) Allocator.Error!Split {
+        const index = ref.get() orelse return .{ .lo = .none, .hi = .none };
         const node = self.nodes.items[index];
         if (key < node.key) {
             const parts = try self.split(gpa, node.left, key);
@@ -215,11 +216,11 @@ pub const PersistentMap = struct {
         return .{ .lo = try self.newNode(gpa, node.key, node.value, node.prio, node.left, parts.lo), .hi = parts.hi };
     }
 
-    fn insertAt(self: *PersistentMap, gpa: Allocator, index: u32, key: u32, value: u32, prio: u32) Allocator.Error!u32 {
-        if (index == nil) return try self.newNode(gpa, key, value, prio, nil, nil);
+    fn insertAt(self: *PersistentMap, gpa: Allocator, ref: Ref, key: u32, value: u32, prio: u32) Allocator.Error!Ref {
+        const index = ref.get() orelse return try self.newNode(gpa, key, value, prio, .none, .none);
         const node = self.nodes.items[index];
         if (higher(prio, key, node)) {
-            const parts = try self.split(gpa, index, key);
+            const parts = try self.split(gpa, ref, key);
             return try self.newNode(gpa, key, value, prio, parts.lo, parts.hi);
         }
         if (key < node.key) {
@@ -230,8 +231,8 @@ pub const PersistentMap = struct {
         return try self.newNode(gpa, node.key, node.value, node.prio, node.left, right);
     }
 
-    fn replaceAt(self: *PersistentMap, gpa: Allocator, index: u32, key: u32, value: u32) Allocator.Error!u32 {
-        const node = self.nodes.items[index];
+    fn replaceAt(self: *PersistentMap, gpa: Allocator, ref: Ref, key: u32, value: u32) Allocator.Error!Ref {
+        const node = self.nodes.items[ref.get().?];
         if (key == node.key) return try self.newNode(gpa, key, value, node.prio, node.left, node.right);
         if (key < node.key) {
             const left = try self.replaceAt(gpa, node.left, key, value);
@@ -258,10 +259,10 @@ pub const NodeKind = enum(u8) {
 pub const Item = struct {
     start: u32,
     len: u32,
-    child: u32,
+    child: Ref,
 
     pub fn isChild(self: Item) bool {
-        return self.child != nil;
+        return self.child != .none;
     }
 };
 
@@ -358,13 +359,13 @@ pub const Sink = struct {
     /// adapter's canonical node for the child.
     pub fn child(self: *Sink, node: u32) Allocator.Error!void {
         try self.flushRun();
-        try self.store.items.append(self.gpa, .{ .start = 0, .len = 0, .child = node });
+        try self.store.items.append(self.gpa, .{ .start = 0, .len = 0, .child = .some(node) });
     }
 
     fn flushRun(self: *Sink) Allocator.Error!void {
         const end: u32 = @intCast(self.store.bytes.items.len);
         if (end > self.run_start) {
-            try self.store.items.append(self.gpa, .{ .start = self.run_start, .len = end - self.run_start, .child = nil });
+            try self.store.items.append(self.gpa, .{ .start = self.run_start, .len = end - self.run_start, .child = .none });
         }
         self.run_start = end;
     }
@@ -458,7 +459,7 @@ pub fn appendIdentityOrder(
         }
         const item = items[frame.item];
         frame.item += 1;
-        if (item.isChild()) next = item.child;
+        if (item.child.get()) |child| next = child;
     }
 }
 
@@ -501,13 +502,13 @@ pub fn Engine(comptime Adapter: type) type {
             /// Start in `class_children` of the representative's step words
             /// (see `appendStepWords`). A leaf or content class has them from
             /// creation; an identity class gets them when first keyed.
-            children: u32 = nil,
+            children: Ref = .none,
             /// Hash of the class's one-step structure, for `class_by_step`.
             step_hash: u64 = 0,
             /// Tarjan index while the class is being keyed.
-            tarjan: u32 = nil,
-            key_scc: u32 = nil,
-            summary: u32 = nil,
+            tarjan: Ref = .none,
+            key_scc: Ref = .none,
+            summary: Ref = .none,
             /// The class lies on a cycle of classes: it denotes an infinite
             /// tree that contains itself.
             on_cycle: bool = false,
@@ -545,7 +546,7 @@ pub fn Engine(comptime Adapter: type) type {
         local_of: collections.DenseMap(u32, u32),
         state_of_class: collections.DenseMap(u32, u32),
         state_nodes: std.ArrayListUnmanaged(u32) = .empty,
-        state_class: std.ArrayListUnmanaged(u32) = .empty,
+        state_class: std.ArrayListUnmanaged(Ref) = .empty,
         local_class: std.ArrayListUnmanaged(u32) = .empty,
         /// Each block's class while one component is named, absent until
         /// known. Read per block, so it starts cleared to absent (zero).
@@ -569,8 +570,8 @@ pub fn Engine(comptime Adapter: type) type {
         /// class, and while it is being classified its Tarjan index.
         const NodeInfo = struct {
             desc: u32,
-            class: u32 = nil,
-            tarjan: u32 = nil,
+            class: Ref = .none,
+            tarjan: Ref = .none,
         };
 
         const Span = struct { start: u32, len: u32 };
@@ -634,7 +635,7 @@ pub fn Engine(comptime Adapter: type) type {
                 const record = engine.classes.items[class];
                 const desc = engine.store.descs.items[record.desc];
                 if (desc.kind != step.desc.kind or desc.items_len != step.desc.items_len) return false;
-                if (!sliceEql(u32, engine.class_children.items[record.children..][0..desc.items_len], step.words)) return false;
+                if (!sliceEql(u32, engine.class_children.items[record.children.get().?..][0..desc.items_len], step.words)) return false;
                 return sliceEql(u8, engine.descBytes(desc), engine.descBytes(step.desc));
             }
         };
@@ -719,7 +720,7 @@ pub fn Engine(comptime Adapter: type) type {
             try self.classify(adapter, node);
             const class = self.nodeClass(node);
             try self.summarizeClass(class);
-            return self.summaries.items[self.classes.items[class].summary];
+            return self.summaries.items[self.classes.items[class].summary.get().?];
         }
 
         // Descriptions //
@@ -739,16 +740,16 @@ pub fn Engine(comptime Adapter: type) type {
         }
 
         fn nodeClass(self: *const Self, node: u32) u32 {
-            return self.info(node).class;
+            return self.info(node).class.get().?;
         }
 
         fn hasClass(self: *const Self, node: u32) bool {
             const entry = self.node_info.getPtrConst(node) orelse return false;
-            return entry.class != nil;
+            return entry.class != .none;
         }
 
         fn setClass(self: *Self, node: u32, class: u32) void {
-            self.node_info.getPtr(node).?.class = class;
+            self.node_info.getPtr(node).?.class = .some(class);
         }
 
         fn classDesc(self: *const Self, class: u32) Desc {
@@ -781,7 +782,7 @@ pub fn Engine(comptime Adapter: type) type {
                 .identity => {
                     self.setClass(node, try self.newClass(node));
                     for (self.store.itemsOf(desc)) |item| {
-                        if (item.isChild()) try self.pending.append(self.gpa, item.child);
+                        if (item.child.get()) |child| try self.pending.append(self.gpa, child);
                     }
                 },
                 .leaf => self.setClass(node, try self.internStep(node)),
@@ -820,7 +821,7 @@ pub fn Engine(comptime Adapter: type) type {
         /// its one-step structure, so a node written as an unrolled copy of
         /// it joins it.
         fn registerStep(self: *Self, class: u32) Allocator.Error!void {
-            if (self.classes.items[class].children != nil) return;
+            if (self.classes.items[class].children != .none) return;
             const step = try self.stepOf(self.classes.items[class].rep);
             try self.setStep(class, step);
             const entry = try self.class_by_step.getOrPutContextAdapted(
@@ -849,14 +850,14 @@ pub fn Engine(comptime Adapter: type) type {
         fn setStep(self: *Self, class: u32, step: Step) Allocator.Error!void {
             const start: u32 = @intCast(self.class_children.items.len);
             try self.class_children.appendSlice(self.gpa, step.words);
-            self.classes.items[class].children = start;
+            self.classes.items[class].children = .some(start);
             self.classes.items[class].step_hash = step.hash;
         }
 
         fn appendStepWords(self: *Self, out: *std.ArrayListUnmanaged(u32), desc: Desc) Allocator.Error!void {
             try out.ensureUnusedCapacity(self.gpa, desc.items_len);
             for (self.store.itemsOf(desc)) |item| {
-                out.appendAssumeCapacity(if (item.isChild()) self.nodeClass(item.child) else run_bit | item.len);
+                out.appendAssumeCapacity(if (item.child.get()) |child| self.nodeClass(child) else run_bit | item.len);
             }
         }
 
@@ -899,19 +900,18 @@ pub fn Engine(comptime Adapter: type) type {
                     // afresh each time.
                     const item = self.store.itemsOf(desc)[frame.item];
                     frame.item += 1;
-                    if (!item.isChild()) continue;
-                    const child = item.child;
+                    const child = item.child.get() orelse continue;
                     const child_desc = try self.descOf(adapter, child);
                     const child_info = self.info(child);
-                    if (child_info.class != nil) continue;
+                    if (child_info.class != .none) continue;
                     if (child_desc.kind != .content) {
                         try self.classifyAtom(child, child_desc);
                         continue;
                     }
-                    if (child_info.tarjan != nil) {
-                        if (self.tarjan_on_stack.items[child_info.tarjan]) {
-                            const own = self.info(frame.node).tarjan;
-                            self.tarjan_low.items[own] = @min(self.tarjan_low.items[own], child_info.tarjan);
+                    if (child_info.tarjan.get()) |child_tarjan| {
+                        if (self.tarjan_on_stack.items[child_tarjan]) {
+                            const own = self.info(frame.node).tarjan.get().?;
+                            self.tarjan_low.items[own] = @min(self.tarjan_low.items[own], child_tarjan);
                         }
                         continue;
                     }
@@ -922,16 +922,16 @@ pub fn Engine(comptime Adapter: type) type {
                 if (descended) continue;
 
                 const done = self.tarjan_frames.pop().?;
-                const own = self.info(done.node).tarjan;
+                const own = self.info(done.node).tarjan.get().?;
                 if (self.tarjan_frames.items.len > 0) {
-                    const parent = self.info(self.tarjan_frames.items[self.tarjan_frames.items.len - 1].node).tarjan;
+                    const parent = self.info(self.tarjan_frames.items[self.tarjan_frames.items.len - 1].node).tarjan.get().?;
                     self.tarjan_low.items[parent] = @min(self.tarjan_low.items[parent], self.tarjan_low.items[own]);
                 }
                 if (self.tarjan_low.items[own] != own) continue;
                 self.scc_members.clearRetainingCapacity();
                 while (true) {
                     const member = self.tarjan_stack.pop().?;
-                    self.tarjan_on_stack.items[self.info(member).tarjan] = false;
+                    self.tarjan_on_stack.items[self.info(member).tarjan.get().?] = false;
                     try self.scc_members.append(self.gpa, member);
                     if (member == done.node) break;
                 }
@@ -958,7 +958,7 @@ pub fn Engine(comptime Adapter: type) type {
         }
 
         fn tarjanNodeVisit(self: *Self, node: u32) Allocator.Error!void {
-            self.node_info.getPtr(node).?.tarjan = try self.tarjanPush(node);
+            self.node_info.getPtr(node).?.tarjan = .some(try self.tarjanPush(node));
         }
 
         fn nodeDesc(self: *const Self, node: u32) Desc {
@@ -967,7 +967,7 @@ pub fn Engine(comptime Adapter: type) type {
 
         fn hasSelfEdge(self: *const Self, node: u32) bool {
             for (self.store.itemsOf(self.nodeDesc(node))) |item| {
-                if (item.child == node) return true;
+                if (item.child == Ref.some(node)) return true;
             }
             return false;
         }
@@ -1016,18 +1016,19 @@ pub fn Engine(comptime Adapter: type) type {
             for (members, 0..) |member, index| {
                 try self.local_of.put(member, @intCast(index));
                 try self.state_nodes.append(self.gpa, member);
-                try self.state_class.append(self.gpa, nil);
+                try self.state_class.append(self.gpa, .none);
             }
             // Existing on-cycle classes reachable through on-cycle classes.
             var scan: usize = 0;
             while (scan < self.state_nodes.items.len) : (scan += 1) {
                 for (self.store.itemsOf(self.stateDesc(@intCast(scan)))) |item| {
-                    if (!item.isChild() or self.local_of.contains(item.child)) continue;
-                    const class = self.nodeClass(item.child);
+                    const child = item.child.get() orelse continue;
+                    if (self.local_of.contains(child)) continue;
+                    const class = self.nodeClass(child);
                     if (!self.classes.items[class].on_cycle or self.state_of_class.contains(class)) continue;
                     try self.state_of_class.put(class, @intCast(self.state_nodes.items.len));
                     try self.state_nodes.append(self.gpa, self.classes.items[class].rep);
-                    try self.state_class.append(self.gpa, class);
+                    try self.state_class.append(self.gpa, .some(class));
                 }
             }
 
@@ -1046,8 +1047,8 @@ pub fn Engine(comptime Adapter: type) type {
             try self.local_globals.resize(self.gpa, block_count);
             const globals = self.local_globals.items;
             @memset(globals, .none);
-            for (self.state_class.items, 0..) |class, state| {
-                if (class == nil) continue;
+            for (self.state_class.items, 0..) |state_class, state| {
+                const class = state_class.get() orelse continue;
                 const block = self.local_class.items[state];
                 std.debug.assert(globals[block] == .none or globals[block].get().? == class);
                 globals[block] = .some(class);
@@ -1085,8 +1086,8 @@ pub fn Engine(comptime Adapter: type) type {
                 const start: u32 = std.math.cast(u32, signature.items.len) orelse return error.OutOfMemory;
                 if (!first) try appendVarint(signature, self.gpa, self.local_class.items[state]);
                 for (self.store.itemsOf(self.stateDesc(@intCast(state)))) |item| {
-                    if (item.isChild()) {
-                        switch (self.stateChild(item.child)) {
+                    if (item.child.get()) |child| {
+                        switch (self.stateChild(child)) {
                             .state => |child_state| {
                                 try signature.append(self.gpa, 3);
                                 if (!first) try appendVarint(signature, self.gpa, self.local_class.items[child_state]);
@@ -1147,7 +1148,7 @@ pub fn Engine(comptime Adapter: type) type {
                     try self.signature.appendSlice(self.gpa, self.store.bytesOf(item));
                     continue;
                 }
-                const class: u32 = switch (self.stateChild(item.child)) {
+                const class: u32 = switch (self.stateChild(item.child.get().?)) {
                     .fixed => |class| class,
                     .state => |child_state| blk: {
                         const block = self.local_class.items[child_state];
@@ -1178,21 +1179,21 @@ pub fn Engine(comptime Adapter: type) type {
         /// order: a child's class, or a byte run tagged with `run_bit`.
         fn childClasses(self: *const Self, class: u32) []const u32 {
             const record = self.classes.items[class];
-            return self.class_children.items[record.children..][0..self.store.descs.items[record.desc].items_len];
+            return self.class_children.items[record.children.get().?..][0..self.store.descs.items[record.desc].items_len];
         }
 
         /// An identity class's step words, once its constraints' children
         /// have classes.
         fn fillChildClasses(self: *Self, class: u32) Allocator.Error!void {
-            if (self.classes.items[class].children != nil) return;
+            if (self.classes.items[class].children != .none) return;
             const start: u32 = @intCast(self.class_children.items.len);
             try self.appendStepWords(&self.class_children, self.classDesc(class));
-            self.classes.items[class].children = start;
+            self.classes.items[class].children = .some(start);
         }
 
         fn tarjanClassVisit(self: *Self, class: u32) Allocator.Error!void {
             try self.fillChildClasses(class);
-            self.classes.items[class].tarjan = try self.tarjanPush(class);
+            self.classes.items[class].tarjan = .some(try self.tarjanPush(class));
         }
 
         /// Key every class reachable from `start` that has none, one strongly
@@ -1204,7 +1205,7 @@ pub fn Engine(comptime Adapter: type) type {
         /// summary is ever looked up by them, and every class this visits has
         /// one by the time it returns, so indices never need clearing.
         fn summarizeClass(self: *Self, start: u32) Allocator.Error!void {
-            if (self.classes.items[start].summary != nil) return;
+            if (self.classes.items[start].summary != .none) return;
             self.clearTarjan();
             try self.tarjanClassVisit(start);
             while (self.tarjan_frames.items.len > 0) {
@@ -1216,11 +1217,11 @@ pub fn Engine(comptime Adapter: type) type {
                     frame.item += 1;
                     if (child & run_bit != 0) continue;
                     const child_class = self.classes.items[child];
-                    if (child_class.summary != nil) continue;
-                    if (child_class.tarjan != nil) {
-                        if (self.tarjan_on_stack.items[child_class.tarjan]) {
-                            const own = self.classes.items[frame.node].tarjan;
-                            self.tarjan_low.items[own] = @min(self.tarjan_low.items[own], child_class.tarjan);
+                    if (child_class.summary != .none) continue;
+                    if (child_class.tarjan.get()) |child_tarjan| {
+                        if (self.tarjan_on_stack.items[child_tarjan]) {
+                            const own = self.classes.items[frame.node].tarjan.get().?;
+                            self.tarjan_low.items[own] = @min(self.tarjan_low.items[own], child_tarjan);
                         }
                         continue;
                     }
@@ -1231,26 +1232,26 @@ pub fn Engine(comptime Adapter: type) type {
                 if (descended) continue;
 
                 const done = self.tarjan_frames.pop().?;
-                const own = self.classes.items[done.node].tarjan;
+                const own = self.classes.items[done.node].tarjan.get().?;
                 if (self.tarjan_frames.items.len > 0) {
-                    const parent = self.classes.items[self.tarjan_frames.items[self.tarjan_frames.items.len - 1].node].tarjan;
+                    const parent = self.classes.items[self.tarjan_frames.items[self.tarjan_frames.items.len - 1].node].tarjan.get().?;
                     self.tarjan_low.items[parent] = @min(self.tarjan_low.items[parent], self.tarjan_low.items[own]);
                 }
                 if (self.tarjan_low.items[own] != own) continue;
                 self.scc_members.clearRetainingCapacity();
                 while (true) {
                     const member = self.tarjan_stack.pop().?;
-                    self.tarjan_on_stack.items[self.classes.items[member].tarjan] = false;
+                    self.tarjan_on_stack.items[self.classes.items[member].tarjan.get().?] = false;
                     try self.scc_members.append(self.gpa, member);
                     if (member == done.node) break;
                 }
                 const scc: u32 = @intCast(self.scc_cyclic.items.len);
                 const cyclic = self.scc_members.items.len > 1 or self.classHasSelfEdge(self.scc_members.items[0]);
                 try self.scc_cyclic.append(self.gpa, cyclic);
-                for (self.scc_members.items) |member| self.classes.items[member].key_scc = scc;
+                for (self.scc_members.items) |member| self.classes.items[member].key_scc = .some(scc);
                 for (self.scc_members.items) |member| {
                     const summary = try self.walk(member);
-                    self.classes.items[member].summary = @intCast(self.summaries.items.len);
+                    self.classes.items[member].summary = .some(@intCast(self.summaries.items.len));
                     try self.summaries.append(self.gpa, summary);
                 }
             }
@@ -1277,7 +1278,7 @@ pub fn Engine(comptime Adapter: type) type {
             self.walk_frames.clearRetainingCapacity();
             self.active.clearRetainingCapacity();
             var state = WalkState{};
-            const scc = self.classes.items[root].key_scc;
+            const scc = self.classes.items[root].key_scc.get().?;
             const desc = self.classDesc(root);
             switch (desc.kind) {
                 .leaf => {
@@ -1340,14 +1341,14 @@ pub fn Engine(comptime Adapter: type) type {
                         try self.buf.append(self.gpa, self.tags.identity_ref);
                         try appendVarint(&self.buf, self.gpa, state.defined - index);
                         state.contains_identity = true;
-                    } else if (self.classes.items[class].key_scc == scc or desc.constraint_count == 0) {
+                    } else if (self.classes.items[class].key_scc == Ref.some(scc) or desc.constraint_count == 0) {
                         try self.defineIdentity(state, class);
                     } else {
                         try self.writeReference(state, class);
                     }
                 },
                 .content => {
-                    if (self.classes.items[class].key_scc != scc) return try self.writeReference(state, class);
+                    if (self.classes.items[class].key_scc != Ref.some(scc)) return try self.writeReference(state, class);
                     // Only classes of the walked component are ever active.
                     for (self.active.items, 0..) |active, depth| {
                         if (active != class) continue;
@@ -1365,7 +1366,7 @@ pub fn Engine(comptime Adapter: type) type {
         /// the walk already defined are listed as (child index, distance)
         /// pairs; the rest become defined here, in the child's order.
         fn writeReference(self: *Self, state: *WalkState, class: u32) Allocator.Error!void {
-            const summary = self.summaries.items[self.classes.items[class].summary];
+            const summary = self.summaries.items[self.classes.items[class].summary.get().?];
             if (summary.contains_identity) state.contains_identity = true;
             if (summary.nvars == 0) {
                 try self.buf.append(self.gpa, self.tags.child_key);
@@ -1461,13 +1462,13 @@ pub fn Engine(comptime Adapter: type) type {
         /// The class of an already summarized node.
         pub fn classOf(self: *const Self, node: u32) ?u32 {
             const entry = self.node_info.getPtrConst(node) orelse return null;
-            return if (entry.class == nil) null else entry.class;
+            return entry.class.get();
         }
 
         /// Re-derive the encoding of a class whose component is keyed. The
         /// returned bytes are valid until the next walk.
         pub fn encodingOf(self: *Self, class: u32) Allocator.Error![]const u8 {
-            std.debug.assert(self.classes.items[class].summary != nil);
+            std.debug.assert(self.classes.items[class].summary != .none);
             _ = try self.walk(class);
             return self.buf.items;
         }

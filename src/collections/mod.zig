@@ -74,6 +74,8 @@ pub const OptionalId = @import("optional_id.zig").OptionalId;
 pub const ZeroSentinelId = @import("optional_id.zig").ZeroSentinelId;
 /// An optional raw `u32` in four bytes.
 pub const OptionalU32 = @import("optional_id.zig").OptionalU32;
+/// An optional raw `u8` in one byte; zero means absent.
+pub const OptionalU8 = @import("optional_id.zig").OptionalU8;
 /// An optional small enum in one byte.
 pub const OptionalEnum = @import("optional_id.zig").OptionalEnum;
 /// An optional struct at the struct's own size, keyed by one biased field.

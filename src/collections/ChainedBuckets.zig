@@ -1,6 +1,7 @@
 //! A multimap whose buckets are chains threaded through one shared node list,
 //! so a key holding several values owns no list of its own.
 const std = @import("std");
+const OptionalU32 = @import("optional_id.zig").OptionalU32;
 const Allocator = std.mem.Allocator;
 
 /// Values grouped by key, each group in insertion order. `Context` is the
@@ -10,9 +11,10 @@ pub fn ChainedBuckets(comptime K: type, comptime V: type, comptime Context: type
         const Self = @This();
         /// Node positions are program-size counts, so `u32` holds them;
         /// `append` refuses growth past that range.
-        const end: u32 = std.math.maxInt(u32);
+        const max_nodes: usize = std.math.maxInt(u32);
         const Chain = struct { head: u32, tail: u32 };
-        const Node = struct { value: V, next: u32 };
+        /// `next` is absent for a chain's last node.
+        const Node = struct { value: V, next: OptionalU32 };
 
         chains: std.HashMapUnmanaged(K, Chain, Context, std.hash_map.default_max_load_percentage) = .empty,
         nodes: std.ArrayList(Node) = .empty,
@@ -23,17 +25,17 @@ pub fn ChainedBuckets(comptime K: type, comptime V: type, comptime Context: type
         /// while the iterator is live is visited too.
         pub const Iterator = struct {
             buckets: *const Self,
-            index: u32,
+            /// The next node to visit, absent when no value remains.
+            index: OptionalU32,
 
             /// Whether no value remains; a fresh iterator is empty exactly
             /// when its key is absent.
             pub fn isEmpty(self: Iterator) bool {
-                return self.index == end;
+                return self.index == .none;
             }
 
             pub fn next(self: *Iterator) ?V {
-                if (self.index == end) return null;
-                const node = self.buckets.nodes.items[self.index];
+                const node = self.buckets.nodes.items[self.index.get() orelse return null];
                 self.index = node.next;
                 return node.value;
             }
@@ -60,8 +62,8 @@ pub fn ChainedBuckets(comptime K: type, comptime V: type, comptime Context: type
         }
 
         pub fn get(self: *const Self, key: K) Iterator {
-            const chain = self.chains.get(key) orelse return .{ .buckets = self, .index = end };
-            return .{ .buckets = self, .index = chain.head };
+            const chain = self.chains.get(key) orelse return .{ .buckets = self, .index = .none };
+            return .{ .buckets = self, .index = .some(chain.head) };
         }
 
         pub fn keyIterator(self: *const Self) std.HashMapUnmanaged(K, Chain, Context, std.hash_map.default_max_load_percentage).KeyIterator {
@@ -72,7 +74,7 @@ pub fn ChainedBuckets(comptime K: type, comptime V: type, comptime Context: type
         /// matching `appendAssumeCapacity` calls cannot fail.
         pub fn ensureUnusedCapacity(self: *Self, allocator: Allocator, keys: u32, values: usize) Allocator.Error!void {
             const needed = std.math.add(usize, self.nodes.items.len, values) catch return error.OutOfMemory;
-            if (needed > end) return error.OutOfMemory;
+            if (needed > max_nodes) return error.OutOfMemory;
             try self.nodes.ensureUnusedCapacity(allocator, values);
             try self.chains.ensureUnusedCapacity(allocator, keys);
         }
@@ -84,10 +86,10 @@ pub fn ChainedBuckets(comptime K: type, comptime V: type, comptime Context: type
 
         pub fn appendAssumeCapacity(self: *Self, key: K, value: V) void {
             const index: u32 = @intCast(self.nodes.items.len);
-            self.nodes.appendAssumeCapacity(.{ .value = value, .next = end });
+            self.nodes.appendAssumeCapacity(.{ .value = value, .next = .none });
             const entry = self.chains.getOrPutAssumeCapacity(key);
             if (entry.found_existing) {
-                self.nodes.items[entry.value_ptr.tail].next = index;
+                self.nodes.items[entry.value_ptr.tail].next = .some(index);
                 entry.value_ptr.tail = index;
             } else {
                 entry.value_ptr.* = .{ .head = index, .tail = index };

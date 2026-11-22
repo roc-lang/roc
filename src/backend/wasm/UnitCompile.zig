@@ -215,18 +215,7 @@ pub fn imageOfModule(gpa: Allocator, module: *const WasmModule, stack_checks: bo
 
     // Segments and their sites.
     const data_relocs = try arena.dupe(WasmLinking.RelocationEntry, module.reloc_data.entries.items);
-    std.mem.sort(WasmLinking.RelocationEntry, data_relocs, {}, struct {
-        fn segmentOf(entry: WasmLinking.RelocationEntry) u32 {
-            return switch (entry) {
-                .index => |index| index.data_segment_index,
-                .offset => |offset| offset.data_segment_index,
-            };
-        }
-        fn lessThan(_: void, a: WasmLinking.RelocationEntry, b: WasmLinking.RelocationEntry) bool {
-            if (segmentOf(a) != segmentOf(b)) return segmentOf(a) < segmentOf(b);
-            return a.getOffset() < b.getOffset();
-        }
-    }.lessThan);
+    std.mem.sort(WasmLinking.RelocationEntry, data_relocs, {}, WasmLinking.RelocationEntry.dataSegmentLessThan);
     const segments = try arena.alloc(WasmUnitImage.InputSegment, module.data_segments.items.len);
     next_reloc = 0;
     for (segments, module.data_segments.items, 0..) |*segment, source, index| {
@@ -234,11 +223,7 @@ pub fn imageOfModule(gpa: Allocator, module: *const WasmModule, stack_checks: bo
         var sites: std.ArrayList(WasmUnitImage.InputSite) = .empty;
         while (next_reloc < data_relocs.len) : (next_reloc += 1) {
             const entry = data_relocs[next_reloc];
-            const segment_index = switch (entry) {
-                .index => |reloc| reloc.data_segment_index,
-                .offset => |reloc| reloc.data_segment_index,
-            };
-            if (segment_index != index) break;
+            if (!entry.belongsToDataSegment(index)) break;
             const site = try siteOf(entry, entry.getOffset(), true, symbols, import_count, &types, &imports, stack_low);
             zeroField(bytes, site);
             markTableSite(site, requested, imports.list.items);
@@ -697,7 +682,7 @@ test "a unit compiled alone imports what it calls and names its data through sit
     var linked_import: ?u32 = null;
     for (view.imports(), 0..) |import, index| {
         if (std.mem.eql(u8, view.name(import.name), linked_name)) linked_import = @intCast(index);
-        try std.testing.expect(import.kind != @backingInt(WasmUnitImage.ImportKind.function) or import.type != WasmUnitImage.no_type);
+        try std.testing.expect(import.kind != @backingInt(WasmUnitImage.ImportKind.function) or import.type != .none);
     }
     try std.testing.expect(linked_import != null);
     try std.testing.expect(view.imports().len < 32);

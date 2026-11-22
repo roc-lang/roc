@@ -226,7 +226,7 @@ pub const ErasedFns = struct {
 pub const ConstPlanId = enum(u32) { _ };
 
 const ExpectSiteKey = struct {
-    file: u32,
+    file: collections.OptionalU32,
     line: u32,
     column: u32,
     region_start: u32,
@@ -464,14 +464,11 @@ pub const BoxyExport = struct {
     /// For a template's worker, generic or integer list: the template's
     /// position in its module's checked table, which a needs list naming
     /// the worker by identity resolves it to in the module's current
-    /// checked module.
-    template: u32 = no_template,
+    /// checked module. Absent for a worker that is no template's.
+    template: collections.OptionalU32 = .none,
     /// Whether another unit can read the record: only these records are in
     /// the module's export digest, which its importers' keys fold in.
     visible: bool = false,
-
-    /// `template` of a worker that is no template's.
-    pub const no_template = std.math.maxInt(u32);
 };
 
 /// Everything one lowering produced: the procedure store, its layouts, the

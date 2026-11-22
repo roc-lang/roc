@@ -422,6 +422,10 @@ pub const Binder = struct {
     recursive_value: bool,
 };
 
+/// The first node id of a module. Id zero is the node store's reserved node,
+/// which a walk over a module's nodes leaves out.
+pub const first_node: u32 = can.CIR.Node.first_idx;
+
 /// The publication tables a reader answers by-node questions from. A reader
 /// built before a table exists reports that table's facts as absent; the
 /// body-level analyses read every table and require them all.
@@ -975,8 +979,7 @@ pub const CheckedBodies = struct {
         const node = ModuleEnv.nodeIdxFrom(pattern_id);
         const plan = self.env.store.literalDispatchPlanForNode(node) orelse invariant("a custom literal pattern had no literal dispatch plan");
         const context = plan.patternContext(&self.env.store) orelse invariant("a custom literal pattern had no pattern context");
-        if (context.equality_fn_var_plus_one == 0) invariant("a custom literal pattern had no equality function");
-        const equality_fn: Var = @fromBackingInt(@intCast(context.equality_fn_var_plus_one - 1));
+        const equality_fn: Var = context.equality_fn_var.get() orelse invariant("a custom literal pattern had no equality function");
         const equality_fn_ty = self.typeOf(equality_fn);
         return .{
             .pattern = pattern_id,

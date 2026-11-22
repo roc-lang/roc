@@ -405,7 +405,7 @@ fn allocWasmData(state: *WasmRunState, module: *bytebox.ModuleInstance, alignmen
             data_ptr = alloc_ptr + extra_bytes;
             end = @as(u64, data_ptr) + length;
         }
-        if (end > std.math.maxInt(u32)) @panic("wasm evaluator exhausted the wasm32 address space");
+        if (std.math.cast(u32, end) == null) @panic("wasm evaluator exhausted the wasm32 address space");
         const missing = end - current_len;
         const pages = (missing + 65535) / 65536;
         if (!module.memoryGrow(@intCast(pages))) @panic("wasm evaluator could not grow linear memory");
