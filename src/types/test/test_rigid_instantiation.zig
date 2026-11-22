@@ -405,7 +405,7 @@ test "instantiate - alias preserves structure" {
 
     const rigid_a = try env.types.freshFromContentWithRank(try env.mkRigidVar("a"), .generalized);
     const list_ident_idx = try env.idents.insert(gpa, .for_text("List"));
-    const builtin_module_idx = base.ModuleIdentity.Idx.NONE;
+    const builtin_module_idx = @as(base.ModuleIdentity.Idx, @fromBackingInt(1));
     const backing_content = try env.types.mkNominal(
         .{ .ident_idx = list_ident_idx },
         &[_]Var{rigid_a},
@@ -454,7 +454,7 @@ test "instantiate - nominal type application instantiates its args" {
     // Test Box a
     {
         const box_ident_idx = try env.idents.insert(gpa, .for_text("Box"));
-        const builtin_module_idx = base.ModuleIdentity.Idx.NONE;
+        const builtin_module_idx = @as(base.ModuleIdentity.Idx, @fromBackingInt(1));
         const box_content = try env.types.mkNominal(
             .{ .ident_idx = box_ident_idx },
             &[_]Var{rigid_a},
@@ -676,7 +676,7 @@ test "instantiate - rejected nominal positions produce error and unwind partial 
         defer env.deinit();
         const first = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .generalized);
         const second = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .generalized);
-        const content = try env.types.mkNominal(try env.mkTypeIdent("Rejected"), &.{ first, second }, .NONE, false);
+        const content = try env.types.mkNominal(try env.mkTypeIdent("Rejected"), &.{ first, second }, @fromBackingInt(1), false);
         const original = try env.types.freshFromContentWithRank(content, .generalized);
         var instantiator = Instantiator{
             .store = &env.types,

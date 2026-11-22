@@ -24,7 +24,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RUPC";
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 5;
+pub const format_version: u32 = 6;
 
 /// One source file the pieces' lines name, in the order the set indexes them.
 pub const SourceFile = struct {
@@ -392,14 +392,14 @@ fn optionalWord(value: u32) ?u32 {
 }
 
 fn writeLoc(writer: *Writer, loc: base.SourceLoc) Allocator.Error!void {
-    try writer.word(loc.file);
+    try writer.word(@backingInt(loc.file));
     try writer.word(loc.line);
     try writer.word(loc.column);
 }
 
 fn readLoc(reader: *Reader, file_count: usize) ReadError!base.SourceLoc {
-    const loc: base.SourceLoc = .{ .file = try reader.word(), .line = try reader.word(), .column = try reader.word() };
-    if (loc.hasLocation() and loc.file >= file_count) return error.MalformedPieces;
+    const loc: base.SourceLoc = .{ .file = @fromBackingInt(try reader.word()), .line = try reader.word(), .column = try reader.word() };
+    if (loc.hasLocation() and loc.fileIndex() >= file_count) return error.MalformedPieces;
     return loc;
 }
 
@@ -592,11 +592,11 @@ test "pieces round-trip through their encoding" {
         .frame = .{ .prologue_size = 4, .stack_alloc = 16, .frame_size = 32, .callee_saved_mask = 3, .epilogue_offset = 2, .uses_frame_pointer = true },
         .refs = try sa.dupe(CodeExcerpt.Reference, &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0, .veneer = .none }}),
         .symbolic_refs = try sa.dupe(CodeExcerpt.SymbolicReference, &.{.{ .site = 2, .form = .addr, .target = .{ .rc_helper = try sa.dupe(u8, "roc__helper") } }}),
-        .lines = try sa.dupe(CodeExcerpt.LineEntry, &.{.{ .offset = 0, .loc = .{ .file = 0, .line = 3, .column = 1 }, .region = base.Region.from_raw_offsets(5, 9) }}),
+        .lines = try sa.dupe(CodeExcerpt.LineEntry, &.{.{ .offset = 0, .loc = .{ .file = .some(0), .line = 3, .column = 1 }, .region = base.Region.from_raw_offsets(5, 9) }}),
         .failure_sites = try sa.dupe(CodeExcerpt.FailureSite, &.{.{ .offset = 4, .meaning = .checked_error }}),
         .relocations = try sa.dupe(CodeExcerpt.NamedRelocation, &.{.{ .offset = 0, .name = try sa.dupe(u8, "roc_alloc"), .scope = .shared, .kind = .{ .function = .aarch64_call26 } }}),
         .data = try sa.dupe(CodeExcerpt.DataItem, &.{.{ .name = try sa.dupe(u8, "roc__hcafe"), .bytes = try sa.dupe(u8, "constant"), .alignment = 8, .symbol_offset = 0 }}),
-        .loc = .{ .file = 0, .line = 2, .column = 0 },
+        .loc = .{ .file = .some(0), .line = 2, .column = 0 },
         .name = "Main.answer",
     };
     excerpts[1] = .{

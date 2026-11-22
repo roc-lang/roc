@@ -5399,7 +5399,7 @@ fn testLiteralRootFailureOwnership(allocator: Allocator) (Allocator.Error || err
         .message = &temporary,
         .meaning = .checked_error,
         .region = base.Region.from_raw_offsets(3, 8),
-        .loc = .{ .file = 2, .line = 4, .column = 5 },
+        .loc = .{ .file = .some(2), .line = 4, .column = 5 },
     };
     try failures.record(allocator, root_ids[0], .{ .rejection = .quote }, failure);
     // Deterministically invalidate the evaluator's bytes without reading freed memory.
@@ -7067,9 +7067,9 @@ const DevProgram = struct {
         if (self.image_selection.codeAt(address)) |at| {
             const line = at.locations.lineEntryAt(at.offset) orelse return null;
             if (line.region.isEmpty() or !line.loc.hasLocation()) return null;
-            const identity = at.locations.sourceFile(line.loc.file).module_identity;
+            const identity = at.locations.sourceFile(line.loc.fileIndex()).module_identity;
             var loc = line.loc;
-            loc.file = self.sourceFileOf(identity);
+            loc.file = .some(self.sourceFileOf(identity));
             return .{ .offset = line.offset, .loc = loc, .region = line.region };
         }
         const line = self.codegen.lineEntryAt(address - @intFromPtr(self.executable.codePtr())) orelse return null;
@@ -8219,9 +8219,9 @@ fn comptimeFailureSiteFromLoc(
 ) ComptimeFailureSite {
     const failed_file: ?base.SourceFileEntry = if (failed_loc) |loc|
         (if (loc.hasLocation()) .{
-            .name = lir_store.sourceFileName(loc.file),
-            .qualified_name = lir_store.sourceFileQualifiedName(loc.file),
-            .module_identity = lir_store.sourceFileModuleIdentity(loc.file),
+            .name = lir_store.sourceFileName(loc.fileIndex()),
+            .qualified_name = lir_store.sourceFileQualifiedName(loc.fileIndex()),
+            .module_identity = lir_store.sourceFileModuleIdentity(loc.fileIndex()),
         } else null)
     else
         null;

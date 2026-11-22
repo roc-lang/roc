@@ -272,8 +272,8 @@ fn patchAbsolutePointerOperand(code: []u8, operand_offset: usize, target_addr: u
 
     if (@sizeOf(usize) == 4) {
         if (operand_offset + 4 > code.len) return error.InvalidOffset;
-        if (target_addr > std.math.maxInt(u32)) return error.BranchOutOfRange;
-        std.mem.writeInt(u32, code[operand_offset..][0..4], @intCast(target_addr), .little);
+        const target_addr32 = std.math.cast(u32, target_addr) orelse return error.BranchOutOfRange;
+        std.mem.writeInt(u32, code[operand_offset..][0..4], target_addr32, .little);
         return;
     }
 
@@ -321,8 +321,7 @@ fn patchAarch64PageOffset12Relocation(code: []u8, inst_offset: usize, target_add
 }
 
 fn asCodeOffset(offset: u64, code_len: usize) ApplyRelocationsError!usize {
-    if (offset > std.math.maxInt(usize)) return error.InvalidOffset;
-    const idx: usize = @intCast(offset);
+    const idx = std.math.cast(usize, offset) orelse return error.InvalidOffset;
     if (idx > code_len) return error.InvalidOffset;
     return idx;
 }

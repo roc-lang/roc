@@ -124,8 +124,9 @@ pub const Idx = packed struct(u32) {
     attributes: Attributes,
     idx: u29,
 
-    /// Sentinel value representing no/unset ident
-    pub const NONE: Idx = .{ .attributes = .{ .effectful = true, .ignored = true, .reserved = true }, .idx = std.math.maxInt(u29) };
+    /// No identifier: the all-zero word. The interner reserves serial index
+    /// zero, so no interned identifier has it.
+    pub const NONE: Idx = .{ .attributes = .{ .effectful = false, .ignored = false }, .idx = 0 };
 
     pub fn eql(self: Idx, other: Idx) bool {
         if (comptime builtin.mode == .debug) {
@@ -264,9 +265,8 @@ pub const Store = struct {
     /// Insert a new identifier into the store.
     pub fn insert(self: *Store, gpa: std.mem.Allocator, ident: Ident) std.mem.Allocator.Error!Idx {
         const idx = try self.interner.insert(gpa, ident.raw_text);
-        // The 29-bit id space is the store's capacity; `maxInt(u29)` is the
-        // `NONE` sentinel.
-        if (@backingInt(idx) >= std.math.maxInt(u29)) return error.OutOfMemory;
+        // The 29-bit id space is the store's capacity.
+        if (@backingInt(idx) > std.math.maxInt(u29)) return error.OutOfMemory;
 
         const result = Idx{
             .attributes = ident.attributes,
@@ -334,7 +334,7 @@ pub const Store = struct {
         const name = str_buffer[digit_index + 1 ..];
 
         const idx = try self.interner.insert(gpa, name);
-        if (@backingInt(idx) >= std.math.maxInt(u29)) return error.OutOfMemory;
+        if (@backingInt(idx) > std.math.maxInt(u29)) return error.OutOfMemory;
 
         const attributes = Attributes{
             .effectful = false,

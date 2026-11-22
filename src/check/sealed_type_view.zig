@@ -53,14 +53,12 @@ const invariant = checked_artifact.checkedArtifactInvariant;
 
 /// The canonical names one identifier of the module stands for, one per name
 /// space a checked type uses identifiers in. A name space the module's types
-/// never use the identifier in holds `none`.
+/// never use the identifier in is absent.
 pub const SealedNameRow = extern struct {
-    type_name: u32 = none,
-    record_field_label: u32 = none,
-    tag_label: u32 = none,
-    method_name: u32 = none,
-
-    pub const none: u32 = std.math.maxInt(u32);
+    type_name: collections.OptionalId(canonical.TypeNameId) = .none,
+    record_field_label: collections.OptionalId(canonical.RecordFieldLabelId) = .none,
+    tag_label: collections.OptionalId(canonical.TagLabelId) = .none,
+    method_name: collections.OptionalId(canonical.MethodNameId) = .none,
 };
 
 /// The checked identity of one module identity the module's types name, and
@@ -68,7 +66,7 @@ pub const SealedNameRow = extern struct {
 /// available to the module.
 pub const SealedOriginRow = extern struct {
     owner: ModuleId = .{},
-    identity: u32 = SealedNameRow.none,
+    identity: collections.OptionalId(canonical.ModuleIdentityId) = .none,
     has_owner: u32 = 0,
 };
 
@@ -162,25 +160,24 @@ pub const SealedTypeView = struct {
         return self.names[index];
     }
 
-    fn present(id: u32) u32 {
-        if (id == SealedNameRow.none) invariant("a sealed checked type named an identifier in a name space publication never interned it in", .{});
-        return id;
+    fn present(id: anytype) @TypeOf(id).CompactPayload {
+        return id.get() orelse invariant("a sealed checked type named an identifier in a name space publication never interned it in", .{});
     }
 
     fn typeName(self: SealedTypeView, ident: Ident.Idx) canonical.TypeNameId {
-        return @fromBackingInt(present(self.nameRow(ident).type_name));
+        return present(self.nameRow(ident).type_name);
     }
 
     fn recordFieldLabel(self: SealedTypeView, ident: Ident.Idx) canonical.RecordFieldLabelId {
-        return @fromBackingInt(present(self.nameRow(ident).record_field_label));
+        return present(self.nameRow(ident).record_field_label);
     }
 
     fn tagLabel(self: SealedTypeView, ident: Ident.Idx) canonical.TagLabelId {
-        return @fromBackingInt(present(self.nameRow(ident).tag_label));
+        return present(self.nameRow(ident).tag_label);
     }
 
     fn methodName(self: SealedTypeView, ident: Ident.Idx) canonical.MethodNameId {
-        return @fromBackingInt(present(self.nameRow(ident).method_name));
+        return present(self.nameRow(ident).method_name);
     }
 
     fn originRow(self: SealedTypeView, origin: base.ModuleIdentity.Idx) *const SealedOriginRow {
@@ -190,7 +187,7 @@ pub const SealedTypeView = struct {
     }
 
     fn originIdentity(self: SealedTypeView, origin: base.ModuleIdentity.Idx) canonical.ModuleIdentityId {
-        return @fromBackingInt(present(self.originRow(origin).identity));
+        return present(self.originRow(origin).identity);
     }
 
     fn originOwner(self: SealedTypeView, origin: base.ModuleIdentity.Idx) *const ModuleId {
@@ -546,34 +543,34 @@ const ColumnBuilder = struct {
 
     fn typeName(self: *ColumnBuilder, ident: Ident.Idx) Allocator.Error!void {
         const name_row = try self.row(ident);
-        if (name_row.type_name != SealedNameRow.none) return;
-        name_row.type_name = @backingInt(try self.names.internTypeIdent(&self.env.common.idents, ident));
+        if (name_row.type_name != .none) return;
+        name_row.type_name = .some(try self.names.internTypeIdent(&self.env.common.idents, ident));
     }
 
     fn recordFieldLabel(self: *ColumnBuilder, ident: Ident.Idx) Allocator.Error!void {
         const name_row = try self.row(ident);
-        if (name_row.record_field_label != SealedNameRow.none) return;
-        name_row.record_field_label = @backingInt(try self.names.internRecordFieldIdent(&self.env.common.idents, ident));
+        if (name_row.record_field_label != .none) return;
+        name_row.record_field_label = .some(try self.names.internRecordFieldIdent(&self.env.common.idents, ident));
     }
 
     fn tagLabel(self: *ColumnBuilder, ident: Ident.Idx) Allocator.Error!void {
         const name_row = try self.row(ident);
-        if (name_row.tag_label != SealedNameRow.none) return;
-        name_row.tag_label = @backingInt(try self.names.internTagIdent(&self.env.common.idents, ident));
+        if (name_row.tag_label != .none) return;
+        name_row.tag_label = .some(try self.names.internTagIdent(&self.env.common.idents, ident));
     }
 
     fn methodName(self: *ColumnBuilder, ident: Ident.Idx) Allocator.Error!void {
         const name_row = try self.row(ident);
-        if (name_row.method_name != SealedNameRow.none) return;
-        name_row.method_name = @backingInt(try self.names.internMethodIdent(&self.env.common.idents, ident));
+        if (name_row.method_name != .none) return;
+        name_row.method_name = .some(try self.names.internMethodIdent(&self.env.common.idents, ident));
     }
 
     fn origin(self: *ColumnBuilder, origin_module: base.ModuleIdentity.Idx) Allocator.Error!void {
         const index: usize = @backingInt(origin_module);
         if (index >= self.columns.origins.items().len) try self.columns.origins.appendNTimes(self.allocator, .{}, index + 1 - self.columns.origins.items().len);
         const origin_row = &self.columns.origins.items()[index];
-        if (origin_row.identity != SealedNameRow.none) return;
-        origin_row.identity = @backingInt(try self.names.internModuleIdentity(self.env.moduleIdentityHash(origin_module)));
+        if (origin_row.identity != .none) return;
+        origin_row.identity = .some(try self.names.internModuleIdentity(self.env.moduleIdentityHash(origin_module)));
         if (try self.origins.ownerIfAvailable(self.env, self.imports, origin_module)) |owner| {
             origin_row.owner = owner;
             origin_row.has_owner = 1;

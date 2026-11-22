@@ -11213,8 +11213,8 @@ const Builder = struct {
             // interface identity for active recursive and partially overlapping
             // requests.
             if (resolved_request_ty) |request_fn_ty| {
-                var raw_spec: u32 = if (source_ctx.draft.template_specs_by_template.get(template_ref)) |chain| chain.head else TemplateSpecChain.end;
-                while (raw_spec != TemplateSpecChain.end) : (raw_spec = source_ctx.draft.template_specs.items[raw_spec].next_in_template) {
+                var spec_link: collections.OptionalU32 = if (source_ctx.draft.template_specs_by_template.get(template_ref)) |chain| .some(chain.head) else .none;
+                while (spec_link.get()) |raw_spec| : (spec_link = source_ctx.draft.template_specs.items[raw_spec].next_in_template) {
                     const spec = &source_ctx.draft.template_specs.items[raw_spec];
                     // The checked source root selects the template body, but it is
                     // not part of a resolved specialization's identity. Recursive
@@ -11352,7 +11352,7 @@ const Builder = struct {
         lexical_needs_cleanup = false;
         const template_chain = try source_ctx.draft.template_specs_by_template.getOrPut(template_ref);
         if (template_chain.found_existing) {
-            source_ctx.draft.template_specs.items[template_chain.value_ptr.tail].next_in_template = @intCast(spec_index);
+            source_ctx.draft.template_specs.items[template_chain.value_ptr.tail].next_in_template = .some(@intCast(spec_index));
             template_chain.value_ptr.tail = @intCast(spec_index);
         } else {
             template_chain.value_ptr.* = .{ .head = @intCast(spec_index), .tail = @intCast(spec_index) };
@@ -17795,15 +17795,13 @@ const OptionalEagerTemplateResolution = collections.OptionalStruct(EagerTemplate
 const TemplateSpecChain = struct {
     head: u32,
     tail: u32,
-
-    const end = std.math.maxInt(u32);
 };
 
 const DraftTemplateSpec = struct {
     state: DraftSpecState,
     template_ref: names.ProcTemplate,
-    /// The next draft spec of the same template, or `TemplateSpecChain.end`.
-    next_in_template: u32 = TemplateSpecChain.end,
+    /// The next draft spec of the same template, absent for the chain's last.
+    next_in_template: collections.OptionalU32 = .none,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     /// Worker-local symbol retained when a deferred request must eagerly lower
@@ -17983,14 +17981,15 @@ const MaterializedConstNodeAddress = struct {
 /// reads: a node still under construction that the expression reaches
 /// through a back-edge, directly or through a node it shares. `serial`
 /// tells that binding apart from a later one at the same stack position.
+/// Binding serials are issued from one, so serial zero marks no read.
 const ConstNodeFreeRead = struct {
     index: u32,
     serial: u32,
 
-    const none: ConstNodeFreeRead = .{ .index = std.math.maxInt(u32), .serial = 0 };
+    const none: ConstNodeFreeRead = .{ .index = 0, .serial = 0 };
 
     fn isNone(read: ConstNodeFreeRead) bool {
-        return read.index == std.math.maxInt(u32);
+        return read.serial == 0;
     }
 };
 
@@ -18479,7 +18478,7 @@ const FrozenPreparedCodecCalls = struct {
         errdefer custom_call_ids.deinit();
 
         for (calls, 0..) |call, index| {
-            if (index > std.math.maxInt(u32)) Common.invariant("prepared codec call index exceeded its identity range");
+            if (std.math.cast(u32, index) == null) Common.invariant("prepared codec call index exceeded its identity range");
             switch (call.purpose) {
                 .format => {
                     const address = FormatCodecCallAddress{
@@ -18649,28 +18648,21 @@ const DraftPreparedInspectMethod = struct {
 
 const RuntimeImpossibilityProofId = enum(u32) { _ };
 
-/// A per-node column of optional proof ids, stored as `u32`s with
-/// `maxInt(u32)` for "no proof"; that value is never minted.
+/// A growing per-node column of optional proof ids, four bytes each; zero
+/// means "no proof".
 const ImpossibilityProofColumn = struct {
-    items: std.ArrayList(u32) = .empty,
-
-    const none = std.math.maxInt(u32);
-
-    fn encode(proof: ?RuntimeImpossibilityProofId) u32 {
-        return if (proof) |id| @backingInt(id) else none;
-    }
+    items: std.ArrayList(collections.OptionalId(RuntimeImpossibilityProofId)) = .empty,
 
     fn get(self: *const ImpossibilityProofColumn, index: usize) ?RuntimeImpossibilityProofId {
-        const raw = self.items.items[index];
-        return if (raw == none) null else @fromBackingInt(raw);
+        return self.items.items[index].get();
     }
 
     fn set(self: *ImpossibilityProofColumn, index: usize, proof: ?RuntimeImpossibilityProofId) void {
-        self.items.items[index] = encode(proof);
+        self.items.items[index] = .of(proof);
     }
 
     fn append(self: *ImpossibilityProofColumn, allocator: Allocator, proof: ?RuntimeImpossibilityProofId) Allocator.Error!void {
-        try self.items.append(allocator, encode(proof));
+        try self.items.append(allocator, .of(proof));
     }
 
     fn clearRetainingCapacity(self: *ImpossibilityProofColumn) void {
@@ -19264,7 +19256,9 @@ const BodyDraftStore = struct {
     materialized_const_nodes: std.ArrayList(MaterializedConstNode),
     const_restore_scopes: std.ArrayListUnmanaged(ConstRestoreScope) = .empty,
     const_restore_lets: std.ArrayListUnmanaged(ConstRestoreLet) = .empty,
-    const_node_binding_serial: u32 = 0,
+    /// The serial the next ConstStore node binding receives; issued from one
+    /// because serial zero marks `ConstNodeFreeRead.none`.
+    const_node_binding_serial: u32 = 1,
     /// The free read of the node a restore step delivered last.
     delivered_const_free_read: ConstNodeFreeRead = .none,
     stored_capture_witnesses: std.ArrayListUnmanaged(StoredCaptureWitness) = .empty,
@@ -20766,7 +20760,7 @@ const BodyDraftStore = struct {
         }
         const literal_backing = if (literal_bytes_len == 0) null else try Ast.SharedLiteralBacking.initUnfilled(program.allocator, literal_bytes_len);
         defer if (literal_backing) |backing| backing.owner.release();
-        if (literal_bytes_len > std.math.maxInt(u32)) return error.OutOfMemory;
+        if (std.math.cast(u32, literal_bytes_len) == null) return error.OutOfMemory;
         var literal_cursor: u32 = 0;
         for (self.string_literals.items, 0..) |literal, index| {
             if (!ids.retained(.string_literals, index)) continue;
@@ -21884,7 +21878,8 @@ fn appendRuntimeImpossibilityProof(
     proof: RuntimeImpossibilityProof,
 ) Allocator.Error!RuntimeImpossibilityProofId {
     const index = draft.impossibility_proofs.items.len;
-    if (index >= ImpossibilityProofColumn.none) return error.OutOfMemory;
+    // `OptionalId(RuntimeImpossibilityProofId)` stores an id plus one.
+    if (std.math.cast(u32, index + 1) == null) return error.OutOfMemory;
     const id: RuntimeImpossibilityProofId = @fromBackingInt(@intCast(index));
     try draft.impossibility_proofs.append(allocator, proof);
     return id;
@@ -33974,8 +33969,8 @@ const BodyContext = struct {
         else
             line;
         return .{
-            .file = self.source_file_id orelse
-                Common.invariant("expression-capable body context had no source-file identity"),
+            .file = .some(self.source_file_id orelse
+                Common.invariant("expression-capable body context had no source-file identity")),
             .line = user_line + 1,
             .column = column + 1,
         };
@@ -42264,8 +42259,7 @@ const BodyContext = struct {
         base_capture_id: usize,
     ) u32 {
         const capture_id = base_capture_id + self.parserRecordFieldRank(fields, field_index);
-        if (capture_id > std.math.maxInt(u32)) Common.invariant("parser generated too many field captures");
-        return @intCast(capture_id);
+        return std.math.cast(u32, capture_id) orelse Common.invariant("parser generated too many field captures");
     }
 
     fn appendParserPrecomputedCaptures(
@@ -42475,7 +42469,7 @@ const BodyContext = struct {
 
         const base_capture_id = plan.next_capture_id;
         plan.next_capture_id += fields.len;
-        if (plan.next_capture_id > std.math.maxInt(u32)) Common.invariant(codec_name ++ " generated too many captures");
+        if (std.math.cast(u32, plan.next_capture_id) == null) Common.invariant(codec_name ++ " generated too many captures");
 
         for (fields, 0..) |_, index| {
             const capture_id = self.parserFieldCaptureIdForRecordField(fields, index, base_capture_id);
@@ -42522,7 +42516,7 @@ const BodyContext = struct {
 
         const base_capture_id = plan.next_capture_id;
         plan.next_capture_id += fields.len;
-        if (plan.next_capture_id > std.math.maxInt(u32)) Common.invariant(switch (kind) {
+        if (std.math.cast(u32, plan.next_capture_id) == null) Common.invariant(switch (kind) {
             .parser => "parser generated too many captures",
             .encoder => "encoder_for generated too many captures",
         });
@@ -54529,8 +54523,7 @@ const BodyContext = struct {
             .record_field => return try self.graph.recordFieldValueNode(node, try recordFieldName(self.nameStoreMut(), view, @fromBackingInt(step.data))),
             .tag_payload_tag => return node,
             .tag_payload_index => {
-                const tag_node = path_nodes[path_node].parent;
-                if (tag_node == static_dispatch.no_evidence_path_node) return null;
+                const tag_node = path_nodes[path_node].parent.get() orelse return null;
                 const tag_step = path_nodes[tag_node].step;
                 if (tag_step.stepKind() != .tag_payload_tag) return null;
                 return try self.graph.tagPayloadNode(
@@ -61038,7 +61031,7 @@ const BodyContext = struct {
                 break;
             }
             if (exists) continue;
-            if (call_index > std.math.maxInt(u32)) {
+            if (std.math.cast(u32, call_index) == null) {
                 Common.invariant("checked generated codec call index exceeded its identity range");
             }
             slots[len] = .{

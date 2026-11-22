@@ -30,8 +30,8 @@ scopes: std.ArrayList(Scope) = .empty,
 environment_index: std.HashMapUnmanaged(Environment, u32, EnvironmentContext, std.hash_map.default_max_load_percentage) = .empty,
 dependencies: collections.DenseMapUnmanaged(types.NominalDecl.Idx, *Dependencies) = .empty,
 /// The backing of the nominal type each root holds, by root, as
-/// `openNominalBackingOf` answered it: `no_view` for an invalid declaration.
-opened: collections.DenseMapUnmanaged(Var, Var) = .empty,
+/// `openNominalBackingOf` answered it: absent for an invalid declaration.
+opened: collections.DenseMapUnmanaged(Var, OptVar) = .empty,
 /// The backing of each valid declaration that takes no arguments, as
 /// `openNominalBacking` answered it, by the declaration key its applications
 /// carry (`nominalDeclarationKey`): every application of such a declaration opens to the
@@ -39,7 +39,7 @@ opened: collections.DenseMapUnmanaged(Var, Var) = .empty,
 argless_backings: std.AutoHashMapUnmanaged(u64, Var) = .empty,
 /// Where the graphs of final declarations live across readers, if anywhere.
 shared: ?Shared = null,
-argument_scratch: std.ArrayList(Var) = .empty,
+argument_scratch: std.ArrayList(OptVar) = .empty,
 // Projected Range.start values name immutable spans, not element offsets.
 // Only this reader may interpret or index them. Reallocating these directories
 // never moves or poisons the independently owned child spans.
@@ -65,15 +65,17 @@ const FieldSlice = struct {
 /// A template root in a scope: `dependency` is the root's node in the
 /// scope's declaration graph.
 const Node = struct { scope: u32, dependency: u32, descriptor: ?types.Descriptor = null };
-const Environment = struct { declaration: types.NominalDecl.Idx, args: []const Var };
+/// An environment's argument is absent where the declaration's graph needs
+/// none of it.
+const Environment = struct { declaration: types.NominalDecl.Idx, args: []const OptVar };
 /// An interned environment, its declaration's graph, and its views.
 const Scope = struct {
     environment: Environment,
     dependencies: *const Dependencies,
     /// The view of each template root in this scope, indexed by the root's
-    /// dependency node and `no_view` until the root is first viewed here.
+    /// dependency node and absent until the root is first viewed here.
     /// Empty until the scope's first view.
-    views: []Var = &.{},
+    views: []OptVar = &.{},
 };
 const EnvironmentContext = struct {
     pub fn hash(_: @This(), env: Environment) u64 {
@@ -83,7 +85,7 @@ const EnvironmentContext = struct {
         return h.final();
     }
     pub fn eql(_: @This(), a: Environment, b: Environment) bool {
-        return a.declaration == b.declaration and varsEqual(a.args, b.args);
+        return a.declaration == b.declaration and optVarsEqual(a.args, b.args);
     }
 };
 pub const Resolved = struct { var_: Var, desc: types.Descriptor };
@@ -143,9 +145,7 @@ const DependencyBuilder = struct {
     /// The children of the node being expanded.
     children: std.ArrayList(u32) = .empty,
 };
-const absent_argument: Var = @fromBackingInt(std.math.maxInt(u32));
-/// No view ID takes the all-ones value (see `view`).
-const no_view: Var = @fromBackingInt(std.math.maxInt(u32));
+const OptVar = collections.OptionalId(Var);
 
 /// Formal-dependency graphs that outlive a reader. A declaration's graph is a
 /// function of its formals and backing template alone, so once the template
@@ -237,9 +237,9 @@ pub fn hasSourceDependencies(self: *const Self, view_id: Var) Allocator.Error!bo
         const required = scope.dependencies.nodes.items[node.dependency].source_formals;
         for (scope.environment.args, required) |actual, needed| {
             if (!needed) continue;
-            std.debug.assert(actual != absent_argument);
-            if (self.sourceVar(actual) != null) return true;
-            if (!(try seen.getOrPut(self.gpa, actual)).found_existing) try pending.append(self.gpa, actual);
+            const actual_var = actual.get().?;
+            if (self.sourceVar(actual_var) != null) return true;
+            if (!(try seen.getOrPut(self.gpa, actual_var)).found_existing) try pending.append(self.gpa, actual_var);
         }
         current = pending.pop() orelse return false;
     }
@@ -310,7 +310,7 @@ fn viewBacking(self: *Self, declaration: types.NominalDecl.Idx, args: []const Va
     const dependencies = try self.ensureDependencies(declaration);
     try self.argument_scratch.resize(self.gpa, args.len);
     const canonical = self.argument_scratch.items;
-    for (args, canonical) |arg, *dest| dest.* = self.root(arg);
+    for (args, canonical) |arg, *dest| dest.* = .some(self.root(arg));
     const scope = try self.internScope(.{ .declaration = declaration, .args = canonical }, dependencies);
     return try self.view(dependencies, backing_dependency, scope);
 }
@@ -323,12 +323,12 @@ pub fn openNominalBackingOf(self: *Self, nominal_root: Var, nominal: types.Nomin
     if (self.opened.get(nominal_root)) |backing| {
         if (std.debug.runtime_safety) {
             const reopened = try self.openNominalBacking(nominal);
-            std.debug.assert((reopened orelse no_view) == backing);
+            std.debug.assert(OptVar.of(reopened) == backing);
         }
-        return if (backing == no_view) null else backing;
+        return backing.get();
     }
     const backing = try self.openNominalBacking(nominal);
-    try self.opened.put(self.gpa, nominal_root, backing orelse no_view);
+    try self.opened.put(self.gpa, nominal_root, .of(backing));
     return backing;
 }
 
@@ -336,7 +336,7 @@ fn internScope(self: *Self, environment: Environment, dependencies: *const Depen
     if (self.environment_index.get(environment)) |existing| return existing;
     const owned = Environment{
         .declaration = environment.declaration,
-        .args = try self.arena.allocator().dupe(Var, environment.args),
+        .args = try self.arena.allocator().dupe(OptVar, environment.args),
     };
     const index: u32 = @intCast(self.scopes.items.len);
     try self.scopes.append(self.gpa, .{ .environment = owned, .dependencies = dependencies });
@@ -351,16 +351,14 @@ fn view(self: *Self, dependencies: *const Dependencies, dependency: u32, scope: 
     const template = &dependencies.nodes.items[dependency];
     const environment = self.scopes.items[scope].environment;
     if (template.formal) |formal| {
-        const actual = environment.args[formal];
-        std.debug.assert(actual != absent_argument);
-        return actual;
+        return environment.args[formal].get().?;
     }
     var normalized = scope;
     for (environment.args, template.formals) |actual, needed| {
-        if (!needed and actual != absent_argument) {
+        if (!needed and actual != .none) {
             try self.argument_scratch.resize(self.gpa, environment.args.len);
             for (environment.args, template.formals, self.argument_scratch.items) |arg, used, *dest| {
-                dest.* = if (used) arg else absent_argument;
+                dest.* = if (used) arg else .none;
             }
             normalized = try self.internScope(.{ .declaration = environment.declaration, .args = self.argument_scratch.items }, dependencies);
             break;
@@ -369,18 +367,19 @@ fn view(self: *Self, dependencies: *const Dependencies, dependency: u32, scope: 
     // Interning can grow scopes; take the pointer only now.
     const views = &self.scopes.items[normalized].views;
     if (views.*.len == 0) {
-        const fresh = try self.arena.allocator().alloc(Var, dependencies.nodes.items.len);
-        @memset(fresh, no_view);
+        const fresh = try self.arena.allocator().alloc(OptVar, dependencies.nodes.items.len);
+        @memset(fresh, .none);
         views.* = fresh;
     }
     const slot = &views.*[dependency];
-    if (slot.* != no_view) return slot.*;
+    if (slot.get()) |existing| return existing;
     const index = try addOffset(self.source_len, @intCast(self.nodes.items.len));
-    // All-ones Var is RecordField.Presence's absent-presence sentinel.
+    // An optional Var (a view slot, a field's presence) cannot hold the
+    // all-ones Var.
     if (index == std.math.maxInt(u32)) return error.OutOfMemory;
     const result: Var = @fromBackingInt(index);
     try self.nodes.append(self.gpa, .{ .scope = normalized, .dependency = dependency });
-    slot.* = result;
+    slot.* = .some(result);
     return result;
 }
 
@@ -668,8 +667,7 @@ pub fn getRecordFieldAt(self: *const Self, range: types.RecordField.SafeMultiLis
     return .{ .name = slice.items(.name)[offset], .presence = slice.items(.presence)[offset] };
 }
 
-/// Whether two type-variable lists name the same variables in the same order.
-fn varsEqual(a: []const Var, b: []const Var) bool {
+fn optVarsEqual(a: []const OptVar, b: []const OptVar) bool {
     if (a.len != b.len) return false;
     for (a, b) |left, right| {
         if (left != right) return false;

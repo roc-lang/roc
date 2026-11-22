@@ -216,12 +216,12 @@ NO CHANGE
 					(e-block
 						(s-let
 							(p-assign (ident "#interp_0"))
-							(e-dispatch-call (method "to_str") (constraint-fn-var 295)
+							(e-dispatch-call (method "to_str") (constraint-fn-var 296)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "n"))))
 								(args)))
-						(e-interpolation (constraint-fn-var 311) (dispatcher-var 26)
+						(e-interpolation (constraint-fn-var 312) (dispatcher-var 27)
 							(first
 								(e-literal (string "a ")))
 							(parts
@@ -269,10 +269,10 @@ NO CHANGE
 				(p-assign (ident "_args")))
 			(e-block
 				(s-expr
-					(e-call (constraint-fn-var 412)
+					(e-call (constraint-fn-var 413)
 						(e-lookup-local
 							(p-assign (ident "echo!")))
-						(e-call (constraint-fn-var 411)
+						(e-call (constraint-fn-var 412)
 							(e-lookup-local
 								(p-assign (ident "f")))
 							(e-num (value "1")))))

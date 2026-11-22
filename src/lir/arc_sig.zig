@@ -60,9 +60,9 @@ pub const OutcomeSpan = extern struct {
 /// Restituted parameters of the outcome row whose discriminant equals an
 /// explicit switch arm's value, or null when no row names that value.
 pub fn outcomeMaskForValue(outcomes: []const Outcome, value: u64) ?ParamMask {
-    if (value > std.math.maxInt(u32)) return null;
+    const discriminant = std.math.cast(u32, value) orelse return null;
     for (outcomes) |outcome| {
-        if (outcome.discriminant == @as(u32, @intCast(value))) return outcome.restituted_params;
+        if (outcome.discriminant == discriminant) return outcome.restituted_params;
     }
     return null;
 }

@@ -11,8 +11,6 @@ pub const Idx = layout.Idx;
 /// Temporary node identifier inside a not-yet-interned layout graph.
 pub const NodeId = enum(u32) {
     _,
-
-    pub const none: NodeId = @fromBackingInt(@intCast(std.math.maxInt(u32)));
 };
 
 /// Reference to either an already-canonical layout or a local graph node.
