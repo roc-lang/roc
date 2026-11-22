@@ -15574,7 +15574,8 @@ fn customIssue12741WasmGenericTailCalls(
 
 /// A wasm32 dev build without specialization compiles each module to its
 /// own unit, so the app's calls to `Issue13356Parity.even` (closed types) and
-/// `Issue13356Loop.ping` (a generic parameter, so a tail carry) cross units
+/// `Issue13356Loop.ping` (a generic parameter, so a tail carry) and
+/// `Issue13356SelfTail.nt` (a function that tail-calls itself) cross units
 /// into cycles of tail calls, and must return each cycle's final result.
 fn customIssue13356WasmCrossModuleTailGroup(
     io: std.Io,
@@ -15604,8 +15605,8 @@ fn customIssue13356WasmCrossModuleTailGroup(
     defer wasm.deinit();
     const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
         return customFailure(allocator, timer, "cross-module tail group wasm execution failed: {}", .{err});
-    if (!std.mem.eql(u8, result, "81 >ioioi")) {
-        return customFailure(allocator, timer, "cross-module tail group wasm returned \"{s}\", not \"81 >ioioi\"", .{result});
+    if (!std.mem.eql(u8, result, "81 >ioioi 5")) {
+        return customFailure(allocator, timer, "cross-module tail group wasm returned \"{s}\", not \"81 >ioioi 5\"", .{result});
     }
     return null;
 }
