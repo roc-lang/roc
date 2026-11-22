@@ -10857,11 +10857,11 @@ fn rejectPolymorphicRecursion(self: *Self) std.mem.Allocator.Error!void {
             }
         };
         std.mem.sort(u32, order, Order{ .components = components, .schemes = node_schemes.items }, Order.lessThan);
-        // Absent for a component with no joined pair; `joined_unresolved`
-        // until its first record is found. Small and read for every
-        // component, so it starts cleared to absent (zero).
-        const joined_unresolved: u32 = std.math.maxInt(u32) - 1;
-        std.debug.assert(records.len < joined_unresolved);
+        // The components with a joined pair, and each one's first record.
+        // Both are small and read for every component, so they start
+        // cleared (zero).
+        var joined = try std.DynamicBitSetUnmanaged.initEmpty(self.gpa, component_count);
+        defer joined.deinit(self.gpa);
         const first_records = try self.gpa.alloc(collections.OptionalU32, component_count);
         defer self.gpa.free(first_records);
         @memset(first_records, .none);
@@ -10871,20 +10871,21 @@ fn rejectPolymorphicRecursion(self: *Self) std.mem.Allocator.Error!void {
             if (component != components[previous]) continue;
             if (node_schemes.items[node] != node_schemes.items[previous]) continue;
             if (verdicts[component] == .rejected) continue;
-            // Marked here, resolved to the component's first record below.
-            first_records[component] = .some(joined_unresolved);
+            joined.set(component);
             any_joined = true;
         }
         if (any_joined) {
             for (flows.items) |flow| {
                 const component = components[flow.from];
                 if (component != components[flow.to]) continue;
-                const first = first_records[component].get() orelse continue;
-                first_records[component] = .some(@min(first, flow.record));
+                if (!joined.isSet(component)) continue;
+                const first = &first_records[component];
+                first.* = .some(if (first.get()) |record| @min(record, flow.record) else flow.record);
             }
-            for (first_records) |maybe_record| {
-                const record_index = maybe_record.get() orelse continue;
+            var joined_components = joined.iterator(.{});
+            while (joined_components.next()) |component| {
                 // Two nodes share a component only through flows inside it.
+                const record_index = first_records[component].get().?;
                 std.debug.assert(record_index < records.len);
                 rejected[record_index] = true;
                 any_rejected = true;
