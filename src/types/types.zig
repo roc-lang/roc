@@ -1472,10 +1472,8 @@ pub const RecordField = struct {
     pub const Presence = struct {
         /// Every field has a value type variable.
         var_: Var,
-        /// A field-kind variable, or `no_presence_var` for a required field.
-        presence_var: Var,
-
-        const no_presence_var: Var = @fromBackingInt(@intCast(std.math.maxInt(u32)));
+        /// A field-kind variable, absent for a required field.
+        presence_var: collections.OptionalId(Var),
 
         pub const Decoded = union(enum) {
             required: Var,
@@ -1487,22 +1485,18 @@ pub const RecordField = struct {
 
         /// Construct a required field with no kind variable.
         pub fn required(var_: Var) @This() {
-            return .{ .var_ = var_, .presence_var = no_presence_var };
+            return .{ .var_ = var_, .presence_var = .none };
         }
 
         /// Construct a field whose kind is carried by `presence`.
         pub fn unknown(presence: Var, var_: Var) @This() {
-            std.debug.assert(presence != no_presence_var);
-            return .{ .var_ = var_, .presence_var = presence };
+            return .{ .var_ = var_, .presence_var = .some(presence) };
         }
 
         /// Recover the semantic field-kind representation.
         pub fn decode(self: @This()) Decoded {
-            if (self.presence_var == no_presence_var) {
-                return .{ .required = self.var_ };
-            }
-
-            return .{ .unknown = .{ .presence = self.presence_var, .var_ = self.var_ } };
+            const presence = self.presence_var.get() orelse return .{ .required = self.var_ };
+            return .{ .unknown = .{ .presence = presence, .var_ = self.var_ } };
         }
 
         /// The field's value type variable. Every field carries one (unknown
@@ -1521,7 +1515,7 @@ pub const RecordField = struct {
         /// `Content.field_presence` (or stays flex) exactly like a type
         /// variable resolves to a structure.
         pub fn presenceVar(self: @This()) ?Var {
-            return if (self.presence_var == no_presence_var) null else self.presence_var;
+            return self.presence_var.get();
         }
     };
 
@@ -1740,20 +1734,7 @@ pub const NumeralInfo = struct {
 
     /// A row of a type store's `numeral_infos`, or none. A constraint carries
     /// one exactly when its origin is a numeric literal conversion.
-    pub const OptIdx = enum(u32) {
-        none = std.math.maxInt(u32),
-        _,
-
-        pub fn from(idx: SafeList.Idx) OptIdx {
-            std.debug.assert(@backingInt(idx) != std.math.maxInt(u32));
-            return @fromBackingInt(@backingInt(idx));
-        }
-
-        /// The row, or null when absent.
-        pub fn get(self: OptIdx) ?SafeList.Idx {
-            return if (self == .none) null else @fromBackingInt(@backingInt(self));
-        }
-    };
+    pub const OptIdx = collections.OptionalId(SafeList.Idx);
 
     /// Test-only convenience: facts for an integer literal given as a value,
     /// for unit tests that need a numeral constraint without parsing source.
@@ -1836,20 +1817,7 @@ pub const StaticDispatchConstraint = struct {
 
         /// An optional raw `CIR.Expr.Idx`. `none` marks a synthetic constraint
         /// with no introducing expression.
-        pub const OptExprIdx = enum(u32) {
-            none = std.math.maxInt(u32),
-            _,
-
-            pub fn from(raw: u32) OptExprIdx {
-                std.debug.assert(raw != std.math.maxInt(u32));
-                return @fromBackingInt(@intCast(raw));
-            }
-
-            /// The raw index, or null when absent.
-            pub fn get(self: OptExprIdx) ?u32 {
-                return if (self == .none) null else @backingInt(self);
-            }
-        };
+        pub const OptExprIdx = collections.OptionalU32;
     };
 
     /// An optional region packed into a `Region` using a `maxInt` start offset
@@ -1881,8 +1849,6 @@ pub const StaticDispatchConstraint = struct {
         /// Whose source `expr_region` and the parts' regions point into.
         regions: RegionSource,
 
-        const no_var: Var = @fromBackingInt(@intCast(std.math.maxInt(u32)));
-
         /// A module can render only its own source positions. Cross-module
         /// copying keeps the defining module's positions, so a report about an
         /// imported copy points at the use that instantiated it instead.
@@ -1893,7 +1859,8 @@ pub const StaticDispatchConstraint = struct {
 
         pub const none = InterpolationMetadata{
             .expr_region = OptRegion.none,
-            .item_var = no_var,
+            // Absent metadata has no item type; readers check `isPresent` first.
+            .item_var = undefined,
             .interpolated_parts = .empty(),
             .regions = .this_module,
         };
@@ -1906,24 +1873,7 @@ pub const StaticDispatchConstraint = struct {
         pub const MetadataList = MkSafeList(@This());
 
         /// Interpolation metadata in its type store's pool, or `none`.
-        pub const OptIdx = enum(u32) {
-            none = std.math.maxInt(u32),
-            _,
-
-            pub fn from(idx: MetadataList.Idx) OptIdx {
-                std.debug.assert(@backingInt(idx) != std.math.maxInt(u32));
-                return @fromBackingInt(@backingInt(idx));
-            }
-
-            /// The pool index, or null when absent.
-            pub fn get(self: OptIdx) ?MetadataList.Idx {
-                return if (self == .none) null else @fromBackingInt(@backingInt(self));
-            }
-
-            pub fn isPresent(self: OptIdx) bool {
-                return self != .none;
-            }
-        };
+        pub const OptIdx = collections.OptionalId(MetadataList.Idx);
     };
 
     /// The kinds of literal that desugar to open literal-conversion constraints.

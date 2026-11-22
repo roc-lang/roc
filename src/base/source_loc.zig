@@ -7,23 +7,33 @@
 //! never need the original source text or its line-start table.
 
 const std = @import("std");
+const collections = @import("collections");
 
 /// A resolved source location. `none` marks compiler-generated code with no
 /// single source counterpart (the debug-info convention is line 0).
 pub const SourceLoc = extern struct {
-    /// Index into the owning program's source file table, or `no_file`.
-    file: u32,
+    /// Index into the owning program's source file table; absent for no
+    /// location.
+    file: collections.OptionalU32,
     /// 1-based source line; 0 means no location.
     line: u32,
     /// 1-based byte column within the line; 0 means no location.
     column: u32,
 
-    pub const no_file: u32 = std.math.maxInt(u32);
+    pub const none: SourceLoc = .{ .file = .none, .line = 0, .column = 0 };
 
-    pub const none: SourceLoc = .{ .file = no_file, .line = 0, .column = 0 };
+    /// A location in source file table entry `file`.
+    pub fn at(file: u32, line: u32, column: u32) SourceLoc {
+        return .{ .file = .some(file), .line = line, .column = column };
+    }
 
     pub fn hasLocation(self: SourceLoc) bool {
-        return self.file != no_file;
+        return self.file != .none;
+    }
+
+    /// The source file table entry of a location that has one.
+    pub fn fileIndex(self: SourceLoc) u32 {
+        return self.file.get().?;
     }
 };
 

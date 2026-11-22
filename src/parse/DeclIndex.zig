@@ -160,14 +160,11 @@ pub const NameBucket = struct {
 /// `DeclIndex.bucket_overflow`. Most keys have one declaration.
 const StoredBucket = struct {
     first: DeclIdx,
-    overflow: OverflowIdx = .none,
+    overflow: collections.OptionalId(OverflowIdx) = .none,
 };
 
 /// A list in `DeclIndex.bucket_overflow`.
-const OverflowIdx = enum(u32) {
-    none = std.math.maxInt(u32),
-    _,
-};
+const OverflowIdx = enum(u32) { _ };
 
 /// Parser-owned type path such as `Parent.Nested`.
 pub const TypePath = struct {
@@ -381,7 +378,7 @@ pub fn deinit(self: *DeclIndex) void {
 fn bucketDecls(self: *const DeclIndex, stored: StoredBucket) NameBucket {
     return .{
         .first = stored.first,
-        .rest = if (stored.overflow == .none) &.{} else self.bucket_overflow.items[@backingInt(stored.overflow)].items,
+        .rest = if (stored.overflow.get()) |overflow| self.bucket_overflow.items[@backingInt(overflow)].items else &.{},
     };
 }
 
@@ -589,13 +586,15 @@ fn addDeclToBucket(
         return;
     }
     const bucket = gop.value_ptr;
-    if (bucket.overflow == .none) {
-        const overflow: OverflowIdx = @fromBackingInt(std.math.cast(u32, self.bucket_overflow.items.len) orelse return error.OutOfMemory);
-        if (overflow == .none) return error.OutOfMemory;
+    const overflow = bucket.overflow.get() orelse blk: {
+        const len = std.math.cast(u32, self.bucket_overflow.items.len) orelse return error.OutOfMemory;
+        if (len == std.math.maxInt(u32)) return error.OutOfMemory;
+        const overflow: OverflowIdx = @fromBackingInt(len);
         try self.bucket_overflow.append(self.gpa, .empty);
-        bucket.overflow = overflow;
-    }
-    try self.bucket_overflow.items[@backingInt(bucket.overflow)].append(self.gpa, decl_idx);
+        bucket.overflow = .some(overflow);
+        break :blk overflow;
+    };
+    try self.bucket_overflow.items[@backingInt(overflow)].append(self.gpa, decl_idx);
 }
 
 fn declKindMayBindValue(kind: DeclKind) bool {

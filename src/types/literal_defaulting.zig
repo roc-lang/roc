@@ -196,7 +196,7 @@ test "dominant kind precedence is numeral > quote > interpolation" {
         .fn_name = Ident.Idx.NONE,
         .fn_var = undefined,
         .origin = .{ .from_literal = .numeral },
-        .numeral = .from(numeral_row),
+        .numeral = .some(numeral_row),
     };
     const quote_constraint = StaticDispatchConstraint{
         .fn_name = Ident.Idx.NONE,

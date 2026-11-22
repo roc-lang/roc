@@ -847,10 +847,20 @@ pub const Import = struct {
         _,
     };
 
+    /// An import's resolution state. Zero is unresolved, one is a failure
+    /// reported before checking, and a resolved import stores its module index
+    /// plus `first_resolved`, so no state can be mistaken for a module index.
     pub const ResolvedModuleIdx = enum(u32) {
-        failed_before_checking = std.math.maxInt(u32) - 1,
-        none = std.math.maxInt(u32),
+        none = 0,
+        failed_before_checking = 1,
         _,
+
+        const first_resolved: u32 = 2;
+
+        pub fn resolved(module_idx: u32) ResolvedModuleIdx {
+            std.debug.assert(module_idx <= std.math.maxInt(u32) - first_resolved);
+            return @fromBackingInt(module_idx + first_resolved);
+        }
 
         pub fn isNone(self: ResolvedModuleIdx) bool {
             return self == .none;
@@ -861,17 +871,23 @@ pub const Import = struct {
         }
 
         pub fn isResolved(self: ResolvedModuleIdx) bool {
-            return !self.isNone() and !self.isFailedBeforeChecking();
+            return @backingInt(self) >= first_resolved;
+        }
+
+        /// The resolved module index, or null when the import is not resolved.
+        pub fn moduleIdx(self: ResolvedModuleIdx) ?u32 {
+            if (!self.isResolved()) return null;
+            return @backingInt(self) - first_resolved;
         }
     };
 
     pub const Store = struct {
         /// Open-addressed table from an import's interned name to its
         /// `Import.Idx`, for deduplication. Its length is zero or a power of
-        /// two; a cell holds an `Import.Idx` or `empty_lookup_cell`, and a name
+        /// two; a cell holds an `Import.Idx` or is absent (empty), and a name
         /// probes linearly from `lookupSlot`. It is serialized as it is, so a
         /// loaded store looks names up without rebuilding anything.
-        lookup: collections.SafeList(Import.Idx) = .{},
+        lookup: collections.SafeList(collections.OptionalId(Import.Idx)) = .{},
         /// List of interned string IDs indexed by Import.Idx
         imports: collections.SafeList(base.StringLiteral.Idx) = .{},
         /// List of interned ident IDs indexed by Import.Idx (parallel to imports)
@@ -884,9 +900,6 @@ pub const Import = struct {
         pub fn init() Store {
             return .{};
         }
-
-        /// The cell value of an unused `lookup` slot.
-        pub const empty_lookup_cell: Import.Idx = @fromBackingInt(std.math.maxInt(u32));
 
         const initial_lookup_len: usize = 8;
 
@@ -914,8 +927,7 @@ pub const Import = struct {
             const mask = cells.len - 1;
             var slot = lookupSlot(string_idx, mask);
             while (true) : (slot = (slot + 1) & mask) {
-                const cell = cells[slot];
-                if (cell == empty_lookup_cell) return null;
+                const cell = cells[slot].get() orelse return null;
                 if (self.imports.items()[@backingInt(cell)] == string_idx) return cell;
             }
         }
@@ -933,12 +945,12 @@ pub const Import = struct {
             if (needed > self.lookup.len()) {
                 var new_len: usize = @max(initial_lookup_len, @as(usize, @intCast(self.lookup.len())));
                 while (new_len < needed) new_len *= 2;
-                var table = try collections.SafeList(Import.Idx).initCapacity(allocator, new_len);
-                table.appendNTimesAssumeCapacity(empty_lookup_cell, new_len);
+                var table = try collections.SafeList(collections.OptionalId(Import.Idx)).initCapacity(allocator, new_len);
+                table.appendNTimesAssumeCapacity(.none, new_len);
                 const old = self.lookup;
                 self.lookup = table;
                 for (old.items()) |cell| {
-                    if (cell != empty_lookup_cell) self.placeLookup(cell);
+                    if (cell.get()) |import_idx| self.placeLookup(import_idx);
                 }
                 var old_table = old;
                 old_table.deinit(allocator);
@@ -950,8 +962,8 @@ pub const Import = struct {
             const cells = self.lookup.items();
             const mask = cells.len - 1;
             var slot = lookupSlot(self.imports.items()[@backingInt(import_idx)], mask);
-            while (cells[slot] != empty_lookup_cell) slot = (slot + 1) & mask;
-            cells[slot] = import_idx;
+            while (cells[slot] != .none) slot = (slot + 1) & mask;
+            cells[slot] = .some(import_idx);
         }
 
         /// Get or create an Import.Idx for the given module name in a fresh CommonEnv.
@@ -1008,9 +1020,7 @@ pub const Import = struct {
         pub fn getResolvedModule(self: *const Store, import_idx: Import.Idx) ?u32 {
             const idx = @backingInt(import_idx);
             if (idx >= self.resolved_modules.len()) return null;
-            const resolved = self.resolved_modules.items()[idx];
-            if (!resolved.isResolved()) return null;
-            return @backingInt(resolved);
+            return self.resolved_modules.items()[idx].moduleIdx();
         }
 
         /// Return true when import resolution has already reported a user-facing
@@ -1026,7 +1036,7 @@ pub const Import = struct {
         pub fn setResolvedModule(self: *Store, import_idx: Import.Idx, module_idx: u32) void {
             const idx = @backingInt(import_idx);
             if (idx < self.resolved_modules.len()) {
-                self.resolved_modules.items()[idx] = @fromBackingInt(@intCast(module_idx));
+                self.resolved_modules.items()[idx] = .resolved(module_idx);
             }
         }
 
@@ -1102,7 +1112,7 @@ pub const Import = struct {
 
         /// Uses extern struct to guarantee consistent field layout across optimization levels.
         pub const Serialized = extern struct {
-            lookup: collections.SafeList(Import.Idx).Serialized,
+            lookup: collections.SafeList(collections.OptionalId(Import.Idx)).Serialized,
             imports: collections.SafeList(base.StringLiteral.Idx).Serialized,
             import_idents: collections.SafeList(base.Ident.Idx).Serialized,
             resolved_modules: collections.SafeList(Import.ResolvedModuleIdx).Serialized,

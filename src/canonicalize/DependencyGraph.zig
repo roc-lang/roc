@@ -904,7 +904,7 @@ const DemandAnalyzer = struct {
     /// The local definition an associated lookup checking resolved names,
     /// when it names one of this module's own.
     fn associatedLocalDef(self: *const DemandAnalyzer, resolved: anytype) ?CIR.Def.Idx {
-        if (resolved.module_identity != self.cir.self_module_identity) return null;
+        if (self.cir.self_module_identity.get() != resolved.module_identity) return null;
         return resolved.target_def_idx;
     }
 

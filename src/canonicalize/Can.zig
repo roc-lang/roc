@@ -1237,10 +1237,7 @@ const DeferredRef = struct {
 fn pushDeferredRef(self: *Self, ref: DeferredRef) std.mem.Allocator.Error!ModuleEnv.DeferredImportRef.Idx {
     const idx: u32 = @intCast(self.env.deferred_import_refs.len());
     _ = try self.env.deferred_import_refs.append(self.env.gpa, .{
-        .import_idx = if (ref.import_idx) |import_idx|
-            @backingInt(import_idx)
-        else
-            ModuleEnv.DeferredImportRef.no_import,
+        .import_idx = .of(ref.import_idx),
         .node_idx = 0,
         .path_bits = @bitCast(ref.path),
         .module_name_bits = @bitCast(ref.module_name),

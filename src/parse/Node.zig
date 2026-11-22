@@ -534,7 +534,7 @@ pub const Tag = enum {
     ellipsis,
 
     /// A branch in a match expression
-    /// * main_token - Guard expression index (0 = no guard, raw value = @backingInt(guard) + 1)
+    /// * main_token - Guard expression index as an `OptionalU32` word (0 = no guard)
     /// * lhs - Pattern index
     /// * rhs - Body index
     branch,
