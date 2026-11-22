@@ -109,6 +109,44 @@ def requireLive (rule : String) (x : Local) : CM VId := do
   if !liveV (← get) v then fail rule s!"read of l{x} (v{v}) after its value died"
   return v
 
+/-- How many of `i`'s units have given slot `k` away: `taken` is a multiset,
+    one entry per take or claim of that slot. -/
+def takenCount (i : VInfo) (k : Nat) : Nat := i.taken.count k
+
+/-- A slot stays readable while one of the container's units still holds it.
+    A container with no explicit unit keeps a conceptual one (arc_certify
+    `requireFieldUntaken`: `units = max(balance, 1)`). -/
+def slotGone (i : VInfo) (k : Nat) : Bool := (takenCount i k : Int) ≥ max i.bal 1
+
+/-- C-Claim: makes the unit behind projection `v`'s slot explicit, by claiming
+    that slot of its container. Each of the container's units gives a slot
+    away once. A container holding no unit of its own first claims itself
+    from its parent, up the projection chain (arc_certify `parentUnit`: "a
+    nested projection container's unit becomes explicit ... by claiming that
+    complete container from its own parent"); the claimed container then
+    holds that one unit. Layouts are not in the dump (G2), so whether the
+    projection owns all of its container's refcounted slots is not checked;
+    the heap machine's LEAK check covers that. -/
+partial def claimSlot (v : VId) (fuel : Nat := 32) : CM Bool := do
+  if fuel == 0 then return false
+  let i ← infoOf v
+  let some (c, k) := i.slot | return false
+  let ci ← infoOf c
+  if ci.mode == .static then return false
+  -- any held unit can be claimed, including one an `incref` added to a
+  -- borrowed value (a retained element read out of a list)
+  if ci.bal ≥ 1 then
+    if (takenCount ci k : Int) < ci.bal then
+      putInfo c { ci with taken := k :: ci.taken, residual := true }
+      return true
+    return false
+  if takenCount ci k == 0 && ci.slot.isSome then
+    if ← claimSlot c (fuel - 1) then
+      let ci ← infoOf c
+      putInfo c { ci with mode := .owned, slot := none, bal := 1, taken := k :: ci.taken, residual := true }
+      return true
+  return false
+
 /-- Spend one unit of `x`'s value (a release or a move). -/
 def spend (rule : String) (x : Local) (allowNegative : Bool := false) : CM VId := do
   let v ← valOf x
@@ -122,14 +160,11 @@ def spend (rule : String) (x : Local) (allowNegative : Bool := false) : CM VId :
     -- This comes first even where a transient negative balance is allowed
     -- (C-Ctor), so a payload moved into an aggregate claims its slot
     if let some (c, k) := i.slot then
-      let ci ← infoOf c
-      -- any held unit can be claimed, including one an `incref` added to a
-      -- borrowed value (a retained element read out of a list)
-      if ci.mode != .static && ci.bal ≥ 1 && !(ci.taken.contains k) then
-        putInfo c { ci with taken := k :: ci.taken, residual := true }
-        putInfo v { i with mode := .owned, slot := none }
+      if ← claimSlot v then
+        putInfo v { (← infoOf v) with mode := .owned, slot := none }
         return v
-      if ci.taken.contains k && !allowNegative then
+      let ci ← infoOf c
+      if ci.mode != .static && slotGone ci k && !allowNegative then
         fail "C-ClaimTwice" s!"l{x} (v{v}) claims slot {k} of v{c} a second time"
   if i.bal < 1 && !allowNegative then
     fail rule s!"l{x} (v{v}) spends a unit it does not hold (balance {i.bal}, mode {reprStr i.mode})"
@@ -157,27 +192,30 @@ def certExpr (env : Env) (x : Local) (ty : Ty) (e : Expr) : CM Unit := do
     | .field i | .tagPayload _ i =>
       let v ← requireLive "C-Proj" y
       let iv ← infoOf v
-      if iv.taken.contains i then fail "C-ReadAfterTake" s!"l{x} reads slot {i} of l{y} after it was taken"
-      if take then
+      if slotGone iv i then fail "C-ReadAfterTake" s!"l{x} reads slot {i} of l{y} after it was taken"
+      -- a part of static data is static (immortal) itself, taken or not:
+      -- ImmortalLocals elided the counts of everything read out of it
+      if iv.mode == .static then
+        if rc then bind x (← fresh { bal := 0, mode := .static })
+      else if take then
         putInfo v { iv with taken := i :: iv.taken, residual := true }
         claimUp v
         -- C-BirthTake: a take moving the only unit out of a unique container is unique
         if rc then bind x (← fresh { bal := 1, mode := .owned, uniq := iv.uniq && iv.bal == 1 })
       else if rc then
-        -- a part of static data is static (immortal) itself
-        if iv.mode == .static then bind x (← fresh { bal := 0, mode := .static })
-        else bind x (← fresh { bal := 0, mode := .borrowed [v], slot := some (v, i) })
+        bind x (← fresh { bal := 0, mode := .borrowed [v], slot := some (v, i) })
     | .tagPayloadStruct _ =>
       let v ← requireLive "C-Proj" y
       let iv ← infoOf v
-      if iv.taken.contains 0 then fail "C-ReadAfterTake" s!"l{x} reads the payload of l{y} after it was taken"
-      if take then
+      if slotGone iv 0 then fail "C-ReadAfterTake" s!"l{x} reads the payload of l{y} after it was taken"
+      if iv.mode == .static then
+        if rc then bind x (← fresh { bal := 0, mode := .static })
+      else if take then
         putInfo v { iv with taken := 0 :: iv.taken, residual := true }
         claimUp v
         if rc then bind x (← fresh { bal := 1, mode := .owned, uniq := iv.uniq && iv.bal == 1 })
       else if rc then
-        if iv.mode == .static then bind x (← fresh { bal := 0, mode := .static })
-        else bind x (← fresh { bal := 0, mode := .borrowed [v], slot := some (v, 0) })
+        bind x (← fresh { bal := 0, mode := .borrowed [v], slot := some (v, 0) })
   -- C-Lit: the dump is final LIR, after ImmortalLocals elision, so a literal
   -- is image-backed (static) and carries no unit
   | .lit _ _ => if rc then bind x (← fresh { bal := 0, mode := .static })

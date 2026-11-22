@@ -76,9 +76,9 @@ the key; it is merged by "and", as the design's lattice does.
 | C-Lit | Literals are static: no unit, always live. The dump is after `ImmortalLocals.elide`. | `immortal_locals.zig` `elide` |
 | C-Alias | An alias names the same value | module header |
 | C-Proj, C-Read | Every read finds its value live: a unit remains, it is static, every lender is live, or its holder is live | check (a); `requireLive` |
-| C-Take | A take marks the slot taken and gives the result its own unit. It claims every container above and leaves them residual. | check (f); `bindPayloadRead` |
-| C-ReadAfterTake | Reading a taken slot is rejected | check (f) |
-| C-Claim, C-ClaimTwice | Spending a borrowed projection of an owned container claims that slot's unit, at most once. Any held unit of a non-static container can be claimed, including one an `incref` added to a borrowed value; claims are tried before a C-Ctor's transient negative spend. | `tryClaim`; `arc_dismantle.zig` |
+| C-Take | A take marks the slot taken by one of the container's units and gives the result its own unit. It claims every container above and leaves them residual. A take out of static data is static. | check (f); `bindPayloadRead` |
+| C-ReadAfterTake | Reading a slot that every unit of its container has given away is rejected. A container with no explicit unit counts as one (`units = max(balance, 1)`), so after a take from a container holding two units (an alias kept by an `incref`) the slot is still readable. | check (f); `requireFieldUntaken` |
+| C-Claim, C-ClaimTwice | Spending a borrowed projection of an owned container claims that slot's unit, once per unit the container holds. Any held unit of a non-static container can be claimed, including one an `incref` added to a borrowed value; claims are tried before a C-Ctor's transient negative spend. A container holding no unit first claims itself from its own parent, up the projection chain (a field of a tag payload struct of an owned parameter, returned without counts). Whether the projection owns all of its container's refcounted slots is not checked (G2); the machine's LEAK check covers it. | `tryClaim`, `parentUnit`; `arc_dismantle.zig` |
 | C-Ctor | `list`, `struct` and `tag` spend one unit per refcounted operand (transiently negative is allowed); the operand then lives through its holder | module header |
 | C-StaticPart | A projection of static data is static. A `struct` or `tag` whose refcounted operands are all static is static. | |
 | C-Call, C-CallBorrow, C-CallOwned | A borrowed param needs a live argument; an owned param spends a unit. The result is owned, or borrowed if the callee has `ret_borrowed`. | check (e) |
@@ -118,4 +118,9 @@ The certifier model also gives up (printed `GAVE-UP`, not counted as a rejection
 | `hidden.dump` | VALUE-MISMATCH only | `list_set_in_place_unsafe`, then a read through the consumed name: no count error, caught only by R-Equiv |
 | `shared.dump` | SHARED-MUTATION when stamped, clean when checked, C-UniqueStamp | a `unique=` stamp on a list with count 2 |
 | `leak.dump` | LEAK, C-Balance | a missing `decref` of an alias |
+| `claim_nested.dump` | clean | an owned tag parameter returns a list field of its payload struct with no counts: the field claims the payload, which claims the tag (C-Claim up the chain) |
+| `claim_borrowed.dump` | C-Ret, DOUBLE-FREE | the same with the parameter borrowed: there is no unit to claim |
+| `take_shared.dump` | clean | a take through an alias of a tag holding two units, then a read of the same slot through the other name |
+| `take_dead.dump` | C-ReadAfterTake, USE-AFTER-FREE | the same without the `incref`: the slot's only unit was taken and released |
+| `take_static.dump` | clean | a take out of static data, not released on a crash path (C-Take on static data) |
 | `smoke.roc` | clean, all tests pass | one real compilation at `--specialize=yes` and `--opt=speed` |

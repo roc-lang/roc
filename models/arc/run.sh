@@ -209,6 +209,16 @@ cmd_selftest() {
 	expect_out shared.dump certify "C-UniqueStamp" || fail=1
 	expect_out leak.dump oracle "LEAK" || fail=1
 	expect_out leak.dump certify "C-Balance" || fail=1
+	expect_out claim_nested.dump certify "" || fail=1
+	expect_out claim_nested.dump oracle "" || fail=1
+	expect_out claim_borrowed.dump certify "C-Ret" || fail=1
+	expect_out claim_borrowed.dump oracle "DOUBLE-FREE" || fail=1
+	expect_out take_shared.dump certify "" || fail=1
+	expect_out take_shared.dump oracle "" || fail=1
+	expect_out take_dead.dump certify "C-ReadAfterTake" || fail=1
+	expect_out take_dead.dump oracle "USE-AFTER-FREE" || fail=1
+	expect_out take_static.dump certify "" || fail=1
+	expect_out take_static.dump oracle "" || fail=1
 	# the generator runs and is deterministic
 	local s
 	for s in 1 2 3 4 5 6 7 8 9 10; do

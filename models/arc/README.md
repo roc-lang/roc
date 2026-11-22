@@ -107,6 +107,11 @@ It runs `zig run` on the tool with `src/base/LowLevel.zig` as its `lowlevel` mod
   Dict internals are not fully followed, the remaining slots of a residual container are not balanced, and a struct or
   tag layout no RC helper names is treated as not refcounted (FORMAT.md G2). Dumps from compilers older than
   `borrowed=` in the header make every parameter look owned.
+- The dump is taken after passes that run after the compiler's certifier. `comptime_value_guards` adds a `switch` with
+  a `crash` arm before each read of a compile-time value, and those arms do not release owned values live at the guard.
+  The model's certifier sees them and reports `C-Balance` at `crash` in a `boxy.template` procedure (about 1 in 100
+  generated programs); the compiler's certifier never sees them. In the programs found so far the leaking arm reads the
+  same failure slot as an earlier guard on its path, so it is dead.
 - Theorems: `certifier_sound`, `unique_args_equiv` and `Reuse.reuse_sound` are stated with `sorry`. They fix what each
   run checks, not a proof that it is enough.
 - `gen.py` produces `expect`-only modules; it does not exercise platforms, effects or hosted calls.

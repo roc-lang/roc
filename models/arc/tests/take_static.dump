@@ -1,0 +1,13 @@
+=== LIR <unnamed> (p0, identity=00, fingerprint=00, borrowed=0, ret_borrowed=false, unique=false) ===
+proc p0 args=[] ret=u64
+  l0:struct_#2 = literal static_data s1
+  l1:list#1 = ref.field l0[0] take
+  l2:u64 = low_level list_len(l1)
+  l4:list#1 = list(l2)
+  decref l4 rc=concrete(decref,1) single_thread
+  l3:bool = literal 1
+  switch l3 default_cold=false
+    case 0:
+      crash
+    default:
+      ret l2
