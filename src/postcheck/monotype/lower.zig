@@ -11213,8 +11213,8 @@ const Builder = struct {
             // interface identity for active recursive and partially overlapping
             // requests.
             if (resolved_request_ty) |request_fn_ty| {
-                var raw_spec: u32 = if (source_ctx.draft.template_specs_by_template.get(template_ref)) |chain| chain.head else TemplateSpecChain.end;
-                while (raw_spec != TemplateSpecChain.end) : (raw_spec = source_ctx.draft.template_specs.items[raw_spec].next_in_template) {
+                var spec_link: collections.OptionalU32 = if (source_ctx.draft.template_specs_by_template.get(template_ref)) |chain| .some(chain.head) else .none;
+                while (spec_link.get()) |raw_spec| : (spec_link = source_ctx.draft.template_specs.items[raw_spec].next_in_template) {
                     const spec = &source_ctx.draft.template_specs.items[raw_spec];
                     // The checked source root selects the template body, but it is
                     // not part of a resolved specialization's identity. Recursive
@@ -11352,7 +11352,7 @@ const Builder = struct {
         lexical_needs_cleanup = false;
         const template_chain = try source_ctx.draft.template_specs_by_template.getOrPut(template_ref);
         if (template_chain.found_existing) {
-            source_ctx.draft.template_specs.items[template_chain.value_ptr.tail].next_in_template = @intCast(spec_index);
+            source_ctx.draft.template_specs.items[template_chain.value_ptr.tail].next_in_template = .some(@intCast(spec_index));
             template_chain.value_ptr.tail = @intCast(spec_index);
         } else {
             template_chain.value_ptr.* = .{ .head = @intCast(spec_index), .tail = @intCast(spec_index) };
@@ -17795,15 +17795,13 @@ const OptionalEagerTemplateResolution = collections.OptionalStruct(EagerTemplate
 const TemplateSpecChain = struct {
     head: u32,
     tail: u32,
-
-    const end = std.math.maxInt(u32);
 };
 
 const DraftTemplateSpec = struct {
     state: DraftSpecState,
     template_ref: names.ProcTemplate,
-    /// The next draft spec of the same template, or `TemplateSpecChain.end`.
-    next_in_template: u32 = TemplateSpecChain.end,
+    /// The next draft spec of the same template, absent for the chain's last.
+    next_in_template: collections.OptionalU32 = .none,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     /// Worker-local symbol retained when a deferred request must eagerly lower
@@ -18649,28 +18647,21 @@ const DraftPreparedInspectMethod = struct {
 
 const RuntimeImpossibilityProofId = enum(u32) { _ };
 
-/// A per-node column of optional proof ids, stored as `u32`s with
-/// `maxInt(u32)` for "no proof"; that value is never minted.
+/// A growing per-node column of optional proof ids, four bytes each; zero
+/// means "no proof".
 const ImpossibilityProofColumn = struct {
-    items: std.ArrayList(u32) = .empty,
-
-    const none = std.math.maxInt(u32);
-
-    fn encode(proof: ?RuntimeImpossibilityProofId) u32 {
-        return if (proof) |id| @backingInt(id) else none;
-    }
+    items: std.ArrayList(collections.OptionalId(RuntimeImpossibilityProofId)) = .empty,
 
     fn get(self: *const ImpossibilityProofColumn, index: usize) ?RuntimeImpossibilityProofId {
-        const raw = self.items.items[index];
-        return if (raw == none) null else @fromBackingInt(raw);
+        return self.items.items[index].get();
     }
 
     fn set(self: *ImpossibilityProofColumn, index: usize, proof: ?RuntimeImpossibilityProofId) void {
-        self.items.items[index] = encode(proof);
+        self.items.items[index] = .of(proof);
     }
 
     fn append(self: *ImpossibilityProofColumn, allocator: Allocator, proof: ?RuntimeImpossibilityProofId) Allocator.Error!void {
-        try self.items.append(allocator, encode(proof));
+        try self.items.append(allocator, .of(proof));
     }
 
     fn clearRetainingCapacity(self: *ImpossibilityProofColumn) void {
@@ -21884,7 +21875,7 @@ fn appendRuntimeImpossibilityProof(
     proof: RuntimeImpossibilityProof,
 ) Allocator.Error!RuntimeImpossibilityProofId {
     const index = draft.impossibility_proofs.items.len;
-    if (index >= ImpossibilityProofColumn.none) return error.OutOfMemory;
+    if (index >= std.math.maxInt(u32)) return error.OutOfMemory;
     const id: RuntimeImpossibilityProofId = @fromBackingInt(@intCast(index));
     try draft.impossibility_proofs.append(allocator, proof);
     return id;
@@ -33974,8 +33965,8 @@ const BodyContext = struct {
         else
             line;
         return .{
-            .file = self.source_file_id orelse
-                Common.invariant("expression-capable body context had no source-file identity"),
+            .file = .some(self.source_file_id orelse
+                Common.invariant("expression-capable body context had no source-file identity")),
             .line = user_line + 1,
             .column = column + 1,
         };
@@ -54529,8 +54520,7 @@ const BodyContext = struct {
             .record_field => return try self.graph.recordFieldValueNode(node, try recordFieldName(self.nameStoreMut(), view, @fromBackingInt(step.data))),
             .tag_payload_tag => return node,
             .tag_payload_index => {
-                const tag_node = path_nodes[path_node].parent;
-                if (tag_node == static_dispatch.no_evidence_path_node) return null;
+                const tag_node = path_nodes[path_node].parent.get() orelse return null;
                 const tag_step = path_nodes[tag_node].step;
                 if (tag_step.stepKind() != .tag_payload_tag) return null;
                 return try self.graph.tagPayloadNode(

@@ -307,9 +307,11 @@ pub const TypeId = enum(u32) { _ };
 
 /// A nominal declaration: its module and its id in that module's checked
 /// type store.
+/// A nominal's module and its checked declaration, absent for a nominal
+/// whose declaration lowering cannot name.
 pub const NominalDeclKey = struct {
     module: ModuleIndex,
-    decl: checked.CheckedNominalDeclarationId,
+    decl: collections.OptionalId(checked.CheckedNominalDeclarationId),
 };
 
 pub const Primitive = checked.CheckedPrimitive;
@@ -2000,7 +2002,7 @@ pub const Converter = struct {
                     .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
                 }
                 const decl = try self.declarationKey(view, nominal);
-                const decl_key = decl orelse NominalDeclKey{ .module = module, .decl = @fromBackingInt(std.math.maxInt(u32)) };
+                const decl_key = decl orelse NominalDeclKey{ .module = module, .decl = .none };
                 return try self.store.intern(.{ .nominal = .{
                     .decl = decl_key,
                     .args = children,
@@ -2054,8 +2056,8 @@ pub const Converter = struct {
     fn declarationKey(self: Converter, view: *const ModuleView, nominal: checked.CheckedNominalType) Allocator.Error!?NominalDeclKey {
         return switch (nominal.representation) {
             .opaque_without_backing => null,
-            .local_declaration => |decl| .{ .module = view.index, .decl = decl },
-            .imported_declaration => |imported| .{ .module = self.modules.byKey(imported.artifact).index, .decl = imported.declaration },
+            .local_declaration => |decl| .{ .module = view.index, .decl = .some(decl) },
+            .imported_declaration => |imported| .{ .module = self.modules.byKey(imported.artifact).index, .decl = .some(imported.declaration) },
             .builtin => |builtin_nominal| blk: {
                 if (!checked.builtinNominalHasDeclarationBacking(builtin_nominal)) {
                     invariantFmt("builtin nominal {s} has no declaration backing yet reached nominal conversion", .{@tagName(builtin_nominal)});
@@ -2063,20 +2065,20 @@ pub const Converter = struct {
                 const owner = self.modules.byKey(nominal.owner_module.*);
                 const declaration = owner.types().builtinNominalDeclaration(builtin_nominal) orelse
                     invariantFmt("module has no declaration for builtin nominal {s}", .{@tagName(builtin_nominal)});
-                break :blk .{ .module = owner.index, .decl = declaration.id };
+                break :blk .{ .module = owner.index, .decl = .some(declaration.id) };
             },
             .local_box_payload_capability => |cap| blk: {
                 const capability = view.view.interface_capabilities.boxPayloadCapability(cap.capability);
                 const decl = (try self.store.declarationByKey(view, capability.nominal)) orelse
                     invariant("a box payload capability names a nominal its module does not declare");
-                break :blk .{ .module = view.index, .decl = decl };
+                break :blk .{ .module = view.index, .decl = .some(decl) };
             },
             .imported_box_payload_capability => |cap| blk: {
                 const owner = self.modules.byKey(cap.artifact);
                 const capability = owner.view.interface_capabilities.boxPayloadCapability(cap.capability);
                 const decl = (try self.store.declarationByKey(owner, capability.nominal)) orelse
                     invariant("a box payload capability names a nominal its module does not declare");
-                break :blk .{ .module = owner.index, .decl = decl };
+                break :blk .{ .module = owner.index, .decl = .some(decl) };
             },
         };
     }
@@ -2263,12 +2265,13 @@ pub const Converter = struct {
     fn declName(self: Converter, decl: NominalDeclKey, text: []const u8) Allocator.Error!NameId {
         if (self.store.decl_name_ids.get(decl)) |existing| return existing;
         const view = self.modules.get(decl.module);
-        const declaration = view.types().nominalDeclarationById(decl.decl);
+        const decl_id = decl.decl.get().?;
+        const declaration = view.types().nominalDeclarationById(decl_id);
         // Declarations sharing a name are told apart by their order, which
         // the rest of the module's source leaves alone.
         var ordinal: u32 = 0;
         const name = view.types().nominalDeclarationName(declaration);
-        for (view.types().nominal_declarations[0..@backingInt(decl.decl)]) |earlier| {
+        for (view.types().nominal_declarations[0..@backingInt(decl_id)]) |earlier| {
             if (view.types().nominalDeclarationName(earlier) == name) ordinal += 1;
         }
         return try self.store.internDeclName(decl, self.modules.linkName(decl.module), ordinal, text);
@@ -2282,7 +2285,7 @@ pub const Converter = struct {
         };
         if (!nominal.has_backing) invariant("asked for the backing of an opaque type without one");
         const view = self.modules.get(nominal.decl.module);
-        const declaration = view.types().nominalDeclarationById(nominal.decl.decl);
+        const declaration = view.types().nominalDeclarationById(nominal.decl.decl.get().?);
         const formals = declaration.formalArgs(view.types());
         const args = try self.store.allocator.dupe(TypeId, self.store.nominalArgs(nominal));
         defer self.store.allocator.free(args);

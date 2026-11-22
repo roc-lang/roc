@@ -464,22 +464,8 @@ pub const InterfaceConstraints = struct {
         finished: Type.MaybeTypeId = .none,
     };
     /// A related group index or none. Groups are numbered densely among a
-    /// capture's open nodes, so an index never reaches `none`.
-    pub const MaybeRelatedGroup = enum(u32) {
-        none = std.math.maxInt(u32),
-        _,
-
-        fn of(group: ?u32) MaybeRelatedGroup {
-            const present = group orelse return .none;
-            std.debug.assert(present != std.math.maxInt(u32));
-            return @fromBackingInt(present);
-        }
-
-        fn get(self: MaybeRelatedGroup) ?u32 {
-            if (self == .none) return null;
-            return @backingInt(self);
-        }
-    };
+    /// capture's open nodes.
+    pub const MaybeRelatedGroup = collections.OptionalU32;
     pub const Kind = struct {
         resolved: ?ResolvedFieldKind,
         cells: ?FieldKindCells,
@@ -875,7 +861,6 @@ pub const InterfaceConstraints = struct {
             if (T == names.TagNameId) return self.text(ns.tagLabelText(value));
             if (T == MaybeNodeId) return self.write(?NodeId, value.get());
             if (T == Type.MaybeTypeId) return self.write(?Type.TypeId, value.get());
-            if (T == MaybeRelatedGroup) return self.write(?u32, value.get());
             if (comptime collections.CompactOptionalPayload(T)) |Payload| return self.write(?Payload, value.get());
             switch (@typeInfo(T)) {
                 .@"struct" => |info| inline for (info.field_names, info.field_types) |field_name, field_type| {
@@ -1529,7 +1514,6 @@ pub const InterfaceConstraints = struct {
         if (T == FieldKindId) return context.kind(value);
         if (T == MaybeNodeId) return .of(try mapValue(context, ?NodeId, value.get()));
         if (T == Type.MaybeTypeId) return .of(try mapValue(context, ?Type.TypeId, value.get()));
-        if (T == MaybeRelatedGroup) return .of(try mapValue(context, ?u32, value.get()));
         if (comptime collections.CompactOptionalPayload(T)) |Payload| return .of(try mapValue(context, ?Payload, value.get()));
         return switch (@typeInfo(T)) {
             .@"struct" => |info| blk: {

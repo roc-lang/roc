@@ -199,7 +199,7 @@ pub const ExportInterface = struct {
     /// For a template's worker: its template's position in its module's
     /// checked table, which a needs list naming the worker by identity
     /// resolves it to (`LirProgram.BoxyExport.template`).
-    template: u32 = LirProgram.BoxyExport.no_template,
+    template: collections.OptionalU32 = .none,
     /// Whether another unit may read this interface: the module's export
     /// digest covers only these (`LirProgram.BoxyExport.visible`).
     visible: bool = false,
@@ -332,7 +332,7 @@ test "export interface snapshot owns the complete calling contract" {
         .nonescaping_fn_params = 5,
         .capture_reuse_fn_params = 4,
         .table_needs = "producer needs",
-        .template = 4,
+        .template = .some(4),
         .visible = true,
     };
     try producer.put(identity, expected);
@@ -884,10 +884,8 @@ pub const DictionaryNode = struct {
     requirement: ?DictRequirement,
     kind: Kind,
     /// The shallowest target on this entry's path that some back edge below
-    /// it returns to, or `no_reach`.
-    reaches: u32 = no_reach,
-
-    pub const no_reach = std.math.maxInt(u32);
+    /// it returns to, if any.
+    reaches: collections.OptionalU32 = .none,
 
     pub const Kind = union(enum) {
         /// A requirement no method target resolves.
@@ -1787,7 +1785,7 @@ pub const Program = struct {
             map.userLineIdx(line, offset) orelse return base.SourceLoc.none
         else
             line;
-        return .{ .file = self.source_files[@backingInt(index)], .line = user_line + 1, .column = column + 1 };
+        return .{ .file = .some(self.source_files[@backingInt(index)]), .line = user_line + 1, .column = column + 1 };
     }
 
     /// The source location a procedure template's worker reports: where the
@@ -3046,7 +3044,7 @@ pub const Program = struct {
         var result: NominalOverrides = .{ null, null, null };
         if (nominal.has_backing) {
             const view = self.module(nominal.decl.module);
-            const declaration = view.types().nominalDeclarationById(nominal.decl.decl);
+            const declaration = view.types().nominalDeclarationById(nominal.decl.decl.get().?);
             const owner: static_dispatch.MethodOwner = if (nominal.builtin) |builtin| (if (builtin == .try_)
                 .{ .nominal = declaration.nominal }
             else
@@ -3239,8 +3237,8 @@ pub const Program = struct {
             const done = walk.frames.pop().?;
             const entry = &walk.nodes.items[done.node];
             entry.kind.target.children = done.children.items;
-            entry.reaches = done.reaches;
-            if (walk.frames.items.len > 0) walk.reach(done.reaches);
+            entry.reaches = .of(done.reaches);
+            if (walk.frames.items.len > 0) if (done.reaches) |depth| walk.reach(depth);
         }
         return walk.nodes.items;
     }
@@ -3264,7 +3262,7 @@ pub const Program = struct {
         const Frame = struct {
             node: u32,
             next: usize = 0,
-            reaches: u32 = DictionaryNode.no_reach,
+            reaches: ?u32 = null,
             children: std.ArrayList(u32) = .empty,
         };
 
@@ -3282,7 +3280,7 @@ pub const Program = struct {
 
         fn reach(self: *DictionaryWalk, depth: u32) void {
             const top = &self.frames.items[self.frames.items.len - 1];
-            top.reaches = @min(top.reaches, depth);
+            top.reaches = if (top.reaches) |reaches| @min(reaches, depth) else depth;
         }
 
         fn visit(self: *DictionaryWalk, requirement: DictRequirement) Allocator.Error!void {
@@ -3299,7 +3297,7 @@ pub const Program = struct {
                 if (on_path.target != target or !std.mem.eql(TypeId, on_path.instance.bound, instance.bound)) continue;
                 on_path.recursive = true;
                 const depth = on_path.depth;
-                _ = try self.add(.{ .requirement = requirement, .kind = .{ .back_edge = frame.node }, .reaches = depth });
+                _ = try self.add(.{ .requirement = requirement, .kind = .{ .back_edge = frame.node }, .reaches = .some(depth) });
                 return self.reach(depth);
             }
             const depth: u32 = @intCast(self.frames.items.len);
@@ -3526,7 +3524,7 @@ pub const Program = struct {
             .box => .{ .module = null, .owner = .{ .builtin = .box } },
             .nominal => |nominal| blk: {
                 const view = self.module(nominal.decl.module);
-                const declaration = view.types().nominalDeclarationById(nominal.decl.decl);
+                const declaration = view.types().nominalDeclarationById(nominal.decl.decl.get().?);
                 break :blk .{ .module = nominal.decl.module, .owner = if (nominal.builtin) |builtin| (if (builtin == .try_)
                     .{ .nominal = declaration.nominal }
                 else
@@ -5191,9 +5189,9 @@ fn recordExports(program: *Program) Allocator.Error!void {
     try program.result.boxy_exports.ensureTotalCapacity(result_allocator, @intCast(program.result.exported_procs.items.len));
     for (program.workers.items, visible) |worker, is_visible| {
         if (worker.imported or !Program.exportableKind(worker.key)) continue;
-        const template: u32 = switch (worker.key) {
-            .template => |key| @backingInt(key.template),
-            .lambda, .method_entry, .default, .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => LirProgram.BoxyExport.no_template,
+        const template: collections.OptionalU32 = switch (worker.key) {
+            .template => |key| .some(@backingInt(key.template)),
+            .lambda, .method_entry, .default, .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => .none,
         };
         program.result.boxy_exports.putAssumeCapacity(program.result.store.getProcSpec(worker.proc).identity, .{ .template = template, .visible = is_visible });
     }

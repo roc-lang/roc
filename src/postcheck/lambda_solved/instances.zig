@@ -80,9 +80,6 @@ pub const Census = struct {
     exprs: usize = 0,
 };
 
-const none_class = std.math.maxInt(u32);
-const no_rep = std.math.maxInt(u32);
-
 /// An instantiation read under an instance: a row made in, or named by, a
 /// body read under `env`.
 const Occ = struct {
@@ -139,15 +136,15 @@ pub const Table = struct {
     group_first_env: []u32 = &.{},
     group_classes: []u32 = &.{},
     /// Per instantiation row: its instance read in the global environment,
-    /// `none_class` until its group is classified. A group's identity row
+    /// absent until its group is classified. A group's identity row
     /// is its first instance, which for a group nothing instantiated is its
     /// own types.
-    row_class: []u32 = &.{},
+    row_class: []collections.OptionalU32 = &.{},
     /// Instances of occurrences read under a further instance, each added
     /// when the occurrence's group is classified.
     pair_class: std.AutoHashMapUnmanaged(Occ, u32) = .empty,
-    /// Per group: the row of its first instance, or `no_rep`.
-    rep0: []u32 = &.{},
+    /// Per group: the row of its first instance, if it has one.
+    rep0: []collections.OptionalU32 = &.{},
     /// The scheme nodes of every group with an instance.
     scheme_pos: collections.DenseMapUnmanaged(Type.TypeVarId, SchemePos) = .empty,
     /// Per group: its copied types, for a group with further instances.
@@ -238,9 +235,8 @@ pub const Table = struct {
     fn classOf(self: *const Table, occ: Occ) u32 {
         if (occ.env != .global) return self.pair_class.get(occ) orelse
             Common.invariant("an occurrence under a further instance was never assigned an instance");
-        const class = self.row_class[@backingInt(occ.row)];
-        if (class == none_class) Common.invariant("an instantiation row was never assigned an instance");
-        return class;
+        return self.row_class[@backingInt(occ.row)].get() orelse
+            Common.invariant("an instantiation row was never assigned an instance");
     }
 
     fn copiedTypes(self: *const Table, env: Env) ?*const collections.DenseMapUnmanaged(Type.TypeVarId, void) {
@@ -284,7 +280,7 @@ pub fn resolve(program: *const Ast.Program, ref: Ref) Ref {
                 ty = program.poly.instImages(rep.row)[pos.position];
                 env = rep.env;
             } else {
-                ty = program.poly.instImages(@fromBackingInt(table.rep0[pos.group]))[pos.position];
+                ty = program.poly.instImages(@fromBackingInt(table.rep0[pos.group].get().?))[pos.position];
                 env = .global;
             }
             continue;
@@ -560,12 +556,12 @@ const Discovery = struct {
         @memset(t.group_first_env, 0);
         t.group_classes = try allocator.alloc(u32, group_count);
         @memset(t.group_classes, 0);
-        t.rep0 = try allocator.alloc(u32, group_count);
-        @memset(t.rep0, no_rep);
+        t.rep0 = try allocator.alloc(collections.OptionalU32, group_count);
+        @memset(t.rep0, .none);
         t.copied = try allocator.alloc(?Copied, group_count);
         @memset(t.copied, null);
-        t.row_class = try allocator.alloc(u32, poly_.instantiations.items.len);
-        @memset(t.row_class, none_class);
+        t.row_class = try allocator.alloc(collections.OptionalU32, poly_.instantiations.items.len);
+        @memset(t.row_class, .none);
         t.group_positions = try allocator.alloc(u32, fn_count);
         @memset(t.group_positions, 0);
         try t.instances.append(allocator, undefined);
@@ -589,7 +585,7 @@ const Discovery = struct {
         self.classified = try std.DynamicBitSetUnmanaged.initEmpty(allocator, group_count);
         for (0..group_count) |group_index| {
             if (poly_.schemes.items[group_index].isGeneric()) continue;
-            t.row_class[group_index] = 0;
+            t.row_class[group_index] = .some(0);
             self.classified.set(group_index);
         }
 
@@ -610,7 +606,7 @@ const Discovery = struct {
     fn setClass(self: *Discovery, occ: Occ, class: u32) Allocator.Error!void {
         const t = self.table();
         if (occ.env == .global) {
-            t.row_class[@backingInt(occ.row)] = class;
+            t.row_class[@backingInt(occ.row)] = .some(class);
         } else {
             try t.pair_class.put(self.allocator, occ, class);
         }
@@ -641,7 +637,7 @@ const Discovery = struct {
         for (self.group_occs[group].items, classes.items) |occ, class| try self.setClass(occ, class);
         // The identity row reads the group's first instance, which for a
         // group nothing instantiated is its own types.
-        t.row_class[@backingInt(Ast.Polymorphism.identity(group))] = 0;
+        t.row_class[@backingInt(Ast.Polymorphism.identity(group))] = .some(0);
         self.classified.set(group);
         if (reps.items.len == 0) return;
         if (diagnostics.isSet(.lambda_solve_stats) and reps.items.len > 1) {
@@ -675,7 +671,7 @@ const Discovery = struct {
         // extended.
         const first = reps.items[0];
         if (first.env != .global) Common.invariant("a group's first instance was not an instantiation its source made");
-        t.rep0[group] = @backingInt(first.row);
+        t.rep0[group] = .some(@backingInt(first.row));
         const scheme = self.poly().schemes.items[group];
         for (self.poly().schemeNodes(scheme), 0..) |node, position| {
             try t.scheme_pos.put(self.allocator, self.types().root(node), .{ .group = group, .position = @intCast(position) });
@@ -1172,15 +1168,15 @@ const Region = struct {
         defer graph.deinit(allocator);
 
         for (program.binding_groups.group(self.group)) |fn_id| {
-            try graph.push(allocator, program.fn_tys.items[@backingInt(fn_id)], Graph.no_parent);
+            try graph.push(allocator, program.fn_tys.items[@backingInt(fn_id)], null);
             const fn_ = lifted.getFn(fn_id);
             try graph.pushLocals(discovery, fn_.args);
             try graph.pushLocals(discovery, fn_.captures);
         }
         for (self.exprs.items) |expr_id| {
-            try graph.push(allocator, program.expr_tys.items[@backingInt(expr_id)], Graph.no_parent);
-            if (poly_.expr_insts.get(expr_id)) |inst| _ = try graph.noteInst(discovery, inst, Graph.no_parent);
-            for (exprLocals(lifted, expr_id).slice()) |local| try graph.push(allocator, program.local_tys.items[@backingInt(local)], Graph.no_parent);
+            try graph.push(allocator, program.expr_tys.items[@backingInt(expr_id)], null);
+            if (poly_.expr_insts.get(expr_id)) |inst| _ = try graph.noteInst(discovery, inst, null);
+            for (exprLocals(lifted, expr_id).slice()) |local| try graph.push(allocator, program.local_tys.items[@backingInt(local)], null);
             const data = lifted.getExpr(expr_id).data;
             if (data == .loop_) try graph.pushLocals(discovery, data.loop_.params);
             if (data == .join_point) {
@@ -1190,10 +1186,10 @@ const Region = struct {
             if (data == .jump) try graph.pushLocals(discovery, data.jump.loop_params);
         }
         for (self.pats.items) |pat_id| {
-            try graph.push(allocator, program.pat_tys.items[@backingInt(pat_id)], Graph.no_parent);
+            try graph.push(allocator, program.pat_tys.items[@backingInt(pat_id)], null);
             const data = lifted.getPat(pat_id).data;
-            if (data == .bind) try graph.push(allocator, program.local_tys.items[@backingInt(data.bind)], Graph.no_parent);
-            if (data == .as) try graph.push(allocator, program.local_tys.items[@backingInt(data.as.local)], Graph.no_parent);
+            if (data == .bind) try graph.push(allocator, program.local_tys.items[@backingInt(data.bind)], null);
+            if (data == .as) try graph.push(allocator, program.local_tys.items[@backingInt(data.as.local)], null);
         }
 
         var children: std.ArrayList(Type.TypeVarId) = .empty;
@@ -1208,13 +1204,13 @@ const Region = struct {
             if (owner != self.owner and owner != Type.unowned) continue;
             const entry = try graph.index_of.getOrPut(allocator, root);
             if (entry.found_existing) {
-                try graph.edge(allocator, item.parent, entry.value_ptr.*);
+                try graph.edge(allocator, item.parent.get(), entry.value_ptr.*);
                 continue;
             }
             const index: u32 = @intCast(graph.nodes.items.len);
             entry.value_ptr.* = index;
             try graph.nodes.append(allocator, root);
-            try graph.edge(allocator, item.parent, index);
+            try graph.edge(allocator, item.parent.get(), index);
             if (self.positions.contains(root)) {
                 // A scheme node: substituted, never copied, and a seed.
                 try graph.reaches.append(allocator, true);
@@ -1252,9 +1248,9 @@ const Region = struct {
 
     /// The reference graph `findCopied` walks.
     const Graph = struct {
-        const no_parent = std.math.maxInt(u32);
         const inst_bit: u32 = 1 << 31;
-        const Work = struct { ty: Type.TypeVarId, parent: u32 };
+        /// `parent` is absent for a root.
+        const Work = struct { ty: Type.TypeVarId, parent: collections.OptionalU32 };
 
         work: std.ArrayList(Work) = .empty,
         nodes: std.ArrayList(Type.TypeVarId) = .empty,
@@ -1277,22 +1273,21 @@ const Region = struct {
             self.edges.deinit(allocator);
         }
 
-        fn push(self: *Graph, allocator: Allocator, ty: Type.TypeVarId, parent: u32) Allocator.Error!void {
-            try self.work.append(allocator, .{ .ty = ty, .parent = parent });
+        fn push(self: *Graph, allocator: Allocator, ty: Type.TypeVarId, parent: ?u32) Allocator.Error!void {
+            try self.work.append(allocator, .{ .ty = ty, .parent = .of(parent) });
         }
 
         fn pushLocals(self: *Graph, discovery: *Discovery, span: Lifted.Span(Lifted.TypedLocal)) Allocator.Error!void {
             const program = discovery.program;
             const locals = program.lifted.typedLocalSpan(span);
-            for (0..locals.len) |index| try self.push(discovery.allocator, program.local_tys.items[@backingInt(GuardedList.at(locals, index).local)], no_parent);
+            for (0..locals.len) |index| try self.push(discovery.allocator, program.local_tys.items[@backingInt(GuardedList.at(locals, index).local)], null);
         }
 
-        fn edge(self: *Graph, allocator: Allocator, parent: u32, child: u32) Allocator.Error!void {
-            if (parent == no_parent) return;
-            try self.edges.append(allocator, .{ parent, child });
+        fn edge(self: *Graph, allocator: Allocator, parent: ?u32, child: u32) Allocator.Error!void {
+            try self.edges.append(allocator, .{ parent orelse return, child });
         }
 
-        fn noteInst(self: *Graph, discovery: *Discovery, inst: Type.InstId, parent: u32) Allocator.Error!u32 {
+        fn noteInst(self: *Graph, discovery: *Discovery, inst: Type.InstId, parent: ?u32) Allocator.Error!u32 {
             const allocator = discovery.allocator;
             const entry = try self.inst_index.getOrPut(allocator, inst);
             if (!entry.found_existing) {

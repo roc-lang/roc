@@ -250,7 +250,7 @@ fn verifyNoCaptureFreePacks(store: *const LirStore) void {
     if (builtin.mode != .debug) return;
     for (store.getCFStmts()) |stmt| {
         if (stmt != .assign_packed_erased_fn) continue;
-        if (store.stmtRow(stmt.assign_packed_erased_fn.data).capture == null) {
+        if (store.stmtRow(stmt.assign_packed_erased_fn.data).capture == .none) {
             Common.invariant("a capture-free erased callable was packed at runtime instead of read from static data");
         }
     }
@@ -592,8 +592,8 @@ fn DenseChainMap(comptime Key: type, comptime primary: []const u8, comptime V: t
     return struct {
         const Self = @This();
         const Primary = @FieldType(Key, primary);
-        const end: u32 = std.math.maxInt(u32);
-        const Node = struct { key: Key, value: V, next: u32 };
+        /// The node after this one in its chain, absent at the chain's end.
+        const Node = struct { key: Key, value: V, next: collections.OptionalU32 };
 
         heads: collections.DenseMap(Primary, u32),
         nodes: std.ArrayList(Node) = .empty,
@@ -613,11 +613,11 @@ fn DenseChainMap(comptime Key: type, comptime primary: []const u8, comptime V: t
         }
 
         fn find(self: *const Self, key: Key) ?u32 {
-            var index = self.heads.get(@field(key, primary)) orelse return null;
-            while (index != end) {
+            var link: collections.OptionalU32 = .some(self.heads.get(@field(key, primary)) orelse return null);
+            while (link.get()) |index| {
                 const node = self.nodes.items[index];
                 if (std.meta.eql(node.key, key)) return index;
-                index = node.next;
+                link = node.next;
             }
             return null;
         }
@@ -636,14 +636,14 @@ fn DenseChainMap(comptime Key: type, comptime primary: []const u8, comptime V: t
                 self.nodes.items[index].value = value;
                 return;
             }
-            if (self.nodes.items.len >= end) return error.OutOfMemory;
+            if (self.nodes.items.len >= std.math.maxInt(u32)) return error.OutOfMemory;
             try self.nodes.ensureUnusedCapacity(self.heads.allocator, 1);
             const head = try self.heads.getOrPut(@field(key, primary));
             const index: u32 = @intCast(self.nodes.items.len);
             self.nodes.appendAssumeCapacity(.{
                 .key = key,
                 .value = value,
-                .next = if (head.found_existing) head.value_ptr.* else end,
+                .next = if (head.found_existing) .some(head.value_ptr.*) else .none,
             });
             head.value_ptr.* = index;
         }
@@ -8334,12 +8334,12 @@ const Lowerer = struct {
             .target = target,
             .data = try self.result.store.addStmtRow(LIR.PackedErasedFnData, .{
                 .proc = try self.markReachableFn(fn_id),
-                .capture = capture,
-                .capture_layout = capture_layout,
+                .capture = .of(capture),
+                .capture_layout = .of(capture_layout),
                 .on_drop = self.erasedCallableOnDrop(capture_layout),
                 .on_copy = self.erasedCallableOnDrop(capture_layout).copyCallback(),
-                .frozen_capture_layout = try self.frozenCaptureLayout(capture_layout),
-                .reuse = reuse,
+                .frozen_capture_layout = .of(try self.frozenCaptureLayout(capture_layout)),
+                .reuse = .of(reuse),
             }),
             .next = next,
         } }, where.source());
@@ -8916,7 +8916,7 @@ const Lowerer = struct {
                 .closure = callee,
                 .args = try self.result.store.addLocalSpan(args.ids),
                 .arg_plan = try self.erasedCallArgsPlan(args.ids),
-                .reuse_source = callee,
+                .reuse_source = .some(callee),
                 .result_reuse = try self.erasedResultDemand(abi_ret_ty) == .single_slot,
             }),
             .next = after_call,
@@ -9223,7 +9223,7 @@ const Lowerer = struct {
                 .args = try self.result.store.addLocalSpan(lowered.ids),
                 .extra = try self.result.store.addOptionalStmtRow(LIR.LowLevelExtra, .{
                     .interchangeable = interchangeable,
-                    .map_output_elem = map_output_elem,
+                    .map_output_elem = .of(map_output_elem),
                 }),
                 .next = next,
             } }, where.source());
@@ -10850,7 +10850,7 @@ const Lowerer = struct {
         for (self.erased_call_owner_uses.items[start..]) |use| {
             const call = &self.result.store.getCFStmtPtr(use.stmt).assign_call_erased;
             var data = self.result.store.stmtRow(call.data);
-            data.reuse_source = self.resolveErasedOwner(use.closure) orelse use.closure;
+            data.reuse_source = .some(self.resolveErasedOwner(use.closure) orelse use.closure);
             call.data = try self.result.store.addStmtRow(LIR.ErasedCallData, data);
         }
         self.erased_call_owner_uses.shrinkRetainingCapacity(start);
@@ -14099,12 +14099,12 @@ const Lowerer = struct {
                     .target = target,
                     .data = try self.result.store.addStmtRow(LIR.PackedErasedFnData, .{
                         .proc = try self.markReachableFn(task.target_variant.target),
-                        .capture = capture,
-                        .capture_layout = capture_layout,
+                        .capture = .of(capture),
+                        .capture_layout = .of(capture_layout),
                         .on_drop = self.erasedCallableOnDrop(capture_layout),
                         .on_copy = self.erasedCallableOnDrop(capture_layout).copyCallback(),
-                        .frozen_capture_layout = try self.frozenCaptureLayout(capture_layout),
-                        .reuse = try self.erasedCallableReuseForPack(target, capture_layout),
+                        .frozen_capture_layout = .of(try self.frozenCaptureLayout(capture_layout)),
+                        .reuse = .of(try self.erasedCallableReuseForPack(target, capture_layout)),
                     }),
                     .next = next,
                 } }, where.glue());
@@ -15826,8 +15826,8 @@ fn lirSymbol(symbol: Common.Symbol) LIR.Symbol {
 }
 
 fn lirInlineScopeId(scope: Lifted.InlineScopeId) LIR.InlineScopeId {
-    if (scope == Lifted.InlineScopeId.none) return LIR.InlineScopeId.none;
-    return .fromRow(scope.row());
+    const row = scope.get() orelse return LIR.InlineScopeId.none;
+    return .fromRow(@backingInt(row));
 }
 
 fn constFnTemplateForFn(self: *Lowerer, fn_id: Type.FnId) std.mem.Allocator.Error!LirProgram.FnTemplate {
