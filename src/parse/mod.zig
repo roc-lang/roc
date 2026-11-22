@@ -1552,6 +1552,61 @@ test "issue 13335: a package dependency record parse error is reported at the to
     });
 }
 
+test "a platform `targets` section parse error is reported at the token where parsing stopped" {
+    const platform = "platform \"\" requires {} exposes [] packages {} provides { \"roc_main\": main_for_host } targets: { inputs_dir: \"targets/\", ";
+    try expectHeaderDiagnosticsAtStoppingToken(&.{
+        .{
+            .before = platform,
+            .stopped_at = "Wasm32",
+            .after = ": { inputs: [app] } }",
+            .tag = .expected_targets_field_name,
+        },
+        .{
+            .before = platform ++ "wasm32 ",
+            .stopped_at = "{",
+            .after = " inputs: [app] } }",
+            .tag = .expected_targets_field_colon,
+        },
+        // Only `inputs_dir` takes a string, so the field name is the error.
+        .{
+            .before = platform,
+            .stopped_at = "inputs",
+            .after = ": \"other/\" }",
+            .tag = .expected_targets_field_name,
+        },
+        .{
+            .before = platform ++ "wasm32: ",
+            .stopped_at = "42",
+            .after = " }",
+            .tag = .expected_targets_field_name,
+        },
+    });
+}
+
+test "a host symbol map entry parse error is reported at the token where parsing stopped" {
+    const platform = "platform \"\" requires {} exposes [] packages {} ";
+    try expectHeaderDiagnosticsAtStoppingToken(&.{
+        .{
+            .before = platform ++ "provides { \"roc_main\" ",
+            .stopped_at = "main_for_host",
+            .after = " }",
+            .tag = .expected_symbol_map_colon,
+        },
+        .{
+            .before = platform ++ "provides { \"roc_main\": ",
+            .stopped_at = "42",
+            .after = " }",
+            .tag = .expected_symbol_map_function,
+        },
+        .{
+            .before = platform ++ "provides { \"roc_main\": main_for_host } hosted { \"roc_line\": Stdout.Line ",
+            .stopped_at = "42",
+            .after = " }",
+            .tag = .expected_symbol_map_function,
+        },
+    });
+}
+
 test "a second platform entry in a dependency record is reported at its `platform` keyword" {
     try expectHeaderDiagnosticsAtStoppingToken(&.{.{
         .before = "app [main] { pf: \"pf.roc\", a: platform \"a.roc\", b: ",

@@ -713,6 +713,7 @@ const CustomCase = enum {
     issue_12741_wasm_generic_tail_calls_dev,
     issue_12741_wasm_generic_tail_calls_size,
     issue_12741_wasm_generic_tail_calls_speed,
+    issue_13356_wasm_cross_module_tail_group_dev,
     issue_12848_wasm_shared_helper_emitted_once_size,
     issue_13028_wasm_size_small_copy_is_memory_copy,
     issue_13028_wasm_speed_small_copy_is_scalar,
@@ -5685,6 +5686,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 object packs offer no entry past the parameter limit (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_12769_wasm_object_entry_parameter_limit } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_dev } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_size } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13356: a call from another module into a cycle of tail calls returns the cycle's result on wasm32 (dev, --specialize=no)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_13356_wasm_cross_module_tail_group_dev } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12848: a helper with many callers is emitted once on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_12848_wasm_shared_helper_emitted_once_size } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 13028: a twelve-byte copy is one memory.copy on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_13028_wasm_size_small_copy_is_memory_copy } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 13028: a twelve-byte copy stays loads and stores on wasm32 (speed)", .timeout_ms = 600_000, .backend = .speed, .body = .{ .custom = .issue_13028_wasm_speed_small_copy_is_scalar } },
@@ -7414,6 +7416,7 @@ fn runCustomCase(
         .issue_12769_wasm_object_entry_parameter_limit => customIssue12769WasmObjectEntryParameterLimit(io, allocator, &env, &timer, timeout_ms),
         .issue_12741_wasm_generic_tail_calls_dev => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=dev"),
         .issue_12741_wasm_generic_tail_calls_size => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=size"),
+        .issue_13356_wasm_cross_module_tail_group_dev => customIssue13356WasmCrossModuleTailGroup(io, allocator, &env, &timer, timeout_ms),
         .issue_12848_wasm_shared_helper_emitted_once_size => customIssue12848WasmSharedHelperEmittedOnce(io, allocator, &env, &timer, timeout_ms),
         .issue_13028_wasm_size_small_copy_is_memory_copy => customIssue13028WasmSizeSmallCopyIsMemoryCopy(io, allocator, &env, &timer, timeout_ms),
         .issue_13028_wasm_speed_small_copy_is_scalar => customIssue13028WasmSpeedSmallCopyIsScalar(io, allocator, &env, &timer, timeout_ms),
@@ -14893,6 +14896,7 @@ const wasm_parity_apps = [_]WasmParityApp{
     .{ .app = "test/wasm/issue_12560_boxed_bool_not_static_lib_app.roc" },
     .{ .app = "test/wasm/issue_12569_specialized_callables.roc" },
     .{ .app = "test/wasm/issue_12741_generic_tail_calls_app.roc" },
+    .{ .app = "test/wasm/issue_13356_cross_module_tail_group_app.roc" },
     .{ .app = "test/wasm/issue_12769_many_wasm_parameters_app.roc" },
     .{ .app = "test/wasm/issue_12778_wide_record_static_lib_app.roc" },
     .{ .app = "test/wasm/issue_12782_i128_narrow_static_lib_app.roc" },
@@ -15564,6 +15568,44 @@ fn customIssue12741WasmGenericTailCalls(
         return customFailure(allocator, timer, "failed to read the generic tail call module's allocation counts: {}", .{err});
     if (outstanding != 1) {
         return customFailure(allocator, timer, "generic tail call wasm left {d} allocations outstanding, not just its result", .{outstanding});
+    }
+    return null;
+}
+
+/// A wasm32 dev build without specialization compiles each module to its
+/// own unit, so the app's calls to `Issue13356Parity.even` (closed types) and
+/// `Issue13356Loop.ping` (a generic parameter, so a tail carry) cross units
+/// into cycles of tail calls, and must return each cycle's final result.
+fn customIssue13356WasmCrossModuleTailGroup(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "cross-module-tail-group.wasm" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output path: {}", .{err});
+    defer allocator.free(output_path);
+    const output_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output argument: {}", .{err});
+    defer allocator.free(output_arg);
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--target=wasm32", "--opt=dev", "--specialize=no", "--no-cache", output_arg },
+        .roc_file = "test/wasm/issue_13356_cross_module_tail_group_app.roc",
+        .exit = .success,
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+    })) |failure| return failure;
+    if (validateWasmOutput(io, allocator, timer, output_path)) |failure| return failure;
+
+    var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
+        return customFailure(allocator, timer, "failed to load the cross-module tail group wasm module: {}", .{err});
+    defer wasm.deinit();
+    const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+        return customFailure(allocator, timer, "cross-module tail group wasm execution failed: {}", .{err});
+    if (!std.mem.eql(u8, result, "81 >ioioi")) {
+        return customFailure(allocator, timer, "cross-module tail group wasm returned \"{s}\", not \"81 >ioioi\"", .{result});
     }
     return null;
 }

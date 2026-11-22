@@ -37,7 +37,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RBWU".*;
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 4;
+pub const format_version: u32 = 5;
 
 /// The alignment an image's bytes need in memory for `View`.
 pub const alignment: std.mem.Alignment = .@"16";

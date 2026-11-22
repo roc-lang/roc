@@ -27212,7 +27212,14 @@ caller's frame is gone.
   tail area and calls it. The chain therefore runs in the frame of whoever
   entered the group. A member copies its aggregate arguments into its own
   frame on entry, because they may sit in the tail area and the next
-  frame-replacing call overwrites it.
+  frame-replacing call overwrites it. The tail area and the drivers are the
+  defining unit's own. A member other units call (`LirProcSpec.exported`)
+  is defined under a local name, and its exported name belongs to its tail
+  entry: a function with the member's signature that calls the member and
+  then the group's driver. A call from another unit is an ordinary call to
+  that entry, which returns the group's result, so an importer drives
+  nothing and needs no fact about the callee's group, and a change to which
+  of a module's functions form a group never reaches its importers' code.
 - The interpreter ends the activation that made the call and starts the
   callee's in the same native frame.
 
@@ -27781,7 +27788,9 @@ Callables), tail-drive summary and tail carry—functions of its body and its
 callees—are the whole of what another module compiles against (Per-Module
 Output). Imports are acyclic, so no same-SCC tail call crosses a unit: a
 worker's tail group lies within its module, and an importer's ordinary call
-passes a carry-taking worker no carry.
+passes a carry-taking worker no carry. On WebAssembly that call reaches the
+worker's tail entry, which finishes the chain in the defining unit
+(Frame-Replacing Calls).
 Variants inherit their source's unit.
 
 Ownership solving and field-take analysis finish before parallel emission
