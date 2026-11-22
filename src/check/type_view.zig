@@ -85,7 +85,7 @@ const EnvironmentContext = struct {
         return h.final();
     }
     pub fn eql(_: @This(), a: Environment, b: Environment) bool {
-        return a.declaration == b.declaration and std.mem.eql(OptVar, a.args, b.args);
+        return a.declaration == b.declaration and optVarsEqual(a.args, b.args);
     }
 };
 pub const Resolved = struct { var_: Var, desc: types.Descriptor };
@@ -665,4 +665,12 @@ pub fn getRecordFieldsSlice(self: *const Self, range: types.RecordField.SafeMult
 pub fn getRecordFieldAt(self: *const Self, range: types.RecordField.SafeMultiList.Range, offset: u32) types.RecordField {
     const slice = self.getRecordFieldsSlice(range);
     return .{ .name = slice.items(.name)[offset], .presence = slice.items(.presence)[offset] };
+}
+
+fn optVarsEqual(a: []const OptVar, b: []const OptVar) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |left, right| {
+        if (left != right) return false;
+    }
+    return true;
 }
