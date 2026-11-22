@@ -441,7 +441,7 @@ pub const Constants = struct {
     ///      bindings rejected).
     /// 205: selected data hoists carry their callable-slot proof and validation
     /// candidates survive until request eligibility is known.
-    pub const CACHE_VERSION = 205;
+    pub const CACHE_VERSION = 206;
 };
 
 /// Configuration for the Roc cache system.
