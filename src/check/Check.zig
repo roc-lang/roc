@@ -31,7 +31,6 @@ const hoist_roots = @import("can").HoistRoots;
 const output_type_roots = @import("output_type_roots.zig");
 const dispatch_evidence = @import("dispatch_evidence.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
-const top_level_def_owners = @import("top_level_def_owners.zig");
 
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
@@ -1132,9 +1131,6 @@ local_procedure_outer_refs: std.ArrayListUnmanaged(LocalProcedureOuterRef) = .em
 promoted_local_procedures: std.ArrayListUnmanaged(hoist_roots.PromotedLocalProcedure) = .empty,
 /// Binding patterns of `promoted_local_procedures`.
 promoted_local_procedure_patterns: collections.DenseMapUnmanaged(CIR.Pattern.Idx, void) = .empty,
-/// Whether this module's `top_level_def_owners` table is recorded. It is
-/// recorded on the first lookup that needs it, and before publication.
-top_level_def_owners_published: bool = false,
 /// Constraint callables of dispatch edges whose selected target, or the
 /// target of a dispatch derived from them, is a local procedure that was not
 /// promoted. Settled with `promoted_local_procedure_patterns`.
@@ -2067,7 +2063,6 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .local_procedure_outer_refs = .settled,
     .promoted_local_procedures = .keyed,
     .promoted_local_procedure_patterns = .keyed,
-    .top_level_def_owners_published = .keyed,
     .contextual_local_dispatch_fn_vars = .keyed,
     .contextual_local_dispatch_exprs = .keyed,
     .executable_root_defs = .input,
@@ -16073,7 +16068,6 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.recordCheckingOutputs();
     var checking_scope = try checking_interface.makeScope(self.gpa, self.cir, self.builtin_ctx.builtin_module, self.imported_modules, self.owner_modules);
     defer checking_scope.deinit();
-    try self.publishTopLevelDefOwners();
     try checking_interface.publish(self.cir, &checking_scope, defReference);
 
     self.debugAssertNominalDeclTableComplete();
@@ -16141,11 +16135,10 @@ fn recordErroneousNodes(self: *Self) Allocator.Error!void {
     var errors = ErroneousTypeMemo.init(self);
     defer errors.deinit();
     const store = &self.cir.store;
-    var top_level_def_patterns = collections.DenseMap(CIR.Pattern.Idx, CIR.Def.Idx).init(self.gpa);
-    defer top_level_def_patterns.deinit();
-    for (store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
-        try top_level_def_patterns.put(store.getDef(def_idx).pattern, def_idx);
-    }
+    // The owner table and the walk below both ascend by node, so one cursor
+    // finds each node's owner.
+    const owners = self.cir.top_level_def_owners.items();
+    var owner_cursor: usize = 0;
     var erroneous: std.ArrayList(u32) = .empty;
     defer erroneous.deinit(self.gpa);
     var raw_node: u32 = CIR.Node.first_idx;
@@ -16158,7 +16151,11 @@ fn recordErroneousNodes(self: *Self) Allocator.Error!void {
         else if (isPatternNodeTag(tag)) blk: {
             const pattern_idx: CIR.Pattern.Idx = @fromBackingInt(raw_node);
             if (store.getPattern(pattern_idx) == .runtime_error) break :blk true;
-            const type_var = if (top_level_def_patterns.get(pattern_idx)) |def_idx| ModuleEnv.varFrom(def_idx) else ModuleEnv.varFrom(pattern_idx);
+            while (owner_cursor < owners.len and owners[owner_cursor].node < raw_node) owner_cursor += 1;
+            // A def's own pattern is checked through the def's variable.
+            const def_pattern_owner: ?CIR.Def.Idx = if (owner_cursor < owners.len and owners[owner_cursor].node == raw_node and
+                store.getDef(owners[owner_cursor].def).pattern == pattern_idx) owners[owner_cursor].def else null;
+            const type_var = if (def_pattern_owner) |def_idx| ModuleEnv.varFrom(def_idx) else ModuleEnv.varFrom(pattern_idx);
             break :blk try errors.contains(type_var);
         } else if (isStatementNodeTag(tag))
             store.getStatement(@fromBackingInt(raw_node)) == .s_runtime_error
@@ -17997,7 +17994,7 @@ const StoredConstScan = struct {
             .callee => |callee| {
                 if (self.hoistedPromotedLocalProcedureForExpr(callee.module, callee.callee)) |lambda| {
                     try items.add(.{ .local_procedure = lambda });
-                } else if (try self.hoistedCallableDefForExpr(callee.module, callee.callee)) |callable_def| {
+                } else if (self.hoistedCallableDefForExpr(callee.module, callee.callee)) |callable_def| {
                     try items.add(.{ .callable_def = callable_def });
                 } else return .{ .value = true };
                 return .{ .group = .all };
@@ -18264,12 +18261,12 @@ fn hoistedCallableDefForExpr(
     self: *Self,
     module: *const ModuleEnv,
     expr: CIR.Expr.Idx,
-) Allocator.Error!?HoistedCallableDef {
+) ?HoistedCallableDef {
     return switch (module.store.getExpr(expr)) {
-        .e_lookup_local => |lookup| self.hoistedTopLevelDefForNode(module, ModuleEnv.nodeIdxFrom(lookup.pattern_idx)),
+        .e_lookup_local => |lookup| hoistedTopLevelDefForNode(module, ModuleEnv.nodeIdxFrom(lookup.pattern_idx)),
         .e_lookup_external => |external| blk: {
             const imported_module = self.hoistedImportedModule(module, external.module_idx) orelse break :blk null;
-            break :blk self.hoistedTopLevelDefForNode(imported_module, @fromBackingInt(@intCast(external.target_node_idx)));
+            break :blk hoistedTopLevelDefForNode(imported_module, @fromBackingInt(@intCast(external.target_node_idx)));
         },
         .e_lookup_associated_resolved => |resolved| blk: {
             const target_module = self.moduleEnvForIdentity(module, resolved.module_identity);
@@ -18345,25 +18342,9 @@ fn hoistedImportedModule(
     return self.imported_modules[module_idx];
 }
 
-fn hoistedTopLevelDefForNode(
-    self: *Self,
-    module: *const ModuleEnv,
-    node: CIR.Node.Idx,
-) Allocator.Error!?HoistedCallableDef {
-    if (module == self.cir) {
-        try self.publishTopLevelDefOwners();
-    } else {
-        // An imported module recorded its table when it was checked.
-        std.debug.assert(module.checking_dependency.published);
-    }
+fn hoistedTopLevelDefForNode(module: *const ModuleEnv, node: CIR.Node.Idx) ?HoistedCallableDef {
     const def = module.topLevelDefOwner(node) orelse return null;
     return .{ .module = module, .def = def };
-}
-
-fn publishTopLevelDefOwners(self: *Self) Allocator.Error!void {
-    if (self.top_level_def_owners_published) return;
-    try top_level_def_owners.publish(self.gpa, self.cir);
-    self.top_level_def_owners_published = true;
 }
 
 fn exprHasDedicatedLiteralConversionRoot(self: *Self, expr: CIR.Expr.Idx) bool {
@@ -39556,7 +39537,7 @@ fn traceHostedErrorOrigin(self: *Self, condition: CIR.Expr.Idx, called: bool, me
                         }
                     }
                 }
-                const target = (try self.hoistedCallableDefForExpr(self.cir, position.expr)) orelse break :walk null;
+                const target = self.hoistedCallableDefForExpr(self.cir, position.expr) orelse break :walk null;
                 if (target.module != self.cir) {
                     const origin = target.module.diagnosticHostedReturn(target.def) orelse break :walk null;
                     if (!position.called) break :walk null;
@@ -41705,7 +41686,7 @@ test "issue 11214 - hoisted associated lookup preserves ownership when both indi
     // Both stores have the same structure, so the lookup's indices name a
     // real def in Root as well, without any bounds failure. Assert the target
     // owner as well as the def.
-    const target = (try root.checker.hoistedCallableDefForExpr(module, callee)).?;
+    const target = root.checker.hoistedCallableDefForExpr(module, callee).?;
     try std.testing.expectEqual(@as(*const ModuleEnv, module), target.module);
     const imported_def = module.store.getDef(target.def);
     const root_def = root.module_env.store.getDef(target.def);
@@ -52890,7 +52871,7 @@ fn localValueMethodBinding(self: *Self, method_lookup: StaticDispatchMethodBindi
                 expr = (try self.localDeclExprForPattern(lookup.pattern_idx)) orelse return true;
             },
             .e_lookup_external, .e_lookup_associated_resolved => {
-                const def = (try self.hoistedCallableDefForExpr(self.cir, expr)) orelse return true;
+                const def = self.hoistedCallableDefForExpr(self.cir, expr) orelse return true;
                 const def_pattern = def.module.store.getDef(def.def).pattern;
                 const def_types: *const types_mod.Store = if (def.module == self.cir) self.types else &def.module.types;
                 return def_types.resolveThroughAliases(ModuleEnv.varFrom(def_pattern)).desc.content.unwrapFunc() == null;
