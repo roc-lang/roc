@@ -272,7 +272,7 @@ const SharedCrash = struct {
 /// A debug scope together with the source file of the code placed in it.
 const DebugFileScope = struct {
     scope: LlvmBuilder.Metadata,
-    file: u32,
+    file: collections.OptionalU32,
 };
 
 /// Lowers statement-only LIR procedures to LLVM bitcode.
@@ -534,7 +534,7 @@ pub const MonoLlvmCodeGen = struct {
     debug_enums_fwd_ref: LlvmBuilder.Metadata.Optional = .none,
     debug_globals_fwd_ref: LlvmBuilder.Metadata.Optional = .none,
     current_subprogram: LlvmBuilder.Metadata.Optional = .none,
-    current_debug_file: u32 = SourceLoc.no_file,
+    current_debug_file: collections.OptionalU32 = .none,
     /// The current procedure's source line, where SSA locals' debug values
     /// are placed when their defining statement is in an inline scope.
     current_proc_line: u32 = 0,
@@ -833,7 +833,7 @@ pub const MonoLlvmCodeGen = struct {
         self.debug_enums_fwd_ref = .none;
         self.debug_globals_fwd_ref = .none;
         self.current_subprogram = .none;
-        self.current_debug_file = SourceLoc.no_file;
+        self.current_debug_file = .none;
         self.current_source_stmt = null;
         self.debug_inline_subprograms.clearRetainingCapacity();
         self.debug_inline_callsites.clearRetainingCapacity();
@@ -1279,10 +1279,10 @@ pub const MonoLlvmCodeGen = struct {
                 allocated_name = symbol_name;
                 break :blk symbol_name;
             };
-            const file = if (loc.file == SourceLoc.no_file or loc.file >= self.store.sourceFileCount())
+            const file = if (loc.file.get()) |file_index| (if (file_index >= self.store.sourceFileCount())
                 ""
             else
-                self.store.sourceFileName(loc.file);
+                self.store.sourceFileName(file_index)) else "";
 
             const name_ptr = (try self.staticBytes(name)).toConst().?;
             const file_ptr = (try self.staticBytes(file)).toConst().?;
@@ -1330,11 +1330,11 @@ pub const MonoLlvmCodeGen = struct {
 
     /// DIFile metadata for one source file table entry (interned by the
     /// builder, so repeated calls are cheap).
-    fn debugFileFor(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, file: u32) Error!LlvmBuilder.Metadata {
-        const name = if (file == SourceLoc.no_file)
-            "<roc-generated>"
+    fn debugFileFor(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, file: collections.OptionalU32) Error!LlvmBuilder.Metadata {
+        const name = if (file.get()) |file_index|
+            self.store.sourceFileName(file_index)
         else
-            self.store.sourceFileName(file);
+            "<roc-generated>";
         return builder.debugFile(
             builder.metadataString(name) catch return error.OutOfMemory,
             builder.metadataString(".") catch return error.OutOfMemory,
@@ -2909,7 +2909,7 @@ pub const MonoLlvmCodeGen = struct {
             self.current_debug_file = outer_debug_file;
         }
         self.current_subprogram = .none;
-        self.current_debug_file = SourceLoc.no_file;
+        self.current_debug_file = .none;
         if (!builder.strip) {
             const proc_loc = self.store.procLoc(proc_id);
             const file = try self.debugFileFor(builder, proc_loc.file);
@@ -4513,8 +4513,8 @@ pub const MonoLlvmCodeGen = struct {
     /// from another file (e.g. a compiler-generated callee's body, which
     /// carries its call site's location, or a procedure with no location of
     /// its own) goes in a lexical block that names its file.
-    fn debugScopeInFile(self: *MonoLlvmCodeGen, scope: LlvmBuilder.Metadata, scope_file: u32, file: u32) Error!LlvmBuilder.Metadata {
-        if (file == scope_file or file == SourceLoc.no_file) return scope;
+    fn debugScopeInFile(self: *MonoLlvmCodeGen, scope: LlvmBuilder.Metadata, scope_file: collections.OptionalU32, file: collections.OptionalU32) Error!LlvmBuilder.Metadata {
+        if (file == scope_file or file == .none) return scope;
         const key: DebugFileScope = .{ .scope = scope, .file = file };
         if (self.debug_file_scopes.get(key)) |existing| return existing;
         const builder = self.builder orelse return error.CompilationFailed;
@@ -4566,7 +4566,7 @@ pub const MonoLlvmCodeGen = struct {
         if (self.debug_inline_callsites.get(@backingInt(root))) |existing| return existing;
         const builder = self.builder orelse return error.CompilationFailed;
 
-        const Pending = struct { id: lir.LIR.InlineScopeId, parent_scope: LlvmBuilder.Metadata, parent_file: u32 };
+        const Pending = struct { id: lir.LIR.InlineScopeId, parent_scope: LlvmBuilder.Metadata, parent_file: collections.OptionalU32 };
         var chain: std.ArrayList(Pending) = .empty;
         defer chain.deinit(self.allocator);
         var id = root;
@@ -4656,11 +4656,11 @@ pub const MonoLlvmCodeGen = struct {
                 try self.emitPackedErasedFn(
                     assign_stmt.target,
                     assign.proc,
-                    assign.capture,
-                    assign.capture_layout,
+                    assign.capture.get(),
+                    assign.capture_layout.get(),
                     assign.on_drop,
                     assign.on_copy,
-                    assign.reuse,
+                    assign.reuse.get(),
                     assign.reuse_unique,
                     assign.frame,
                 );
@@ -9547,10 +9547,10 @@ pub const MonoLlvmCodeGen = struct {
             scope.source_identity.writeSymbolName(&symbol_name)
         else
             self.store.getString(scope.source_name);
-        const file = if (loc.file == SourceLoc.no_file or loc.file >= self.store.sourceFileCount())
+        const file = if (loc.file.get()) |file_index| (if (file_index >= self.store.sourceFileCount())
             ""
         else
-            self.store.sourceFileName(loc.file);
+            self.store.sourceFileName(file_index)) else "";
 
         return builder.structConst(frame_ty, &.{
             (try self.staticBytes(name)).toConst().?,
@@ -15993,7 +15993,7 @@ test "issue 13146: debug locations name the file of their statement" {
         .copies_site_code = false,
         .source_name = .none,
         .source_loc = .none,
-        .call_site = .{ .file = 0, .line = 4, .column = 5 },
+        .call_site = .{ .file = .some(0), .line = 4, .column = 5 },
         .parent = .none,
     });
     // An inlined callee from another module.
@@ -16001,13 +16001,13 @@ test "issue 13146: debug locations name the file of their statement" {
         .source_identity = lir.LIR.ProcIdentity.forTest(3),
         .copies_site_code = false,
         .source_name = .none,
-        .source_loc = .{ .file = 1, .line = 40, .column = 1 },
-        .call_site = .{ .file = 0, .line = 5, .column = 5 },
+        .source_loc = .{ .file = .some(1), .line = 40, .column = 1 },
+        .call_site = .{ .file = .some(0), .line = 5, .column = 5 },
         .parent = .none,
     });
     const origin = struct {
         fn at(file: u32, line: u32, scope: lir.LIR.InlineScopeId) lir.LIR.StmtOrigin {
-            return .{ .loc = .{ .file = file, .line = line, .column = 2 }, .region = Base.Region.zero(), .inline_scope = scope, .kind = .source };
+            return .{ .loc = .{ .file = .some(file), .line = line, .column = 2 }, .region = Base.Region.zero(), .inline_scope = scope, .kind = .source };
         }
     }.at;
     const a = try store.addLocal(.{ .layout_idx = .i64 });
@@ -16026,7 +16026,7 @@ test "issue 13146: debug locations name the file of their statement" {
         .frame_locals = try store.addLocalSpan(&.{ s1, s2, s3 }),
         .body = .some(body),
         .ret_layout = .i64,
-    }, .{ .file = 0, .line = 3, .column = 1 });
+    }, .{ .file = .some(0), .line = 3, .column = 1 });
 
     const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .x86_64, .os_tag = .linux });
     var codegen = MonoLlvmCodeGen.initForLinkedObject(gpa, &store, target);
@@ -16106,7 +16106,7 @@ test "issue 13125: generated functions that call procs have debug subprograms" {
         .frame_locals = args,
         .body = .some(body),
         .ret_layout = .i64,
-    }, .{ .file = 0, .line = 3, .column = 1 });
+    }, .{ .file = .some(0), .line = 3, .column = 1 });
     var symbol_buf: [lir.LIR.ProcIdentity.symbol_name_len]u8 = undefined;
     const adapter_name = store.getProcSpec(proc).identity.writeSymbolName(&symbol_buf);
 

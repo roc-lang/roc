@@ -513,8 +513,8 @@ const Builder = struct {
             .target = target,
             .data = try self.store.addStmtRow(LIR.PackedErasedFnData, .{
                 .proc = worker,
-                .capture = capture,
-                .capture_layout = .opaque_ptr,
+                .capture = .some(capture),
+                .capture_layout = .some(.opaque_ptr),
                 .on_drop = .none,
             }),
             .next = next,

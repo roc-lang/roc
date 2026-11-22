@@ -22,6 +22,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 const static_data = @import("static_data");
 
 const Allocator = std.mem.Allocator;
@@ -94,8 +95,6 @@ pub const Placement = union(enum) {
     pooled: usize,
 };
 
-const none: u32 = std.math.maxInt(u32);
-
 /// Placement decisions for one image's static data exports.
 pub const Plan = struct {
     allocator: Allocator,
@@ -108,8 +107,8 @@ pub const Plan = struct {
     /// no address cycle.
     poolable: []bool,
     /// Address relocation target export of each relocation, flattened in
-    /// export order, or `none` for a function pointer.
-    targets: []u32,
+    /// export order; absent for a function pointer.
+    targets: []collections.OptionalU32,
     target_starts: []u32,
     /// Exports with every address target before its sources.
     order: []u32,
@@ -144,7 +143,7 @@ pub const Plan = struct {
         };
         errdefer plan.deinit();
 
-        if (exports.len >= none) return error.UnsupportedStaticDataRelocation;
+        if (exports.len >= std.math.maxInt(u32)) return error.UnsupportedStaticDataRelocation;
         plan.placements = try allocator.alloc(Placement, exports.len);
         for (plan.placements) |*placement| placement.* = .{ .local = .{ .data_offset = 0, .listed = false } };
         for (exports) |data_export| {
@@ -165,8 +164,8 @@ pub const Plan = struct {
 
         var relocation_count: usize = 0;
         for (exports) |data_export| relocation_count += data_export.relocations.len;
-        if (relocation_count >= none) return error.UnsupportedStaticDataRelocation;
-        plan.targets = try allocator.alloc(u32, relocation_count);
+        if (relocation_count >= std.math.maxInt(u32)) return error.UnsupportedStaticDataRelocation;
+        plan.targets = try allocator.alloc(collections.OptionalU32, relocation_count);
         plan.sorted_relocations = try allocator.alloc(u32, relocation_count);
 
         var names = std.StringHashMapUnmanaged(u32).empty;
@@ -181,15 +180,15 @@ pub const Plan = struct {
             plan.target_starts[i] = cursor;
             for (data_export.relocations, 0..) |relocation, r| {
                 plan.targets[cursor] = switch (relocation.kind) {
-                    .function_pointer => none,
-                    .address => switch (relocation.target) {
+                    .function_pointer => .none,
+                    .address => .some(switch (relocation.target) {
                         .data_symbol => |id| blk: {
                             const index = @backingInt(id);
                             if (index >= exports.len) return error.UnsupportedStaticDataRelocation;
                             break :blk index;
                         },
                         .named => names.get(relocation.target_symbol_name) orelse return error.UnsupportedStaticDataRelocation,
-                    },
+                    }),
                 };
                 plan.sorted_relocations[cursor] = @intCast(r);
                 cursor += 1;
@@ -216,7 +215,11 @@ pub const Plan = struct {
         for (plan.order) |i| {
             var poolable = !ordered.cyclic[i];
             for (plan.targets[plan.target_starts[i]..plan.target_starts[i + 1]]) |target| {
-                if (target == none or !plan.poolable[target]) poolable = false;
+                const address_target = target.get() orelse {
+                    poolable = false;
+                    continue;
+                };
+                if (!plan.poolable[address_target]) poolable = false;
             }
             plan.poolable[i] = poolable;
             if (poolable) plan.hashes[i] = plan.contentHash(exports, i);
@@ -293,9 +296,8 @@ pub const Plan = struct {
 
     /// Target export of relocation `r` of export `i`, for an address relocation.
     pub fn relocationTarget(self: *const Plan, i: usize, r: usize) u32 {
-        const target = self.targets[self.target_starts[i] + r];
-        if (target == none) base.invariant("static data invariant violated: relocation {d} of export {d} is not an address relocation", .{ r, i });
-        return target;
+        return self.targets[self.target_starts[i] + r].get() orelse
+            base.invariant("static data invariant violated: relocation {d} of export {d} is not an address relocation", .{ r, i });
     }
 
     fn contentHash(self: *const Plan, exports: []const StaticDataExport, i: usize) u64 {
@@ -347,7 +349,7 @@ const Order = struct {
 /// connected component precedes it (Tarjan's algorithm, iterative). Recursive
 /// type descriptors point at one another, so the graph is cyclic; the members
 /// of a cycle are placed together and marked `cyclic`.
-fn componentOrder(allocator: Allocator, count: usize, targets: []const u32, target_starts: []const u32) Allocator.Error!Order {
+fn componentOrder(allocator: Allocator, count: usize, targets: []const collections.OptionalU32, target_starts: []const u32) Allocator.Error!Order {
     const order = try allocator.alloc(u32, count);
     errdefer allocator.free(order);
     const cyclic = try allocator.alloc(bool, count);
@@ -403,15 +405,15 @@ fn componentOrder(allocator: Allocator, count: usize, targets: []const u32, targ
                 }
                 const members = order[first..emitted];
                 var self_loop = false;
-                for (targets[target_starts[node]..target_starts[node + 1]]) |target| self_loop = self_loop or target == node;
+                for (targets[target_starts[node]..target_starts[node + 1]]) |target| self_loop = self_loop or target == collections.OptionalU32.some(node);
                 if (members.len > 1 or self_loop) for (members) |member| {
                     cyclic[member] = true;
                 };
                 continue;
             }
-            const target = targets[frame.next_target];
+            const target_slot = targets[frame.next_target];
             frame.next_target += 1;
-            if (target == none) continue;
+            const target = target_slot.get() orelse continue;
             if (index[target] == unindexed) {
                 index[target] = next_index;
                 low[target] = next_index;
@@ -432,7 +434,8 @@ const PoolIndex = struct {
     const Candidate = struct {
         entry: *align(1) const Entry,
         relocations: []align(1) const Relocation,
-        next: u32,
+        /// The next candidate with the same hash, if any.
+        next: collections.OptionalU32,
     };
 
     candidates: std.ArrayList(Candidate) = .empty,
@@ -466,8 +469,8 @@ const PoolIndex = struct {
                 _ = try mappedSlice(u8, pool.mapping, entry.data_offset, entry.len);
                 const first: usize = @intCast(entry.first_relocation);
                 const head = try index.heads.getOrPut(allocator, entry.hash);
-                const next = if (head.found_existing) head.value_ptr.* else none;
-                if (index.candidates.items.len >= none) return error.InvalidStaticPool;
+                const next: collections.OptionalU32 = if (head.found_existing) .some(head.value_ptr.*) else .none;
+                if (index.candidates.items.len >= std.math.maxInt(u32)) return error.InvalidStaticPool;
                 head.value_ptr.* = @intCast(index.candidates.items.len);
                 index.candidates.appendAssumeCapacity(.{
                     .entry = entry,
@@ -496,10 +499,10 @@ const PoolIndex = struct {
             if (plan.placements[plan.relocationTarget(i, r)] != .pooled) return null;
         }
 
-        var candidate_index = self.heads.get(plan.hashes[i]) orelse return null;
-        while (candidate_index != none) {
+        var next_candidate: collections.OptionalU32 = .some(self.heads.get(plan.hashes[i]) orelse return null);
+        while (next_candidate.get()) |candidate_index| {
             const candidate = self.candidates.items[candidate_index];
-            candidate_index = candidate.next;
+            next_candidate = candidate.next;
             const entry = candidate.entry;
             if (entry.len != data_export.bytes.len or
                 entry.alignment != exportAlignment(data_export) or

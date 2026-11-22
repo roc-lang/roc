@@ -28,6 +28,7 @@
 //! headers and the file tail belonging to the coordinating thread.
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 const backend = @import("backend");
 const HostPrelink = @import("HostPrelink.zig");
 const unit_walk = @import("../unit_walk.zig");
@@ -267,7 +268,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         const place = places[index];
         for (view.sites()) |site| {
             if (@as(UnitImage.SiteKind, @fromBackingInt(site.kind)) != .abs64) continue;
-            if (site.atom != UnitImage.no_atom and !reached_atoms[index][site.atom]) continue;
+            if (site.atom.get()) |atom| if (!reached_atoms[index][atom]) continue;
             const region: UnitImage.Region = @fromBackingInt(site.region);
             switch (region) {
                 .block, .data, .pdata, .xdata => {},
@@ -350,7 +351,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     }
 
     // Symbols of code the link leaves as a hole get no entry.
-    const symbol_slots = try gpa.alloc([]u32, images.items.len);
+    const symbol_slots = try gpa.alloc([]collections.OptionalU32, images.items.len);
     @memset(symbol_slots, &.{});
     defer {
         for (order.items) |index| gpa.free(symbol_slots[index]);
@@ -361,15 +362,15 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     var app_strings: u64 = 0;
     for (order.items) |index| {
         const view = images.items[index].view;
-        const slots = try gpa.alloc(u32, view.symbols().len);
+        const slots = try gpa.alloc(collections.OptionalU32, view.symbols().len);
         symbol_slots[index] = slots;
         var kept: u32 = 0;
         for (view.symbolAtoms(), slots) |atom, *slot| {
-            if (atom != UnitImage.no_atom and !reached_atoms[index][atom]) {
-                slot.* = no_symbol;
+            if (if (atom.get()) |present| !reached_atoms[index][present] else false) {
+                slot.* = .none;
                 continue;
             }
-            slot.* = kept;
+            slot.* = .some(kept);
             kept += 1;
         }
         places[index].first_symbol = exe.symbol_count + app_symbol_count;
@@ -591,8 +592,6 @@ fn findHostSymbol(context: *const anyopaque, name: []const u8) ?u64 {
     const symbol = host.findSymbol(name) orelse return null;
     return symbol.rva;
 }
-
-const no_symbol: u32 = std.math.maxInt(u32);
 
 /// Where an image's regions land, as image-relative addresses.
 const Place = struct {
@@ -837,7 +836,7 @@ const Context = struct {
     /// Section numbers of the app's text, data and unwind sections.
     section_numbers: [3]u16,
     reached_atoms: []const []const bool,
-    symbol_slots: []const []const u32,
+    symbol_slots: []const []const collections.OptionalU32,
 
     /// The file offset of an image-relative address in the app's sections.
     fn fileOffsetOf(self: *const Context, rva: u64) u64 {
@@ -915,9 +914,9 @@ const Task = struct {
         const symbols = view.symbols()[range.first..][0..range.count];
         const slots = context.symbol_slots[range.image][range.first..][0..range.count];
         var written: u64 = 0;
-        for (symbols, slots) |symbol, slot| {
+        for (symbols, slots) |symbol, symbol_slot| {
             // A symbol of code the link left as a hole has no entry.
-            if (slot == no_symbol) continue;
+            const slot = symbol_slot.get() orelse continue;
             const entry = context.out[@intCast(context.symtab_offset + (place.first_symbol + slot) * symbol_size)..][0..symbol_size];
             written += symbol_size;
             const region: UnitImage.Region = @fromBackingInt(symbol.region);
@@ -952,7 +951,7 @@ const Task = struct {
         const addresses = context.resolved[range.image];
         const atoms_reached = context.reached_atoms[range.image];
         for (view.sites()[range.first..][0..range.count]) |site| {
-            if (site.atom != UnitImage.no_atom and !atoms_reached[site.atom]) continue;
+            if (site.atom.get()) |atom| if (!atoms_reached[atom]) continue;
             const region: UnitImage.Region = @fromBackingInt(site.region);
             const kind: UnitImage.SiteKind = @fromBackingInt(site.kind);
             const out = context.regionOut(place, view, region);

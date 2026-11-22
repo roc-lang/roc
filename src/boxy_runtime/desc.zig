@@ -460,16 +460,33 @@ pub const AdaptField = extern struct {
 
 /// The destination of one source variant of a re-tag plan: `discriminant`
 /// under the destination's union, its payload converted by `plan` (null for
-/// a variant without arguments). `absent` marks a source variant the
-/// destination's row lacks, which no value reaching the conversion holds.
+/// a variant without arguments). The discriminant is absent for a source
+/// variant the destination's row lacks, which no value reaching the
+/// conversion holds.
 pub const AdaptVariant = extern struct {
-    discriminant: u32,
+    discriminant: TargetDiscriminant,
     plan: ?*const AdaptPlan,
-
-    pub const absent: u32 = std.math.maxInt(u32);
 
     pub fn layout(width: PointerWidth) ExternLayout(AdaptVariant) {
         return externLayout(AdaptVariant, width);
+    }
+};
+
+/// A re-tag destination discriminant in four bytes: zero is absent, and any
+/// other word stores the discriminant plus one.
+pub const TargetDiscriminant = enum(u32) {
+    absent = 0,
+    _,
+
+    pub fn of(discriminant: u32) TargetDiscriminant {
+        std.debug.assert(discriminant < std.math.maxInt(u32));
+        return @fromBackingInt(discriminant + 1);
+    }
+
+    /// The discriminant, or null when absent.
+    pub fn get(self: TargetDiscriminant) ?u32 {
+        if (self == .absent) return null;
+        return @backingInt(self) - 1;
     }
 };
 

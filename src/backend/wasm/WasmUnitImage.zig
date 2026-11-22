@@ -33,11 +33,12 @@
 //!
 //! This file depends on `std` alone.
 const std = @import("std");
+const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 
 const magic = "RBWU".*;
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 3;
+pub const format_version: u32 = 4;
 
 /// The alignment an image's bytes need in memory for `View`.
 pub const alignment: std.mem.Alignment = .@"16";
@@ -130,9 +131,6 @@ pub const segment_zero_fill: u32 = 1;
 /// `Header.flags` bit: the unit's code checks stack bounds, and every
 /// function carries its stack frame facts.
 pub const image_stack_checks: u32 = 1;
-/// `Import.type` of an import whose signature the unit does not know: a
-/// function only named by a table slot in a data segment.
-pub const no_type: u32 = std.math.maxInt(u32);
 
 /// One function signature: its value types, parameters then results, in
 /// the value-type blob.
@@ -245,8 +243,10 @@ pub const Import = extern struct {
     module: u32,
     name: u32,
     field: u32,
-    /// For a function: its signature, or `no_type`.
-    type: u32,
+    /// For a function: its signature; absent for a function whose signature
+    /// the unit does not know (one only named by a table slot in a data
+    /// segment) and for every other kind.
+    type: collections.OptionalU32,
     kind: u8,
     /// For a global: its value type and whether it is mutable.
     valtype: u8,
@@ -450,9 +450,9 @@ pub const View = struct {
             if (import.flags & ~(import_address_taken | import_weak) != 0) return error.InvalidImage;
             const kind = std.enums.fromInt(ImportKind, import.kind) orelse return error.InvalidImage;
             switch (kind) {
-                .function => if (import.type != no_type and import.type >= self.header.type_count) return error.InvalidImage,
-                .global => if (import.type != no_type or !validValType(import.valtype) or import.mutable > 1) return error.InvalidImage,
-                .table, .data => if (import.type != no_type) return error.InvalidImage,
+                .function => if (import.type.get()) |type_index| if (type_index >= self.header.type_count) return error.InvalidImage,
+                .global => if (import.type != .none or !validValType(import.valtype) or import.mutable > 1) return error.InvalidImage,
+                .table, .data => if (import.type != .none) return error.InvalidImage,
             }
         }
     }
@@ -762,8 +762,8 @@ pub const InputImport = struct {
     /// The field an embedder import keeps; null when it is the symbol name.
     field: ?[]const u8 = null,
     kind: ImportKind,
-    /// For a function: its signature, or `no_type`.
-    type: u32 = no_type,
+    /// For a function: its signature, if the unit knows it.
+    type: ?u32 = null,
     /// For a global.
     valtype: u8 = 0,
     mutable: bool = false,
@@ -877,7 +877,7 @@ pub fn encode(allocator: Allocator, input: Input) EncodeError![]align(alignment.
         .module = try strings.add(import.module),
         .name = try strings.add(import.name),
         .field = try strings.add(import.field orelse import.name),
-        .type = import.type,
+        .type = .of(import.type),
         .kind = @backingInt(import.kind),
         .valtype = import.valtype,
         .mutable = @intFromBool(import.mutable),
