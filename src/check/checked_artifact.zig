@@ -3907,10 +3907,10 @@ fn reconstructTypeData(comptime Live: type, pool_owner: anytype, stored: anytype
 var empty_view_var_names: canonical.NameInterner = .{};
 
 // Builtin identity selects its declaration directly, independently of the
-// declaring module's source statement numbering. Zero means absent; stored
-// declaration ids are offset by one so the index is compact serializable POD.
-const BuiltinNominalDeclarationIndex = [@typeInfo(CheckedBuiltinNominal).@"enum".field_names.len]u32;
-const empty_builtin_nominal_declarations: BuiltinNominalDeclarationIndex = @splat(0);
+// declaring module's source statement numbering. Each entry is a compact
+// optional id, so the index is serializable POD that starts zeroed.
+const BuiltinNominalDeclarationIndex = [@typeInfo(CheckedBuiltinNominal).@"enum".field_names.len]collections.OptionalId(CheckedNominalDeclarationId);
+const empty_builtin_nominal_declarations: BuiltinNominalDeclarationIndex = @splat(.none);
 
 /// Borrowed, read-only view over a `CheckedTypeStore`'s relocated slices plus its
 /// `var_names` interner, so type accessors can resolve ids without holding the owning
@@ -4364,9 +4364,8 @@ pub const CheckedTypeStoreView = struct {
         self: *const CheckedTypeStoreView,
         builtin_nominal: CheckedBuiltinNominal,
     ) ?CheckedNominalDeclaration {
-        const entry = self.builtin_nominal_declarations[@backingInt(builtin_nominal)];
-        if (entry == 0) return null;
-        return self.nominalDeclarationById(@fromBackingInt(@intCast(entry - 1)));
+        const id = self.builtin_nominal_declarations[@backingInt(builtin_nominal)].get() orelse return null;
+        return self.nominalDeclarationById(id);
     }
 
     pub fn nominalDeclarationForPayload(
@@ -4403,10 +4402,9 @@ const CheckedTypePairSet = struct {
     first_by_left: collections.DenseMap(CheckedTypeId, u32),
     rows: std.ArrayListUnmanaged(Row) = .empty,
 
-    const no_row = std.math.maxInt(u32);
     const Row = struct {
         right: CheckedTypeId,
-        next: u32,
+        next: collections.OptionalU32,
     };
 
     fn init(allocator: Allocator) CheckedTypePairSet {
@@ -4426,13 +4424,13 @@ const CheckedTypePairSet = struct {
     /// Add `pair`, reporting whether it was already present.
     fn insert(self: *CheckedTypePairSet, pair: CheckedTypeExactPair) Allocator.Error!bool {
         const row_index = std.math.cast(u32, self.rows.items.len) orelse return error.OutOfMemory;
-        if (row_index == no_row) return error.OutOfMemory;
+        if (row_index == std.math.maxInt(u32)) return error.OutOfMemory;
         try self.rows.ensureUnusedCapacity(self.first_by_left.allocator, 1);
         const head = try self.first_by_left.getOrPut(pair.left);
-        const first = if (head.found_existing) head.value_ptr.* else no_row;
+        const first: collections.OptionalU32 = if (head.found_existing) .some(head.value_ptr.*) else .none;
         var cursor = first;
-        while (cursor != no_row) {
-            const row = self.rows.items[cursor];
+        while (cursor.get()) |row_at| {
+            const row = self.rows.items[row_at];
             if (row.right == pair.right) return true;
             cursor = row.next;
         }
@@ -7646,11 +7644,10 @@ fn indexBuiltinNominalDeclaration(
 ) void {
     const owner = builtin_nominal orelse return;
     const slot = &store.builtin_nominal_declarations[@backingInt(owner)];
-    const entry = @backingInt(declaration_id) + 1;
-    if (slot.* != 0 and slot.* != entry) {
+    if (slot.get()) |existing| if (existing != declaration_id) {
         checkedArtifactInvariant("builtin identity referenced conflicting nominal declarations", .{});
-    }
-    slot.* = entry;
+    };
+    slot.* = .some(declaration_id);
 }
 
 fn checkedTypeIdSliceEql(a: []const CheckedTypeId, b: []const CheckedTypeId) bool {
@@ -9079,8 +9076,6 @@ pub const ImportedOriginIndex = struct {
     /// Nominal declarations examined while indexing owners' declarations.
     declaration_visits: u64 = 0,
 
-    const no_declaration = std.math.maxInt(u32);
-
     const ImportedOrigin = struct {
         /// The first import view carrying the origin's identity. Every view
         /// with that identity is the same checked artifact. Null when no
@@ -9090,7 +9085,7 @@ pub const ImportedOriginIndex = struct {
         /// first declaration lookup: `first` maps a statement to its first
         /// declaration index and `next` chains declarations that share one.
         first: std.AutoHashMapUnmanaged(u32, u32) = .empty,
-        next: []u32 = &.{},
+        next: []collections.OptionalU32 = &.{},
         declarations_indexed: bool = false,
     };
 
@@ -9230,7 +9225,7 @@ pub const ImportedOriginIndex = struct {
         const view = origin.view orelse return null;
         const declarations = view.checked_types.nominal_declarations;
         if (!origin.declarations_indexed) {
-            const next = try self.allocator.alloc(u32, declarations.len);
+            const next = try self.allocator.alloc(collections.OptionalU32, declarations.len);
             errdefer self.allocator.free(next);
             var first: std.AutoHashMapUnmanaged(u32, u32) = .empty;
             errdefer first.deinit(self.allocator);
@@ -9241,7 +9236,7 @@ pub const ImportedOriginIndex = struct {
                 index -= 1;
                 self.declaration_visits += 1;
                 const head = first.getOrPutAssumeCapacity(declarations[index].source_statement);
-                next[index] = if (head.found_existing) head.value_ptr.* else no_declaration;
+                next[index] = if (head.found_existing) .some(head.value_ptr.*) else .none;
                 head.value_ptr.* = @intCast(index);
             }
             origin.first = first;
@@ -9250,8 +9245,9 @@ pub const ImportedOriginIndex = struct {
         }
 
         var found: ?CheckedNominalDeclarationId = null;
-        var cursor = origin.first.get(source_decl) orelse no_declaration;
-        while (cursor != no_declaration) : (cursor = origin.next[cursor]) {
+        var next_declaration: collections.OptionalU32 = .of(origin.first.get(source_decl));
+        while (next_declaration.get()) |cursor| {
+            next_declaration = origin.next[cursor];
             const declaration = declarations[cursor];
             if (!base.ModuleIdentity.eql(view.canonical_names.moduleIdentityBytes(declaration.nominal.module), origin_hash)) continue;
             if (found) |existing| {
@@ -14043,10 +14039,8 @@ const EvidencePass = struct {
     const GeneratedCodecsByKind = std.EnumArray(static_dispatch.GeneratedCodecDerivationKind, ?static_dispatch.GeneratedCodecDerivationId);
     const CallableContractRow = struct {
         span: artifact_serialize.Span,
-        /// The next older row in the same bucket.
-        next: u32,
-
-        const none = std.math.maxInt(u32);
+        /// The next older row in the same bucket, if any.
+        next: collections.OptionalU32,
     };
 
     fn init(
@@ -14706,20 +14700,20 @@ const EvidencePass = struct {
                 .scheme_callable => if (param.path.len != 0) {
                     var chain: std.ArrayList(static_dispatch.EvidencePathStep) = .empty;
                     defer chain.deinit(self.allocator);
-                    var node = param.path.last;
-                    while (node != static_dispatch.no_evidence_path_node) {
+                    var next_node = param.path.last;
+                    while (next_node.get()) |node| {
                         const path_node = self.evidence_path_nodes.items[node];
                         try chain.append(self.allocator, path_node.step);
-                        node = path_node.parent;
+                        next_node = path_node.parent;
                     }
-                    var parent: u32 = @intCast(self.evidence_path_nodes.items.len);
-                    try self.evidence_path_nodes.append(self.allocator, .{ .parent = static_dispatch.no_evidence_path_node, .step = .{ .kind = @backingInt(static_dispatch.EvidencePathStep.Kind.fn_ret), .data = 0 } });
+                    var parent: collections.OptionalU32 = .some(@intCast(self.evidence_path_nodes.items.len));
+                    try self.evidence_path_nodes.append(self.allocator, .{ .parent = .none, .step = .{ .kind = @backingInt(static_dispatch.EvidencePathStep.Kind.fn_ret), .data = 0 } });
                     var step_index = chain.items.len;
                     while (step_index > 0) {
                         step_index -= 1;
-                        const next_node: u32 = @intCast(self.evidence_path_nodes.items.len);
+                        const appended: collections.OptionalU32 = .some(@intCast(self.evidence_path_nodes.items.len));
                         try self.evidence_path_nodes.append(self.allocator, .{ .parent = parent, .step = chain.items[step_index] });
-                        parent = next_node;
+                        parent = appended;
                     }
                     param.path = .{ .last = parent, .len = param.path.len + 1 };
                 },
@@ -15385,19 +15379,19 @@ const EvidencePass = struct {
     fn publishPathNode(
         self: *EvidencePass,
         path_nodes: []const static_dispatch.EvidencePathNode,
-        scheme_node: u32,
-    ) Allocator.Error!u32 {
-        const no_node = static_dispatch.no_evidence_path_node;
-        if (scheme_node == no_node) return no_node;
+        scheme_node: collections.OptionalU32,
+    ) Allocator.Error!collections.OptionalU32 {
+        const scheme_index = scheme_node.get() orelse return .none;
         const idents = self.module.identStoreConst();
         const published = self.published_path_nodes.items;
         self.published_path_chain.clearRetainingCapacity();
         var node = scheme_node;
-        while (node != no_node and published[node] == .none) {
-            try self.published_path_chain.append(self.allocator, node);
-            node = path_nodes[node].parent;
+        while (node.get()) |index| {
+            if (published[index] != .none) break;
+            try self.published_path_chain.append(self.allocator, index);
+            node = path_nodes[index].parent;
         }
-        var parent = if (node == no_node) no_node else published[node].get().?;
+        var parent: collections.OptionalU32 = if (node.get()) |index| published[index] else .none;
         var i = self.published_path_chain.items.len;
         while (i > 0) {
             i -= 1;
@@ -15419,9 +15413,9 @@ const EvidencePass = struct {
             const published_node: u32 = @intCast(self.evidence_path_nodes.items.len);
             try self.evidence_path_nodes.append(self.allocator, .{ .parent = parent, .step = converted });
             published[next] = .some(published_node);
-            parent = published_node;
+            parent = .some(published_node);
         }
-        return published[scheme_node].get().?;
+        return published[scheme_index];
     }
 
     fn pathlessDefaultPhaseForParam(self: *EvidencePass, param: EvidenceParam) ?NumericDefaultPhase {
@@ -16950,13 +16944,13 @@ const EvidencePass = struct {
         for (entries) |entry| std.hash.autoHash(&hasher, entry);
         const bucket_key = hasher.final();
         const row_index = std.math.cast(u32, self.callable_contracts.items.len) orelse return error.OutOfMemory;
-        if (row_index == CallableContractRow.none) return error.OutOfMemory;
+        if (row_index == std.math.maxInt(u32)) return error.OutOfMemory;
         try self.callable_contracts.ensureUnusedCapacity(self.allocator, 1);
         const bucket = try self.callable_contract_buckets.getOrPut(self.allocator, bucket_key);
-        const newest = if (bucket.found_existing) bucket.value_ptr.* else CallableContractRow.none;
+        const newest: collections.OptionalU32 = if (bucket.found_existing) .some(bucket.value_ptr.*) else .none;
         var cursor = newest;
-        while (cursor != CallableContractRow.none) {
-            const row = self.callable_contracts.items[cursor];
+        while (cursor.get()) |row_at| {
+            const row = self.callable_contracts.items[row_at];
             cursor = row.next;
             if (row.span.len != entries.len) continue;
             const existing = self.evidence_refs.items[row.span.start..][0..row.span.len];
@@ -17316,14 +17310,14 @@ const EvidencePass = struct {
 
     /// The instance a stored nested-function use places into its containing
     /// value, as a `SiteEvidenceEntry.instance_ty`.
-    fn siteInstanceType(self: *EvidencePass, record_idx: u32) u32 {
+    fn siteInstanceType(self: *EvidencePass, record_idx: u32) collections.OptionalId(CheckedTypeId) {
         const record = self.module.moduleEnvConst().scheme_uses.items()[record_idx];
         if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.nested_function_use)) {
-            return static_dispatch.SiteEvidenceEntry.no_site_instance;
+            return .none;
         }
         const instance = self.checked_types.rootForSourceVar(self.module, @fromBackingInt(@intCast(record.slot_data))) orelse
             checkedArtifactInvariant("stored nested function instance type was not published", .{});
-        return @backingInt(instance);
+        return .some(instance);
     }
 
     /// Publish the complete construction recipe for a generalized nested
@@ -17415,8 +17409,8 @@ const EvidencePass = struct {
 
 test "procedure evidence schema positively classifies callable paths and pathless requirements" {
     var params = [_]static_dispatch.EvidenceParamRecord{
-        .{ .method = @fromBackingInt(@intCast(1)), .dispatcher_ty = @fromBackingInt(@intCast(1)), .callable_ty = @fromBackingInt(@intCast(3)), .slot = .some(0), .structural = .some(.encoder), .path = .{ .last = 0, .len = 1 } },
-        .{ .method = @fromBackingInt(@intCast(2)), .dispatcher_ty = @fromBackingInt(@intCast(2)), .callable_ty = @fromBackingInt(@intCast(4)), .slot = .some(1), .path = .{ .last = 1, .len = 1 } },
+        .{ .method = @fromBackingInt(@intCast(1)), .dispatcher_ty = @fromBackingInt(@intCast(1)), .callable_ty = @fromBackingInt(@intCast(3)), .slot = .some(0), .structural = .some(.encoder), .path = .{ .last = .some(0), .len = 1 } },
+        .{ .method = @fromBackingInt(@intCast(2)), .dispatcher_ty = @fromBackingInt(@intCast(2)), .callable_ty = @fromBackingInt(@intCast(4)), .slot = .some(1), .path = .{ .last = .some(1), .len = 1 } },
     };
     const table = CheckedProcedureTemplateTable{
         .evidence_params_pool = .fromBorrowedSlice(params[0..]),
@@ -17447,7 +17441,7 @@ test "procedure evidence schema positively classifies callable paths and pathles
         static_dispatch.procedureEvidenceSchema(&target_params),
     );
 
-    target_params[0].path = .{ .last = 0, .len = 1 };
+    target_params[0].path = .{ .last = .some(0), .len = 1 };
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.requires_record,
         static_dispatch.procedureEvidenceSchema(&target_params),
@@ -21359,54 +21353,54 @@ fn callableIdentityIsSpecializationIndependent(
 const EnclosingDispatchSiteChains = struct {
     const Entry = struct {
         site: EnclosingDispatchSite,
-        next_plus_one: u32,
+        next: collections.OptionalU32,
     };
 
     allocator: Allocator,
     entries: std.ArrayList(Entry) = .empty,
-    /// Index of each plan's newest entry plus one; zero is the empty chain.
-    plan_heads_plus_one: []u32,
-    iterator_plan_heads_plus_one: []u32,
+    /// Index of each plan's newest entry; absent is the empty chain.
+    plan_heads: []collections.OptionalU32,
+    iterator_plan_heads: []collections.OptionalU32,
     scratch: std.ArrayList(EnclosingDispatchSite) = .empty,
 
     fn init(allocator: Allocator, plan_count: usize, iterator_plan_count: usize) Allocator.Error!EnclosingDispatchSiteChains {
-        const plan_heads = try allocator.alloc(u32, plan_count);
+        const plan_heads = try allocator.alloc(collections.OptionalU32, plan_count);
         errdefer allocator.free(plan_heads);
-        @memset(plan_heads, 0);
-        const iterator_plan_heads = try allocator.alloc(u32, iterator_plan_count);
-        @memset(iterator_plan_heads, 0);
+        @memset(plan_heads, .none);
+        const iterator_plan_heads = try allocator.alloc(collections.OptionalU32, iterator_plan_count);
+        @memset(iterator_plan_heads, .none);
         return .{
             .allocator = allocator,
-            .plan_heads_plus_one = plan_heads,
-            .iterator_plan_heads_plus_one = iterator_plan_heads,
+            .plan_heads = plan_heads,
+            .iterator_plan_heads = iterator_plan_heads,
         };
     }
 
     fn deinit(self: *EnclosingDispatchSiteChains) void {
         self.scratch.deinit(self.allocator);
-        self.allocator.free(self.iterator_plan_heads_plus_one);
-        self.allocator.free(self.plan_heads_plus_one);
+        self.allocator.free(self.iterator_plan_heads);
+        self.allocator.free(self.plan_heads);
         self.entries.deinit(self.allocator);
     }
 
-    fn append(self: *EnclosingDispatchSiteChains, heads_plus_one: []u32, raw: usize, site: EnclosingDispatchSite) Allocator.Error!void {
-        if (raw >= heads_plus_one.len) {
+    fn append(self: *EnclosingDispatchSiteChains, heads: []collections.OptionalU32, raw: usize, site: EnclosingDispatchSite) Allocator.Error!void {
+        if (raw >= heads.len) {
             checkedArtifactInvariant("dispatch callable specialization referenced a missing plan", .{});
         }
         const index: u32 = @intCast(self.entries.items.len);
-        try self.entries.append(self.allocator, .{ .site = site, .next_plus_one = heads_plus_one[raw] });
-        heads_plus_one[raw] = index + 1;
+        try self.entries.append(self.allocator, .{ .site = site, .next = heads[raw] });
+        heads[raw] = .some(index);
     }
 
-    /// The sites chained at `heads_plus_one[raw]`; aliases `scratch` until
-    /// the next call.
-    fn sites(self: *EnclosingDispatchSiteChains, heads_plus_one: []const u32, raw: usize) Allocator.Error![]const EnclosingDispatchSite {
+    /// The sites chained at `heads[raw]`; aliases `scratch` until the next
+    /// call.
+    fn sites(self: *EnclosingDispatchSiteChains, heads: []const collections.OptionalU32, raw: usize) Allocator.Error![]const EnclosingDispatchSite {
         self.scratch.clearRetainingCapacity();
-        var entry_plus_one = heads_plus_one[raw];
-        while (entry_plus_one != 0) {
-            const entry = self.entries.items[entry_plus_one - 1];
+        var next_entry = heads[raw];
+        while (next_entry.get()) |entry_index| {
+            const entry = self.entries.items[entry_index];
             try self.scratch.append(self.allocator, entry.site);
-            entry_plus_one = entry.next_plus_one;
+            next_entry = entry.next;
         }
         return self.scratch.items;
     }
@@ -21585,14 +21579,14 @@ fn specializeResolvedStaticDispatchPlanCallables(
     for (plans.plans.items(), 0..) |*plan, raw| {
         try specializer.finalizePlan(plan, .{
             .index = &specializer.identity_index,
-            .sites = try chains.sites(chains.plan_heads_plus_one, raw),
+            .sites = try chains.sites(chains.plan_heads, raw),
             .scopes = template_refs.scopes,
         });
     }
     for (plans.iterator_for_plans.items(), 0..) |*iterator_plan, raw| {
         try specializer.finalizeIteratorPlan(iterator_plan, .{
             .index = &specializer.identity_index,
-            .sites = try chains.sites(chains.iterator_plan_heads_plus_one, raw),
+            .sites = try chains.sites(chains.iterator_plan_heads, raw),
             .scopes = template_refs.scopes,
         });
     }
@@ -21611,12 +21605,12 @@ fn appendEnclosingDispatchSites(
     const plan_refs = plans.template_refs.items()[plan_span.start .. plan_span.start + plan_span.len];
     const plan_scopes = template_refs.plan_scopes[plan_span.start .. plan_span.start + plan_span.len];
     for (plan_refs, plan_scopes) |plan_id, scope| {
-        try chains.append(chains.plan_heads_plus_one, @backingInt(plan_id), .{ .template_root = template_root, .scope = scope });
+        try chains.append(chains.plan_heads, @backingInt(plan_id), .{ .template_root = template_root, .scope = scope });
     }
     const iterator_refs = template_refs.pool[iterator_span.start .. iterator_span.start + iterator_span.len];
     const iterator_scopes = template_refs.iterator_scopes[iterator_span.start .. iterator_span.start + iterator_span.len];
     for (iterator_refs, iterator_scopes) |iterator_plan_id, scope| {
-        try chains.append(chains.iterator_plan_heads_plus_one, @backingInt(iterator_plan_id), .{ .template_root = template_root, .scope = scope });
+        try chains.append(chains.iterator_plan_heads, @backingInt(iterator_plan_id), .{ .template_root = template_root, .scope = scope });
     }
 }
 
@@ -29324,8 +29318,8 @@ fn publishCheckedExhaustivenessSites(
 /// walked as far, so claiming every tree of a module visits each node at most
 /// twice: once outside function bodies and once entering them.
 const CheckedTreeOwners = struct {
-    /// Per CIR node, its owner, or `unowned`.
-    node_owners: []u32,
+    /// Per CIR node, its owner, if any.
+    node_owners: []collections.OptionalU32,
     /// Per CIR node, whether a claim has walked it and everything below it.
     walked: std.DynamicBitSetUnmanaged,
     /// Per CIR node, whether a claim that skips function bodies has walked
@@ -29337,8 +29331,6 @@ const CheckedTreeOwners = struct {
     patterns: bool,
     pending: std.ArrayList(Node) = .empty,
 
-    const unowned = std.math.maxInt(u32);
-
     const Node = union(enum) {
         expr: CIR.Expr.Idx,
         statement: CIR.Statement.Idx,
@@ -29346,9 +29338,9 @@ const CheckedTreeOwners = struct {
     };
 
     fn init(allocator: Allocator, node_count: usize, patterns: bool) Allocator.Error!CheckedTreeOwners {
-        const node_owners = try allocator.alloc(u32, node_count);
+        const node_owners = try allocator.alloc(collections.OptionalU32, node_count);
         errdefer allocator.free(node_owners);
-        @memset(node_owners, unowned);
+        @memset(node_owners, .none);
         return .{ .node_owners = node_owners, .walked = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count), .patterns = patterns };
     }
 
@@ -29361,14 +29353,13 @@ const CheckedTreeOwners = struct {
 
     /// The claimant that owns node `raw`, or null when no claimed tree holds it.
     fn owner(self: *const CheckedTreeOwners, raw: u32) ?u32 {
-        const claimant = self.node_owners[raw];
-        return if (claimant == unowned) null else claimant;
+        return self.node_owners[raw].get();
     }
 
     /// Give `claimant` node `raw` alone, unless it has an owner. The node is
     /// not walked: a later claim whose tree holds it still walks below it.
     fn claimNode(self: *CheckedTreeOwners, raw: u32, claimant: u32) void {
-        if (self.node_owners[raw] == unowned) self.node_owners[raw] = claimant;
+        if (self.node_owners[raw] == .none) self.node_owners[raw] = .some(claimant);
     }
 
     /// Whether `raw` is new to a claim that walks `function_bodies` as
@@ -29383,7 +29374,7 @@ const CheckedTreeOwners = struct {
                 self.walked_outside_functions.set(raw);
             },
         }
-        if (self.node_owners[raw] == unowned) self.node_owners[raw] = claimant;
+        if (self.node_owners[raw] == .none) self.node_owners[raw] = .some(claimant);
         return true;
     }
 
@@ -34027,12 +34018,13 @@ pub const CheckedModuleArtifact = struct {
     fn evidencePathNodeFailure(nodes: []const static_dispatch.EvidencePathNode, index: usize) ?DispatchEvidenceFailure.Kind {
         const node = nodes[index];
         const kind = node.step.kindOrNull() orelse return .evidence_param_path_invalid_kind;
-        const parent_kind: ?static_dispatch.EvidencePathStep.Kind = if (node.parent == static_dispatch.no_evidence_path_node)
-            null
-        else if (node.parent < index)
-            nodes[node.parent].step.kindOrNull() orelse return .evidence_param_path_invalid_kind
+        const parent_kind: ?static_dispatch.EvidencePathStep.Kind = if (node.parent.get()) |parent|
+            if (parent < index)
+                nodes[parent].step.kindOrNull() orelse return .evidence_param_path_invalid_kind
+            else
+                return .evidence_param_path_out_of_bounds
         else
-            return .evidence_param_path_out_of_bounds;
+            null;
         if ((kind == .tag_payload_index) != (parent_kind == .tag_payload_tag)) return .evidence_param_path_invalid_shape;
         switch (kind) {
             .fn_ret, .alias_backing, .nominal_backing => if (node.step.data != 0) return .evidence_param_path_invalid_shape,
@@ -34200,8 +34192,7 @@ pub const CheckedModuleArtifact = struct {
                 return ty;
             },
             .tag_payload_index => {
-                const parent = nodes[node].parent;
-                if (parent == static_dispatch.no_evidence_path_node) return null;
+                const parent = nodes[node].parent.get() orelse return null;
                 const tag_step = nodes[parent].step;
                 if (tag_step.kindOrNull() != .tag_payload_tag) return null;
                 if (tag_step.data >= self.canonical_names.tagLabelCount()) return null;
@@ -34580,10 +34571,8 @@ pub const CheckedModuleArtifact = struct {
             if (@as(u64, entry.subst_start) + entry.subst_len > table.site_substitutions.items().len) {
                 return .{ .kind = .site_substitution_out_of_bounds, .index = @intCast(i) };
             }
-            if (entry.instance_ty != static_dispatch.SiteEvidenceEntry.no_site_instance and
-                !self.typesView().containsId(@fromBackingInt(entry.instance_ty)))
-            {
-                return .{ .kind = .site_instance_type_out_of_bounds, .index = @intCast(i) };
+            if (entry.instance_ty.get()) |instance_ty| {
+                if (!self.typesView().containsId(instance_ty)) return .{ .kind = .site_instance_type_out_of_bounds, .index = @intCast(i) };
             }
             if (i > 0 and table.site_evidence.items()[i - 1].key >= entry.key) {
                 return .{ .kind = .site_evidence_keys_unsorted, .index = @intCast(i) };
@@ -34809,22 +34798,22 @@ pub const CheckedModuleArtifact = struct {
         const path_depths = try allocator.alloc(u32, path_nodes.len);
         defer allocator.free(path_depths);
         for (path_nodes, 0..) |node, i| {
-            path_depths[i] = if (node.parent == static_dispatch.no_evidence_path_node) 1 else path_depths[node.parent] + 1;
+            path_depths[i] = if (node.parent.get()) |parent| path_depths[parent] + 1 else 1;
         }
         for (templates.evidence_params_pool.items(), 0..) |param, i| {
             if (@as(u64, param.callable_contracts.start) + param.callable_contracts.len > templates.evidence_param_callables.items().len)
                 return .{ .kind = .callable_contract_out_of_bounds, .index = @intCast(i) };
-            const path_in_bounds = if (param.path.len == 0)
-                param.path.last == static_dispatch.no_evidence_path_node
+            const path_in_bounds = if (param.path.last.get()) |last|
+                param.path.len != 0 and last < path_nodes.len and path_depths[last] == param.path.len
             else
-                param.path.last < path_nodes.len and path_depths[param.path.last] == param.path.len;
+                param.path.len == 0;
             if (!path_in_bounds) {
                 return .{ .kind = .evidence_param_path_out_of_bounds, .index = @intCast(i), .method = param.method };
             }
             if (!self.typesView().containsId(param.callable_ty)) {
                 return .{ .kind = .evidence_param_callable_type_out_of_bounds, .index = @intCast(i), .method = param.method };
             }
-            if (param.path.len != 0 and path_nodes[param.path.last].step.kindOrNull() == .tag_payload_tag) {
+            if (param.path.len != 0 and path_nodes[param.path.last.get().?].step.kindOrNull() == .tag_payload_tag) {
                 return .{ .kind = .evidence_param_path_invalid_shape, .index = @intCast(i), .method = param.method };
             }
         }
@@ -39830,8 +39819,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xDB, 0x5C, 0x50, 0x7F, 0xB3, 0xB0, 0x6F, 0x71, 0xE5, 0xA4, 0xE2, 0x00, 0xA9, 0xA4, 0x78, 0xC5,
-        0xC8, 0xBF, 0x21, 0x46, 0x8D, 0x98, 0xD6, 0x86, 0x28, 0xE8, 0xAB, 0xBC, 0xFC, 0xEB, 0x2C, 0x78,
+        0x39, 0x2D, 0xA5, 0x30, 0xD8, 0x77, 0x37, 0xAF, 0xC1, 0xA9, 0x58, 0x70, 0xC3, 0x62, 0x2D, 0x79,
+        0x48, 0x01, 0x3A, 0x91, 0x8F, 0x2B, 0xE9, 0x68, 0x3E, 0xB7, 0x45, 0x19, 0xDD, 0x5B, 0x53, 0xC6,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

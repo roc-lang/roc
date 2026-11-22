@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 const types_mod = @import("types");
 const can = @import("can");
 
@@ -927,19 +928,19 @@ pub const ComptimeCondition = struct {
 
 /// The part of a match branch that a redundant or unmatchable pattern problem
 /// is about: either every `|` alternative of the branch, or one alternative.
+/// Zero is the whole branch; an alternative stores its index plus one.
 pub const MatchBranchPart = enum(u32) {
-    whole_branch = std.math.maxInt(u32),
+    whole_branch = 0,
     _,
 
     /// The alternative at this zero-based index within its branch.
     pub fn alternative(index: u32) MatchBranchPart {
-        std.debug.assert(index != std.math.maxInt(u32));
-        return @fromBackingInt(index);
+        return @fromBackingInt(@backingInt(collections.OptionalU32.some(index)));
     }
 
     /// The zero-based alternative index, or null for the whole branch.
     pub fn alternativeIndex(self: MatchBranchPart) ?u32 {
-        return if (self == .whole_branch) null else @backingInt(self);
+        return @as(collections.OptionalU32, @fromBackingInt(@backingInt(self))).get();
     }
 };
 

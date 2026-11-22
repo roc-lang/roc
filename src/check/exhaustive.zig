@@ -1386,13 +1386,11 @@ const InhabitedGraph = struct {
         /// An unconditional construction proof, never the solver's initial true.
         proven_true: bool = false,
         remaining: usize = 0,
-        first_parent: u32 = ParentLink.none,
+        first_parent: collections.OptionalU32 = .none,
     };
     const ParentLink = struct {
         parent: usize,
-        next: u32,
-
-        const none = std.math.maxInt(u32);
+        next: collections.OptionalU32,
     };
 
     fn init(gpa: Allocator, store: *TypeStore, idents: BuiltinIdents, mode: InhabitedMode) InhabitedGraph {
@@ -1462,7 +1460,7 @@ const InhabitedGraph = struct {
         } else {
             const link: u32 = @intCast(self.parent_links.items.len);
             try self.parent_links.append(self.gpa, .{ .parent = parent, .next = self.nodes.items[child].first_parent });
-            self.nodes.items[child].first_parent = link;
+            self.nodes.items[child].first_parent = .some(link);
         }
         self.nodes.items[parent].remaining += 1;
         if (comptime builtin.is_test) self.stats.edges += 1;
@@ -1695,10 +1693,10 @@ const InhabitedGraph = struct {
     fn settle(self: *InhabitedGraph) Allocator.Error!void {
         while (self.settled_false_parents.pop()) |parent| try self.propagateFalse(parent);
         while (self.false_nodes.pop()) |child| {
-            var link = self.nodes.items[child].first_parent;
-            while (link != ParentLink.none) {
+            var next_link = self.nodes.items[child].first_parent;
+            while (next_link.get()) |link| {
                 const parent = self.parent_links.items[link].parent;
-                link = self.parent_links.items[link].next;
+                next_link = self.parent_links.items[link].next;
                 try self.propagateFalse(parent);
             }
         }
