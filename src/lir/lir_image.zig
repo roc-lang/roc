@@ -797,14 +797,14 @@ fn guardedListFromRef(
     ref: ArrayRef,
 ) ImageError!GuardedList.List(T, name) {
     const items = try sliceFromRef(T, base_ptr, image_size, ref);
-    if (items.len > std.math.maxInt(u32)) return error.InvalidLirImage;
+    if (std.math.cast(u32, items.len) == null) return error.InvalidLirImage;
     return .fromBorrowedSlice(items);
 }
 
 /// A borrowed `SafeList` over a validated image array.
 fn safeListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) ImageError!collections.SafeList(T) {
     const items = try sliceFromRef(T, base_ptr, image_size, ref);
-    if (items.len > std.math.maxInt(u32)) return error.InvalidLirImage;
+    if (std.math.cast(u32, items.len) == null) return error.InvalidLirImage;
     return .fromBorrowedSlice(items);
 }
 

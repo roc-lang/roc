@@ -6114,7 +6114,9 @@ const Certifier = struct {
                         errdefer branch_state.deinit();
                         branch_state.clearOutcomeDiscriminants();
                         if (variant_container) |container| {
-                            if (known_variant == null and branch.value < std.math.maxInt(u32)) {
+                            // A known variant is stored as an `OptionalU32`,
+                            // which holds the variant plus one.
+                            if (known_variant == null and std.math.cast(u32, branch.value +| 1) != null) {
                                 try branch_state.setKnownVariant(container, @intCast(branch.value));
                             }
                         }
@@ -6633,10 +6635,10 @@ const Certifier = struct {
         var observed: ClaimSet = .{};
         for (0..absent_fields.len) |index| {
             const field_index = GuardedList.at(absent_fields, index);
-            if (field_index > std.math.maxInt(u32) or !required.contains(@intCast(field_index))) {
+            const field: u32 = field: {
+                if (std.math.cast(u32, field_index)) |field| if (required.contains(field)) break :field field;
                 return self.fail("residual-shell metadata names non-RC or absent field {d}", .{field_index});
-            }
-            const field: u32 = @intCast(field_index);
+            };
             if (observed.contains(field)) {
                 return self.fail("residual-shell metadata repeats field {d}", .{field_index});
             }

@@ -18478,7 +18478,7 @@ const FrozenPreparedCodecCalls = struct {
         errdefer custom_call_ids.deinit();
 
         for (calls, 0..) |call, index| {
-            if (index > std.math.maxInt(u32)) Common.invariant("prepared codec call index exceeded its identity range");
+            if (std.math.cast(u32, index) == null) Common.invariant("prepared codec call index exceeded its identity range");
             switch (call.purpose) {
                 .format => {
                     const address = FormatCodecCallAddress{
@@ -20760,7 +20760,7 @@ const BodyDraftStore = struct {
         }
         const literal_backing = if (literal_bytes_len == 0) null else try Ast.SharedLiteralBacking.initUnfilled(program.allocator, literal_bytes_len);
         defer if (literal_backing) |backing| backing.owner.release();
-        if (literal_bytes_len > std.math.maxInt(u32)) return error.OutOfMemory;
+        if (std.math.cast(u32, literal_bytes_len) == null) return error.OutOfMemory;
         var literal_cursor: u32 = 0;
         for (self.string_literals.items, 0..) |literal, index| {
             if (!ids.retained(.string_literals, index)) continue;
@@ -21878,7 +21878,8 @@ fn appendRuntimeImpossibilityProof(
     proof: RuntimeImpossibilityProof,
 ) Allocator.Error!RuntimeImpossibilityProofId {
     const index = draft.impossibility_proofs.items.len;
-    if (index >= std.math.maxInt(u32)) return error.OutOfMemory;
+    // `OptionalId(RuntimeImpossibilityProofId)` stores an id plus one.
+    if (std.math.cast(u32, index + 1) == null) return error.OutOfMemory;
     const id: RuntimeImpossibilityProofId = @fromBackingInt(@intCast(index));
     try draft.impossibility_proofs.append(allocator, proof);
     return id;
@@ -42258,8 +42259,7 @@ const BodyContext = struct {
         base_capture_id: usize,
     ) u32 {
         const capture_id = base_capture_id + self.parserRecordFieldRank(fields, field_index);
-        if (capture_id > std.math.maxInt(u32)) Common.invariant("parser generated too many field captures");
-        return @intCast(capture_id);
+        return std.math.cast(u32, capture_id) orelse Common.invariant("parser generated too many field captures");
     }
 
     fn appendParserPrecomputedCaptures(
@@ -42469,7 +42469,7 @@ const BodyContext = struct {
 
         const base_capture_id = plan.next_capture_id;
         plan.next_capture_id += fields.len;
-        if (plan.next_capture_id > std.math.maxInt(u32)) Common.invariant(codec_name ++ " generated too many captures");
+        if (std.math.cast(u32, plan.next_capture_id) == null) Common.invariant(codec_name ++ " generated too many captures");
 
         for (fields, 0..) |_, index| {
             const capture_id = self.parserFieldCaptureIdForRecordField(fields, index, base_capture_id);
@@ -42516,7 +42516,7 @@ const BodyContext = struct {
 
         const base_capture_id = plan.next_capture_id;
         plan.next_capture_id += fields.len;
-        if (plan.next_capture_id > std.math.maxInt(u32)) Common.invariant(switch (kind) {
+        if (std.math.cast(u32, plan.next_capture_id) == null) Common.invariant(switch (kind) {
             .parser => "parser generated too many captures",
             .encoder => "encoder_for generated too many captures",
         });
@@ -61031,7 +61031,7 @@ const BodyContext = struct {
                 break;
             }
             if (exists) continue;
-            if (call_index > std.math.maxInt(u32)) {
+            if (std.math.cast(u32, call_index) == null) {
                 Common.invariant("checked generated codec call index exceeded its identity range");
             }
             slots[len] = .{

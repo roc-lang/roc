@@ -3886,12 +3886,11 @@ const GlueRocValueWriter = struct {
         }
 
         const elem_alignment = self.alignmentOf(elem_layout);
-        if (elem_alignment > std.math.maxInt(u32)) {
+        const elem_alignment32 = std.math.cast(u32, elem_alignment) orelse
             glueInvariant("glue list element alignment {d} exceeds Roc allocation ABI", .{elem_alignment});
-        }
         const bytes = builtins.utils.allocateWithRefcount(
             len * elem_size,
-            @intCast(elem_alignment),
+            elem_alignment32,
             elements_refcounted,
             self.roc_ops,
         );

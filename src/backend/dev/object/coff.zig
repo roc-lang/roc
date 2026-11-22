@@ -676,10 +676,8 @@ pub const CoffWriter = struct {
                 var unwind_codes: std.ArrayList(u8) = .empty;
                 defer unwind_codes.deinit(self.allocator);
 
-                if (func.prologue_size > std.math.maxInt(u8)) {
+                const prolog_offset = std.math.cast(u8, func.prologue_size) orelse
                     invariant("COFF invariant violated: x64 prologue too large for UNWIND_INFO: {d}", .{func.prologue_size});
-                }
-                const prolog_offset: u8 = @intCast(func.prologue_size);
 
                 if (func.stack_alloc > 0) {
                     if (func.stack_alloc <= 128) {

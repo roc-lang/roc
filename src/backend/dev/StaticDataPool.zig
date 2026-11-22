@@ -143,7 +143,8 @@ pub const Plan = struct {
         };
         errdefer plan.deinit();
 
-        if (exports.len >= std.math.maxInt(u32)) return error.UnsupportedStaticDataRelocation;
+        // `componentOrder` issues visit indices from one through `exports.len + 1`.
+        if (std.math.cast(u32, exports.len + 1) == null) return error.UnsupportedStaticDataRelocation;
         plan.placements = try allocator.alloc(Placement, exports.len);
         for (plan.placements) |*placement| placement.* = .{ .local = .{ .data_offset = 0, .listed = false } };
         for (exports) |data_export| {
@@ -164,7 +165,7 @@ pub const Plan = struct {
 
         var relocation_count: usize = 0;
         for (exports) |data_export| relocation_count += data_export.relocations.len;
-        if (relocation_count >= std.math.maxInt(u32)) return error.UnsupportedStaticDataRelocation;
+        if (std.math.cast(u32, relocation_count) == null) return error.UnsupportedStaticDataRelocation;
         plan.targets = try allocator.alloc(collections.OptionalU32, relocation_count);
         plan.sorted_relocations = try allocator.alloc(u32, relocation_count);
 
@@ -470,7 +471,8 @@ const PoolIndex = struct {
                 const first: usize = @intCast(entry.first_relocation);
                 const head = try index.heads.getOrPut(allocator, entry.hash);
                 const next: collections.OptionalU32 = if (head.found_existing) .some(head.value_ptr.*) else .none;
-                if (index.candidates.items.len >= std.math.maxInt(u32)) return error.InvalidStaticPool;
+                // A later candidate's `next` stores this index plus one.
+                if (std.math.cast(u32, index.candidates.items.len + 1) == null) return error.InvalidStaticPool;
                 head.value_ptr.* = @intCast(index.candidates.items.len);
                 index.candidates.appendAssumeCapacity(.{
                     .entry = entry,

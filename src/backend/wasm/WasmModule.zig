@@ -1031,10 +1031,11 @@ fn appendFuncBody(self: *Self, body: []const u8) Allocator.Error!void {
 }
 
 fn storeFuncBodyBytes(self: *Self, body: []const u8) Allocator.Error!FuncBody {
-    const start = self.func_body_bytes.items.len;
-    if (body.len > std.math.maxInt(u32) - start) return error.OutOfMemory;
+    const start = std.math.cast(u32, self.func_body_bytes.items.len) orelse return error.OutOfMemory;
+    const len = std.math.cast(u32, body.len) orelse return error.OutOfMemory;
+    _ = std.math.add(u32, start, len) catch return error.OutOfMemory;
     try self.func_body_bytes.appendSlice(self.allocator, body);
-    return .{ .start = @intCast(start), .len = @intCast(body.len) };
+    return .{ .start = start, .len = len };
 }
 
 /// The bytes of the function body at `index` in `func_bodies`.

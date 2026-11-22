@@ -1556,7 +1556,7 @@ pub const Program = struct {
     pub fn bindingGroups(self: *const Program, allocator: std.mem.Allocator) std.mem.Allocator.Error!BindingGroups {
         const fn_count = self.fnCount();
         if (fn_count == 0) return .empty;
-        if (fn_count >= std.math.maxInt(u32)) return error.OutOfMemory;
+        if (std.math.cast(u32, fn_count) == null) return error.OutOfMemory;
 
         // Every function each function references, in one flat list.
         var edges = std.ArrayList(u32).empty;

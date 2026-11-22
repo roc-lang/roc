@@ -21415,8 +21415,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                             const jp_key = @backingInt(jmp.target);
                             if (self.join_point_jumps.getPtr(jp_key)) |jumps| {
-                                if (self.join_jump_records.items.len >= std.math.maxInt(u32)) return error.OutOfMemory;
-                                const record: collections.OptionalU32 = .some(@intCast(self.join_jump_records.items.len));
+                                const record_index = self.join_jump_records.items.len;
+                                // `OptionalU32` stores the index plus one.
+                                if (std.math.cast(u32, record_index + 1) == null) return error.OutOfMemory;
+                                const record: collections.OptionalU32 = .some(@intCast(record_index));
                                 try self.join_jump_records.append(self.allocator, .{ .location = jump_location, .next = .none });
                                 if (jumps.last.get()) |last| {
                                     self.join_jump_records.items[last].next = record;

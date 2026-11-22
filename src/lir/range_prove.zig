@@ -358,7 +358,8 @@ fn PairMap(comptime Primary: type, comptime V: type) type {
         /// when absent. The pointer is valid until the next insertion.
         fn getOrPut(self: *Self, primary: Primary, second: u32) ResourceError!GetOrPutResult {
             if (self.find(primary, second)) |index| return .{ .value_ptr = &self.nodes.items[index].value, .found_existing = true };
-            if (self.nodes.items.len >= std.math.maxInt(u32)) return error.OutOfMemory;
+            // A later entry's `next` stores this index plus one.
+            if (std.math.cast(u32, self.nodes.items.len + 1) == null) return error.OutOfMemory;
             try self.nodes.ensureUnusedCapacity(self.heads.allocator, 1);
             const head = try self.heads.getOrPut(primary);
             const index: u32 = @intCast(self.nodes.items.len);
@@ -6680,7 +6681,7 @@ const Pass = struct {
         if (demand.against == .limit) {
             // A limit below zero admits nothing, and the base is compared
             // as a `U64`.
-            if (demand.c < 0 or demand.c > std.math.maxInt(u64)) return false;
+            if (std.math.cast(u64, demand.c) == null) return false;
             switch (demand.base) {
                 .constant => return false,
                 .local => |local| switch (self.localLayout(local)) {

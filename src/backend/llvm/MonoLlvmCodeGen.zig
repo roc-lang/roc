@@ -9205,9 +9205,7 @@ pub const MonoLlvmCodeGen = struct {
         var capture = self.deferredStrCapture(local) orelse return error.CompilationFailed;
         if (count == 0) return;
         if (capture.pending_rc_count != 0 and capture.pending_rc_atomicity != atomicity) return error.CompilationFailed;
-        const total: u64 = @as(u64, capture.pending_rc_count) + count;
-        if (total > std.math.maxInt(u32)) return error.OutOfMemory;
-        capture.pending_rc_count = @intCast(total);
+        capture.pending_rc_count = std.math.add(u32, capture.pending_rc_count, count) catch return error.OutOfMemory;
         capture.pending_rc_atomicity = atomicity;
         self.deferred_str_captures.putAssumeCapacity(local, capture);
     }

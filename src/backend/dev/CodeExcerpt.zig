@@ -1063,7 +1063,7 @@ pub const PreparedData = struct {
             const owned = try copyData(a, item);
             try items.put(a, owned.name, .{ .item = owned });
         }
-        if (items.count() > std.math.maxInt(u32)) return error.OutOfMemory;
+        if (std.math.cast(u32, items.count()) == null) return error.OutOfMemory;
         var iterator = items.iterator();
         var data = std.ArrayList([]const u8).empty;
         defer data.deinit(allocator);

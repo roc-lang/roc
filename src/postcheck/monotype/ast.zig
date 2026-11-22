@@ -202,12 +202,12 @@ pub const LocalNameTable = struct {
         );
         if (entry.found_existing) return @fromBackingInt(entry.key_ptr.*);
         errdefer self.index.removeByPtr(entry.key_ptr);
-        if (self.spans.items.len >= std.math.maxInt(u32)) return error.OutOfMemory;
+        const id_raw = std.math.cast(u32, self.spans.items.len + 1) orelse return error.OutOfMemory;
         const start = std.math.cast(u32, self.bytes.items.len) orelse return error.OutOfMemory;
         const len = std.math.cast(u32, name.len) orelse return error.OutOfMemory;
         try self.spans.ensureUnusedCapacity(allocator, 1);
         try self.bytes.appendSlice(allocator, name);
-        const id: LocalNameId = @fromBackingInt(@intCast(self.spans.items.len + 1));
+        const id: LocalNameId = @fromBackingInt(id_raw);
         self.spans.appendAssumeCapacity(.{ .start = start, .len = len });
         entry.key_ptr.* = @backingInt(id);
         return id;

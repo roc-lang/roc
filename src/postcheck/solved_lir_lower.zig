@@ -636,7 +636,8 @@ fn DenseChainMap(comptime Key: type, comptime primary: []const u8, comptime V: t
                 self.nodes.items[index].value = value;
                 return;
             }
-            if (self.nodes.items.len >= std.math.maxInt(u32)) return error.OutOfMemory;
+            // A later entry's `next` stores this index plus one.
+            if (std.math.cast(u32, self.nodes.items.len + 1) == null) return error.OutOfMemory;
             try self.nodes.ensureUnusedCapacity(self.heads.allocator, 1);
             const head = try self.heads.getOrPut(@field(key, primary));
             const index: u32 = @intCast(self.nodes.items.len);

@@ -328,7 +328,7 @@ fn reserveExtraDataStart(store: *NodeStore, count: usize) std.mem.Allocator.Erro
     const start = std.math.cast(u32, store.extra_data.items.len) orelse return error.OutOfMemory;
     if (count != 0) {
         const last_offset = std.math.cast(u32, count - 1) orelse return error.OutOfMemory;
-        if (start > std.math.maxInt(u32) - last_offset) return error.OutOfMemory;
+        _ = std.math.add(u32, start, last_offset) catch return error.OutOfMemory;
     }
     try store.extra_data.ensureUnusedCapacity(store.gpa, count);
     return start;
@@ -530,7 +530,7 @@ pub fn addNumericLiteral(
     const digits_start = std.math.cast(u32, store.numeric_literal_bytes.items.len) orelse return error.OutOfMemory;
     try store.numeric_literals.ensureUnusedCapacity(store.gpa, 1);
     const parsed = try NumericLiteral.parseInto(parse_state.allocator(), &store.numeric_literal_bytes, store.gpa, split.number_text, kind);
-    if (store.numeric_literal_bytes.items.len > std.math.maxInt(u32)) {
+    if (std.math.cast(u32, store.numeric_literal_bytes.items.len) == null) {
         store.numeric_literal_bytes.shrinkRetainingCapacity(digits_start);
         return error.OutOfMemory;
     }

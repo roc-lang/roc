@@ -2960,8 +2960,8 @@ pub const InstGraph = struct {
     /// column's capacity is kept at least `nodes`'s, so a node fitting in
     /// `nodes` fits everywhere and costs one capacity check.
     fn reserveNode(self: *InstGraph) Allocator.Error!void {
-        // `MaybeNodeId` stores an id plus one, so `maxInt(u32)` is never an id.
-        if (self.nodes.items.len >= std.math.maxInt(u32)) return error.OutOfMemory;
+        // `MaybeNodeId` stores an id plus one.
+        if (std.math.cast(u32, self.nodes.items.len + 1) == null) return error.OutOfMemory;
         if (self.nodes.items.len < self.nodes.capacity) return;
         const capacity = std.math.add(usize, self.nodes.capacity, @max(self.nodes.capacity / 2, 8)) catch return error.OutOfMemory;
         // `nodes` grows last: a failed column growth leaves it within every

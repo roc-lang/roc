@@ -139,7 +139,6 @@ pub const OptionalType = enum(u32) {
     _,
 
     pub fn some(index: u32) OptionalType {
-        std.debug.assert(index < std.math.maxInt(u32));
         return @fromBackingInt(index + 1);
     }
 
@@ -933,7 +932,7 @@ pub fn encode(allocator: Allocator, input: Input) EncodeError![]align(alignment.
     const code_offset = place(&size, code_out.items.len);
     const data_offset = place(&size, data_out.items.len);
     const strings_offset = place(&size, strings.bytes.items.len);
-    if (size > std.math.maxInt(u32)) return error.ImageTooLarge;
+    if (std.math.cast(u32, size) == null) return error.ImageTooLarge;
 
     const out = try allocator.alignedAlloc(u8, alignment, size);
     errdefer allocator.free(out);

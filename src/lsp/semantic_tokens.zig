@@ -827,7 +827,8 @@ const Classifier = struct {
     fn bind(self: *Classifier, token: Token.Idx, class: Class) Allocator.Error!void {
         self.set(token, class);
         const name = try self.nameOf(token, self.ast.resolve(token));
-        if (self.bindings.items.len >= std.math.maxInt(u32)) return error.OutOfMemory;
+        // A later binding's `shadowed` stores this slot plus one.
+        if (std.math.cast(u32, self.bindings.items.len + 1) == null) return error.OutOfMemory;
         const slot: u32 = @intCast(self.bindings.items.len);
         try self.bindings.ensureUnusedCapacity(self.allocator, 1);
         const entry = try self.innermost.getOrPut(name);

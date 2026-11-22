@@ -350,7 +350,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     const signature_size = signature_header_size + page_count * 32;
     const file_size = signature_offset + signature_size;
     const linkedit_filesize = file_size - linkedit_fileoff;
-    if (file_size > std.math.maxInt(u32)) return error.ProgramTooLarge;
+    if (std.math.cast(u32, file_size) == null) return error.ProgramTooLarge;
 
     try output.resize(file_size);
     const mapped = try output.map(file_size);

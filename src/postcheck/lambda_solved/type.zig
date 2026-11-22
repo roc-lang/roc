@@ -367,7 +367,8 @@ pub const Store = struct {
     }
 
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeVarId {
-        if (self.vars.items.len >= std.math.maxInt(u32)) return error.OutOfMemory;
+        // `MaybeTypeVarId` stores an id plus one.
+        if (std.math.cast(u32, self.vars.items.len + 1) == null) return error.OutOfMemory;
         const id: TypeVarId = @fromBackingInt(@as(u32, @intCast(self.vars.items.len)));
         try self.vars.ensureUnusedCapacity(self.allocator, 1);
         try self.analysis_changes.ensureUnusedCapacity(self.allocator, 1);
@@ -508,7 +509,7 @@ pub const Store = struct {
         if (len == 0) return .{ .span = .empty(), .slots = &.{} };
         const start = std.math.cast(u32, list.items.len) orelse return error.OutOfMemory;
         const count = std.math.cast(u32, len) orelse return error.OutOfMemory;
-        if (std.math.maxInt(u32) - start < count) return error.OutOfMemory;
+        _ = std.math.add(u32, start, count) catch return error.OutOfMemory;
         const slots = try list.addManyAsSlice(allocator, len);
         return .{ .span = .{ .start = start, .len = count }, .slots = slots };
     }

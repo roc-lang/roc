@@ -450,8 +450,8 @@ fn closeScopeNames(self: *DeclIndex) std.mem.Allocator.Error!std.EnumArray(Names
     var spans = std.EnumArray(Namespace, Span).initFill(Span.empty());
     try self.scope_names.ensureUnusedCapacity(self.gpa, run.len);
     try self.scope_name_decl_ids.ensureUnusedCapacity(self.gpa, run.len);
-    if (self.scope_name_decl_ids.items.len + run.len > std.math.maxInt(u32) or
-        self.scope_names.items.len + run.len > std.math.maxInt(u32)) return error.OutOfMemory;
+    if (std.math.cast(u32, self.scope_name_decl_ids.items.len + run.len) == null or
+        std.math.cast(u32, self.scope_names.items.len + run.len) == null) return error.OutOfMemory;
 
     var i: usize = 0;
     while (i < run.len) {

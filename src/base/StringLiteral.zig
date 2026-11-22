@@ -150,7 +150,7 @@ pub const Store = struct {
         const str_len = std.math.cast(u32, string.len) orelse return error.OutOfMemory;
         const entry_len = std.math.add(usize, entry_header_size, string.len) catch return error.OutOfMemory;
         const entry_end = std.math.add(usize, self.buffer.items().len, entry_len) catch return error.OutOfMemory;
-        if (entry_end > std.math.maxInt(u32)) return error.OutOfMemory;
+        if (std.math.cast(u32, entry_end) == null) return error.OutOfMemory;
 
         // One reservation covers the header and the text, so the entry is
         // appended whole or not at all.
@@ -347,10 +347,8 @@ const StringLiteralPolicy = struct {
 };
 
 fn checkedU32(value: usize, comptime invariant_name: []const u8) u32 {
-    if (value > std.math.maxInt(u32)) {
+    return std.math.cast(u32, value) orelse
         invariant("{s} exceeded u32 storage invariant", .{invariant_name});
-    }
-    return @intCast(value);
 }
 
 fn expectedNextStringContentStart(previous_end: *usize, string_len: usize) u32 {

@@ -143,7 +143,8 @@ fn LocalRuns(comptime V: type) type {
         }
 
         fn note(self: *Self, local: LIR.LocalId, value: V) ScalarizeError!void {
-            if (self.pending.items.len >= std.math.maxInt(u32)) return error.OutOfMemory;
+            // Run starts and lengths count pending values in a `u32`.
+            if (std.math.cast(u32, self.pending.items.len + 1) == null) return error.OutOfMemory;
             try self.pending.ensureUnusedCapacity(self.runs.allocator, 1);
             const entry = try self.runs.getOrPut(local);
             if (!entry.found_existing) entry.value_ptr.* = .{ .start = 0, .len = 0 };

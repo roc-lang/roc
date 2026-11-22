@@ -79,7 +79,7 @@ pub const DependencyGraph = struct {
         errdefer self.allocator.free(starts);
         const dependencies = try self.allocator.alloc(CIR.Def.Idx, self.added.items.len);
         errdefer self.allocator.free(dependencies);
-        if (self.added.items.len > std.math.maxInt(u32)) return error.OutOfMemory;
+        if (std.math.cast(u32, self.added.items.len) == null) return error.OutOfMemory;
 
         @memset(starts, 0);
         for (self.added.items) |edge| starts[edge.from_position + 1] += 1;
@@ -2500,7 +2500,7 @@ pub fn computeCheckOrder(
     defer allocator.free(successor_starts);
     const successors = try allocator.alloc(u32, group_edges.items.len);
     defer allocator.free(successors);
-    if (group_edges.items.len > std.math.maxInt(u32)) return error.OutOfMemory;
+    if (std.math.cast(u32, group_edges.items.len) == null) return error.OutOfMemory;
     @memset(successor_starts, 0);
     for (group_edges.items) |edge| successor_starts[edge.from + 1] += 1;
     for (1..successor_starts.len) |group| successor_starts[group] += successor_starts[group - 1];

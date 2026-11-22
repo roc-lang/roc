@@ -503,18 +503,15 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
         .symbol = try reader.word32(),
     };
     const pieces_len = try reader.word64();
-    if (pieces_len > std.math.maxInt(usize)) return error.InvalidEntry;
-    const pieces = try reader.take(@intCast(pieces_len));
+    const pieces = try reader.take(std.math.cast(usize, pieces_len) orelse return error.InvalidEntry);
     const code_locations_len = try reader.word64();
-    if (code_locations_len > std.math.maxInt(usize)) return error.InvalidEntry;
-    const code_locations = try reader.take(@intCast(code_locations_len));
+    const code_locations = try reader.take(std.math.cast(usize, code_locations_len) orelse return error.InvalidEntry);
     const metadata_len = try reader.word64();
-    if (metadata_len > std.math.maxInt(usize)) return error.InvalidEntry;
-    const function_metadata = try reader.take(@intCast(metadata_len));
+    const function_metadata = try reader.take(std.math.cast(usize, metadata_len) orelse return error.InvalidEntry);
     const image_len = try reader.word64();
-    if (image_len > std.math.maxInt(usize)) return error.InvalidEntry;
-    if (image_len != 0) _ = try reader.take(imagePadding(reader.at));
-    const image = try reader.take(@intCast(image_len));
+    const image_size = std.math.cast(usize, image_len) orelse return error.InvalidEntry;
+    if (image_size != 0) _ = try reader.take(imagePadding(reader.at));
+    const image = try reader.take(image_size);
     return .{
         .exports = exports,
         .exports_digest = exports_digest,

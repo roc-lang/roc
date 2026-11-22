@@ -1634,7 +1634,7 @@ const CompileTimeRequestScheduler = struct {
         const_templates: *const ConstTemplateTable,
         entries: []CompileTimeRequestScheduleEntry,
     ) Allocator.Error!CompileTimeRequestScheduler {
-        if (entries.len > std.math.maxInt(u32)) return error.OutOfMemory;
+        if (std.math.cast(u32, entries.len) == null) return error.OutOfMemory;
         var root_to_request_index = try collections.OptionalIndexColumn(RequestIndex).initFilled(allocator, compile_time_roots.roots.items().len);
         errdefer root_to_request_index.deinit(allocator);
 
@@ -2138,10 +2138,11 @@ const CompileTimeRequestScheduler = struct {
         dependency_index: usize,
         dependent_index: usize,
     ) u64 {
-        if (dependency_index > std.math.maxInt(u32) or dependent_index > std.math.maxInt(u32)) {
+        const dependency = std.math.cast(u32, dependency_index) orelse
             checkedArtifactInvariant("compile-time dependency edge index exceeded scheduler key capacity", .{});
-        }
-        return (@as(u64, @intCast(dependency_index)) << 32) | @as(u64, @intCast(dependent_index));
+        const dependent = std.math.cast(u32, dependent_index) orelse
+            checkedArtifactInvariant("compile-time dependency edge index exceeded scheduler key capacity", .{});
+        return (@as(u64, dependency) << 32) | dependent;
     }
 };
 

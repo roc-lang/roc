@@ -277,7 +277,7 @@ const ProcArcDomain = struct {
     ) ResourceError!ProcArcDomain {
         const frame = store.getLocalSpan(frame_span);
         const frame_len = GuardedList.borrowLen(frame);
-        if (frame_len >= std.math.maxInt(u32)) arcInvariant("ARC proc-local domain exceeds its dense index representation");
+        if (std.math.cast(u32, frame_len) == null) arcInvariant("ARC proc-local domain exceeds its dense index representation");
 
         const frame_locals = try allocator.alloc(LIR.LocalId, frame_len);
         var resource_bit_index = try ArcBitColumn.initFilled(allocator, frame_len);
@@ -2135,7 +2135,8 @@ const PlanSpan = struct {
             self.len = @intCast(needed);
             return;
         }
-        if (needed > std.math.maxInt(u32) - pool.items.len) return error.OutOfMemory;
+        const pool_end = std.math.add(usize, pool.items.len, needed) catch return error.OutOfMemory;
+        if (std.math.cast(u32, pool_end) == null) return error.OutOfMemory;
         if (@as(usize, self.start) + self.capacity == pool.items.len) {
             // The run ends the pool, so it grows in place.
             pool.shrinkRetainingCapacity(@as(usize, self.start) + self.len);
@@ -3435,8 +3436,8 @@ const Inserter = struct {
                     // the aggregate holds their only unit.
                     const fields = self.store.getLocalSpan(assign.fields);
                     for (0..GuardedList.borrowLen(fields)) |position| {
-                        if (position > std.math.maxInt(u8)) break;
-                        if (std.mem.findScalar(u32, self.transfer_position_scratch.items, @intCast(position)) != null) continue;
+                        const position8 = std.math.cast(u8, position) orelse break;
+                        if (std.mem.findScalar(u32, self.transfer_position_scratch.items, position8) != null) continue;
                         const local = GuardedList.at(fields, position);
                         if (try self.wholeMoveResidual(&segment.owned, segment.cursor, position, assign.fields, local)) |release| {
                             try self.death_scratch.append(self.lane_allocator, release);
@@ -3702,7 +3703,9 @@ const Inserter = struct {
             arcInvariant("ARC plan and metadata tables lost index alignment");
         }
         const index = self.arc_plans.plans.items.len;
-        if (index >= std.math.maxInt(u32)) arcInvariant("ARC plan index representation exhausted");
+        // Continuation plans are referenced through `OptionalU32`, which
+        // stores the index plus one.
+        if (std.math.cast(u32, index + 1) == null) arcInvariant("ARC plan index representation exhausted");
         try self.arc_plans.plans.append(self.solve_allocator, .{ .start = start });
         try self.arc_plans.metadata.append(self.solve_allocator, .{});
         return @intCast(index);
@@ -7311,8 +7314,8 @@ const Inserter = struct {
         if (self.source_liveness.frozen) arcInvariant("ARC mutated frozen source liveness");
         if (self.source_liveness.stmt_node_indices.get(stmt)) |index| return index;
 
-        const index = graph.nodes.items.len;
-        if (index >= std.math.maxInt(u32)) arcInvariant("ARC liveness graph exceeded its node index representation");
+        const index = std.math.cast(u32, graph.nodes.items.len) orelse
+            arcInvariant("ARC liveness graph exceeded its node index representation");
 
         try graph.nodes.append(self.source_liveness.scratch_allocator, .{
             .stmt = stmt,
@@ -7321,9 +7324,9 @@ const Inserter = struct {
             .successor_len = 0,
             .def = null,
         });
-        try self.source_liveness.stmt_node_indices.put(stmt, @intCast(index));
-        try work.append(self.source_liveness.scratch_allocator, @intCast(index));
-        return @intCast(index);
+        try self.source_liveness.stmt_node_indices.put(stmt, index);
+        try work.append(self.source_liveness.scratch_allocator, index);
+        return index;
     }
 
     fn appendReadBeforeRebindSuccessor(

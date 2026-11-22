@@ -918,9 +918,8 @@ pub fn appendBodyShardWithJoinRelocation(
     const source_string_bytes = source.strings.encodedBytesFrom(source_prefix.string_bytes);
     const source_string_entries = source.stringEntryCountFrom(source_prefix.string_bytes) orelse
         return error.InvalidBodyPrefix;
-    if (source_string_bytes.len > std.math.maxInt(u32) - bases.string_bytes) {
-        return error.OutOfMemory;
-    }
+    const source_string_len = std.math.cast(u32, source_string_bytes.len) orelse return error.OutOfMemory;
+    _ = std.math.add(u32, bases.string_bytes, source_string_len) catch return error.OutOfMemory;
 
     // Reserve every destination before the first append. Parallel metadata
     // arrays are reserved and appended alongside their owner arrays.
@@ -1486,9 +1485,9 @@ fn lookupOrAddStmtSource(self: *Self, source: StmtSource) Allocator.Error!StmtSo
     if (entry.found_existing) return entry.value_ptr.*;
     errdefer self.stmt_source_rows.removeByPtr(entry.key_ptr);
     const index = self.stmt_sources.len() + if (self.body_coordinator != null) self.body_prefix.stmt_sources else 0;
-    if (index > std.math.maxInt(u32)) return error.OutOfMemory;
+    const index32 = std.math.cast(u32, index) orelse return error.OutOfMemory;
     try self.stmt_sources.append(self.allocator, source);
-    entry.value_ptr.* = @fromBackingInt(@intCast(index));
+    entry.value_ptr.* = @fromBackingInt(index32);
     return entry.value_ptr.*;
 }
 
@@ -1594,9 +1593,10 @@ pub fn procLoc(self: *const Self, id: LirProcSpecId) base.SourceLoc {
 /// `existing` stored items. Storage past 32-bit positions has exhausted the
 /// representable memory.
 fn spanRange(existing: usize, count: usize) Allocator.Error!struct { start: u32, len: u32 } {
-    const end = std.math.add(usize, existing, count) catch return error.OutOfMemory;
-    if (end > std.math.maxInt(u32)) return error.OutOfMemory;
-    return .{ .start = @intCast(existing), .len = @intCast(count) };
+    const start = std.math.cast(u32, existing) orelse return error.OutOfMemory;
+    const len = std.math.cast(u32, count) orelse return error.OutOfMemory;
+    _ = std.math.add(u32, start, len) catch return error.OutOfMemory;
+    return .{ .start = start, .len = len };
 }
 
 /// Appends `values` to the `field` backing list and returns the span that
@@ -1943,8 +1943,8 @@ pub fn stmtRowCount(self: *const Self, comptime column: usize) usize {
 pub fn addStmtRow(self: *Self, comptime T: type, row: T) Allocator.Error!lir_defs.StmtRowId(T) {
     const column = comptime stmtRowColumn(T);
     const index = self.stmtRowCount(column);
-    // A row's id is its position plus one, so the last position has no id.
-    if (index >= std.math.maxInt(u32)) return error.OutOfMemory;
+    // A row's id is its position plus one, which must fit in a `u32`.
+    if (std.math.cast(u32, index + 1) == null) return error.OutOfMemory;
     try self.stmt_rows[column].append(self.allocator, row);
     return .fromPosition(@intCast(index));
 }

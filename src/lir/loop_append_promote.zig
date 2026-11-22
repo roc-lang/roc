@@ -740,7 +740,7 @@ const Pass = struct {
                             .i64_literal => |lit| if (lit.value >= 0) .{ .literal = @intCast(lit.value) } else Abstract.other,
                             .i128_literal => |lit_id| blk_lit: {
                                 const lit = self.store.stmtRow(lit_id);
-                                break :blk_lit if (lit.value >= 0 and lit.value <= std.math.maxInt(u64)) .{ .literal = @intCast(lit.value) } else Abstract.other;
+                                break :blk_lit if (std.math.cast(u64, lit.value)) |value| .{ .literal = value } else Abstract.other;
                             },
                             .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref => .other,
                         };
@@ -1162,7 +1162,7 @@ const Pass = struct {
                         .i64_literal => |lit| if (lit.value >= 0) @intCast(lit.value) else null,
                         .i128_literal => |lit_id| blk_lit: {
                             const lit = self.store.stmtRow(lit_id);
-                            break :blk_lit if (lit.value >= 0 and lit.value <= std.math.maxInt(u64)) @intCast(lit.value) else null;
+                            break :blk_lit std.math.cast(u64, lit.value);
                         },
                         .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref => null,
                     };

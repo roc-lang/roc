@@ -368,8 +368,8 @@ const Pass = struct {
             defer kept.deinit(self.allocator);
             for (0..branches.len) |index| {
                 const branch = GuardedList.at(branches, index);
-                if (branch.value > std.math.maxInt(u32)) continue;
-                if (tags.contains(@intCast(branch.value))) {
+                const tag = std.math.cast(u32, branch.value) orelse continue;
+                if (tags.contains(tag)) {
                     try kept.append(self.allocator, branch);
                 }
             }

@@ -5272,7 +5272,7 @@ const Solver = struct {
             fn rebuild(self: *Self, allocator: Allocator, pool: *std.ArrayList(Entry), types: *const Type.Store, span: Type.Span) Allocator.Error!void {
                 if (@as(usize, self.entries_start) + self.entries_len == pool.items.len) pool.shrinkRetainingCapacity(self.entries_start);
                 const start = std.math.cast(u32, pool.items.len) orelse return error.OutOfMemory;
-                if (std.math.maxInt(u32) - start < span.len) return error.OutOfMemory;
+                _ = std.math.add(u32, start, span.len) catch return error.OutOfMemory;
                 try pool.ensureUnusedCapacity(allocator, span.count());
                 for (0..span.count()) |position| pool.appendAssumeCapacity(.{ .name = labelAt(Name, types, span, position), .position = @intCast(position) });
                 std.sort.pdq(Entry, pool.items[start..], {}, lessThan);

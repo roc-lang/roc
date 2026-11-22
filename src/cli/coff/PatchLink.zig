@@ -329,7 +329,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         slot_index.* = try addSection(gpa, &sections, debug_section_names[slot], debug_rva, size, size, IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_DISCARDABLE);
         debug_rva = sections.items[slot_index.*.?].end();
     }
-    if (debug_rva > std.math.maxInt(u32)) return error.ProgramTooLarge;
+    if (std.math.cast(u32, debug_rva) == null) return error.ProgramTooLarge;
 
     // Section numbers: the host's sections before its DWARF keep theirs,
     // the app's follow, the DWARF sections come last.
@@ -404,7 +404,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     const long_names_offset = host_strtab.len + app_strings;
     const strtab_size = long_names_offset + long_names.items.len;
     const file_size = strtab_offset + strtab_size;
-    if (file_size > std.math.maxInt(u32)) return error.ProgramTooLarge;
+    if (std.math.cast(u32, file_size) == null) return error.ProgramTooLarge;
 
     // Provided values must fit their windows.
     for (host.provides(), provided) |provide, found| {
