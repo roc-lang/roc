@@ -101,7 +101,7 @@ test "issue 13347: provided function returning a platform nominal over a for-cla
 
 /// Lower a platform whose declarations depend on the abstract type through
 /// an alias (`Inner`), beside a declared parameter (`S(a)`), and through
-/// another nominal (`T`).
+/// another nominal (`T`), and which dispatches to a method of one.
 fn expectNestedPlatformNominalsLower(strategy: base.SpecializationStrategy) harness.LowerToLirHarnessError!void {
     const gpa = std.testing.allocator;
     var tmp_dir = std.testing.tmpDir(.{});
@@ -130,15 +130,21 @@ fn expectNestedPlatformNominalsLower(strategy: base.SpecializationStrategy) harn
         \\
         \\Inner : { model : Model }
         \\
-        \\S(a) := { inner : Inner, extra : a }
+        \\S(a) := { inner : Inner, extra : a }.{
+        \\    get_model : S(a) -> Model
+        \\    get_model = |s| s.inner.model
+        \\}
         \\
         \\T := [Wrapped(S(U64))]
         \\
-        \\wrap : U64 -> T
-        \\wrap = |extra| Wrapped({ inner: { model: main }, extra })
+        \\make : U64 -> S(U64)
+        \\make = |extra| { inner: { model: main }, extra }
+        \\
+        \\rebuild : S(U64) -> S(U64)
+        \\rebuild = |s| { inner: { model: s.get_model() }, extra: s.extra }
         \\
         \\entry : U64 -> T
-        \\entry = |n| wrap(n)
+        \\entry = |n| Wrapped(rebuild(make(n)))
         ,
     });
 

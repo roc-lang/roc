@@ -6957,9 +6957,14 @@ whose annotation a forward reference has not filled yet, a record's missing
 extension, a match branch's missing guard, a definition's missing annotation,
 and the node of a scheme use that no source node introduced. Such fields
 encode and decode through `collections.ZeroSentinelId` where the in-memory
-form is an optional, which asserts that a present index is nonzero. Every
-walk over a store's nodes starts at `Node.first_idx`. Clones and deserialized
-stores carry the reserved node with the rest of their nodes.
+form is an optional, which asserts that a present index is nonzero. A walk
+over a store's nodes starts at `Node.first_idx`. Source-reference relocation
+is the one walk that reads the reserved node: it visits `nodes` and
+`replaced_source_nodes` alike, the second of which reserves nothing, and the
+reserved tag has nothing to relocate. Columns indexed by node, such as type
+variables and the body index's node kinds, keep slot zero, which describes
+no node. Clones and deserialized stores carry the reserved node with the
+rest of their nodes.
 
 Rejected code is replaced in place with a runtime error node: an expression,
 statement, or literal pattern checking rejects, and a read of a `var` before it

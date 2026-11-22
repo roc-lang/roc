@@ -4,7 +4,100 @@ const std = @import("std");
 const CIR = @import("can").CIR;
 const TestEnv = @import("./TestEnv.zig");
 
+fn expectNominalParameters(env: *const TestEnv, name: []const u8, declared: u32, context: u16) error{ TestExpectedEqual, TestUnexpectedResult }!void {
+    for (env.module_env.types.nominal_decls.items()) |decl| {
+        if (!std.mem.eql(u8, env.module_env.getIdent(decl.ident.ident_idx), name)) continue;
+        try std.testing.expectEqual(context, decl.flags.context_len);
+        try std.testing.expectEqual(declared + context, decl.formals.count);
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
 // https://github.com/roc-lang/roc/issues/13347
+test "check - issue 13347 - platform declarations take the abstract types they reach as context" {
+    var env = try TestEnv.init("Platform",
+        \\platform ""
+        \\    requires { [Model : model] for main : model }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "entry": entry }
+        \\
+        \\Direct := { model : Model }
+        \\
+        \\Inner : { model : Model }
+        \\
+        \\ThroughAlias(a) := { inner : Inner, extra : a }
+        \\
+        \\ThroughNominal := [Wrapped(ThroughAlias(U64))]
+        \\
+        \\ThroughLater := [Earlier(Later)]
+        \\
+        \\Later := [Later(Model), Stop]
+        \\
+        \\Recursive := [Leaf(Model), Node(Recursive, Recursive)]
+        \\
+        \\Independent(a) := [Independent(a)]
+        \\
+        \\entry : U64 -> U64
+        \\entry = |n| n
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+    try expectNominalParameters(&env, "Direct", 0, 1);
+    try expectNominalParameters(&env, "ThroughAlias", 1, 1);
+    try expectNominalParameters(&env, "ThroughNominal", 0, 1);
+    try expectNominalParameters(&env, "ThroughLater", 0, 1);
+    try expectNominalParameters(&env, "Later", 0, 1);
+    try expectNominalParameters(&env, "Recursive", 0, 1);
+    try expectNominalParameters(&env, "Independent", 1, 0);
+}
+
+test "check - issue 13347 - a platform nominal's arity counts its declared parameters only" {
+    var env = try TestEnv.init("Platform",
+        \\platform ""
+        \\    requires { [Model : model] for main : model }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "entry": entry }
+        \\
+        \\S := { model : Model }
+        \\
+        \\f : S(U64) -> U64
+        \\f = |_| 0
+        \\
+        \\entry : U64 -> U64
+        \\entry = |n| n
+    );
+    defer env.deinit();
+    try std.testing.expectEqual(@as(usize, 1), try env.typeProblemCount());
+}
+
+test "check - issue 13347 - a platform's body-local declaration takes the abstract type beside its function's variable" {
+    var env = try TestEnv.init("Platform",
+        \\platform ""
+        \\    requires { [Model : model] for main : model }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "entry": entry }
+        \\
+        \\wrapped : a -> Str
+        \\wrapped = |x| {
+        \\    Both := [Both(a, Model)]
+        \\    OnlyModel := [OnlyModel(Model)]
+        \\    _only = OnlyModel.OnlyModel(main)
+        \\    Str.inspect([Both.Both(x, main)])
+        \\}
+        \\
+        \\entry : U64 -> U64
+        \\entry = |n| n
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+    try expectNominalParameters(&env, "Both", 0, 2);
+    try expectNominalParameters(&env, "OnlyModel", 0, 1);
+}
+
 test "check - issue 13347 - a platform nominal over the platform abstract type prints without its context" {
     var env = try TestEnv.init("Platform",
         \\platform ""
