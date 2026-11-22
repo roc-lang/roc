@@ -677,7 +677,7 @@ test "proc fingerprint ignores program numbering but not content" {
             for (0..padding) |_| _ = try store.addLocal(.{ .layout_idx = .u64 });
             for (0..padding) |index| {
                 _ = try store.addProcSpec(.{
-                    .name = .none,
+                    .name = .fromRaw(1),
                     .identity = LIR.ProcIdentity.forTest(@intCast(100 + index)),
                     .args = .empty(),
                     .body = .none,
@@ -685,7 +685,7 @@ test "proc fingerprint ignores program numbering but not content" {
                 }, .none);
             }
             const callee = try store.addProcSpec(.{
-                .name = .none,
+                .name = .fromRaw(1),
                 .identity = LIR.ProcIdentity.forTest(callee_identity),
                 .args = .empty(),
                 .body = .none,
@@ -700,7 +700,7 @@ test "proc fingerprint ignores program numbering but not content" {
                 .next = ret,
             } }, .test_fixture);
             return try store.addProcSpec(.{
-                .name = .none,
+                .name = .fromRaw(1),
                 .identity = LIR.ProcIdentity.forTest(1),
                 .args = .empty(),
                 .body = .some(call),

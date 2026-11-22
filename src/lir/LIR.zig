@@ -46,12 +46,6 @@ pub const Symbol = packed struct(u64) {
     pub fn hash(self: Symbol) u64 {
         return self.id;
     }
-
-    pub const none: Symbol = .{ .id = std.math.maxInt(u64) };
-
-    pub fn isNone(self: Symbol) bool {
-        return self.id == none.id;
-    }
 };
 
 /// Content identity of a lowered procedure: a digest of everything that

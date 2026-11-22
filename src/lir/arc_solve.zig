@@ -1452,8 +1452,7 @@ fn enterOutcomeWalk(
         if (state.present == walk.present and state.discriminant == walk.discriminant) return true;
         next = state.next.get();
     }
-    const position = std.math.cast(u32, states.items.len) orelse return error.OutOfMemory;
-    if (position == std.math.maxInt(u32)) return error.OutOfMemory;
+    const position = try collections.nextBiasedId(states.items.len);
     try states.append(allocator, .{ .present = walk.present, .discriminant = walk.discriminant, .next = .of(head) });
     heads.set(index, position);
     return false;
@@ -2088,9 +2087,9 @@ fn appendPublishedOutcomes(
     var restituted: arc_sig.ParamMask = 0;
     var row: usize = 0;
     while (row < word_count) : (row += 2) {
-        const mask = GuardedList.at(words, row + 1);
-        if (mask > std.math.maxInt(arc_sig.ParamMask)) solveInvariant("ARC read a published outcome row naming an untracked parameter");
-        const outcome: arc_sig.Outcome = .{ .discriminant = GuardedList.at(words, row), .restituted_params = @intCast(mask) };
+        const mask = std.math.cast(arc_sig.ParamMask, GuardedList.at(words, row + 1)) orelse
+            solveInvariant("ARC read a published outcome row naming an untracked parameter");
+        const outcome: arc_sig.Outcome = .{ .discriminant = GuardedList.at(words, row), .restituted_params = mask };
         if (all_outcomes.items.len > start and !outcomeLessThan({}, all_outcomes.items[all_outcomes.items.len - 1], outcome)) {
             solveInvariant("ARC read a published outcome table out of discriminant order");
         }

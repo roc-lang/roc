@@ -982,7 +982,8 @@ fn hashRecipe(hasher: *std.hash.Wyhash, recipe: Recipe) void {
             for (desc.scoped) |override| {
                 hashWord(hasher, @backingInt(override.nominal));
                 for (override.methods) |method| {
-                    if (method) |operand| hashOperand(hasher, operand) else hashWord(hasher, std.math.maxInt(u32));
+                    hasher.update(&.{@intFromBool(method != null)});
+                    if (method) |operand| hashOperand(hasher, operand);
                 }
             }
         },

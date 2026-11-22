@@ -3084,10 +3084,10 @@ const Certifier = struct {
         var balance_entry = balances.next();
         var claim_entry = claimed.next();
         while (balance_entry != null or claim_entry != null) {
-            const value_index = @min(
-                if (balance_entry) |entry| entry.index else std.math.maxInt(u32),
-                if (claim_entry) |entry| entry.index else std.math.maxInt(u32),
-            );
+            const value_index = if (balance_entry) |balance|
+                (if (claim_entry) |claim| @min(balance.index, claim.index) else balance.index)
+            else
+                claim_entry.?.index;
             var units: i32 = 0;
             var claims: ClaimSet = .{};
             if (balance_entry) |entry| {

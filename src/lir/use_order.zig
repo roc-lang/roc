@@ -52,8 +52,7 @@ pub const UseAnswers = struct {
 
     /// Records the answer for a query `get` has not answered.
     pub fn put(self: *UseAnswers, stmt: LIR.CFStmtId, local: LIR.LocalId, answer: bool) Allocator.Error!void {
-        const position = std.math.cast(u32, self.entries.items.len) orelse return error.OutOfMemory;
-        if (position == std.math.maxInt(u32)) return error.OutOfMemory;
+        const position = try collections.nextBiasedId(self.entries.items.len);
         const head = try self.heads.getOrPut(stmt);
         const next: collections.OptionalU32 = if (head.found_existing) .some(head.value_ptr.*) else .none;
         try self.entries.append(self.allocator, .{ .stmt = stmt, .local = local, .answer = answer, .next = next });

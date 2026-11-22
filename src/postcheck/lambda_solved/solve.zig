@@ -159,8 +159,7 @@ const ActivePairs = struct {
             if (node.pair.second == pair.second) return false;
             cursor = node.next;
         }
-        const index = std.math.cast(u32, self.nodes.items.len) orelse return error.OutOfMemory;
-        if (index == std.math.maxInt(u32)) return error.OutOfMemory;
+        const index = try collections.nextBiasedId(self.nodes.items.len);
         try self.nodes.ensureUnusedCapacity(allocator, 1);
         try self.heads.put(allocator, pair.first, index);
         self.nodes.appendAssumeCapacity(.{ .pair = pair, .next = head });
@@ -5258,8 +5257,12 @@ const Solver = struct {
             const Entry = struct { name: Name, position: u32 };
 
             len: u32,
+            /// The index's run in the pool; an index with no entries owns no
+            /// run.
             entries_start: u32,
             entries_len: u32,
+
+            const fresh: Self = .{ .len = 0, .entries_start = 0, .entries_len = 0 };
 
             fn lessThan(_: void, lhs: Entry, rhs: Entry) bool {
                 const lhs_key = @backingInt(lhs.name);
@@ -5270,7 +5273,7 @@ const Solver = struct {
             /// Index the row `span` of `types` into `pool`, reusing this
             /// index's run when it ends the pool.
             fn rebuild(self: *Self, allocator: Allocator, pool: *std.ArrayList(Entry), types: *const Type.Store, span: Type.Span) Allocator.Error!void {
-                if (@as(usize, self.entries_start) + self.entries_len == pool.items.len) pool.shrinkRetainingCapacity(self.entries_start);
+                if (self.entries_len != 0 and @as(usize, self.entries_start) + self.entries_len == pool.items.len) pool.shrinkRetainingCapacity(self.entries_start);
                 const start = std.math.cast(u32, pool.items.len) orelse return error.OutOfMemory;
                 _ = std.math.add(u32, start, span.len) catch return error.OutOfMemory;
                 try pool.ensureUnusedCapacity(allocator, span.count());
@@ -5373,7 +5376,7 @@ const Solver = struct {
         const gop = try indexes.getOrPut(self.allocator, span.start);
         // A fresh index owns no run, so filling it never reuses the pool's
         // last run.
-        if (!gop.found_existing) gop.value_ptr.* = .{ .len = 0, .entries_start = std.math.maxInt(u32), .entries_len = 0 };
+        if (!gop.found_existing) gop.value_ptr.* = Index.fresh;
         if (gop.value_ptr.len != span.len) try gop.value_ptr.rebuild(self.allocator, pool, &self.program.types, span);
         return pool.items[gop.value_ptr.entries_start..][0..gop.value_ptr.entries_len];
     }

@@ -39,8 +39,7 @@ pub fn add(self: *Self, gpa: Allocator) Allocator.Error!usize {
 }
 /// Add an exact dependency from a parent equation to a child.
 pub fn edge(self: *Self, gpa: Allocator, parent: usize, child: usize, transform: Transform) Allocator.Error!void {
-    const index = std.math.cast(u32, self.edges.items.len) orelse return error.OutOfMemory;
-    if (index == std.math.maxInt(u32)) return error.OutOfMemory;
+    const index = try collections.nextBiasedId(self.edges.items.len);
     try self.edges.append(gpa, .{ .parent = parent, .next = self.nodes.items[child].first, .transform = transform });
     self.nodes.items[child].first = .some(index);
     self.nodes.items[parent].remaining += 1;
