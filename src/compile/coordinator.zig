@@ -9780,7 +9780,7 @@ fn stagedEntryRuntimeLines(
     for (0..store.cfStmtCount()) |index| {
         const loc = store.stmtLoc(@fromBackingInt(@as(u32, @intCast(index))));
         if (!loc.hasLocation()) continue;
-        if (!std.mem.eql(u8, store.sourceFileName(loc.file), app_env.module_name)) continue;
+        if (!std.mem.eql(u8, store.sourceFileName(loc.fileIndex()), app_env.module_name)) continue;
         try lines.append(allocator, loc.line);
     }
     return try lines.toOwnedSlice(allocator);

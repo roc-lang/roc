@@ -761,8 +761,8 @@ const MetadataReader = struct {
         return count;
     }
     fn ext(self: *MetadataReader) error{InvalidMetadata}!void {
-        const id = try self.word();
-        if (id != no_type and id >= self.types) return error.InvalidMetadata;
+        const id = @as(OptionalTypeIndex, @fromBackingInt(try self.word())).get() orelse return;
+        if (id >= self.types) return error.InvalidMetadata;
     }
     fn typeEntry(self: *MetadataReader) error{InvalidMetadata}!void {
         switch (try self.tag(std.meta.Tag(types.Node))) {
@@ -1116,7 +1116,11 @@ fn appendWord(allocator: Allocator, list: *std.ArrayList(u8), value: u32) Alloca
     try list.appendSlice(allocator, &buffer);
 }
 
-const no_type = std.math.maxInt(u32);
+/// A row extension's table word: an optional type table index.
+const OptionalTypeIndex = collections.OptionalU32;
+
+/// A nominal's builtin byte.
+const OptionalBuiltin = collections.OptionalEnum(checked.CheckedBuiltinNominal);
 
 const Encoder = struct {
     allocator: Allocator,
@@ -1348,7 +1352,7 @@ const Encoder = struct {
                 try self.tableTypes(store.nominalArgs(nominal));
                 try self.tableName(nominal.name);
                 try self.table.append(self.allocator, @intFromBool(nominal.is_opaque));
-                try self.table.append(self.allocator, if (nominal.builtin) |builtin| @backingInt(builtin) + 1 else 0);
+                try self.table.append(self.allocator, @backingInt(OptionalBuiltin.of(nominal.builtin)));
                 try self.table.append(self.allocator, @intFromBool(nominal.has_backing));
             },
             .function => |function| {
@@ -1374,7 +1378,7 @@ const Encoder = struct {
     }
 
     fn tableExt(self: *Encoder, ext: ?TypeId) Allocator.Error!void {
-        try self.tableWord(if (ext) |ty| self.table_index.get(ty).? else no_type);
+        try self.tableWord(@backingInt(OptionalTypeIndex.of(if (ext) |ty| self.table_index.get(ty).? else null)));
     }
 
     fn tableName(self: *Encoder, id: types.NameId) Allocator.Error!void {
@@ -1553,7 +1557,7 @@ const Encoder = struct {
                     .{ record.module, Codec.pieceFamilyRoot(program, piece) };
                 try self.module(module_index);
                 try self.bytes.append(self.allocator, @backingInt(piece.kind));
-                try self.word(root);
+                try self.word(@backingInt(root));
                 switch (Codec.pieceOperands(piece.kind)) {
                     .none => {},
                     .types => {
@@ -1630,8 +1634,8 @@ const Decoder = struct {
     }
 
     fn ext(self: *Decoder) ?TypeId {
-        const index = self.word();
-        return if (index == no_type) null else self.table[index];
+        const index = @as(OptionalTypeIndex, @fromBackingInt(self.word())).get() orelse return null;
+        return self.table[index];
     }
 
     fn readTable(self: *Decoder) Allocator.Error!void {
@@ -1695,7 +1699,7 @@ const Decoder = struct {
             .box => try store.intern(.{ .box = self.typeOf() }),
             .nominal => blk: {
                 const module_index = self.module();
-                const decl: checked.CheckedNominalDeclarationId = @fromBackingInt(self.word());
+                const decl: collections.OptionalId(checked.CheckedNominalDeclarationId) = @fromBackingInt(self.word());
                 const args = try self.typeSpan();
                 const nominal_name = try self.name();
                 const is_opaque = self.byte() != 0;
@@ -1705,7 +1709,7 @@ const Decoder = struct {
                     .args = args,
                     .name = nominal_name,
                     .is_opaque = is_opaque,
-                    .builtin = if (builtin == 0) null else @fromBackingInt(@intCast(builtin - 1)),
+                    .builtin = @as(OptionalBuiltin, @fromBackingInt(builtin)).get(),
                     .has_backing = self.byte() != 0,
                 } });
             },
@@ -1734,8 +1738,8 @@ const Decoder = struct {
             const unit = self.program.moduleUnit() orelse invariant("a link's encoding of a worker was read outside a module unit");
             const interface = unit.imports.get(.{ .bytes = named }) orelse
                 invariant("a link's encoding names a template worker its module's object exports no record of");
-            if (interface.template == LirProgram.BoxyExport.no_template) invariant("a link's encoding names a template worker whose record locates no template");
-            const template_id: checked_names.CheckedProcedureTemplateId = @fromBackingInt(interface.template);
+            const template_raw = interface.template.get() orelse invariant("a link's encoding names a template worker whose record locates no template");
+            const template_id: checked_names.CheckedProcedureTemplateId = @fromBackingInt(template_raw);
             if (std.debug.runtime_safety and !std.mem.eql(u8, &self.program.templateIdentity(module_index, template_id, binding).bytes, &named))
                 invariant("a link's encoding of a template resolved to a template of another identity");
             return template_id;
@@ -1869,7 +1873,7 @@ const Decoder = struct {
             .codec => {
                 const module_index = self.module();
                 const kind: Codec.PieceKind = @fromBackingInt(@intCast(self.byte()));
-                const root = self.word();
+                const root: collections.OptionalU32 = @fromBackingInt(self.word());
                 var a: u32 = 0;
                 var b_operand: u32 = 0;
                 switch (Codec.pieceOperands(kind)) {
@@ -2064,7 +2068,7 @@ fn paddedRecordEntry(out: *std.ArrayList(u8), entries: []const EncodedDeclaredEn
         try Write.word(out, 0);
         try out.append(allocator, 0); // no default
     }
-    try Write.word(out, no_type);
+    try Write.word(out, @backingInt(OptionalTypeIndex.none));
     try out.append(allocator, 1);
     try Write.word(out, 1); // one unnamed field
     try Write.word(out, 0);

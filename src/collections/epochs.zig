@@ -69,7 +69,6 @@ const Epoch = struct {
     /// Install a natural epoch `identifier`, which must exceed every
     /// identifier installed since the stamps were last cleared.
     fn install(self: *Epoch, identifier: u32) void {
-        std.debug.assert(identifier < std.math.maxInt(u32));
         const next = identifier + first_epoch;
         std.debug.assert(next > self.current);
         storage_work.add(.epoch_resets, 1);

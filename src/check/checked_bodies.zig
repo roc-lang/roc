@@ -979,8 +979,7 @@ pub const CheckedBodies = struct {
         const node = ModuleEnv.nodeIdxFrom(pattern_id);
         const plan = self.env.store.literalDispatchPlanForNode(node) orelse invariant("a custom literal pattern had no literal dispatch plan");
         const context = plan.patternContext(&self.env.store) orelse invariant("a custom literal pattern had no pattern context");
-        if (context.equality_fn_var_plus_one == 0) invariant("a custom literal pattern had no equality function");
-        const equality_fn: Var = @fromBackingInt(@intCast(context.equality_fn_var_plus_one - 1));
+        const equality_fn: Var = context.equality_fn_var.get() orelse invariant("a custom literal pattern had no equality function");
         const equality_fn_ty = self.typeOf(equality_fn);
         return .{
             .pattern = pattern_id,

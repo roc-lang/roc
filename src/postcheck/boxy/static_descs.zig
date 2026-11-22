@@ -860,7 +860,7 @@ pub const StaticDescs = struct {
     pub fn staticDictionaryTree(self: *StaticDescs, owner: u32, index: u32, root: lower.DictionaryRoot, root_entry: ?WorkerId) Allocator.Error!ExportIndex {
         var key: std.ArrayList(u8) = .empty;
         defer key.deinit(self.allocator);
-        try appendKeyWord(self.allocator, &key, if (root_entry) |entry| @backingInt(entry) + 1 else 0);
+        try appendKeyWord(self.allocator, &key, @backingInt(collections.OptionalId(WorkerId).of(root_entry)));
         switch (root) {
             .requirement => |requirement| {
                 try key.append(self.allocator, 0);
@@ -2057,7 +2057,7 @@ pub const StaticDescs = struct {
         defer pointers.deinit(self.allocator);
         for (targets, 0..) |target, index| {
             const base_offset = @as(u32, @intCast(index)) * variant_layout.size;
-            writeU32(@constCast(self.exports.items[entries].bytes), base_offset + variant_layout.of(.discriminant), if (target.get()) |position| @backingInt(position) else desc_format.AdaptVariant.absent);
+            writeU32(@constCast(self.exports.items[entries].bytes), base_offset + variant_layout.of(.discriminant), @backingInt(if (target.get()) |position| desc_format.TargetDiscriminant.of(@backingInt(position)) else .absent));
             const payload = if (payloads) |plans| plans[index].get() else null;
             if (payload) |plan| try pointers.append(self.allocator, .{ .offset = base_offset + variant_layout.of(.plan), .target = @backingInt(plan) });
         }
@@ -2096,7 +2096,7 @@ pub fn appendCaptureWordKey(allocator: Allocator, key: *std.ArrayList(u8), word:
 fn appendRequirementKey(allocator: Allocator, key: *std.ArrayList(u8), requirement: lower.DictRequirement) Allocator.Error!void {
     try appendKeyWord(allocator, key, @backingInt(requirement.module));
     try appendKeyWord(allocator, key, @backingInt(requirement.method));
-    try appendKeyWord(allocator, key, if (requirement.structural) |kind| @as(u32, @backingInt(kind)) + 1 else 0);
+    try appendKeyWord(allocator, key, @backingInt(collections.OptionalEnum(@TypeOf(requirement.structural.?)).of(requirement.structural)));
     try appendKeyWord(allocator, key, @backingInt(requirement.dispatcher));
     try appendKeyWord(allocator, key, @backingInt(requirement.callable));
 }
@@ -2445,7 +2445,7 @@ test "override scopes are interned by content and restricted to a type's reach" 
     const module = try fixture.modules.add(module_view);
     const name = try store.internName("Local");
     const local = try store.intern(.{ .nominal = .{
-        .decl = .{ .module = module, .decl = declaration_ids[0] },
+        .decl = .{ .module = module, .decl = .some(declaration_ids[0]) },
         .args = &.{},
         .name = name,
         .is_opaque = true,
@@ -2453,7 +2453,7 @@ test "override scopes are interned by content and restricted to a type's reach" 
         .has_backing = false,
     } });
     const other = try store.intern(.{ .nominal = .{
-        .decl = .{ .module = module, .decl = declaration_ids[1] },
+        .decl = .{ .module = module, .decl = .some(declaration_ids[1]) },
         .args = &.{},
         .name = name,
         .is_opaque = true,

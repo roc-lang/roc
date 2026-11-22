@@ -24,7 +24,7 @@ pub const Graph = struct {
 
     /// A graph over `count` callables, all eligible until rejected.
     pub fn init(allocator: Allocator, count: usize) Allocator.Error!Graph {
-        if (count > std.math.maxInt(u32)) return error.OutOfMemory;
+        if (std.math.cast(u32, count) == null) return error.OutOfMemory;
         var heads = try collections.OptionalIndexColumn(EdgeIndex).initFilled(allocator, count);
         errdefer heads.deinit(allocator);
         const allowed = try allocator.alloc(bool, count);

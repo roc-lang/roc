@@ -125,8 +125,6 @@ pub const Slot = struct {
 /// An interned path of steps from a seed's root; `root` is the seed itself.
 pub const PathId = enum(u32) { root = 0, _ };
 
-const none: u32 = std.math.maxInt(u32);
-
 /// How the code around an expression consumes its value. Lifted bodies share
 /// expression nodes, within a body and across bodies, so a node can have
 /// several parents; each use belongs to one body.
@@ -137,10 +135,10 @@ const Use = union(enum) {
     /// The parent reads a part of this value: a field or tuple access.
     receiver: Ast.ExprId,
     /// The parent is a constructor holding this value at `step`. `loop` is
-    /// the innermost loop enclosing the parent in this body.
-    operand: struct { parent: Ast.ExprId, step: Step, loop: u32 },
+    /// the innermost loop enclosing the parent in this body, if any.
+    operand: struct { parent: Ast.ExprId, step: Step, loop: collections.OptionalU32 },
     /// The parent is a record update of this value.
-    update_base: struct { parent: Ast.ExprId, loop: u32 },
+    update_base: struct { parent: Ast.ExprId, loop: collections.OptionalU32 },
     /// A pattern binds this value.
     pattern: Ast.PatId,
     /// A recursive binding's pattern binds this value, which may read the
@@ -157,7 +155,7 @@ const Use = union(enum) {
 
 const UseRow = struct { body: u32, use: Use, next: collections.OptionalU32 };
 
-const LocalUseRow = struct { body: u32, expr: Ast.ExprId, next: u32 };
+const LocalUseRow = struct { body: u32, expr: Ast.ExprId, next: collections.OptionalU32 };
 
 const LoopKey = struct { body: u32, loop: u32 };
 
@@ -180,8 +178,8 @@ pub const Index = struct {
     uses: std.ArrayList(UseRow) = .empty,
     local_use_head: collections.DenseMapUnmanaged(Ast.LocalId, u32) = .empty,
     local_use_rows: std.ArrayList(LocalUseRow) = .empty,
-    /// The loop enclosing each loop of each body.
-    enclosing_loop: std.AutoHashMapUnmanaged(LoopKey, u32) = .empty,
+    /// The loop enclosing each loop of each body, absent for an outermost one.
+    enclosing_loop: std.AutoHashMapUnmanaged(LoopKey, collections.OptionalU32) = .empty,
     /// Locals bound once by a plain binding, to their value; null for a
     /// local bound more than once or recursively.
     defs: collections.DenseMapUnmanaged(Ast.LocalId, collections.OptionalId(Ast.ExprId)) = .empty,
@@ -279,12 +277,12 @@ pub const Index = struct {
     }
 
     /// Whether loop `inner` of `fn_id`'s body is `outer` or lies inside it.
-    fn loopWithin(self: *const Index, fn_id: Ast.FnId, inner: u32, outer: Ast.ExprId) bool {
+    fn loopWithin(self: *const Index, fn_id: Ast.FnId, inner: collections.OptionalU32, outer: Ast.ExprId) bool {
         var current = inner;
-        while (current != none) : (current = self.enclosing_loop.get(.{ .body = @backingInt(fn_id), .loop = current }) orelse
+        while (current.get()) |loop| : (current = self.enclosing_loop.get(.{ .body = @backingInt(fn_id), .loop = loop }) orelse
             Common.invariant("inline crossing met a loop its body did not index"))
         {
-            if (current == @backingInt(outer)) return true;
+            if (loop == @backingInt(outer)) return true;
         }
         return false;
     }
@@ -398,7 +396,7 @@ pub const Index = struct {
                 if (raw >= self.use_head.len) Common.invariant("a source body held an expression created after indexing began");
                 // A node this body already reached has its children indexed.
                 if (!try self.addUse(raw_fn, e, item.use)) continue;
-                const loop: u32 = if (loops.getLastOrNull()) |l| @backingInt(l.loop) else none;
+                const loop: collections.OptionalU32 = if (loops.getLastOrNull()) |l| .some(@backingInt(l.loop)) else .none;
                 const push = struct {
                     fn push(t: *std.ArrayList(IndexTask), a: Allocator, id: Ast.ExprId, use: Use) Allocator.Error!void {
                         try t.append(a, .{ .expr = .{ .id = id, .use = use } });
@@ -407,7 +405,7 @@ pub const Index = struct {
                 switch (p.getExpr(e).data) {
                     .local => |local| {
                         const gop = try self.local_use_head.getOrPut(gpa, local);
-                        const next = if (gop.found_existing) gop.value_ptr.* else none;
+                        const next: collections.OptionalU32 = if (gop.found_existing) .some(gop.value_ptr.*) else .none;
                         try self.local_use_rows.append(gpa, .{ .body = raw_fn, .expr = e, .next = next });
                         gop.value_ptr.* = @intCast(self.local_use_rows.items.len - 1);
                     },
@@ -1233,9 +1231,9 @@ const Walk = struct {
         site: Ast.ExprId,
         path: PathId,
         /// The body that pushed the frame, and the innermost loop around
-        /// the push there.
+        /// the push there, if any.
         body: Ast.FnId,
-        loop: u32,
+        loop: collections.OptionalU32,
         below: std.ArrayList(u32) = .empty,
         watchers: std.ArrayList(Watcher) = .empty,
     };
@@ -1246,14 +1244,16 @@ const Walk = struct {
 
     const Entry = struct {
         fn_id: Ast.FnId,
-        /// For a root entry, the number of inline frames beneath its body.
-        depth: u32,
-        is_root: bool,
+        /// For a root entry, the number of inline frames beneath its body;
+        /// null for an entry a call made.
+        root_depth: ?u32,
         callers: std.ArrayList(Caller) = .empty,
         exits: std.ArrayList(Exit) = .empty,
     };
 
-    const EntryKey = struct { fn_id: Ast.FnId, slot_kind: Slot.Kind, slot: u32, path: PathId, node: u32, root_depth: u32 };
+    /// A root entry has a `root_depth` and no `slot`; a call's entry has a
+    /// `slot` and no `root_depth`.
+    const EntryKey = struct { fn_id: Ast.FnId, slot_kind: Slot.Kind, slot: collections.OptionalU32, path: PathId, node: u32, root_depth: collections.OptionalU32 };
 
     const Exit = struct { path: PathId, node: u32 };
 
@@ -1302,7 +1302,7 @@ const Walk = struct {
         self.work = .empty;
         self.applies = .empty;
         // Node 0, the empty stack, has no frame; its fields are never read.
-        try self.nodes.append(self.alloc(), .{ .frame = undefined, .site = undefined, .path = .root, .body = undefined, .loop = none });
+        try self.nodes.append(self.alloc(), .{ .frame = undefined, .site = undefined, .path = .root, .body = undefined, .loop = .none });
     }
 
     fn end(self: *Walk) void {
@@ -1334,16 +1334,16 @@ const Walk = struct {
             self.root_fn orelse Common.invariant("a crossing walk climbed beneath its inline frames without a root body")
         else
             self.frames[depth - 1].fn_id;
-        const key: EntryKey = .{ .fn_id = fn_id, .slot_kind = .arg, .slot = none, .path = .root, .node = 0, .root_depth = @intCast(depth) };
+        const key: EntryKey = .{ .fn_id = fn_id, .slot_kind = .arg, .slot = .none, .path = .root, .node = 0, .root_depth = .some(@intCast(depth)) };
         const gop = try self.entry_map.getOrPut(self.alloc(), key);
         if (!gop.found_existing) {
             gop.value_ptr.* = @intCast(self.entries.items.len);
-            try self.entries.append(self.alloc(), .{ .fn_id = fn_id, .depth = @intCast(depth), .is_root = true });
+            try self.entries.append(self.alloc(), .{ .fn_id = fn_id, .root_depth = @intCast(depth) });
         }
         return gop.value_ptr.*;
     }
 
-    fn pushNode(self: *Walk, body: Ast.FnId, loop: u32, site: Ast.ExprId, frame: Frame, path: PathId, beneath: u32) Allocator.Error!u32 {
+    fn pushNode(self: *Walk, body: Ast.FnId, loop: collections.OptionalU32, site: Ast.ExprId, frame: Frame, path: PathId, beneath: u32) Allocator.Error!u32 {
         const key: NodeKey = .{ .body = body, .site = site, .frame = frame, .path = path };
         const gop = try self.node_map.getOrPut(self.alloc(), key);
         if (!gop.found_existing) {
@@ -1381,12 +1381,12 @@ const Walk = struct {
             if (node != 0 and index.sameScc(self.entries.items[c.entry].fn_id, callee) and
                 index.sameScc(self.nodes.items[node].body, callee)) return;
         }
-        const key: EntryKey = .{ .fn_id = callee, .slot_kind = slot.kind, .slot = slot.index, .path = path, .node = node, .root_depth = none };
+        const key: EntryKey = .{ .fn_id = callee, .slot_kind = slot.kind, .slot = .some(slot.index), .path = path, .node = node, .root_depth = .none };
         const gop = try self.entry_map.getOrPut(self.alloc(), key);
         const entry: u32 = if (gop.found_existing) gop.value_ptr.* else blk: {
             const id: u32 = @intCast(self.entries.items.len);
             gop.value_ptr.* = id;
-            try self.entries.append(self.alloc(), .{ .fn_id = callee, .depth = none, .is_root = false });
+            try self.entries.append(self.alloc(), .{ .fn_id = callee, .root_depth = null });
             const f = self.session.program.getFn(callee);
             const local = switch (slot.kind) {
                 .arg => GuardedList.at(self.session.program.typedLocalSpan(f.args), slot.index).local,
@@ -1409,12 +1409,12 @@ const Walk = struct {
         if ((try self.exit_set.getOrPut(self.alloc(), .{ .entry = entry, .path = path, .node = node })).found_existing) return;
         const e = &self.entries.items[entry];
         try e.exits.append(self.alloc(), .{ .path = path, .node = node });
-        if (e.is_root) {
+        if (e.root_depth) |depth| {
             // The result of a root body is the result of the innermost
             // inline frame beneath it, read at that frame's call.
-            if (e.depth == 0) return;
-            const call = self.frames[e.depth - 1].call_expr orelse return;
-            const next = try self.rootEntry(e.depth - 1);
+            if (depth == 0) return;
+            const call = self.frames[depth - 1].call_expr orelse return;
+            const next = try self.rootEntry(depth - 1);
             try self.addConfig(next, Item.expr(call), path, node);
             return;
         }
@@ -1485,8 +1485,8 @@ const Walk = struct {
         switch (c.item.kind) {
             .local => {
                 const body = @backingInt(self.entries.items[c.entry].fn_id);
-                var row = index.local_use_head.get(@fromBackingInt(c.item.id)) orelse return;
-                while (row != none) : (row = index.local_use_rows.items[row].next) {
+                var link: collections.OptionalU32 = .some(index.local_use_head.get(@fromBackingInt(c.item.id)) orelse return);
+                while (link.get()) |row| : (link = index.local_use_rows.items[row].next) {
                     const use = index.local_use_rows.items[row];
                     if (use.body == body) try self.addConfig(c.entry, Item.expr(use.expr), c.path, c.node);
                 }

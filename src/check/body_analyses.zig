@@ -2227,10 +2227,9 @@ const DiagnosticState = enum(u8) { fresh, active, done };
 /// close cycles through delayed function bodies; a monotone worklist
 /// propagates errors across those cycles.
 const ConstantGraph = struct {
-    const no_edge = std.math.maxInt(usize);
-    const Edge = struct { parent: u32, next: usize };
+    const Edge = struct { parent: u32, next: collections.OptionalU32 };
     allocator: Allocator,
-    heads: collections.DenseMap(u32, usize),
+    heads: collections.DenseMap(u32, u32),
     edges: std.ArrayList(Edge) = .empty,
     /// The initializer expression a local constant lookup reads.
     lookup_values: collections.DenseMap(u32, ExprId),
@@ -2239,7 +2238,7 @@ const ConstantGraph = struct {
     fn init(allocator: Allocator, bodies: CheckedBodies) Allocator.Error!ConstantGraph {
         var graph = ConstantGraph{
             .allocator = allocator,
-            .heads = collections.DenseMap(u32, usize).init(allocator),
+            .heads = collections.DenseMap(u32, u32).init(allocator),
             .lookup_values = collections.DenseMap(u32, ExprId).init(allocator),
         };
         errdefer graph.deinit();
@@ -2292,10 +2291,12 @@ const ConstantGraph = struct {
     fn enter(self: *ConstantGraph, raw: u32) Allocator.Error!?u32 {
         const previous = self.current;
         if (previous) |parent| {
+            const index = std.math.cast(u32, self.edges.items.len) orelse return error.OutOfMemory;
+            if (index == std.math.maxInt(u32)) return error.OutOfMemory;
             const head = try self.heads.getOrPut(raw);
-            const next = if (head.found_existing) head.value_ptr.* else no_edge;
+            const next: collections.OptionalU32 = if (head.found_existing) .some(head.value_ptr.*) else .none;
             try self.edges.append(self.allocator, .{ .parent = parent, .next = next });
-            head.value_ptr.* = self.edges.items.len - 1;
+            head.value_ptr.* = index;
         }
         self.current = raw;
         return previous;
@@ -2309,10 +2310,10 @@ const ConstantGraph = struct {
             if (errors.isSet(entry.key_ptr.*)) try work.append(self.allocator, entry.key_ptr.*);
         }
         while (work.pop()) |raw| {
-            var edge_index = self.heads.get(raw) orelse continue;
-            while (edge_index != no_edge) {
+            var next_edge: collections.OptionalU32 = .some(self.heads.get(raw) orelse continue);
+            while (next_edge.get()) |edge_index| {
                 const edge = self.edges.items[edge_index];
-                edge_index = edge.next;
+                next_edge = edge.next;
                 if (errors.isSet(edge.parent)) continue;
                 errors.set(edge.parent);
                 try work.append(self.allocator, edge.parent);

@@ -56,7 +56,6 @@ pub const Row = struct {
     /// A domain wider than `u32` bits is a compiler invariant violation: ARC
     /// bit domains are bounded by a procedure's frame.
     pub fn initEmpty(bit_len: usize) Row {
-        std.debug.assert(bit_len <= std.math.maxInt(u32));
         if (bit_len <= inline_bits) return .{ .bit_len = @intCast(bit_len), .storage = .{ .inline_words = @splat(0) } };
         const word_len = (bit_len + 63) / 64;
         return .{ .bit_len = @intCast(bit_len), .storage = .{ .tree = Words.init(word_len) } };
@@ -353,8 +352,8 @@ pub fn equationRow(
 
 /// Whether `node` is the header of its innermost loop.
 fn isHeader(forest: *const LoopForest, node: u32) bool {
-    const loop = forest.innermostOf(node);
-    return loop != LoopForest.none and forest.loops[loop].header == node;
+    const loop = forest.innermostOf(node) orelse return false;
+    return forest.loops[loop].header == node;
 }
 
 fn rowAt(rows: []const Row, node: u32) *const Row {
@@ -381,7 +380,6 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
     defer scratch_arena.deinit();
     const scratch = scratch_arena.allocator();
     const node_count = graph.nodeCount();
-    const no_loop = LoopForest.none;
 
     const rows = try allocator.alloc(Row, node_count);
     for (rows) |*row| row.* = Row.initEmpty(graph.bit_len);
@@ -396,8 +394,9 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
     for (0..node_count) |target_index| {
         const target: u32 = @intCast(target_index);
         for (graph.predecessorsOf(target)) |predecessor| {
-            var loop = forest.innermostOf(target);
-            while (loop != no_loop and !forest.containsNode(loop, predecessor)) : (loop = forest.loops[loop].parent) {
+            var cursor = forest.innermostOf(target);
+            while (cursor) |loop| : (cursor = forest.loops[loop].parent.get()) {
+                if (forest.containsNode(loop, predecessor)) break;
                 if (forest.loops[loop].header != target) {
                     try found_entries.append(scratch, .{ .loop = loop, .predecessor = predecessor, .target = target });
                 }
@@ -423,17 +422,18 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
     const written = try scratch.alloc(Row, loop_count);
     for (written) |*bits| bits.* = Row.initEmpty(graph.bit_len);
     for (0..node_count) |node_index| {
-        const loop = forest.innermostOf(node_index);
-        if (loop == no_loop) continue;
+        const loop = forest.innermostOf(node_index) orelse continue;
         for (graph.defsOf(node_index)) |bit| try written[loop].set(scratch, bit);
         for (graph.successorsOf(node_index), graph.succ_starts[node_index]..) |successor, edge| {
             const kills = graph.killsOf(edge);
             if (kills.len == 0) continue;
-            const target_loop = forest.innermostOf(successor);
-            if (target_loop == no_loop) continue;
-            var common = loop;
-            while (common != no_loop and !forest.contains(common, target_loop)) common = forest.loops[common].parent;
-            if (common == no_loop) continue;
+            const target_loop = forest.innermostOf(successor) orelse continue;
+            var cursor: ?u32 = loop;
+            while (cursor) |candidate| {
+                if (forest.contains(candidate, target_loop)) break;
+                cursor = forest.loops[candidate].parent.get();
+            }
+            const common = cursor orelse continue;
             for (kills) |bit| try written[common].set(scratch, bit);
         }
     }
@@ -442,8 +442,7 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
         while (preorder_index > 0) {
             preorder_index -= 1;
             const loop = forest.preorder[preorder_index];
-            const parent = forest.loops[loop].parent;
-            if (parent != no_loop) try written[parent].setUnion(scratch, &written[loop]);
+            if (forest.loops[loop].parent.get()) |parent| try written[parent].setUnion(scratch, &written[loop]);
         }
     }
 
@@ -475,8 +474,11 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
 
         fn reach(search: *@This(), node: u32) Allocator.Error!void {
             if (search.component_of_[node] != search.component) return;
-            const innermost = search.forest_.innermostOf(node);
-            if (innermost != LoopForest.none and search.transparent(innermost)) {
+            const transparent_loop: ?u32 = if (search.forest_.innermostOf(node)) |innermost|
+                (if (search.transparent(innermost)) innermost else null)
+            else
+                null;
+            if (transparent_loop) |innermost| {
                 const loop = search.forest_.outermostWhile(innermost, search, transparent);
                 if (search.loop_seen.testAndInsert(loop)) return;
                 try search.work.append(search.allocator_, .{ .loop = true, .index = loop });
@@ -515,7 +517,7 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
         component_cursor -= 1;
         const members = components.membersOf(component_cursor);
         const first = members[0];
-        if (members.len == 1 and forest.innermostOf(first) == no_loop) {
+        if (members.len == 1 and forest.innermostOf(first) == null) {
             // One exact equation step from the solved successors' rows.
             rows[first] = try equationRow(graph, first, allocator, @as([]const Row, rows), rowAt);
             continue;
@@ -577,11 +579,10 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
 
         // Rows: the bits whole loops carry, shared down the component's loop
         // tree, plus the bits exposed at the node itself.
-        var top = forest.innermostOf(first);
-        while (forest.loops[top].parent != no_loop) top = forest.loops[top].parent;
+        var top = forest.innermostOf(first).?;
+        while (forest.loops[top].parent.get()) |parent| top = parent;
         for (forest.preorder[forest.loops[top].enter .. forest.loops[top].exit + 1]) |loop| {
-            const parent = forest.loops[loop].parent;
-            var row = if (parent != no_loop) carried[parent] else Row.initEmpty(graph.bit_len);
+            var row = if (forest.loops[loop].parent.get()) |parent| carried[parent] else Row.initEmpty(graph.bit_len);
             const bits = search.loop_bits.group(loop);
             var cursor = bits.len;
             while (cursor > 0) {
@@ -604,7 +605,7 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
         ready.clearRetainingCapacity();
         for (members) |member| {
             if (isHeader(&forest, member)) {
-                var row = carried[forest.innermostOf(member)];
+                var row = carried[forest.innermostOf(member).?];
                 const bits = search.node_bits.group(member);
                 var cursor = bits.len;
                 while (cursor > 0) {

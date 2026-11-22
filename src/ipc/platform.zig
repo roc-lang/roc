@@ -268,11 +268,8 @@ pub fn createMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
     switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .windows => {
             // Handle sizes larger than 4GB properly
-            const size_high: windows.DWORD = if (size > std.math.maxInt(u32))
-                @intCast(size >> 32)
-            else
-                0;
-            const size_low: windows.DWORD = @intCast(size & 0xFFFFFFFF);
+            const size_high: windows.DWORD = @intCast(@as(u64, size) >> 32);
+            const size_low: windows.DWORD = @truncate(size);
 
             // Use SEC_RESERVE to only reserve virtual address space without committing
             // physical memory or page file backing. This allows reserving very large

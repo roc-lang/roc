@@ -711,11 +711,10 @@ pub const GeneratedCodecCall = extern struct {
     /// selected method scheme's nested evidence. A call that resolves to a
     /// nested generated derivation names that derivation's source constraint.
     evidence_var: u32,
-    /// The value shape this call handles, or `no_subject_var` when the method
-    /// has no shape-specific call contract.
-    subject_var: u32,
+    /// The value shape this call handles (`Var`), absent when the method has
+    /// no shape-specific call contract.
+    subject_var: collections.OptionalU32,
 
-    pub const no_subject_var = std.math.maxInt(u32);
     pub const SafeList = collections.SafeList(@This());
 };
 
@@ -1093,11 +1092,11 @@ file_dependencies: FileDependency.SafeList,
 deferred_import_refs: DeferredImportRef.SafeList,
 /// The content identity of the module each entry of `imports` resolved to,
 /// parallel to `imports.imports` by index. Written by the import-resolution
-/// drain and `NONE` for an import that resolution rejected. A module that
+/// drain and absent for an import that resolution rejected. A module that
 /// follows an exposed alias out of an imported module reads this table on the
 /// alias's owning environment to reach the module the alias names, without
 /// spelling any module's name.
-import_identities: collections.SafeList(base.ModuleIdentity.Idx),
+import_identities: collections.SafeList(collections.OptionalId(base.ModuleIdentity.Idx)),
 /// The module's source-visible final path segment, such as `Foo` for the
 /// logical module path `Folder/Foo`.
 /// Used for type-module main types and associated-name construction; logical
@@ -1132,10 +1131,10 @@ module_identities: base.SerialStringInterner,
 /// entry, parallel by index. Display-only by itself; identity decisions must
 /// read the paired content hash from `module_identities`.
 module_identity_displays: collections.SafeList(Ident.Idx),
-/// This module's own entry in `module_identities`; `NONE` until the deep
+/// This module's own entry in `module_identities`; absent until the deep
 /// content identity has been computed (after import resolution, before
 /// type-checking).
-self_module_identity: base.ModuleIdentity.Idx,
+self_module_identity: collections.OptionalId(base.ModuleIdentity.Idx),
 /// The digest of `common.source`, taken once where the source bytes were
 /// first in hand. Every identity and cache key that depends on the source
 /// text reads this instead of hashing the text: the content identity above,
@@ -1425,9 +1424,9 @@ pub const DeferredRefFailure = enum(u8) {
 /// diagnostic. The list is the only record of this work: nothing walks the
 /// CIR to rediscover it.
 pub const DeferredImportRef = extern struct {
-    /// The import this reference goes through, or `no_import` when the
-    /// reference goes through no module import.
-    import_idx: u32,
+    /// The import this reference goes through, absent when the reference
+    /// goes through no module import.
+    import_idx: collections.OptionalId(CIR.Import.Idx),
     /// Raw node index of the node this entry resolves.
     node_idx: u32,
     /// Dotted path relative to the imported module root (e.g. `Files.Dir.Read`).
@@ -1539,16 +1538,11 @@ pub const DeferredImportRef = extern struct {
         return @bitCast(self.qualified_name_bits);
     }
 
-    /// `import_idx` value for a reference that goes through no module import.
-    /// A file import is such a reference: the file it names is the
-    /// `file_dependencies` entry at `file_dependency_idx`.
-    pub const no_import: u32 = std.math.maxInt(u32);
-
     /// The import this reference goes through, or null for a reference that
-    /// goes through no module import.
+    /// goes through no module import. A file import is such a reference: the
+    /// file it names is the `file_dependencies` entry at `file_dependency_idx`.
     pub fn importIdx(self: @This()) ?CIR.Import.Idx {
-        if (self.import_idx == no_import) return null;
-        return @fromBackingInt(@intCast(self.import_idx));
+        return self.import_idx.get();
     }
 };
 
@@ -1634,7 +1628,7 @@ pub fn initWithSourceDigest(
         .qualified_module_name = "", // Recorded by the coordinator
         .module_identities = .{},
         .module_identity_displays = .{},
-        .self_module_identity = base.ModuleIdentity.Idx.NONE,
+        .self_module_identity = .none,
         .source_digest = source_digest,
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, node_capacity),
@@ -4127,7 +4121,7 @@ pub const Serialized = extern struct {
     imports: CIR.Import.Store.Serialized,
     file_dependencies: FileDependency.SafeList.Serialized,
     deferred_import_refs: DeferredImportRef.SafeList.Serialized,
-    import_identities: collections.SafeList(base.ModuleIdentity.Idx).Serialized,
+    import_identities: collections.SafeList(collections.OptionalId(base.ModuleIdentity.Idx)).Serialized,
     module_name: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
     display_module_name_idx_reserved: u32, // Reserved space for display_module_name_idx field (interned during deserialization)
     display_module_name_idx_padding: u32 = 0,
@@ -5639,9 +5633,7 @@ pub fn internModuleIdentity(
 pub fn importIdentity(self: *const Self, import_idx: CIR.Import.Idx) ?base.ModuleIdentity.Idx {
     const idx: usize = @backingInt(import_idx);
     if (idx >= self.import_identities.len()) return null;
-    const identity = self.import_identities.items()[idx];
-    if (identity.isNone()) return null;
-    return identity;
+    return self.import_identities.items()[idx].get();
 }
 
 /// Record the content identity of the module an import resolved to. The table
@@ -5654,9 +5646,9 @@ pub fn setImportIdentity(
 ) std.mem.Allocator.Error!void {
     const idx: usize = @backingInt(import_idx);
     while (self.import_identities.len() <= idx) {
-        _ = try self.import_identities.append(self.gpa, base.ModuleIdentity.Idx.NONE);
+        _ = try self.import_identities.append(self.gpa, .none);
     }
-    self.import_identities.items()[idx] = identity;
+    self.import_identities.items()[idx] = .some(identity);
 }
 
 /// Look up a module content identity in this env's table without inserting.
@@ -5667,7 +5659,6 @@ pub fn lookupModuleIdentity(self: *const Self, hash: *const base.ModuleIdentity.
 
 /// The 32-byte content identity hash for an env-local identity index.
 pub fn moduleIdentityHash(self: *const Self, idx: base.ModuleIdentity.Idx) *const base.ModuleIdentity.Hash {
-    std.debug.assert(!idx.isNone());
     const bytes = self.module_identities.getText(@backingInt(idx));
     std.debug.assert(bytes.len == 32);
     return @ptrCast(bytes.ptr);
@@ -5676,7 +5667,6 @@ pub fn moduleIdentityHash(self: *const Self, idx: base.ModuleIdentity.Idx) *cons
 /// Display ident for an env-local identity index. Diagnostics only—never
 /// use for identity decisions.
 pub fn moduleIdentityDisplayIdent(self: *const Self, idx: base.ModuleIdentity.Idx) Ident.Idx {
-    std.debug.assert(!idx.isNone());
     return self.module_identity_displays.items()[@backingInt(idx)];
 }
 
@@ -5689,17 +5679,14 @@ pub fn moduleIdentityDisplayText(self: *const Self, idx: base.ModuleIdentity.Idx
 
 /// This module's own deep content identity hash; null until finalized.
 pub fn contentIdentityHash(self: *const Self) ?*const base.ModuleIdentity.Hash {
-    if (self.self_module_identity.isNone()) return null;
-    return self.moduleIdentityHash(self.self_module_identity);
+    return self.moduleIdentityHash(self.self_module_identity.get() orelse return null);
 }
 
 /// This module's own identity table entry. Panics if not yet finalized:
 /// callers run after import resolution, where the identity must exist.
 pub fn selfModuleIdentity(self: *const Self) base.ModuleIdentity.Idx {
-    if (self.self_module_identity.isNone()) {
+    return self.self_module_identity.get() orelse
         base.invariant("module content identity not finalized for module '{s}'", .{self.module_name});
-    }
-    return self.self_module_identity;
 }
 
 /// Record this module's deep content identity. Idempotent for an equal hash;
@@ -5711,7 +5698,7 @@ pub fn setContentIdentity(self: *Self, hash: base.ModuleIdentity.Hash) std.mem.A
         }
         return;
     }
-    self.self_module_identity = try self.internModuleIdentity(&hash, self.display_module_name_idx);
+    self.self_module_identity = .some(try self.internModuleIdentity(&hash, self.display_module_name_idx));
 }
 
 /// Compute and record this module's deep content identity from its resolved
@@ -5722,7 +5709,7 @@ pub fn ensureContentIdentity(
     self: *Self,
     imported_envs: []const *const Self,
 ) std.mem.Allocator.Error!void {
-    if (!self.self_module_identity.isNone()) return;
+    if (self.self_module_identity != .none) return;
 
     var import_hashes = try std.ArrayList(base.ModuleIdentity.Hash).initCapacity(self.gpa, imported_envs.len);
     defer import_hashes.deinit(self.gpa);

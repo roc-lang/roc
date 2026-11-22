@@ -2572,8 +2572,8 @@ const SchemeRequirementCandidate = struct {
     structural_origin: StructuralSchemeRequirementOrigin,
     deferred_generated_codec: bool,
     /// The neighbouring candidates of the same owner, in arena order.
-    prev_of_owner: u32,
-    next_of_owner: u32,
+    prev_of_owner: collections.OptionalU32,
+    next_of_owner: collections.OptionalU32,
 
     source: Source,
 
@@ -2584,7 +2584,6 @@ const SchemeRequirementCandidate = struct {
         creation,
         scheme_copy: ?CIR.Expr.Idx,
     };
-    const none: u32 = std.math.maxInt(u32);
 };
 
 comptime {
@@ -3146,17 +3145,17 @@ fn recordSchemeRequirementCandidate(
     std.debug.assert((source == .creation) == (structural_origin == null));
     const owner_root = self.prospectiveSchemeOwner(self.active_scheme_root) orelse return;
     const candidate_idx = std.math.cast(u32, self.scheme_requirement_candidates.items.len) orelse return error.OutOfMemory;
-    if (candidate_idx == SchemeRequirementCandidate.none) return error.OutOfMemory;
+    if (candidate_idx == std.math.maxInt(u32)) return error.OutOfMemory;
     try self.scheme_requirement_candidates.ensureUnusedCapacity(self.gpa, 1);
     const owner_entry = try self.scheme_requirement_candidate_chains_by_owner.getOrPut(self.gpa, owner_root);
-    const prev_of_owner = if (owner_entry.found_existing) blk: {
+    const prev_of_owner: collections.OptionalU32 = if (owner_entry.found_existing) blk: {
         const last = owner_entry.value_ptr.last;
-        self.scheme_requirement_candidates.items[last].next_of_owner = candidate_idx;
+        self.scheme_requirement_candidates.items[last].next_of_owner = .some(candidate_idx);
         owner_entry.value_ptr.last = candidate_idx;
-        break :blk last;
+        break :blk .some(last);
     } else blk: {
         owner_entry.value_ptr.* = .{ .first = candidate_idx, .last = candidate_idx };
-        break :blk SchemeRequirementCandidate.none;
+        break :blk .none;
     };
     self.scheme_requirement_candidates.appendAssumeCapacity(.{
         .owner_root = owner_root,
@@ -3173,7 +3172,7 @@ fn recordSchemeRequirementCandidate(
         .source = source,
         .deferred_generated_codec = deferred_generated_codec,
         .prev_of_owner = prev_of_owner,
-        .next_of_owner = SchemeRequirementCandidate.none,
+        .next_of_owner = .none,
     });
 }
 
@@ -3388,7 +3387,7 @@ fn registerInstantiatedSchemeRequirement(
             .var_ = requirement.receiver_var,
             .constraints = constraint_range,
             .failure_expr = if (instantiation_expr) |expr_idx|
-                .from(@backingInt(expr_idx))
+                .some(@backingInt(expr_idx))
             else
                 .none,
         }, .current_group);
@@ -3450,13 +3449,13 @@ fn shrinkSchemeRequirementCandidatesTo(self: *Self, new_len: usize) void {
         const candidate = self.scheme_requirement_candidates.pop().?;
         const chain = self.scheme_requirement_candidate_chains_by_owner.getPtr(candidate.owner_root) orelse unreachable; // recordSchemeRequirementCandidate chains every candidate under its owner, and scheme capture (which drops owner chains) never runs inside the probe being rolled back
         std.debug.assert(chain.last == candidate_idx);
-        std.debug.assert(candidate.next_of_owner == SchemeRequirementCandidate.none);
-        if (candidate.prev_of_owner == SchemeRequirementCandidate.none) {
+        std.debug.assert(candidate.next_of_owner == .none);
+        if (candidate.prev_of_owner.get()) |prev_of_owner| {
+            chain.last = prev_of_owner;
+            self.scheme_requirement_candidates.items[prev_of_owner].next_of_owner = .none;
+        } else {
             std.debug.assert(chain.first == candidate_idx);
             _ = self.scheme_requirement_candidate_chains_by_owner.remove(candidate.owner_root);
-        } else {
-            chain.last = candidate.prev_of_owner;
-            self.scheme_requirement_candidates.items[candidate.prev_of_owner].next_of_owner = SchemeRequirementCandidate.none;
         }
     }
 }
@@ -4631,13 +4630,12 @@ const DeferredTryRowEdge = struct {
 /// destinations form a graph keyed by residual tail: a contribution points at
 /// the destination whose residual tail its source row ends in.
 const TryRowFixpointScratch = struct {
-    const no_node = std.math.maxInt(u32);
-
     /// Indices into the fixpoint's own `edges`.
     edges: std.ArrayListUnmanaged(u32) = .empty,
-    /// Per owned edge: its destination node and the node its source ends in.
+    /// Per owned edge: its destination node and the node its source ends in,
+    /// if its source ends in a destination node.
     edge_nodes: std.ArrayListUnmanaged(u32) = .empty,
-    edge_targets: std.ArrayListUnmanaged(u32) = .empty,
+    edge_targets: std.ArrayListUnmanaged(collections.OptionalU32) = .empty,
     /// Destination residual tail root to node.
     node_keys: collections.DenseMapUnmanaged(Var, u32) = .empty,
     /// Owned edges grouped by destination node (`out_start` is per node).
@@ -6601,9 +6599,8 @@ const LocalFunctionCaptures = struct {
     reached: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Pattern.Idx) = .empty,
     scope: LexicalScope = .{},
 
-    const no_link = std.math.maxInt(u32);
-    const RefChain = struct { first: u32 = no_link, last: u32 = no_link };
-    const RefLink = struct { referenced: CIR.Pattern.Idx, next: u32 };
+    const RefChain = struct { first: collections.OptionalU32 = .none, last: collections.OptionalU32 = .none };
+    const RefLink = struct { referenced: CIR.Pattern.Idx, next: collections.OptionalU32 };
 
     fn deinit(self: *LocalFunctionCaptures) void {
         const gpa = self.checker.gpa;
@@ -6645,15 +6642,15 @@ const LocalFunctionCaptures = struct {
             if (!self.isOuterRef(&self.scope, referenced)) continue;
             if (owner) |function| {
                 const link = std.math.cast(u32, self.ref_links.items.len) orelse return error.OutOfMemory;
-                if (link == no_link) return error.OutOfMemory;
-                try self.ref_links.append(gpa, .{ .referenced = referenced, .next = no_link });
+                if (link == std.math.maxInt(u32)) return error.OutOfMemory;
+                try self.ref_links.append(gpa, .{ .referenced = referenced, .next = .none });
                 const chain = self.refs.getPtr(function).?;
-                if (chain.last == no_link) {
-                    chain.first = link;
+                if (chain.last.get()) |last| {
+                    self.ref_links.items[last].next = .some(link);
                 } else {
-                    self.ref_links.items[chain.last].next = link;
+                    chain.first = .some(link);
                 }
-                chain.last = link;
+                chain.last = .some(link);
             }
             if (self.refs.contains(referenced)) continue;
             if ((try self.functionLikeExpr(referenced)) == null) continue;
@@ -6671,8 +6668,9 @@ const LocalFunctionCaptures = struct {
             changed = false;
             for (self.refs.keys(), self.refs.values()) |function, chain| {
                 if (self.reached.contains(function)) continue;
-                var link = chain.first;
-                while (link != no_link) : (link = self.ref_links.items[link].next) {
+                var next_link = chain.first;
+                while (next_link.get()) |link| {
+                    next_link = self.ref_links.items[link].next;
                     const referenced = self.ref_links.items[link].referenced;
                     const value = if (self.refs.contains(referenced))
                         self.reached.get(referenced) orelse continue
@@ -8899,14 +8897,12 @@ const Env = struct {
     /// `clean_index` holds the first link of each trigger's chain through
     /// `clean_links`, so forgetting the prefix clears two flat tables rather
     /// than one list per trigger ever seen.
-    clean_index: std.AutoHashMapUnmanaged(u64, u32) = .empty,
+    clean_index: std.AutoHashMapUnmanaged(u64, collections.OptionalU32) = .empty,
     clean_links: std.ArrayListUnmanaged(CleanLink) = .empty,
 
     const CleanLink = struct {
         position: u32,
-        next: u32,
-
-        const none = std.math.maxInt(u32);
+        next: collections.OptionalU32,
     };
 
     fn init(
@@ -10887,11 +10883,11 @@ fn rejectPolymorphicRecursion(self: *Self) std.mem.Allocator.Error!void {
             }
         };
         std.mem.sort(u32, order, Order{ .components = components, .schemes = node_schemes.items }, Order.lessThan);
-        // Absent for a component with no joined pair; `joined_unresolved`
-        // until its first record is found. Small and read for every
-        // component, so it starts cleared to absent (zero).
-        const joined_unresolved: u32 = std.math.maxInt(u32) - 1;
-        std.debug.assert(records.len < joined_unresolved);
+        // The components with a joined pair, and each one's first record.
+        // Both are small and read for every component, so they start
+        // cleared (zero).
+        var joined = try std.DynamicBitSetUnmanaged.initEmpty(self.gpa, component_count);
+        defer joined.deinit(self.gpa);
         const first_records = try self.gpa.alloc(collections.OptionalU32, component_count);
         defer self.gpa.free(first_records);
         @memset(first_records, .none);
@@ -10901,20 +10897,21 @@ fn rejectPolymorphicRecursion(self: *Self) std.mem.Allocator.Error!void {
             if (component != components[previous]) continue;
             if (node_schemes.items[node] != node_schemes.items[previous]) continue;
             if (verdicts[component] == .rejected) continue;
-            // Marked here, resolved to the component's first record below.
-            first_records[component] = .some(joined_unresolved);
+            joined.set(component);
             any_joined = true;
         }
         if (any_joined) {
             for (flows.items) |flow| {
                 const component = components[flow.from];
                 if (component != components[flow.to]) continue;
-                const first = first_records[component].get() orelse continue;
-                first_records[component] = .some(@min(first, flow.record));
+                if (!joined.isSet(component)) continue;
+                const first = &first_records[component];
+                first.* = .some(if (first.get()) |record| @min(record, flow.record) else flow.record);
             }
-            for (first_records) |maybe_record| {
-                const record_index = maybe_record.get() orelse continue;
+            var joined_components = joined.iterator(.{});
+            while (joined_components.next()) |component| {
                 // Two nodes share a component only through flows inside it.
+                const record_index = first_records[component].get().?;
                 std.debug.assert(record_index < records.len);
                 rejected[record_index] = true;
                 any_rejected = true;
@@ -13812,7 +13809,7 @@ fn enqueueLocalSchemeRequirements(self: *Self, scheme_idx: usize, env: *Env) All
         try self.enqueueDeferredDispatchConstraint(env, .{
             .var_ = requirement.receiver_var,
             .constraints = range,
-            .failure_expr = if (requirement.failure_expr.get()) |expr| .from(@backingInt(expr)) else .none,
+            .failure_expr = if (requirement.failure_expr.get()) |expr| .some(@backingInt(expr)) else .none,
         }, .{ .recorded = self.type_schemes.items[scheme_idx].capture_group_index });
     }
 }
@@ -16763,11 +16760,10 @@ fn hoistedRootsReachingRejectedCode(self: *Self) Allocator.Error![]bool {
     defer self.gpa.free(reaches);
     @memset(reaches, false);
     // The regions directly nested in each region, as edges from parent to child.
-    var nested_heads = try self.gpa.alloc(u32, region_count);
+    var nested_heads = try self.gpa.alloc(collections.OptionalU32, region_count);
     defer self.gpa.free(nested_heads);
-    const no_edge = std.math.maxInt(u32);
-    @memset(nested_heads, no_edge);
-    var nested_edges: std.ArrayListUnmanaged(struct { child: u32, next: u32 }) = .empty;
+    @memset(nested_heads, .none);
+    var nested_edges: std.ArrayListUnmanaged(struct { child: u32, next: collections.OptionalU32 }) = .empty;
     defer nested_edges.deinit(self.gpa);
 
     var work: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
@@ -16791,7 +16787,7 @@ fn hoistedRootsReachingRejectedCode(self: *Self) Allocator.Error![]bool {
             if (expr != region_expr) {
                 if (region_of.get(expr)) |child| {
                     try nested_edges.append(self.gpa, .{ .child = child, .next = nested_heads[region] });
-                    nested_heads[region] = @intCast(nested_edges.items.len - 1);
+                    nested_heads[region] = .some(@intCast(nested_edges.items.len - 1));
                     continue;
                 }
             }
@@ -16817,8 +16813,9 @@ fn hoistedRootsReachingRejectedCode(self: *Self) Allocator.Error![]bool {
         try stack.append(self.gpa, .{ .region = @intCast(start), .expanded = false });
         while (stack.pop()) |frame| {
             if (frame.expanded) {
-                var edge = nested_heads[frame.region];
-                while (edge != no_edge) : (edge = nested_edges.items[edge].next) {
+                var next_edge = nested_heads[frame.region];
+                while (next_edge.get()) |edge| {
+                    next_edge = nested_edges.items[edge].next;
                     if (reaches[nested_edges.items[edge].child]) reaches[frame.region] = true;
                 }
                 continue;
@@ -16826,8 +16823,9 @@ fn hoistedRootsReachingRejectedCode(self: *Self) Allocator.Error![]bool {
             if (visited[frame.region]) continue;
             visited[frame.region] = true;
             try stack.append(self.gpa, .{ .region = frame.region, .expanded = true });
-            var edge = nested_heads[frame.region];
-            while (edge != no_edge) : (edge = nested_edges.items[edge].next) {
+            var next_edge = nested_heads[frame.region];
+            while (next_edge.get()) |edge| {
+                next_edge = nested_edges.items[edge].next;
                 const child = nested_edges.items[edge].child;
                 if (!visited[child]) try stack.append(self.gpa, .{ .region = child, .expanded = false });
             }
@@ -19629,7 +19627,7 @@ fn passOnDeferredEntryFailureExpr(self: *Self, env: *Env, ownership: *DeferredEn
     const queued = env.deferred_static_dispatch_constraints.items().len;
     if (queued > ownership.children_start) {
         const failure_expr: StaticDispatchConstraint.Provenance.OptExprIdx = if (ownership.site) |site| switch (site.kind) {
-            .own, .own_derived, .loop_derived => if (siteFailureExpr(site, ownership.entry)) |expr| .from(@backingInt(expr)) else .none,
+            .own, .own_derived, .loop_derived => if (siteFailureExpr(site, ownership.entry)) |expr| .some(@backingInt(expr)) else .none,
             .use_owned => self.deferredEntryChildFailureExpr(ownership.entry),
         } else self.deferredEntryChildFailureExpr(ownership.entry);
         inheritDeferredConstraintFailureExpr(env, ownership.children_start, failure_expr);
@@ -19641,7 +19639,7 @@ fn passOnDeferredEntryFailureExpr(self: *Self, env: *Env, ownership: *DeferredEn
 /// inherit from it.
 fn deferredEntryChildFailureExpr(self: *Self, entry: DeferredConstraintCheck) StaticDispatchConstraint.Provenance.OptExprIdx {
     const expr_idx = self.deferredConstraintFailureExpr(entry) orelse return .none;
-    return .from(@backingInt(expr_idx));
+    return .some(@backingInt(expr_idx));
 }
 
 fn inheritDeferredConstraintFailureExpr(
@@ -20767,7 +20765,7 @@ fn checkInstantiatedStaticDispatchConstraints(
                 .var_ = current.dispatcher_var,
                 .constraints = current.constraints,
                 .failure_expr = if (current.instantiation_expr.get()) |expr_idx|
-                    .from(@backingInt(expr_idx))
+                    .some(@backingInt(expr_idx))
                 else
                     .none,
             }, .{ .recorded = current.owner_group_index.get() });
@@ -24975,7 +24973,7 @@ fn enqueueUseOwnedDeferredConstraint(
     }
     if (requirement_count == 0) return try self.enqueueDeferredDispatchConstraint(env, deferred, owner);
     var use_owned = deferred;
-    use_owned.failure_expr = .from(@backingInt(use_expr));
+    use_owned.failure_expr = .some(@backingInt(use_expr));
     if (requirement_count == constraints.len) return try self.enqueueDeferredDispatchConstraint(env, use_owned, owner);
 
     var requirements = try std.ArrayList(StaticDispatchConstraint).initCapacity(self.gpa, requirement_count);
@@ -40935,7 +40933,7 @@ fn mkMethodCallConstraint(
 fn constraintProvenance(intro_expr: ?CIR.Expr.Idx) StaticDispatchConstraint.Provenance {
     return .{
         .intro_expr = if (intro_expr) |e|
-            StaticDispatchConstraint.Provenance.OptExprIdx.from(@backingInt(e))
+            StaticDispatchConstraint.Provenance.OptExprIdx.some(@backingInt(e))
         else
             .none,
     };
@@ -41353,7 +41351,7 @@ fn copyImportedBindingSchemeCodecRequirements(
         // belongs to another method family and would require its own
         // source-node/value-pool rebasing rules at this boundary.
         std.debug.assert(source_env.types.derivedMapPlan(source_constraint.fn_var) == null);
-        std.debug.assert(!source_constraint.interpolation.isPresent());
+        std.debug.assert(source_constraint.interpolation == .none);
         std.debug.assert(source_constraint.numeral == .none);
 
         const receiver_var = try copy_import.copyVar(
@@ -45597,7 +45595,7 @@ fn collectInstanceRequirements(self: *Self, root: Var, out: *std.ArrayListUnmana
                 try out.append(self.gpa, .{ .var_ = resolved.var_, .constraints = range });
                 for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
                     try pending.append(self.gpa, constraint.fn_var);
-                    if (!constraint.interpolation.isPresent()) continue;
+                    if (constraint.interpolation == .none) continue;
                     const parts = self.types.getInterpolationMetadata(constraint.interpolation).interpolated_parts;
                     for (0..parts.len()) |part_index| {
                         try pending.append(self.gpa, self.types.getInterpolationPartAt(parts, @intCast(part_index)).var_);
@@ -45682,7 +45680,7 @@ fn instanceRequirementsAccept(
 /// An interpolation producing a builtin `Str` makes each interpolated part a
 /// `Str`, exactly as a call site's does.
 fn interpolatedPartsAreStr(self: *Self, probe: *CommitProbe, constraint: StaticDispatchConstraint, env: *Env) Allocator.Error!bool {
-    if (!constraint.interpolation.isPresent()) return true;
+    if (constraint.interpolation == .none) return true;
     const parts = self.types.getInterpolationMetadata(constraint.interpolation).interpolated_parts;
     for (0..parts.len()) |part_index| {
         const part = self.types.getInterpolationPartAt(parts, @intCast(part_index));
@@ -48119,11 +48117,10 @@ fn captureSchemeDispatchRequirements(
         // Undecided candidates are relinked, in order, into the owner's
         // remaining chain.
         var undecided: ?SchemeRequirementCandidateChain = null;
-        var next_candidate_idx = owner_chain.first;
-        while (next_candidate_idx != SchemeRequirementCandidate.none) {
-            const candidate_idx = next_candidate_idx;
+        var next_candidate: collections.OptionalU32 = .some(owner_chain.first);
+        while (next_candidate.get()) |candidate_idx| {
             const candidate = self.scheme_requirement_candidates.items[candidate_idx];
-            next_candidate_idx = candidate.next_of_owner;
+            next_candidate = candidate.next_of_owner;
             std.debug.assert(candidate.owner_root == root.owner);
 
             // This is the candidate's one declared owner boundary. Whether it
@@ -48160,7 +48157,7 @@ fn captureSchemeDispatchRequirements(
                         try ready.append(self.gpa, .{
                             .dispatcher_var = candidate.receiver_var,
                             .constraint = candidate.constraint,
-                            .failure_expr = if (candidate.failure_expr.get()) |expr| .from(@backingInt(expr)) else .none,
+                            .failure_expr = if (candidate.failure_expr.get()) |expr| .some(@backingInt(expr)) else .none,
                             .owner = .{ .recorded = self.currentGroupIndex() },
                         });
                         // The exact relation has transferred to this boundary;
@@ -48189,11 +48186,11 @@ fn captureSchemeDispatchRequirements(
                         if (receiver.desc.rank == rank) {
                             const candidates = self.scheme_requirement_candidates.items;
                             if (undecided) |*chain| {
-                                candidates[chain.last].next_of_owner = candidate_idx;
-                                candidates[candidate_idx].prev_of_owner = chain.last;
+                                candidates[chain.last].next_of_owner = .some(candidate_idx);
+                                candidates[candidate_idx].prev_of_owner = .some(chain.last);
                                 chain.last = candidate_idx;
                             } else {
-                                candidates[candidate_idx].prev_of_owner = SchemeRequirementCandidate.none;
+                                candidates[candidate_idx].prev_of_owner = .none;
                                 undecided = .{ .first = candidate_idx, .last = candidate_idx };
                             }
                             break :created false;
@@ -48231,7 +48228,7 @@ fn captureSchemeDispatchRequirements(
             });
         }
         if (undecided) |chain| {
-            self.scheme_requirement_candidates.items[chain.last].next_of_owner = SchemeRequirementCandidate.none;
+            self.scheme_requirement_candidates.items[chain.last].next_of_owner = .none;
             try self.scheme_requirement_candidate_chains_by_owner.putNoClobber(self.gpa, root.owner, chain);
         }
     }
@@ -48279,9 +48276,10 @@ fn assertSchemeRequirementBoundaryDecided(self: *const Self, roots: []const Boun
     const rank = env.rank();
     for (roots) |root| {
         const owner_chain = self.scheme_requirement_candidate_chains_by_owner.get(root.owner) orelse continue;
-        var candidate_idx = owner_chain.first;
-        while (candidate_idx != SchemeRequirementCandidate.none) : (candidate_idx = self.scheme_requirement_candidates.items[candidate_idx].next_of_owner) {
+        var next_candidate: collections.OptionalU32 = .some(owner_chain.first);
+        while (next_candidate.get()) |candidate_idx| {
             const candidate = self.scheme_requirement_candidates.items[candidate_idx];
+            next_candidate = candidate.next_of_owner;
             const receiver = self.types.resolveVar(candidate.receiver_var);
             std.debug.assert(candidate.source == .creation);
             std.debug.assert(receiver.desc.content == .flex and receiver.desc.rank == rank);
@@ -48372,9 +48370,10 @@ fn settleBoundaryLocalDerivedCodecRecords(
     // record kinds settle the same way, so capture can see its inputs settled.
     for (roots) |root| {
         const owner_chain = self.scheme_requirement_candidate_chains_by_owner.get(root.owner) orelse continue;
-        var candidate_idx = owner_chain.first;
-        while (candidate_idx != SchemeRequirementCandidate.none) : (candidate_idx = self.scheme_requirement_candidates.items[candidate_idx].next_of_owner) {
+        var next_candidate: collections.OptionalU32 = .some(owner_chain.first);
+        while (next_candidate.get()) |candidate_idx| {
             const candidate = self.scheme_requirement_candidates.items[candidate_idx];
+            next_candidate = candidate.next_of_owner;
             if (self.final_codec_dispatch_constraint_fns.get(candidate.constraint.fn_var) != .final) continue;
             shape_kinds.clearRetainingCapacity();
             try self.collectDerivedCodecOpenRecordParts(candidate.receiver_var, null, &shape_kinds);
@@ -48748,7 +48747,7 @@ fn drainGroundedPendingSchemeRequirementDispatchers(
             .var_ = dispatcher.dispatcher_var,
             .constraints = dispatcher.constraints,
             .failure_expr = if (dispatcher.instantiation_expr.get()) |expr_idx|
-                .from(@backingInt(expr_idx))
+                .some(@backingInt(expr_idx))
             else
                 .none,
         }, .{ .recorded = dispatcher.owner_group_index.get() });
@@ -48820,7 +48819,7 @@ fn checkGroundedStoredTypeSchemeRequirementsAtFinalization(
                     .var_ = requirement.receiver_var,
                     .constraints = constraint_range,
                     .failure_expr = if (requirement.failure_expr.get()) |expr_idx|
-                        .from(@backingInt(expr_idx))
+                        .some(@backingInt(expr_idx))
                     else
                         .none,
                 }, .{ .recorded = scheme.capture_group_index });
@@ -51023,7 +51022,7 @@ fn relateTryRowFixpoint(self: *Self, env: *Env) Allocator.Error!bool {
     for (scratch.edges.items) |owned_edge_idx| {
         const edge = self.try_row_fixpoints.items[fixpoint_idx].edges.items[owned_edge_idx];
         const source_tail = self.types.resolveVar(self.tagRowTail(edge.plan.err)).var_;
-        try scratch.edge_targets.append(self.gpa, scratch.node_keys.get(source_tail) orelse TryRowFixpointScratch.no_node);
+        try scratch.edge_targets.append(self.gpa, .of(scratch.node_keys.get(source_tail)));
     }
     const node_count: u32 = @intCast(scratch.node_keys.count());
     try scratch.out_start.appendNTimes(self.gpa, 0, node_count + 1);
@@ -51049,16 +51048,16 @@ fn relateTryRowFixpoint(self: *Self, env: *Env) Allocator.Error!bool {
         const members = scratch.order.items[scratch.order_start.items[component_idx]..scratch.order_start.items[component_idx + 1]];
         for (members) |node| {
             for (scratch.out_edges.items[scratch.out_start.items[node]..scratch.out_start.items[node + 1]]) |owned_idx| {
-                const target = scratch.edge_targets.items[owned_idx];
-                if (target == TryRowFixpointScratch.no_node) continue;
+                const target = scratch.edge_targets.items[owned_idx].get() orelse continue;
                 if (scratch.component.items[target] != component_idx) continue;
                 try self.collapseTryRowEdge(self.try_row_fixpoints.items[fixpoint_idx].edges.items[scratch.edges.items[owned_idx]], env);
             }
         }
         for (members) |node| {
             for (scratch.out_edges.items[scratch.out_start.items[node]..scratch.out_start.items[node + 1]]) |owned_idx| {
-                const target = scratch.edge_targets.items[owned_idx];
-                if (target != TryRowFixpointScratch.no_node and scratch.component.items[target] == component_idx) continue;
+                if (scratch.edge_targets.items[owned_idx].get()) |target| {
+                    if (scratch.component.items[target] == component_idx) continue;
+                }
                 try self.relateDeferredTryRowEdge(self.try_row_fixpoints.items[fixpoint_idx].edges.items[scratch.edges.items[owned_idx]], env);
             }
         }
@@ -51096,9 +51095,9 @@ fn tryRowFixpointComponents(self: *Self, node_count: u32) Allocator.Error!void {
             const call = &scratch.calls.items[scratch.calls.items.len - 1];
             const node = call.node;
             if (call.next < scratch.out_start.items[node + 1]) {
-                const target = scratch.edge_targets.items[scratch.out_edges.items[call.next]];
+                const next_target = scratch.edge_targets.items[scratch.out_edges.items[call.next]];
                 call.next += 1;
-                if (target == TryRowFixpointScratch.no_node) continue;
+                const target = next_target.get() orelse continue;
                 if (scratch.index.items[target] == unvisited) {
                     scratch.index.items[target] = next_index;
                     scratch.lowlink.items[target] = next_index;
@@ -54395,9 +54394,8 @@ const UsePositions = struct {
     chains: collections.DenseMapUnmanaged(u32, Chain) = .empty,
     links: std.ArrayListUnmanaged(Link) = .empty,
 
-    const none = std.math.maxInt(u32);
     const Chain = struct { first: u32, last: u32 };
-    const Link = struct { position: usize, next: u32 };
+    const Link = struct { position: usize, next: collections.OptionalU32 };
 
     pub fn deinit(self: *UsePositions, gpa: Allocator) void {
         self.chains.deinit(gpa);
@@ -54411,27 +54409,24 @@ const UsePositions = struct {
 
     fn append(self: *UsePositions, gpa: Allocator, use_idx: u32, position: usize) Allocator.Error!void {
         const link = std.math.cast(u32, self.links.items.len) orelse return error.OutOfMemory;
-        if (link == none) return error.OutOfMemory;
+        if (link == std.math.maxInt(u32)) return error.OutOfMemory;
         try self.links.ensureUnusedCapacity(gpa, 1);
         const chain = try self.chains.getOrPut(gpa, use_idx);
         if (chain.found_existing) {
             if (self.links.items[chain.value_ptr.last].position == position) return;
-            self.links.items[chain.value_ptr.last].next = link;
+            self.links.items[chain.value_ptr.last].next = .some(link);
             chain.value_ptr.last = link;
         } else {
             chain.value_ptr.* = .{ .first = link, .last = link };
         }
-        self.links.appendAssumeCapacity(.{ .position = position, .next = none });
+        self.links.appendAssumeCapacity(.{ .position = position, .next = .none });
     }
 
     /// The link after `consumed`, the last link of `use_idx`'s chain already
-    /// read (`none` before the first), or null at the chain's current end.
-    fn nextLink(self: *const UsePositions, use_idx: u32, consumed: u32) ?u32 {
-        const link = if (consumed == none)
-            (self.chains.get(use_idx) orelse return null).first
-        else
-            self.links.items[consumed].next;
-        return if (link == none) null else link;
+    /// read (absent before the first), or null at the chain's current end.
+    fn nextLink(self: *const UsePositions, use_idx: u32, consumed: collections.OptionalU32) ?u32 {
+        const last = consumed.get() orelse return (self.chains.get(use_idx) orelse return null).first;
+        return self.links.items[last].next.get();
     }
 };
 
@@ -55645,7 +55640,7 @@ fn settledRelationFailureExpr(
     constraint: StaticDispatchConstraint,
 ) StaticDispatchConstraint.Provenance.OptExprIdx {
     const expr_idx = self.constraintFailureExpr(deferred, constraint) orelse return .none;
-    return .from(@backingInt(expr_idx));
+    return .some(@backingInt(expr_idx));
 }
 
 fn recordSettledDeferredDispatchRelation(
@@ -55916,13 +55911,13 @@ fn syncCleanDeferredPrefix(self: *Self, env: *Env) void {
     if (env.clean_len != 0) {
         for (log[env.clean_log_cursor..]) |key| {
             const head = env.clean_index.getPtr(key) orelse continue;
-            var link = head.*;
-            while (link != Env.CleanLink.none) {
+            var next_link = head.*;
+            while (next_link.get()) |link| {
                 const entry = env.clean_links.items[link];
                 env.truncateClean(entry.position);
-                link = entry.next;
+                next_link = entry.next;
             }
-            head.* = Env.CleanLink.none;
+            head.* = .none;
             if (env.clean_len == 0) break;
         }
     }
@@ -55957,10 +55952,10 @@ fn extendCleanDeferredPrefix(self: *Self, env: *Env, rebuilt_from: usize) Alloca
 
 fn indexCleanDeferredEntry(self: *Self, env: *Env, key: u64, position: u32) Allocator.Error!void {
     const gop = try env.clean_index.getOrPut(self.gpa, key);
-    if (!gop.found_existing) gop.value_ptr.* = Env.CleanLink.none;
+    if (!gop.found_existing) gop.value_ptr.* = .none;
     const link: u32 = @intCast(env.clean_links.items.len);
     try env.clean_links.append(self.gpa, .{ .position = position, .next = gop.value_ptr.* });
-    gop.value_ptr.* = link;
+    gop.value_ptr.* = .some(link);
 }
 
 fn beginStaticDispatchDrain(self: *Self, is_numeric_default_pass: bool, start: usize) StaticDispatchDrain {
@@ -56045,7 +56040,7 @@ fn resumeStaticDispatchDrain(
     // The use whose relations are settling (design.md "a use's relations
     // settle as one unit"): the queue position of its first processed
     // relation, and the last of its links in `use_positions` it has consumed.
-    var settling: ?struct { use: u32, first: usize, consumed: u32 } = null;
+    var settling: ?struct { use: u32, first: usize, consumed: collections.OptionalU32 } = null;
     const settling_before = self.settling_use;
     defer self.settling_use = settling_before;
     // The queue positions of each use's relations, indexed the first time a
@@ -56068,7 +56063,7 @@ fn resumeStaticDispatchDrain(
             }
             while (use_positions.nextLink(active.use, active.consumed)) |link| {
                 const position = use_positions.links.items[link].position;
-                active.consumed = link;
+                active.consumed = .some(link);
                 if (position <= active.first or self.use_settled_entries.contains(position)) continue;
                 try self.use_settled_entries.put(self.gpa, position, {});
                 self.excludeOtherEntryUses(entries[position], active.use);
@@ -56087,7 +56082,7 @@ fn resumeStaticDispatchDrain(
                 .skip => continue,
                 .process => {},
                 .settle => |use_idx| {
-                    settling = .{ .use = use_idx, .first = index, .consumed = UsePositions.none };
+                    settling = .{ .use = use_idx, .first = index, .consumed = .none };
                     self.settling_use = use_idx;
                 },
             };
@@ -59701,20 +59696,19 @@ fn publishDispatchRelationMerges(self: *Self) Allocator.Error!void {
 
     // Each dropped var's folds, in journal order, as a linked list over
     // journal indexes.
-    const no_fold = std.math.maxInt(u32);
     var first_fold: std.AutoHashMapUnmanaged(Var, u32) = .empty;
     defer first_fold.deinit(self.gpa);
     var last_fold: std.AutoHashMapUnmanaged(Var, u32) = .empty;
     defer last_fold.deinit(self.gpa);
-    const next_fold = try self.gpa.alloc(u32, merges.len);
+    const next_fold = try self.gpa.alloc(collections.OptionalU32, merges.len);
     defer self.gpa.free(next_fold);
     try first_fold.ensureTotalCapacity(self.gpa, @intCast(merges.len));
     try last_fold.ensureTotalCapacity(self.gpa, @intCast(merges.len));
     for (merges, 0..) |merge, index| {
-        next_fold[index] = no_fold;
+        next_fold[index] = .none;
         const last = last_fold.getOrPutAssumeCapacity(merge.dropped_fn_var);
         if (last.found_existing) {
-            next_fold[last.value_ptr.*] = @intCast(index);
+            next_fold[last.value_ptr.*] = .some(@intCast(index));
         } else {
             first_fold.putAssumeCapacity(merge.dropped_fn_var, @intCast(index));
         }
@@ -59739,11 +59733,12 @@ fn publishDispatchRelationMerges(self: *Self) Allocator.Error!void {
         visited.clearRetainingCapacity();
         try visited.put(self.gpa, dropped, {});
         var selected: ?Var = null;
-        var fold = first_fold.get(dropped).?;
+        var next: collections.OptionalU32 = .some(first_fold.get(dropped).?);
         while (true) {
             // Push this var's folds in reverse so they pop in journal order.
             const push_start = stack.items.len;
-            while (fold != no_fold) : (fold = next_fold[fold]) {
+            while (next.get()) |fold| {
+                next = next_fold[fold];
                 const retained = merges[fold].retained_fn_var;
                 if ((try visited.getOrPut(self.gpa, retained)).found_existing) continue;
                 try stack.append(self.gpa, retained);
@@ -59763,10 +59758,10 @@ fn publishDispatchRelationMerges(self: *Self) Allocator.Error!void {
                 } else {
                     selected = current;
                 }
-                fold = no_fold;
+                next = .none;
                 continue;
             }
-            fold = first_fold.get(current) orelse no_fold;
+            next = .of(first_fold.get(current));
         }
 
         const retained = selected orelse continue;
@@ -62351,8 +62346,8 @@ fn recordGeneratedCodecDerivationSnapshot(
     for (calls) |call| {
         try roots.append(self.gpa, @fromBackingInt(@intCast(call.dispatcher_var)));
         try roots.append(self.gpa, @fromBackingInt(@intCast(call.callable_var)));
-        if (call.subject_var != ModuleEnv.GeneratedCodecCall.no_subject_var) {
-            try roots.append(self.gpa, @fromBackingInt(@intCast(call.subject_var)));
+        if (call.subject_var.get()) |subject_var| {
+            try roots.append(self.gpa, @fromBackingInt(@intCast(subject_var)));
         }
     }
 
@@ -62420,12 +62415,12 @@ fn recordGeneratedCodecDerivationSnapshot(
         cursor += 1;
         const copied_callable = copied_vars[cursor];
         cursor += 1;
-        const copied_subject: u32 = if (call.subject_var == ModuleEnv.GeneratedCodecCall.no_subject_var)
-            ModuleEnv.GeneratedCodecCall.no_subject_var
+        const copied_subject: collections.OptionalU32 = if (call.subject_var == .none)
+            .none
         else blk: {
             const subject = copied_vars[cursor];
             cursor += 1;
-            break :blk @backingInt(subject);
+            break :blk .some(@backingInt(subject));
         };
         copied_calls.appendAssumeCapacity(.{
             .method_ident = call.method_ident,
@@ -62888,7 +62883,7 @@ fn recordGeneratedCodecCall(
         .dispatcher_var = @backingInt(dispatcher_var),
         .callable_var = @backingInt(callable_var),
         .evidence_var = @backingInt(evidence_var),
-        .subject_var = if (subject_var) |subject| @backingInt(subject) else ModuleEnv.GeneratedCodecCall.no_subject_var,
+        .subject_var = .of(if (subject_var) |subject| @backingInt(subject) else null),
     });
 }
 
@@ -62917,7 +62912,7 @@ fn hasReusableGeneratedCodecCall(
     walk: *const DerivedCodecWalk,
 ) bool {
     for (self.scratch_generated_codec_calls.items[walk.generated_calls_start..]) |call| {
-        if (call.subject_var == ModuleEnv.GeneratedCodecCall.no_subject_var and
+        if (call.subject_var == .none and
             (@as(Ident.Idx, @bitCast(call.method_ident))).eql(method_name))
         {
             return true;
@@ -63024,7 +63019,7 @@ fn stepParseSettle(
 ) Allocator.Error!DerivedCodecStep(DerivedParseTask) {
     const env = inputs.env;
     const failure_expr = inputs.failure_expr;
-    const failure_expr_idx: StaticDispatchConstraint.Provenance.OptExprIdx = if (failure_expr) |expr| .from(@backingInt(expr)) else .none;
+    const failure_expr_idx: StaticDispatchConstraint.Provenance.OptExprIdx = if (failure_expr) |expr| .some(@backingInt(expr)) else .none;
     if (!settle.entered) {
         settle.entered = true;
         self.settling_codec_method_requirements_depth += 1;

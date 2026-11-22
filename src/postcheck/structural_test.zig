@@ -1028,7 +1028,7 @@ test "Monotype closed direct low-level lowering stays sealed and allocation disc
         "fn sourceLocFor(",
         "fn sourceRegionForExpr(",
     );
-    try expectContains(source_mapping, ".file = self.source_file_id");
+    try expectContains(source_mapping, ".file = .some(self.source_file_id");
     try expectNotContains(source_mapping, "sourceFileIdFor");
 
     const proof_fold = sourceSliceBetween(

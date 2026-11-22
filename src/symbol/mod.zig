@@ -11,18 +11,12 @@ const base = @import("base");
 pub const Symbol = enum(u32) {
     _,
 
-    pub const none: Symbol = @fromBackingInt(@intCast(std.math.maxInt(u32)));
-
     pub fn fromRaw(value: u32) Symbol {
         return @fromBackingInt(@intCast(value));
     }
 
     pub fn raw(self: Symbol) u32 {
         return @backingInt(self);
-    }
-
-    pub fn isNone(self: Symbol) bool {
-        return self == Symbol.none;
     }
 };
 

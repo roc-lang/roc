@@ -618,8 +618,8 @@ pub const Store = struct {
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeId {
         self.assertMutable();
         const index = self.types.len();
-        // `MaybeTypeId` stores an id plus one, so `maxInt(u32)` is never an id.
-        if (index >= std.math.maxInt(u32)) return error.OutOfMemory;
+        // `MaybeTypeId` stores an id plus one.
+        if (std.math.cast(u32, index + 1) == null) return error.OutOfMemory;
         try self.reservePrefixList(&self.types, 1);
         try self.ensureSideCapacity(content);
         const named_nodes_len = self.named_nodes.len();

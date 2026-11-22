@@ -115,8 +115,8 @@ pub const Store = struct {
     allocator: std.mem.Allocator,
 
     layouts: collections.SafeList(Layout),
-    /// The list layout each layout resolves to through boxes, or `Idx.none`.
-    resolved_list_layouts: collections.SafeList(Idx),
+    /// The list layout each layout resolves to through boxes, if any.
+    resolved_list_layouts: collections.SafeList(collections.OptionalId(Idx)),
     /// Whether each layout lies on a cycle of the layout graph: a value of
     /// it can hold, at some depth, another value of the same layout. Every
     /// such cycle passes through a list or a box, and those are the layouts
@@ -582,11 +582,11 @@ pub const Store = struct {
     }
 
     pub fn reserveLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
-        // The top position is `Idx.none`, so it is never a layout's.
-        if (self.layouts.len() >= @backingInt(Idx.none)) return error.OutOfMemory;
+        // Every layout index must fit `Idx`.
+        if (self.layouts.len() > std.math.maxInt(@typeInfo(Idx).@"enum".tag_type)) return error.OutOfMemory;
         const safe_list_idx = try self.layouts.append(self.allocator, layout);
         const idx: Idx = @fromBackingInt(@intCast(@backingInt(safe_list_idx)));
-        _ = try self.resolved_list_layouts.append(self.allocator, self.computeResolvedListLayoutIdx(idx) orelse .none);
+        _ = try self.resolved_list_layouts.append(self.allocator, .of(self.computeResolvedListLayoutIdx(idx)));
         // A layout reserved outside a graph commit names only finished
         // layouts, so it closes no cycle. A graph commit marks the cycles
         // among the layouts it reserved once they are finished.
@@ -1058,8 +1058,6 @@ pub const Store = struct {
 
         pub const RecursiveKey = graph_mod.Digest;
 
-        const no_node = std.math.maxInt(u32);
-
         /// Analyze `graph` with temporaries and results in `scratch`; the
         /// store's `settled` groups grow in their own allocator.
         fn init(
@@ -1073,17 +1071,17 @@ pub const Store = struct {
             const node_digests = try scratch.alloc(?RecursiveKey, node_count);
 
             // The reduction node of every node that is neither nominal nor
-            // committed.
-            const reduction_node = try scratch.alloc(u32, node_count);
+            // committed; absent for those.
+            const reduction_node = try scratch.alloc(collections.OptionalU32, node_count);
             var reduction = recursive_digest.Graph.init(scratch);
             for (graph.nodes.items, reduction_node) |node, *index| {
                 index.* = switch (node) {
-                    .nominal, .committed => no_node,
-                    .pending, .box, .list, .closure, .erased_callable, .struct_, .tag_union => try reduction.addNode(),
+                    .nominal, .committed => .none,
+                    .pending, .box, .list, .closure, .erased_callable, .struct_, .tag_union => .some(try reduction.addNode()),
                 };
             }
-            for (reduction_node, 0..) |index, i| {
-                if (index == no_node) continue;
+            for (reduction_node, 0..) |optional_index, i| {
+                const index = optional_index.get() orelse continue;
                 reduction.beginNode(index);
                 var hasher = TypeDigestHasher.init();
                 try encodeNode(graph, @intCast(i), ContentSink{
@@ -1096,8 +1094,8 @@ pub const Store = struct {
             }
             try reduction.resolve(settled, null);
 
-            for (reduction_node, keys) |index, *key| {
-                if (index == no_node) continue;
+            for (reduction_node, keys) |optional_index, *key| {
+                const index = optional_index.get() orelse continue;
                 switch (reduction.resolution(index)) {
                     .acyclic => {},
                     .folded, .cyclic => key.* = reduction.digest(index),
@@ -1108,7 +1106,7 @@ pub const Store = struct {
                     .canonical => null,
                     .local => |node_id| switch (graph.getNode(node_id)) {
                         .committed => |committed| graph.committedDigest(committed),
-                        .pending, .nominal, .box, .list, .closure, .erased_callable, .struct_, .tag_union => reduction.digest(reduction_node[@backingInt(node_id)]),
+                        .pending, .nominal, .box, .list, .closure, .erased_callable, .struct_, .tag_union => reduction.digest(reduction_node[@backingInt(node_id)].get().?),
                     },
                 };
             }
@@ -1181,7 +1179,7 @@ pub const Store = struct {
         const ContentSink = struct {
             graph: *const LayoutGraph,
             reduction: *recursive_digest.Graph,
-            reduction_node: []const u32,
+            reduction_node: []const collections.OptionalU32,
             hasher: *TypeDigestHasher,
 
             fn writeByte(self_sink: ContentSink, value: u8) Allocator.Error!void {
@@ -1199,7 +1197,7 @@ pub const Store = struct {
                     .local => |node_id| switch (self_sink.graph.getNode(node_id)) {
                         .committed => |committed| .{ .settled = self_sink.graph.committedDigest(committed) },
                         .nominal => unreachable, // children resolve through nominals before reaching the sink
-                        .pending, .box, .list, .closure, .erased_callable, .struct_, .tag_union => .{ .node = self_sink.reduction_node[@backingInt(node_id)] },
+                        .pending, .box, .list, .closure, .erased_callable, .struct_, .tag_union => .{ .node = self_sink.reduction_node[@backingInt(node_id)].get().? },
                     },
                 });
             }
@@ -1528,10 +1526,12 @@ pub const Store = struct {
         @memset(recursive_nodes, false);
         @memset(reaches_cycle, false);
 
-        const visit_index = try scratch.alloc(i32, graph.nodes.items.len);
-        const lowlink = try scratch.alloc(i32, graph.nodes.items.len);
+        // Visit indices are issued from one, so zero marks an unvisited node.
+        const unvisited: u32 = 0;
+        const visit_index = try scratch.alloc(u32, graph.nodes.items.len);
+        const lowlink = try scratch.alloc(u32, graph.nodes.items.len);
         const on_stack = try scratch.alloc(bool, graph.nodes.items.len);
-        @memset(visit_index, -1);
+        @memset(visit_index, unvisited);
         @memset(lowlink, 0);
         @memset(on_stack, false);
 
@@ -1541,14 +1541,14 @@ pub const Store = struct {
             allocator: std.mem.Allocator,
             graph: *const LayoutGraph,
             edges: Edges,
-            visit_index: []i32,
-            lowlink: []i32,
+            visit_index: []u32,
+            lowlink: []u32,
             on_stack: []bool,
             stack: *std.ArrayList(GraphNodeId),
             recursive_nodes: []bool,
             component_ids: *LayoutComponentColumn,
             reaches_cycle: []bool,
-            next_index: i32 = 0,
+            next_index: u32 = 1,
             next_component_id: u32 = 0,
 
             /// Which references the walk follows. `size` edges are the ones
@@ -1683,7 +1683,7 @@ pub const Store = struct {
                         const child_id = walk_children.items[frame.next];
                         frame.next += 1;
                         const child_index = @backingInt(child_id);
-                        if (self_finder.visit_index[child_index] == -1) {
+                        if (self_finder.visit_index[child_index] == unvisited) {
                             try self_finder.enterWalkNode(child_id, &frames, &walk_children);
                         } else if (self_finder.on_stack[child_index]) {
                             self_finder.lowlink[frame_index] = @min(self_finder.lowlink[frame_index], self_finder.visit_index[child_index]);
@@ -1792,7 +1792,7 @@ pub const Store = struct {
         };
 
         for (graph.nodes.items, 0..) |_, i| {
-            if (visit_index[i] == -1) {
+            if (visit_index[i] == unvisited) {
                 try cycle_finder.strongConnect(@fromBackingInt(@intCast(i)));
             }
         }
@@ -1801,12 +1801,12 @@ pub const Store = struct {
         for (reaches_cycle) |reaches| has_cycle = has_cycle or reaches;
         if (has_cycle) {
             // Size cycles are cycles, so only a graph with a cycle can have them.
-            @memset(visit_index, -1);
+            @memset(visit_index, unvisited);
             @memset(lowlink, 0);
             cycle_finder.edges = .size;
-            cycle_finder.next_index = 0;
+            cycle_finder.next_index = 1;
             for (graph.nodes.items, 0..) |_, i| {
-                if (visit_index[i] == -1) {
+                if (visit_index[i] == unvisited) {
                     try cycle_finder.strongConnect(@fromBackingInt(@intCast(i)));
                 }
             }
@@ -2415,7 +2415,7 @@ pub const Store = struct {
         const layouts_end: usize = @intCast(self.layouts.len());
         for (@as(usize, @intCast(layouts_start))..layouts_end) |i| {
             const idx: Idx = @fromBackingInt(@intCast(i));
-            self.resolved_list_layouts.items()[i] = self.computeResolvedListLayoutIdx(idx) orelse .none;
+            self.resolved_list_layouts.items()[i] = .of(self.computeResolvedListLayoutIdx(idx));
         }
         try self.markLayoutCycles(scratch, @intCast(layouts_start));
 
@@ -2429,7 +2429,8 @@ pub const Store = struct {
     fn markLayoutCycles(self: *Self, scratch: Allocator, first: usize) Allocator.Error!void {
         const count = @as(usize, @intCast(self.layouts.len())) - first;
         if (count == 0) return;
-        const unvisited = std.math.maxInt(u32);
+        // Visit indices are issued from one, so zero marks an unvisited node.
+        const unvisited: u32 = 0;
         const visit_index = try scratch.alloc(u32, count);
         const lowlink = try scratch.alloc(u32, count);
         const on_stack = try scratch.alloc(bool, count);
@@ -2441,7 +2442,7 @@ pub const Store = struct {
         const Visit = struct { node: u32, children: digest_mod.Digests.Children };
         var visits = std.ArrayList(Visit).empty;
         var component_stack = std.ArrayList(u32).empty;
-        var next_index: u32 = 0;
+        var next_index: u32 = 1;
         const on_cycle = self.layouts_on_cycle.items();
 
         for (0..count) |root| {
@@ -3256,7 +3257,7 @@ pub const Store = struct {
         const ptr = self.layouts.get(@fromBackingInt(@intCast(@backingInt(idx))));
         ptr.* = layout;
         self.digest_cache.invalidateLayout(idx);
-        self.resolved_list_layouts.items()[@backingInt(idx)] = self.computeResolvedListLayoutIdx(idx) orelse .none;
+        self.resolved_list_layouts.items()[@backingInt(idx)] = .of(self.computeResolvedListLayoutIdx(idx));
     }
 
     /// Overwrite a layout that the running graph commit reserved. The commit
@@ -3285,8 +3286,7 @@ pub const Store = struct {
     }
 
     pub fn resolvedListLayoutIdx(self: *const Self, layout_idx: Idx) ?Idx {
-        const resolved = self.resolved_list_layouts.items()[@backingInt(layout_idx)];
-        return if (resolved == Idx.none) null else resolved;
+        return self.resolved_list_layouts.items()[@backingInt(layout_idx)].get();
     }
 };
 

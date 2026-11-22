@@ -978,7 +978,7 @@ const Packing = struct {
         const stmt = store.getCFStmt(stmt_id);
         if (stmt == .assign_packed_erased_fn) {
             const data = store.stmtRow(stmt.assign_packed_erased_fn.data);
-            return .{ .target = stmt.assign_packed_erased_fn.target, .capture = data.capture, .reuse = data.reuse, .dynamic = false, .frame = data.frame };
+            return .{ .target = stmt.assign_packed_erased_fn.target, .capture = data.capture.get(), .reuse = data.reuse.get(), .dynamic = false, .frame = data.frame };
         }
         if (stmt != .dyn) return null;
         const op = store.stmtRow(stmt.dyn.data);
@@ -1415,7 +1415,7 @@ fn rewriteSites(allocator: Allocator, store: *LirStore, proc_id: ProcId, sites: 
             const pack = store.getCFStmt(site.pack).assign_packed_erased_fn;
             var data = store.stmtRow(pack.data);
             data.frame = true;
-            data.reuse = null;
+            data.reuse = .none;
             data.reuse_unique = false;
             const next = try releaseReuse(store, site.pack, packing.reuse, pack.next);
             store.getCFStmtPtr(site.pack).assign_packed_erased_fn = .{
@@ -1742,8 +1742,8 @@ test "returning, storing, or passing a parameter to an erased call lets it escap
                     .target = packed_fn,
                     .data = try f.store.addStmtRow(LIR.PackedErasedFnData, .{
                         .proc = worker,
-                        .capture = record,
-                        .capture_layout = record_layout,
+                        .capture = .some(record),
+                        .capture_layout = .some(record_layout),
                         .on_drop = .none,
                     }),
                     .next = try f.ret(packed_fn),
@@ -1837,8 +1837,8 @@ test "a parameter captured by a callable that keeps it does not escape, wherever
             .target = callable,
             .data = try f.store.addStmtRow(LIR.PackedErasedFnData, .{
                 .proc = lambda,
-                .capture = record,
-                .capture_layout = record_layout,
+                .capture = .some(record),
+                .capture_layout = .some(record_layout),
                 .on_drop = .{ .rc_helper = .{ .op = .decref, .layout_idx = record_layout } },
             }),
             .next = pass,
@@ -1974,13 +1974,13 @@ const PackFixture = struct {
             .target = self.callable,
             .data = try self.f.store.addStmtRow(LIR.PackedErasedFnData, .{
                 .proc = self.worker,
-                .capture = self.capture,
-                .capture_layout = self.capture_layout,
+                .capture = .some(self.capture),
+                .capture_layout = .some(self.capture_layout),
                 .on_drop = if (self.f.layouts.layoutContainsRefcounted(self.f.layouts.getLayout(self.capture_layout)))
                     .{ .rc_helper = .{ .op = .decref, .layout_idx = self.capture_layout } }
                 else
                     .none,
-                .reuse = reuse,
+                .reuse = .of(reuse),
             }),
             .next = next,
         } });
@@ -2109,7 +2109,7 @@ test "a frame packing releases the allocation it would have repacked, and calls 
     const proc = try p.packer(&.{reuse}, pack);
     try testing.expectEqual(@as(usize, 1), try p.run());
     const data = p.packData(pack);
-    try testing.expect(data.frame and data.reuse == null);
+    try testing.expect(data.frame and data.reuse == .none);
     // The reuse allocation is released; a capture without reference-counted
     // data needs no release.
     var tags: [8]std.meta.Tag(LIR.CFStmt) = undefined;
