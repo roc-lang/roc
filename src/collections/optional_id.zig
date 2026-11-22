@@ -34,7 +34,6 @@ fn IndexValue(comptime Id: type, comptime reserved_zero: bool) type {
         /// Wrap an ID within the owning store's bounded index domain.
         pub inline fn some(id: Id) Self {
             const raw: u32 = @backingInt(id);
-            std.debug.assert(raw < std.math.maxInt(u32));
             if (reserved_zero) std.debug.assert(raw != 0);
             return @fromBackingInt(if (reserved_zero) raw else raw + 1);
         }
@@ -74,7 +73,6 @@ pub const OptionalU32 = enum(u32) {
 
     /// Wrap a value below `maxInt(u32)`.
     pub inline fn some(value: u32) OptionalU32 {
-        std.debug.assert(value < std.math.maxInt(u32));
         return @fromBackingInt(value + 1);
     }
 
@@ -101,7 +99,6 @@ pub const OptionalU8 = enum(u8) {
 
     /// Wrap a value below `maxInt(u8)`.
     pub inline fn some(value: u8) OptionalU8 {
-        std.debug.assert(value < std.math.maxInt(u8));
         return @fromBackingInt(value + 1);
     }
 
@@ -180,7 +177,6 @@ pub fn OptionalStruct(comptime T: type, comptime key: []const u8) type {
         pub fn some(value: T) Self {
             var biased = value;
             const raw = keyRaw(@field(value, key));
-            std.debug.assert(raw < std.math.maxInt(u32));
             @field(biased, key) = keyFromRaw(raw + 1);
             return .{ .biased = biased };
         }

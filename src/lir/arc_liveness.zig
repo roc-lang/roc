@@ -56,7 +56,6 @@ pub const Row = struct {
     /// A domain wider than `u32` bits is a compiler invariant violation: ARC
     /// bit domains are bounded by a procedure's frame.
     pub fn initEmpty(bit_len: usize) Row {
-        std.debug.assert(bit_len <= std.math.maxInt(u32));
         if (bit_len <= inline_bits) return .{ .bit_len = @intCast(bit_len), .storage = .{ .inline_words = @splat(0) } };
         const word_len = (bit_len + 63) / 64;
         return .{ .bit_len = @intCast(bit_len), .storage = .{ .tree = Words.init(word_len) } };

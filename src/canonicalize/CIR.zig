@@ -858,7 +858,6 @@ pub const Import = struct {
         const first_resolved: u32 = 2;
 
         pub fn resolved(module_idx: u32) ResolvedModuleIdx {
-            std.debug.assert(module_idx <= std.math.maxInt(u32) - first_resolved);
             return @fromBackingInt(module_idx + first_resolved);
         }
 

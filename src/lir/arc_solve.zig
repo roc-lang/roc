@@ -1426,7 +1426,6 @@ const EscapeDiscriminant = enum(u32) {
     const first_discriminant: u32 = 2;
 
     fn of(value: u32) EscapeDiscriminant {
-        std.debug.assert(value <= std.math.maxInt(u32) - first_discriminant);
         return @fromBackingInt(value + first_discriminant);
     }
 
@@ -2054,12 +2053,9 @@ fn computeOutcomeRestitution(
             });
         }
         std.mem.sort(arc_sig.Outcome, all_outcomes.items[start..], {}, outcomeLessThan);
-        if (start > std.math.maxInt(u32) or all_outcomes.items.len - start > std.math.maxInt(u32)) {
-            solveInvariant("ARC outcome table exceeded its span representation");
-        }
         solution.available_outcome_spans[proc_index] = .{
-            .start = @intCast(start),
-            .len = @intCast(all_outcomes.items.len - start),
+            .start = std.math.cast(u32, start) orelse solveInvariant("ARC outcome table exceeded its span representation"),
+            .len = std.math.cast(u32, all_outcomes.items.len - start) orelse solveInvariant("ARC outcome table exceeded its span representation"),
         };
         if (@import("builtin").mode == .debug) outcome_scratch_entries += escape_discriminants.len;
         for (escape_discriminants, 0..) |maybe_discriminant, stmt_index| {
@@ -5069,7 +5065,7 @@ const UniquenessStructure = struct {
             }
         }
         // Callers are placed in procedure order, then statement order.
-        if (caller_count > std.math.maxInt(u32)) return error.OutOfMemory;
+        if (std.math.cast(u32, caller_count) == null) return error.OutOfMemory;
         for (1..caller_starts.len) |index| caller_starts[index] += caller_starts[index - 1];
         const caller_items = try arena.alloc(u32, caller_count);
         const caller_fill = try arena.dupe(u32, caller_starts[0..proc_count]);

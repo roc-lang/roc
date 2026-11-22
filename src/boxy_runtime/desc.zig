@@ -479,7 +479,6 @@ pub const TargetDiscriminant = enum(u32) {
     _,
 
     pub fn of(discriminant: u32) TargetDiscriminant {
-        std.debug.assert(discriminant < std.math.maxInt(u32));
         return @fromBackingInt(discriminant + 1);
     }
 

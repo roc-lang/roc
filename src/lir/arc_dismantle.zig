@@ -444,18 +444,18 @@ pub const Dismantles = struct {
     }
 
     pub fn operandTakeAt(self: *const Dismantles, stmt: LIR.CFStmtId, position: usize) ?Take {
-        if (position > std.math.maxInt(u8)) return null;
-        return self.operand_takes.get(.{ .stmt = stmt, .position = @intCast(position) });
+        const position8 = std.math.cast(u8, position) orelse return null;
+        return self.operand_takes.get(.{ .stmt = stmt, .position = position8 });
     }
 
     pub fn ownedOnlyOperandTake(self: *const Dismantles, stmt: LIR.CFStmtId, position: usize) ?Take {
-        if (position > std.math.maxInt(u8)) return null;
-        return self.owned_only_operand_takes.get(.{ .stmt = stmt, .position = @intCast(position) });
+        const position8 = std.math.cast(u8, position) orelse return null;
+        return self.owned_only_operand_takes.get(.{ .stmt = stmt, .position = position8 });
     }
 
     pub fn wholeMoveResidualAt(self: *const Dismantles, stmt: LIR.CFStmtId, position: usize) ?Take {
-        if (position > std.math.maxInt(u8)) return null;
-        return self.whole_move_residuals.get(.{ .stmt = stmt, .position = @intCast(position) });
+        const position8 = std.math.cast(u8, position) orelse return null;
+        return self.whole_move_residuals.get(.{ .stmt = stmt, .position = position8 });
     }
 
     pub fn containerOf(self: *const Dismantles, local: LIR.LocalId) ?Container {
@@ -500,8 +500,8 @@ pub const Dismantles = struct {
     }
 
     pub fn fieldRestitutionArg(self: *const Dismantles, stmt: LIR.CFStmtId, position: usize) ?FieldRestitutionArg {
-        if (position > std.math.maxInt(u8)) return null;
-        return self.field_restitution_args.get(.{ .stmt = stmt, .position = @intCast(position) });
+        const position8 = std.math.cast(u8, position) orelse return null;
+        return self.field_restitution_args.get(.{ .stmt = stmt, .position = position8 });
     }
 
     pub fn projectionUnitOf(self: *const Dismantles, local: LIR.LocalId) ?LIR.LocalId {
@@ -594,7 +594,6 @@ const CandidateAbove = enum(u32) {
 
     fn of(candidate_index: ?u32) CandidateAbove {
         const index = candidate_index orelse return .no_candidate;
-        std.debug.assert(index <= std.math.maxInt(u32) - first_candidate);
         return @fromBackingInt(index + first_candidate);
     }
 
@@ -1796,8 +1795,8 @@ fn wholeMoveSite(
         var found: ?WholeMoveSite = null;
         for (0..GuardedList.borrowLen(fields)) |position| {
             if (!namesContainer(analysis, local, view, GuardedList.at(fields, position))) continue;
-            if (found != null or position > std.math.maxInt(u8)) return null;
-            found = .{ .stmt = stmt_id, .next = build.next, .position = @intCast(position) };
+            if (found != null) return null;
+            found = .{ .stmt = stmt_id, .next = build.next, .position = std.math.cast(u8, position) orelse return null };
         }
         return found;
     }

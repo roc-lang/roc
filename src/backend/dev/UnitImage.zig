@@ -146,7 +146,6 @@ pub const OptionalAtom = enum(u32) {
     _,
 
     pub fn some(atom: u32) OptionalAtom {
-        std.debug.assert(atom < std.math.maxInt(u32));
         return @fromBackingInt(atom + 1);
     }
 

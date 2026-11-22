@@ -412,7 +412,6 @@ pub const OptionalDeclaredOrder = struct {
     pub const none: OptionalDeclaredOrder = .{};
 
     pub fn some(order: DeclaredOrder) OptionalDeclaredOrder {
-        std.debug.assert(order.slots.start < std.math.maxInt(u32));
         return .{ .padding = order.padding, .stored_slots_start = order.slots.start + 1, .slots_len = order.slots.len };
     }
 
