@@ -17981,14 +17981,15 @@ const MaterializedConstNodeAddress = struct {
 /// reads: a node still under construction that the expression reaches
 /// through a back-edge, directly or through a node it shares. `serial`
 /// tells that binding apart from a later one at the same stack position.
+/// Binding serials are issued from one, so serial zero marks no read.
 const ConstNodeFreeRead = struct {
     index: u32,
     serial: u32,
 
-    const none: ConstNodeFreeRead = .{ .index = std.math.maxInt(u32), .serial = 0 };
+    const none: ConstNodeFreeRead = .{ .index = 0, .serial = 0 };
 
     fn isNone(read: ConstNodeFreeRead) bool {
-        return read.index == std.math.maxInt(u32);
+        return read.serial == 0;
     }
 };
 
@@ -19255,7 +19256,9 @@ const BodyDraftStore = struct {
     materialized_const_nodes: std.ArrayList(MaterializedConstNode),
     const_restore_scopes: std.ArrayListUnmanaged(ConstRestoreScope) = .empty,
     const_restore_lets: std.ArrayListUnmanaged(ConstRestoreLet) = .empty,
-    const_node_binding_serial: u32 = 0,
+    /// The serial the next ConstStore node binding receives; issued from one
+    /// because serial zero marks `ConstNodeFreeRead.none`.
+    const_node_binding_serial: u32 = 1,
     /// The free read of the node a restore step delivered last.
     delivered_const_free_read: ConstNodeFreeRead = .none,
     stored_capture_witnesses: std.ArrayListUnmanaged(StoredCaptureWitness) = .empty,

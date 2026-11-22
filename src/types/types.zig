@@ -1820,25 +1820,22 @@ pub const StaticDispatchConstraint = struct {
         pub const OptExprIdx = collections.OptionalU32;
     };
 
-    /// An optional region packed into a `Region` using a `maxInt` start offset
-    /// as the "absent" sentinel (a real region never starts at `maxInt`),
+    /// An optional region whose start offset is stored zero-means-absent,
     /// avoiding the extra tag byte a Zig optional would add.
     pub const OptRegion = struct {
-        region: base.Region,
+        start: collections.OptionalU32,
+        end: base.Region.Position,
 
-        pub const none = OptRegion{ .region = .{
-            .start = .{ .offset = std.math.maxInt(u32) },
-            .end = .{ .offset = std.math.maxInt(u32) },
-        } };
+        pub const none = OptRegion{ .start = .none, .end = .{ .offset = 0 } };
 
         pub fn some(region: base.Region) OptRegion {
-            std.debug.assert(region.start.offset != std.math.maxInt(u32));
-            return .{ .region = region };
+            return .{ .start = .some(region.start.offset), .end = region.end };
         }
 
         /// The region, or null when absent.
         pub fn get(self: OptRegion) ?base.Region {
-            return if (self.region.start.offset == std.math.maxInt(u32)) null else self.region;
+            const start = self.start.get() orelse return null;
+            return .{ .start = .{ .offset = start }, .end = self.end };
         }
     };
 
