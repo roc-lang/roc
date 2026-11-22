@@ -41,6 +41,7 @@ pub fn writeProc(
         try writer.print(" transform={s}", .{@tagName(proc.tail_transform)});
     }
     if (proc.tail_group.get()) |group| try writer.print(" tail_group={d}", .{@backingInt(group)});
+    if (proc.tail_carry) try writer.writeAll(" tail_carry");
     try writer.writeAll("\n");
 
     if (proc.body.get()) |body| {

@@ -1048,6 +1048,8 @@ fn recordProcedureFacts(store: *LirStore, solution: *const arc_solve.Solution) R
 /// Stamp the procedures joined by same-SCC tail calls with their group. The
 /// group is the connected component of those calls, named by its
 /// lowest-numbered member; ownership variants inherit their source's group.
+/// A Roc-ABI member with a dynamic parameter takes a tail carry
+/// (`LIR.LirProcSpec.takesTailCarry`), which variants inherit too.
 fn recordTailGroups(store: *LirStore, solution: *const arc_solve.Solution) ResourceError!void {
     const proc_count = store.procSpecCount();
     var groups = try collections.DisjointSets.init(store.allocator, proc_count);
@@ -1067,8 +1069,18 @@ fn recordTailGroups(store: *LirStore, solution: *const arc_solve.Solution) Resou
     var members = grouped.iterator(.{});
     while (members.next()) |proc_index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@as(u32, @intCast(proc_index)));
-        store.getProcSpecPtr(proc).tail_group = .some(@fromBackingInt(groups.find(@intCast(proc_index))));
+        const spec = store.getProcSpecPtr(proc);
+        spec.tail_group = .some(@fromBackingInt(groups.find(@intCast(proc_index))));
+        spec.tail_carry = spec.abi == .roc and hasDynamicParam(store, spec.args);
     }
+}
+
+fn hasDynamicParam(store: *const LirStore, args: LIR.LocalSpan) bool {
+    const params = store.getLocalSpan(args);
+    for (0..params.len) |index| {
+        if (store.getLocal(GuardedList.at(params, index)).dyn != null) return true;
+    }
+    return false;
 }
 
 const default_emission_wave_size = 128;
@@ -1674,6 +1686,7 @@ const VariantTable = struct {
             .hosted = source_spec.hosted,
             .tail_transform = source_spec.tail_transform,
             .tail_group = source_spec.tail_group,
+            .tail_carry = source_spec.tail_carry,
             // The variant's body is the source's, so it has the source's shapes.
             .shapes = source_spec.shapes,
             .stack_probe = source_spec.stack_probe,
@@ -1721,6 +1734,7 @@ const VariantTable = struct {
             .external = true,
             .linked = true,
             .may_leave_pending = source_spec.may_leave_pending,
+            .tail_carry = source_spec.tail_carry,
             .rc_read_only_params = source_spec.rc_read_only_params,
             .rc_ret_unique = source_spec.rc_ret_unique,
             .rc_ret_unique_fields = source_spec.rc_ret_unique_fields,

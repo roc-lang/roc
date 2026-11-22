@@ -24,7 +24,7 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 27;
+pub const format_version: u32 = 28;
 
 const magic = "RBXO";
 
@@ -136,6 +136,9 @@ pub const ExportRecord = struct {
     rc_ret_borrowed: bool,
     rc_ret_unique: bool,
     may_leave_pending: bool,
+    /// Whether the worker takes a tail carry
+    /// (`LIR.LirProcSpec.takesTailCarry`): an importer's calls pass it one.
+    tail_carry: bool,
     rc_ret_conditions: []const u32,
     /// The outcome table of the outcome-restitution variant the object
     /// publishes for the worker, as discriminant and mask word pairs
@@ -184,11 +187,11 @@ pub fn exportRecordsDigest(allocator: Allocator, records: []const ExportRecord) 
         }
     }.lessThan);
     var hasher = base.Sha256.init(.{});
-    hasher.update("roc.boxy.export_records.v4");
+    hasher.update("roc.boxy.export_records.v5");
     for (sorted) |record| {
         hasher.update(&record.identity);
         inline for (.{ record.rc_borrowed_params, record.rc_ret_lenders, record.rc_read_only_params, record.rc_ret_unique_fields }) |word| hasher.update(std.mem.asBytes(&word));
-        hasher.update(&[_]u8{ @intFromBool(record.rc_ret_borrowed), @intFromBool(record.rc_ret_unique), @intFromBool(record.may_leave_pending) });
+        hasher.update(&[_]u8{ @intFromBool(record.rc_ret_borrowed), @intFromBool(record.rc_ret_unique), @intFromBool(record.may_leave_pending), @intFromBool(record.tail_carry) });
         hasher.update(std.mem.asBytes(&@as(u32, @intCast(record.rc_ret_conditions.len))));
         hasher.update(std.mem.sliceAsBytes(record.rc_ret_conditions));
         // An importer's calls may demand the published outcome variant.
@@ -314,6 +317,7 @@ pub fn encodeParts(allocator: Allocator, entry: Entry) Allocator.Error!Encoded {
         try bytes.append(allocator, @intFromBool(record.rc_ret_borrowed));
         try bytes.append(allocator, @intFromBool(record.rc_ret_unique));
         try bytes.append(allocator, @intFromBool(record.may_leave_pending));
+        try bytes.append(allocator, @intFromBool(record.tail_carry));
         try appendU32(&bytes, allocator, @intCast(record.rc_ret_conditions.len));
         for (record.rc_ret_conditions) |word| try appendU32(&bytes, allocator, word);
         try appendU32(&bytes, allocator, @intCast(record.rc_outcomes.len));
@@ -445,6 +449,7 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
             .rc_ret_borrowed = try reader.flag(),
             .rc_ret_unique = try reader.flag(),
             .may_leave_pending = try reader.flag(),
+            .tail_carry = try reader.flag(),
             .rc_ret_conditions = &.{},
         };
         const condition_count = try reader.word32();
@@ -682,8 +687,8 @@ test "a Boxy object entry round-trips through its bytes" {
     const conditions = [_]u32{ 3, 9 };
     var entry: Entry = .{
         .exports = &.{
-            .{ .identity = @splat(1), .rc_borrowed_params = 5, .rc_ret_lenders = 1, .rc_read_only_params = 4, .rc_ret_unique_fields = 0, .rc_ret_borrowed = true, .rc_ret_unique = false, .may_leave_pending = true, .rc_ret_conditions = &conditions, .rc_outcomes = &.{ 0, 0, 1, 1 }, .nonescaping_fn_params = 6, .capture_reuse_fn_params = 2, .template = .some(6), .visible = true },
-            .{ .identity = @splat(2), .rc_borrowed_params = 0, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 2, .rc_ret_borrowed = false, .rc_ret_unique = true, .may_leave_pending = false, .rc_ret_conditions = &.{} },
+            .{ .identity = @splat(1), .rc_borrowed_params = 5, .rc_ret_lenders = 1, .rc_read_only_params = 4, .rc_ret_unique_fields = 0, .rc_ret_borrowed = true, .rc_ret_unique = false, .may_leave_pending = true, .tail_carry = false, .rc_ret_conditions = &conditions, .rc_outcomes = &.{ 0, 0, 1, 1 }, .nonescaping_fn_params = 6, .capture_reuse_fn_params = 2, .template = .some(6), .visible = true },
+            .{ .identity = @splat(2), .rc_borrowed_params = 0, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 2, .rc_ret_borrowed = false, .rc_ret_unique = true, .may_leave_pending = false, .tail_carry = true, .rc_ret_conditions = &.{} },
         },
         .exports_digest = undefined,
         .hosted_symbols = &.{ "roc_fx_stdout_line", "roc_fx_stdin_line" },
@@ -727,7 +732,7 @@ test "a Boxy object entry round-trips through its bytes" {
     try std.testing.expectError(error.InvalidEntry, decode(allocator, altered));
 
     // Needs lists round-trip with the rest of their export record.
-    const needs_records: []const ExportRecord = &.{.{ .identity = @splat(3), .rc_borrowed_params = 0, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 0, .rc_ret_borrowed = false, .rc_ret_unique = false, .may_leave_pending = false, .rc_ret_conditions = &.{}, .table_needs = "a needs list" }};
+    const needs_records: []const ExportRecord = &.{.{ .identity = @splat(3), .rc_borrowed_params = 0, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 0, .rc_ret_borrowed = false, .rc_ret_unique = false, .may_leave_pending = false, .tail_carry = false, .rc_ret_conditions = &.{}, .table_needs = "a needs list" }};
     const needs_entry: Entry = .{
         .exports = needs_records,
         .exports_digest = try exportRecordsDigest(allocator, needs_records),
@@ -743,7 +748,7 @@ test "a Boxy object entry round-trips through its bytes" {
 
 test "an export records digest is a function of the records in identity order" {
     const allocator = std.testing.allocator;
-    const first: ExportRecord = .{ .identity = @splat(1), .rc_borrowed_params = 1, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 0, .rc_ret_borrowed = false, .rc_ret_unique = false, .may_leave_pending = false, .rc_ret_conditions = &.{}, .visible = true };
+    const first: ExportRecord = .{ .identity = @splat(1), .rc_borrowed_params = 1, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 0, .rc_ret_borrowed = false, .rc_ret_unique = false, .may_leave_pending = false, .tail_carry = false, .rc_ret_conditions = &.{}, .visible = true };
     var second = first;
     second.identity = @splat(2);
     const baseline = try exportRecordsDigest(allocator, &.{ first, second });
@@ -753,7 +758,7 @@ test "an export records digest is a function of the records in identity order" {
         @field(changed, field) ^= 1;
         try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{ first, changed })));
     }
-    inline for (.{ "rc_ret_borrowed", "rc_ret_unique", "may_leave_pending" }) |field| {
+    inline for (.{ "rc_ret_borrowed", "rc_ret_unique", "may_leave_pending", "tail_carry" }) |field| {
         var changed = second;
         @field(changed, field) = !@field(changed, field);
         try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{ first, changed })));
@@ -885,6 +890,7 @@ test "a Boxy object export digest round-trip releases every failed allocation" {
                 .rc_ret_borrowed = true,
                 .rc_ret_unique = false,
                 .may_leave_pending = true,
+                .tail_carry = true,
                 .rc_ret_conditions = &.{ 3, 9 },
                 .rc_outcomes = &.{ 0, 2 },
                 .nonescaping_fn_params = 3,

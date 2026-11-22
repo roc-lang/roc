@@ -15204,6 +15204,7 @@ test "Boxy object record reservation OOM releases the transferred unit" {
             .rc_ret_borrowed = false,
             .rc_ret_unique = false,
             .may_leave_pending = false,
+            .tail_carry = false,
             .rc_ret_conditions = &.{ 3, 9 },
             .table_needs = "needs",
         }},

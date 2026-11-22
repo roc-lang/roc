@@ -455,7 +455,7 @@ external_calls: ExternalCalls = .unconfigured,
 /// with the `.boxy` runtime contract.
 boxy_runtime_symbols: ?BoxyRuntimeSignatures.SymbolTable = null,
 /// The procedure being compiled's tail carry parameter, if it takes one
-/// (`procCarriesTailArgs`).
+/// (`LirProcSpec.takesTailCarry`).
 carry: ?Storage.LocalInfo = null,
 /// The address of the pending cell of the procedure being compiled
 /// (`LirProcSpec.uses_pending_cell`).
@@ -6806,7 +6806,7 @@ fn tailArgOffsets(self: *Self, proc: LirProcSpec, offsets: ?[]u32) Allocator.Err
         if (offsets) |out| out[i] = offset;
         offset += std.mem.alignForward(u32, size, 16);
     }
-    const hidden_count = self.hiddenParams(proc).count();
+    const hidden_count = hiddenParams(proc).count();
     for (0..hidden_count) |i| {
         if (offsets) |out| out[args.len + i] = offset;
         offset += 16;
@@ -6912,7 +6912,7 @@ fn compileTailDrivers(self: *Self) Allocator.Error!void {
             self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
             const proc = self.store.getProcSpec(member);
             const args = self.store.getLocalSpan(proc.args);
-            const hidden_count = self.hiddenParams(proc).count();
+            const hidden_count = hiddenParams(proc).count();
             const offsets = try self.allocator.alloc(u32, args.len + hidden_count);
             defer self.allocator.free(offsets);
             _ = try self.tailArgOffsets(proc, offsets);
@@ -6978,7 +6978,7 @@ fn generateFrameReplacingCall(self: *Self, proc_id: LIR.LirProcSpecId, call_args
     const args = self.store.getLocalSpan(call_args);
     const params = self.store.getLocalSpan(proc.args);
     if (args.len != params.len) wasmInvariantFmt("WASM/codegen invariant violated: frame-replacing call arity mismatch", .{});
-    const hidden = self.hiddenParams(proc);
+    const hidden = hiddenParams(proc);
     var offsets_buffer: [16 * @sizeOf(u32)]u8 align(@alignOf(u32)) = undefined;
     var offsets_sfa = std.heap.BufferFirstAllocator.init(&offsets_buffer, self.allocator);
     const offsets_alloc = offsets_sfa.allocator();
@@ -7137,7 +7137,7 @@ fn procFuncType(self: *Self, proc: LirProcSpec) Allocator.Error!u32 {
     if (direct_count < args.len) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
     // The hidden result pointer, tail carry, and pending cell follow the
     // explicit arguments.
-    const hidden = self.hiddenParams(proc);
+    const hidden = hiddenParams(proc);
     if (hidden.result) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
     if (hidden.carry) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
     if (hidden.pending) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
@@ -7284,7 +7284,7 @@ fn emitProcSpecBody(
             _ = try self.bindProcParamLocal(arg);
         }
         const stored_args: ?u32 = if (direct_count < args.len) self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory else null;
-        const hidden = self.hiddenParams(proc);
+        const hidden = hiddenParams(proc);
         if (hidden.result) _ = try self.bindProcParamLocal(proc.dyn_result.get().?);
         if (hidden.carry) self.carry = .{ .idx = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory, .val_type = .i32 };
         if (hidden.pending) self.pending_cell = .{ .idx = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory, .val_type = .i32 };
@@ -7392,7 +7392,7 @@ fn emitProcSpecBody(
     const param_count: u32 = if (erased_abi)
         6
     else blk: {
-        const hidden = self.hiddenParams(proc);
+        const hidden = hiddenParams(proc);
         const direct_count = self.directArgCount(proc);
         break :blk @intCast(direct_count + @intFromBool(direct_count < args.len) + hidden.count());
     };
@@ -9189,7 +9189,7 @@ const stored_arg_slot_size: u32 = 16;
 /// "Wasm Calling Convention" in design.md).
 fn directArgCount(self: *const Self, proc: LirProcSpec) usize {
     const arg_count = self.store.getLocalSpan(proc.args).len;
-    const hidden_count = self.hiddenParams(proc).count();
+    const hidden_count = hiddenParams(proc).count();
     if (arg_count + hidden_count <= layout.abi.wasm_max_function_params) return arg_count;
     return layout.abi.wasm_max_function_params - 1 - hidden_count;
 }
@@ -9229,26 +9229,12 @@ const HiddenParams = struct {
     }
 };
 
-fn hiddenParams(self: *const Self, proc: LirProcSpec) HiddenParams {
+fn hiddenParams(proc: LirProcSpec) HiddenParams {
     return .{
         .result = proc.abi == .roc and proc.dyn_result != .none,
-        .carry = procCarriesTailArgs(self.store, proc),
+        .carry = proc.takesTailCarry(),
         .pending = proc.takesPendingCell(),
     };
-}
-
-/// Whether `proc` takes a tail carry: a last hidden parameter holding the
-/// storage a frame-replacing call moved its dynamic arguments into, because
-/// their bytes lived in the frame it replaced. Such a procedure has a dynamic
-/// parameter and can receive frame-replacing calls; it releases its carry
-/// when it returns or replaces its own frame. Every other caller passes none.
-fn procCarriesTailArgs(store: *const LirStore, proc: LirProcSpec) bool {
-    if (!isTailGroupMember(proc)) return false;
-    const params = store.getLocalSpan(proc.args);
-    for (0..params.len) |i| {
-        if (store.getLocal(GuardedList.at(params, i)).dyn != null) return true;
-    }
-    return false;
 }
 
 fn localDyn(self: *const Self, local: ProcLocalId) ?LIR.DynLocal {
@@ -9582,7 +9568,7 @@ fn generateDynCall(self: *Self, proc_id: LIR.LirProcSpecId, args: ProcLocalSpan,
         try self.emitTargetAddress(t);
     }
     // An ordinary call's arguments stay in this frame: no carry.
-    if (procCarriesTailArgs(self.store, callee)) try self.emitI32Const(0);
+    if (callee.takesTailCarry()) try self.emitI32Const(0);
     if (callee.takesPendingCell()) try self.emitPendingCell();
     try self.emitCall(func_idx);
     try self.emitTailDrive(callee);
