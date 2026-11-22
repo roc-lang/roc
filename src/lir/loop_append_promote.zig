@@ -366,8 +366,7 @@ const Edge = struct {
 const EdgeIndex = struct {
     heads: collections.DenseMap(LocalId, usize),
     /// Storage for the chains; the live prefix covers the indexed edges.
-    next: []usize,
-    const end = std.math.maxInt(usize);
+    next: []?usize,
 
     fn init(allocator: Allocator, edges: []const Edge) ResourceError!EdgeIndex {
         var self = EdgeIndex{
@@ -385,11 +384,11 @@ const EdgeIndex = struct {
         if (self.next.len < edges.len) {
             allocator.free(self.next);
             self.next = &.{};
-            self.next = try allocator.alloc(usize, edges.len);
+            self.next = try allocator.alloc(?usize, edges.len);
         }
         for (edges, 0..) |edge, i| {
             const entry = try self.heads.getOrPut(edge.source);
-            self.next[i] = if (entry.found_existing) entry.value_ptr.* else end;
+            self.next[i] = if (entry.found_existing) entry.value_ptr.* else null;
             entry.value_ptr.* = i;
         }
     }
@@ -408,8 +407,8 @@ const EdgeIndex = struct {
         var cursor: usize = 0;
         var edge_visits: usize = 0;
         while (cursor < queue.items.len) : (cursor += 1) {
-            var index = self.heads.get(queue.items[cursor]) orelse end;
-            while (index != end) : (index = self.next[index]) {
+            var next = self.heads.get(queue.items[cursor]);
+            while (next) |index| : (next = self.next[index]) {
                 edge_visits += 1;
                 const target = edges[index].target;
                 const entry = try carriers.getOrPut(target);

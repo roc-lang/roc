@@ -25,11 +25,10 @@ pub fn run(result: *LirProgram.Result) Allocator.Error!void {
     try pass.run();
 }
 
-const payload_struct_slot = std.math.maxInt(u32);
-
 const PayloadSlot = struct {
     variant: u32,
-    payload: u32,
+    /// The payload field read, or null for a read of the whole payload struct.
+    payload: ?u32,
 };
 
 /// Known discriminants of a tag value. Discriminants below 64 are bits of
@@ -301,7 +300,7 @@ const Pass = struct {
             }),
             .tag_payload_struct => self.mergePayloadRead(target, op.source, .{
                 .variant = op.tag_discriminant,
-                .payload = payload_struct_slot,
+                .payload = null,
             }),
         };
     }
@@ -335,9 +334,9 @@ const Pass = struct {
             const stmt = self.store.getCFStmtImmediate(construction);
             if (stmt.* != .assign_tag or stmt.assign_tag.discriminant != slot.variant) continue;
             const payload = stmt.assign_tag.payload orelse continue;
-            if (slot.payload == payload_struct_slot) {
-                if (try self.localInfoMut(target).mergeFrom(self.allocator, self.localInfo(payload))) changed = true;
-            } else if (try self.mergeFieldFromInfo(target, self.localInfo(payload), slot.payload)) {
+            if (slot.payload) |field_index| {
+                if (try self.mergeFieldFromInfo(target, self.localInfo(payload), field_index)) changed = true;
+            } else if (try self.localInfoMut(target).mergeFrom(self.allocator, self.localInfo(payload))) {
                 changed = true;
             }
         }

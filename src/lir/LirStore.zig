@@ -978,17 +978,7 @@ pub fn appendBodyShardWithJoinRelocation(
     }
     for (source.locals.unsafeRawItemsForView()[source_prefix.locals..]) |item| self.locals.appendAssumeCapacity(relocateBodyValue(StoredLocal, item, prefix, bases));
     for (source.local_names.unsafeRawItemsForView()[source_prefix.locals..]) |name| {
-        self.local_names.appendAssumeCapacity(
-            if (name == no_local_name)
-                no_local_name
-            else
-                @backingInt(relocateBodyValue(
-                    base.StringLiteral.Idx,
-                    @as(base.StringLiteral.Idx, @fromBackingInt(@intCast(name))),
-                    prefix,
-                    bases,
-                )),
-        );
+        self.local_names.appendAssumeCapacity(relocateBodyValue(base.StringLiteral.Idx, name, prefix, bases));
     }
     for (source.cf_switch_branches.unsafeRawItemsForView()[source_prefix.cf_switch_branches..]) |item| self.cf_switch_branches.appendAssumeCapacity(relocateBodyValue(CFSwitchBranch, item, prefix, bases));
     for (source.str_match_steps.unsafeRawItemsForView()[source_prefix.str_match_steps..]) |item| self.str_match_steps.appendAssumeCapacity(relocateBodyValue(StrMatchStep, item, prefix, bases));
@@ -1114,8 +1104,8 @@ proc_locs: GuardedList.List(base.SourceLoc, "LirStore.proc_locs"),
 /// for a proc with no source name.
 proc_debug_names: GuardedList.List(base.StringLiteral.Idx, "LirStore.proc_debug_names"),
 /// Source-level name per local, parallel to `locals`: an index into
-/// `strings`, or `no_local_name` for compiler-generated temporaries.
-local_names: GuardedList.List(u32, "LirStore.local_names"),
+/// `strings`, or `.none` for compiler-generated temporaries.
+local_names: GuardedList.List(base.StringLiteral.Idx, "LirStore.local_names"),
 /// Active procedure-construction scope. Never persisted in LIR images or
 /// transferred into another body worker; completed proofs live in LIR itself.
 tail_call_builder: ?*TailCallBuilder = null,
@@ -1268,9 +1258,6 @@ pub fn deinit(self: *Self) void {
     self.local_names.deinit(self.allocator);
 }
 
-/// Sentinel in `local_names` for locals with no source-level name.
-pub const no_local_name: u32 = std.math.maxInt(u32);
-
 /// Record the source-level name of a local (empty means none).
 pub fn setLocalName(self: *Self, id: LocalId, name: []const u8) Allocator.Error!void {
     if (name.len == 0) return;
@@ -1280,14 +1267,14 @@ pub fn setLocalName(self: *Self, id: LocalId, name: []const u8) Allocator.Error!
         raw - self.body_prefix.locals
     else
         raw;
-    self.local_names.set(local_index, @backingInt(idx));
+    self.local_names.set(local_index, idx);
 }
 
 /// Source-level name of a local, or null for compiler-generated temporaries.
 pub fn localName(self: *const Self, id: LocalId) ?[]const u8 {
-    const raw = self.getLocalNameRaw(id);
-    if (raw == no_local_name) return null;
-    return self.getString(@fromBackingInt(@intCast(raw)));
+    const name = self.getLocalNameRaw(id);
+    if (name == .none) return null;
+    return self.getString(name);
 }
 
 /// Record the source-level debug name of a proc.
@@ -1778,7 +1765,7 @@ pub fn addLocal(self: *Self, local: Local) Allocator.Error!LocalId {
     try self.locals.ensureUnusedCapacity(self.allocator, 1);
     try self.local_names.ensureUnusedCapacity(self.allocator, 1);
     self.locals.appendAssumeCapacity(StoredLocal.fromLocal(local));
-    self.local_names.appendAssumeCapacity(no_local_name);
+    self.local_names.appendAssumeCapacity(.none);
     return @fromBackingInt(@intCast(@as(u32, @intCast(idx))));
 }
 
@@ -2763,8 +2750,8 @@ test "body shard relocates nonzero local and body suffixes" {
         .source_identity = lir_defs.ProcIdentity.forTest(123),
         .copies_site_code = false,
         .source_name = coordinator_name,
-        .source_loc = .{ .file = 1, .line = 2, .column = 3 },
-        .call_site = .{ .file = 4, .line = 5, .column = 6 },
+        .source_loc = .{ .file = .some(1), .line = 2, .column = 3 },
+        .call_site = .{ .file = .some(4), .line = 5, .column = 6 },
         .parent = .none,
     });
 
@@ -2776,13 +2763,13 @@ test "body shard relocates nonzero local and body suffixes" {
 
     const body_local = try worker.addLocal(.{ .layout_idx = .zst });
     try worker.setLocalName(body_local, "body_local");
-    const body_name: base.StringLiteral.Idx = @fromBackingInt(@intCast(worker.getLocalNameRaw(body_local)));
+    const body_name = worker.getLocalNameRaw(body_local);
     const worker_inline_scope = try worker.addInlineScope(.{
         .source_identity = lir_defs.ProcIdentity.forTest(456),
         .copies_site_code = false,
         .source_name = body_name,
-        .source_loc = .{ .file = 2, .line = 3, .column = 4 },
-        .call_site = .{ .file = 5, .line = 6, .column = 7 },
+        .source_loc = .{ .file = .some(2), .line = 3, .column = 4 },
+        .call_site = .{ .file = .some(5), .line = 6, .column = 7 },
         .parent = body_inline_scope,
     });
     const frame = try worker.addLocalSpan(&.{ body_local, global });
@@ -2793,7 +2780,7 @@ test "body shard relocates nonzero local and body suffixes" {
         .size = 16,
         .alignment = 8,
     });
-    const body_loc: base.SourceLoc = .{ .file = 7, .line = 8, .column = 9 };
+    const body_loc: base.SourceLoc = .{ .file = .some(7), .line = 8, .column = 9 };
     const body_region = base.Region.from_raw_offsets(10, 20);
     const ret = try worker.addCFStmt(.{ .ret = .{ .value = body_local } }, .{
         .loc = body_loc,
@@ -2842,8 +2829,8 @@ test "body shard relocates nonzero local and body suffixes" {
         .source_identity = lir_defs.ProcIdentity.forTest(789),
         .copies_site_code = false,
         .source_name = destination_name,
-        .source_loc = .{ .file = 8, .line = 9, .column = 10 },
-        .call_site = .{ .file = 11, .line = 12, .column = 13 },
+        .source_loc = .{ .file = .some(8), .line = 9, .column = 10 },
+        .call_site = .{ .file = .some(11), .line = 12, .column = 13 },
         .parent = body_inline_scope,
     });
 
@@ -3070,7 +3057,7 @@ test "body shard reads coordinator prefix without copying it" {
 }
 
 /// Returns the raw local-name table entry for the given local id.
-pub fn getLocalNameRaw(self: *const Self, id: LocalId) u32 {
+pub fn getLocalNameRaw(self: *const Self, id: LocalId) base.StringLiteral.Idx {
     const index = @backingInt(id);
     if (self.body_coordinator) |coordinator| {
         if (index < self.body_prefix.locals) return coordinator.getLocalNameRaw(id);

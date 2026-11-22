@@ -1079,8 +1079,8 @@ test "reachable proc pass follows packed erased callable refs in static initiali
         .target = value,
         .data = try result.store.addStmtRow(LIR.PackedErasedFnData, .{
             .proc = callable_proc,
-            .capture = null,
-            .capture_layout = null,
+            .capture = .none,
+            .capture_layout = .none,
             .on_drop = .none,
         }),
         .next = initializer_ret,

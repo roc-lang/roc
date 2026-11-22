@@ -107,8 +107,6 @@ pub const UniquenessOptions = struct {
     metrics: ?*UniquenessMetrics = null,
 };
 
-const no_local: u32 = std.math.maxInt(u32);
-
 const OptionalU32 = collections.OptionalU32;
 const WriteFirstSlice = collections.WriteFirstSlice;
 
@@ -137,9 +135,9 @@ pub const JoinBody = struct {
 /// ownership unit before the caller frame can be replaced.
 pub const TailCallLifetime = struct {
     stmt: LIR.CFStmtId,
-    /// Each argument's anchoring parameter position plus one; zero when the
+    /// Each argument's anchoring parameter position, absent when the
     /// argument has no anchor.
-    anchor_params: [arc_sig.tracked_param_count]u8 = @splat(0),
+    anchor_params: [arc_sig.tracked_param_count]collections.OptionalU8 = @splat(.none),
     carriers: [arc_sig.tracked_param_count]collections.OptionalId(LIR.LocalId) = @splat(.none),
 
     comptime {
@@ -148,8 +146,7 @@ pub const TailCallLifetime = struct {
 
     pub fn anchorParam(self: *const TailCallLifetime, position: usize) ?usize {
         if (position >= arc_sig.tracked_param_count) return null;
-        const anchor = self.anchor_params[position];
-        return if (anchor == 0) null else anchor - 1;
+        return if (self.anchor_params[position].get()) |anchor| anchor else null;
     }
 
     pub fn carrier(self: *const TailCallLifetime, position: usize) ?LIR.LocalId {
@@ -1406,15 +1403,38 @@ pub fn solveWithOptions(
 const OutcomeWalkState = struct {
     stmt: u32,
     present: bool,
-    discriminant: u32,
+    /// The discriminant the returned local was last tagged with, absent
+    /// when no `assign_tag` witnesses it.
+    discriminant: OptionalU32,
 };
 
 /// One walk state a statement was entered with; `next` chains the other
 /// states of the same statement.
 const OutcomeSeenState = struct {
     present: bool,
-    discriminant: u32,
-    next: u32,
+    discriminant: OptionalU32,
+    next: OptionalU32,
+};
+
+/// The discriminant every walk reaching an escape returned with: none yet,
+/// several different ones, or one, stored plus `first_discriminant`.
+const EscapeDiscriminant = enum(u32) {
+    none = 0,
+    ambiguous = 1,
+    _,
+
+    const first_discriminant: u32 = 2;
+
+    fn of(value: u32) EscapeDiscriminant {
+        std.debug.assert(value <= std.math.maxInt(u32) - first_discriminant);
+        return @fromBackingInt(value + first_discriminant);
+    }
+
+    /// The one discriminant, or null for none or several.
+    fn single(self: EscapeDiscriminant) ?u32 {
+        if (@backingInt(self) < first_discriminant) return null;
+        return @backingInt(self) - first_discriminant;
+    }
 };
 
 /// Records `walk` as entered at its statement's inventory position, reporting
@@ -1426,16 +1446,16 @@ fn enterOutcomeWalk(
     index: u32,
     walk: OutcomeWalkState,
 ) Allocator.Error!bool {
-    const head = heads.get(index) orelse no_local;
-    var cursor = head;
-    while (cursor != no_local) {
+    const head = heads.get(index);
+    var next = head;
+    while (next) |cursor| {
         const state = states.items[cursor];
         if (state.present == walk.present and state.discriminant == walk.discriminant) return true;
-        cursor = state.next;
+        next = state.next.get();
     }
     const position = std.math.cast(u32, states.items.len) orelse return error.OutOfMemory;
-    if (position == no_local) return error.OutOfMemory;
-    try states.append(allocator, .{ .present = walk.present, .discriminant = walk.discriminant, .next = head });
+    if (position == std.math.maxInt(u32)) return error.OutOfMemory;
+    try states.append(allocator, .{ .present = walk.present, .discriminant = walk.discriminant, .next = .of(head) });
     heads.set(index, position);
     return false;
 }
@@ -1627,11 +1647,11 @@ fn computeOutcomeRestitution(
     // has already collected it; restitution performs no reachability walk.
     var statement_indices = collections.DenseMap(LIR.CFStmtId, u32).init(allocator);
     defer statement_indices.deinit();
-    var discriminant_buffer = std.ArrayList(OptionalU32).empty;
+    var discriminant_buffer = std.ArrayList(EscapeDiscriminant).empty;
     defer discriminant_buffer.deinit(allocator);
     var mask_buffer = std.ArrayList(arc_sig.ParamMask).empty;
     defer mask_buffer.deinit(allocator);
-    var bit_discriminant_buffer = std.ArrayList(OptionalU32).empty;
+    var bit_discriminant_buffer = std.ArrayList(EscapeDiscriminant).empty;
     defer bit_discriminant_buffer.deinit(allocator);
     var bit_present_buffer = std.ArrayList(bool).empty;
     defer bit_present_buffer.deinit(allocator);
@@ -1649,8 +1669,6 @@ fn computeOutcomeRestitution(
     defer seen_heads.deinit(allocator);
     var seen_states = std.ArrayList(OutcomeSeenState).empty;
     defer seen_states.deinit(allocator);
-    // An escape reached with different discriminants on different paths.
-    const ambiguous_discriminant: OptionalU32 = .some(no_local - 1);
 
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
@@ -1741,7 +1759,7 @@ fn computeOutcomeRestitution(
             try stack.append(allocator, .{
                 .stmt = @backingInt(body),
                 .present = true,
-                .discriminant = no_local,
+                .discriminant = .none,
             });
             while (stack.pop()) |walk| {
                 const walk_index = statement_indices.get(@fromBackingInt(walk.stmt)) orelse
@@ -1754,7 +1772,7 @@ fn computeOutcomeRestitution(
                 // Only `assign_tag` witnesses a result discriminant; every
                 // other write to the returned local kills the witness first.
                 if (body_clone.writtenLocal(stmt.*)) |target| {
-                    if (target == ret_local) next_state.discriminant = no_local;
+                    if (target == ret_local) next_state.discriminant = .none;
                 }
 
                 const pushNext = struct {
@@ -1790,13 +1808,13 @@ fn computeOutcomeRestitution(
                     },
                     .assign_packed_erased_fn => |assign_stmt| {
                         const assign = store.stmtRow(assign_stmt.data);
-                        if (assign.capture) |capture| {
+                        if (assign.capture.get()) |capture| {
                             if (!consumeOutcomeLocal(solution, active_param, &next_state.present, capture)) {
                                 valid = false;
                                 break;
                             }
                         }
-                        if (assign.reuse) |reuse| {
+                        if (assign.reuse.get()) |reuse| {
                             if (!consumeOutcomeLocal(solution, active_param, &next_state.present, reuse)) {
                                 valid = false;
                                 break;
@@ -1850,7 +1868,7 @@ fn computeOutcomeRestitution(
                             valid = false;
                             break;
                         }
-                        if (assign.target == ret_local) next_state.discriminant = assign.discriminant;
+                        if (assign.target == ret_local) next_state.discriminant = .some(assign.discriminant);
                     },
                     .store_tag => |assign| {
                         if (assign.payload) |payload| {
@@ -1916,34 +1934,34 @@ fn computeOutcomeRestitution(
                             break;
                         };
                         const target_stmt = store.getCFStmtImmediate(target);
-                        if (next_state.discriminant != no_local and
+                        if (next_state.discriminant != .none and
                             !(target_stmt.* == .ret and target_stmt.ret.value == ret_local))
                         {
                             valid = false;
                             break;
                         }
-                        if (target_stmt.* == .ret and target_stmt.ret.value == ret_local and next_state.discriminant != no_local) {
+                        if (target_stmt.* == .ret and target_stmt.ret.value == ret_local) if (next_state.discriminant.get()) |discriminant| {
                             const stmt_index = statement_indices.get(current) orelse
                                 solveInvariant("ARC outcome escape was outside its lifted procedure inventory");
                             const old = bit_escape_discriminants[stmt_index];
                             if (old == .none) {
-                                bit_escape_discriminants[stmt_index] = .some(next_state.discriminant);
+                                bit_escape_discriminants[stmt_index] = .of(discriminant);
                                 bit_escape_present[stmt_index] = next_state.present;
-                            } else if (old == OptionalU32.some(next_state.discriminant)) {
+                            } else if (old == EscapeDiscriminant.of(discriminant)) {
                                 bit_escape_present[stmt_index] = bit_escape_present[stmt_index] and next_state.present;
                             } else {
-                                bit_escape_discriminants[stmt_index] = ambiguous_discriminant;
+                                bit_escape_discriminants[stmt_index] = .ambiguous;
                                 bit_escape_present[stmt_index] = false;
                             }
-                        }
+                        };
                         try pushNext(&stack, allocator, next_state, target);
                     },
                     .ret => |ret_stmt| {
-                        if (ret_stmt.value != ret_local or next_state.discriminant == no_local) {
+                        if (ret_stmt.value != ret_local or next_state.discriminant == .none) {
                             valid = false;
                             break;
                         }
-                        const discriminant: u32 = @intCast(next_state.discriminant);
+                        const discriminant: u32 = next_state.discriminant.get().?;
                         const entry = try bit_accum.getOrPut(discriminant);
                         if (entry.found_existing) {
                             entry.value_ptr.present_on_all_paths = entry.value_ptr.present_on_all_paths and next_state.present;
@@ -1954,12 +1972,12 @@ fn computeOutcomeRestitution(
                             solveInvariant("ARC outcome escape was outside its lifted procedure inventory");
                         const old = bit_escape_discriminants[stmt_index];
                         if (old == .none) {
-                            bit_escape_discriminants[stmt_index] = .some(discriminant);
+                            bit_escape_discriminants[stmt_index] = .of(discriminant);
                             bit_escape_present[stmt_index] = next_state.present;
-                        } else if (old == OptionalU32.some(discriminant)) {
+                        } else if (old == EscapeDiscriminant.of(discriminant)) {
                             bit_escape_present[stmt_index] = bit_escape_present[stmt_index] and next_state.present;
                         } else {
-                            bit_escape_discriminants[stmt_index] = ambiguous_discriminant;
+                            bit_escape_discriminants[stmt_index] = .ambiguous;
                             bit_escape_present[stmt_index] = false;
                         }
                     },
@@ -2004,11 +2022,11 @@ fn computeOutcomeRestitution(
                 if (old == .none) {
                     escape_discriminants[stmt_index] = discriminant;
                 } else if (old != discriminant) {
-                    escape_discriminants[stmt_index] = ambiguous_discriminant;
+                    escape_discriminants[stmt_index] = .ambiguous;
                     escape_masks[stmt_index] = 0;
                     continue;
                 }
-                if (discriminant != ambiguous_discriminant and bit_escape_present[stmt_index]) {
+                if (discriminant != .ambiguous and bit_escape_present[stmt_index]) {
                     escape_masks[stmt_index] |= param_bit;
                 }
             }
@@ -2045,8 +2063,7 @@ fn computeOutcomeRestitution(
         };
         if (@import("builtin").mode == .debug) outcome_scratch_entries += escape_discriminants.len;
         for (escape_discriminants, 0..) |maybe_discriminant, stmt_index| {
-            if (maybe_discriminant == ambiguous_discriminant) continue;
-            const discriminant = maybe_discriminant.get() orelse continue;
+            const discriminant = maybe_discriminant.single() orelse continue;
             const outcome = accum.get(@intCast(discriminant)) orelse
                 solveInvariant("ARC outcome escape named an unreturned discriminant");
             solution.restitution_params_by_stmt[@backingInt(proc_stmts[stmt_index])] = escape_masks[stmt_index] & outcome.remaining_on_all_paths;
@@ -2253,7 +2270,7 @@ fn buildTailCallTable(
             if (solver.param_proc[leader] != OptionalU32.some(call.caller)) continue;
             const anchor = solver.param_position.get(leader);
             if (anchor >= arc_sig.tracked_param_count) continue;
-            fact.anchor_params[position] = @intCast(anchor + 1);
+            fact.anchor_params[position] = .some(@intCast(anchor));
         }
 
         facts[fill[call.caller]] = fact;
@@ -2923,11 +2940,11 @@ fn updateDirectCallResultDefs(solver: *Solver, changed: *std.ArrayList(u32)) Sol
         const source = if (callee_sig.ret_mode == .borrowed)
             callRetBorrowSource(solver, callee_sig, args)
         else
-            no_local;
-        const updated: DefKind = if (source == no_local)
-            .fresh
+            null;
+        const updated: DefKind = if (source) |borrow_source|
+            .{ .borrow_capable = borrow_source }
         else
-            .{ .borrow_capable = source };
+            .fresh;
         if (!std.meta.eql(solver.defs[target], updated)) {
             solver.defs[target] = updated;
             try changed.append(solver.allocator, target);
@@ -3232,11 +3249,11 @@ fn liftSharedStmtFacts(solver: *Solver, proc_index: u32, current: LIR.CFStmtId) 
             const assign = store.stmtRow(assign_stmt.data);
             solver.address_taken.set(@backingInt(assign.proc));
             try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
-            if (assign.capture) |capture| try solver.binding_facts.append(allocator, .{ .demand = capture });
-            if (assign.reuse) |reuse| try solver.binding_facts.append(allocator, .{ .demand = reuse });
-            if (assign.capture) |capture| try liftVisibilityLink(solver, assign_stmt.target, capture);
-            if (assign.capture) |capture| try solver.unique_facts.append(allocator, .{ .destroy = capture });
-            if (assign.reuse) |reuse| try solver.unique_facts.append(allocator, .{ .consume = .{ .local = reuse, .stmt = current } });
+            if (assign.capture.get()) |capture| try solver.binding_facts.append(allocator, .{ .demand = capture });
+            if (assign.reuse.get()) |reuse| try solver.binding_facts.append(allocator, .{ .demand = reuse });
+            if (assign.capture.get()) |capture| try liftVisibilityLink(solver, assign_stmt.target, capture);
+            if (assign.capture.get()) |capture| try solver.unique_facts.append(allocator, .{ .destroy = capture });
+            if (assign.reuse.get()) |reuse| try solver.unique_facts.append(allocator, .{ .consume = .{ .local = reuse, .stmt = current } });
         },
         .assign_low_level => |assign| {
             const rc_effect = inferenceRcEffect(solver, assign.op, store.stmtRow(assign.rc_effect));
@@ -3254,8 +3271,8 @@ fn liftSharedStmtFacts(solver: *Solver, proc_index: u32, current: LIR.CFStmtId) 
                 }
             }
             const borrow_source = lowLevelBorrowSource(solver.domain, rc_effect, args);
-            if (rc_effect.retain_result and borrow_source != no_local) {
-                const source: LIR.LocalId = @fromBackingInt(@intCast(solver.domain.localAt(borrow_source)));
+            if (rc_effect.retain_result and borrow_source != null) {
+                const source: LIR.LocalId = @fromBackingInt(@intCast(solver.domain.localAt(borrow_source.?)));
                 try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = source } });
             } else {
                 try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
@@ -3564,38 +3581,38 @@ fn liftDynStmtFacts(solver: *Solver, current: LIR.CFStmtId, target: ?LIR.LocalId
 }
 
 /// Returns the single refcounted argument a borrowed-return call result may
-/// borrow from, or `no_local` when the lender mask names zero or several
+/// borrow from, or null when the lender mask names zero or several
 /// refcounted arguments (the caller then keeps the result owned and retains
 /// it after the call).
-fn callRetBorrowSource(solver: *const Solver, callee_sig: arc_sig.RcSig, args: anytype) u32 {
-    var source: u32 = no_local;
+fn callRetBorrowSource(solver: *const Solver, callee_sig: arc_sig.RcSig, args: anytype) ?u32 {
+    var source: ?u32 = null;
     for (0..GuardedList.borrowLen(args)) |position| {
         const arg = GuardedList.at(args, position);
         const bit = arc_sig.paramBit(position) orelse break;
         if ((callee_sig.ret_lenders & bit) == 0) continue;
         const arg_index = solver.domain.indexOf(arg) orelse continue;
-        if (source != no_local and source != arg_index) return no_local;
+        if (source != null and source != arg_index) return null;
         source = arg_index;
     }
     return source;
 }
 
 /// Returns the single refcounted argument named by `result_borrows_args`, or
-/// `no_local` when the mask names zero or several refcounted arguments.
+/// null when the mask names zero or several refcounted arguments.
 fn lowLevelBorrowSource(
     domain: *const ArcLocalDomain,
     rc_effect: LIR.LowLevel.RcEffect,
     args: anytype,
-) u32 {
-    if (rc_effect.result_borrows_args == 0) return no_local;
-    var source: u32 = no_local;
+) ?u32 {
+    if (rc_effect.result_borrows_args == 0) return null;
+    var source: ?u32 = null;
     for (0..GuardedList.borrowLen(args)) |index| {
         const arg = GuardedList.at(args, index);
         if (index >= 64) break;
         const bit = @as(u64, 1) << @as(u6, @intCast(index));
         if ((rc_effect.result_borrows_args & bit) == 0) continue;
         const arg_index = domain.indexOf(arg) orelse continue;
-        if (source != no_local and source != arg_index) return no_local;
+        if (source != null and source != arg_index) return null;
         source = arg_index;
     }
     return source;
@@ -3913,7 +3930,7 @@ fn computeVisibilityFromLift(
             .store_struct, .store_tag => {},
             .assign_packed_erased_fn => |assign_stmt| {
                 const assign = store.stmtRow(assign_stmt.data);
-                if (assign.capture) |capture| {
+                if (assign.capture.get()) |capture| {
                     addEdge(&sets, rc_local, @backingInt(assign_stmt.target), @backingInt(capture));
                 }
             },
@@ -3973,7 +3990,7 @@ fn computeVisibilityFromLift(
                 // The callee is unknown; the boundary is treated like a
                 // pinned signature.
                 seedLocal(&visible, rc_local, @backingInt(assign.closure));
-                if (assign.reuse_source) |reuse_source| seedLocal(&visible, rc_local, @backingInt(reuse_source));
+                if (assign.reuse_source.get()) |reuse_source| seedLocal(&visible, rc_local, @backingInt(reuse_source));
                 const args = store.getLocalSpan(assign.args);
                 for (0..GuardedList.borrowLen(args)) |arg_index| {
                     const arg = GuardedList.at(args, arg_index);
@@ -5290,7 +5307,7 @@ const UniquenessComponentTask = struct {
                     .unresolved = self.component.unresolved,
                 },
                 .marks = try .init(persistent, self.component.stmts.len),
-                .marked_local = no_local,
+                .marked_local = null,
                 .marked_uses = false,
                 .work = .empty,
             };
@@ -6283,8 +6300,8 @@ fn computeUniquenessDetailed(
                 const assign = store.stmtRow(assign_stmt.data);
                 marks.trackDef(&has_def, &multi_def, assign_stmt.target);
                 marks.noteBirth(&born, assign_stmt.target);
-                if (assign.capture) |capture| marks.destroy(&destroyed, capture);
-                if (assign.reuse) |reuse| try marks.consumeAt(allocator, &consumes, reuse, @intCast(stmt_index));
+                if (assign.capture.get()) |capture| marks.destroy(&destroyed, capture);
+                if (assign.reuse.get()) |reuse| try marks.consumeAt(allocator, &consumes, reuse, @intCast(stmt_index));
             },
             .str_match => |str_match_stmt| {
                 const str_match = store.stmtRow(str_match_stmt.data);
@@ -7245,7 +7262,7 @@ test "uniqueness workspace reuses topology and exact use queries across signatur
         if (round == 2) try testing.expect(actual.unique.isSet(@backingInt(taken)));
         // Evict the current generation's local, not the immutable answers.
         // Re-querying all recorded edges must not walk a single predecessor.
-        workspace.order.marked_local = no_local;
+        workspace.order.marked_local = null;
         const visits = workspace.order.backward_visits;
         for (workspace.use_answers.entries.items) |entry| {
             try testing.expectEqual(entry.answer, try workspace.order.usesAfter(@backingInt(entry.stmt), entry.local));

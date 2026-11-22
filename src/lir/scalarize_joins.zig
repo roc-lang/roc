@@ -2068,15 +2068,15 @@ const Pass = struct {
                 .assign_call_erased => |assign_stmt| {
                     const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.closure);
-                    if (assign.reuse_source) |reuse_source| try self.noteUse(reuse_source);
+                    if (assign.reuse_source.get()) |reuse_source| try self.noteUse(reuse_source);
                     const args = self.store.getLocalSpan(assign.args);
                     for (0..args.len) |index| try self.noteUse(GuardedList.at(args, index));
                     try self.noteWrite(assign_stmt.target);
                 },
                 .assign_packed_erased_fn => |assign_stmt| {
                     const assign = self.store.stmtRow(assign_stmt.data);
-                    if (assign.capture) |capture| try self.noteUse(capture);
-                    if (assign.reuse) |reuse| try self.noteUse(reuse);
+                    if (assign.capture.get()) |capture| try self.noteUse(capture);
+                    if (assign.reuse.get()) |reuse| try self.noteUse(reuse);
                     try self.noteWrite(assign_stmt.target);
                 },
                 .assign_low_level => |assign| {

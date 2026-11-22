@@ -107,7 +107,7 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      combined with the v79-v81 changes.
 /// v83: procedure specs name their body chunks, and the store carries the
 ///      chunk column, combined with the v79-v82 changes.
-pub const FORMAT_VERSION: u32 = 83;
+pub const FORMAT_VERSION: u32 = 84;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -322,7 +322,7 @@ pub const LirStoreImage = extern struct {
             .body_prefix = std.mem.zeroes(LirStore.BodyPrefix),
             .proc_locs = try guardedListFromRef(base.SourceLoc, "LirStore.proc_locs", base_ptr, image_size, self.proc_locs),
             .proc_debug_names = try guardedListFromRef(base.StringLiteral.Idx, "LirStore.proc_debug_names", base_ptr, image_size, self.proc_debug_names),
-            .local_names = try guardedListFromRef(u32, "LirStore.local_names", base_ptr, image_size, self.local_names),
+            .local_names = try guardedListFromRef(base.StringLiteral.Idx, "LirStore.local_names", base_ptr, image_size, self.local_names),
         };
     }
 };
@@ -402,7 +402,7 @@ pub const LayoutStoreImage = extern struct {
         allocator: std.mem.Allocator,
     ) ViewError!layout_mod.Store {
         const layouts = try safeListFromRef(layout_mod.Layout, base_ptr, image_size, self.layouts);
-        const resolved_list_layouts = try safeListFromRef(layout_mod.Idx, base_ptr, image_size, self.resolved_list_layouts);
+        const resolved_list_layouts = try safeListFromRef(collections.OptionalId(layout_mod.Idx), base_ptr, image_size, self.resolved_list_layouts);
         const layouts_on_cycle = try safeListFromRef(bool, base_ptr, image_size, self.layouts_on_cycle);
         const tuple_elems = try safeListFromRef(layout_mod.Idx, base_ptr, image_size, self.tuple_elems);
         const struct_field_offsets = try safeListFromRef(layout_mod.WidthValues(u32), base_ptr, image_size, self.struct_field_offsets);
@@ -969,7 +969,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
     defer second.deinit();
     // Both shards start with the same suffix identities. The second commit
     // must relocate them before the image can forget all worker overlay state.
-    const shard_loc: base.SourceLoc = .{ .file = 1, .line = 2, .column = 3 };
+    const shard_loc: base.SourceLoc = .{ .file = .some(1), .line = 2, .column = 3 };
     for ([_]*LirStore{ &first, &second }, roots, [_][]const u8{ "first", "second" }) |worker, root, name| {
         const local = try worker.addLocal(.{ .layout_idx = pointer_layout });
         try worker.setLocalName(local, name);
@@ -979,7 +979,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
             .copies_site_code = false,
             .source_name = string,
             .source_loc = shard_loc,
-            .call_site = .{ .file = 1, .line = 4, .column = 5 },
+            .call_site = .{ .file = .some(1), .line = 4, .column = 5 },
             .parent = .none,
         });
         const ret = try worker.addCFStmt(.{ .ret = .{ .value = local } }, .{
@@ -1132,7 +1132,7 @@ test "LIR image copies and round-trips every populated store field" {
     var layouts = layout_mod.Store{
         .allocator = gpa,
         .layouts = try h.safeList(layout_mod.Layout, source_allocator, 3, 0x40),
-        .resolved_list_layouts = try h.safeList(layout_mod.Idx, source_allocator, 4, 0x50),
+        .resolved_list_layouts = try h.safeList(collections.OptionalId(layout_mod.Idx), source_allocator, 4, 0x50),
         .layouts_on_cycle = try h.safeList(bool, source_allocator, 4, 0x58),
         .tuple_elems = try h.safeList(layout_mod.Idx, source_allocator, 5, 0x60),
         .struct_fields = try h.multiList(layout_mod.StructField, source_allocator, 6, 0x70),
