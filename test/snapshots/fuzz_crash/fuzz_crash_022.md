@@ -15,7 +15,7 @@ getUser = |id| if (id > 1!) "big" else "l"
 -ain! = |_| getUser(900)
 ~~~
 # EXPECTED
-EXPECTED DEPENDENCY NAME - fuzz_crash_022.md:1:1:1:4
+EXPECTED DEPENDENCY NAME - fuzz_crash_022.md:1:15:1:16
 UNEXPECTED TYPE SYNTAX - fuzz_crash_022.md:1:19:1:27
 UNEXPECTED STATEMENT - fuzz_crash_022.md:1:28:1:29
 UNEXPECTED STATEMENT - fuzz_crash_022.md:1:29:1:30
@@ -43,7 +43,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 	(report
 		(severity runtime_error)
 		(title "Expected Dependency Name")
-		(region (start 1 1) (end 1 4))
+		(region (start 1 15) (end 1 16))
 		(headline
 			(reflow "I was parsing an app dependency record, and I expected a lowercase field name."))
 		(document
@@ -63,13 +63,11 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 			(line-break)
 			(line-break)
 			(text "I found ")
-			(annotated code "app")
+			(annotated code "|")
 			(text " here.")
 			(line-break)
-			(reflow "That word is reserved by Roc, so it cannot be used as a name in this position.")
 			(line-break)
-			(line-break)
-			(source-region (file "fuzz_crash_022.md") (start 1 1) (end 1 4) (annotation error) (line-text "app [main!] { |f: platform \"c\" }"))))
+			(source-region (file "fuzz_crash_022.md") (start 1 15) (end 1 16) (annotation error) (line-text "app [main!] { |f: platform \"c\" }"))))
 	(report
 		(severity runtime_error)
 		(title "Unexpected Type Syntax")
