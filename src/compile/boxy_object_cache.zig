@@ -18,12 +18,13 @@
 
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 const build_options = @import("build_options");
 
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 26;
+pub const format_version: u32 = 27;
 
 const magic = "RBXO";
 
@@ -155,15 +156,12 @@ pub const ExportRecord = struct {
     /// checked table, which a needs list naming the worker by identity
     /// resolves it to (`LirProgram.BoxyExport.template`). It locates the
     /// worker in the module the entry was built from, so it is no part of
-    /// the export digest.
-    template: u32 = no_template,
+    /// the export digest. Absent for a worker that is no template's.
+    template: collections.OptionalU32 = .none,
     /// Whether another unit can read this record
     /// (`LirProgram.BoxyExport.visible`): the export digest covers exactly
     /// these records.
     visible: bool = false,
-
-    /// `template` of a worker that is no template's.
-    pub const no_template = std.math.maxInt(u32);
 };
 
 /// The digest of the importer-visible ones of `records` in identity order,
@@ -324,7 +322,7 @@ pub fn encodeParts(allocator: Allocator, entry: Entry) Allocator.Error!Encoded {
         try appendU64(&bytes, allocator, record.capture_reuse_fn_params);
         try appendU32(&bytes, allocator, @intCast(record.table_needs.len));
         try bytes.appendSlice(allocator, record.table_needs);
-        try appendU32(&bytes, allocator, record.template);
+        try appendU32(&bytes, allocator, @backingInt(record.template));
         try bytes.append(allocator, @intFromBool(record.visible));
     }
     for ([_][]const []const u8{ entry.hosted_symbols, entry.link_root_symbols, entry.app_export_symbols }) |symbols| {
@@ -466,7 +464,7 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
         record.rc_ret_conditions = conditions;
         record.rc_outcomes = outcomes;
         record.table_needs = needs;
-        record.template = try reader.word32();
+        record.template = @fromBackingInt(try reader.word32());
         record.visible = try reader.flag();
         decoded_exports += 1;
     }
@@ -684,7 +682,7 @@ test "a Boxy object entry round-trips through its bytes" {
     const conditions = [_]u32{ 3, 9 };
     var entry: Entry = .{
         .exports = &.{
-            .{ .identity = @splat(1), .rc_borrowed_params = 5, .rc_ret_lenders = 1, .rc_read_only_params = 4, .rc_ret_unique_fields = 0, .rc_ret_borrowed = true, .rc_ret_unique = false, .may_leave_pending = true, .rc_ret_conditions = &conditions, .rc_outcomes = &.{ 0, 0, 1, 1 }, .nonescaping_fn_params = 6, .capture_reuse_fn_params = 2, .template = 6, .visible = true },
+            .{ .identity = @splat(1), .rc_borrowed_params = 5, .rc_ret_lenders = 1, .rc_read_only_params = 4, .rc_ret_unique_fields = 0, .rc_ret_borrowed = true, .rc_ret_unique = false, .may_leave_pending = true, .rc_ret_conditions = &conditions, .rc_outcomes = &.{ 0, 0, 1, 1 }, .nonescaping_fn_params = 6, .capture_reuse_fn_params = 2, .template = .some(6), .visible = true },
             .{ .identity = @splat(2), .rc_borrowed_params = 0, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 2, .rc_ret_borrowed = false, .rc_ret_unique = true, .may_leave_pending = false, .rc_ret_conditions = &.{} },
         },
         .exports_digest = undefined,
@@ -782,7 +780,7 @@ test "an export records digest is a function of the records in identity order" {
     // Where a template lies in its module, and any record no other unit
     // reads, are no part of the digest.
     changed = second;
-    changed.template = 9;
+    changed.template = .some(9);
     try std.testing.expectEqual(baseline, try exportRecordsDigest(allocator, &.{ first, changed }));
     var private = second;
     private.identity = @splat(4);

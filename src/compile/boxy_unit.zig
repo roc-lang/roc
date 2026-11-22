@@ -1024,7 +1024,7 @@ pub fn expectSiteRecords(gpa: Allocator, lowered: *const lir.CheckedPipeline.Low
     for (sites, records) |site, *record| {
         if (!site.loc.hasLocation()) base.invariant("a test unit's expect site has no source location", .{});
         record.* = .{
-            .module = lowered.lir_result.store.sourceFileModuleIdentity(site.loc.file),
+            .module = lowered.lir_result.store.sourceFileModuleIdentity(site.loc.fileIndex()),
             .region_start = site.region.start.offset,
             .region_end = site.region.end.offset,
         };
