@@ -169,9 +169,10 @@ pub const ModuleUnit = struct {
     expect_sites: bool = false,
 };
 
-/// The ownership signature and tail-drive summary a unit's ARC solved for
-/// one exported worker: what a call to it from another object compiles
-/// against (`LIR.LirProcSpec` `rc_*` fields and `may_leave_pending`).
+/// The ownership signature, tail-drive summary and tail carry a unit's ARC
+/// solved for one exported worker: what a call to it from another object
+/// compiles against (`LIR.LirProcSpec` `rc_*` fields, `may_leave_pending`
+/// and `tail_carry`).
 pub const ExportInterface = struct {
     rc_borrowed_params: u64 = 0,
     rc_ret_borrowed: bool = false,
@@ -181,6 +182,7 @@ pub const ExportInterface = struct {
     rc_ret_unique_fields: u64 = 0,
     rc_ret_conditions: []const u32 = &.{},
     may_leave_pending: bool = false,
+    tail_carry: bool = false,
     /// The outcome table of the outcome-restitution variant the worker's
     /// object outputs (`LIR.LirProcSpec.rc_outcomes`); empty when it
     /// outputs none. That variant has an interface of its own, under the
@@ -294,6 +296,7 @@ pub const ExportInterfaces = struct {
             .rc_ret_unique_fields = spec.rc_ret_unique_fields,
             .rc_ret_conditions = conditions,
             .may_leave_pending = spec.may_leave_pending,
+            .tail_carry = spec.tail_carry,
             .rc_outcomes = outcomes,
             .nonescaping_fn_params = spec.nonescaping_fn_params,
             .capture_reuse_fn_params = spec.capture_reuse_fn_params,
@@ -328,6 +331,7 @@ test "export interface snapshot owns the complete calling contract" {
         .rc_ret_unique_fields = 4,
         .rc_ret_conditions = &.{ 7, 8, 9 },
         .may_leave_pending = true,
+        .tail_carry = true,
         .rc_outcomes = &.{ 0, 0, 1, 2 },
         .nonescaping_fn_params = 5,
         .capture_reuse_fn_params = 4,
@@ -1569,6 +1573,7 @@ pub const Program = struct {
         proc.rc_ret_unique = interface.rc_ret_unique;
         proc.rc_ret_unique_fields = interface.rc_ret_unique_fields;
         proc.may_leave_pending = interface.may_leave_pending;
+        proc.tail_carry = interface.tail_carry;
         proc.nonescaping_fn_params = interface.nonescaping_fn_params;
         proc.capture_reuse_fn_params = interface.capture_reuse_fn_params;
         proc.rc_ret_conditions = self.result.store.addU32Span(interface.rc_ret_conditions) catch |err| switch (err) {
