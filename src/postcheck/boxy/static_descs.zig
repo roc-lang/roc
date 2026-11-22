@@ -2432,7 +2432,7 @@ test "override scopes are interned by content and restricted to a type's reach" 
     var declaration_ids: [2]checked.CheckedNominalDeclarationId = undefined;
     for (&declaration_ids, 0..) |*id, index| {
         id.* = @fromBackingInt(@intCast(declarations.nominal_declarations.items().len));
-        _ = try declarations.nominal_declarations.append(allocator, .{
+        try declarations.appendNominalDeclaration(allocator, .{
             .id = id.*,
             .nominal = .{ .module = declaring_module, .source_decl = @intCast(index) },
             .source_statement = @intCast(index),
