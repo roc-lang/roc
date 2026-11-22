@@ -9259,6 +9259,12 @@ placeholder whose instantiated callable is valid. Its arguments consume
 its message's `Str` demand the same way: an erroneous message retires the
 crash, and a message whose own type is not `Str` is rejected by an owned
 relation that retires the crash while the message keeps its solved type.
+A record field access and a tuple access consume their receiver the same way.
+An erroneous receiver retires the access before the access relates a row or a
+tuple shape to it, so the access never takes an error-free type from a field
+or item of an erroneous value: in `{ bad: nope, n: 5 }.n` the record is
+erroneous, and the access is the runtime error that evaluates it. A retired
+field access checks none of its segments and records no `.?` judgment.
 Statement-owned iterator loops have no parent expression to mark; they consume
 the same operand record and leave the erroneous iterable expression in
 `erroneous_value_exprs`. Checked for-nodes require a topology plan even on
@@ -9284,8 +9290,8 @@ checker records, in `retired_operand_sequences`, its operands in evaluation
 order up to and including the first erroneous one: a call's callee then its
 arguments, a method call's receiver then its arguments, a binary operator's
 two operands, an interpolation's parts, a tuple's, list's, or tag's items, a
-record's update base then its fields in source order, and a `for` loop's
-iterable. The erroneous-value sweep records that sequence as the runtime
+record's update base then its fields in source order, a field or tuple
+access's receiver, and a `for` loop's iterable. The erroneous-value sweep records that sequence as the runtime
 error's `evaluated` operands (`CIR.Expr.e_runtime_error.evaluated`, checked
 `CheckedRuntimeError.evaluated`) and keeps those operands' subtrees live;
 only the operands after the erroneous one are invalidated. An operand whose
