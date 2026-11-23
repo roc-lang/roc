@@ -318,8 +318,8 @@ pub const MismatchBehavior = enum {
     /// Merge on success exactly like a normal unify. On a top-level mismatch,
     /// keep successful child unifications, record nothing, and do not poison the
     /// top-level operands; return `Result.mismatch`. The caller owns the
-    /// diagnostic (with correct expected/actual roles) and may wrap the call in a
-    /// savepoint when it explicitly needs rollback.
+    /// diagnostic (with correct expected/actual roles) and relates in an ask
+    /// (`unifyRecording`) when it explicitly needs to discard the writes.
     write_no_report,
 };
 
@@ -375,7 +375,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
     // that contract independent of whether this particular relation happens to
     // mismatch or whether its first operand is a checked representative.
     if (opts.on_mismatch == .poison_to_err) {
-        env.types.assertNoSavepointActive();
+        env.types.assertNoAskOpen();
     }
     return unifyIn(.direct, env, a, b, opts);
 }
@@ -468,8 +468,8 @@ fn unifyIn(comptime mode: WriteMode, env: *const Env, a: Var, b: Var, opts: Opti
         return Result{ .problem = problem_idx };
     };
 
-    // Openings from a call that may still roll back must not outlive it.
-    if (mode == .direct and !env.types.savepointActive()) try env.unify_scratch.persistOpenings();
+    // Openings from a relation an ask may still discard must not outlive it.
+    if (mode == .direct) try env.unify_scratch.persistOpenings();
     // A refusal a mismatch handler absorbed did not reject this relation.
     env.unify_scratch.bounded_row_violation = null;
     env.unify_scratch.record_tail_refusal = null;
@@ -5543,8 +5543,8 @@ pub const Scratch = struct {
     // never converges—every lift would mint a fresh backing whose interior
     // recursive application is a new var, so the in-progress pair guard never
     // sees a repeat. Reusing the first opening restores the fixed graph the
-    // guard needs. Reset per unify call; savepoints bracket whole unify calls,
-    // so a rollback never leaves a memo entry dangling.
+    // guard needs. Reset per unify call; asks bracket whole unify calls, so a
+    // discarded ask never leaves a memo entry dangling.
     opened_nominals: std.ArrayListUnmanaged(OpenedNominalMemo),
     opened_nominal_args: VarSafeList,
     // Whether each entry of `opened_nominals` may outlive this unify call:

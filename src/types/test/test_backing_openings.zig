@@ -204,26 +204,26 @@ test "an opening reads args the pool it appends to held" {
     try fixture.open(.outermost, .pool);
 }
 
-test "a replay under a savepoint writes what walking the template writes" {
+test "a replay inside an ask writes what walking the template writes" {
     const gpa = std.testing.allocator;
     var fixture: Fixture = undefined;
     try fixture.init(gpa, false);
     defer fixture.deinit(gpa);
 
-    // The recording made under the savepoint outlives its rollback.
-    var walked_savepoint = try fixture.walked.createSavepoint();
-    var replayed_savepoint = try fixture.replayed.createSavepoint();
+    // The recording made inside a discarded ask outlives it.
+    var walked_mark = fixture.walked.beginAsk();
+    var replayed_mark = fixture.replayed.beginAsk();
     try fixture.open(.outermost, .fresh);
-    fixture.walked.rollbackToSavepoint(&walked_savepoint);
-    fixture.replayed.rollbackToSavepoint(&replayed_savepoint);
+    fixture.walked.endAskNo(&walked_mark);
+    fixture.replayed.endAskNo(&replayed_mark);
     try expectSameStores(&fixture.walked, &fixture.replayed);
     try fixture.open(@fromBackingInt(@intCast(2)), .fresh);
 
-    walked_savepoint = try fixture.walked.createSavepoint();
-    replayed_savepoint = try fixture.replayed.createSavepoint();
+    walked_mark = fixture.walked.beginAsk();
+    replayed_mark = fixture.replayed.beginAsk();
     try fixture.open(.outermost, .fresh);
-    fixture.walked.commitSavepoint(&walked_savepoint);
-    fixture.replayed.commitSavepoint(&replayed_savepoint);
+    try fixture.walked.endAskYes(&walked_mark);
+    try fixture.replayed.endAskYes(&replayed_mark);
     try expectSameStores(&fixture.walked, &fixture.replayed);
     try fixture.open(@fromBackingInt(@intCast(2)), .fresh);
 }

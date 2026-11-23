@@ -12,20 +12,6 @@ const instantiate = @import("instantiate.zig");
 
 const Allocator = std.mem.Allocator;
 
-/// Compile-time switch selecting whether the savepoint trail can be
-/// cross-checked against a full copy of the store.
-///
-/// - `.savepoint_only` (production): rollback trusts the savepoint's undo trail
-///   alone. The copy, the cross-check assert, and the savepoint's copy field are
-///   all compiled away—zero code, zero state.
-/// - `.clone_crosscheck` (test builds): the full-copy cross-check is compiled
-///   in, and a test can opt an individual savepoint into it via
-///   `createSavepointVerifying`. Savepoints created the normal way still copy
-///   nothing, so the suite runs the same savepoint-only path production uses.
-const SavepointVerification = enum { savepoint_only, clone_crosscheck };
-const savepoint_verification: SavepointVerification =
-    if (builtin.is_test) .clone_crosscheck else .savepoint_only;
-
 /// How an in-place write to a type-store entry treats an open ask. The
 /// unifier is specialized on it at compile time: its ordinary instantiation
 /// writes `.direct`, which records nothing, and the instantiation an ask runs
@@ -340,7 +326,7 @@ pub const Store = struct {
     /// The identity of every nominal type application and alias a descriptor
     /// of this store holds, one row per distinct identity: a stored nominal or
     /// alias descriptor names its row (`types.Descriptor.encode`). Append-only;
-    /// a probe's rollback keeps the rows it interned, which stay valid
+    /// a discarded ask keeps the rows it interned, which stay valid
     /// identities whether or not a descriptor names them.
     nominal_identities: NominalIdentity.SafeList = .{},
     alias_identities: AliasIdentity.SafeList = .{},
@@ -401,19 +387,14 @@ pub const Store = struct {
     /// relocated.
     ground_epoch: u64 = 0,
 
-    /// Undo trail for speculative unification. While a probe is active
-    /// (`savepoint_active`), every in-place write to a slot, descriptor, checked
-    /// representative, or structural rank that existed before the probe began
-    /// is journaled as (index, old value); rollback replays the journal in
-    /// reverse. Entries appended during the probe are undone by truncation, not
-    /// journaled.
-    /// Probes never nest (they bracket leaf-level unification), so this is a
-    /// flag, not a depth.
-    savepoint_active: bool = false,
     /// Set while an ask is open (`beginAsk`): the unifier runs in its
-    /// recording specialization, whose writes journal into the same trails
-    /// a savepoint uses, and every other write may only reach entries the
-    /// ask appended. Read by `beginAsk`/`endAsk*` and by debug assertions.
+    /// recording specialization, which journals every in-place write to a
+    /// slot, descriptor, checked representative, or structural rank that
+    /// existed before the ask began as (index, old value), and every other
+    /// write may only reach entries the ask appended. Discarding the ask
+    /// replays the journal in reverse and truncates what was appended. Asks
+    /// never nest, so this is a flag, not a depth. Read by `beginAsk`,
+    /// `endAsk*` and debug assertions only; no write tests it.
     ask_open: bool = false,
     /// `free_descs` while an ask is open: the ask sets the free list aside,
     /// so every class created during the ask is appended (and discarding the
@@ -422,8 +403,8 @@ pub const Store = struct {
     /// Set once checking has solved this store (see `seal`). Every write to a
     /// sealed store is a violated compiler invariant.
     sealed: bool = false,
-    savepoint_baseline_slots: u32 = 0,
-    savepoint_baseline_descs: u32 = 0,
+    ask_baseline_slots: u32 = 0,
+    ask_baseline_descs: u32 = 0,
     slot_trail: std.ArrayListUnmanaged(SlotUndo) = .empty,
     /// Advances whenever a slot write can change which class a var resolves
     /// to, so a caller that indexed resolved classes knows when to re-index.
@@ -431,8 +412,9 @@ pub const Store = struct {
     desc_trail: std.ArrayListUnmanaged(DescUndo) = .empty,
     root_meta_trail: std.ArrayListUnmanaged(RootMetaUndo) = .empty,
     union_rank_trail: std.ArrayListUnmanaged(UnionRankUndo) = .empty,
-    /// `derived_map_plans` as it stood when the open probe first changed it,
-    /// valid while `derived_map_plans_journaled`; rollback restores it.
+    /// `derived_map_plans` as it stood when the open ask first changed it,
+    /// valid while `derived_map_plans_journaled`; discarding the ask restores
+    /// it.
     derived_map_plans_undo: std.ArrayListUnmanaged(DerivedMapPlanEntry) = .empty,
     derived_map_plans_journaled: bool = false,
     /// The checking step that closed each uncommitted tag tail class a match
@@ -442,8 +424,9 @@ pub const Store = struct {
     /// Only a type mismatch's report reads it. Runtime-only: never
     /// serialized or cloned; sealing releases it.
     tag_tail_closings: std.ArrayListUnmanaged(TagTailClosingEntry) = .empty,
-    /// `tag_tail_closings` as it stood when the open probe first changed
-    /// it, valid while `tag_tail_closings_journaled`; rollback restores it.
+    /// `tag_tail_closings` as it stood when the open ask first changed it,
+    /// valid while `tag_tail_closings_journaled`; discarding the ask restores
+    /// it.
     tag_tail_closings_undo: std.ArrayListUnmanaged(TagTailClosingEntry) = .empty,
     tag_tail_closings_journaled: bool = false,
 
@@ -453,12 +436,8 @@ pub const Store = struct {
     /// appending, so the descriptor store does not grow with dead entries.
     /// Runtime-only: never serialized, cloned, or relocated.
     free_descs: std.ArrayListUnmanaged(DescStore.Idx) = .empty,
-    /// How many entries at the end of `free_descs` the open probe has
-    /// reissued. A probe takes without removing, so that rollback can hand
-    /// them back by forgetting the count; commit removes them.
-    probe_taken_descs: u32 = 0,
-    /// Descriptors orphaned while a probe is open. Rollback restores the slots
-    /// that named them, so they are freed only when the probe commits.
+    /// Descriptors orphaned while an ask is open. Discarding the ask restores
+    /// the slots that named them, so they are freed only when it is kept.
     pending_free_descs: std.ArrayListUnmanaged(DescStore.Idx) = .empty,
 
     /// Every static-dispatch relation the unifier folded into a retained
@@ -476,8 +455,8 @@ pub const Store = struct {
     /// range's end and holding the room's end, so a receiver whose
     /// requirements grow one use at a time extends its own list in place
     /// rather than copying it (`appendStaticDispatchConstraintsAfter`). Room
-    /// is neither reserved nor used while a savepoint is active, so a
-    /// rollback never has room to forget.
+    /// is neither reserved nor used by a recording write, so discarding an
+    /// ask never has room to forget.
     static_dispatch_constraint_room: std.AutoHashMapUnmanaged(u32, u32) = .empty,
 
     /// Relocate the self-contained type store and its explicit nominal lookup index.
@@ -580,7 +559,7 @@ pub const Store = struct {
     pub fn seal(self: *Self) void {
         if (std.debug.runtime_safety) {
             if (self.sealed) base.invariant("a type store was sealed twice", .{});
-            if (self.savepoint_active) base.invariant("a type store was sealed with a savepoint open", .{});
+            if (self.ask_open) base.invariant("a type store was sealed with an ask open", .{});
             if (self.frozen_anchors.count() != 0) base.invariant("a type store was sealed with a frozen class", .{});
         }
         self.sealGrowingColumns();
@@ -622,7 +601,7 @@ pub const Store = struct {
     /// constraint, and a reader resolves it (one slot read).
     fn canonicalizeForSeal(self: *Self, idents: *const base.Ident.Store) Allocator.Error!void {
         self.debugAssertUnsealed();
-        if (std.debug.runtime_safety and self.savepoint_active) base.invariant("a type store was canonicalized with a savepoint open", .{});
+        if (std.debug.runtime_safety and self.ask_open) base.invariant("a type store was canonicalized with an ask open", .{});
 
         const slot_count: usize = @intCast(self.slots.len());
         var live_descs = try std.DynamicBitSetUnmanaged.initEmpty(self.gpa, self.descs.backing.len());
@@ -921,21 +900,13 @@ pub const Store = struct {
         return false;
     }
 
-    // savepoint (create/rollback) for unification //
-    //
-    // Probe whether two types could unify, then discard the result. The undo
-    // trail records each in-place write to a pre-existing slot/descriptor;
-    // rollback replays it in reverse and truncates everything appended during
-    // the probe. Cost is O(entries the probe mutated), not O(store size).
+    // ask (see `WriteMode`) //
 
-    /// A handle returned by `createSavepoint`, passed back to
-    /// `rollbackToSavepoint`. Captures the rollback-only state: trail position
-    /// and the append-only list lengths to rewind to (and, under the
-    /// clone cross-check, a full store copy to compare against). The
-    /// slot/desc baselines are not here—they live on the store as
-    /// `savepoint_baseline_*` because they are also the per-write journaling
+    /// What discarding an ask restores: trail positions and the append-only
+    /// list lengths to rewind to. The slot/desc baselines live on the store
+    /// as `ask_baseline_*` because they are also the per-write journaling
     /// threshold.
-    pub const Savepoint = struct {
+    pub const AskMark = struct {
         slot_trail_len: usize,
         desc_trail_len: usize,
         root_meta_trail_len: usize,
@@ -949,11 +920,9 @@ pub const Store = struct {
         static_dispatch_constraints_len: usize,
         static_dispatch_relation_merges_len: usize,
         pattern_only_tag_copies_len: usize,
-        verify_clone: SavepointVerifyClone = savepoint_verify_clone_init,
     };
 
-    /// Full store copy kept only under the clone cross-check, to assert that the
-    /// trail restored all union-find state to exactly its pre-savepoint values.
+    /// Full store copy a test compares the store against (`TestCopy`).
     const VerifyClone = struct {
         slots: []Slot,
         descs: DescStore.Rows,
@@ -969,13 +938,7 @@ pub const Store = struct {
         }
     };
 
-    /// The `Savepoint.verify_clone` field type: a real optional when the clone
-    /// cross-check is compiled in, and a zero-sized `void` otherwise so
-    /// production savepoints carry no extra state.
-    const SavepointVerifyClone = if (savepoint_verification == .clone_crosscheck) ?VerifyClone else void;
-    const savepoint_verify_clone_init: SavepointVerifyClone = if (savepoint_verification == .clone_crosscheck) null else {};
-
-    fn cloneForSavepointVerification(self: *Self) Allocator.Error!VerifyClone {
+    fn cloneForAskMarkVerification(self: *Self) Allocator.Error!VerifyClone {
         const slots = try self.slots.toOwnedSlots(self.gpa);
         errdefer self.gpa.free(slots);
 
@@ -997,50 +960,14 @@ pub const Store = struct {
         };
     }
 
-    /// Open a savepoint over the type store. Pair with `rollbackToSavepoint`.
-    /// Rollback relies solely on the undo trail; no store copy is taken, so this
-    /// is the path production and the bulk of the test suite run.
-    pub fn createSavepoint(self: *Self) Allocator.Error!Savepoint {
-        return self.createSavepointImpl(false);
-    }
-
-    /// Test-only variant of `createSavepoint` that additionally copies the whole
-    /// store, so the matching `rollbackToSavepoint` asserts the trail restored
-    /// every piece of union-find state byte-for-byte—i.e. that the savepoint
-    /// trail is behaviorally identical to fully copying the store and restoring
-    /// the copy.
-    /// Only available when the clone cross-check is compiled in (test builds).
-    fn createSavepointVerifying(self: *Self) Allocator.Error!Savepoint {
-        comptime std.debug.assert(savepoint_verification == .clone_crosscheck);
-        return self.createSavepointImpl(true);
-    }
-
-    fn createSavepointImpl(self: *Self, comptime take_clone: bool) Allocator.Error!Savepoint {
-        self.debugAssertUnsealed();
-        const verify_clone: SavepointVerifyClone =
-            if (savepoint_verification == .clone_crosscheck and take_clone) vc: {
-                break :vc try self.cloneForSavepointVerification();
-            } else savepoint_verify_clone_init;
-
-        var savepoint = self.markForRestore();
-        savepoint.verify_clone = verify_clone;
-
-        // Probes never nest; catch it loudly if that invariant is ever broken.
-        std.debug.assert(!self.savepoint_active);
-        std.debug.assert(!self.ask_open);
-        std.debug.assert(self.probe_taken_descs == 0);
-        self.savepoint_active = true;
-        return savepoint;
-    }
-
-    /// The trail positions and list lengths an ask or a savepoint restores,
+    /// The trail positions and list lengths an ask restores,
     /// with the slot and descriptor baselines set from them.
-    fn markForRestore(self: *Self) Savepoint {
+    fn markForRestore(self: *Self) AskMark {
         std.debug.assert(self.pending_free_descs.items.len == 0);
         std.debug.assert(!self.derived_map_plans_journaled);
         std.debug.assert(!self.tag_tail_closings_journaled);
-        self.savepoint_baseline_slots = @intCast(self.slots.len());
-        self.savepoint_baseline_descs = @intCast(self.descs.backing.len());
+        self.ask_baseline_slots = @intCast(self.slots.len());
+        self.ask_baseline_descs = @intCast(self.descs.backing.len());
         return .{
             .slot_trail_len = self.slot_trail.items.len,
             .desc_trail_len = self.desc_trail.items.len,
@@ -1058,35 +985,8 @@ pub const Store = struct {
         };
     }
 
-    /// Close a savepoint KEEPING everything done since it was created—the
-    /// counterpart to `rollbackToSavepoint` for a speculation that succeeded
-    /// and is committed in place. The journaled undo entries are dead weight
-    /// once nothing will replay them, so the trails shrink back to their
-    /// savepoint lengths; the baselines deactivate so in-place writes stop
-    /// journaling.
-    pub fn commitSavepoint(self: *Self, savepoint: *Savepoint) void {
-        self.debugAssertUnsealed();
-        std.debug.assert(self.savepoint_active);
-        self.dropTrails(savepoint);
-        self.savepoint_active = false;
-        // The descriptors the probe reissued stay reissued, and its merges
-        // are kept, so the descriptors they orphaned are dead for good.
-        // `freeDesc` reserved their room on the free list.
-        self.free_descs.items.len -= self.probe_taken_descs;
-        self.probe_taken_descs = 0;
-        for (self.pending_free_descs.items) |desc_idx| self.recycleDesc(desc_idx);
-        self.pending_free_descs.clearRetainingCapacity();
-
-        if (savepoint_verification == .clone_crosscheck) {
-            if (savepoint.verify_clone) |*vclone| {
-                vclone.deinit(self.gpa);
-                savepoint.verify_clone = null;
-            }
-        }
-    }
-
     /// Forget the undo entries journaled since `mark`, keeping the writes.
-    fn dropTrails(self: *Self, mark: *const Savepoint) void {
+    fn dropTrails(self: *Self, mark: *const AskMark) void {
         self.desc_trail.shrinkRetainingCapacity(mark.desc_trail_len);
         self.slot_trail.shrinkRetainingCapacity(mark.slot_trail_len);
         self.root_meta_trail.shrinkRetainingCapacity(mark.root_meta_trail_len);
@@ -1095,44 +995,16 @@ pub const Store = struct {
         self.tag_tail_closings_journaled = false;
     }
 
-    /// Assert that no speculative solver transaction is open. Mismatch
-    /// poisoning is permanent error recovery and must never run speculatively;
-    /// callers that unify under a savepoint use the non-poisoning relation API.
-    pub fn assertNoSavepointActive(self: *const Self) void {
-        std.debug.assert(!self.savepoint_active);
+    /// Assert that no ask is open. Mismatch poisoning is permanent error
+    /// recovery and must never run speculatively; an ask relates through the
+    /// non-poisoning relation API.
+    pub fn assertNoAskOpen(self: *const Self) void {
         std.debug.assert(!self.ask_open);
-    }
-
-    /// Whether a speculative solver transaction is open, so writes made now
-    /// may still be rolled back.
-    pub fn savepointActive(self: *const Self) bool {
-        return self.savepoint_active;
-    }
-
-    /// Undo everything done since `savepoint` was created.
-    pub fn rollbackToSavepoint(self: *Self, savepoint: *Savepoint) void {
-        self.debugAssertUnsealed();
-        std.debug.assert(self.savepoint_active);
-        self.restoreTo(savepoint);
-        // Every descriptor the probe took from the free list is dead again:
-        // it was never removed, only counted as taken.
-        self.probe_taken_descs = 0;
-
-        // Back to not speculating; savepoint_baseline_* are dead until the next create.
-        self.savepoint_active = false;
-
-        if (savepoint_verification == .clone_crosscheck) {
-            if (savepoint.verify_clone) |*vclone| {
-                self.assertMatchesClone(vclone);
-                vclone.deinit(self.gpa);
-                savepoint.verify_clone = null;
-            }
-        }
     }
 
     /// Restore every entry journaled since `mark` and drop everything
     /// appended since.
-    fn restoreTo(self: *Self, mark: *const Savepoint) void {
+    fn restoreTo(self: *Self, mark: *const AskMark) void {
         self.class_watch.noteRollback();
         self.settled_descs.clear();
         self.function_free_descs.clear();
@@ -1174,10 +1046,10 @@ pub const Store = struct {
         // Drop everything appended since the mark. The slot/desc baselines are
         // the store fields (also the journaling threshold); the rest come from
         // the mark.
-        self.slots.shrinkRetainingCapacity(self.savepoint_baseline_slots);
-        self.descs.backing.shrinkRetainingCapacity(self.savepoint_baseline_descs);
-        self.root_metas.shrinkRetainingCapacity(self.savepoint_baseline_descs);
-        self.union_ranks.shrinkRetainingCapacity(self.savepoint_baseline_slots);
+        self.slots.shrinkRetainingCapacity(self.ask_baseline_slots);
+        self.descs.backing.shrinkRetainingCapacity(self.ask_baseline_descs);
+        self.root_metas.shrinkRetainingCapacity(self.ask_baseline_descs);
+        self.union_ranks.shrinkRetainingCapacity(self.ask_baseline_slots);
         self.vars.shrinkRetainingCapacity(mark.vars_len);
         self.record_fields.shrinkRetainingCapacity(mark.record_fields_len);
         self.tags.shrinkRetainingCapacity(mark.tags_len);
@@ -1202,10 +1074,10 @@ pub const Store = struct {
         // Rows for classes appended since the mark are written without a
         // journal and sort after every older class.
         var plans_len = self.derived_map_plans.items().len;
-        while (plans_len > 0 and @backingInt(self.derived_map_plans.items()[plans_len - 1].class) >= self.savepoint_baseline_descs) plans_len -= 1;
+        while (plans_len > 0 and @backingInt(self.derived_map_plans.items()[plans_len - 1].class) >= self.ask_baseline_descs) plans_len -= 1;
         self.derived_map_plans.shrinkRetainingCapacity(plans_len);
         var closings_len = self.tag_tail_closings.items.len;
-        while (closings_len > 0 and @backingInt(self.tag_tail_closings.items[closings_len - 1].class) >= self.savepoint_baseline_descs) closings_len -= 1;
+        while (closings_len > 0 and @backingInt(self.tag_tail_closings.items[closings_len - 1].class) >= self.ask_baseline_descs) closings_len -= 1;
         self.tag_tail_closings.shrinkRetainingCapacity(closings_len);
 
         // The merges are undone, so nothing they orphaned is dead.
@@ -1220,10 +1092,9 @@ pub const Store = struct {
     /// to entries appended since. The free list is set aside, so every class
     /// created meanwhile is appended. Asks never nest, and never open inside
     /// a savepoint.
-    pub fn beginAsk(self: *Self) Savepoint {
+    pub fn beginAsk(self: *Self) AskMark {
         self.debugAssertUnsealed();
         std.debug.assert(!self.ask_open);
-        std.debug.assert(!self.savepoint_active);
         std.debug.assert(self.ask_free_descs.items.len == 0);
         const mark = self.markForRestore();
         std.mem.swap(std.ArrayListUnmanaged(DescStore.Idx), &self.free_descs, &self.ask_free_descs);
@@ -1233,7 +1104,7 @@ pub const Store = struct {
 
     /// Close the open ask keeping everything it wrote: the descriptors its
     /// merges orphaned are dead for good, and go on the free list.
-    pub fn endAskYes(self: *Self, mark: *const Savepoint) Allocator.Error!void {
+    pub fn endAskYes(self: *Self, mark: *const AskMark) Allocator.Error!void {
         self.debugAssertUnsealed();
         std.debug.assert(self.ask_open);
         self.dropTrails(mark);
@@ -1247,7 +1118,7 @@ pub const Store = struct {
     /// Close the open ask discarding everything since `beginAsk`: every
     /// journaled entry is restored and everything appended is dropped, so
     /// the store is as it was.
-    pub fn endAskNo(self: *Self, mark: *const Savepoint) void {
+    pub fn endAskNo(self: *Self, mark: *const AskMark) void {
         self.debugAssertUnsealed();
         std.debug.assert(self.ask_open);
         self.restoreTo(mark);
@@ -1275,7 +1146,7 @@ pub const Store = struct {
     /// the store against (`expectRestoredTo`). Test builds only.
     pub const TestCopy = struct {
         clone: VerifyClone,
-        mark: Savepoint,
+        mark: AskMark,
         free_descs: []DescStore.Idx,
         tag_tail_closings: []TagTailClosingEntry,
 
@@ -1288,15 +1159,15 @@ pub const Store = struct {
 
     pub fn testCopy(self: *Self) Allocator.Error!TestCopy {
         comptime std.debug.assert(builtin.is_test);
-        var full = try self.cloneForSavepointVerification();
+        var full = try self.cloneForAskMarkVerification();
         errdefer full.deinit(self.gpa);
         const free = try self.gpa.dupe(DescStore.Idx, self.free_descs.items);
         errdefer self.gpa.free(free);
-        const saved_slots = self.savepoint_baseline_slots;
-        const saved_descs = self.savepoint_baseline_descs;
+        const saved_slots = self.ask_baseline_slots;
+        const saved_descs = self.ask_baseline_descs;
         defer {
-            self.savepoint_baseline_slots = saved_slots;
-            self.savepoint_baseline_descs = saved_descs;
+            self.ask_baseline_slots = saved_slots;
+            self.ask_baseline_descs = saved_descs;
         }
         return .{
             .clone = full,
@@ -1349,11 +1220,11 @@ pub const Store = struct {
     /// Whether `var_` existed when the open ask began.
     pub fn predatesAsk(self: *const Self, var_: Var) bool {
         std.debug.assert(self.ask_open);
-        return @backingInt(var_) < self.savepoint_baseline_slots;
+        return @backingInt(var_) < self.ask_baseline_slots;
     }
 
     /// Clone cross-check: assert the trail-restored store is byte-for-byte
-    /// identical to the full copy taken at `createSavepointVerifying`.
+    /// identical to the full copy `vclone`.
     fn assertMatchesClone(self: *Self, vclone: *const VerifyClone) void {
         std.debug.assert(self.slots.len() == vclone.slots.len);
         for (vclone.slots, 0..) |b, i| std.debug.assert(std.meta.eql(self.slots.get(@fromBackingInt(@intCast(i))), b));
@@ -1378,11 +1249,8 @@ pub const Store = struct {
         }
     }
 
-    /// In-place slot write. While a probe is active, journals the slot's previous
-    /// value so rollback can restore it; a failed journal append is propagated
-    /// rather than risk a type store the trail can no longer faithfully undo.
     /// Whether a write in `mode` to the entry at `index` of a list that was
-    /// `baseline` long when the open ask or savepoint began must journal the
+    /// `baseline` long when the open ask began must journal the
     /// entry's old value. A recording write journals every entry that
     /// predates the ask; a direct write never reaches one while an ask is
     /// open.
@@ -1396,14 +1264,18 @@ pub const Store = struct {
                 if (std.debug.runtime_safety and self.ask_open and index < baseline) {
                     base.invariant("a direct write reached a type-store entry an open ask may restore", .{});
                 }
-                return self.savepoint_active and index < baseline;
+                return false;
             },
         }
     }
 
+    /// In-place slot write. A recording write journals the slot's previous
+    /// value so discarding the ask can restore it; a failed journal append is
+    /// propagated rather than risk a type store the trail can no longer
+    /// faithfully undo.
     fn setSlot(self: *Self, comptime mode: WriteMode, idx: SlotStore.Idx, val: Slot) Allocator.Error!void {
         self.debugAssertUnsealed();
-        if (self.journalsWrite(mode, @backingInt(idx), self.savepoint_baseline_slots)) {
+        if (self.journalsWrite(mode, @backingInt(idx), self.ask_baseline_slots)) {
             try self.slot_trail.append(self.gpa, .{ .idx = idx, .old = self.slots.get(idx) });
         }
         switch (self.slots.get(idx)) {
@@ -1477,11 +1349,12 @@ pub const Store = struct {
         self.descs.setWord(idx, word);
     }
 
-    /// Before an in-place write to descriptor `idx`: journal its row while a
-    /// probe that predates it is open, and note the write for class watches.
+    /// Before an in-place write to descriptor `idx`: journal its row when a
+    /// recording write reaches a descriptor that predates the open ask, and
+    /// note the write for class watches.
     inline fn journalDescWrite(self: *Self, comptime mode: WriteMode, idx: DescStore.Idx) Allocator.Error!void {
         self.debugAssertUnsealed();
-        if (self.journalsWrite(mode, @backingInt(idx), self.savepoint_baseline_descs)) try self.journalDescRow(idx);
+        if (self.journalsWrite(mode, @backingInt(idx), self.ask_baseline_descs)) try self.journalDescRow(idx);
         self.class_watch.noteWrite(idx);
     }
 
@@ -1527,7 +1400,7 @@ pub const Store = struct {
     /// In-place equivalence-class root metadata write. See setSlot.
     fn setRootMeta(self: *Self, comptime mode: WriteMode, idx: DescStore.Idx, val: RootMeta) Allocator.Error!void {
         self.debugAssertUnsealed();
-        if (self.journalsWrite(mode, @backingInt(idx), self.savepoint_baseline_descs)) {
+        if (self.journalsWrite(mode, @backingInt(idx), self.ask_baseline_descs)) {
             try self.root_meta_trail.append(self.gpa, .{ .idx = idx, .old = self.getRootMeta(idx) });
         }
         self.class_watch.noteWrite(idx);
@@ -1537,7 +1410,7 @@ pub const Store = struct {
     fn setUnionRank(self: *Self, comptime mode: WriteMode, storage_var: Var, rank: u8) Allocator.Error!void {
         self.debugAssertUnsealed();
         const slot_idx = Self.varToSlotIdx(storage_var);
-        if (self.journalsWrite(mode, @backingInt(slot_idx), self.savepoint_baseline_slots)) {
+        if (self.journalsWrite(mode, @backingInt(slot_idx), self.ask_baseline_slots)) {
             try self.union_rank_trail.append(self.gpa, .{ .idx = slot_idx, .old = self.getUnionRank(storage_var) });
         }
         self.union_ranks.set(unionRankIdx(slot_idx), rank);
@@ -1558,9 +1431,8 @@ pub const Store = struct {
     fn appendClassRow(self: *Self, row: Desc.Row, checked_var: Var) Allocator.Error!DescStore.Idx {
         self.debugAssertUnsealed();
         if (self.takeFreeDesc()) |desc_idx| {
-            // Inside a probe the freed descriptor predates it (frees made
-            // during the probe are pending), so both writes journal and
-            // rollback restores them.
+            // An open ask sets the free list aside, so a reissued
+            // descriptor is never one an ask may restore.
             try self.setDescRowUnguarded(.direct, desc_idx, row);
             try self.setRootMeta(.direct, desc_idx, .{ .checked_var = checked_var });
             return desc_idx;
@@ -1572,10 +1444,9 @@ pub const Store = struct {
     }
 
     /// `appendClassRow` into descriptor and root metadata room reserved
-    /// earlier. A reissued descriptor's writes may still journal.
+    /// earlier.
     inline fn appendClassRowAssumeCapacity(self: *Self, row: Desc.Row, checked_var: Var) Allocator.Error!DescStore.Idx {
         if (self.takeFreeDesc()) |desc_idx| {
-            // As in `appendClassRow`, both writes journal inside a probe.
             try self.setDescRowUnguarded(.direct, desc_idx, row);
             try self.setRootMeta(.direct, desc_idx, .{ .checked_var = checked_var });
             return desc_idx;
@@ -1592,21 +1463,16 @@ pub const Store = struct {
         return desc_idx;
     }
 
-    /// The most recently freed descriptor not yet reissued, if any. Outside
-    /// a probe it leaves the free list; inside one it is only counted as
-    /// taken, so rollback can hand it back.
+    /// The most recently freed descriptor not yet reissued, if any. An open
+    /// ask has set the free list aside, so it reissues none.
     fn takeFreeDesc(self: *Self) ?DescStore.Idx {
-        if (!self.savepoint_active) return self.free_descs.pop();
-        const available = self.free_descs.items.len - self.probe_taken_descs;
-        if (available == 0) return null;
-        self.probe_taken_descs += 1;
-        return self.free_descs.items[available - 1];
+        return self.free_descs.pop();
     }
 
     /// Free the descriptor `former_root` named until the write that orphaned
     /// it: no slot names it any more, so the next class created may take it.
-    /// While a probe is open the free waits for the probe to commit, since
-    /// rollback would restore `former_root`'s slot.
+    /// A recording write's free waits for the ask to be kept, since
+    /// discarding it would restore `former_root`'s slot.
     fn freeDesc(self: *Self, comptime mode: WriteMode, desc_idx: DescStore.Idx, former_root: Var) Allocator.Error!void {
         self.debugAssertUnsealed();
         std.debug.assert(!std.meta.eql(self.slots.get(Self.varToSlotIdx(former_root)), Slot{ .root = desc_idx }));
@@ -1617,15 +1483,7 @@ pub const Store = struct {
                 try self.pending_free_descs.append(self.gpa, desc_idx);
                 return;
             },
-            .direct => {
-                std.debug.assert(!self.ask_open);
-                if (self.savepoint_active) {
-                    // Reserve the free-list room now so committing never fails.
-                    try self.free_descs.ensureUnusedCapacity(self.gpa, self.pending_free_descs.items.len + 1);
-                    try self.pending_free_descs.append(self.gpa, desc_idx);
-                    return;
-                }
-            },
+            .direct => std.debug.assert(!self.ask_open),
         }
         try self.free_descs.ensureUnusedCapacity(self.gpa, 1);
         self.recycleDesc(desc_idx);
@@ -1636,7 +1494,7 @@ pub const Store = struct {
     /// a frozen anchor, a derived map plan, and a tag tail closing. The caller has reserved the
     /// list's room.
     fn recycleDesc(self: *Self, desc_idx: DescStore.Idx) void {
-        std.debug.assert(!self.savepoint_active);
+        std.debug.assert(!self.ask_open);
         const index: u32 = @backingInt(desc_idx);
         if (index < self.settled_descs.bits.bit_length) self.settled_descs.bits.unset(index);
         if (index < self.function_free_descs.bits.bit_length) self.function_free_descs.bits.unset(index);
@@ -1679,10 +1537,10 @@ pub const Store = struct {
         return self.derived_map_plans.items()[slot.index].plan;
     }
 
-    /// Before the open probe first changes the plan rows, keep a copy for
-    /// rollback.
+    /// Before a recording write first changes a plan row of a class that
+    /// predates the open ask, keep a copy for discarding the ask.
     fn journalDerivedMapPlans(self: *Self, comptime mode: WriteMode, class: DescStore.Idx) Allocator.Error!void {
-        if (!self.journalsWrite(mode, @backingInt(class), self.savepoint_baseline_descs) or self.derived_map_plans_journaled) return;
+        if (!self.journalsWrite(mode, @backingInt(class), self.ask_baseline_descs) or self.derived_map_plans_journaled) return;
         self.derived_map_plans_undo.clearRetainingCapacity();
         try self.derived_map_plans_undo.appendSlice(self.gpa, self.derived_map_plans.items());
         self.derived_map_plans_journaled = true;
@@ -1769,10 +1627,10 @@ pub const Store = struct {
         return self.tag_tail_closings.items[slot.index].closing;
     }
 
-    /// Before the open probe first changes the closing rows, keep a copy for
-    /// rollback.
+    /// Before a recording write first changes a closing row of a class that
+    /// predates the open ask, keep a copy for discarding the ask.
     fn journalTagTailClosings(self: *Self, comptime mode: WriteMode, class: DescStore.Idx) Allocator.Error!void {
-        if (!self.journalsWrite(mode, @backingInt(class), self.savepoint_baseline_descs) or self.tag_tail_closings_journaled) return;
+        if (!self.journalsWrite(mode, @backingInt(class), self.ask_baseline_descs) or self.tag_tail_closings_journaled) return;
         self.tag_tail_closings_undo.clearRetainingCapacity();
         try self.tag_tail_closings_undo.appendSlice(self.gpa, self.tag_tail_closings.items);
         self.tag_tail_closings_journaled = true;
@@ -2142,12 +2000,12 @@ pub const Store = struct {
     /// Create a new variable with the provided content assuming there is capacity
     pub fn appendFromContentAssumeCapacity(self: *Self, content: Content, rank: Rank) Var {
         self.debugAssertUnsealed();
-        std.debug.assert(!self.savepoint_active);
+        std.debug.assert(!self.ask_open);
         const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(self.slots.len()))));
         const checked_var = Self.slotIdxToVar(slot_idx);
         const desc: Desc = .{ .content = content, .rank = rank };
         const desc_idx = if (self.free_descs.pop()) |freed| reused: {
-            // Nothing watches or settles a freed descriptor, and no probe is
+            // Nothing watches or settles a freed descriptor, and no ask is
             // open, so the raw writes need no notes and no journal.
             self.descs.setRow(freed, self.encodeDescWithoutIdentity(desc));
             self.root_metas.set(rootMetaIdx(freed), .{ .checked_var = checked_var });
@@ -3024,7 +2882,7 @@ pub const Store = struct {
     ) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
         self.debugAssertUnsealed();
         if (mode == .direct) std.debug.assert(!self.ask_open);
-        const reserves_room = mode == .direct and !self.savepoint_active;
+        const reserves_room = mode == .direct;
         const list = &self.static_dispatch_constraints;
         const start: u32 = @backingInt(prefix.start);
         const end: u32 = start + @as(u32, @intCast(prefix.count));
@@ -3253,7 +3111,7 @@ pub const Store = struct {
     /// not journaled, so a rollback could not undo the registration.
     pub fn registerNominalDecl(self: *Self, decl: NominalDecl) Allocator.Error!NominalDecl.Idx {
         self.debugAssertUnsealed();
-        std.debug.assert(!self.savepoint_active);
+        std.debug.assert(!self.ask_open);
         std.debug.assert(decl.source.sourceDecl().present);
 
         const statement = decl.statement();
@@ -3341,7 +3199,7 @@ pub const Store = struct {
     /// fill a reserved entry once its formals and backing have been copied).
     pub fn setNominalDecl(self: *Self, idx: NominalDecl.Idx, decl: NominalDecl) void {
         self.debugAssertUnsealed();
-        std.debug.assert(!self.savepoint_active);
+        std.debug.assert(!self.ask_open);
         self.noteNominalDeclWrite(decl);
         self.nominal_decls.set(idx, decl);
     }
@@ -3354,7 +3212,7 @@ pub const Store = struct {
     /// recursion). Applications of invalid declarations poison to err.
     pub fn markNominalDeclInvalid(self: *Self, idx: NominalDecl.Idx) void {
         self.debugAssertUnsealed();
-        std.debug.assert(!self.savepoint_active);
+        std.debug.assert(!self.ask_open);
         var decl = self.nominal_decls.get(idx).*;
         decl.flags.valid = false;
         self.invalid_nominal_decl_written = true;
@@ -3390,7 +3248,7 @@ pub const Store = struct {
     /// is otherwise; the word is written either way, so nothing branches on
     /// `condition`. A mark is a generalization pass's scratch,
     /// which the pass clears before it returns, so a mark write is neither
-    /// journaled nor reported to class watches: no probe opens or rolls back
+    /// journaled nor reported to class watches: no ask opens or is discarded
     /// while a pass runs, and a journaled row never carries a mark
     /// (`journalDescRow`).
     pub fn markGeneralizingIf(self: *Self, desc_idx: DescStore.Idx, condition: bool) void {
@@ -3588,11 +3446,12 @@ pub const Store = struct {
         self.debugAssertUnsealed();
         const storage = self.findStorageRoot(initial_var);
 
-        // Compress the chain so future resolves are O(1). Skipped during a probe:
-        // compression is a pure optimization (it never changes what a var
-        // resolves to), so it would only be journaled and rolled back. Skipping
-        // also keeps this resolver infallible (no journaling, no allocation).
-        if (mode == .direct and !self.savepoint_active and initial_var != storage.storage_var) {
+        // Compress the chain so future resolves are O(1). The recording
+        // specialization skips it: compression is a pure optimization (it
+        // never changes what a var resolves to), so it would only be
+        // journaled and discarded. Skipping also keeps this resolver
+        // infallible (no journaling, no allocation).
+        if (mode == .direct and initial_var != storage.storage_var) {
             // A compressed slot could come to name a variable an open ask
             // appended, which discarding the ask truncates.
             std.debug.assert(!self.ask_open);
@@ -4077,7 +3936,7 @@ pub const Store = struct {
     /// `occurrence` is left as a rank-zero storage root whose slot the caller
     /// assigns.
     fn detachOccurrence(self: *Self, class: ResolvedStorageRoot, occurrence: Var) Allocator.Error!void {
-        std.debug.assert(!self.savepoint_active);
+        std.debug.assert(!self.ask_open);
         const checked_var = class.meta.checked_var;
         std.debug.assert(occurrence != checked_var);
 
@@ -4544,15 +4403,15 @@ test "canonicalizing for seal gives children representatives and flattens rows" 
         .ext = inner_tags,
     } } });
 
-    // Sealing retires a real committed probe and a thawed freeze, while the
-    // selected plan and nominal backing remain part of the solved store.
+    // Sealing retires a kept ask and a thawed freeze, while the selected plan
+    // and nominal backing remain part of the solved store.
     const callable = try store.fresh();
     const joined = try store.fresh();
     const plan = testDerivedMapPlan(5, 1);
     try store.setDerivedMapPlan(callable, plan);
-    var savepoint = try store.createSavepoint();
-    try store.union_(callable, joined, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
-    store.commitSavepoint(&savepoint);
+    const mark = store.beginAsk();
+    try store.unionIn(.recording, callable, joined, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
+    try store.endAskYes(&mark);
     const checked_callable = store.resolveVar(callable).var_;
     try store.freezeClass(checked_callable);
     try store.thawFrozenClasses();
@@ -4735,16 +4594,16 @@ test "merging classes of a sealed store is a violated invariant" {
     try base.death_test.expectPanic("a sealed type store was written", unifySealedClasses, .{});
 }
 
-fn openSavepointOnSealedStore() Allocator.Error!void {
+fn openAskOnSealedStore() Allocator.Error!void {
     var a: Var = undefined;
     var b: Var = undefined;
     var store = try sealedTestStore(&a, &b);
     defer store.deinit();
-    _ = try store.createSavepoint();
+    _ = store.beginAsk();
 }
 
-test "opening a savepoint on a sealed store is a violated invariant" {
-    try base.death_test.expectPanic("a sealed type store was written", openSavepointOnSealedStore, .{});
+test "opening an ask on a sealed store is a violated invariant" {
+    try base.death_test.expectPanic("a sealed type store was written", openAskOnSealedStore, .{});
 }
 
 fn compressSealedPath() Allocator.Error!void {
@@ -5138,12 +4997,12 @@ test "resetting a storage root to unbound frees its old descriptor" {
     try std.testing.expectEqual(@as(usize, 0), store.free_descs.items.len);
 }
 
-test "a probe frees nothing until it commits and rollback restores the free list" {
+test "an ask frees nothing until it is kept and reissues no freed descriptor" {
     const gpa = std.testing.allocator;
     var store = try Store.init(gpa);
     defer store.deinit();
 
-    // A class the probes merge away, and two descriptors freed before them.
+    // A class the asks merge away, and two descriptors freed before them.
     const d = try store.freshFromContent(.{ .structure = .empty_record });
     const d_desc = store.resolveVar(d).desc_idx;
     const a = try store.fresh();
@@ -5156,42 +5015,35 @@ test "a probe frees nothing until it commits and rollback restores the free list
     defer gpa.free(free_before);
     const descs_before = store.descs.backing.len();
 
-    // A rolled-back probe: a fresh var takes a freed descriptor and the
-    // merge inside orphans a pre-probe descriptor. Rollback puts the
-    // descriptor and the free list back (the verifying savepoint also
-    // cross-checks every descriptor against a full copy).
+    // A discarded ask: a fresh var is appended rather than reissued, and the
+    // merge inside orphans a pre-ask descriptor. Discarding puts the
+    // descriptor and the free list back, byte for byte.
     {
-        var savepoint = try store.createSavepointVerifying();
+        var copy = try store.testCopy();
+        defer copy.deinit(gpa);
+        const mark = store.beginAsk();
         const e = try store.fresh();
-        try std.testing.expectEqual(free_before[1], store.resolveVar(e).desc_idx);
-        try std.testing.expectEqual(@as(u32, 1), store.probe_taken_descs);
-        try store.union_(d, a, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
-        try std.testing.expectEqualSlices(DescStore.Idx, free_before, store.free_descs.items);
+        try std.testing.expectEqual(descs_before, @backingInt(store.resolveVar(e).desc_idx));
+        try store.unionIn(.recording, d, a, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
         try std.testing.expectEqualSlices(DescStore.Idx, &.{d_desc}, store.pending_free_descs.items);
-        store.rollbackToSavepoint(&savepoint);
-        try std.testing.expectEqualSlices(DescStore.Idx, free_before, store.free_descs.items);
-        try std.testing.expectEqual(@as(u32, 0), store.probe_taken_descs);
-        try std.testing.expectEqual(@as(usize, 0), store.pending_free_descs.items.len);
+        store.endAskNo(&mark);
+        try store.expectRestoredTo(&copy);
         try std.testing.expectEqual(d_desc, store.resolveVar(d).desc_idx);
         try std.testing.expectEqual(Content{ .structure = .empty_record }, store.resolveVar(d).desc.content);
-        try std.testing.expectEqual(descs_before, store.descs.backing.len());
     }
 
-    // A committed probe keeps its merge, so the orphan is freed at commit,
-    // and the descriptor the probe took stays taken.
+    // A kept ask keeps its merge, so the orphan is freed when it is kept.
     {
-        var savepoint = try store.createSavepoint();
+        const mark = store.beginAsk();
         const e = try store.fresh();
         const e_desc = store.resolveVar(e).desc_idx;
-        try std.testing.expectEqual(free_before[1], e_desc);
-        try store.union_(d, a, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
-        store.commitSavepoint(&savepoint);
-        try std.testing.expectEqualSlices(DescStore.Idx, &.{ free_before[0], d_desc }, store.free_descs.items);
+        try store.unionIn(.recording, d, a, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
+        try store.endAskYes(&mark);
+        try std.testing.expectEqualSlices(DescStore.Idx, &.{ free_before[0], free_before[1], d_desc }, store.free_descs.items);
         try std.testing.expectEqual(@as(usize, 0), store.pending_free_descs.items.len);
         try std.testing.expectEqual(e_desc, store.resolveVar(e).desc_idx);
         try std.testing.expect(!descIsNamed(&store, d_desc));
         try std.testing.expectEqual(store.resolveVar(a).desc_idx, store.resolveVar(d).desc_idx);
-        try std.testing.expectEqual(descs_before, store.descs.backing.len());
         for (store.free_descs.items) |freed| try std.testing.expect(!descIsNamed(&store, freed));
     }
 }
@@ -5318,10 +5170,10 @@ test "settled classes survive content-preserving merges and clear on any observa
     try store.union_(settled_flex, structure, .{ .content = .{ .structure = .empty_record }, .rank = Rank.outermost });
     try std.testing.expect(!store.isSettled(witness));
 
-    // A rollback clears every settled class.
+    // A discarded ask clears every settled class.
     try store.markSettled(&.{witness});
-    var savepoint = try store.createSavepoint();
-    store.rollbackToSavepoint(&savepoint);
+    const mark = store.beginAsk();
+    store.endAskNo(&mark);
     try std.testing.expect(!store.isSettled(witness));
 }
 
@@ -5351,18 +5203,14 @@ test "function-free records are kept apart from settled ones and forgotten on an
     try std.testing.expect(!store.isFunctionFree(recorded));
     try std.testing.expect(store.isSettled(settled));
 
-    // A rollback forgets every record.
+    // A discarded ask forgets every record.
     try store.markFunctionFree(&.{settled});
-    var savepoint = try store.createSavepoint();
-    store.rollbackToSavepoint(&savepoint);
+    const mark = store.beginAsk();
+    store.endAskNo(&mark);
     try std.testing.expect(!store.isFunctionFree(settled));
 }
 
-test "savepoint clone cross-check is compiled in for test builds" {
-    try std.testing.expect(savepoint_verification == .clone_crosscheck);
-}
-
-test "savepoint trail is byte-for-byte identical to a full store copy+rollback" {
+test "a discarded ask leaves the store byte-for-byte as it was" {
     const gpa = std.testing.allocator;
 
     // A few independent runs with different mutation mixes.
@@ -5371,87 +5219,32 @@ test "savepoint trail is byte-for-byte identical to a full store copy+rollback" 
         var store = try Store.init(gpa);
         defer store.deinit();
 
-        // Pre-savepoint content: a handful of vars, some redirected/unioned.
+        // Content before the ask: a handful of vars, some redirected/unioned.
         const a = try store.fresh();
         const b = try store.fresh();
         _ = try store.freshRedirect(b);
         try store.union_(a, b, .{ .content = .err, .rank = Rank.generalized });
 
-        // Independent oracle: keep our own copy of the pre-savepoint slots/descs
-        // to compare against after rollback, alongside the verifying savepoint's
-        // internal cross-check.
-        const before_slots = try store.slots.toOwnedSlots(gpa);
-        defer gpa.free(before_slots);
-        var before_descs = try store.descs.backing.clone(gpa);
-        defer before_descs.deinit(gpa);
-        var before_root_metas = try store.root_metas.clone(gpa);
-        defer before_root_metas.deinit(gpa);
-        const before_union_ranks = try gpa.dupe(u8, store.union_ranks.items);
-        defer gpa.free(before_union_ranks);
-        const before_vars_len = store.vars.items.len;
+        var copy = try store.testCopy();
+        defer copy.deinit(gpa);
+        const mark = store.beginAsk();
 
-        // Verifying savepoint: copies the whole store up front; rollback asserts
-        // the trail restored it byte-for-byte (same behavior as restoring a copy).
-        var sp = try store.createSavepointVerifying();
-
-        // Mutations a probe might do, varied per run. These exercise: appends
-        // (fresh/register), in-place writes to pre-existing entries (union_,
-        // setVarContent, setDescRank), the same entry written twice (reverse
-        // replay), and the compression path (a no-op while a savepoint is open).
+        // Writes a relation an ask runs might make, varied per run: appends
+        // (fresh/register), recording writes to entries that predate the ask
+        // (union, content, rank), the same entry written twice (reverse
+        // replay), and a recording resolve (which compresses nothing).
         const fresh1 = try store.fresh();
         const fresh2 = try store.register(.{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
-        try store.union_(fresh1, fresh2, .{ .content = .err, .rank = Rank.outermost });
-        try store.setVarContent(a, .{ .flex = Flex.init() });
-        try store.setVarContent(a, .err);
-        if (run % 2 == 0) try store.setDescRank(store.resolveVar(b).desc_idx, Rank.outermost);
-        _ = store.resolveVarAndCompressPath(a);
+        try store.unionIn(.recording, fresh1, fresh2, .{ .content = .err, .rank = Rank.outermost });
+        try store.setVarContentIn(.recording, a, .{ .flex = Flex.init() });
+        try store.setVarContentIn(.recording, a, .err);
+        if (run % 2 == 0) try store.setDescRankIn(.recording, store.resolveVar(b).desc_idx, Rank.outermost);
+        _ = store.resolveVarWordAndCompressPathIn(.recording, a);
 
-        store.rollbackToSavepoint(&sp);
-
-        // The store must be byte-identical to its pre-savepoint state.
-        try std.testing.expect(!store.savepoint_active);
-        try std.testing.expectEqual(@as(u64, before_slots.len), store.slots.len());
-        for (before_slots, 0..) |x, slot_index| {
-            try std.testing.expect(std.meta.eql(x, store.slots.get(@fromBackingInt(@intCast(slot_index)))));
-        }
-        try std.testing.expectEqual(before_descs.len(), store.descs.backing.len());
-        var i: usize = 0;
-        while (i < before_descs.len()) : (i += 1) {
-            try std.testing.expect(std.meta.eql(before_descs.get(@fromBackingInt(@intCast(i))), store.descs.backing.get(@fromBackingInt(@intCast(i)))));
-        }
-        try std.testing.expectEqual(before_root_metas.len(), store.root_metas.len());
-        i = 0;
-        while (i < before_root_metas.len()) : (i += 1) {
-            try std.testing.expect(std.meta.eql(before_root_metas.get(@fromBackingInt(@intCast(i))), store.root_metas.get(@fromBackingInt(@intCast(i)))));
-        }
-        try std.testing.expectEqualSlices(u8, before_union_ranks, store.union_ranks.items);
-        try std.testing.expectEqual(before_vars_len, store.vars.items.len);
+        store.endAskNo(&mark);
+        try std.testing.expect(!store.ask_open);
+        try store.expectRestoredTo(&copy);
     }
-}
-
-test "createSavepointVerifying cross-checks a probe-unify against a full copy" {
-    const gpa = std.testing.allocator;
-
-    var store = try Store.init(gpa);
-    defer store.deinit();
-
-    // A small typed environment a real probe would unify against.
-    const a = try store.fresh();
-    const b = try store.fresh();
-    try store.union_(a, b, .{ .content = .err, .rank = Rank.generalized });
-
-    // A probe brackets a trial unification it always discards. The verifying
-    // savepoint copies the store up front; on rollback its internal cross-check
-    // asserts the trail put the store back byte-for-byte—exactly as if we had
-    // restored the full copy.
-    var sp = try store.createSavepointVerifying();
-    const c = try store.fresh();
-    try store.union_(a, c, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
-    try store.setVarContent(b, .err);
-    _ = store.resolveVarAndCompressPath(a);
-    store.rollbackToSavepoint(&sp);
-
-    try std.testing.expect(!store.savepoint_active);
 }
 
 test "Store empty CompactWriter roundtrip" {
@@ -5726,7 +5519,7 @@ test "a derived map plan follows its callable's class through merges and detache
     try std.testing.expectEqual(@as(usize, 2), store.derived_map_plans.items().len);
 }
 
-test "a rolled-back probe restores the derived map plans and a freed class forgets its plan" {
+test "a discarded ask restores the derived map plans and a freed class forgets its plan" {
     const gpa = std.testing.allocator;
     var store = try Store.init(gpa);
     defer store.deinit();
@@ -5737,12 +5530,15 @@ test "a rolled-back probe restores the derived map plans and a freed class forge
     const other = try store.fresh();
     try store.setDerivedMapPlan(callable, plan);
     {
-        var savepoint = try store.createSavepointVerifying();
-        try store.union_(callable, other, flex_desc);
+        var copy = try store.testCopy();
+        defer copy.deinit(gpa);
+        const mark = store.beginAsk();
+        try store.unionIn(.recording, callable, other, flex_desc);
         const fresh_callable = try store.fresh();
         try store.setDerivedMapPlan(fresh_callable, testDerivedMapPlan(4, 0));
         try std.testing.expectEqual(plan, store.derivedMapPlan(other).?);
-        store.rollbackToSavepoint(&savepoint);
+        store.endAskNo(&mark);
+        try store.expectRestoredTo(&copy);
     }
     try std.testing.expectEqual(plan, store.derivedMapPlan(callable).?);
     try std.testing.expectEqual(@as(?DerivedMapPlan, null), store.derivedMapPlan(other));

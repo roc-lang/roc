@@ -4603,7 +4603,7 @@ rank is not `Descriptor.rank`: descriptor rank is the Hindley-Milner scope level
 used to decide generalization, while union-find rank is private data-structure
 metadata. On a union, the lower structural rank redirects to the higher one; a
 tie keeps the second storage root and increments its structural rank. Path
-compression may change storage parents at any time outside a solver savepoint.
+compression may change storage parents at any time outside an ask (Asks).
 Neither operation may change the class descriptor or checked representative.
 
 Each live storage root names one descriptor whose root metadata contains the
@@ -4631,13 +4631,11 @@ last-in-first-out, so the indices a module's check produces, and the bytes
 written to its cache, stay deterministic. The free list is runtime-only: a
 loaded store starts with none, and nothing outside the store may hold a
 descriptor index across a merge, since the index may name another class once
-reused. While a savepoint is open a merge does not free its orphan, because
-rollback restores the slot that named it; the orphan waits on a pending list
-that commit frees and rollback discards. A probe may still reissue descriptors
-from the free list: those predate the probe, so the writes that reissue them
-journal like any other pre-probe write, and the probe only counts them as
-taken rather than removing them, so commit removes them and rollback forgets
-the count.
+reused. While an ask is open a merge does not free its orphan, because
+discarding the ask restores the slot that named it; the orphan waits on a
+pending list that keeping the ask frees and discarding it drops. An open ask
+sets the free list aside, so it reissues no descriptor and every class it
+creates is appended.
 
 `resolveVar` returns the checked representative and class descriptor;
 storage-root traversal is a private store operation. Consequently a checked
@@ -4645,8 +4643,8 @@ representative is not required to be a storage root slot. `is_root` on a
 resolved variable means that the queried variable is the checked
 representative, which is the only root notion checker consumers may use.
 
-Solver savepoints journal storage-parent, structural-rank, and root-metadata
-mutations and restore all three byte-for-byte. Serializing the sealed store
+An ask's recording writes journal storage-parent, structural-rank, and
+root-metadata mutations, and discarding it restores all three byte-for-byte. Serializing the sealed store
 includes both metadata stores, so loading a cached store preserves its checked
 representatives and balanced structure. A declared solver-mutating redirect
 joins whole classes through the same balanced mechanism while explicitly
@@ -4654,15 +4652,15 @@ adopting the redirect destination's descriptor and checked representative; it
 must not directly graft one storage root beneath another and recreate an
 unbounded chain.
 
-A solver savepoint runs only non-poisoning unification. Successful speculative
-relations may be committed in place, but a mismatch returns without poisoning
-either top-level operand so the savepoint owner can roll the relation back.
+An ask runs only non-poisoning unification. Successful speculative
+relations may be kept in place, but a mismatch returns without poisoning
+either top-level operand so the ask's owner can discard the relation.
 Occurrence-directed mismatch poisoning is permanent recovery against the live
-equivalence classes; running it inside a savepoint would both do work whose
+equivalence classes; running it inside an ask would both do work whose
 result must be discarded and make correctness depend on the queried
-occurrence's current representative. The commit-probe API fixes the
+occurrence's current representative. The recording unifier requires the
 non-poisoning behavior for every relation it runs, and ordinary poisoning
-unification asserts that no savepoint is active.
+unification asserts that no ask is open.
 
 A failed unification is different from a successful class union. Either
 operand can be one checked occurrence already connected to a shared binding: a
@@ -6091,7 +6089,7 @@ The fold relates arguments in order, so the parameter type a rejected argument
 met already carries what earlier operands gave the function's shared
 variables. Only once a relation has been rejected, and only when the callee's
 type is an instance of a scheme, the checker asks whether the argument is
-wrong by itself: in a commit-probe it relates the argument to its parameter in
+wrong by itself: in a ask it relates the argument to its parameter in
 a fresh copy of that scheme, then relates one earlier operand (an earlier
 argument, or a method call's receiver) to the same copy. The first earlier
 operand whose relation fails there is reported with the argument as a
@@ -12347,7 +12345,7 @@ an owned tag lifts into). Instantiation grows checker lists that an
 ordinary ask leaves alone (scheme uses, dispatchers, open literals and the
 like), so such an ask (`InstantiatingAsk`) also holds those lists' lengths
 and truncates them when discarded, and its checker code runs as it ran in
-the commit probe these sites used: the probe flags are set while the ask is
+the ask these sites used: the probe flags are set while the ask is
 open, so an instantiation inside it registers no use for whole-use replay,
 and the literals its kept relations determine wait for the next dispatch
 pass.
@@ -12536,7 +12534,7 @@ constraints and off-root scheme requirements. Every omitted requirement remains
 on its source type and is enforced by the ordinary enclosing relation and the
 actual stored-value instantiation. Shape copies never enter literal, dispatch,
 ambiguity, or evidence worklists. The copy and its projected relation belong to
-one commit-probe, so a rejected aggregate relation retains neither the copy nor any
+one ask, so a rejected aggregate relation retains neither the copy nor any
 partial unification. Rejection is diagnosed by the owning full-shape relation.
 
 Record constructions retain the complete accepted projected row, not just
@@ -12574,7 +12572,7 @@ slots are copied together with one substitution map, preserving repeated-variabl
 equalities. Omitted variants remain authoritative in the enclosing full
 relation, and no declaration-template cell is exposed to mutation. Missing
 tags, arity disagreement, or erroneous context establish no slot copy. The
-selected copy and projected relations share one commit-probe; rejection leaves
+selected copy and projected relations share one ask; rejection leaves
 diagnostic ownership with the full enclosing relation. This is expected-shape
 guidance, not permission to discard a structural row's complement or the
 dispatch requirements it came with.
@@ -12618,9 +12616,9 @@ polymorphism a program could use. The rule reads only explicit context:
   aliases) seeds anything; an unknown slot leaves the lambda as it was.
 - A projected cell is already the construction's own fresh shape copy and is
   related directly. A record update's borrowed field is copied
-  (`copyExpectedShape`) inside the seed's commit-probe, so the base's own
+  (`copyExpectedShape`) inside the seed's ask, so the base's own
   type is never constrained by the seed.
-- The relation runs in one commit-probe. An expectation the lambda does not
+- The relation runs in one ask. An expectation the lambda does not
   fit (a different arity, or erroneous context) is rolled back with its copy,
   and the owning relation reports the mismatch exactly as without the seed.
   A lambda whose parameters are plain variables, against a context related
@@ -13772,7 +13770,7 @@ one tag (`Store.pattern_only_tag_copies`: the part that keeps its entry, the
 merged row, and the tag's name), at the merge that makes the copy. A relation
 that copies no marked tag journals nothing, which is every relation of a
 single-part pattern row with the row it matches. The journal is diagnostic
-metadata like the mark, and a savepoint's rollback truncates it with the rest
+metadata like the mark, and a discarded ask truncates it with the rest
 of the store.
 
 The judgment reads a tag as pattern-only when the entry its row lists is
@@ -14111,7 +14109,7 @@ value to the return as it relates any return, and `.boxy` joins the two
 checked types' rows (Row Joins). No lowering stage reconstructs the relation
 from the two types on its own.
 
-If the inferred body has not yet lifted to `Try`, the checker commit-probes a
+If the inferred body has not yet lifted to `Try`, the checker asks a
 fresh `Try` seed using the first concrete `?` success parameter and a fresh
 error row. An established relation is already the ordinary unifier's exact
 commit and becomes the composition target. A rejected relation rolls back all
@@ -14414,15 +14412,12 @@ Five consumers keep the rule exact:
   pair whose relation fails, or makes an acyclic row anonymously recursive,
   is the row's conflict, and a row the relation meets that repeats a label
   of its own is a mismatch of that relation, so the conflict stays the
-  outer row's. Outside a speculation the pairs relate together or not at
-  all: they are first probed as one set against throwaway problem stores,
-  with an occurs check of the row after each, and rolled back, so a
-  rejected row records nothing and leaves no relation on the types it
-  shares. Inside a commit probe, where `runUnify` can meet a repeating row
-  first, the type store already holds that probe's savepoint and holds no
-  second one, so the pairs relate for real with the same checks
-  (`relating_repeated_row_label`), and the relations before a conflict
-  stand until the probe commits or rolls back. Relations can bind further tails and expose further repeats; the
+  outer row's. The pairs relate together or not at all: they are first
+  asked as one set (Asks), with an occurs check of the row after each, and
+  the ask is discarded, so a rejected row records nothing and leaves no
+  relation on the types it shares. Normalization never runs inside an ask:
+  an ask's relation that meets a repeating row stops there, and the row is
+  normalized once the ask is discarded. Relations can bind further tails and expose further repeats; the
   chain is rescanned until none remain, and each pass removes a label.
 - The type-key writer reports a repeated label to the checker
   instead of keying it, in the requests the checker makes while inference is
@@ -15056,7 +15051,7 @@ through a method named `foo` (`test/cli/MethodsOnOpenRows*.roc`).
 Builtin `Str` interpolation accepts a part only when ordinary unification can
 make the part `Str` and every static-dispatch constraint already carried by the
 part is satisfiable by builtin `Str`. The checker decides both conditions in one
-commit-probe: success commits the unification and any method evidence; failure
+ask: success commits the unification and any method evidence; failure
 rolls the whole attempt back and reports the interpolation-part type mismatch.
 
 Builtin quote and interpolation literal constraints are discharged directly by
@@ -15567,7 +15562,7 @@ poisons that use's own occurrences and never the instance other uses share.
 Checking a module ends by thawing every frozen class, so no later stage,
 serialized store, or import sees the mark. Builds with runtime safety check
 the mechanism against what it replaces: every replay first relates a fresh
-copy of the method's scheme to the edge's callable on a savepoint and requires
+copy of the method's scheme to the edge's callable in a discarded ask and requires
 the result to equal the frozen instance exactly, expanding transparent aliases
 at every depth (including row extensions) and comparing each record or tag
 union row as its fields or tags sorted by name, however many extensions store
@@ -15656,10 +15651,10 @@ instantiation would have, and extending its substitution and relations with
 them. A use is linked when a drain is about to process one of its relations,
 when a unification is about to relate one of its placeholders, before an
 error report snapshots any type, before the rank it was instantiated at is
-generalized, and when module finalization begins. A link inside a speculative
-probe is part of the speculation: its copies and redirects are in the
-probe's savepoint, a rollback undoes them and leaves the use unlinked, and
-the outermost commit registers them. Builds with runtime safety check that
+generalized, and when module finalization begins. A link inside an ask is
+part of the speculation: its redirect is a recording write, discarding the
+ask undoes it and its copies and leaves the use unlinked, and keeping the ask
+registers them. Builds with runtime safety check that
 no instantiation copies a placeholder, and that by the end of checking every
 use not replayed is linked.
 
@@ -17177,9 +17172,9 @@ Other solved-graph mutations:
   (above). In `checkBranchBodyAgainstExpected`, a branch whose relation to
   the annotated result reading shows can only succeed skips the rolled-back
   probe, and a fold into the branch accumulator that reading shows can only
-  succeed runs the same `runUnify` the commit probe would have committed,
+  succeed runs the same `runUnify` the ask would have committed,
   outside a probe. `projectExpectedAggregateShape`'s projected-cell relation
-  and `commitProjectedStoredValue` do the same for their commit probes.
+  and `commitProjectedStoredValue` do the same for their asks.
   `projectExpectedTagPayload` without a borrowed record field reads every
   refusal before its copy writes anything, so it opens no probe. The `?`
   seed in `processReturnConstraints`, a payload-free tag in
@@ -17431,7 +17426,7 @@ Other solved-graph mutations:
   then its whole error type is unified with the parent parser's error type.
 - `processReturnConstraints` / `collectTryReturnRowUses` /
   `projectTryReturnRow`—policy: Try Return-Row Composition (above).
-  A commit-probe seeds an unsettled inferred body only when ordinary
+  A ask seeds an unsettled inferred body only when ordinary
   unification establishes a `Try`. A lambda with a `?` return owns a composed `Try`: the annotated result,
   or a fresh `Try` sharing the body's success type. The body participates in
   the same batch, with a tagless body row always included in the residual
@@ -17457,7 +17452,7 @@ Other solved-graph mutations:
   (above). Rewrites the row part holding an outer copy of a repeated label to
   omit it, after relating the occurrences through ordinary unification.
 - `recordInspectOverrideInstances`—policy: Inspect Overrides (above). One
-  commit-probe per `to_inspect` declaration instantiates the method's scheme as
+  ask per `to_inspect` declaration instantiates the method's scheme as
   a dispatch target, unifies the copy's argument with its owner over fresh
   type variables and its result with `Str`, and accepts every requirement the
   copy carries (and an interpolated result's parts) against the types those
@@ -17468,7 +17463,7 @@ Other solved-graph mutations:
   are pinned by test/cli/InspectUnannotatedOverride.roc and
   test/cli/InspectIneligibleOverride.roc.
 - `constrainInterpolationPartToStr`—policy: Builtin Str Interpolation Part
-  Compatibility (above). One commit-probe unifies the part with `Str` and
+  Compatibility (above). One ask unifies the part with `Str` and
   validates every attached dispatch constraint; only full success is committed.
 - Literal defaulting (`commitLiteralDefault`)—policy: literal defaulting as
   declared in Static Dispatch At The Checked Boundary (the `LITERAL DEFAULTED`
@@ -17483,7 +17478,7 @@ Other solved-graph mutations:
   literal is open. The dispatch pass then checks each method
   requirement of a default-decided receiver against the default. The default
   is a type the program never chose, so that unification runs in a
-  commit-probe: a requirement the default satisfies is kept, and one it
+  ask: a requirement the default satisfies is kept, and one it
   rejects is rewound, reported as an undetermined type, and rejected without
   retyping anything reachable through the relation's argument graph.
   A pending use copy of a scheme requirement counts among its receiver's
@@ -17578,7 +17573,7 @@ Other solved-graph mutations:
   value against the complete expected type.
 - `seedCallResultFromContext`—policy: Expected Shape Context (above). Projects
   result context onto an instantiated call's return slot before argument
-  construction, using the same commit-probe and copy policy as aggregates.
+  construction, using the same ask and copy policy as aggregates.
   The ordinary owning result relation remains authoritative.
 - `relateSameMethodRequirementsAtBoundary` (`relateSameMethodRequirements`
   committed probe)—policy: one requirement per method on a type about to be
@@ -23915,7 +23910,7 @@ replay"), which carries no flag, and the entry's remaining requirements are
 still requirements of the default. A default-decided receiver's dispatch
 replays like any other. A replay shares an instance whose relation to an equal
 callable already succeeded, so it cannot reject the default and runs outside
-the commit-probe that brackets the receiver's other requirements.
+the ask that brackets the receiver's other requirements.
 
 The report's type is the class as the program wrote it: every default-decided
 class reachable from the receiver is shown with the union of its recorded
