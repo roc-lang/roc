@@ -6371,11 +6371,12 @@ const Builder = struct {
     /// structural equality remains the reuse authority across instantiations.
     static_data_uses: std.ArrayList(StaticDataUse),
     /// Whether each stored node's value has a stable static data
-    /// representation (`constNodeHasStableStaticDataRepresentation`), by module.
-    static_data_eligibility: std.AutoHashMap(checked.ModuleId, ConstNodeAnswers),
+    /// representation (`constNodeHasStableStaticDataRepresentation`), by
+    /// lowering module.
+    static_data_eligibility: collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers),
     /// Whether each stored node's value is data alone
-    /// (`constNodeIsStoredData`), by module.
-    stored_data: std.AutoHashMap(checked.ModuleId, ConstNodeAnswers),
+    /// (`constNodeIsStoredData`), by lowering module.
+    stored_data: collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers),
     hosted_catalog: []HostedCatalogEntry = &.{},
     /// Exact `(owner, method)` -> target map over every reachable module's
     /// method registry, for compiler-generated component lookups (structural
@@ -6536,8 +6537,8 @@ const Builder = struct {
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .static_data_ids = std.AutoHashMap(StaticDataUse, Common.StaticDataId).init(allocator),
             .static_data_uses = .empty,
-            .static_data_eligibility = std.AutoHashMap(checked.ModuleId, ConstNodeAnswers).init(allocator),
-            .stored_data = std.AutoHashMap(checked.ModuleId, ConstNodeAnswers).init(allocator),
+            .static_data_eligibility = collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers).init(allocator),
+            .stored_data = collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers).init(allocator),
             .evidence_arena = base.SingleThreadArena.init(allocator),
             .const_evidence_memo = std.AutoHashMap(ConstEvidenceMemoKey, StoredConstFnEvidence).init(allocator),
             .const_evidence_by_content = std.AutoHashMap(u64, StoredConstFnEvidence).init(allocator),
@@ -6787,7 +6788,7 @@ const Builder = struct {
         self.method_targets.deinit(self.allocator);
         self.inspect_overrides.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
-        for ([_]*std.AutoHashMap(checked.ModuleId, ConstNodeAnswers){ &self.static_data_eligibility, &self.stored_data }) |tables| {
+        for ([_]*collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers){ &self.static_data_eligibility, &self.stored_data }) |tables| {
             var answers = tables.valueIterator();
             while (answers.next()) |table| table.deinit(self.allocator);
             tables.deinit();
@@ -13059,7 +13060,8 @@ const Builder = struct {
                 .stable_static_data => &builder.static_data_eligibility,
                 .stored_data => &builder.stored_data,
             };
-            const entry = try tables.getOrPut(view.key);
+            const entry = try tables.getOrPut(view.lowering_module orelse
+                Common.invariant("checked module view was read before its lowering module id was seeded"));
             if (!entry.found_existing) entry.value_ptr.* = .empty;
             const table = entry.value_ptr;
             const known = table.items.len;

@@ -22681,7 +22681,13 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
                 env,
                 .{ .platform_requirement = .{ .required_ident = required.required_ident, .platform_region = required.platform_region } },
             );
-            if (definition_use != definition_var and relation.isEstablished()) {
+            // A definition the requirement rejects does not satisfy it, so
+            // the platform's invocation has no definition to call: the
+            // binding becomes a runtime error, as a rejected annotation's
+            // does.
+            if (!relation.isEstablished()) {
+                try self.markErroneousValueExpr(def.expr);
+            } else if (definition_use != definition_var) {
                 self.platform_required_defs.getPtr(def_idx).?.relates_scheme_instances = true;
             }
         }

@@ -66,7 +66,7 @@ fn appendAfterDependencies(
     artifact: *const Artifact,
     placed: *std.AutoHashMapUnmanaged([32]u8, void),
     order: *std.ArrayList(*const Artifact),
-) !void {
+) (std.mem.Allocator.Error || error{TestUnexpectedResult})!void {
     if ((try placed.getOrPut(allocator, artifact.key.bytes)).found_existing) return;
     const dependency_keys = try coord.unitDependencyKeys(allocator, artifact);
     defer allocator.free(dependency_keys);
