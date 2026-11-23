@@ -27814,6 +27814,22 @@ const ApplicationPositions = union(enum) {
     }
 };
 
+/// Classify a type application in this module by where its arguments stand.
+fn applicationPositions(self: *Self, apply: CIR.TypeAnno.Apply) std.mem.Allocator.Error!ApplicationPositions {
+    return switch (try annotation_positions.classify(self.gpa, .{
+        .builtin_owner = self.builtin_ctx.builtin_module,
+        .context = self,
+        .resolve = annotationPositionOwner,
+    }, self.cir, apply)) {
+        .builtin => .builtin,
+        .invalid => .invalid,
+        .declaration => |declaration| if (try self.declarationPositions(declaration.owner, declaration.statement)) |positions|
+            .{ .declaration = positions }
+        else
+            .invalid,
+    };
+}
+
 fn declarationPositions(self: *Self, owner: *const ModuleEnv, statement: CIR.Statement.Idx) std.mem.Allocator.Error!?[]annotation_positions.Positions {
     const key = NominalPositionKey{ .owner = owner, .statement = statement };
     const entry = try self.nominal_positions.getOrPut(self.gpa, key);
@@ -29602,18 +29618,7 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
         // the formals its backing places on its own row; an argument of a
         // nominal type is out of reach.
         frame.state.apply.reaches_start = try self.applicationArgumentReaches(a, env, ctx);
-        frame.state.apply.positions = switch (try annotation_positions.classify(self.gpa, .{
-            .builtin_owner = self.builtin_ctx.builtin_module,
-            .context = self,
-            .resolve = annotationPositionOwner,
-        }, self.cir, a)) {
-            .builtin => .builtin,
-            .invalid => .invalid,
-            .declaration => |declaration| if (try self.declarationPositions(declaration.owner, declaration.statement)) |positions|
-                .{ .declaration = positions }
-            else
-                .invalid,
-        };
+        frame.state.apply.positions = try self.applicationPositions(a);
         frame.state.apply.prepared = true;
     }
     const state = &frame.state.apply;
@@ -38837,7 +38842,7 @@ fn rejectValueAnnotation(
             .start = (annotation.name_region orelse type_region).start,
             .end = (where_region orelse type_region).end,
         },
-        .type_region = type_region,
+        .thunk_result = try self.thunkResultText(annotation.anno, type_region),
         .where_region = where_region,
         .type_is_function = self.cir.store.getTypeAnno(annotation.anno) == .@"fn",
         .rhs_region = self.cir.store.getExprRegion(rhs),
@@ -38846,6 +38851,98 @@ fn rejectValueAnnotation(
         .writes_named_variable = written.named_variable,
     } });
     try self.rejected_value_annotations.put(self.gpa, pattern_idx, {});
+}
+
+/// A rejected value annotation's type as the result of the suggested thunk
+/// `{} -> T`: its source text without each anonymous `..` in an output
+/// position, which the thunk's annotation opens implicitly and would report
+/// as redundant (design.md "Polarity"). The walk follows annotation
+/// generation: only a function argument flips polarity, a type application
+/// argument stands where its formal does, and an invariant or unresolved
+/// argument is generated as written at every depth. It reaches each `..` in
+/// source order, so the kept text is written straight into the problem store.
+fn thunkResultText(self: *Self, root: CIR.TypeAnno.Idx, type_region: Region) Allocator.Error!problem.ExtraStringIdx {
+    const Step = union(enum) {
+        visit: struct { anno: CIR.TypeAnno.Idx, polarity: Polarity },
+        /// A redundant `..` with the separator before it.
+        skip: Region,
+    };
+    var pending_buffer: [1024]u8 align(@alignOf(usize)) = undefined;
+    var pending_allocator_state = std.heap.BufferFirstAllocator.init(&pending_buffer, self.gpa);
+    const pending_allocator = pending_allocator_state.allocator();
+    var pending: std.ArrayList(Step) = .empty;
+    defer pending.deinit(pending_allocator);
+
+    const source = self.cir.getSourceAll();
+    const text = &self.problems.extra_strings_backing;
+    const start = text.items.len;
+    errdefer text.shrinkRetainingCapacity(start);
+    // Skipping only shortens the type's text.
+    try text.ensureUnusedCapacity(type_region.end.offset - type_region.start.offset);
+    var cursor = type_region.start.offset;
+
+    // Children are pushed last first, so they are visited in source order and
+    // a union's skip comes after every skip inside its tags.
+    try pending.append(pending_allocator, .{ .visit = .{ .anno = root, .polarity = .pos } });
+    while (pending.pop()) |step| {
+        const item = switch (step) {
+            .visit => |item| item,
+            .skip => |region| {
+                std.debug.assert(cursor <= region.start.offset);
+                text.appendSliceAssumeCapacity(source[cursor..region.start.offset]);
+                cursor = region.end.offset;
+                continue;
+            },
+        };
+        var children: []const CIR.TypeAnno.Idx = &.{};
+        var children_polarity = item.polarity;
+        switch (self.cir.store.getTypeAnno(item.anno)) {
+            .tag_union => |tu| {
+                children = self.cir.store.sliceTypeAnnos(tu.tags);
+                // `[]` is never opened, so its `..` is not redundant.
+                if (tu.ext) |ext| {
+                    if (children.len > 0 and item.polarity == .pos and self.annoIsAnonymousOpenExt(ext)) {
+                        try pending.append(pending_allocator, .{ .skip = .{
+                            .start = self.cir.store.getTypeAnnoRegion(children[children.len - 1]).end,
+                            .end = self.cir.store.getTypeAnnoRegion(ext).end,
+                        } });
+                    }
+                }
+            },
+            .tag => |t| children = self.cir.store.sliceTypeAnnos(t.args),
+            .tuple => |t| children = self.cir.store.sliceTypeAnnos(t.elems),
+            .record => |r| {
+                var fields = std.mem.reverseIterator(self.cir.store.sliceAnnoRecordFields(r.fields));
+                while (fields.next()) |field_idx| {
+                    try pending.append(pending_allocator, .{ .visit = .{ .anno = self.cir.store.getAnnoRecordField(field_idx).ty, .polarity = item.polarity } });
+                }
+            },
+            .@"fn" => |f| {
+                try pending.append(pending_allocator, .{ .visit = .{ .anno = f.ret, .polarity = item.polarity } });
+                children = self.cir.store.sliceTypeAnnos(f.args);
+                children_polarity = item.polarity.flip();
+            },
+            .parens => |p| try pending.append(pending_allocator, .{ .visit = .{ .anno = p.anno, .polarity = item.polarity } }),
+            .apply => |a| {
+                const positions = try self.applicationPositions(a);
+                const args = self.cir.store.sliceTypeAnnos(a.args);
+                var index = args.len;
+                while (index > 0) {
+                    index -= 1;
+                    const arg_positions = positions.at(index) orelse continue;
+                    if (arg_positions.isInvariant()) continue;
+                    try pending.append(pending_allocator, .{ .visit = .{ .anno = args[index], .polarity = arg_positions.polarity(item.polarity) } });
+                }
+            },
+            .rigid_var, .rigid_var_lookup, .underscore, .lookup, .malformed => {},
+        }
+        var reversed = std.mem.reverseIterator(children);
+        while (reversed.next()) |child| {
+            try pending.append(pending_allocator, .{ .visit = .{ .anno = child, .polarity = children_polarity } });
+        }
+    }
+    text.appendSliceAssumeCapacity(source[cursor..type_region.end.offset]);
+    return .{ .start = start, .count = text.items.len - start };
 }
 
 /// The arity of an annotated function type whose definition is a placeholder

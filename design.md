@@ -6900,7 +6900,12 @@ for a function-typed value such as `id = mk({})` too. It quotes the
 annotation, suggests writing `_` in place of each type variable (or removing
 each `..`) or a concrete type, and, for a named binding, the thunk built from
 the program's own text (`empty : {} -> List(a)` / `empty = |{}| []`) to call
-as `empty({})` where the binding must be used at many types.
+as `empty({})` where the binding must be used at many types. The thunk's
+annotation opens its result's output rows (Polarity), so its signature drops
+each anonymous `..` in an output position, which would otherwise be reported
+as redundant: `color : [Red, ..]` suggests `color : {} -> [Red]`
+(`Check.thunkResultText`). A `..` in an input position is a rigid there and
+stays.
 
 A placeholder for a function that is not implemented yet is not a function
 either: `parse : Str -> Try(a, [Bad])` / `parse = ...`, or `= crash "todo"`,

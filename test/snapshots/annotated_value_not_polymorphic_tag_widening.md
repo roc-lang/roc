@@ -55,7 +55,7 @@ REDUNDANT OPEN TAG UNION - annotated_value_not_polymorphic_tag_widening.md:6:24:
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "f : {} -> [Red, Green, ..]")
+			(text "f : {} -> [Red, Green]")
 			(line-break)
 			(indent 1)
 			(text "f = |{}| Red")
