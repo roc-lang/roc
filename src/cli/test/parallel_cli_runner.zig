@@ -827,6 +827,7 @@ const CustomCase = enum {
     glue_rust_include,
     glue_keyword_names,
     glue_c_tests,
+    glue_rust_tests,
     roc_test_skips_url_dependency_expects,
     issue_12592_inference_reuse_current_tests,
 };
@@ -2863,6 +2864,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "issue 13349: RustGlue output works through include! and is lint-clean in every edition", .body = .{ .custom = .glue_rust_include } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: fields and tags named after host-language keywords compile in every generator", .body = .{ .custom = .glue_keyword_names } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
+    .{ .id = 0, .suite = .glue, .name = "RustGlue.roc expect tests pass", .body = .{ .custom = .glue_rust_tests } },
 };
 
 // Subcommand suite cases
@@ -7547,6 +7549,7 @@ fn runCustomCase(
         .glue_rust_include => customGlueRustInclude(io, allocator, &env, &timer, timeout_ms),
         .glue_keyword_names => customGlueKeywordNames(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
+        .glue_rust_tests => customGlueRustTests(io, allocator, &env, &timer, timeout_ms),
         .roc_test_skips_url_dependency_expects => customRocTestSkipsUrlDependencyExpects(io, allocator, &env, &timer, timeout_ms),
         .issue_12592_inference_reuse_current_tests => customIssue12592(io, allocator, &env, &timer, timeout_ms),
     };
@@ -22220,6 +22223,14 @@ fn customGlueZigKeywordTagNames(io: std.Io, allocator: Allocator, env: *const Ca
 fn customGlueCTests(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "test", "--opt=interpreter", "src/glue/src/CGlue.roc" },
+        .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "unreachable" } },
+    })) |failure| return failure;
+    return null;
+}
+
+fn customGlueRustTests(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "test", "--opt=interpreter", "src/glue/src/RustGlue.roc" },
         .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "unreachable" } },
     })) |failure| return failure;
     return null;
