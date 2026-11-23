@@ -88,9 +88,8 @@ pub const Var = enum {
     /// an evaluator completes, roots the checked-value writer completes, and
     /// value-form expressions their bodies keep.
     hoist_root_stats,
-    /// Print, for every module the type checker checks, how many times each
-    /// speculative checking site relates types speculatively and how many
-    /// times it decides by reading the types instead.
+    /// Print, for every module the type checker checks, how many of each
+    /// probe site's probes were kept and how many were discarded.
     checker_speculation_stats,
 
     /// The variable's name in the environment.

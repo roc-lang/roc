@@ -204,26 +204,26 @@ test "an opening reads args the pool it appends to held" {
     try fixture.open(.outermost, .pool);
 }
 
-test "a replay inside an ask writes what walking the template writes" {
+test "a replay inside a probe writes what walking the template writes" {
     const gpa = std.testing.allocator;
     var fixture: Fixture = undefined;
     try fixture.init(gpa, false);
     defer fixture.deinit(gpa);
 
-    // The recording made inside a discarded ask outlives it.
-    var walked_mark = fixture.walked.beginAsk();
-    var replayed_mark = fixture.replayed.beginAsk();
+    // The recording made inside a discarded probe outlives it.
+    var walked_mark = fixture.walked.beginProbe();
+    var replayed_mark = fixture.replayed.beginProbe();
     try fixture.open(.outermost, .fresh);
-    fixture.walked.endAskNo(&walked_mark);
-    fixture.replayed.endAskNo(&replayed_mark);
+    fixture.walked.endProbeNo(&walked_mark);
+    fixture.replayed.endProbeNo(&replayed_mark);
     try expectSameStores(&fixture.walked, &fixture.replayed);
     try fixture.open(@fromBackingInt(@intCast(2)), .fresh);
 
-    walked_mark = fixture.walked.beginAsk();
-    replayed_mark = fixture.replayed.beginAsk();
+    walked_mark = fixture.walked.beginProbe();
+    replayed_mark = fixture.replayed.beginProbe();
     try fixture.open(.outermost, .fresh);
-    try fixture.walked.endAskYes(&walked_mark);
-    try fixture.replayed.endAskYes(&replayed_mark);
+    try fixture.walked.endProbeYes(&walked_mark);
+    try fixture.replayed.endProbeYes(&replayed_mark);
     try expectSameStores(&fixture.walked, &fixture.replayed);
     try fixture.open(@fromBackingInt(@intCast(2)), .fresh);
 }

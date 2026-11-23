@@ -15,16 +15,16 @@ const Allocator = std.mem.Allocator;
 /// Which family an in-place write to a type-store entry belongs to. The
 /// unifier's writes (`unifierUnion` and the other `unifier*` functions, and
 /// the store internals they reach) test, with one comparison against the
-/// open ask's baseline, whether the entry predates the ask, and journal its
-/// old value when it does. Outside an ask the baselines are 0, so the test
+/// open probe's baseline, whether the entry predates the probe, and journal its
+/// old value when it does. Outside a probe the baselines are 0, so the test
 /// never holds. Every other write is plain: it tests and journals nothing,
 /// and debug builds assert it never reaches an entry that predates an open
-/// ask. Only the unifier overwrites such an entry: a compiler invariant.
+/// probe. Only the unifier overwrites such an entry: a compiler invariant.
 const WriteFamily = enum { plain, unifier };
 
 /// One entry of the undo log (`Store.undo_log`): an in-place write the
-/// unifier made, while an ask was open, to an entry that predates the ask,
-/// holding what the write replaced. Discarding the ask replays the log
+/// unifier made, while a probe was open, to an entry that predates the probe,
+/// holding what the write replaced. Discarding the probe replays the log
 /// strictly backwards.
 const Undo = union(enum) {
     slot: struct { idx: SlotStore.Idx, old: Slot },
@@ -343,7 +343,7 @@ pub const Store = struct {
     /// The identity of every nominal type application and alias a descriptor
     /// of this store holds, one row per distinct identity: a stored nominal or
     /// alias descriptor names its row (`types.Descriptor.encode`). Append-only;
-    /// a discarded ask keeps the rows it interned, which stay valid
+    /// a discarded probe keeps the rows it interned, which stay valid
     /// identities whether or not a descriptor names them.
     nominal_identities: NominalIdentity.SafeList = .{},
     alias_identities: AliasIdentity.SafeList = .{},
@@ -404,33 +404,33 @@ pub const Store = struct {
     /// relocated.
     ground_epoch: u64 = 0,
 
-    /// Set while an ask is open (`beginAsk`): the unifier's writes journal
+    /// Set while a probe is open (`beginProbe`): the unifier's writes journal
     /// every in-place write to a slot, descriptor, checked representative,
-    /// or structural rank that existed before the ask began as (index, old
-    /// value), and every other write may only reach entries the ask
-    /// appended. Discarding the ask replays the journal in reverse and
-    /// truncates what was appended. Asks never nest, so this is a flag, not
+    /// or structural rank that existed before the probe began as (index, old
+    /// value), and every other write may only reach entries the probe
+    /// appended. Discarding the probe replays the journal in reverse and
+    /// truncates what was appended. Probes never nest, so this is a flag, not
     /// a depth. No write's journaling test reads it: that test compares
     /// against the baselines below.
-    ask_open: bool = false,
+    probe_open: bool = false,
     /// Set while the unifier runs (`enterUnifier`), in debug builds only, so
-    /// a unifier write while an ask is open can assert it comes from the
+    /// a unifier write while a probe is open can assert it comes from the
     /// unifier.
     unifier_running: UnifierRunning = if (std.debug.runtime_safety) false else {},
-    /// `free_descs` while an ask is open: the ask sets the free list aside,
-    /// so every class created during the ask is appended (and discarding the
-    /// ask truncates it), and puts it back when it ends.
-    ask_free_descs: std.ArrayListUnmanaged(DescStore.Idx) = .empty,
+    /// `free_descs` while a probe is open: the probe sets the free list aside,
+    /// so every class created during the probe is appended (and discarding the
+    /// probe truncates it), and puts it back when it ends.
+    probe_free_descs: std.ArrayListUnmanaged(DescStore.Idx) = .empty,
     /// Set once checking has solved this store (see `seal`). Every write to a
     /// sealed store is a violated compiler invariant.
     sealed: bool = false,
-    /// The slot and descriptor counts when the open ask began, and 0 when no
-    /// ask is open: an entry below its baseline predates the ask, which a
+    /// The slot and descriptor counts when the open probe began, and 0 when no
+    /// probe is open: an entry below its baseline predates the probe, which a
     /// unifier write tests with one comparison (`journalsWrite`).
-    ask_baseline_slots: u32 = 0,
-    ask_baseline_descs: u32 = 0,
-    /// The open ask's undo log (`Undo`), in write order; empty while no ask
-    /// is open, since asks never nest and ending one empties it.
+    probe_baseline_slots: u32 = 0,
+    probe_baseline_descs: u32 = 0,
+    /// The open probe's undo log (`Undo`), in write order; empty while no probe
+    /// is open, since probes never nest and ending one empties it.
     undo_log: std.ArrayListUnmanaged(Undo) = .empty,
     /// Advances whenever a slot write can change which class a var resolves
     /// to, so a caller that indexed resolved classes knows when to re-index.
@@ -449,7 +449,7 @@ pub const Store = struct {
     /// appending, so the descriptor store does not grow with dead entries.
     /// Runtime-only: never serialized, cloned, or relocated.
     free_descs: std.ArrayListUnmanaged(DescStore.Idx) = .empty,
-    /// Descriptors orphaned while an ask is open. Discarding the ask restores
+    /// Descriptors orphaned while a probe is open. Discarding the probe restores
     /// the slots that named them, so they are freed only when it is kept.
     pending_free_descs: std.ArrayListUnmanaged(DescStore.Idx) = .empty,
 
@@ -468,8 +468,8 @@ pub const Store = struct {
     /// range's end and holding the room's end, so a receiver whose
     /// requirements grow one use at a time extends its own list in place
     /// rather than copying it (`appendStaticDispatchConstraintsAfter`). Room
-    /// is neither reserved nor used by a recording write, so discarding an
-    /// ask never has room to forget.
+    /// is neither reserved nor used while a probe is open, so discarding a
+    /// probe never has room to forget.
     static_dispatch_constraint_room: std.AutoHashMapUnmanaged(u32, u32) = .empty,
 
     /// Relocate the self-contained type store and its explicit nominal lookup index.
@@ -567,12 +567,12 @@ pub const Store = struct {
 
     /// Make this store read-only: checking has solved it, and every later
     /// stage only reads it. Sealing happens at a quiescent point, with no
-    /// savepoint open and no class frozen. All checked outputs have been
+    /// probe open and no class frozen. All checked outputs have been
     /// published; only checker-owned buffers are released at this boundary.
     pub fn seal(self: *Self) void {
         if (std.debug.runtime_safety) {
             if (self.sealed) base.invariant("a type store was sealed twice", .{});
-            if (self.ask_open) base.invariant("a type store was sealed with an ask open", .{});
+            if (self.probe_open) base.invariant("a type store was sealed with a probe open", .{});
             if (self.frozen_anchors.count() != 0) base.invariant("a type store was sealed with a frozen class", .{});
         }
         self.sealGrowingColumns();
@@ -614,7 +614,7 @@ pub const Store = struct {
     /// constraint, and a reader resolves it (one slot read).
     fn canonicalizeForSeal(self: *Self, idents: *const base.Ident.Store) Allocator.Error!void {
         self.debugAssertUnsealed();
-        if (std.debug.runtime_safety and self.ask_open) base.invariant("a type store was canonicalized with an ask open", .{});
+        if (std.debug.runtime_safety and self.probe_open) base.invariant("a type store was canonicalized with a probe open", .{});
 
         const slot_count: usize = @intCast(self.slots.len());
         var live_descs = try std.DynamicBitSetUnmanaged.initEmpty(self.gpa, self.descs.backing.len());
@@ -807,8 +807,8 @@ pub const Store = struct {
         self.free_descs = .empty;
         self.pending_free_descs.deinit(self.gpa);
         self.pending_free_descs = .empty;
-        self.ask_free_descs.deinit(self.gpa);
-        self.ask_free_descs = .empty;
+        self.probe_free_descs.deinit(self.gpa);
+        self.probe_free_descs = .empty;
         self.static_dispatch_relation_merges.deinit(self.gpa);
         self.static_dispatch_relation_merges = .empty;
         self.pattern_only_tag_copies.deinit(self.gpa);
@@ -903,14 +903,14 @@ pub const Store = struct {
         return false;
     }
 
-    // ask (see `WriteMode`) //
+    // probe (see `WriteFamily`) //
 
     /// The lengths of the append-only lists the unifier grows, which
-    /// discarding an ask rewinds to. The slot and descriptor counts live on
-    /// the store as `ask_baseline_*`, because they are also the unifier
+    /// discarding a probe rewinds to. The slot and descriptor counts live on
+    /// the store as `probe_baseline_*`, because they are also the unifier
     /// writes' journaling test, and the undo log needs no length: it is
-    /// empty whenever an ask begins.
-    pub const AskMark = struct {
+    /// empty whenever a probe begins.
+    pub const ProbeMark = struct {
         vars_len: usize,
         record_fields_len: usize,
         tags_len: usize,
@@ -938,7 +938,7 @@ pub const Store = struct {
         }
     };
 
-    fn cloneForAskMarkVerification(self: *Self) Allocator.Error!VerifyClone {
+    fn cloneForProbeVerification(self: *Self) Allocator.Error!VerifyClone {
         const slots = try self.slots.toOwnedSlots(self.gpa);
         errdefer self.gpa.free(slots);
 
@@ -960,8 +960,8 @@ pub const Store = struct {
         };
     }
 
-    /// The list lengths an ask restores.
-    fn markForRestore(self: *const Self) AskMark {
+    /// The list lengths a probe restores.
+    fn markForRestore(self: *const Self) ProbeMark {
         std.debug.assert(self.pending_free_descs.items.len == 0);
         std.debug.assert(self.undo_log.items.len == 0);
         return .{
@@ -977,28 +977,28 @@ pub const Store = struct {
         };
     }
 
-    /// Assert that no ask is open. Mismatch poisoning is permanent error
-    /// recovery and must never run speculatively; an ask relates through the
+    /// Assert that no probe is open. Mismatch poisoning is permanent error
+    /// recovery and must never run speculatively; a probe relates through the
     /// non-poisoning relation API.
-    pub fn assertNoAskOpen(self: *const Self) void {
-        std.debug.assert(!self.ask_open);
+    pub fn assertNoProbeOpen(self: *const Self) void {
+        std.debug.assert(!self.probe_open);
     }
 
     /// Restore every entry journaled since `mark` and drop everything
     /// appended since.
-    fn restoreTo(self: *Self, mark: *const AskMark) void {
+    fn restoreTo(self: *Self, mark: *const ProbeMark) void {
         self.class_watch.noteRollback();
         self.settled_descs.clear();
         self.function_free_descs.clear();
-        // Rows for classes appended since the ask began sort after every
+        // Rows for classes appended since the probe began sort after every
         // older class, and their writes are not journaled: drop them first,
         // so the rows of older classes stand at the indices their journaled
         // writes name.
         var plans_len = self.derived_map_plans.items().len;
-        while (plans_len > 0 and @backingInt(self.derived_map_plans.items()[plans_len - 1].class) >= self.ask_baseline_descs) plans_len -= 1;
+        while (plans_len > 0 and @backingInt(self.derived_map_plans.items()[plans_len - 1].class) >= self.probe_baseline_descs) plans_len -= 1;
         self.derived_map_plans.shrinkRetainingCapacity(plans_len);
         var closings_len = self.tag_tail_closings.items.len;
-        while (closings_len > 0 and @backingInt(self.tag_tail_closings.items[closings_len - 1].class) >= self.ask_baseline_descs) closings_len -= 1;
+        while (closings_len > 0 and @backingInt(self.tag_tail_closings.items[closings_len - 1].class) >= self.probe_baseline_descs) closings_len -= 1;
         self.tag_tail_closings.shrinkRetainingCapacity(closings_len);
 
         // Replay the log strictly backwards, so each pre-existing entry lands
@@ -1028,10 +1028,10 @@ pub const Store = struct {
         // Drop everything appended since the mark. The slot/desc baselines are
         // the store fields (also the journaling threshold); the rest come from
         // the mark.
-        self.slots.shrinkRetainingCapacity(self.ask_baseline_slots);
-        self.descs.backing.shrinkRetainingCapacity(self.ask_baseline_descs);
-        self.root_metas.shrinkRetainingCapacity(self.ask_baseline_descs);
-        self.union_ranks.shrinkRetainingCapacity(self.ask_baseline_slots);
+        self.slots.shrinkRetainingCapacity(self.probe_baseline_slots);
+        self.descs.backing.shrinkRetainingCapacity(self.probe_baseline_descs);
+        self.root_metas.shrinkRetainingCapacity(self.probe_baseline_descs);
+        self.union_ranks.shrinkRetainingCapacity(self.probe_baseline_slots);
         self.vars.shrinkRetainingCapacity(mark.vars_len);
         self.record_fields.shrinkRetainingCapacity(mark.record_fields_len);
         self.tags.shrinkRetainingCapacity(mark.tags_len);
@@ -1046,66 +1046,65 @@ pub const Store = struct {
         self.pending_free_descs.clearRetainingCapacity();
     }
 
-    // ask (see `WriteMode`) //
+    // probe (see `WriteFamily`) //
 
-    /// Open an ask: from here until `endAskYes` or `endAskNo`, the unifier's
-    /// recording specialization journals each in-place write to an entry
-    /// that predates the ask, and any other code may only append and write
-    /// to entries appended since. The free list is set aside, so every class
-    /// created meanwhile is appended. Asks never nest, and never open inside
-    /// a savepoint.
-    pub fn beginAsk(self: *Self) AskMark {
+    /// Open a probe: from here until `endProbeYes` or `endProbeNo`, the
+    /// unifier's writes journal each in-place write to an entry that predates
+    /// the probe, and any other code may only append and write to entries
+    /// appended since. The free list is set aside, so every class created
+    /// meanwhile is appended. Probes never nest.
+    pub fn beginProbe(self: *Self) ProbeMark {
         self.debugAssertUnsealed();
-        std.debug.assert(!self.ask_open);
-        std.debug.assert(self.ask_free_descs.items.len == 0);
+        std.debug.assert(!self.probe_open);
+        std.debug.assert(self.probe_free_descs.items.len == 0);
         const mark = self.markForRestore();
-        self.ask_baseline_slots = @intCast(self.slots.len());
-        self.ask_baseline_descs = @intCast(self.descs.backing.len());
-        std.mem.swap(std.ArrayListUnmanaged(DescStore.Idx), &self.free_descs, &self.ask_free_descs);
-        self.ask_open = true;
+        self.probe_baseline_slots = @intCast(self.slots.len());
+        self.probe_baseline_descs = @intCast(self.descs.backing.len());
+        std.mem.swap(std.ArrayListUnmanaged(DescStore.Idx), &self.free_descs, &self.probe_free_descs);
+        self.probe_open = true;
         return mark;
     }
 
-    /// Close the open ask keeping everything it wrote: the descriptors its
+    /// Close the open probe keeping everything it wrote: the descriptors its
     /// merges orphaned are dead for good, and go on the free list.
-    pub fn endAskYes(self: *Self, mark: *const AskMark) Allocator.Error!void {
+    pub fn endProbeYes(self: *Self, mark: *const ProbeMark) Allocator.Error!void {
         self.debugAssertUnsealed();
-        std.debug.assert(self.ask_open);
+        std.debug.assert(self.probe_open);
         _ = mark;
         self.undo_log.clearRetainingCapacity();
-        self.ask_open = false;
-        self.ask_baseline_slots = 0;
-        self.ask_baseline_descs = 0;
+        self.probe_open = false;
+        self.probe_baseline_slots = 0;
+        self.probe_baseline_descs = 0;
         self.restoreFreeList();
         try self.free_descs.ensureUnusedCapacity(self.gpa, self.pending_free_descs.items.len);
         for (self.pending_free_descs.items) |desc_idx| self.recycleDesc(desc_idx);
         self.pending_free_descs.clearRetainingCapacity();
     }
 
-    /// Close the open ask discarding everything since `beginAsk`: every
+    /// Close the open probe discarding everything since `beginProbe`: every
     /// journaled entry is restored and everything appended is dropped, so
     /// the store is as it was.
-    pub fn endAskNo(self: *Self, mark: *const AskMark) void {
+    pub fn endProbeNo(self: *Self, mark: *const ProbeMark) void {
         self.debugAssertUnsealed();
-        std.debug.assert(self.ask_open);
+        std.debug.assert(self.probe_open);
         self.restoreTo(mark);
-        self.ask_open = false;
-        self.ask_baseline_slots = 0;
-        self.ask_baseline_descs = 0;
+        self.probe_open = false;
+        self.probe_baseline_slots = 0;
+        self.probe_baseline_descs = 0;
         self.restoreFreeList();
     }
 
-    /// Put back the free list an ask set aside. Nothing is freed during an
-    /// ask except into `pending_free_descs`, so the set-aside list is the
+    /// Put back the free list a probe set aside. Nothing is freed during a
+    /// probe except into `pending_free_descs`, so the set-aside list is the
     /// whole of it.
     fn restoreFreeList(self: *Self) void {
         std.debug.assert(self.free_descs.items.len == 0);
-        std.mem.swap(std.ArrayListUnmanaged(DescStore.Idx), &self.free_descs, &self.ask_free_descs);
+        std.mem.swap(std.ArrayListUnmanaged(DescStore.Idx), &self.free_descs, &self.probe_free_descs);
     }
 
-    /// Whether an ask is open.
-    pub fn askOpen(self: *const Self) bool {
-        return self.ask_open;
+    /// Whether a probe is open.
+    pub fn probeOpen(self: *const Self) bool {
+        return self.probe_open;
     }
 
     /// What `enterUnifier` hands `leaveUnifier`: whether the unifier was
@@ -1113,7 +1112,7 @@ pub const Store = struct {
     pub const UnifierRunning = if (std.debug.runtime_safety) bool else void;
 
     /// Note that the unifier runs from here until `leaveUnifier`, which a
-    /// unifier write asserts while an ask is open. Debug builds only.
+    /// unifier write asserts while a probe is open. Debug builds only.
     pub inline fn enterUnifier(self: *Self) UnifierRunning {
         if (!std.debug.runtime_safety) return {};
         const was = self.unifier_running;
@@ -1129,11 +1128,11 @@ pub const Store = struct {
     /// What a failed test expectation returns.
     pub const TestExpectError = error{ TestExpectedEqual, TestUnexpectedResult };
 
-    /// A copy of everything a discarded ask restores, for a test to compare
+    /// A copy of everything a discarded probe restores, for a test to compare
     /// the store against (`expectRestoredTo`). Test builds only.
     pub const TestCopy = struct {
         clone: VerifyClone,
-        mark: AskMark,
+        mark: ProbeMark,
         free_descs: []DescStore.Idx,
         tag_tail_closings: []TagTailClosingEntry,
 
@@ -1146,7 +1145,7 @@ pub const Store = struct {
 
     pub fn testCopy(self: *Self) Allocator.Error!TestCopy {
         comptime std.debug.assert(builtin.is_test);
-        var full = try self.cloneForAskMarkVerification();
+        var full = try self.cloneForProbeVerification();
         errdefer full.deinit(self.gpa);
         const free = try self.gpa.dupe(DescStore.Idx, self.free_descs.items);
         errdefer self.gpa.free(free);
@@ -1198,10 +1197,10 @@ pub const Store = struct {
         }
     }
 
-    /// Whether `var_` existed when the open ask began.
-    pub fn predatesAsk(self: *const Self, var_: Var) bool {
-        std.debug.assert(self.ask_open);
-        return @backingInt(var_) < self.ask_baseline_slots;
+    /// Whether `var_` existed when the open probe began.
+    pub fn predatesProbe(self: *const Self, var_: Var) bool {
+        std.debug.assert(self.probe_open);
+        return @backingInt(var_) < self.probe_baseline_slots;
     }
 
     /// Clone cross-check: assert the trail-restored store is byte-for-byte
@@ -1231,35 +1230,35 @@ pub const Store = struct {
     }
 
     /// Whether a write of `family` to the entry at `index` of a list whose
-    /// open-ask baseline is `baseline` must journal the entry's old value.
-    /// A unifier write journals every entry that predates the open ask, with
-    /// one comparison: outside an ask the baseline is 0, so nothing is. A
+    /// open-probe baseline is `baseline` must journal the entry's old value.
+    /// A unifier write journals every entry that predates the open probe, with
+    /// one comparison: outside a probe the baseline is 0, so nothing is. A
     /// plain write journals nothing, and never reaches an entry that predates
-    /// an open ask: only the unifier overwrites one.
+    /// an open probe: only the unifier overwrites one.
     inline fn journalsWrite(self: *const Self, comptime family: WriteFamily, index: u32, baseline: u32) bool {
         switch (family) {
             .unifier => {
-                if (std.debug.runtime_safety and self.ask_open and !self.unifier_running) {
-                    base.invariant("a unifier write ran outside the unifier while an ask was open", .{});
+                if (std.debug.runtime_safety and self.probe_open and !self.unifier_running) {
+                    base.invariant("a unifier write ran outside the unifier while a probe was open", .{});
                 }
                 return index < baseline;
             },
             .plain => {
-                if (std.debug.runtime_safety and self.ask_open and index < baseline) {
-                    base.invariant("a plain write reached a type-store entry an open ask may restore", .{});
+                if (std.debug.runtime_safety and self.probe_open and index < baseline) {
+                    base.invariant("a plain write reached a type-store entry an open probe may restore", .{});
                 }
                 return false;
             },
         }
     }
 
-    /// In-place slot write. A recording write journals the slot's previous
-    /// value so discarding the ask can restore it; a failed journal append is
-    /// propagated rather than risk a type store the trail can no longer
-    /// faithfully undo.
+    /// In-place slot write. A unifier write to a slot that predates the open
+    /// probe journals its previous value so discarding the probe can restore
+    /// it; a failed journal append is propagated rather than risk a type
+    /// store the log can no longer faithfully undo.
     fn setSlot(self: *Self, comptime family: WriteFamily, idx: SlotStore.Idx, val: Slot) Allocator.Error!void {
         self.debugAssertUnsealed();
-        if (self.journalsWrite(family, @backingInt(idx), self.ask_baseline_slots)) {
+        if (self.journalsWrite(family, @backingInt(idx), self.probe_baseline_slots)) {
             try self.undo_log.append(self.gpa, .{ .slot = .{ .idx = idx, .old = self.slots.get(idx) } });
         }
         switch (self.slots.get(idx)) {
@@ -1334,11 +1333,11 @@ pub const Store = struct {
     }
 
     /// Before an in-place write to descriptor `idx`: journal its row when a
-    /// recording write reaches a descriptor that predates the open ask, and
+    /// unifier write reaches a descriptor that predates the open probe, and
     /// note the write for class watches.
     inline fn journalDescWrite(self: *Self, comptime family: WriteFamily, idx: DescStore.Idx) Allocator.Error!void {
         self.debugAssertUnsealed();
-        if (self.journalsWrite(family, @backingInt(idx), self.ask_baseline_descs)) try self.journalDescRow(idx);
+        if (self.journalsWrite(family, @backingInt(idx), self.probe_baseline_descs)) try self.journalDescRow(idx);
         self.class_watch.noteWrite(idx);
     }
 
@@ -1384,7 +1383,7 @@ pub const Store = struct {
     /// In-place equivalence-class root metadata write. See setSlot.
     fn setRootMeta(self: *Self, comptime family: WriteFamily, idx: DescStore.Idx, val: RootMeta) Allocator.Error!void {
         self.debugAssertUnsealed();
-        if (self.journalsWrite(family, @backingInt(idx), self.ask_baseline_descs)) {
+        if (self.journalsWrite(family, @backingInt(idx), self.probe_baseline_descs)) {
             try self.undo_log.append(self.gpa, .{ .root_meta = .{ .idx = idx, .old = self.getRootMeta(idx) } });
         }
         self.class_watch.noteWrite(idx);
@@ -1394,7 +1393,7 @@ pub const Store = struct {
     fn setUnionRank(self: *Self, comptime family: WriteFamily, storage_var: Var, rank: u8) Allocator.Error!void {
         self.debugAssertUnsealed();
         const slot_idx = Self.varToSlotIdx(storage_var);
-        if (self.journalsWrite(family, @backingInt(slot_idx), self.ask_baseline_slots)) {
+        if (self.journalsWrite(family, @backingInt(slot_idx), self.probe_baseline_slots)) {
             try self.undo_log.append(self.gpa, .{ .union_rank = .{ .idx = slot_idx, .old = self.getUnionRank(storage_var) } });
         }
         self.union_ranks.set(unionRankIdx(slot_idx), rank);
@@ -1415,8 +1414,8 @@ pub const Store = struct {
     fn appendClassRow(self: *Self, row: Desc.Row, checked_var: Var) Allocator.Error!DescStore.Idx {
         self.debugAssertUnsealed();
         if (self.takeFreeDesc()) |desc_idx| {
-            // An open ask sets the free list aside, so a reissued
-            // descriptor is never one an ask may restore.
+            // An open probe sets the free list aside, so a reissued
+            // descriptor is never one a probe may restore.
             try self.setDescRowUnguarded(.plain, desc_idx, row);
             try self.setRootMeta(.plain, desc_idx, .{ .checked_var = checked_var });
             return desc_idx;
@@ -1448,26 +1447,26 @@ pub const Store = struct {
     }
 
     /// The most recently freed descriptor not yet reissued, if any. An open
-    /// ask has set the free list aside, so it reissues none.
+    /// probe has set the free list aside, so it reissues none.
     fn takeFreeDesc(self: *Self) ?DescStore.Idx {
         return self.free_descs.pop();
     }
 
     /// Free the descriptor `former_root` named until the write that orphaned
     /// it: no slot names it any more, so the next class created may take it.
-    /// A free while an ask is open waits for the ask to be kept, since
+    /// A free while a probe is open waits for the probe to be kept, since
     /// discarding it would restore `former_root`'s slot.
     fn freeDesc(self: *Self, comptime family: WriteFamily, desc_idx: DescStore.Idx, former_root: Var) Allocator.Error!void {
         self.debugAssertUnsealed();
         std.debug.assert(!std.meta.eql(self.slots.get(Self.varToSlotIdx(former_root)), Slot{ .root = desc_idx }));
         switch (family) {
-            // Discarding the ask restores the slots that named it, so the
-            // free waits for the ask to be kept.
-            .unifier => if (self.ask_open) {
+            // Discarding the probe restores the slots that named it, so the
+            // free waits for the probe to be kept.
+            .unifier => if (self.probe_open) {
                 try self.pending_free_descs.append(self.gpa, desc_idx);
                 return;
             },
-            .plain => std.debug.assert(!self.ask_open),
+            .plain => std.debug.assert(!self.probe_open),
         }
         try self.free_descs.ensureUnusedCapacity(self.gpa, 1);
         self.recycleDesc(desc_idx);
@@ -1478,7 +1477,7 @@ pub const Store = struct {
     /// a frozen anchor, a derived map plan, and a tag tail closing. The caller has reserved the
     /// list's room.
     fn recycleDesc(self: *Self, desc_idx: DescStore.Idx) void {
-        std.debug.assert(!self.ask_open);
+        std.debug.assert(!self.probe_open);
         const index: u32 = @backingInt(desc_idx);
         if (index < self.settled_descs.bits.bit_length) self.settled_descs.bits.unset(index);
         if (index < self.function_free_descs.bits.bit_length) self.function_free_descs.bits.unset(index);
@@ -1522,12 +1521,12 @@ pub const Store = struct {
     }
 
     /// A write of `family` to the plan row of `class` journals it (in the
-    /// undo log) when the class predates the open ask.
+    /// undo log) when the class predates the open probe.
     fn putClassDerivedMapPlan(self: *Self, comptime family: WriteFamily, class: DescStore.Idx, plan: DerivedMapPlan) Allocator.Error!void {
         self.debugAssertUnsealed();
         const slot = self.derivedMapPlanSlot(class);
         if (slot.found and std.meta.eql(self.derived_map_plans.items()[slot.index].plan, plan)) return;
-        const journals = self.journalsWrite(family, @backingInt(class), self.ask_baseline_descs);
+        const journals = self.journalsWrite(family, @backingInt(class), self.probe_baseline_descs);
         if (journals) try self.undo_log.ensureUnusedCapacity(self.gpa, 1);
         const index: u32 = @intCast(slot.index);
         if (slot.found) {
@@ -1543,7 +1542,7 @@ pub const Store = struct {
         self.debugAssertUnsealed();
         const slot = self.derivedMapPlanSlot(class);
         if (!slot.found) return;
-        if (self.journalsWrite(family, @backingInt(class), self.ask_baseline_descs)) {
+        if (self.journalsWrite(family, @backingInt(class), self.probe_baseline_descs)) {
             try self.undo_log.append(self.gpa, .{ .plan_removed = .{ .index = @intCast(slot.index), .entry = self.derived_map_plans.items()[slot.index] } });
         }
         _ = self.derived_map_plans.orderedRemove(slot.index);
@@ -1611,12 +1610,12 @@ pub const Store = struct {
     }
 
     /// A write of `family` to the closing row of `class` journals it (in
-    /// the undo log) when the class predates the open ask.
+    /// the undo log) when the class predates the open probe.
     fn putClassTagTailClosing(self: *Self, comptime family: WriteFamily, class: DescStore.Idx, closing: TagTailClosing) Allocator.Error!void {
         self.debugAssertUnsealed();
         const slot = self.tagTailClosingSlot(class);
         if (slot.found and self.tag_tail_closings.items[slot.index].closing == closing) return;
-        const journals = self.journalsWrite(family, @backingInt(class), self.ask_baseline_descs);
+        const journals = self.journalsWrite(family, @backingInt(class), self.probe_baseline_descs);
         if (journals) try self.undo_log.ensureUnusedCapacity(self.gpa, 1);
         const index: u32 = @intCast(slot.index);
         if (slot.found) {
@@ -1632,7 +1631,7 @@ pub const Store = struct {
         self.debugAssertUnsealed();
         const slot = self.tagTailClosingSlot(class);
         if (!slot.found) return;
-        if (self.journalsWrite(family, @backingInt(class), self.ask_baseline_descs)) {
+        if (self.journalsWrite(family, @backingInt(class), self.probe_baseline_descs)) {
             try self.undo_log.append(self.gpa, .{ .closing_removed = .{ .index = @intCast(slot.index), .entry = self.tag_tail_closings.items[slot.index] } });
         }
         _ = self.tag_tail_closings.orderedRemove(slot.index);
@@ -1982,12 +1981,12 @@ pub const Store = struct {
     /// Create a new variable with the provided content assuming there is capacity
     pub fn appendFromContentAssumeCapacity(self: *Self, content: Content, rank: Rank) Var {
         self.debugAssertUnsealed();
-        std.debug.assert(!self.ask_open);
+        std.debug.assert(!self.probe_open);
         const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(self.slots.len()))));
         const checked_var = Self.slotIdxToVar(slot_idx);
         const desc: Desc = .{ .content = content, .rank = rank };
         const desc_idx = if (self.free_descs.pop()) |freed| reused: {
-            // Nothing watches or settles a freed descriptor, and no ask is
+            // Nothing watches or settles a freed descriptor, and no probe is
             // open, so the raw writes need no notes and no journal.
             self.descs.setRow(freed, self.encodeDescWithoutIdentity(desc));
             self.root_metas.set(rootMetaIdx(freed), .{ .checked_var = checked_var });
@@ -2045,7 +2044,7 @@ pub const Store = struct {
     fn isolateFromFrozenClassSlow(self: *Self, comptime family: WriteFamily, target_var: Var) Allocator.Error!bool {
         var class = self.resolveStorageRoot(target_var);
         if (!class.desc.flags.frozen) return true;
-        if (family == .unifier and self.ask_open) unreachable; // no relation an ask runs reaches a frozen class
+        if (family == .unifier and self.probe_open) unreachable; // no relation a probe runs reaches a frozen class
         const anchor = self.frozen_anchors.get(class.desc_idx) orelse
             base.invariant("a frozen type class has no anchor", .{});
         if (target_var == anchor) return false;
@@ -2870,8 +2869,8 @@ pub const Store = struct {
     }
 
     /// `appendStaticDispatchConstraintsAfter` written by the unifier (see
-    /// `WriteFamily`). An append while an ask is open neither uses nor
-    /// reserves room, so discarding the ask, which truncates the list, leaves
+    /// `WriteFamily`). An append while a probe is open neither uses nor
+    /// reserves room, so discarding the probe, which truncates the list, leaves
     /// no room behind.
     pub fn unifierAppendStaticDispatchConstraintsAfter(
         self: *Self,
@@ -2888,8 +2887,8 @@ pub const Store = struct {
         suffix: []const StaticDispatchConstraint,
     ) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
         self.debugAssertUnsealed();
-        if (family == .plain) std.debug.assert(!self.ask_open);
-        const reserves_room = !self.ask_open;
+        if (family == .plain) std.debug.assert(!self.probe_open);
+        const reserves_room = !self.probe_open;
         const list = &self.static_dispatch_constraints;
         const start: u32 = @backingInt(prefix.start);
         const end: u32 = start + @as(u32, @intCast(prefix.count));
@@ -3114,11 +3113,11 @@ pub const Store = struct {
     /// present (a declaration is re-registered when its body is generated
     /// after predeclaration). Returns the declaration's stable index.
     ///
-    /// Must not run inside a unification savepoint: the declaration table is
-    /// not journaled, so a rollback could not undo the registration.
+    /// Must not run inside a probe: the declaration table is not journaled,
+    /// so discarding the probe could not undo the registration.
     pub fn registerNominalDecl(self: *Self, decl: NominalDecl) Allocator.Error!NominalDecl.Idx {
         self.debugAssertUnsealed();
-        std.debug.assert(!self.ask_open);
+        std.debug.assert(!self.probe_open);
         std.debug.assert(decl.source.sourceDecl().present);
 
         const statement = decl.statement();
@@ -3206,7 +3205,7 @@ pub const Store = struct {
     /// fill a reserved entry once its formals and backing have been copied).
     pub fn setNominalDecl(self: *Self, idx: NominalDecl.Idx, decl: NominalDecl) void {
         self.debugAssertUnsealed();
-        std.debug.assert(!self.ask_open);
+        std.debug.assert(!self.probe_open);
         self.noteNominalDeclWrite(decl);
         self.nominal_decls.set(idx, decl);
     }
@@ -3219,7 +3218,7 @@ pub const Store = struct {
     /// recursion). Applications of invalid declarations poison to err.
     pub fn markNominalDeclInvalid(self: *Self, idx: NominalDecl.Idx) void {
         self.debugAssertUnsealed();
-        std.debug.assert(!self.ask_open);
+        std.debug.assert(!self.probe_open);
         var decl = self.nominal_decls.get(idx).*;
         decl.flags.valid = false;
         self.invalid_nominal_decl_written = true;
@@ -3259,7 +3258,7 @@ pub const Store = struct {
     /// is otherwise; the word is written either way, so nothing branches on
     /// `condition`. A mark is a generalization pass's scratch,
     /// which the pass clears before it returns, so a mark write is neither
-    /// journaled nor reported to class watches: no ask opens or is discarded
+    /// journaled nor reported to class watches: no probe opens or is discarded
     /// while a pass runs, and a journaled row never carries a mark
     /// (`journalDescRow`).
     pub fn markGeneralizingIf(self: *Self, desc_idx: DescStore.Idx, condition: bool) void {
@@ -3318,7 +3317,7 @@ pub const Store = struct {
     }
 
     /// `resolveVarWordAndCompressPath` for the unifier (see `WriteFamily`),
-    /// which compresses no path while an ask is open.
+    /// which compresses no path while a probe is open.
     pub fn unifierResolveVarWord(self: *Self, var_: Var) ResolvedVarWord {
         return self.resolveVarWordAndCompressPathWith(.unifier, var_);
     }
@@ -3462,19 +3461,19 @@ pub const Store = struct {
         self.debugAssertUnsealed();
         const storage = self.findStorageRoot(initial_var);
 
-        // Compress the chain so future resolves are O(1), but not while an
-        // ask is open, which a unifier resolve tells by the slot baseline
+        // Compress the chain so future resolves are O(1), but not while a
+        // probe is open, which a unifier resolve tells by the slot baseline
         // being nonzero: compression is a pure optimization (it never changes
         // what a var resolves to), so it would only be journaled and
         // discarded, and a compressed slot could come to name a variable the
-        // ask appended. Skipping also keeps this resolver infallible (no
+        // probe appended. Skipping also keeps this resolver infallible (no
         // journaling, no allocation).
         const compresses = switch (family) {
             .plain => true,
-            .unifier => self.ask_baseline_slots == 0,
+            .unifier => self.probe_baseline_slots == 0,
         };
         if (compresses and initial_var != storage.storage_var) {
-            if (family == .plain) std.debug.assert(!self.ask_open);
+            if (family == .plain) std.debug.assert(!self.probe_open);
             var compressed_slot_idx = Self.varToSlotIdx(initial_var);
             var compressed_slot: Slot = self.slots.get(compressed_slot_idx);
             var guard = debug.IterationGuard.init("resolveVarAndCompressPath");
@@ -3968,7 +3967,7 @@ pub const Store = struct {
     /// `occurrence` is left as a rank-zero storage root whose slot the caller
     /// assigns.
     fn detachOccurrence(self: *Self, class: ResolvedStorageRoot, occurrence: Var) Allocator.Error!void {
-        std.debug.assert(!self.ask_open);
+        std.debug.assert(!self.probe_open);
         const checked_var = class.meta.checked_var;
         std.debug.assert(occurrence != checked_var);
 
@@ -4435,17 +4434,17 @@ test "canonicalizing for seal gives children representatives and flattens rows" 
         .ext = inner_tags,
     } } });
 
-    // Sealing retires a kept ask and a thawed freeze, while the selected plan
+    // Sealing retires a kept probe and a thawed freeze, while the selected plan
     // and nominal backing remain part of the solved store.
     const callable = try store.fresh();
     const joined = try store.fresh();
     const plan = testDerivedMapPlan(5, 1);
     try store.setDerivedMapPlan(callable, plan);
-    const mark = store.beginAsk();
+    const mark = store.beginProbe();
     const unifier_entry = store.enterUnifier();
     defer store.leaveUnifier(unifier_entry);
     try store.unifierUnion(callable, joined, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
-    try store.endAskYes(&mark);
+    try store.endProbeYes(&mark);
     const checked_callable = store.resolveVar(callable).var_;
     try store.freezeClass(checked_callable);
     try store.thawFrozenClasses();
@@ -4632,10 +4631,10 @@ fn openAskOnSealedStore() Allocator.Error!void {
     var b: Var = undefined;
     var store = try sealedTestStore(&a, &b);
     defer store.deinit();
-    _ = store.beginAsk();
+    _ = store.beginProbe();
 }
 
-test "opening an ask on a sealed store is a violated invariant" {
+test "opening a probe on a sealed store is a violated invariant" {
     try base.death_test.expectPanic("a sealed type store was written", openAskOnSealedStore, .{});
 }
 
@@ -5030,12 +5029,12 @@ test "resetting a storage root to unbound frees its old descriptor" {
     try std.testing.expectEqual(@as(usize, 0), store.free_descs.items.len);
 }
 
-test "an ask frees nothing until it is kept and reissues no freed descriptor" {
+test "a probe frees nothing until it is kept and reissues no freed descriptor" {
     const gpa = std.testing.allocator;
     var store = try Store.init(gpa);
     defer store.deinit();
 
-    // A class the asks merge away, and two descriptors freed before them.
+    // A class the probes merge away, and two descriptors freed before them.
     const d = try store.freshFromContent(.{ .structure = .empty_record });
     const d_desc = store.resolveVar(d).desc_idx;
     const a = try store.fresh();
@@ -5048,34 +5047,34 @@ test "an ask frees nothing until it is kept and reissues no freed descriptor" {
     defer gpa.free(free_before);
     const descs_before = store.descs.backing.len();
 
-    // A discarded ask: a fresh var is appended rather than reissued, and the
-    // merge inside orphans a pre-ask descriptor. Discarding puts the
+    // A discarded probe: a fresh var is appended rather than reissued, and the
+    // merge inside orphans a pre-probe descriptor. Discarding puts the
     // descriptor and the free list back, byte for byte.
     {
         var copy = try store.testCopy();
         defer copy.deinit(gpa);
-        const mark = store.beginAsk();
+        const mark = store.beginProbe();
         const e = try store.fresh();
         try std.testing.expectEqual(descs_before, @backingInt(store.resolveVar(e).desc_idx));
         const unifier_entry = store.enterUnifier();
         defer store.leaveUnifier(unifier_entry);
         try store.unifierUnion(d, a, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
         try std.testing.expectEqualSlices(DescStore.Idx, &.{d_desc}, store.pending_free_descs.items);
-        store.endAskNo(&mark);
+        store.endProbeNo(&mark);
         try store.expectRestoredTo(&copy);
         try std.testing.expectEqual(d_desc, store.resolveVar(d).desc_idx);
         try std.testing.expectEqual(Content{ .structure = .empty_record }, store.resolveVar(d).desc.content);
     }
 
-    // A kept ask keeps its merge, so the orphan is freed when it is kept.
+    // A kept probe keeps its merge, so the orphan is freed when it is kept.
     {
-        const mark = store.beginAsk();
+        const mark = store.beginProbe();
         const e = try store.fresh();
         const e_desc = store.resolveVar(e).desc_idx;
         const unifier_entry = store.enterUnifier();
         defer store.leaveUnifier(unifier_entry);
         try store.unifierUnion(d, a, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
-        try store.endAskYes(&mark);
+        try store.endProbeYes(&mark);
         try std.testing.expectEqualSlices(DescStore.Idx, &.{ free_before[0], free_before[1], d_desc }, store.free_descs.items);
         try std.testing.expectEqual(@as(usize, 0), store.pending_free_descs.items.len);
         try std.testing.expectEqual(e_desc, store.resolveVar(e).desc_idx);
@@ -5207,10 +5206,10 @@ test "settled classes survive content-preserving merges and clear on any observa
     try store.union_(settled_flex, structure, .{ .content = .{ .structure = .empty_record }, .rank = Rank.outermost });
     try std.testing.expect(!store.isSettled(witness));
 
-    // A discarded ask clears every settled class.
+    // A discarded probe clears every settled class.
     try store.markSettled(&.{witness});
-    const mark = store.beginAsk();
-    store.endAskNo(&mark);
+    const mark = store.beginProbe();
+    store.endProbeNo(&mark);
     try std.testing.expect(!store.isSettled(witness));
 }
 
@@ -5240,14 +5239,14 @@ test "function-free records are kept apart from settled ones and forgotten on an
     try std.testing.expect(!store.isFunctionFree(recorded));
     try std.testing.expect(store.isSettled(settled));
 
-    // A discarded ask forgets every record.
+    // A discarded probe forgets every record.
     try store.markFunctionFree(&.{settled});
-    const mark = store.beginAsk();
-    store.endAskNo(&mark);
+    const mark = store.beginProbe();
+    store.endProbeNo(&mark);
     try std.testing.expect(!store.isFunctionFree(settled));
 }
 
-test "a discarded ask leaves the store byte-for-byte as it was" {
+test "a discarded probe leaves the store byte-for-byte as it was" {
     const gpa = std.testing.allocator;
 
     // A few independent runs with different mutation mixes.
@@ -5256,7 +5255,7 @@ test "a discarded ask leaves the store byte-for-byte as it was" {
         var store = try Store.init(gpa);
         defer store.deinit();
 
-        // Content before the ask: a handful of vars, some redirected/unioned.
+        // Content before the probe: a handful of vars, some redirected/unioned.
         const a = try store.fresh();
         const b = try store.fresh();
         _ = try store.freshRedirect(b);
@@ -5264,12 +5263,12 @@ test "a discarded ask leaves the store byte-for-byte as it was" {
 
         var copy = try store.testCopy();
         defer copy.deinit(gpa);
-        const mark = store.beginAsk();
+        const mark = store.beginProbe();
 
-        // Writes a relation an ask runs might make, varied per run: appends
-        // (fresh/register), recording writes to entries that predate the ask
+        // Writes a relation a probe runs might make, varied per run: appends
+        // (fresh/register), unifier writes to entries that predate the probe
         // (union, content, rank), the same entry written twice (reverse
-        // replay), and a recording resolve (which compresses nothing).
+        // replay), and a unifier resolve (which compresses nothing).
         const fresh1 = try store.fresh();
         const fresh2 = try store.register(.{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
         const unifier_entry = store.enterUnifier();
@@ -5280,8 +5279,8 @@ test "a discarded ask leaves the store byte-for-byte as it was" {
         if (run % 2 == 0) try store.unifierSetDescRank(store.resolveVar(b).desc_idx, Rank.outermost);
         _ = store.unifierResolveVarWord(a);
 
-        store.endAskNo(&mark);
-        try std.testing.expect(!store.ask_open);
+        store.endProbeNo(&mark);
+        try std.testing.expect(!store.probe_open);
         try store.expectRestoredTo(&copy);
     }
 }
@@ -5558,7 +5557,7 @@ test "a derived map plan follows its callable's class through merges and detache
     try std.testing.expectEqual(@as(usize, 2), store.derived_map_plans.items().len);
 }
 
-test "a discarded ask restores the derived map plans and a freed class forgets its plan" {
+test "a discarded probe restores the derived map plans and a freed class forgets its plan" {
     const gpa = std.testing.allocator;
     var store = try Store.init(gpa);
     defer store.deinit();
@@ -5571,14 +5570,14 @@ test "a discarded ask restores the derived map plans and a freed class forgets i
     {
         var copy = try store.testCopy();
         defer copy.deinit(gpa);
-        const mark = store.beginAsk();
+        const mark = store.beginProbe();
         const unifier_entry = store.enterUnifier();
         defer store.leaveUnifier(unifier_entry);
         try store.unifierUnion(callable, other, flex_desc);
         const fresh_callable = try store.fresh();
         try store.setDerivedMapPlan(fresh_callable, testDerivedMapPlan(4, 0));
         try std.testing.expectEqual(plan, store.derivedMapPlan(other).?);
-        store.endAskNo(&mark);
+        store.endProbeNo(&mark);
         try store.expectRestoredTo(&copy);
     }
     try std.testing.expectEqual(plan, store.derivedMapPlan(callable).?);

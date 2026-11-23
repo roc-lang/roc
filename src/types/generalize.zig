@@ -956,7 +956,7 @@ pub const VarPool = struct {
     }
 
     /// Drop every var from `first` on from the rank lists: the vars a
-    /// discarded ask created and ranked. They were ranked after every older
+    /// discarded probe created and ranked. They were ranked after every older
     /// var, so they end each list.
     pub fn dropVarsFrom(self: *Self, first: Var) void {
         for (self.ranks.items) |*list| {

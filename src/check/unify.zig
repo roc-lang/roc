@@ -314,8 +314,8 @@ pub const MismatchBehavior = enum {
     /// Merge on success exactly like a normal unify. On a top-level mismatch,
     /// keep successful child unifications, record nothing, and do not poison the
     /// top-level operands; return `Result.mismatch`. The caller owns the
-    /// diagnostic (with correct expected/actual roles) and relates inside an
-    /// ask (`Store.beginAsk`) when it explicitly needs to discard the writes.
+    /// diagnostic (with correct expected/actual roles) and relates inside a
+    /// probe (`Store.beginProbe`) when it explicitly needs to discard the writes.
     write_no_report,
 };
 
@@ -374,7 +374,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
     // that contract independent of whether this particular relation happens to
     // mismatch or whether its first operand is a checked representative.
     if (opts.on_mismatch == .poison_to_err) {
-        env.types.assertNoAskOpen();
+        env.types.assertNoProbeOpen();
     }
     const unifier_running = env.types.enterUnifier();
     defer env.types.leaveUnifier(unifier_running);
@@ -450,8 +450,8 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         return Result{ .problem = problem_idx };
     };
 
-    // Openings from a relation an ask may still discard must not outlive it.
-    if (!env.types.askOpen()) try env.unify_scratch.persistOpenings();
+    // Openings from a relation a probe may still discard must not outlive it.
+    if (!env.types.probeOpen()) try env.unify_scratch.persistOpenings();
     // A refusal a mismatch handler absorbed did not reject this relation.
     env.unify_scratch.bounded_row_violation = null;
     env.unify_scratch.record_tail_refusal = null;
@@ -606,7 +606,7 @@ pub fn poisonMethodConflictReceivers(env: *const Env) std.mem.Allocator.Error!vo
 ///
 /// Every in-place write it makes to the type store is one of the store's
 /// unifier writes (`Store.unifierUnion` and the rest), which journal an
-/// entry that predates an open ask before overwriting it.
+/// entry that predates an open probe before overwriting it.
 const Unifier = struct {
     const Self = @This();
 
@@ -5518,8 +5518,8 @@ pub const Scratch = struct {
     // never converges—every lift would mint a fresh backing whose interior
     // recursive application is a new var, so the in-progress pair guard never
     // sees a repeat. Reusing the first opening restores the fixed graph the
-    // guard needs. Reset per unify call; asks bracket whole unify calls, so a
-    // discarded ask never leaves a memo entry dangling.
+    // guard needs. Reset per unify call; probes bracket whole unify calls, so a
+    // discarded probe never leaves a memo entry dangling.
     opened_nominals: std.ArrayListUnmanaged(OpenedNominalMemo),
     opened_nominal_args: VarSafeList,
     // Whether each entry of `opened_nominals` may outlive this unify call:
