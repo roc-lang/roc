@@ -1349,6 +1349,8 @@ const StringKind = enum {
 const StringInterpolationState = struct {
     kind: StringKind,
     curly_depth: u32,
+    /// Where the string literal this interpolation interrupts begins.
+    opening_quote_pos: u32,
 };
 
 /// The tokenizer that uses a Cursor and produces a TokenizedBuffer.
@@ -1794,9 +1796,7 @@ pub const Tokenizer = struct {
 
                         const last = self.string_interpolation_stack.pop() orelse unreachable; // the enclosing branch checked the stack is non-empty
                         try self.pushTokenNormalHere(gpa, .CloseStringInterpolation, start);
-                        // For string interpolations, we don't have the original opening quote position
-                        // so we use the current position as a fallback
-                        try self.tokenizeStringLikeLiteralBody(gpa, last.kind, self.cursor.pos);
+                        try self.tokenizeStringLikeLiteralBody(gpa, last.kind, last.opening_quote_pos);
                     } else {
                         try self.pushTokenNormalHere(gpa, .CloseCurly, start);
                     }
@@ -1974,7 +1974,7 @@ pub const Tokenizer = struct {
     const open_curly = '{';
     const close_curly = '}';
 
-    pub fn tokenizeStringLikeLiteralBody(self: *Tokenizer, gpa: std.mem.Allocator, kind: StringKind, opening_quote_pos: usize) std.mem.Allocator.Error!void {
+    pub fn tokenizeStringLikeLiteralBody(self: *Tokenizer, gpa: std.mem.Allocator, kind: StringKind, opening_quote_pos: u32) std.mem.Allocator.Error!void {
         const start = self.cursor.pos;
         var string_part_tag: Token.Tag = .StringPart;
         while (self.cursor.pos < self.cursor.buf.len) {
@@ -1984,13 +1984,13 @@ pub const Tokenizer = struct {
                 const dollar_start = self.cursor.pos;
                 self.cursor.pos += 2;
                 try self.pushTokenNormalHere(gpa, .OpenStringInterpolation, dollar_start);
-                try self.string_interpolation_stack.append(.{ .kind = kind, .curly_depth = 0 });
+                try self.string_interpolation_stack.append(.{ .kind = kind, .curly_depth = 0, .opening_quote_pos = opening_quote_pos });
                 return;
             } else if (c == '\n') {
                 try self.pushTokenNormalHere(gpa, string_part_tag, start);
                 if (kind == .single_line) {
                     // Include the opening quote in the error region
-                    self.cursor.pushMessage(.UnclosedString, @intCast(opening_quote_pos), @intCast(self.cursor.pos));
+                    self.cursor.pushMessage(.UnclosedString, opening_quote_pos, self.cursor.pos);
                     try self.pushTokenNormalHere(gpa, .StringEnd, self.cursor.pos);
                 }
                 return;
@@ -2014,7 +2014,7 @@ pub const Tokenizer = struct {
         }
         if (kind == .single_line) {
             // Include the opening quote in the error region
-            self.cursor.pushMessage(.UnclosedString, @intCast(opening_quote_pos), @intCast(self.cursor.pos));
+            self.cursor.pushMessage(.UnclosedString, opening_quote_pos, self.cursor.pos);
         }
         try self.pushTokenNormalHere(gpa, string_part_tag, start);
     }
@@ -3185,6 +3185,9 @@ test "issue 13366: every tokenizer diagnostic covers the source it reports" {
         .{ .source = "s = \"a\u{85}b\"", .tag = .NonPrintableUnicodeInStrLiteral, .start = 6, .end = 8 },
         .{ .source = "s = \"a\xffb\"", .tag = .InvalidUtf8InSource, .start = 6, .end = 7 },
         .{ .source = "s = \"a\xc3", .tag = .InvalidUtf8InSource, .start = 6, .end = 7 },
+        .{ .source = "s = \"a${x}\nt = 1", .tag = .UnclosedString, .start = 4, .end = 10 },
+        .{ .source = "s = \"a${x}", .tag = .UnclosedString, .start = 4, .end = 10 },
+        .{ .source = "s = \"${\"${x} b\n", .tag = .UnclosedString, .start = 7, .end = 14 },
     };
     for (cases) |case| {
         var diagnostics: [4]Diagnostic = undefined;
