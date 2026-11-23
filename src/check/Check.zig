@@ -31,6 +31,7 @@ const hoist_roots = @import("can").HoistRoots;
 const output_type_roots = @import("output_type_roots.zig");
 const dispatch_evidence = @import("dispatch_evidence.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
+const top_level_def_owners = @import("top_level_def_owners.zig");
 
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
@@ -1131,6 +1132,9 @@ local_procedure_outer_refs: std.ArrayListUnmanaged(LocalProcedureOuterRef) = .em
 promoted_local_procedures: std.ArrayListUnmanaged(hoist_roots.PromotedLocalProcedure) = .empty,
 /// Binding patterns of `promoted_local_procedures`.
 promoted_local_procedure_patterns: collections.DenseMapUnmanaged(CIR.Pattern.Idx, void) = .empty,
+/// Whether this module's `top_level_def_owners` table is recorded. It is
+/// recorded on the first lookup that needs it, and before publication.
+top_level_def_owners_published: bool = false,
 /// Constraint callables of dispatch edges whose selected target, or the
 /// target of a dispatch derived from them, is a local procedure that was not
 /// promoted. Settled with `promoted_local_procedure_patterns`.
@@ -2064,6 +2068,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .local_procedure_outer_refs = .settled,
     .promoted_local_procedures = .keyed,
     .promoted_local_procedure_patterns = .keyed,
+    .top_level_def_owners_published = .keyed,
     .contextual_local_dispatch_fn_vars = .keyed,
     .contextual_local_dispatch_exprs = .keyed,
     .executable_root_defs = .input,
@@ -16072,7 +16077,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.recordCheckingOutputs();
     var checking_scope = try checking_interface.makeScope(self.gpa, self.cir, self.builtin_ctx.builtin_module, self.imported_modules, self.owner_modules);
     defer checking_scope.deinit();
-    try checking_interface.publish(self.cir, &checking_scope, defReference, checkingBindingOwner);
+    try self.publishTopLevelDefOwners();
+    try checking_interface.publish(self.cir, &checking_scope, defReference);
 
     self.debugAssertNominalDeclTableComplete();
     self.debugAssertFramesBalanced();
@@ -18264,10 +18270,10 @@ fn hoistedCallableDefForExpr(
     expr: CIR.Expr.Idx,
 ) Allocator.Error!?HoistedCallableDef {
     return switch (module.store.getExpr(expr)) {
-        .e_lookup_local => |lookup| hoistedTopLevelDefForPattern(module, lookup.pattern_idx),
+        .e_lookup_local => |lookup| self.hoistedTopLevelDefForNode(module, ModuleEnv.nodeIdxFrom(lookup.pattern_idx)),
         .e_lookup_external => |external| blk: {
             const imported_module = self.hoistedImportedModule(module, external.module_idx) orelse break :blk null;
-            break :blk hoistedTopLevelDefForNode(imported_module, @fromBackingInt(@intCast(external.target_node_idx)));
+            break :blk self.hoistedTopLevelDefForNode(imported_module, @fromBackingInt(@intCast(external.target_node_idx)));
         },
         .e_lookup_associated_resolved => |resolved| blk: {
             const target_module = self.moduleEnvForIdentity(module, resolved.module_identity);
@@ -18343,103 +18349,25 @@ fn hoistedImportedModule(
     return self.imported_modules[module_idx];
 }
 
-/// The producer records the definition owning every exposed destructured binder.
-fn checkingBindingOwner(module: *const ModuleEnv, node: CIR.Node.Idx) Allocator.Error!?CIR.Def.Idx {
-    const target = try hoistedTopLevelDefForNode(module, node) orelse return null;
-    return target.def;
-}
-
-fn hoistedTopLevelDefForPattern(
-    module: *const ModuleEnv,
-    pattern: CIR.Pattern.Idx,
-) Allocator.Error!?HoistedCallableDef {
-    const pattern_node = ModuleEnv.nodeIdxFrom(pattern);
-    return hoistedTopLevelDefForNode(module, pattern_node);
-}
-
 fn hoistedTopLevelDefForNode(
+    self: *Self,
     module: *const ModuleEnv,
     node: CIR.Node.Idx,
 ) Allocator.Error!?HoistedCallableDef {
-    for (module.store.sliceDefs(module.global_value_defs)) |def_idx| {
-        const def = module.store.getDef(def_idx);
-        if (ModuleEnv.nodeIdxFrom(def_idx) == node or ModuleEnv.nodeIdxFrom(def.expr) == node or try patternBindsNode(module, def.pattern, node)) {
-            return .{ .module = module, .def = def_idx };
-        }
+    if (module == self.cir) {
+        try self.publishTopLevelDefOwners();
+    } else {
+        // An imported module recorded its table when it was checked.
+        std.debug.assert(module.checking_dependency.published);
     }
-    return null;
+    const def = module.topLevelDefOwner(node) orelse return null;
+    return .{ .module = module, .def = def };
 }
 
-/// Whether `pattern` is `node` or binds `node` somewhere inside it, so that a
-/// name bound by a destructure resolves to the def that destructures.
-///
-/// The walk is an explicit worklist (zero-recursion policy).
-fn patternBindsNode(module: *const ModuleEnv, root: CIR.Pattern.Idx, node: CIR.Node.Idx) Allocator.Error!bool {
-    if (ModuleEnv.nodeIdxFrom(root) == node) return true;
-    if (module.store.getPattern(root) == .assign or module.store.getPattern(root) == .var_assign) return false;
-
-    var stack_allocator_state_buffer: [2048]u8 align(@alignOf(usize)) = undefined;
-    var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, module.gpa);
-    const stack_allocator = stack_allocator_state.allocator();
-    var pending: std.ArrayList(CIR.Pattern.Idx) = .empty;
-    defer pending.deinit(stack_allocator);
-
-    try pending.append(stack_allocator, root);
-    while (pending.pop()) |current| {
-        if (ModuleEnv.nodeIdxFrom(current) == node) return true;
-        switch (module.store.getPattern(current)) {
-            .assign, .var_assign => {},
-            .as => |as_pattern| try pending.append(stack_allocator, as_pattern.pattern),
-            .applied_tag => |tag| {
-                for (module.store.slicePatterns(tag.args)) |arg| {
-                    try pending.append(stack_allocator, arg);
-                }
-            },
-            .nominal => |nominal| try pending.append(stack_allocator, nominal.backing_pattern),
-            .nominal_external => |nominal| try pending.append(stack_allocator, nominal.backing_pattern),
-            .record_destructure => |record| {
-                for (module.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
-                    const destruct = module.store.getRecordDestruct(destruct_idx);
-                    try pending.append(stack_allocator, destruct.kind.toPatternIdx());
-                }
-            },
-            .list => |list| {
-                for (module.store.slicePatterns(list.patterns)) |item| {
-                    try pending.append(stack_allocator, item);
-                }
-                if (list.rest_info) |rest| {
-                    if (rest.pattern) |rest_pattern| {
-                        try pending.append(stack_allocator, rest_pattern);
-                    }
-                }
-            },
-            .tuple => |tuple| {
-                for (module.store.slicePatterns(tuple.patterns)) |item| {
-                    try pending.append(stack_allocator, item);
-                }
-            },
-            .str_interpolation => |str| {
-                for (0..str.steps.span.len) |offset| {
-                    const step = module.store.getStrPatternStep(str.steps, @intCast(offset));
-                    if (step.capture) |capture| {
-                        try pending.append(stack_allocator, capture);
-                    }
-                }
-            },
-            .num_literal,
-            .num_from_numeral_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
-            .str_literal,
-            .underscore,
-            .runtime_error,
-            => {},
-            .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
-        }
-    }
-    return false;
+fn publishTopLevelDefOwners(self: *Self) Allocator.Error!void {
+    if (self.top_level_def_owners_published) return;
+    try top_level_def_owners.publish(self.gpa, self.cir);
+    self.top_level_def_owners_published = true;
 }
 
 fn exprHasDedicatedLiteralConversionRoot(self: *Self, expr: CIR.Expr.Idx) bool {
