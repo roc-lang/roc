@@ -35,6 +35,7 @@ TypeNamePlan := { table : TypeTable }.{
 	PreferredName := { name : Str, type_id : U64 }
 
 	PreferredNames := { entries : List(PreferredName), declared : Set(Str) }.{
+
 		## Every top-level type name the generated file declares apart from
 		## its aliases: the reserved names, each host type's declared names,
 		## and the names each preferred name claims.

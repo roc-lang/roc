@@ -1,4 +1,5 @@
 Host := [].{
+
 	## Named like the argument type a generator declares for `send!`.
 	SendArgs := { text : Str }
 

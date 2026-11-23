@@ -2,21 +2,21 @@ platform "glue-declared-name-collisions"
 	requires {
 		unused : {} -> {}
 	}
-	exposes [Host, A, AB]
+	exposes [A, AB, Host]
 	packages {}
 	provides {
 		"take_event": take_event,
 		"take_helpers": take_helpers,
-		"take_signal": take_signal,
-		"take_signal_named": take_signal_named,
-		"take_runtime_named": take_runtime_named,
 		"take_host_named": take_host_named,
 		"take_joined": take_joined,
+		"take_runtime_named": take_runtime_named,
+		"take_signal": take_signal,
+		"take_signal_named": take_signal_named,
 	}
 	hosted {
-		"roc_host_send": Host.send!,
-		"roc_host_load": Host.load!,
 		"roc_host_fetch": Host.fetch!,
+		"roc_host_load": Host.load!,
+		"roc_host_send": Host.send!,
 	}
 	targets: {}
 
