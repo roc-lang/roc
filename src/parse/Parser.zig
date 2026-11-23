@@ -884,6 +884,30 @@ fn parseOptionalLiteralTypeSuffix(self: *Parser) std.mem.Allocator.Error!?AST.Li
     return try self.parseLiteralTypeSuffix();
 }
 
+/// A number token's stored literal and the deprecated suffix it was spelled with.
+const NumberLiteral = struct {
+    literal: NumericLiteral.Idx,
+    deprecated_suffix: NumericLiteral.DeprecatedSuffix,
+};
+
+/// Record the numeric literal of the `Int` or `Float` token at `token`. The
+/// tokenizer's record supplies the facts when it is exact; otherwise they
+/// are derived from the token's text.
+fn addNumberLiteral(self: *Parser, token: Token.Idx, kind: NumericLiteral.Kind) std.mem.Allocator.Error!NumberLiteral {
+    const scanned = self.tok_buf.scannedNumber(token);
+    if (scanned.flags.exact) {
+        return .{
+            .literal = try self.store.addScannedNumericLiteral(scanned, kind),
+            .deprecated_suffix = scanned.suffix,
+        };
+    }
+    const split = NumericLiteral.splitSource(self.tokenText(token), kind);
+    return .{
+        .literal = try self.store.addNumericLiteral(split, kind),
+        .deprecated_suffix = split.deprecated_suffix,
+    };
+}
+
 fn pushDeprecatedNumberSuffixDiagnostic(self: *Parser, suffix: NumericLiteral.DeprecatedSuffix, region: AST.TokenizedRegion) std.mem.Allocator.Error!void {
     if (suffix != .none) {
         try self.pushDiagnostic(.deprecated_number_suffix, region);
@@ -3678,8 +3702,8 @@ fn runExprStatementKernel(
                 if (tok == .Int) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .int);
-                    const literal = try self.store.addNumericLiteral(deprecated, .int);
+                    const deprecated = try self.addNumberLiteral(start, .int);
+                    const literal = deprecated.literal;
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
 
@@ -3715,8 +3739,8 @@ fn runExprStatementKernel(
                 if (tok == .Float) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .frac);
-                    const literal = try self.store.addNumericLiteral(deprecated, .frac);
+                    const deprecated = try self.addNumberLiteral(start, .frac);
+                    const literal = deprecated.literal;
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
 
@@ -6694,8 +6718,8 @@ fn runExprStatementKernel(
                 if (tok == .Float) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .frac);
-                    const literal = try self.store.addNumericLiteral(deprecated, .frac);
+                    const deprecated = try self.addNumberLiteral(start, .frac);
+                    const literal = deprecated.literal;
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
                     if (try self.typeSuffixFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_suffix| {
@@ -6739,8 +6763,8 @@ fn runExprStatementKernel(
                 if (tok == .Int) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .int);
-                    const literal = try self.store.addNumericLiteral(deprecated, .int);
+                    const deprecated = try self.addNumberLiteral(start, .int);
+                    const literal = deprecated.literal;
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
                     if (try self.typeSuffixFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_suffix| {

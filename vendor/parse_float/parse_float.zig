@@ -5,7 +5,9 @@
 const parse = @import("parse.zig");
 const convertHex = @import("convert_hex.zig").convertHex;
 const convertFast = @import("convert_fast.zig").convertFast;
-const convertEiselLemire = @import("convert_eisel_lemire.zig").convertEiselLemire;
+/// Correctly rounded conversion of `w * 10^q` to a binary float, or null when
+/// the algorithm cannot decide the rounding.
+pub const convertEiselLemire = @import("convert_eisel_lemire.zig").convertEiselLemire;
 const convertSlow = @import("convert_slow.zig").convertSlow;
 
 /// Errors returned by Roc builtin float parsing.

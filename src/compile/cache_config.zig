@@ -445,7 +445,8 @@ pub const Constants = struct {
     /// 207: each module records the top-level value definition that owns each
     /// of its nodes.
     /// 208: remaining absences in backend, runtime and module data are explicit.
-    pub const CACHE_VERSION = 208;
+    /// 209: each module records its numeral-node index.
+    pub const CACHE_VERSION = 209;
 };
 
 /// Configuration for the Roc cache system.

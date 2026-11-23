@@ -550,6 +550,36 @@ pub fn addNumericLiteral(
     return idx;
 }
 
+/// Records the numeric literal facts of an exact tokenizer record and
+/// returns the id stored on the AST node.
+pub fn addScannedNumericLiteral(
+    store: *NodeStore,
+    scanned: NumericLiteral.Scanned,
+    kind: NumericLiteral.Kind,
+) std.mem.Allocator.Error!NumericLiteral.Idx {
+    const idx: NumericLiteral.Idx = @fromBackingInt(std.math.cast(u32, store.numeric_literals.items.len) orelse return error.OutOfMemory);
+    const digits_start = std.math.cast(u32, store.numeric_literal_bytes.items.len) orelse return error.OutOfMemory;
+    var digits: NumericLiteral.ScannedDigits = .{};
+    const parsed = NumericLiteral.parseScanned(scanned, kind, &digits);
+    if (std.math.cast(u32, @as(usize, digits_start) + digits.all().len) == null) return error.OutOfMemory;
+    try store.numeric_literals.ensureUnusedCapacity(store.gpa, 1);
+    try store.numeric_literal_bytes.appendSlice(store.gpa, digits.all());
+    store.numeric_literals.appendAssumeCapacity(.{
+        .kind = parsed.kind,
+        .compact = parsed.compact,
+        .digits_start = digits_start,
+        .before_len = @intCast(parsed.before_len),
+        .after_len = @intCast(parsed.after_len),
+        .after_decimal_digit_count = parsed.after_decimal_digit_count,
+        .flags = .{
+            .is_negative = parsed.is_negative,
+            .had_decimal_point = parsed.had_decimal_point,
+            .is_materialized = parsed.is_materialized,
+        },
+    });
+    return idx;
+}
+
 /// Return parsed numeric literal facts by index.
 pub fn getNumericLiteral(store: *const NodeStore, idx: NumericLiteral.Idx) NumericLiteral.Stored {
     return store.numeric_literals.items[@backingInt(idx)];
