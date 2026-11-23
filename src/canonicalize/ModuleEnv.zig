@@ -836,6 +836,9 @@ pub const NumericSuffixTarget = extern struct {
 /// literal through defaulted-field width absorption. The field's default is
 /// construction-site data; it must survive even when later value unification
 /// normalizes the shared runtime row to `required`.
+///
+/// The module's table is sorted by `expr`, then `field_name`, so one
+/// construction's omissions are a contiguous run found by `ofExpr`.
 pub const RecordOmittedDefault = extern struct {
     expr: CIR.Expr.Idx,
     field_name: Ident.Idx,
@@ -843,6 +846,25 @@ pub const RecordOmittedDefault = extern struct {
     default_expr_node: u32,
 
     pub const SafeList = collections.SafeList(@This());
+
+    pub fn lessThan(_: void, a: RecordOmittedDefault, b: RecordOmittedDefault) bool {
+        if (a.expr != b.expr) return @backingInt(a.expr) < @backingInt(b.expr);
+        return @as(u32, @bitCast(a.field_name)) < @as(u32, @bitCast(b.field_name));
+    }
+
+    /// The omissions of one construction in a table sorted by `lessThan`.
+    pub fn ofExpr(table: []const RecordOmittedDefault, expr: CIR.Expr.Idx) []const RecordOmittedDefault {
+        const wanted = @backingInt(expr);
+        var low: usize = 0;
+        var high: usize = table.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (@backingInt(table[mid].expr) < wanted) low = mid + 1 else high = mid;
+        }
+        var end = low;
+        while (end < table.len and table[end].expr == expr) end += 1;
+        return table[low..end];
+    }
 };
 
 /// A value expression that flows into an annotated function's result with a

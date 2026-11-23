@@ -16148,10 +16148,15 @@ Restrictions:
   lifting paths retain the checked representatives of the record relation,
   alongside its original operands, so a polymorphic call's formal slot cannot
   hide the literal that supplies it. Checking registers fresh record expressions
-  as they are checked. At settlement, before default-cycle validation, it groups
-  accepted omission decisions by solved record equality and distributes each
-  decision to every registered construction in that class that did not supply
-  the field. This consumes the unifier's explicit default identity, including
+  as they are checked. An annotated or expected-typed expression checks its
+  body on a fresh variable and relates its own variable to the annotation, so
+  when the annotation names an alias, the expression's root is that alias
+  node, a class of its own; the literal's record class is reached through the
+  alias's backing, which unification related to the body. At settlement, before default-cycle validation, it groups accepted omission
+  decisions by solved record equality and distributes each decision to every
+  registered construction in that class that did not supply the field, then
+  publishes the omissions sorted by construction so each consumer finds one
+  construction's omissions by binary search. This consumes the unifier's explicit default identity, including
   when later value relations normalized the field to required; it never
   reconstructs an omission from a nominal declaration or a solved field kind.
   Equal decisions are coalesced before visiting constructors, and only classes
