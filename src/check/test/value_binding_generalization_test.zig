@@ -145,6 +145,15 @@ test "value binding generalization: the suggested thunk drops a `..` in a covari
     );
 }
 
+test "value binding generalization: the suggested thunk drops every output-position `..`" {
+    try expectThunkSuggestion(
+        \\pair : ([A([X, ..]), B, ..], { c : [C, ..] })
+        \\pair = (A(X), { c: C })
+    ,
+        \\    pair : {} -> ([A([X]), B], { c : [C] })
+    );
+}
+
 test "value binding generalization: the suggested thunk keeps an input-position `..`" {
     try expectThunkSuggestion(
         \\mk = |{}| |_| Done

@@ -38752,77 +38752,90 @@ fn rejectValueAnnotation(
 /// as redundant (design.md "Polarity"). The walk follows annotation
 /// generation: only a function argument flips polarity, a type application
 /// argument stands where its formal does, and an invariant or unresolved
-/// argument is generated as written at every depth.
+/// argument is generated as written at every depth. It reaches each `..` in
+/// source order, so the kept text is written straight into the problem store.
 fn thunkResultText(self: *Self, root: CIR.TypeAnno.Idx, type_region: Region) Allocator.Error!problem.ExtraStringIdx {
-    const Item = struct { anno: CIR.TypeAnno.Idx, polarity: Polarity };
-    var pending: std.ArrayList(Item) = .empty;
-    defer pending.deinit(self.gpa);
-    var removed: std.ArrayList(Region) = .empty;
-    defer removed.deinit(self.gpa);
-    try pending.append(self.gpa, .{ .anno = root, .polarity = .pos });
-    while (pending.pop()) |item| {
+    const Step = union(enum) {
+        visit: struct { anno: CIR.TypeAnno.Idx, polarity: Polarity },
+        /// A redundant `..` with the separator before it.
+        skip: Region,
+    };
+    var pending_buffer: [1024]u8 align(@alignOf(usize)) = undefined;
+    var pending_allocator_state = std.heap.BufferFirstAllocator.init(&pending_buffer, self.gpa);
+    const pending_allocator = pending_allocator_state.allocator();
+    var pending: std.ArrayList(Step) = .empty;
+    defer pending.deinit(pending_allocator);
+
+    const source = self.cir.getSourceAll();
+    const text = &self.problems.extra_strings_backing;
+    const start = text.items.len;
+    errdefer text.shrinkRetainingCapacity(start);
+    // Skipping only shortens the type's text.
+    try text.ensureUnusedCapacity(type_region.end.offset - type_region.start.offset);
+    var cursor = type_region.start.offset;
+
+    // Children are pushed last first, so they are visited in source order and
+    // a union's skip comes after every skip inside its tags.
+    try pending.append(pending_allocator, .{ .visit = .{ .anno = root, .polarity = .pos } });
+    while (pending.pop()) |step| {
+        const item = switch (step) {
+            .visit => |item| item,
+            .skip => |region| {
+                std.debug.assert(cursor <= region.start.offset);
+                text.appendSliceAssumeCapacity(source[cursor..region.start.offset]);
+                cursor = region.end.offset;
+                continue;
+            },
+        };
+        var children: []const CIR.TypeAnno.Idx = &.{};
+        var children_polarity = item.polarity;
         switch (self.cir.store.getTypeAnno(item.anno)) {
             .tag_union => |tu| {
-                const tags = self.cir.store.sliceTypeAnnos(tu.tags);
-                var tags_end: ?u32 = null;
-                for (tags) |tag| {
-                    try pending.append(self.gpa, .{ .anno = tag, .polarity = item.polarity });
-                    tags_end = @max(tags_end orelse 0, self.cir.store.getTypeAnnoRegion(tag).end.offset);
-                }
+                children = self.cir.store.sliceTypeAnnos(tu.tags);
                 // `[]` is never opened, so its `..` is not redundant.
-                const ext = tu.ext orelse continue;
-                const last_tag_end = tags_end orelse continue;
-                if (item.polarity == .pos and self.annoIsAnonymousOpenExt(ext)) {
-                    // Remove the separator along with the `..`.
-                    try removed.append(self.gpa, .{
-                        .start = .{ .offset = last_tag_end },
-                        .end = self.cir.store.getTypeAnnoRegion(ext).end,
-                    });
+                if (tu.ext) |ext| {
+                    if (children.len > 0 and item.polarity == .pos and self.annoIsAnonymousOpenExt(ext)) {
+                        try pending.append(pending_allocator, .{ .skip = .{
+                            .start = self.cir.store.getTypeAnnoRegion(children[children.len - 1]).end,
+                            .end = self.cir.store.getTypeAnnoRegion(ext).end,
+                        } });
+                    }
                 }
             },
-            .tag => |t| for (self.cir.store.sliceTypeAnnos(t.args)) |arg| {
-                try pending.append(self.gpa, .{ .anno = arg, .polarity = item.polarity });
-            },
-            .tuple => |t| for (self.cir.store.sliceTypeAnnos(t.elems)) |elem| {
-                try pending.append(self.gpa, .{ .anno = elem, .polarity = item.polarity });
-            },
-            .record => |r| for (self.cir.store.sliceAnnoRecordFields(r.fields)) |field_idx| {
-                try pending.append(self.gpa, .{ .anno = self.cir.store.getAnnoRecordField(field_idx).ty, .polarity = item.polarity });
+            .tag => |t| children = self.cir.store.sliceTypeAnnos(t.args),
+            .tuple => |t| children = self.cir.store.sliceTypeAnnos(t.elems),
+            .record => |r| {
+                var fields = std.mem.reverseIterator(self.cir.store.sliceAnnoRecordFields(r.fields));
+                while (fields.next()) |field_idx| {
+                    try pending.append(pending_allocator, .{ .visit = .{ .anno = self.cir.store.getAnnoRecordField(field_idx).ty, .polarity = item.polarity } });
+                }
             },
             .@"fn" => |f| {
-                for (self.cir.store.sliceTypeAnnos(f.args)) |arg| {
-                    try pending.append(self.gpa, .{ .anno = arg, .polarity = item.polarity.flip() });
-                }
-                try pending.append(self.gpa, .{ .anno = f.ret, .polarity = item.polarity });
+                try pending.append(pending_allocator, .{ .visit = .{ .anno = f.ret, .polarity = item.polarity } });
+                children = self.cir.store.sliceTypeAnnos(f.args);
+                children_polarity = item.polarity.flip();
             },
-            .parens => |p| try pending.append(self.gpa, .{ .anno = p.anno, .polarity = item.polarity }),
+            .parens => |p| try pending.append(pending_allocator, .{ .visit = .{ .anno = p.anno, .polarity = item.polarity } }),
             .apply => |a| {
                 const positions = try self.applicationPositions(a);
-                for (self.cir.store.sliceTypeAnnos(a.args), 0..) |arg, index| {
+                const args = self.cir.store.sliceTypeAnnos(a.args);
+                var index = args.len;
+                while (index > 0) {
+                    index -= 1;
                     const arg_positions = positions.at(index) orelse continue;
                     if (arg_positions.isInvariant()) continue;
-                    try pending.append(self.gpa, .{ .anno = arg, .polarity = arg_positions.polarity(item.polarity) });
+                    try pending.append(pending_allocator, .{ .visit = .{ .anno = args[index], .polarity = arg_positions.polarity(item.polarity) } });
                 }
             },
             .rigid_var, .rigid_var_lookup, .underscore, .lookup, .malformed => {},
         }
-    }
-
-    std.mem.sort(Region, removed.items, {}, struct {
-        fn lessThan(_: void, a: Region, b: Region) bool {
-            return a.start.offset < b.start.offset;
+        var reversed = std.mem.reverseIterator(children);
+        while (reversed.next()) |child| {
+            try pending.append(pending_allocator, .{ .visit = .{ .anno = child, .polarity = children_polarity } });
         }
-    }.lessThan);
-    const source = self.cir.getSourceAll();
-    var text: std.ArrayList(u8) = .empty;
-    defer text.deinit(self.gpa);
-    var cursor = type_region.start.offset;
-    for (removed.items) |region| {
-        try text.appendSlice(self.gpa, source[cursor..region.start.offset]);
-        cursor = region.end.offset;
     }
-    try text.appendSlice(self.gpa, source[cursor..type_region.end.offset]);
-    return self.problems.putExtraString(text.items);
+    text.appendSliceAssumeCapacity(source[cursor..type_region.end.offset]);
+    return .{ .start = start, .count = text.items.len - start };
 }
 
 /// The arity of an annotated function type whose definition is a placeholder
