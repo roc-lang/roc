@@ -84,6 +84,11 @@ TypeNamePlan := { table : TypeTable }.{
 			return state
 		}
 
+		# A zero-sized type has no host declaration to name.
+		if type_table.is_zero_sized(type_id) {
+			return state
+		}
+
 		next_visited = visited_type_ids.append(type_id)
 
 		type_repr = type_table.get(type_id)
@@ -167,6 +172,11 @@ TypeNamePlan := { table : TypeTable }.{
 	collect_aliases_for_type_id : { entries : List(AliasPlan), seen_aliases : List(Str) }, TypeTable, U64, Str, Str, List(U64) -> { entries : List(AliasPlan), seen_aliases : List(Str) }
 	collect_aliases_for_type_id = |state, type_table, type_id, alias_base, module_base, visited_type_ids| {
 		if List.contains(visited_type_ids, type_id) {
+			return state
+		}
+
+		# A zero-sized type has no host declaration to name.
+		if type_table.is_zero_sized(type_id) {
 			return state
 		}
 

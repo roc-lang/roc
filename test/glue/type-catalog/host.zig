@@ -126,9 +126,7 @@ export fn roc_catalog_roundtrip(arg0: abi.EmptyOrPairOrPayloadOrRecursive) callc
     return arg0;
 }
 
-export fn roc_catalog_single_no_payload() callconv(.c) *anyopaque {
-    return undefined;
-}
+export fn roc_catalog_single_no_payload() callconv(.c) void {}
 
 export fn roc_catalog_single_payload_roundtrip(arg0: abi.CatalogPayload) callconv(.c) abi.CatalogPayload {
     return arg0;
@@ -177,6 +175,9 @@ fn runContract() void {
     const stepped = abi.roc_multi_payload();
     if (stepped._0 != 22) fail("multi-payload first payload mismatch", .{});
     if (!std.mem.eql(u64, stepped._1.items(), &.{ 3, 5, 8 })) fail("multi-payload second payload mismatch", .{});
+
+    const zero_sized: abi.CatalogZeroSizedWrapper = .{ .only = 6.5 };
+    if (abi.roc_zero_sized_wrapper(zero_sized).only != 7.5) fail("zero-sized wrapper mismatch", .{});
 
     result_a.decref(&roc_host);
     result_b.decref(&roc_host);

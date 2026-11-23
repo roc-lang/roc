@@ -38,6 +38,11 @@ make_glue = |types_list| {
 ## Map a type table entry to its Rust type string using structured TypeRepr
 type_id_to_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64 -> Str
 type_id_to_rust = |type_table, duplicate_names, preferred_names, type_id| {
+	# A zero-sized value has no host representation.
+	if type_table.is_zero_sized(type_id) {
+		return "()"
+	}
+
 	type_repr = type_table.get(type_id)
 	match type_repr {
 		RocRecord(rec) =>
@@ -71,7 +76,10 @@ rust_record_fields_decl : TypeTable, List(Str), TypeNamePlan.PreferredNames, Lis
 rust_record_fields_decl = |type_table, duplicate_names, preferred_names, fields, width| {
 	var $field_strs = ""
 	for field in fields {
-		$field_strs = Str.concat($field_strs, rust_record_field_decl(type_table, duplicate_names, preferred_names, field, width))
+		# A zero-sized field occupies no storage and is not a struct member.
+		if !field.is_zero_sized() {
+			$field_strs = Str.concat($field_strs, rust_record_field_decl(type_table, duplicate_names, preferred_names, field, width))
+		}
 	}
 	$field_strs
 }
@@ -95,7 +103,7 @@ type_repr_to_rust = |type_table, duplicate_names, preferred_names, type_id, type
 				RocUnknown(_) => "RocBox"
 				_ => {
 					inner_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, inner_id)
-					if inner_rust == "*mut c_void" {
+					if inner_rust == "*mut c_void" or type_table.is_zero_sized(inner_id) {
 						"RocBox"
 					} else {
 						"*mut ${inner_rust}"
@@ -164,7 +172,7 @@ resolve_tag_union_type_rust = |type_table, duplicate_names, preferred_names, typ
 	match type_table.single_variant_payload(type_id, tu) {
 		SinglePayload(payload_id) => type_id_to_rust(type_table, duplicate_names, preferred_names, payload_id)
 		SinglePayloadStruct(_) => tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)
-		SingleNoPayload => "*mut c_void"
+		SingleNoPayload => "()"
 		NotSingleVariant =>
 			if tu.name != "" {
 				tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)
@@ -361,7 +369,7 @@ generated_type_names_rust = |type_table, duplicate_names| {
 	for type_info in type_table_entries(type_table) {
 		match type_info.repr {
 			RocRecord(rec) =>
-				if rec.name != "" {
+				if rec.name != "" and !type_table.is_zero_sized($type_id) {
 					$names = $names.append(record_struct_name(type_table, duplicate_names, $type_id, rec))
 				}
 			RocTagUnion(tu) =>
@@ -2204,7 +2212,7 @@ generate_element_type_structs_rust = |type_table, duplicate_names, preferred_nam
 	for type_info in type_table_entries(type_table) {
 		match type_info.repr {
 			RocRecord(rec) =>
-				if rec.name != "" {
+				if rec.name != "" and !type_table.is_zero_sized($type_id) {
 					struct_name = record_struct_name(type_table, duplicate_names, $type_id, rec)
 					if !(List.contains($seen_names, struct_name)) {
 						$seen_names = $seen_names.append(struct_name)
@@ -2589,6 +2597,10 @@ list_decref_helper_name_rust = |type_table, duplicate_names, preferred_names, el
 
 decref_stmt_for_type_id_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, Str -> Str
 decref_stmt_for_type_id_rust = |type_table, duplicate_names, preferred_names, type_id, expr| {
+	if type_table.is_zero_sized(type_id) {
+		return ""
+	}
+
 	if is_roc_released(type_table, type_id) {
 		# Every emitter leaves out the release of a value that holds an opaque
 		# Roc value, so reaching this is a generator bug. It must not compile.
@@ -2653,6 +2665,10 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, type_
 
 incref_stmt_for_type_id_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, Str -> Str
 incref_stmt_for_type_id_rust = |type_table, duplicate_names, preferred_names, type_id, expr| {
+	if type_table.is_zero_sized(type_id) {
+		return ""
+	}
+
 	type_repr = type_table.get(type_id)
 	incref_stmt_for_repr_rust(type_table, duplicate_names, preferred_names, type_id, type_repr, expr)
 }
@@ -2934,7 +2950,7 @@ generate_refcount_helpers_rust = |type_table, duplicate_names, preferred_names| 
 	for type_info in type_table_entries(type_table) {
 		match type_info.repr {
 			RocRecord(rec) =>
-				if rec.name != "" {
+				if rec.name != "" and !type_table.is_zero_sized($type_id) {
 					struct_name = record_struct_name(type_table, duplicate_names, $type_id, rec)
 					if !(List.contains($seen_names, struct_name)) {
 						$seen_names = $seen_names.append(struct_name)
@@ -2979,7 +2995,7 @@ direct_param_list_rust = |type_table, duplicate_names, preferred_names, arg_type
 	var $idx = 0
 	arg_shape = ArgShape.from_table(type_table)
 
-	for arg_type_id in arg_shape.positional_non_unit_type_ids(arg_type_ids) {
+	for arg_type_id in arg_shape.abi_visible_type_ids(arg_type_ids) {
 		arg_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, arg_type_id)
 		sep = if $params == "" {
 			""
@@ -2999,7 +3015,7 @@ direct_arg_name_list_rust = |type_table, arg_type_ids| {
 	var $idx = 0
 	arg_shape = ArgShape.from_table(type_table)
 
-	for _arg_type_id in arg_shape.positional_non_unit_type_ids(arg_type_ids) {
+	for _arg_type_id in arg_shape.abi_visible_type_ids(arg_type_ids) {
 		sep = if $args == "" {
 			""
 		} else {
@@ -3022,7 +3038,7 @@ direct_hosted_param_list_rust = |type_table, duplicate_names, preferred_names, f
 	var $params = ""
 	var $idx = 0
 
-	for arg_type_id in arg_shape.positional_non_unit_type_ids(func.arg_type_ids) {
+	for arg_type_id in arg_shape.abi_visible_type_ids(func.arg_type_ids) {
 		arg_rust = if use_args_wrapper {
 			"${name_to_struct_name(func.name)}Args"
 		} else {
@@ -3147,7 +3163,7 @@ hosted_ownership_doc_rust = |type_table, duplicate_names, preferred_names, func|
 	var $arg_lines = ""
 	var $idx = 0
 
-	for arg_type_id in arg_shape.positional_non_unit_type_ids(func.arg_type_ids) {
+	for arg_type_id in arg_shape.abi_visible_type_ids(func.arg_type_ids) {
 		arg_name = "arg${U64.to_str($idx)}"
 		stmt = if is_roc_released(type_table, arg_type_id) {
 			"${arg_name} holds an opaque Roc value, which only Roc can release: pass it back to Roc."

@@ -222,6 +222,11 @@ static void run_contract(void) {
     if (stepped._1.length != 3 || steps[0] != 3 || steps[1] != 5 || steps[2] != 8) {
         record_failure("multi-payload second payload mismatch");
     }
+
+    CatalogZeroSizedWrapper zero_sized = { .only = 6.5 };
+    if (roc_zero_sized_wrapper(zero_sized).only != 7.5) {
+        record_failure("zero-sized wrapper mismatch");
+    }
 }
 
 WASM_EXPORT("wasm_main")

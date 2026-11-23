@@ -88,7 +88,7 @@ generated_type_names_zig = |type_table, duplicate_names| {
 	for type_info in type_table_entries(type_table) {
 		match type_info.repr {
 			RocRecord(rec) =>
-				if rec.name != "" {
+				if rec.name != "" and !type_table.is_zero_sized($type_id) {
 					$names = $names.append(record_struct_name(type_table, duplicate_names, $type_id, rec))
 				}
 			RocTagUnion(tu) =>
@@ -303,6 +303,11 @@ preferred_type_names_zig = |hosted_functions, provides_list, type_table, duplica
 ## Map a type table entry to its Zig type string using structured TypeRepr
 type_id_to_zig : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64 -> Str
 type_id_to_zig = |type_table, duplicate_names, preferred_names, type_id| {
+	# A zero-sized value has no host representation.
+	if type_table.is_zero_sized(type_id) {
+		return "void"
+	}
+
 	type_repr_to_zig(type_table, duplicate_names, preferred_names, type_id, type_table.get(type_id))
 }
 
@@ -326,7 +331,10 @@ zig_record_fields_decl : TypeTable, List(Str), TypeNamePlan.PreferredNames, List
 zig_record_fields_decl = |type_table, duplicate_names, preferred_names, fields, width| {
 	var $field_strs = ""
 	for field in fields {
-		$field_strs = Str.concat($field_strs, zig_record_field_decl(type_table, duplicate_names, preferred_names, field, width))
+		# A zero-sized field occupies no storage and is not a struct member.
+		if !field.is_zero_sized() {
+			$field_strs = Str.concat($field_strs, zig_record_field_decl(type_table, duplicate_names, preferred_names, field, width))
+		}
 	}
 	$field_strs
 }
@@ -405,6 +413,9 @@ type_repr_to_zig = |type_table, duplicate_names, preferred_names, type_id, type_
 					inner_zig = type_id_to_zig(type_table, duplicate_names, preferred_names, inner_id)
 					if inner_zig == "*anyopaque" {
 						"*anyopaque"
+					} else if type_table.is_zero_sized(inner_id) {
+						# The box points at nothing the host can read.
+						"RocBox"
 					} else {
 						"*${inner_zig}"
 					}
@@ -506,7 +517,7 @@ resolve_tag_union_type = |type_table, duplicate_names, preferred_names, type_id,
 	match type_table.single_variant_payload(type_id, tu) {
 		SinglePayload(payload_id) => type_id_to_zig(type_table, duplicate_names, preferred_names, payload_id)
 		SinglePayloadStruct(_) => tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)
-		SingleNoPayload => "*anyopaque"
+		SingleNoPayload => "void"
 		NotSingleVariant =>
 			if tu.name != "" {
 				tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)
@@ -947,7 +958,7 @@ generate_element_type_structs = |type_table, duplicate_names, preferred_names| {
 	for type_info in type_table_entries(type_table) {
 		match type_info.repr {
 			RocRecord(rec) =>
-				if rec.name != "" {
+				if rec.name != "" and !type_table.is_zero_sized($type_id) {
 					struct_name = record_struct_name(type_table, duplicate_names, $type_id, rec)
 					if !(List.contains($seen_names, struct_name)) {
 						$seen_names = $seen_names.append(struct_name)
@@ -1356,6 +1367,10 @@ list_decref_helper_name = |type_table, duplicate_names, preferred_names, elem_id
 
 decref_stmt_for_type_id : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, Str -> Str
 decref_stmt_for_type_id = |type_table, duplicate_names, preferred_names, type_id, expr| {
+	if type_table.is_zero_sized(type_id) {
+		return ""
+	}
+
 	if is_roc_released(type_table, type_id) {
 		# Every emitter leaves out the release of a value that holds an opaque
 		# Roc value, so reaching this is a generator bug. It must not compile.
@@ -1422,6 +1437,10 @@ decref_stmt_for_repr = |type_table, duplicate_names, preferred_names, type_id, t
 
 incref_stmt_for_type_id : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, Str -> Str
 incref_stmt_for_type_id = |type_table, duplicate_names, preferred_names, type_id, expr| {
+	if type_table.is_zero_sized(type_id) {
+		return ""
+	}
+
 	type_repr = type_table.get(type_id)
 	incref_stmt_for_repr(type_table, duplicate_names, preferred_names, type_id, type_repr, expr)
 }
@@ -1549,6 +1568,10 @@ generate_tag_payload_refcount_branch = |type_table, duplicate_names, preferred_n
 
 decref_stmt_uses_roc_host_for_type_id : TypeTable, U64 -> Bool
 decref_stmt_uses_roc_host_for_type_id = |type_table, type_id| {
+	if type_table.is_zero_sized(type_id) {
+		return Bool.False
+	}
+
 	type_repr = type_table.get(type_id)
 	match type_repr {
 		RocStr => Bool.True
@@ -1569,6 +1592,10 @@ decref_stmt_uses_roc_host_for_type_id = |type_table, type_id| {
 
 incref_stmt_uses_amount_for_type_id : TypeTable, U64 -> Bool
 incref_stmt_uses_amount_for_type_id = |type_table, type_id| {
+	if type_table.is_zero_sized(type_id) {
+		return Bool.False
+	}
+
 	type_repr = type_table.get(type_id)
 	match type_repr {
 		RocStr => Bool.True
@@ -1742,7 +1769,7 @@ generate_refcount_helpers = |type_table, duplicate_names, preferred_names| {
 	for type_info in type_table_entries(type_table) {
 		match type_info.repr {
 			RocRecord(rec) =>
-				if rec.name != "" and !is_roc_released(type_table, $type_id) {
+				if rec.name != "" and !type_table.is_zero_sized($type_id) and !is_roc_released(type_table, $type_id) {
 					struct_name = record_struct_name(type_table, duplicate_names, $type_id, rec)
 					if !(List.contains($seen_names, struct_name)) {
 						$seen_names = $seen_names.append(struct_name)
@@ -2499,7 +2526,7 @@ direct_param_list = |type_table, duplicate_names, preferred_names, arg_type_ids|
 	var $idx = 0
 	arg_shape = ArgShape.from_table(type_table)
 
-	for arg_type_id in arg_shape.positional_non_unit_type_ids(arg_type_ids) {
+	for arg_type_id in arg_shape.abi_visible_type_ids(arg_type_ids) {
 		arg_zig = type_id_to_zig(type_table, duplicate_names, preferred_names, arg_type_id)
 		sep = if $params == "" {
 			""
@@ -2523,7 +2550,7 @@ direct_hosted_param_list = |type_table, duplicate_names, preferred_names, func| 
 	var $params = ""
 	var $idx = 0
 
-	for arg_type_id in arg_shape.positional_non_unit_type_ids(func.arg_type_ids) {
+	for arg_type_id in arg_shape.abi_visible_type_ids(func.arg_type_ids) {
 		arg_zig = if use_args_wrapper {
 			"${name_to_struct_name(func.name)}Args"
 		} else {
@@ -2599,7 +2626,7 @@ hosted_ownership_doc_zig = |type_table, duplicate_names, preferred_names, func| 
 	var $arg_lines = ""
 	var $idx = 0
 
-	for arg_type_id in arg_shape.positional_non_unit_type_ids(func.arg_type_ids) {
+	for arg_type_id in arg_shape.abi_visible_type_ids(func.arg_type_ids) {
 		arg_name = "arg${U64.to_str($idx)}"
 		stmt = if is_roc_released(type_table, arg_type_id) {
 			"${arg_name} holds an opaque Roc value, which only Roc can release: pass it back to Roc."

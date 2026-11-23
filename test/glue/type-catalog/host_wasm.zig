@@ -105,9 +105,7 @@ fn roc_crashed(_: [*]const u8, _: usize) callconv(.c) void {
 export fn roc_catalog_roundtrip(arg0: abi.EmptyOrPairOrPayloadOrRecursive) callconv(.c) abi.EmptyOrPairOrPayloadOrRecursive {
     return arg0;
 }
-export fn roc_catalog_single_no_payload() callconv(.c) *anyopaque {
-    return undefined;
-}
+export fn roc_catalog_single_no_payload() callconv(.c) void {}
 export fn roc_catalog_single_payload_roundtrip(arg0: abi.CatalogPayload) callconv(.c) abi.CatalogPayload {
     return arg0;
 }
@@ -148,6 +146,8 @@ fn runContract() void {
     if (stepped._0 != 22) fail("multi-payload first payload mismatch");
     const steps = stepped._1.items();
     if (steps.len != 3 or steps[0] != 3 or steps[1] != 5 or steps[2] != 8) fail("multi-payload second payload mismatch");
+    const zero_sized: abi.CatalogZeroSizedWrapper = .{ .only = 6.5 };
+    if (abi.roc_zero_sized_wrapper(zero_sized).only != 7.5) fail("zero-sized wrapper mismatch");
     result_a.decref(&roc_host);
     result_b.decref(&roc_host);
     structural.decref(&roc_host);

@@ -158,9 +158,7 @@ pub extern "C" fn roc_catalog_roundtrip(arg0: abi::EmptyOrPairOrPayloadOrRecursi
 }
 
 #[no_mangle]
-pub extern "C" fn roc_catalog_single_no_payload() -> *mut c_void {
-    core::ptr::null_mut()
-}
+pub extern "C" fn roc_catalog_single_no_payload() {}
 
 #[no_mangle]
 pub extern "C" fn roc_catalog_single_payload_roundtrip(arg0: abi::CatalogPayload) -> abi::CatalogPayload {
@@ -230,6 +228,10 @@ fn run_contract() {
     }
     if stepped._1.as_slice() != [3u64, 5, 8] {
         fail("multi-payload second payload mismatch");
+    }
+    let zero_sized = abi::CatalogZeroSizedWrapper { only: 6.5 };
+    if unsafe { abi::roc_zero_sized_wrapper(zero_sized) }.only != 7.5 {
+        fail("zero-sized wrapper mismatch");
     }
 }
 

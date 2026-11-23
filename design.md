@@ -32564,6 +32564,18 @@ with the ownership operations of a record. When no payload occupies storage,
 the union has no host value. A generator never lets one payload stand for the
 others.
 
+A value whose committed size is zero has no host representation. It is not
+passed as an argument and not returned, so a hosted or provided signature
+omits it, and a struct that holds one as a field or tag payload has no member
+for it. Generators declare no type for a zero-sized record or union. Glue
+decides this from the committed size, never from the shape of the type: `{}`,
+a union with one payload-free tag, and a record or union of such values are
+all zero-sized. C ABI classification on every target sees the same struct the
+host declares, the one made of an aggregate's sized members. A zero-sized
+field, including the zero-sized `_` field that opts a nominal record into
+declared order, therefore neither breaks a homogeneous float or vector
+aggregate nor stops a struct with one sized field from passing as that field.
+
 Glue's type table describes values. A function value, wherever it appears
 (boxed, in a record or tag payload, or in a stored signature), is one
 erased-callable pointer whose own layout does not depend on its argument or

@@ -61,12 +61,19 @@ TypeTable := { entries : List(TypeInfo) }.{
 	rc_plan : TypeTable, U64 -> HostRcPlan
 	rc_plan = |table, type_id| (table.type_info(type_id)).rc
 
-	is_unit : TypeTable, U64 -> Bool
-	is_unit = |table, type_id|
-		match table.get(type_id) {
-			RocUnit => Bool.True
-			_ => Bool.False
+	## True when a value of this type occupies no storage: its committed size
+	## is zero at both pointer widths. Such a value has no host representation.
+	## It is not passed as an argument, is not returned, and is not a member of
+	## a C struct. An opaque heap target is never zero-sized: its row carries
+	## no size because the host cannot know one.
+	is_zero_sized : TypeTable, U64 -> Bool
+	is_zero_sized = |table, type_id| {
+		info = table.type_info(type_id)
+		match info.repr {
+			RocUnknown(_) => Bool.False
+			_ => info.layout.size32 == 0 and info.layout.size64 == 0
 		}
+	}
 
 	is_refcounted : TypeTable, U64 -> Bool
 	is_refcounted = |table, type_id|
@@ -145,7 +152,12 @@ TypeTable := { entries : List(TypeInfo) }.{
 		}
 
 	record_layout : TypeTable, U64 -> RecordLookup
-	record_layout = |table, type_id| table.record_layout_from_repr(type_id, table.get(type_id))
+	record_layout = |table, type_id|
+		if table.is_zero_sized(type_id) {
+			NotRecord
+		} else {
+			table.record_layout_from_repr(type_id, table.get(type_id))
+		}
 
 	record_layout_from_repr : TypeTable, U64, TypeRepr -> RecordLookup
 	record_layout_from_repr = |table, type_id, type_repr|
@@ -341,10 +353,17 @@ sample_table = TypeTable.from_list([
 	multi_payload_info("Stepped", 0, 32, 7),
 	multi_payload_info("Stepped", 1, 48, 8),
 	multi_payload_info("Hollow", 0, 0, 9),
+	{ repr: RocUnknown("model"), layout: { size32: 0, alignment32: 1, size64: 0, alignment64: 1, contains_refcounted: Bool.False, details: AbiBuiltin }, rc: RcNoop, shape_id: 10 },
 ])
 
-## Checks the sample `TypeTable.is_unit` behavior.
-expect sample_table.is_unit(0) == Bool.False
+## A sized value is not zero-sized.
+expect sample_table.is_zero_sized(0) == Bool.False
+
+## A union whose payloads occupy no storage is zero-sized.
+expect sample_table.is_zero_sized(9)
+
+## An opaque heap target carries no size and is not zero-sized.
+expect sample_table.is_zero_sized(10) == Bool.False
 
 ## Checks the sample `TypeTable.is_refcounted` behavior.
 expect sample_table.is_refcounted(1)

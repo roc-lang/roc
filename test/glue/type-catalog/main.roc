@@ -16,6 +16,7 @@ platform ""
         "roc_single_payload": single_payload_for_host,
         "roc_single_no_payload": single_no_payload_for_host,
         "roc_multi_payload": multi_payload_for_host!,
+        "roc_zero_sized_wrapper": zero_sized_wrapper_for_host,
         "roc_result_a": result_a_for_host,
         "roc_result_b": result_b_for_host,
     }
@@ -106,6 +107,11 @@ single_no_payload_for_host = |_| {
 multi_payload_for_host! : {} => Catalog.MultiPayload
 multi_payload_for_host! = |_| {
     CatalogHost.multi_payload_roundtrip!(Stepped(21, [3, 5, 8]))
+}
+
+zero_sized_wrapper_for_host : [Marker], Catalog.ZeroSizedWrapper -> Catalog.ZeroSizedWrapper
+zero_sized_wrapper_for_host = |_, wrapper| {
+    { empty: {}, only: wrapper.only + 1.0 }
 }
 
 result_a_for_host : {} -> A.Result

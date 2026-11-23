@@ -823,6 +823,7 @@ const CustomCase = enum {
     glue_boxed_app_type,
     glue_generic_nominal_shapes,
     glue_single_tag_multi_payload,
+    glue_zero_sized_values,
     glue_opaque_ownership,
     glue_application_only_requires,
     glue_c_tests,
@@ -2858,6 +2859,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue regression: a heap payload holding the app's type by value is opaque in every generator", .body = .{ .custom = .glue_boxed_app_type } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: each instantiation of a generic nominal is its own type in every generator", .body = .{ .custom = .glue_generic_nominal_shapes } },
     .{ .id = 0, .suite = .glue, .name = "issue 13348: a one-tag union with several payloads is a struct of them in every generator", .body = .{ .custom = .glue_single_tag_multi_payload } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: a zero-sized value is no parameter, result, or struct member in any generator", .body = .{ .custom = .glue_zero_sized_values } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: a value holding an opaque Roc value has no host release in any generator", .body = .{ .custom = .glue_opaque_ownership } },
     .{ .id = 0, .suite = .glue, .name = "issue 11504: application requirements are not glue roots", .body = .{ .custom = .glue_application_only_requires } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
@@ -7541,6 +7543,7 @@ fn runCustomCase(
         .glue_boxed_app_type => customGlueBoxedAppType(io, allocator, &env, &timer, timeout_ms),
         .glue_generic_nominal_shapes => customGlueGenericNominalShapes(io, allocator, &env, &timer, timeout_ms),
         .glue_single_tag_multi_payload => customGlueSingleTagMultiPayload(io, allocator, &env, &timer, timeout_ms),
+        .glue_zero_sized_values => customGlueZeroSizedValues(io, allocator, &env, &timer, timeout_ms),
         .glue_opaque_ownership => customGlueOpaqueOwnership(io, allocator, &env, &timer, timeout_ms),
         .glue_application_only_requires => customGlueApplicationOnlyRequires(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
@@ -21280,6 +21283,93 @@ fn customGlueSingleTagMultiPayload(io: std.Io, allocator: Allocator, env: *const
     return runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
         "zig", "cc", "-c", "-std=c11", "-Wall", "-Werror", include_flag, test_c_path, "-o", test_o_path,
     }, project_root_path, .{ .args = &.{} });
+}
+
+fn customGlueZeroSizedValues(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // A value whose committed size is zero has no host representation: it is
+    // not a parameter, not a result, and not a struct member. That holds for
+    // every zero-sized type (`{}`, a union with one payload-free tag, a union
+    // whose payloads are all zero-sized, a record of those), not only `{}`.
+    return checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/zero-sized-values/main.roc", .{
+        .zig = &.{},
+        .c = &.{
+            "extern uint64_t take_args(uint8_t arg0, uint16_t arg1, uint32_t arg2);",
+            "extern uint64_t take_only_zero_sized(void);",
+            "extern void make_ready(uint8_t arg0);",
+            "extern void make_hollow(uint8_t arg0);",
+            "extern void host_args(uint8_t arg0, uint16_t arg1);",
+            "extern void host_ready(void);",
+        },
+        .rust = &.{
+            "pub fn take_args(arg0: u8, arg1: u16, arg2: u32) -> u64;",
+            "pub fn take_only_zero_sized() -> u64;",
+            "pub fn make_ready(arg0: u8);",
+            "pub fn make_hollow(arg0: u8);",
+            "pub fn host_args(arg0: u8, arg1: u16);",
+            "pub fn host_ready();",
+        },
+        .absent = &.{ "    void a;", "    void _0;", "void arg", ": (),", ": void,", "HostEmpty" },
+        .zig_checks =
+        \\fn Param(comptime function: anytype, comptime index: usize) type {
+        \\    return @typeInfo(@TypeOf(function)).@"fn".param_types[index].?;
+        \\}
+        \\fn Result(comptime function: anytype) type {
+        \\    return @typeInfo(@TypeOf(function)).@"fn".return_type.?;
+        \\}
+        \\fn expectSignature(comptime function: anytype, comptime params: []const type, comptime result: type) void {
+        \\    const info = @typeInfo(@TypeOf(function)).@"fn";
+        \\    if (info.param_types.len != params.len) @compileError("a zero-sized argument is not a parameter");
+        \\    for (params, 0..) |param, index| {
+        \\        if (info.param_types[index].? != param) @compileError("unexpected parameter type " ++ @typeName(info.param_types[index].?));
+        \\    }
+        \\    if (info.return_type.? != result) @compileError("unexpected result type " ++ @typeName(info.return_type.?));
+        \\}
+        \\fn expectFields(comptime T: type, comptime present: []const []const u8, comptime absent: []const []const u8) void {
+        \\    for (present) |name| {
+        \\        if (!@hasField(T, name)) @compileError(@typeName(T) ++ " is missing its sized field " ++ name);
+        \\    }
+        \\    for (absent) |name| {
+        \\        if (@hasField(T, name)) @compileError(@typeName(T) ++ " has a member for its zero-sized field " ++ name);
+        \\    }
+        \\}
+        \\comptime {
+        \\    expectSignature(abi.take_args, &.{ u8, u16, u32 }, u64);
+        \\    expectSignature(abi.take_only_zero_sized, &.{}, u64);
+        \\    expectSignature(abi.make_ready, &.{u8}, void);
+        \\    expectSignature(abi.make_hollow, &.{u8}, void);
+        \\    expectSignature(abi.host_args, &.{ u8, u16 }, void);
+        \\    expectSignature(abi.host_ready, &.{}, void);
+        \\
+        \\    expectFields(Param(abi.take_fields, 0), &.{"b"}, &.{"a"});
+        \\    expectFields(Result(Param(abi.take_fields, 1).payload_a), &.{"_1"}, &.{"_0"});
+        \\    expectFields(Param(abi.take_fields, 2), &.{"n"}, &.{ "r", "inner" });
+        \\    expectFields(Param(abi.host_record, 0), &.{"s"}, &.{"z"});
+        \\
+        \\    // A one-tag union with a zero-sized payload and a sized one is a
+        \\    // struct of the sized one.
+        \\    const Half = Param(abi.take_half, 0);
+        \\    expectFields(Half, &.{"_1"}, &.{"_0"});
+        \\    if (Result(abi.take_half) != Half or @sizeOf(Half) != @sizeOf(abi.RocStr))
+        \\        @compileError("a zero-sized payload occupies no storage");
+        \\}
+        \\
+        \\// Exported callers force analysis of the ownership methods of types
+        \\// that hold zero-sized values.
+        \\export fn retain_and_release(
+        \\    roc_host: *abi.RocHost,
+        \\    record: *const Param(abi.take_fields, 0),
+        \\    tagged: *const Param(abi.take_fields, 1),
+        \\    half: *const Param(abi.take_half, 0),
+        \\    list: *const Param(abi.take_heap, 2),
+        \\) void {
+        \\    inline for (.{ record, tagged, half }) |value| {
+        \\        value.incref(1);
+        \\        value.decref(roc_host);
+        \\    }
+        \\    list.deinit(roc_host);
+        \\}
+        ,
+    });
 }
 
 fn customGlueApplicationOnlyRequires(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {

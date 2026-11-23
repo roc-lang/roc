@@ -21,6 +21,11 @@ Catalog := [].{
     SingleNoPayload : [Ready]
     MultiPayload : [Stepped(U64, List(U64))]
 
+    ZeroSizedWrapper := {
+        empty : {},
+        only : F64,
+    }
+
     CatalogUnion : [
         Payload(Payload),
         Pair(Point, Point),

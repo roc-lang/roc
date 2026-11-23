@@ -118,7 +118,8 @@ pub fn classifyType(allocator: std.mem.Allocator, store: *const Store, start: Id
 
 /// Count the vector members of an aggregate whose leaves are exclusively short
 /// vectors, returning null the moment any other
-/// member (or unnamed padding) is seen. Exactly one vector member makes the
+/// member (or unnamed padding) is seen. A zero-sized field is not a member:
+/// the struct a host declares has no such field. Exactly one vector member makes the
 /// aggregate a transparent Q-register value; two or more make it memory-class.
 /// Counting stops at two because higher counts classify identically. Members
 /// are visited in order on an explicit stack, so aggregate nesting never
@@ -141,6 +142,8 @@ fn countVectors(allocator: std.mem.Allocator, store: *const Store, idx: Idx, may
                 const start = pending.items.len;
                 var i: u32 = 0;
                 while (i < field_count) : (i += 1) {
+                    // A zero-sized field is no member of the C struct the host declares.
+                    if (store.getStructFieldSize(struct_idx, i) == 0) continue;
                     if (store.getStructFieldIsPadding(struct_idx, i)) return null;
                     try pending.append(pending_allocator, store.getStructFieldLayout(struct_idx, i));
                 }
@@ -195,6 +198,8 @@ fn countFloats(allocator: std.mem.Allocator, store: *const Store, idx: Idx, mayb
                 const start = pending.items.len;
                 var i: u32 = 0;
                 while (i < field_count) : (i += 1) {
+                    // A zero-sized field is no member of the C struct the host declares.
+                    if (store.getStructFieldSize(struct_idx, i) == 0) continue;
                     // Unnamed padding is opaque, alignment-1 bytes, never a float
                     // member, so any padding makes the aggregate non-homogeneous (it
                     // falls back to size-based integer classification).
@@ -380,6 +385,32 @@ test "aarch64 classify: unnamed padding makes an aggregate non-HFA" {
     // Contrast: with all three as real float members it IS a 3×f32 HFA.
     const hfa = try testStruct(&store, &.{ .f32, .f32, .f32 });
     try testing.expectEqual(Class{ .float_array = .{ .count = 3, .elem_bits = 32 } }, try classifyType(testing.allocator, &store, hfa));
+}
+
+test "aarch64 classify: zero-sized fields are not aggregate members" {
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // The struct a host declares for { a : {}, x : F64, y : F64 } has no `a`,
+    // so the aggregate is the 2×f64 HFA of its sized members.
+    const floats = try testStruct(&store, &.{ .zst, .f64, .f64 });
+    try testing.expectEqual(Class{ .float_array = .{ .count = 2, .elem_bits = 64 } }, try classifyType(testing.allocator, &store, floats));
+
+    // { x : F64, y : F64, _ : {} }: the zero-sized `_` only opts the record
+    // into declared order. It is not padding bytes, so the HFA stands.
+    const declared_order = try store.putNominalStructFields(&.{
+        .{ .index = 0, .layout = .f64 },
+        .{ .index = 1, .layout = .f64 },
+        .{ .index = 2, .layout = .zst, .is_padding = true },
+    });
+    try testing.expectEqual(Class{ .float_array = .{ .count = 2, .elem_bits = 64 } }, try classifyType(testing.allocator, &store, declared_order));
+
+    // One vector beside a zero-sized field is still a transparent vector, and
+    // two are still memory-class.
+    const one_vector = try testStruct(&store, &.{ .zst, .u8x16 });
+    try testing.expectEqual(Class{ .vector = .u8x16 }, try classifyType(testing.allocator, &store, one_vector));
+    const two_vectors = try testStruct(&store, &.{ .u8x16, .zst, .u8x16 });
+    try testing.expectEqual(Class.memory, try classifyType(testing.allocator, &store, two_vectors));
 }
 
 test "aarch64 classify: Bool (a one-byte enum) uses one register" {
