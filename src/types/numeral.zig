@@ -11,13 +11,17 @@
 //!   - `intBits`/`decBits`/`floatBits`: the bit pattern the value denotes in a
 //!     concrete builtin type. Float conversion is correctly rounded
 //!     (round-to-nearest, ties-to-even) straight from the binary digit facts—
-//!     no decimal text is ever reconstructed.
+//!     no decimal text is ever reconstructed. Digits that reduce to a 64-bit
+//!     decimal significand convert by Clinger's fast path or by the vendored
+//!     Eisel-Lemire algorithm; exact big-integer arithmetic decides the rest,
+//!     including every case Eisel-Lemire leaves undecided.
 //!
 //! Every stage that needs one of these answers (checking, monotype lowering,
 //! the interpreter's runtime `from_numeral`, compile-time folding) calls in
 //! here, so the answers cannot drift apart between stages or engines.
 
 const std = @import("std");
+const parse_float = @import("vendor_parse_float");
 const Allocator = std.mem.Allocator;
 
 /// The builtin numeric types a literal can convert to.
@@ -81,15 +85,17 @@ pub fn magnitudeU128(bytes_be: []const u8) ?u128 {
     return value;
 }
 
+/// 10^0 through 10^38, the largest power of ten that fits in u128.
+const pow10_u128 = blk: {
+    var table: [39]u128 = undefined;
+    table[0] = 1;
+    for (1..table.len) |index| table[index] = table[index - 1] * 10;
+    break :blk table;
+};
+
 fn pow10U128(exponent: u32) ?u128 {
-    // 10^38 is the largest power of ten that fits in u128.
-    if (exponent > 38) return null;
-    var value: u128 = 1;
-    var remaining = exponent;
-    while (remaining > 0) : (remaining -= 1) {
-        value *= 10;
-    }
-    return value;
+    if (exponent >= pow10_u128.len) return null;
+    return pow10_u128[exponent];
 }
 
 fn checkedMulU128(lhs: u128, rhs: u128) ?u128 {
@@ -284,12 +290,58 @@ fn floatMagnitude(comptime F: type, allocator: Allocator, exact: Exact) Allocato
     // IEEE division M / 10^scale is correctly rounded.
     if (clingerFastPath(F, exact)) |value| return value;
 
+    // Eisel-Lemire: correctly rounded from a 64-bit decimal significand and
+    // a decimal exponent, or no answer when the rounding is too close to call.
+    if (decimalSignificand(exact)) |decimal| {
+        if (parse_float.convertEiselLemire(F, decimal.exponent, decimal.significand)) |biased| {
+            return biased.toFloat(F, false);
+        }
+    }
+
+    return floatMagnitudeExact(F, allocator, exact);
+}
+
+/// The magnitude correctly rounded by exact big-integer arithmetic.
+fn floatMagnitudeExact(comptime F: type, allocator: Allocator, exact: Exact) Allocator.Error!F {
     if (exact.scale == 0 or magnitudeIsZero(exact.after)) {
         // Integer-valued: round the `before` magnitude directly.
         return roundBytesToFloat(F, allocator, exact.before);
     }
 
     return floatSlowPath(F, allocator, exact);
+}
+
+/// A magnitude written as `significand * 10^exponent`.
+const DecimalSignificand = struct {
+    significand: u64,
+    exponent: i64,
+};
+
+/// The literal's magnitude as a 64-bit decimal significand and a decimal
+/// exponent, or null when its digits do not reduce to 64 bits.
+fn decimalSignificand(exact: Exact) ?DecimalSignificand {
+    const before = magnitudeU128(exact.before) orelse return null;
+    const after = magnitudeU128(exact.after) orelse return null;
+    var significand: u128 = undefined;
+    var exponent: i64 = undefined;
+    if (before == 0) {
+        significand = after;
+        exponent = -@as(i64, exact.scale);
+    } else if (after == 0) {
+        significand = before;
+        exponent = 0;
+    } else {
+        const shift = pow10U128(exact.scale) orelse return null;
+        const before_scaled = checkedMulU128(before, shift) orelse return null;
+        significand = checkedAddU128(before_scaled, after) orelse return null;
+        exponent = -@as(i64, exact.scale);
+    }
+    while (significand > std.math.maxInt(u64)) {
+        if (significand % 10 != 0) return null;
+        significand /= 10;
+        exponent += 1;
+    }
+    return .{ .significand = @intCast(significand), .exponent = exponent };
 }
 
 fn magnitudeIsZero(bytes_be: []const u8) bool {
@@ -966,4 +1018,238 @@ test "huge digit counts stay fast and unrepresentable in fixed-width targets" {
     const f32_bits = try floatBits(f32, gpa, exact);
     try testing.expect(std.math.isPositiveInf(f32_bits));
     try testing.expectEqual(@as(?i128, null), try decBits(gpa, exact));
+}
+
+/// The conversion `floatBits` makes without Eisel-Lemire: Clinger's fast
+/// path, else exact big-integer arithmetic.
+fn floatBitsExactReference(comptime F: type, allocator: Allocator, exact: Exact) Allocator.Error!F {
+    const magnitude = if (clingerFastPath(F, exact)) |value| value else try floatMagnitudeExact(F, allocator, exact);
+    return if (exact.is_negative) -magnitude else magnitude;
+}
+
+fn FloatBitsInt(comptime F: type) type {
+    return @Int(.unsigned, @bitSizeOf(F));
+}
+
+/// Which conversion decided a literal's float bits.
+const FloatPathCounts = struct {
+    clinger: usize = 0,
+    eisel_lemire: usize = 0,
+    /// Digits that reduce to 64 bits, but Eisel-Lemire left undecided.
+    declined: usize = 0,
+    /// Digits that do not reduce to a 64-bit decimal significand.
+    wide: usize = 0,
+};
+
+/// Require `floatBits` to give the exact reference's bits, and the bits the
+/// correctly rounded `std.fmt.parseFloat` gives, at both float widths.
+fn expectFloatBitsMatchReference(gpa: Allocator, text: []const u8, counts: *FloatPathCounts) (Allocator.Error || std.fmt.ParseFloatError || error{TestExpectedEqual})!void {
+    errdefer std.debug.print("decimal text: '{s}'\n", .{text});
+    const parsed = try testParse(gpa, text);
+    defer parsed.deinit(gpa);
+    inline for (.{ f32, f64 }) |F| {
+        const actual: FloatBitsInt(F) = @bitCast(try floatBits(F, gpa, parsed.exact));
+        const reference: FloatBitsInt(F) = @bitCast(try floatBitsExactReference(F, gpa, parsed.exact));
+        const oracle: FloatBitsInt(F) = @bitCast(try std.fmt.parseFloat(F, text));
+        try testing.expectEqual(reference, actual);
+        try testing.expectEqual(oracle, actual);
+        if (clingerFastPath(F, parsed.exact) != null) {
+            counts.clinger += 1;
+        } else if (decimalSignificand(parsed.exact)) |decimal| {
+            if (parse_float.convertEiselLemire(F, decimal.exponent, decimal.significand) != null) {
+                counts.eisel_lemire += 1;
+            } else {
+                counts.declined += 1;
+            }
+        } else {
+            counts.wide += 1;
+        }
+    }
+}
+
+/// Append a random decimal digit run: uniform digits, or runs of 0s or 9s,
+/// which put values next to powers of ten and rounding boundaries.
+fn appendRandomDecimalDigits(gpa: Allocator, text: *std.ArrayList(u8), random: std.Random, count: usize) Allocator.Error!void {
+    var remaining = count;
+    while (remaining > 0) {
+        const run = @min(remaining, 1 + random.uintLessThan(usize, 8));
+        const style = random.uintLessThan(u8, 4);
+        for (0..run) |_| {
+            try text.append(gpa, switch (style) {
+                0 => '0',
+                1 => '9',
+                else => '0' + random.uintLessThan(u8, 10),
+            });
+        }
+        remaining -= run;
+    }
+}
+
+/// Append the plain decimal spelling of `digits * 10^-point_shift` (`digits`
+/// a nonempty decimal string; `point_shift` may exceed its length), followed
+/// by `zeros` more zeros when there is no point.
+fn appendPlacedDecimal(gpa: Allocator, text: *std.ArrayList(u8), digits: []const u8, point_shift: usize, zeros: usize) Allocator.Error!void {
+    if (point_shift == 0) {
+        try text.appendSlice(gpa, digits);
+        try text.appendNTimes(gpa, '0', zeros);
+    } else if (point_shift < digits.len) {
+        try text.appendSlice(gpa, digits[0 .. digits.len - point_shift]);
+        try text.append(gpa, '.');
+        try text.appendSlice(gpa, digits[digits.len - point_shift ..]);
+    } else {
+        try text.appendSlice(gpa, "0.");
+        try text.appendNTimes(gpa, '0', point_shift - digits.len);
+        try text.appendSlice(gpa, digits);
+    }
+}
+
+test "floatBits equals the exact conversion on composed decimal literals" {
+    const gpa = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0xe15e1_1e41_5e);
+    const random = prng.random();
+
+    var digits = std.ArrayList(u8).empty;
+    defer digits.deinit(gpa);
+    var text = std.ArrayList(u8).empty;
+    defer text.deinit(gpa);
+    var counts: FloatPathCounts = .{};
+    for (0..6000) |_| {
+        // Significant digit counts around the Clinger and 64-bit limits:
+        // F32's 24-bit and F64's 53-bit mantissas, 16-20 digits, and beyond.
+        const digit_count: usize = switch (random.uintLessThan(u8, 6)) {
+            0 => 1 + random.uintLessThan(usize, 8),
+            1 => 15 + random.uintLessThan(usize, 6),
+            2 => 19,
+            3 => 20 + random.uintLessThan(usize, 10),
+            else => 1 + random.uintLessThan(usize, 24),
+        };
+        digits.clearRetainingCapacity();
+        try digits.append(gpa, '1' + random.uintLessThan(u8, 9));
+        try appendRandomDecimalDigits(gpa, &digits, random, digit_count - 1);
+
+        // Place the point anywhere from deep in the subnormal range to past
+        // F64's overflow threshold.
+        text.clearRetainingCapacity();
+        if (random.boolean()) try text.append(gpa, '-');
+        if (random.boolean()) {
+            const point_shift = switch (random.uintLessThan(u8, 4)) {
+                0 => random.uintLessThan(usize, digits.items.len + 1),
+                1 => random.uintLessThan(usize, 60),
+                2 => 30 + random.uintLessThan(usize, 30), // F32 subnormals
+                else => 300 + random.uintLessThan(usize, 50), // F64 subnormals
+            };
+            try appendPlacedDecimal(gpa, &text, digits.items, point_shift, 0);
+        } else {
+            const zeros = switch (random.uintLessThan(u8, 3)) {
+                0 => random.uintLessThan(usize, 25),
+                1 => 25 + random.uintLessThan(usize, 20), // around F32 overflow
+                else => 290 + random.uintLessThan(usize, 30), // around F64 overflow
+            };
+            try appendPlacedDecimal(gpa, &text, digits.items, 0, zeros);
+        }
+        try expectFloatBitsMatchReference(gpa, text.items, &counts);
+    }
+    try testing.expect(counts.clinger > 500);
+    try testing.expect(counts.eisel_lemire > 3000);
+    try testing.expect(counts.wide > 500);
+}
+
+/// Append the exact decimal spelling of the midpoint between the positive
+/// float with bits `bits` and the next float up: `(2m + 1) * 2^(e - 1)` for
+/// the float's integer mantissa `m` and exponent `e`.
+fn appendFloatMidpoint(comptime F: type, gpa: Allocator, text: *std.ArrayList(u8), bits: FloatBitsInt(F)) (Allocator.Error || error{InvalidBase})!void {
+    const big = std.math.big.int.Managed;
+    const mantissa_bits = std.math.floatMantissaBits(F);
+    const biased_exponent: i32 = @intCast(bits >> mantissa_bits);
+    const fraction: u64 = bits & ((@as(FloatBitsInt(F), 1) << mantissa_bits) - 1);
+    const mantissa: u64 = if (biased_exponent == 0) fraction else fraction | (@as(u64, 1) << mantissa_bits);
+    const exponent: i32 = (if (biased_exponent == 0) 1 else biased_exponent) - std.math.floatExponentMax(F) - mantissa_bits;
+
+    var value = try big.initSet(gpa, 2 * mantissa + 1);
+    defer value.deinit();
+    const half_exponent = exponent - 1;
+    var point_shift: usize = 0;
+    if (half_exponent >= 0) {
+        try value.shiftLeft(&value, @intCast(half_exponent));
+    } else {
+        point_shift = @intCast(-half_exponent);
+        var five = try big.initSet(gpa, 5);
+        defer five.deinit();
+        var power = try big.init(gpa);
+        defer power.deinit();
+        try power.pow(&five, @intCast(point_shift));
+        try value.mul(&value, &power);
+    }
+    const digits = try value.toString(gpa, 10, .lower);
+    defer gpa.free(digits);
+    try appendPlacedDecimal(gpa, text, digits, point_shift, 0);
+}
+
+test "floatBits equals the exact conversion at and beside rounding midpoints" {
+    const gpa = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x4a1f_3a7);
+    const random = prng.random();
+
+    var midpoint = std.ArrayList(u8).empty;
+    defer midpoint.deinit(gpa);
+    var text = std.ArrayList(u8).empty;
+    defer text.deinit(gpa);
+    var counts: FloatPathCounts = .{};
+    for (0..400) |round| {
+        midpoint.clearRetainingCapacity();
+        if (round % 2 == 0) {
+            // Normal and subnormal F32 midpoints, including the one above
+            // the largest finite F32 and integer midpoints whose ties
+            // Eisel-Lemire itself rounds to even.
+            const exponent_bits: u32 = switch (random.uintLessThan(u8, 5)) {
+                0 => 0,
+                1 => 254,
+                2 => 127 + random.uintLessThan(u32, 45),
+                else => random.uintLessThan(u32, 255),
+            };
+            const bits: u32 = (exponent_bits << 23) | random.uintLessThan(u32, 1 << 23);
+            try appendFloatMidpoint(f32, gpa, &midpoint, bits);
+        } else {
+            const exponent_bits: u64 = switch (random.uintLessThan(u8, 5)) {
+                0 => 0,
+                1 => 2046,
+                2 => 1023 + random.uintLessThan(u64, 80),
+                else => random.uintLessThan(u64, 2047),
+            };
+            const bits: u64 = (exponent_bits << 52) | random.uintLessThan(u64, 1 << 52);
+            try appendFloatMidpoint(f64, gpa, &midpoint, bits);
+        }
+
+        // The exact tie, which rounds to the even neighbor.
+        try expectFloatBitsMatchReference(gpa, midpoint.items, &counts);
+
+        // Truncations to 17, 19, 20 and 25 significant digits sit just
+        // below the midpoint; bumping the last kept digit puts them above.
+        for ([_]usize{ 17, 19, 20, 25 }) |keep| {
+            var significant: usize = 0;
+            var cut = midpoint.items.len;
+            for (midpoint.items, 0..) |char, index| {
+                if (char == '.' or (significant == 0 and char == '0')) continue;
+                significant += 1;
+                if (significant == keep) {
+                    cut = index + 1;
+                    break;
+                }
+            }
+            if (cut == midpoint.items.len) continue;
+            // Dropped integer digits become zeros, so the magnitude holds.
+            const integer_end = std.mem.findScalar(u8, midpoint.items, '.') orelse midpoint.items.len;
+            text.clearRetainingCapacity();
+            try text.appendSlice(gpa, midpoint.items[0..cut]);
+            if (cut < integer_end) try text.appendNTimes(gpa, '0', integer_end - cut);
+            try expectFloatBitsMatchReference(gpa, text.items, &counts);
+            const last = &text.items[cut - 1];
+            if (last.* != '9') {
+                last.* += 1;
+                try expectFloatBitsMatchReference(gpa, text.items, &counts);
+            }
+        }
+    }
+    try testing.expect(counts.eisel_lemire > 500);
+    try testing.expect(counts.wide > 500);
 }

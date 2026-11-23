@@ -8,7 +8,8 @@ const std = @import("std");
 const base = @import("base");
 const types_store = @import("store.zig");
 const types_mod = @import("types.zig");
-const DenseMap = @import("collections").DenseMap;
+const collections = @import("collections");
+const DenseMap = collections.DenseMap;
 const DenseMapPool = @import("collections").DenseMapPool;
 
 const TypesStore = types_store.Store;
@@ -381,7 +382,7 @@ pub const BackingOpenings = struct {
         while (field_idx < end.fields) : (field_idx += 1) {
             var field = store.record_fields.get(@fromBackingInt(field_idx));
             field.presence.var_ = @fromBackingInt(renamer.ref(field.presence.var_));
-            if (field.presence.presenceVar()) |presence_var| field.presence.presence_var = @fromBackingInt(renamer.ref(presence_var));
+            if (field.presence.presenceVar()) |presence_var| field.presence.presence_var = .some(@fromBackingInt(renamer.ref(presence_var)));
             self.fields.appendAssumeCapacity(field);
         }
         try self.tags.ensureUnusedCapacity(gpa, recording.tags_len);
@@ -440,7 +441,7 @@ pub const BackingOpenings = struct {
             for (self.fields.items[recording.fields_start..][0..recording.fields_len]) |recorded| {
                 var field = recorded;
                 field.presence.var_ = renamer.varOf(@backingInt(field.presence.var_));
-                if (field.presence.presenceVar()) |presence_var| field.presence.presence_var = renamer.varOf(@backingInt(presence_var));
+                if (field.presence.presenceVar()) |presence_var| field.presence.presence_var = .some(renamer.varOf(@backingInt(presence_var)));
                 self.replay_fields.appendAssumeCapacity(field);
             }
             const fields = try store.appendRecordFields(self.replay_fields.items);
@@ -477,7 +478,10 @@ pub const BackingOpenings = struct {
         end: PoolLens,
         args: []const Var,
 
-        const empty_vars_start: u32 = @backingInt(Var.SafeList.Range.empty_start);
+        /// No opening's pool run starts at offset zero (`poolOffset` names a
+        /// range after the run's first slot), so the stored empty range keeps
+        /// its value in both numberings.
+        const empty_vars_start: u32 = TypesStore.stored_empty_var_range;
 
         /// The reference a recorded opening makes to `var_`, which is one
         /// it minted or one of its args.
@@ -639,9 +643,7 @@ const MarkerItem = struct { var_: Var, polarity: Polarity, reach: AdapterReachPo
 /// its parents. Edges with the same child form a list through `next`.
 const ReachEdge = struct {
     parent: Var,
-    next: u32,
-
-    const none = std.math.maxInt(u32);
+    next: collections.OptionalU32,
 };
 
 /// One suspended copy step on the explicit instantiation worklist. Every
@@ -1214,15 +1216,15 @@ pub const Instantiator = struct {
             if (entry.value_ptr.*) try machine.reach_stack.append(self.store.gpa, entry.key_ptr.*);
         }
         while (machine.reach_stack.pop()) |child| {
-            var edge_idx = reach_heads.get(child) orelse continue;
-            while (edge_idx != ReachEdge.none) {
+            var next_edge: collections.OptionalU32 = .some(reach_heads.get(child) orelse continue);
+            while (next_edge.get()) |edge_idx| {
                 const edge = machine.reach_edges.items[edge_idx];
                 const parent_state = reach_state.getPtr(edge.parent).?;
                 if (!parent_state.*) {
                     parent_state.* = true;
                     try machine.reach_stack.append(self.store.gpa, edge.parent);
                 }
-                edge_idx = edge.next;
+                next_edge = edge.next;
             }
         }
 
@@ -1265,7 +1267,7 @@ pub const Instantiator = struct {
         while (i < constraints.len()) : (i += 1) {
             const constraint = self.store.static_dispatch_constraints.items()[@backingInt(constraints.start) + i];
             try self.visitReachChild(parent, constraint.fn_var);
-            if (constraint.interpolation.isPresent()) {
+            if (constraint.interpolation != .none) {
                 const metadata = self.store.getInterpolationMetadata(constraint.interpolation);
                 var part_idx: u32 = 0;
                 while (part_idx < metadata.interpolated_parts.len()) : (part_idx += 1) {
@@ -1284,7 +1286,7 @@ pub const Instantiator = struct {
         const head = try machine.reach_heads.?.getOrPut(resolved.var_);
         try machine.reach_edges.append(self.store.gpa, .{
             .parent = parent,
-            .next = if (head.found_existing) head.value_ptr.* else ReachEdge.none,
+            .next = if (head.found_existing) .some(head.value_ptr.*) else .none,
         });
         head.value_ptr.* = edge_idx;
         const entry = try machine.reach_state.?.getOrPut(resolved.var_);
@@ -1446,7 +1448,7 @@ pub const Instantiator = struct {
             // A method signature is its own annotation root, generated at the
             // output polarity whatever position its dispatcher occupies.
             try pending.append(allocator, .{ .var_ = constraint.fn_var, .polarity = .pos, .reach = .nested });
-            if (constraint.interpolation.isPresent()) {
+            if (constraint.interpolation != .none) {
                 const metadata = self.store.getInterpolationMetadata(constraint.interpolation);
                 var part_idx: u32 = 0;
                 while (part_idx < metadata.interpolated_parts.len()) : (part_idx += 1) {
@@ -2078,7 +2080,7 @@ pub const Instantiator = struct {
                     frame.fresh_fn_var = machine.value_stack.pop().?;
                     const constraint = self.store.static_dispatch_constraints.items()[frame.cons_start + frame.cons_idx];
                     try self.carryDerivedMapPlan(constraint.fn_var, frame.fresh_fn_var);
-                    if (!constraint.interpolation.isPresent()) {
+                    if (constraint.interpolation == .none) {
                         self.freshConstraint(frame).fn_var = frame.fresh_fn_var;
                         frame.cons_idx += 1;
                         frame.stage = .dispatch_fn;
@@ -2139,7 +2141,7 @@ pub const Instantiator = struct {
     /// copy is deferred: deferral is on, the callable is generalized, and
     /// this instantiation has not copied it.
     fn deferredCallable(self: *Self, constraint: StaticDispatchConstraint) ?Var {
-        if (self.deferred_slots == null or constraint.interpolation.isPresent()) return null;
+        if (self.deferred_slots == null or constraint.interpolation != .none) return null;
         const resolved = self.store.resolveVar(constraint.fn_var);
         if (resolved.desc.rank != .generalized) return null;
         if (self.var_map.contains(resolved.var_)) return null;
@@ -2490,7 +2492,7 @@ pub const Instantiator = struct {
         self: *Self,
         source: StaticDispatchConstraint.InterpolationMetadata.OptIdx,
     ) std.mem.Allocator.Error!StaticDispatchConstraint.InterpolationMetadata.OptIdx {
-        if (!source.isPresent()) return source;
+        if (source == .none) return source;
         const metadata = self.store.getInterpolationMetadata(source);
 
         const machine = self.scratch();

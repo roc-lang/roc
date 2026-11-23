@@ -87,8 +87,10 @@ pub const TypeAnno = union(enum) {
     },
 
     pub const Idx = enum(u32) {
-        /// Placeholder value indicating the anno hasn't been set yet.
-        /// Used during forward reference resolution.
+        /// A declaration whose annotation has not been set: the forward
+        /// placeholder a reference creates ahead of its declaration. Zero is
+        /// the node store's reserved node (`Node.Tag.reserved`), so no
+        /// annotation ever has this index.
         placeholder = 0,
         _,
     };

@@ -96,12 +96,12 @@ pub const EvidenceParam = struct {
     /// Assigned once when the owner schema is frozen into the checked pool.
     published_index: ?u32 = null,
     /// Last of the semantic steps from the scheme root to the dispatcher's
-    /// first occurrence, in `Scratch.paramPathNodes()`, or `no_path_node`.
+    /// first occurrence, in `Scratch.paramPathNodes()`; absent for the root.
     /// Empty when no path over the normalized callable exists: dispatchers
     /// reachable only through a constraint's fn type, and open-row remainder
     /// vars erased when the row closes. Valid until the next
     /// `enumerateEvidenceParams` call with the same scratch.
-    path_node: u32 = no_path_node,
+    path_node: collections.OptionalU32 = .none,
     path_len: u32 = 0,
 
     pub const Source = union(enum) {
@@ -131,9 +131,9 @@ const QueuedCallable = struct {
 
 const StackEntry = struct {
     var_: Var,
-    /// Last step of this entry's path in `Scratch.path_nodes`, or
-    /// `no_path_node` for the walk root.
-    path_node: u32,
+    /// Last step of this entry's path in `Scratch.path_nodes`, absent for
+    /// the walk root.
+    path_node: collections.OptionalU32,
     path_len: u32,
     /// A row continuation is checked-store traversal state, not a semantic
     /// path component. Its fields/tags extend the logical row at `path`.
@@ -142,14 +142,11 @@ const StackEntry = struct {
 
 const RowContext = enum { none, record, tag };
 
-/// Sentinel for a path root with no preceding node.
-pub const no_path_node = std.math.maxInt(u32);
-
 /// One step of a path. Paths share their prefixes through `parent` (another
-/// node of the same pool, or `no_path_node` for a first step), so a scheme's
-/// paths cost one node per distinct prefix however deep its type nests.
+/// node of the same pool, absent for a first step), so a scheme's paths cost
+/// one node per distinct prefix however deep its type nests.
 pub const PathNode = extern struct {
-    parent: u32,
+    parent: collections.OptionalU32,
     step: PathStep,
 };
 
@@ -157,7 +154,7 @@ pub const PathNode = extern struct {
 pub fn appendPathSteps(
     gpa: Allocator,
     nodes: []const PathNode,
-    last: u32,
+    last: collections.OptionalU32,
     len: u32,
     out: *std.ArrayListUnmanaged(PathStep),
 ) Allocator.Error!void {
@@ -166,10 +163,11 @@ pub fn appendPathSteps(
     var i = len;
     while (i > 0) {
         i -= 1;
-        steps[i] = nodes[node].step;
-        node = nodes[node].parent;
+        const index = node.get().?;
+        steps[i] = nodes[index].step;
+        node = nodes[index].parent;
     }
-    std.debug.assert(node == no_path_node);
+    std.debug.assert(node == .none);
 }
 
 /// Values of path nodes, each computed once per root from its parent's value:
@@ -183,8 +181,7 @@ pub fn PathMemo(comptime T: type) type {
     return struct {
         const Self = @This();
         /// One root's value at a node; `next` links the node's other roots.
-        const Entry = struct { root: u32, value: T, next: u32 };
-        const no_entry = std.math.maxInt(u32);
+        const Entry = struct { root: u32, value: T, next: collections.OptionalU32 };
 
         /// Path node -> its most recently computed entry in `entries`.
         heads: collections.DenseMapUnmanaged(u32, u32) = .empty,
@@ -199,11 +196,11 @@ pub fn PathMemo(comptime T: type) type {
         }
 
         fn lookup(self: *const Self, root_key: u32, node: u32) ?T {
-            var entry = self.heads.get(node) orelse return null;
-            while (entry != no_entry) {
+            var next_entry: collections.OptionalU32 = .some(self.heads.get(node) orelse return null);
+            while (next_entry.get()) |entry| {
                 const known = self.entries.items[entry];
                 if (known.root == root_key) return known.value;
-                entry = known.next;
+                next_entry = known.next;
             }
             return null;
         }
@@ -215,21 +212,21 @@ pub fn PathMemo(comptime T: type) type {
             self: *Self,
             gpa: Allocator,
             nodes: []const PathNode,
-            last: u32,
+            last: collections.OptionalU32,
             root_key: u32,
             root: T,
             ctx: anytype,
         ) Allocator.Error!?T {
             self.chain.clearRetainingCapacity();
             var value = root;
-            var node = last;
-            while (node != no_path_node) {
+            var next_node = last;
+            while (next_node.get()) |node| {
                 if (self.lookup(root_key, node)) |known| {
                     value = known;
                     break;
                 }
                 try self.chain.append(gpa, node);
-                node = nodes[node].parent;
+                next_node = nodes[node].parent;
             }
             var i = self.chain.items.len;
             while (i > 0) {
@@ -242,7 +239,7 @@ pub fn PathMemo(comptime T: type) type {
                 self.entries.appendAssumeCapacity(.{
                     .root = root_key,
                     .value = value,
-                    .next = if (head.found_existing) head.value_ptr.* else no_entry,
+                    .next = if (head.found_existing) .some(head.value_ptr.*) else .none,
                 });
                 head.value_ptr.* = entry;
             }
@@ -280,8 +277,7 @@ pub const Scratch = struct {
     /// Child collection buffer for one node's children, in declared order.
     children: std.ArrayListUnmanaged(Child) = .empty,
 
-    const ContractClassLink = struct { param: u32, next: u32 };
-    const no_link = std.math.maxInt(u32);
+    const ContractClassLink = struct { param: u32, next: collections.OptionalU32 };
 
     const Child = struct {
         var_: Var,
@@ -329,12 +325,12 @@ pub const Scratch = struct {
         const link: u32 = std.math.cast(u32, self.contract_class_links.items.len) orelse return error.OutOfMemory;
         try self.contract_class_links.ensureUnusedCapacity(gpa, 1);
         const head = try self.contract_classes.getOrPut(gpa, callable);
-        var next: u32 = no_link;
+        var next: collections.OptionalU32 = .none;
         if (head.found_existing) {
-            next = head.value_ptr.*;
+            next = .some(head.value_ptr.*);
             var cursor = next;
-            while (cursor != no_link) {
-                const known = self.contract_class_links.items[cursor];
+            while (cursor.get()) |known_link| {
+                const known = self.contract_class_links.items[known_link];
                 if (known.param == param) return false;
                 cursor = known.next;
             }
@@ -349,23 +345,24 @@ pub const Scratch = struct {
         return self.param_path_nodes.items;
     }
 
-    fn appendPathNode(self: *Scratch, gpa: Allocator, parent: u32, path_step: PathStep) Allocator.Error!u32 {
+    fn appendPathNode(self: *Scratch, gpa: Allocator, parent: collections.OptionalU32, path_step: PathStep) Allocator.Error!collections.OptionalU32 {
         const node: u32 = @intCast(self.path_nodes.items.len);
         try self.path_nodes.append(gpa, .{ .parent = parent, .step = path_step });
-        return node;
+        return .some(node);
     }
 
     /// Move `walk_node`'s path into `param_path_nodes`, sharing the prefixes
     /// already moved there, and return its index in that pool.
-    fn publishPathNode(self: *Scratch, gpa: Allocator, walk_node: u32) Allocator.Error!u32 {
-        if (walk_node == no_path_node) return no_path_node;
+    fn publishPathNode(self: *Scratch, gpa: Allocator, walk_node: collections.OptionalU32) Allocator.Error!collections.OptionalU32 {
+        const walk_index = walk_node.get() orelse return .none;
         self.path_chain.clearRetainingCapacity();
         var node = walk_node;
-        while (node != no_path_node and self.path_node_remap.items[node] == .none) {
-            try self.path_chain.append(gpa, node);
-            node = self.path_nodes.items[node].parent;
+        while (node.get()) |index| {
+            if (self.path_node_remap.items[index] != .none) break;
+            try self.path_chain.append(gpa, index);
+            node = self.path_nodes.items[index].parent;
         }
-        var parent = if (node == no_path_node) no_path_node else self.path_node_remap.items[node].get().?;
+        var parent: collections.OptionalU32 = if (node.get()) |index| self.path_node_remap.items[index] else .none;
         var i = self.path_chain.items.len;
         while (i > 0) {
             i -= 1;
@@ -373,9 +370,9 @@ pub const Scratch = struct {
             const published: u32 = @intCast(self.param_path_nodes.items.len);
             try self.param_path_nodes.append(gpa, .{ .parent = parent, .step = self.path_nodes.items[next].step });
             self.path_node_remap.items[next] = .some(published);
-            parent = published;
+            parent = .some(published);
         }
-        return self.path_node_remap.items[walk_node].get().?;
+        return self.path_node_remap.items[walk_index];
     }
 };
 
@@ -467,7 +464,7 @@ fn walk(
     out: *std.ArrayListUnmanaged(EvidenceParam),
 ) Allocator.Error!void {
     const stack_base = scratch.stack.items.len;
-    try scratch.stack.append(gpa, .{ .var_ = walk_root, .path_node = no_path_node, .path_len = 0 });
+    try scratch.stack.append(gpa, .{ .var_ = walk_root, .path_node = .none, .path_len = 0 });
 
     while (scratch.stack.items.len > stack_base) {
         const entry = scratch.stack.pop().?;

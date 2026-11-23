@@ -235,7 +235,7 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
 
     for (cases) |case| {
         const compiled = codegen.proc_registry.get(@backingInt(case.proc_id)) orelse return error.TestUnexpectedResult;
-        const callable: builtins.erased_callable.ErasedCallableFn = @ptrCast(@alignCast(executable.codePtr() + compiled.code_start));
+        const callable: builtins.erased_callable.ErasedCallableFn = @ptrCast(@alignCast(executable.codePtr() + (compiled.code_start.get() orelse return error.TestUnexpectedResult)));
 
         // Sentinel bytes on both sides of the result slot; the callee owns
         // only ret_buf[8 .. 8 + expected.len].

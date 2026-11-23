@@ -639,7 +639,7 @@ fn copyExcerpts(a: Allocator, excerpts: *std.ArrayList(Excerpt), set: *const Set
 pub fn rebindLoc(loc: base.SourceLoc, file_map: []const u32) base.SourceLoc {
     if (!loc.hasLocation()) return loc;
     var rebound = loc;
-    rebound.file = file_map[loc.file];
+    rebound.file = .some(file_map[loc.fileIndex()]);
     return rebound;
 }
 
@@ -680,7 +680,11 @@ pub const ContentNames = struct {
     depth: u32 = 0,
 
     const domain = "roc.static.data.v2";
-    const no_reference: u32 = std.math.maxInt(u32);
+
+    /// The `Rendered.low` of a rendering that referred back to no active
+    /// stack depth: deeper than every depth, so `@min` with it keeps the
+    /// other operand and it is never below a depth.
+    const no_back_reference: u32 = std.math.maxInt(u32);
 
     pub fn init(allocator: Allocator, set: *const Set) Allocator.Error!ContentNames {
         var self = ContentNames{ .allocator = allocator, .arena = collections.SingleThreadArena.init(allocator) };
@@ -774,7 +778,7 @@ pub const ContentNames = struct {
     }
 
     /// Writes the digest of `item`'s rendering and returns the shallowest
-    /// stack depth that rendering referred back to.
+    /// stack depth that rendering referred back to, or `no_back_reference`.
     fn write(self: *ContentNames, hasher: *Sha256, item: DataItem) Allocator.Error!u32 {
         const rendered = try self.render(item);
         writeNaming(hasher, rendered.naming);
@@ -790,7 +794,8 @@ pub const ContentNames = struct {
 
     const Rendered = struct {
         naming: Naming,
-        /// The shallowest stack depth the rendering referred back to.
+        /// The shallowest stack depth the rendering referred back to, or
+        /// `no_back_reference`.
         low: u32,
     };
 
@@ -810,7 +815,7 @@ pub const ContentNames = struct {
     /// How `item` is named where a rendering refers to it.
     fn render(self: *ContentNames, item: DataItem) Allocator.Error!Rendered {
         if (self.active.get(item.name)) |depth| return .{ .naming = .{ .cycle = self.depth - depth }, .low = depth };
-        if (self.digests.get(item.name)) |digest| return .{ .naming = .{ .data = digest }, .low = no_reference };
+        if (self.digests.get(item.name)) |digest| return .{ .naming = .{ .data = digest }, .low = no_back_reference };
         const depth = self.depth;
         try self.active.putNoClobber(self.allocator, item.name, depth);
         self.depth += 1;
@@ -825,7 +830,7 @@ pub const ContentNames = struct {
         sub.update(item.bytes);
         writeWord(&sub, item.alignment);
         writeWord(&sub, item.symbol_offset);
-        var low: u32 = no_reference;
+        var low: u32 = no_back_reference;
         // Relocations are rendered in offset order; ones already in that
         // order are read in place.
         const in_order = std.sort.isSorted(DataRelocation, item.relocations, {}, relocationOffsetBefore);
@@ -867,7 +872,7 @@ pub const ContentNames = struct {
         const digest = sub.finalResult();
         if (low >= depth) {
             try self.digests.put(self.allocator, item.name, digest);
-            return .{ .naming = .{ .data = digest }, .low = no_reference };
+            return .{ .naming = .{ .data = digest }, .low = no_back_reference };
         }
         return .{ .naming = .{ .data = digest }, .low = low };
     }
@@ -1064,7 +1069,7 @@ pub const PreparedData = struct {
             const owned = try copyData(a, item);
             try items.put(a, owned.name, .{ .item = owned });
         }
-        if (items.count() > std.math.maxInt(u32)) return error.OutOfMemory;
+        if (std.math.cast(u32, items.count()) == null) return error.OutOfMemory;
         var iterator = items.iterator();
         var data = std.ArrayList([]const u8).empty;
         defer data.deinit(allocator);
@@ -2213,8 +2218,8 @@ fn appendMetadata(comptime CG: type, codegen: *CG, excerpt: Excerpt, start: usiz
                 .file_map => |file_map| loc: {
                     if (!excerpt.loc.hasLocation()) break :loc excerpt.loc;
                     var bound = excerpt.loc;
-                    bound.file = file_map[excerpt.loc.file] orelse
-                        base.invariant("a spliced procedure's location names a module the program lacks", .{});
+                    bound.file = .some(file_map[excerpt.loc.fileIndex()] orelse
+                        base.invariant("a spliced procedure's location names a module the program lacks", .{}));
                     break :loc bound;
                 },
             }, excerpt.name);
@@ -2242,8 +2247,8 @@ fn appendMetadata(comptime CG: type, codegen: *CG, excerpt: Excerpt, start: usiz
                 // An entry whose lines name a module version the program
                 // lacks is never served (`LoadedPacks`), so its lines would
                 // differ from the procedure's own.
-                bound.file = file_map[line.loc.file] orelse
-                    base.invariant("a spliced line names a module the program lacks", .{});
+                bound.file = .some(file_map[line.loc.fileIndex()] orelse
+                    base.invariant("a spliced line names a module the program lacks", .{}));
                 break :loc bound;
             },
         };
@@ -2504,9 +2509,9 @@ pub fn reachingAbsentFiles(allocator: Allocator, set: *const Set, present: []con
     const marked = try allocator.alloc(bool, set.excerpts.len);
     errdefer allocator.free(marked);
     for (set.excerpts, marked) |excerpt, *is_marked| {
-        is_marked.* = excerpt.loc.hasLocation() and !present[excerpt.loc.file];
+        is_marked.* = excerpt.loc.hasLocation() and !present[excerpt.loc.fileIndex()];
         for (excerpt.lines) |line| {
-            if (line.loc.hasLocation() and !present[line.loc.file]) is_marked.* = true;
+            if (line.loc.hasLocation() and !present[line.loc.fileIndex()]) is_marked.* = true;
         }
     }
     try markReferrers(allocator, set, marked, .skip);
@@ -2816,8 +2821,8 @@ test "excerpt metadata queues unresolved targets, preserves same-offset line ord
             .{ .site = 1, .form = .addr, .target = .{ .rc_helper = "unemitted" } },
         },
         .lines = &.{
-            .{ .offset = 0, .loc = .{ .file = 3, .line = 10, .column = 1 }, .region = base.Region.zero() },
-            .{ .offset = 0, .loc = .{ .file = 3, .line = 11, .column = 2 }, .region = base.Region.zero() },
+            .{ .offset = 0, .loc = .{ .file = .some(3), .line = 10, .column = 1 }, .region = base.Region.zero() },
+            .{ .offset = 0, .loc = .{ .file = .some(3), .line = 11, .column = 2 }, .region = base.Region.zero() },
         },
         .relocations = &.{},
         .data = &.{},
@@ -2839,7 +2844,7 @@ test "excerpt metadata queues unresolved targets, preserves same-offset line ord
     try appendMetadata(Recorder, &persistent, excerpt, 100, .{ .file_map = &.{ null, null, null, 1 } });
     try std.testing.expectEqual(@as(usize, 2), persistent.lines_len);
     for (excerpt.lines, persistent.lines[0..persistent.lines_len]) |original, rebound| {
-        try std.testing.expectEqual(@as(u32, 1), rebound.loc.file);
+        try std.testing.expectEqual(@as(u32, 1), rebound.loc.fileIndex());
         try std.testing.expectEqual(original.loc.line, rebound.loc.line);
         try std.testing.expectEqual(original.loc.column, rebound.loc.column);
     }
@@ -2860,8 +2865,8 @@ fn testCombineOwnership(allocator: Allocator) (Allocator.Error || error{TestExpe
                 .{ .site = 2, .form = .addr, .target = .{ .proc = lir.ProcIdentity.forTest(4) } },
             },
             .lines = &.{
-                .{ .offset = 0, .loc = .{ .file = 0, .line = 3, .column = 2 }, .region = base.Region.zero() },
-                .{ .offset = 0, .loc = .{ .file = 0, .line = 4, .column = 5 }, .region = base.Region.zero() },
+                .{ .offset = 0, .loc = .{ .file = .some(0), .line = 3, .column = 2 }, .region = base.Region.zero() },
+                .{ .offset = 0, .loc = .{ .file = .some(0), .line = 4, .column = 5 }, .region = base.Region.zero() },
             },
             .relocations = &.{.{ .offset = 0, .name = "external", .scope = .shared, .kind = .{ .function = .x86_call_rel32 } }},
             .data = &.{.{
@@ -3209,8 +3214,8 @@ test "a splice reaches a procedure through references and stable references" {
     // which the program lowers itself, so a stable reference to it places
     // nothing; a reference into the pack does.
     var lined = [_]Excerpt{ set.excerpts[0], set.excerpts[1], set.excerpts[2], set.excerpts[3] };
-    lined[2].lines = &.{.{ .offset = 0, .loc = .{ .file = 1, .line = 3, .column = 1 }, .region = base.Region.zero() }};
-    lined[3].loc = .{ .file = 0, .line = 1, .column = 1 };
+    lined[2].lines = &.{.{ .offset = 0, .loc = .{ .file = .some(1), .line = 3, .column = 1 }, .region = base.Region.zero() }};
+    lined[3].loc = .{ .file = .some(0), .line = 1, .column = 1 };
     const lined_set = Set{ .arena = collections.SingleThreadArena.init(allocator), .excerpts = &lined };
     const absent = try reachingAbsentFiles(allocator, &lined_set, &.{ true, false });
     defer allocator.free(absent);

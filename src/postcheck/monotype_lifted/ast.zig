@@ -201,25 +201,12 @@ pub const LayoutRequest = struct {
 pub const RuntimeSchemaRequest = Mono.RuntimeSchemaRequest;
 /// Request to make a lifted value available as static data.
 pub const StaticDataValue = Mono.StaticDataValue;
-/// A virtual source frame introduced by post-check inlining, or `none`. A
-/// frame's id is its row in `inline_scopes` plus one, so a zeroed column
-/// holds `none`.
-pub const InlineScopeId = enum(u32) {
-    none = 0,
-    _,
+/// A row of `inline_scopes`: one virtual source frame introduced by
+/// post-check inlining.
+pub const InlineScopeRow = enum(u32) { _ };
 
-    /// The id of the frame at `inline_scopes` row `row_index`.
-    pub fn fromRow(row_index: u32) InlineScopeId {
-        std.debug.assert(row_index < std.math.maxInt(u32));
-        return @fromBackingInt(row_index + 1);
-    }
-
-    /// The `inline_scopes` row of a frame.
-    pub fn row(self: InlineScopeId) u32 {
-        std.debug.assert(self != .none);
-        return @backingInt(self) - 1;
-    }
-};
+/// A virtual source frame, or `none`; a zeroed column holds `none`.
+pub const InlineScopeId = collections.OptionalId(InlineScopeRow);
 
 /// One source-level procedure frame retained across post-check inlining.
 pub const InlineScope = struct {
@@ -1010,11 +997,10 @@ pub const Program = struct {
         for (self.string_literals.unsafeRawItemsForView()[start..]) |literal| literal.deinit(self.allocator);
     }
 
-    /// The id the next function takes. The largest `u32` is never a
-    /// function id, so it can mark an absent one.
+    /// The id the next function takes, leaving room for its biased optional
+    /// form (`collections.OptionalId(FnId)`).
     fn nextFnId(self: *const Program) std.mem.Allocator.Error!FnId {
-        const raw = std.math.cast(u32, self.fns.len()) orelse return error.OutOfMemory;
-        if (raw == std.math.maxInt(u32)) return error.OutOfMemory;
+        const raw = try collections.nextBiasedId(self.fns.len());
         return @fromBackingInt(raw);
     }
 
@@ -1161,11 +1147,11 @@ pub const Program = struct {
     }
 
     pub fn inlineScope(self: *const Program, id: InlineScopeId) InlineScope {
-        return self.row("inline_scopes", id.row());
+        return self.row("inline_scopes", @backingInt(id.get().?));
     }
 
     pub fn addInlineScope(self: *Program, scope: InlineScope) std.mem.Allocator.Error!InlineScopeId {
-        const id: InlineScopeId = .fromRow(@intCast(self.rowCount("inline_scopes")));
+        const id: InlineScopeId = .some(@fromBackingInt(@intCast(self.rowCount("inline_scopes"))));
         try self.inline_scopes.append(self.allocator, scope);
         return id;
     }
@@ -1569,7 +1555,7 @@ pub const Program = struct {
     pub fn bindingGroups(self: *const Program, allocator: std.mem.Allocator) std.mem.Allocator.Error!BindingGroups {
         const fn_count = self.fnCount();
         if (fn_count == 0) return .empty;
-        if (fn_count >= std.math.maxInt(u32)) return error.OutOfMemory;
+        if (std.math.cast(u32, fn_count) == null) return error.OutOfMemory;
 
         // Every function each function references, in one flat list.
         var edges = std.ArrayList(u32).empty;
@@ -1578,10 +1564,9 @@ pub const Program = struct {
         defer allocator.free(edge_starts);
         // The function whose body first reached each expression, and the
         // functions whose bodies share an expression with another's.
-        const no_fn = std.math.maxInt(u32);
-        const expr_fns = try allocator.alloc(u32, self.exprCount());
+        const expr_fns = try allocator.alloc(collections.OptionalU32, self.exprCount());
         defer allocator.free(expr_fns);
-        @memset(expr_fns, no_fn);
+        @memset(expr_fns, .none);
         var sharing = try std.DynamicBitSetUnmanaged.initEmpty(allocator, fn_count);
         defer sharing.deinit(allocator);
         // One work stack serves every body. Which functions a body names does
@@ -1599,11 +1584,13 @@ pub const Program = struct {
                 .stmt => |stmt_id| try appendStmtChildren(allocator, self, stmt_id, &pending),
                 .expr => |expr_id| {
                     const first = &expr_fns[@backingInt(expr_id)];
-                    if (first.* == no_fn) {
-                        first.* = @intCast(raw);
-                    } else if (first.* != raw) {
-                        sharing.set(first.*);
-                        sharing.set(raw);
+                    if (first.get()) |first_fn| {
+                        if (first_fn != raw) {
+                            sharing.set(first_fn);
+                            sharing.set(raw);
+                        }
+                    } else {
+                        first.* = .some(@intCast(raw));
                     }
                     const data = self.getExpr(expr_id).data;
                     if (data == .fn_ref) try edges.append(allocator, @backingInt(data.fn_ref.fn_id));
@@ -1713,9 +1700,9 @@ pub const Program = struct {
         allocator: std.mem.Allocator,
         groups: BindingGroups,
     ) std.mem.Allocator.Error!?SharedLocal {
-        const owners = try allocator.alloc(LocalClaims.Owner, self.localCount());
+        const owners = try allocator.alloc(LocalClaims.OptionalOwner, self.localCount());
         defer allocator.free(owners);
-        @memset(owners, LocalClaims.Owner.none);
+        @memset(owners, .none);
         var claims: LocalClaims = .{ .owners = owners };
         var pending = std.ArrayList(ExprChild).empty;
         defer pending.deinit(allocator);
@@ -2604,22 +2591,25 @@ const LocalClaims = struct {
     const Owner = struct {
         group: u32,
         fn_id: FnId,
-
-        const none: Owner = .{ .group = std.math.maxInt(u32), .fn_id = undefined };
     };
 
-    owners: []Owner,
+    /// Zero (`.none`) for a local no group has named yet.
+    const OptionalOwner = collections.OptionalStruct(Owner, "group");
+
+    owners: []OptionalOwner,
     group: u32 = 0,
     /// Set before each function's locals are claimed.
     fn_id: FnId = undefined,
     shared: ?SharedLocal = null,
 
     pub fn bindLocal(self: *LocalClaims, local: LocalId) std.mem.Allocator.Error!void {
-        const owner = &self.owners[@backingInt(local)];
-        if (owner.group == Owner.none.group) {
-            owner.* = .{ .group = self.group, .fn_id = self.fn_id };
-        } else if (owner.group != self.group and self.shared == null) {
-            self.shared = .{ .local = local, .first = owner.fn_id, .second = self.fn_id };
+        const slot = &self.owners[@backingInt(local)];
+        if (slot.get()) |owner| {
+            if (owner.group != self.group and self.shared == null) {
+                self.shared = .{ .local = local, .first = owner.fn_id, .second = self.fn_id };
+            }
+        } else {
+            slot.* = .some(.{ .group = self.group, .fn_id = self.fn_id });
         }
     }
 };

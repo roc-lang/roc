@@ -348,11 +348,8 @@ else
 const EVAL_SHARED_MEMORY_MIN_SIZE: usize = 1024 * 1024 * 1024;
 
 fn configuredSharedMemorySize() usize {
-    if (comptime build_options.shared_memory_size > std.math.maxInt(usize)) {
+    return comptime std.math.cast(usize, build_options.shared_memory_size) orelse
         @compileError("-Dshared-memory-size does not fit in usize for this target");
-    }
-
-    return @intCast(build_options.shared_memory_size);
 }
 
 /// LIR image stored in shared memory, ready for an eval backend to execute.

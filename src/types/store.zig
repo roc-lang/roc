@@ -627,7 +627,7 @@ pub const Store = struct {
         for (0..self.record_fields.len()) |index| {
             var field = self.record_fields.get(@fromBackingInt(@intCast(index)));
             field.presence.var_ = self.representativeVar(field.presence.var_);
-            if (field.presence.presenceVar()) |presence| field.presence.presence_var = self.representativeVar(presence);
+            if (field.presence.presenceVar()) |presence| field.presence.presence_var = .some(self.representativeVar(presence));
             self.record_fields.set(@fromBackingInt(@intCast(index)), field);
         }
         for (self.nominal_decls.items()) |*decl| decl.backing = self.representativeVar(decl.backing);
@@ -1779,8 +1779,8 @@ pub const Store = struct {
             const entry_count = 64;
             const Entry = struct {
                 identity: Identity = undefined,
-                /// The row plus one; zero for an empty entry.
-                row_plus_one: u32 = 0,
+                /// The row, absent for an empty entry.
+                row: collections.OptionalU32 = .none,
             };
 
             inline fn slot(identity: Identity) usize {
@@ -1789,12 +1789,13 @@ pub const Store = struct {
 
             inline fn get(self: *const @This(), identity: Identity) ?u32 {
                 const entry = &self.entries[slot(identity)];
-                if (entry.row_plus_one == 0 or !std.mem.eql(u8, std.mem.asBytes(&entry.identity), std.mem.asBytes(&identity))) return null;
-                return entry.row_plus_one - 1;
+                const row = entry.row.get() orelse return null;
+                if (!std.mem.eql(u8, std.mem.asBytes(&entry.identity), std.mem.asBytes(&identity))) return null;
+                return row;
             }
 
             fn put(self: *@This(), identity: Identity, row: u32) void {
-                self.entries[slot(identity)] = .{ .identity = identity, .row_plus_one = row + 1 };
+                self.entries[slot(identity)] = .{ .identity = identity, .row = .some(row) };
             }
         };
     }
@@ -2726,14 +2727,19 @@ pub const Store = struct {
         return @intCast(self.vars.items.len);
     }
 
+    /// What a stored descriptor keeps of `Range.empty()`. Every range
+    /// `appendVars` makes starts after its length slot, so no such range
+    /// starts at zero.
+    pub const stored_empty_var_range: u32 = 0;
+
     /// What a stored descriptor keeps of the vars range `range`: its start,
-    /// or the empty range's start for `Range.empty()`. Every other range of
+    /// or `stored_empty_var_range` for `Range.empty()`. Every other range of
     /// a stored descriptor came from `appendVars`, so its length is in the
     /// slot before its start.
     pub inline fn storedVarRange(self: *const Self, range: VarSafeList.Range) u32 {
-        if (range.start == VarSafeList.Range.empty_start) {
+        if (@backingInt(range.start) == stored_empty_var_range) {
             std.debug.assert(range.count == 0);
-            return @backingInt(range.start);
+            return stored_empty_var_range;
         }
         const start: u32 = @backingInt(range.start);
         if (std.debug.runtime_safety) {
@@ -2746,7 +2752,7 @@ pub const Store = struct {
 
     /// The vars range a stored descriptor keeps as `stored` (`storedVarRange`).
     pub inline fn varRange(self: *const Self, stored: u32) VarSafeList.Range {
-        if (stored == @backingInt(VarSafeList.Range.empty_start)) return .empty();
+        if (stored == stored_empty_var_range) return .empty();
         return .{ .start = @fromBackingInt(stored), .count = @backingInt(self.vars.items[stored - 1]) & ~range_length_bit };
     }
 
@@ -2895,20 +2901,19 @@ pub const Store = struct {
     pub fn appendInterpolationMetadata(self: *Self, metadata: InterpolationMetadata) std.mem.Allocator.Error!InterpolationMetadata.OptIdx {
         self.debugAssertUnsealed();
         std.debug.assert(metadata.isPresent());
-        return .from(try self.interpolation_metadata.append(self.gpa, metadata));
+        return .some(try self.interpolation_metadata.append(self.gpa, metadata));
     }
 
-    /// A constraint's interpolation metadata, or `.none` when it has none.
+    /// The interpolation metadata of a constraint that has some.
     pub fn getInterpolationMetadata(self: *const Self, idx: InterpolationMetadata.OptIdx) InterpolationMetadata {
-        const pooled = idx.get() orelse return .none;
-        return self.interpolation_metadata.get(pooled).*;
+        return self.interpolation_metadata.get(idx.get().?).*;
     }
 
     /// Record a numeric literal conversion's facts, for a constraint's
     /// `numeral`.
     pub fn appendNumeralInfo(self: *Self, info: NumeralInfo) std.mem.Allocator.Error!NumeralInfo.OptIdx {
         self.debugAssertUnsealed();
-        return .from(try self.numeral_infos.append(self.gpa, info));
+        return .some(try self.numeral_infos.append(self.gpa, info));
     }
 
     /// The facts of `constraint`'s numeric literal conversion, when its
@@ -5537,7 +5542,7 @@ test "Store comprehensive CompactWriter roundtrip" {
     const str_var = try original.freshFromContent(Content{ .structure = .empty_record });
     const list_elem = try original.fresh();
     const list_ident_idx = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reserved = false }, .idx = 999 };
-    const builtin_module_idx = base.ModuleIdentity.Idx.NONE;
+    const builtin_module_idx = @as(base.ModuleIdentity.Idx, @fromBackingInt(1));
     const list_content = try original.mkNominal(
         .{ .ident_idx = list_ident_idx },
         &[_]Var{list_elem},
@@ -6109,7 +6114,7 @@ test "source declaration overflow is rejected before mutating type store" {
             .{ .ident_idx = base.Ident.Idx.NONE },
             unread_backing_var,
             &.{},
-            base.ModuleIdentity.Idx.NONE,
+            @as(base.ModuleIdentity.Idx, @fromBackingInt(1)),
             SourceDecl.max_statement + 1,
         ),
     );
@@ -6122,7 +6127,7 @@ test "source declaration overflow is rejected before mutating type store" {
         store.mkNominalWithSourceDecl(
             .{ .ident_idx = base.Ident.Idx.NONE },
             &.{},
-            base.ModuleIdentity.Idx.NONE,
+            @as(base.ModuleIdentity.Idx, @fromBackingInt(1)),
             NominalType.Source.max_statement + 1,
             false,
         ),

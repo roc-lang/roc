@@ -2383,7 +2383,7 @@ fn hashSpecEvidenceShallow(hasher: *std.hash.Wyhash, entry: SpecEvidence) void {
             const identity = [_]u32{
                 target.target.module_idx,
                 @backingInt(target.target.def_idx),
-                if (target.local_proc_context) |context| @backingInt(context) else std.math.maxInt(u32),
+                if (target.local_proc_context) |context| @backingInt(context) else 0,
                 @intFromBool(target.local_proc_context != null),
             };
             hasher.update(std.mem.asBytes(&identity));
@@ -5214,8 +5214,20 @@ const SealedPendingTemplateBody = struct {
 };
 
 const SpecJobEpoch = enum(u64) { _ };
-/// Stable specialization workspace identity used to preserve per-worker epochs.
-pub const SpecJobWorkerId = enum(u32) { serial = std.math.maxInt(u32), _ };
+/// Stable specialization workspace identity used to preserve per-worker epochs:
+/// the serial path, or the post-check executor lane with the given id.
+pub const SpecJobWorkerId = union(enum) {
+    serial,
+    executor: usize,
+
+    /// Whether this is the executor lane `id`.
+    fn isExecutor(self: SpecJobWorkerId, id: usize) bool {
+        return switch (self) {
+            .serial => false,
+            .executor => |lane| lane == id,
+        };
+    }
+};
 
 /// The type and name stores of one specialization workspace epoch, as prefix
 /// views the coordinator reads in place.
@@ -5314,15 +5326,14 @@ const SpecJobWorkspace = struct {
         if (self.active_epoch != null) {
             Common.compilerBug("Monotype specialization workspace began overlapping epochs");
         }
-        if (self.next_epoch == std.math.maxInt(u64)) {
+        const following_epoch = std.math.add(u64, self.next_epoch, 1) catch
             Common.compilerBug("Monotype specialization workspace exhausted epoch identities");
-        }
         // The workspace has its final address once it lowers an epoch, and
         // every view is captured after this point.
         self.types.superseded = &self.superseded;
         self.name_store.superseded = &self.superseded;
-        const epoch: SpecJobEpoch = @fromBackingInt(@intCast(self.next_epoch));
-        self.next_epoch += 1;
+        const epoch: SpecJobEpoch = @fromBackingInt(self.next_epoch);
+        self.next_epoch = following_epoch;
         self.active_epoch = epoch;
         return epoch;
     }
@@ -6011,21 +6022,22 @@ const SymbolDomains = struct {
     active: SymbolDomain = .coordinator,
 
     fn fresh(self: *SymbolDomains) Common.Symbol {
-        const generator = switch (self.active) {
+        return freshFrom(switch (self.active) {
             .coordinator => &self.coordinator,
             .worker_local => &self.worker_local,
-        };
-        if (generator.next == std.math.maxInt(u32)) {
-            Common.compilerBug("Monotype symbol domain overflow");
-        }
-        return generator.fresh();
+        });
     }
 
     fn freshCoordinator(self: *SymbolDomains) Common.Symbol {
-        if (self.coordinator.next == std.math.maxInt(u32)) {
+        return freshFrom(&self.coordinator);
+    }
+
+    fn freshFrom(generator: *Common.SymbolGen) Common.Symbol {
+        const following = std.math.add(u32, generator.next, 1) catch
             Common.compilerBug("Monotype symbol domain overflow");
-        }
-        return self.coordinator.fresh();
+        const symbol: Common.Symbol = @fromBackingInt(generator.next);
+        generator.next = following;
+        return symbol;
     }
 };
 
@@ -6378,11 +6390,12 @@ const Builder = struct {
     /// structural equality remains the reuse authority across instantiations.
     static_data_uses: std.ArrayList(StaticDataUse),
     /// Whether each stored node's value has a stable static data
-    /// representation (`constNodeHasStableStaticDataRepresentation`), by module.
-    static_data_eligibility: std.AutoHashMap(checked.ModuleId, ConstNodeAnswers),
+    /// representation (`constNodeHasStableStaticDataRepresentation`), by
+    /// lowering module.
+    static_data_eligibility: collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers),
     /// Whether each stored node's value is data alone
-    /// (`constNodeIsStoredData`), by module.
-    stored_data: std.AutoHashMap(checked.ModuleId, ConstNodeAnswers),
+    /// (`constNodeIsStoredData`), by lowering module.
+    stored_data: collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers),
     hosted_catalog: []HostedCatalogEntry = &.{},
     /// Exact `(owner, method)` -> target map over every reachable module's
     /// method registry, for compiler-generated component lookups (structural
@@ -6543,8 +6556,8 @@ const Builder = struct {
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .static_data_ids = std.AutoHashMap(StaticDataUse, Common.StaticDataId).init(allocator),
             .static_data_uses = .empty,
-            .static_data_eligibility = std.AutoHashMap(checked.ModuleId, ConstNodeAnswers).init(allocator),
-            .stored_data = std.AutoHashMap(checked.ModuleId, ConstNodeAnswers).init(allocator),
+            .static_data_eligibility = collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers).init(allocator),
+            .stored_data = collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers).init(allocator),
             .evidence_arena = base.SingleThreadArena.init(allocator),
             .const_evidence_memo = std.AutoHashMap(ConstEvidenceMemoKey, StoredConstFnEvidence).init(allocator),
             .const_evidence_by_content = std.AutoHashMap(u64, StoredConstFnEvidence).init(allocator),
@@ -6735,13 +6748,13 @@ const Builder = struct {
         std.debug.assert(executor_worker.id < inputs.lanes.len);
         const slot = &inputs.lanes[executor_worker.id];
         if (slot.*) |state| {
-            std.debug.assert(@backingInt(state.worker.worker_id) == executor_worker.id);
+            std.debug.assert(state.worker.worker_id.isExecutor(executor_worker.id));
             return state;
         }
         const state = try executor_worker.allocator.create(SpecJobLaneState);
         state.* = SpecJobLaneState.init(
             executor_worker.allocator,
-            @fromBackingInt(@intCast(executor_worker.id)),
+            .{ .executor = executor_worker.id },
         );
         slot.* = state;
         return state;
@@ -6794,7 +6807,7 @@ const Builder = struct {
         self.method_targets.deinit(self.allocator);
         self.inspect_overrides.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
-        for ([_]*std.AutoHashMap(checked.ModuleId, ConstNodeAnswers){ &self.static_data_eligibility, &self.stored_data }) |tables| {
+        for ([_]*collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers){ &self.static_data_eligibility, &self.stored_data }) |tables| {
             var answers = tables.valueIterator();
             while (answers.next()) |table| table.deinit(self.allocator);
             tables.deinit();
@@ -6991,11 +7004,10 @@ const Builder = struct {
     }
 
     fn allocateInstantiationScope(self: *Builder) InstantiationScopeId {
-        if (self.next_instantiation_scope == std.math.maxInt(u64)) {
+        const following_scope = std.math.add(u64, self.next_instantiation_scope, 1) catch
             Common.invariant("Monotype instantiation scope identity exhausted");
-        }
-        const id: InstantiationScopeId = @fromBackingInt(@intCast(self.next_instantiation_scope));
-        self.next_instantiation_scope += 1;
+        const id: InstantiationScopeId = @fromBackingInt(self.next_instantiation_scope);
+        self.next_instantiation_scope = following_scope;
         self.countBodyDiagnostic("instantiation_scopes_created");
         return id;
     }
@@ -7960,7 +7972,7 @@ const Builder = struct {
             }
             context.completed = true;
             if (context.shard) |*shard| {
-                if (@backingInt(shard.worker_id) != completion.worker_id) {
+                if (!shard.worker_id.isExecutor(completion.worker_id)) {
                     Common.compilerBug("post-check executor changed root type worker ownership");
                 }
             }
@@ -7995,9 +8007,6 @@ const Builder = struct {
             const finished_ns = timingNowNs(std_io);
             context.worker_work_ns = @intCast(@max(0, finished_ns - task_started_ns));
         };
-        if (executor_worker.id >= std.math.maxInt(u32)) {
-            Common.compilerBug("post-check executor returned an invalid root type worker id");
-        }
         const lane = Builder.ensureSpecJobLaneState(executor_worker, context.inputs) catch {
             context.failed = true;
             return context;
@@ -8186,7 +8195,7 @@ const Builder = struct {
             }
             context.completed = true;
             if (context.shard) |*shard| {
-                if (@backingInt(shard.worker_id) != completion.worker_id) {
+                if (!shard.worker_id.isExecutor(completion.worker_id)) {
                     Common.compilerBug("post-check executor changed root worker ownership");
                 }
             }
@@ -9939,9 +9948,9 @@ const Builder = struct {
 
     fn traceLink(comptime how: []const u8, body_draft: *const BodyDraftStore, demand: Demand, callee: Ast.FnId) void {
         if (!LiteralDemand.traceEnabled()) return;
-        std.debug.print("ctfe-demand link {s} owner={d} draft={s} demand={s} -> fn#{d}\n", .{
+        std.debug.print("ctfe-demand link {s} owner={?d} draft={s} demand={s} -> fn#{d}\n", .{
             how,
-            if (body_draft.demand_owner) |owner| @backingInt(owner) else std.math.maxInt(u32),
+            if (body_draft.demand_owner) |owner| @as(?u32, @backingInt(owner)) else null,
             @tagName(body_draft.demand),
             @tagName(demand),
             @backingInt(callee),
@@ -10364,7 +10373,7 @@ const Builder = struct {
         }
         context.completed = true;
         if (context.shard) |*shard| {
-            if (@backingInt(shard.worker_id) != completion.worker_id) Common.compilerBug("post-check executor changed specialization worker ownership");
+            if (!shard.worker_id.isExecutor(completion.worker_id)) Common.compilerBug("post-check executor changed specialization worker ownership");
         }
         self.recordParallelWorkerWork(contexts[completion.id..][0..1]);
         self.recordRetainedSpecShardPeak(contexts, accepted, submitted);
@@ -10430,9 +10439,6 @@ const Builder = struct {
             const finished_ns = timingNowNs(std_io);
             context.worker_work_ns = @intCast(@max(0, finished_ns - task_started_ns));
         };
-        if (executor_worker.id >= std.math.maxInt(u32)) {
-            Common.compilerBug("post-check executor returned an invalid specialization worker id");
-        }
         const lane = Builder.ensureSpecJobLaneState(executor_worker, &context.inputs) catch {
             context.failed = true;
             return context;
@@ -10487,9 +10493,6 @@ const Builder = struct {
             const finished_ns = timingNowNs(std_io);
             context.worker_work_ns = @intCast(@max(0, finished_ns - task_started_ns));
         };
-        if (executor_worker.id >= std.math.maxInt(u32)) {
-            Common.compilerBug("post-check executor returned an invalid root worker id");
-        }
         const lane = Builder.ensureSpecJobLaneState(executor_worker, context.inputs) catch {
             context.failed = true;
             return context;
@@ -11227,8 +11230,8 @@ const Builder = struct {
             // interface identity for active recursive and partially overlapping
             // requests.
             if (resolved_request_ty) |request_fn_ty| {
-                var raw_spec: u32 = if (source_ctx.draft.template_specs_by_template.get(template_ref)) |chain| chain.head else TemplateSpecChain.end;
-                while (raw_spec != TemplateSpecChain.end) : (raw_spec = source_ctx.draft.template_specs.items[raw_spec].next_in_template) {
+                var spec_link: collections.OptionalU32 = if (source_ctx.draft.template_specs_by_template.get(template_ref)) |chain| .some(chain.head) else .none;
+                while (spec_link.get()) |raw_spec| : (spec_link = source_ctx.draft.template_specs.items[raw_spec].next_in_template) {
                     const spec = &source_ctx.draft.template_specs.items[raw_spec];
                     // The checked source root selects the template body, but it is
                     // not part of a resolved specialization's identity. Recursive
@@ -11366,7 +11369,7 @@ const Builder = struct {
         lexical_needs_cleanup = false;
         const template_chain = try source_ctx.draft.template_specs_by_template.getOrPut(template_ref);
         if (template_chain.found_existing) {
-            source_ctx.draft.template_specs.items[template_chain.value_ptr.tail].next_in_template = @intCast(spec_index);
+            source_ctx.draft.template_specs.items[template_chain.value_ptr.tail].next_in_template = .some(@intCast(spec_index));
             template_chain.value_ptr.tail = @intCast(spec_index);
         } else {
             template_chain.value_ptr.* = .{ .head = @intCast(spec_index), .tail = @intCast(spec_index) };
@@ -13081,7 +13084,8 @@ const Builder = struct {
                 .stable_static_data => &builder.static_data_eligibility,
                 .stored_data => &builder.stored_data,
             };
-            const entry = try tables.getOrPut(view.key);
+            const entry = try tables.getOrPut(view.lowering_module orelse
+                Common.invariant("checked module view was read before its lowering module id was seeded"));
             if (!entry.found_existing) entry.value_ptr.* = .empty;
             const table = entry.value_ptr;
             const known = table.items.len;
@@ -17711,10 +17715,10 @@ fn DraftSpecLookup(comptime Family: type) type {
             open: OpenAddress,
             digest: DigestAddress,
         };
-        const OverflowId = enum(u32) { none = std.math.maxInt(u32), _ };
+        const OverflowId = enum(u32) { _ };
         const Candidates = struct {
             first: u32,
-            overflow: OverflowId = .none,
+            overflow: collections.OptionalId(OverflowId) = .none,
         };
         const Iterator = struct {
             first: ?u32,
@@ -17785,7 +17789,7 @@ fn DraftSpecLookup(comptime Family: type) type {
             } orelse return null;
             return .{
                 .first = candidates.first,
-                .rest = if (candidates.overflow == .none) &.{} else self.overflow_lists.items[@backingInt(candidates.overflow)].items,
+                .rest = if (candidates.overflow.get()) |overflow| self.overflow_lists.items[@backingInt(overflow)].items else &.{},
             };
         }
 
@@ -17814,18 +17818,17 @@ fn DraftSpecLookup(comptime Family: type) type {
                 return;
             }
             if (entry.value_ptr.first == raw_spec) return;
-            if (entry.value_ptr.overflow != .none) {
-                const list = &self.overflow_lists.items[@backingInt(entry.value_ptr.overflow)];
+            if (entry.value_ptr.overflow.get()) |existing_overflow| {
+                const list = &self.overflow_lists.items[@backingInt(existing_overflow)];
                 for (list.items) |existing| if (existing == raw_spec) return;
                 try list.append(self.allocator, raw_spec);
             } else {
-                if (self.overflow_lists.items.len == @backingInt(OverflowId.none)) return error.OutOfMemory;
+                const overflow: OverflowId = @fromBackingInt(try collections.nextBiasedId(self.overflow_lists.items.len));
                 var list: std.ArrayList(u32) = .empty;
                 errdefer list.deinit(self.allocator);
                 try list.append(self.allocator, raw_spec);
-                const overflow: OverflowId = @fromBackingInt(@intCast(self.overflow_lists.items.len));
                 try self.overflow_lists.append(self.allocator, list);
-                entry.value_ptr.overflow = overflow;
+                entry.value_ptr.overflow = .some(overflow);
             }
             if (pairs) |list| list.appendAssumeCapacity(.{ .node = address.open.node, .spec = raw_spec });
         }
@@ -17858,15 +17861,13 @@ const OptionalEagerTemplateResolution = collections.OptionalStruct(EagerTemplate
 const TemplateSpecChain = struct {
     head: u32,
     tail: u32,
-
-    const end = std.math.maxInt(u32);
 };
 
 const DraftTemplateSpec = struct {
     state: DraftSpecState,
     template_ref: names.ProcTemplate,
-    /// The next draft spec of the same template, or `TemplateSpecChain.end`.
-    next_in_template: u32 = TemplateSpecChain.end,
+    /// The next draft spec of the same template, absent for the chain's last.
+    next_in_template: collections.OptionalU32 = .none,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     /// Worker-local symbol retained when a deferred request must eagerly lower
@@ -18046,14 +18047,15 @@ const MaterializedConstNodeAddress = struct {
 /// reads: a node still under construction that the expression reaches
 /// through a back-edge, directly or through a node it shares. `serial`
 /// tells that binding apart from a later one at the same stack position.
+/// Binding serials are issued from one, so serial zero marks no read.
 const ConstNodeFreeRead = struct {
     index: u32,
     serial: u32,
 
-    const none: ConstNodeFreeRead = .{ .index = std.math.maxInt(u32), .serial = 0 };
+    const none: ConstNodeFreeRead = .{ .index = 0, .serial = 0 };
 
     fn isNone(read: ConstNodeFreeRead) bool {
-        return read.index == std.math.maxInt(u32);
+        return read.serial == 0;
     }
 };
 
@@ -18136,8 +18138,8 @@ const ActiveConstNodeBinding = struct {
     /// Tells this binding apart from a later one at the same stack index.
     serial: u32,
     /// The lowest stack index of an active binding the node's expression
-    /// reads, its own included.
-    min_read: u32 = std.math.maxInt(u32),
+    /// reads, its own included. It starts at the binding's own index.
+    min_read: u32,
     /// Lets of shared nodes that read this node's binding, bound around
     /// its expression, as a list through `ConstRestoreLet.next`.
     lets: collections.OptionalU32 = .none,
@@ -18543,7 +18545,7 @@ const FrozenPreparedCodecCalls = struct {
         errdefer custom_call_ids.deinit();
 
         for (calls, 0..) |call, index| {
-            if (index > std.math.maxInt(u32)) Common.invariant("prepared codec call index exceeded its identity range");
+            if (std.math.cast(u32, index) == null) Common.invariant("prepared codec call index exceeded its identity range");
             switch (call.purpose) {
                 .format => {
                     const address = FormatCodecCallAddress{
@@ -18713,28 +18715,21 @@ const DraftPreparedInspectMethod = struct {
 
 const RuntimeImpossibilityProofId = enum(u32) { _ };
 
-/// A per-node column of optional proof ids, stored as `u32`s with
-/// `maxInt(u32)` for "no proof"; that value is never minted.
+/// A growing per-node column of optional proof ids, four bytes each; zero
+/// means "no proof".
 const ImpossibilityProofColumn = struct {
-    items: std.ArrayList(u32) = .empty,
-
-    const none = std.math.maxInt(u32);
-
-    fn encode(proof: ?RuntimeImpossibilityProofId) u32 {
-        return if (proof) |id| @backingInt(id) else none;
-    }
+    items: std.ArrayList(collections.OptionalId(RuntimeImpossibilityProofId)) = .empty,
 
     fn get(self: *const ImpossibilityProofColumn, index: usize) ?RuntimeImpossibilityProofId {
-        const raw = self.items.items[index];
-        return if (raw == none) null else @fromBackingInt(raw);
+        return self.items.items[index].get();
     }
 
     fn set(self: *ImpossibilityProofColumn, index: usize, proof: ?RuntimeImpossibilityProofId) void {
-        self.items.items[index] = encode(proof);
+        self.items.items[index] = .of(proof);
     }
 
     fn append(self: *ImpossibilityProofColumn, allocator: Allocator, proof: ?RuntimeImpossibilityProofId) Allocator.Error!void {
-        try self.items.append(allocator, encode(proof));
+        try self.items.append(allocator, .of(proof));
     }
 
     fn clearRetainingCapacity(self: *ImpossibilityProofColumn) void {
@@ -19328,7 +19323,9 @@ const BodyDraftStore = struct {
     materialized_const_nodes: std.ArrayList(MaterializedConstNode),
     const_restore_scopes: std.ArrayListUnmanaged(ConstRestoreScope) = .empty,
     const_restore_lets: std.ArrayListUnmanaged(ConstRestoreLet) = .empty,
-    const_node_binding_serial: u32 = 0,
+    /// The serial the next ConstStore node binding receives; issued from one
+    /// because serial zero marks `ConstNodeFreeRead.none`.
+    const_node_binding_serial: u32 = 1,
     /// The free read of the node a restore step delivered last.
     delivered_const_free_read: ConstNodeFreeRead = .none,
     stored_capture_witnesses: std.ArrayListUnmanaged(StoredCaptureWitness) = .empty,
@@ -20830,7 +20827,7 @@ const BodyDraftStore = struct {
         }
         const literal_backing = if (literal_bytes_len == 0) null else try Ast.SharedLiteralBacking.initUnfilled(program.allocator, literal_bytes_len);
         defer if (literal_backing) |backing| backing.owner.release();
-        if (literal_bytes_len > std.math.maxInt(u32)) return error.OutOfMemory;
+        if (std.math.cast(u32, literal_bytes_len) == null) return error.OutOfMemory;
         var literal_cursor: u32 = 0;
         for (self.string_literals.items, 0..) |literal, index| {
             if (!ids.retained(.string_literals, index)) continue;
@@ -21948,7 +21945,8 @@ fn appendRuntimeImpossibilityProof(
     proof: RuntimeImpossibilityProof,
 ) Allocator.Error!RuntimeImpossibilityProofId {
     const index = draft.impossibility_proofs.items.len;
-    if (index >= ImpossibilityProofColumn.none) return error.OutOfMemory;
+    // `OptionalId(RuntimeImpossibilityProofId)` stores an id plus one.
+    if (std.math.cast(u32, index + 1) == null) return error.OutOfMemory;
     const id: RuntimeImpossibilityProofId = @fromBackingInt(@intCast(index));
     try draft.impossibility_proofs.append(allocator, proof);
     return id;
@@ -29090,16 +29088,16 @@ const BodyContext = struct {
     };
 
     /// Cursor states of a nominal instantiation.
-    const InstNominalCursor = struct {
-        const start = 0;
-        const args = 1;
-        const backing = 2;
-        const declared_order = 3;
+    const InstNominalCursor = enum(u8) {
+        start,
+        args,
+        backing,
+        declared_order,
     };
 
     fn stepInstNominal(self: *BodyContext, frame: *InstFrame, task: *InstNominalTask, input: ?InstResult) Allocator.Error!InstStep {
         const nominal = &task.nominal;
-        switch (frame.cursor) {
+        switch (@as(InstNominalCursor, @fromBackingInt(frame.cursor))) {
             InstNominalCursor.start => {
                 switch (nominal.representation) {
                     .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
@@ -29114,7 +29112,7 @@ const BodyContext = struct {
                     },
                     .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
                 }
-                frame.cursor = InstNominalCursor.args;
+                frame.cursor = @backingInt(InstNominalCursor.args);
                 return instSliceStep(nominal.args);
             },
             InstNominalCursor.args => {
@@ -29124,7 +29122,7 @@ const BodyContext = struct {
                     .builtin, .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability => {
                         const source = self.nominalInstantiationSource(nominal) orelse
                             Common.invariant("nominal backing instantiation could not resolve a declaration-backed nominal");
-                        frame.cursor = InstNominalCursor.backing;
+                        frame.cursor = @backingInt(InstNominalCursor.backing);
                         return .{ .call = .{ .decl_backing = try self.boxInstTask(InstDeclBackingTask, .{ .source = source, .args = task.args }) } };
                     },
                 }
@@ -29146,7 +29144,6 @@ const BodyContext = struct {
                 .backing = .of(task.backing),
                 .declared_order = input.?.get(.declared_order),
             })) } },
-            InstNominalCursor.declared_order + 1...std.math.maxInt(u8) => unreachable, // stepInstNominal only sets the cursor to InstNominalCursor constants
         }
     }
 
@@ -29155,7 +29152,7 @@ const BodyContext = struct {
         task.def = try typeDef(self.nameStoreMut(), self.builder.app_module_identity, self.view, nominal.origin_module, nominal.name, nominal.source_decl);
         self.builder.noteBuiltinTryDef(nominal.builtin, self.nameStore(), task.def);
         task.named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal) };
-        frame.cursor = InstNominalCursor.declared_order;
+        frame.cursor = @backingInt(InstNominalCursor.declared_order);
         return .{ .call = .{ .declared_order = try self.boxInstTask(InstDeclaredOrderTask, .{ .nominal = nominal, .args = task.args }) } };
     }
 
@@ -34038,8 +34035,8 @@ const BodyContext = struct {
         else
             line;
         return .{
-            .file = self.source_file_id orelse
-                Common.invariant("expression-capable body context had no source-file identity"),
+            .file = .some(self.source_file_id orelse
+                Common.invariant("expression-capable body context had no source-file identity")),
             .line = user_line + 1,
             .column = column + 1,
         };
@@ -40835,6 +40832,7 @@ const BodyContext = struct {
             .owner = self.draft.current_owner,
             .cell = cell,
             .serial = self.draft.const_node_binding_serial,
+            .min_read = @intCast(index),
         });
         self.draft.const_node_binding_serial += 1;
         try self.draft.active_const_node_binding_indices.put(address, @intCast(index));
@@ -42328,8 +42326,7 @@ const BodyContext = struct {
         base_capture_id: usize,
     ) u32 {
         const capture_id = base_capture_id + self.parserRecordFieldRank(fields, field_index);
-        if (capture_id > std.math.maxInt(u32)) Common.invariant("parser generated too many field captures");
-        return @intCast(capture_id);
+        return std.math.cast(u32, capture_id) orelse Common.invariant("parser generated too many field captures");
     }
 
     fn appendParserPrecomputedCaptures(
@@ -42539,7 +42536,7 @@ const BodyContext = struct {
 
         const base_capture_id = plan.next_capture_id;
         plan.next_capture_id += fields.len;
-        if (plan.next_capture_id > std.math.maxInt(u32)) Common.invariant(codec_name ++ " generated too many captures");
+        if (std.math.cast(u32, plan.next_capture_id) == null) Common.invariant(codec_name ++ " generated too many captures");
 
         for (fields, 0..) |_, index| {
             const capture_id = self.parserFieldCaptureIdForRecordField(fields, index, base_capture_id);
@@ -42586,7 +42583,7 @@ const BodyContext = struct {
 
         const base_capture_id = plan.next_capture_id;
         plan.next_capture_id += fields.len;
-        if (plan.next_capture_id > std.math.maxInt(u32)) Common.invariant(switch (kind) {
+        if (std.math.cast(u32, plan.next_capture_id) == null) Common.invariant(switch (kind) {
             .parser => "parser generated too many captures",
             .encoder => "encoder_for generated too many captures",
         });
@@ -54664,8 +54661,7 @@ const BodyContext = struct {
             .record_field => return try self.graph.recordFieldValueNode(node, try recordFieldName(self.nameStoreMut(), view, @fromBackingInt(step.data))),
             .tag_payload_tag => return node,
             .tag_payload_index => {
-                const tag_node = path_nodes[path_node].parent;
-                if (tag_node == static_dispatch.no_evidence_path_node) return null;
+                const tag_node = path_nodes[path_node].parent.get() orelse return null;
                 const tag_step = path_nodes[tag_node].step;
                 if (tag_step.stepKind() != .tag_payload_tag) return null;
                 return try self.graph.tagPayloadNode(
@@ -61173,7 +61169,7 @@ const BodyContext = struct {
                 break;
             }
             if (exists) continue;
-            if (call_index > std.math.maxInt(u32)) {
+            if (std.math.cast(u32, call_index) == null) {
                 Common.invariant("checked generated codec call index exceeded its identity range");
             }
             slots[len] = .{

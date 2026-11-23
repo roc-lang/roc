@@ -98,12 +98,13 @@ pub fn classifyType(allocator: std.mem.Allocator, store: *const Store, start: Id
                 return .{ .vector = maybe_vector_kind.? };
             }
             var maybe_float_bits: ?u16 = null;
-            const float_count = try countFloats(allocator, store, idx, &maybe_float_bits);
-            if (float_count >= 1 and float_count <= max_hfa_floats) {
-                return .{ .float_array = .{
-                    .count = float_count,
-                    .elem_bits = maybe_float_bits.?,
-                } };
+            if (try countFloats(allocator, store, idx, &maybe_float_bits)) |float_count| {
+                if (float_count >= 1 and float_count <= max_hfa_floats) {
+                    return .{ .float_array = .{
+                        .count = float_count,
+                        .elem_bits = maybe_float_bits.?,
+                    } };
+                }
             }
             return classifyBySize(store, lay);
         },
@@ -116,13 +117,13 @@ pub fn classifyType(allocator: std.mem.Allocator, store: *const Store, start: Id
 }
 
 /// Count the vector members of an aggregate whose leaves are exclusively short
-/// vectors, returning `invalid_float_count` (sentinel) the moment any other
+/// vectors, returning null the moment any other
 /// member (or unnamed padding) is seen. Exactly one vector member makes the
 /// aggregate a transparent Q-register value; two or more make it memory-class.
 /// Counting stops at two because higher counts classify identically. Members
 /// are visited in order on an explicit stack, so aggregate nesting never
 /// becomes native call depth.
-fn countVectors(allocator: std.mem.Allocator, store: *const Store, idx: Idx, maybe_kind: *?layout.Vector) std.mem.Allocator.Error!u8 {
+fn countVectors(allocator: std.mem.Allocator, store: *const Store, idx: Idx, maybe_kind: *?layout.Vector) std.mem.Allocator.Error!?u8 {
     // Aggregates classify in a few members, so the worklist starts on the stack.
     var pending_buffer: [256]u8 align(@alignOf(usize)) = undefined;
     var pending_state = std.heap.BufferFirstAllocator.init(&pending_buffer, allocator);
@@ -140,24 +141,24 @@ fn countVectors(allocator: std.mem.Allocator, store: *const Store, idx: Idx, may
                 const start = pending.items.len;
                 var i: u32 = 0;
                 while (i < field_count) : (i += 1) {
-                    if (store.getStructFieldIsPadding(struct_idx, i)) return invalid_float_count;
+                    if (store.getStructFieldIsPadding(struct_idx, i)) return null;
                     try pending.append(pending_allocator, store.getStructFieldLayout(struct_idx, i));
                 }
                 std.mem.reverse(Idx, pending.items[start..]);
             },
             .scalar => {
                 const scalar = lay.getScalar();
-                if (scalar.tag != .vector) return invalid_float_count;
+                if (scalar.tag != .vector) return null;
                 if (maybe_kind.* == null) maybe_kind.* = scalar.getVector();
                 count += 1;
                 if (count > 1) return count;
             },
             .tag_union => {
                 const info = store.getTagUnionInfo(lay);
-                if (info.variants.len != 1 or info.data.discriminant_size != 0) return invalid_float_count;
+                if (info.variants.len != 1 or info.data.discriminant_size != 0) return null;
                 try pending.append(pending_allocator, info.variants.get(0).payload_layout);
             },
-            .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .hole, .ptr, .dynamic => return invalid_float_count,
+            .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .hole, .ptr, .dynamic => return null,
         }
     }
     return count;
@@ -171,15 +172,12 @@ fn classifyBySize(store: *const Store, lay: Layout) Class {
     return .integer;
 }
 
-const invalid_float_count = std.math.maxInt(u8);
-
-/// Count the float members of an aggregate, returning `invalid_float_count` (sentinel)
-/// the moment a non-float member, a mismatched float width, or more than the HFA limit is
+/// Count the float members of an aggregate, returning null the moment a non-float member, a mismatched float width, or more than the HFA limit is
 /// seen. All members of an HFA must be the same IEEE float width; `maybe_float_bits` is
 /// threaded through to enforce that and to report the element width to the caller.
 /// Members are visited in order on an explicit stack, so aggregate nesting never
 /// becomes native call depth.
-fn countFloats(allocator: std.mem.Allocator, store: *const Store, idx: Idx, maybe_float_bits: *?u16) std.mem.Allocator.Error!u8 {
+fn countFloats(allocator: std.mem.Allocator, store: *const Store, idx: Idx, maybe_float_bits: *?u16) std.mem.Allocator.Error!?u8 {
     // Aggregates classify in a few members, so the worklist starts on the stack.
     var pending_buffer: [256]u8 align(@alignOf(usize)) = undefined;
     var pending_state = std.heap.BufferFirstAllocator.init(&pending_buffer, allocator);
@@ -200,7 +198,7 @@ fn countFloats(allocator: std.mem.Allocator, store: *const Store, idx: Idx, mayb
                     // Unnamed padding is opaque, alignment-1 bytes, never a float
                     // member, so any padding makes the aggregate non-homogeneous (it
                     // falls back to size-based integer classification).
-                    if (store.getStructFieldIsPadding(struct_idx, i)) return invalid_float_count;
+                    if (store.getStructFieldIsPadding(struct_idx, i)) return null;
                     try pending.append(pending_allocator, store.getStructFieldLayout(struct_idx, i));
                 }
                 std.mem.reverse(Idx, pending.items[start..]);
@@ -209,28 +207,28 @@ fn countFloats(allocator: std.mem.Allocator, store: *const Store, idx: Idx, mayb
                 const scalar = lay.getScalar();
                 // Only IEEE floats (f32/f64) count toward an HFA. Dec is i128-backed, so it is
                 // an integer member, not a float.
-                if (scalar.tag != .frac) return invalid_float_count;
+                if (scalar.tag != .frac) return null;
                 const bits: u16 = switch (scalar.getFrac()) {
                     .f32 => 32,
                     .f64 => 64,
-                    .dec => return invalid_float_count,
+                    .dec => return null,
                 };
                 if (maybe_float_bits.*) |existing| {
-                    if (existing != bits) return invalid_float_count;
+                    if (existing != bits) return null;
                 } else {
                     maybe_float_bits.* = bits;
                 }
                 count += 1;
-                if (count > max_hfa_floats) return invalid_float_count;
+                if (count > max_hfa_floats) return null;
             },
             .tag_union => {
                 const info = store.getTagUnionInfo(lay);
-                if (info.variants.len != 1 or info.data.discriminant_size != 0) return invalid_float_count;
+                if (info.variants.len != 1 or info.data.discriminant_size != 0) return null;
                 try pending.append(pending_allocator, info.variants.get(0).payload_layout);
             },
             // Anything else (pointer, list, box, non-transparent tag union, …)
             // makes the aggregate non-homogeneous.
-            .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .hole, .ptr, .dynamic => return invalid_float_count,
+            .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .hole, .ptr, .dynamic => return null,
         }
     }
     return count;

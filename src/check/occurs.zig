@@ -604,7 +604,7 @@ test "occurs: no recursion through two levels (v1 = Box(v2), v2 = Str)" {
     try types_store.setVarContent(v1, try types_store.mkNominal(
         undefined,
         &.{v2},
-        base.ModuleIdentity.Idx.NONE,
+        @as(base.ModuleIdentity.Idx, @fromBackingInt(1)),
         false,
     ));
     try types_store.setRootVarContent(v2, Content{ .structure = .empty_record });
@@ -672,7 +672,7 @@ test "occurs: recursive alias (v = Alias(List v))" {
         types.TypeIdent{ .ident_idx = undefined },
         backing_var,
         &.{arg},
-        base.ModuleIdentity.Idx.NONE,
+        @as(base.ModuleIdentity.Idx, @fromBackingInt(1)),
     ));
 
     const result = occurs(&types_store, &scratch, v);
@@ -697,7 +697,7 @@ test "occurs: alias with no recursion (v = Alias Str)" {
         types.TypeIdent{ .ident_idx = undefined },
         backing_var,
         &.{arg_var},
-        base.ModuleIdentity.Idx.NONE,
+        @as(base.ModuleIdentity.Idx, @fromBackingInt(1)),
     ));
 
     const result = occurs(&types_store, &scratch, alias_var);
@@ -748,7 +748,7 @@ test "occurs: nested recursive tag union (v = [ Cons(elem, Box(v)) ] )" {
     try types_store.setVarContent(boxed_linked_list, try types_store.mkNominal(
         undefined,
         &.{linked_list},
-        base.ModuleIdentity.Idx.NONE,
+        @as(base.ModuleIdentity.Idx, @fromBackingInt(1)),
         false,
     ));
 
@@ -790,7 +790,7 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
     try types_store.setVarContent(nominal_type, try types_store.mkNominal(
         undefined,
         &.{},
-        base.ModuleIdentity.Idx.NONE,
+        @as(base.ModuleIdentity.Idx, @fromBackingInt(1)),
         false,
     ));
 
@@ -829,7 +829,7 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     try types_store.setVarContent(type_b_nominal, try types_store.mkNominal(
         undefined,
         &.{},
-        base.ModuleIdentity.Idx.NONE,
+        @as(base.ModuleIdentity.Idx, @fromBackingInt(1)),
         false,
     ));
 
@@ -837,7 +837,7 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     try types_store.setVarContent(type_a_nominal, try types_store.mkNominal(
         undefined,
         &.{},
-        base.ModuleIdentity.Idx.NONE,
+        @as(base.ModuleIdentity.Idx, @fromBackingInt(1)),
         false,
     ));
 
@@ -875,7 +875,7 @@ test "occurs: valid nominal recursion does not hide later invalid recursion" {
     try types_store.setVarContent(list_nominal, try types_store.mkNominal(
         undefined,
         &.{},
-        base.ModuleIdentity.Idx.NONE,
+        @as(base.ModuleIdentity.Idx, @fromBackingInt(1)),
         false,
     ));
 
@@ -909,7 +909,7 @@ test "occurs: valid nominal return recursion does not hide invalid argument recu
     try types_store.setVarContent(list_nominal, try types_store.mkNominal(
         undefined,
         &.{},
-        base.ModuleIdentity.Idx.NONE,
+        @as(base.ModuleIdentity.Idx, @fromBackingInt(1)),
         false,
     ));
 
@@ -954,7 +954,7 @@ test "occurs: anonymous recursion in a nominal's type argument is not valid (reg
     try types_store.setVarContent(wrapper, try types_store.mkNominal(
         undefined,
         &.{inner},
-        base.ModuleIdentity.Idx.NONE,
+        @as(base.ModuleIdentity.Idx, @fromBackingInt(1)),
         false,
     ));
 
@@ -991,7 +991,7 @@ test "occurs: value graph never traverses a nominal's backing (args only)" {
     try types_store.setVarContent(n, try types_store.mkNominal(
         undefined,
         &.{},
-        base.ModuleIdentity.Idx.NONE,
+        @as(base.ModuleIdentity.Idx, @fromBackingInt(1)),
         false,
     ));
 

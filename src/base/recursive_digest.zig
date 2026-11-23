@@ -75,9 +75,6 @@ pub const Stats = struct {
     group_encodings: u64 = 0,
 };
 
-const no_position = std.math.maxInt(u32);
-const unvisited = std.math.maxInt(u32);
-
 /// Everything reductions sharing one digest domain have settled: the
 /// unfolding of every recursive position, the member shapes of every
 /// recursive group, and the result of every component shape reduced. All of
@@ -196,7 +193,9 @@ pub const Graph = struct {
     labels: std.ArrayList(Identity) = .empty,
     next_labels: std.ArrayList(Identity) = .empty,
     sorted_labels: std.ArrayList(Identity) = .empty,
-    distinct_labels: std.AutoHashMapUnmanaged(Identity, u32) = .empty,
+    /// Each distinct label of a refinement round, and once the partition is
+    /// stable, its block's rank.
+    distinct_labels: std.AutoHashMapUnmanaged(Identity, collections.OptionalU32) = .empty,
     member_ranks: std.ArrayList(u32) = .empty,
     /// One member of each block of the stable partition. Every block has a
     /// member, so one sweep writes every entry before any is read.
@@ -215,8 +214,10 @@ pub const Graph = struct {
         content: Identity = undefined,
         child_start: u32 = 0,
         child_len: u32 = 0,
-        index: u32 = unvisited,
-        lowlink: u32 = unvisited,
+        /// Tarjan visit index, absent until visited.
+        index: collections.OptionalU32 = .none,
+        /// Tarjan low link, written by the visit.
+        lowlink: u32 = undefined,
         on_stack: bool = false,
         resolution: Resolution = undefined,
         digest: ?Identity = null,
@@ -292,7 +293,7 @@ pub const Graph = struct {
         var next_index: u32 = 0;
         for (0..self.nodes.items.len) |start_index| {
             const start: u32 = @intCast(start_index);
-            if (self.nodes.items[start].index != unvisited) continue;
+            if (self.nodes.items[start].index != .none) continue;
             try self.visit(start, &next_index);
             try self.frames.append(self.gpa, .{ .node = start, .next_child = 0 });
             while (self.frames.items.len != 0) {
@@ -307,12 +308,14 @@ pub const Graph = struct {
                         .node => |target| target,
                     };
                     const target_entry = &self.nodes.items[target];
-                    if (target_entry.index == unvisited) {
+                    if (target_entry.index.get()) |target_index| {
+                        if (target_entry.on_stack) {
+                            const entry = &self.nodes.items[node];
+                            entry.lowlink = @min(entry.lowlink, target_index);
+                        }
+                    } else {
                         try self.visit(target, &next_index);
                         try self.frames.append(self.gpa, .{ .node = target, .next_child = 0 });
-                    } else if (target_entry.on_stack) {
-                        const entry = &self.nodes.items[node];
-                        entry.lowlink = @min(entry.lowlink, target_entry.index);
                     }
                     continue;
                 }
@@ -322,7 +325,7 @@ pub const Graph = struct {
                     const parent = &self.nodes.items[self.frames.items[self.frames.items.len - 1].node];
                     parent.lowlink = @min(parent.lowlink, entry.lowlink);
                 }
-                if (entry.lowlink != entry.index) continue;
+                if (entry.lowlink != entry.index.get().?) continue;
                 self.members.clearRetainingCapacity();
                 while (true) {
                     const member = self.scc_stack.pop() orelse
@@ -338,7 +341,7 @@ pub const Graph = struct {
 
     fn visit(self: *Graph, node: u32, next_index: *u32) Allocator.Error!void {
         const entry = &self.nodes.items[node];
-        entry.index = next_index.*;
+        entry.index = .some(next_index.*);
         entry.lowlink = next_index.*;
         entry.on_stack = true;
         next_index.* += 1;
@@ -484,7 +487,7 @@ pub const Graph = struct {
         // in-component children, until a round separates no members.
         const distinct_labels = &self.distinct_labels;
         distinct_labels.clearRetainingCapacity();
-        for (labels) |label| try distinct_labels.put(self.gpa, label, no_position);
+        for (labels) |label| try distinct_labels.put(self.gpa, label, .none);
         var label_count: u32 = distinct_labels.count();
         while (true) {
             distinct_labels.clearRetainingCapacity();
@@ -496,7 +499,7 @@ pub const Graph = struct {
                     hasher.update(&labels[self.memberPosition(target)]);
                 }
                 next_labels[pos] = hasher.finalResult();
-                try distinct_labels.put(self.gpa, next_labels[pos], no_position);
+                try distinct_labels.put(self.gpa, next_labels[pos], .none);
             }
             const next_count: u32 = distinct_labels.count();
             const stable = next_count == label_count;
@@ -518,7 +521,7 @@ pub const Graph = struct {
         std.mem.sort(Identity, sorted_labels, {}, identityLessThan);
         for (sorted_labels, 0..) |label, block_rank| {
             const slot = distinct_labels.getPtr(label) orelse unreachable; // sorted_labels holds exactly the keys of distinct_labels
-            slot.* = @intCast(block_rank);
+            slot.* = .some(@intCast(block_rank));
         }
         try self.member_ranks.resize(self.gpa, member_count);
         const member_ranks = self.member_ranks.items;
@@ -529,7 +532,8 @@ pub const Graph = struct {
         var pos = members.len;
         while (pos > 0) {
             pos -= 1;
-            const block_rank = distinct_labels.get(labels[pos]) orelse unreachable; // the final round put every member's label into distinct_labels
+            const ranked = distinct_labels.get(labels[pos]) orelse unreachable; // the final round put every member's label into distinct_labels
+            const block_rank = ranked.get() orelse unreachable; // every label in distinct_labels has its rank
             member_ranks[pos] = block_rank;
             representatives[block_rank] = members[pos];
         }

@@ -24,7 +24,7 @@ pub const Graph = struct {
 
     /// A graph over `count` callables, all eligible until rejected.
     pub fn init(allocator: Allocator, count: usize) Allocator.Error!Graph {
-        if (count > std.math.maxInt(u32)) return error.OutOfMemory;
+        if (std.math.cast(u32, count) == null) return error.OutOfMemory;
         var heads = try collections.OptionalIndexColumn(EdgeIndex).initFilled(allocator, count);
         errdefer heads.deinit(allocator);
         const allowed = try allocator.alloc(bool, count);
@@ -45,8 +45,7 @@ pub const Graph = struct {
 
     /// Record that `caller`'s body reaches `callee`.
     pub fn addDependency(self: *Graph, caller: Id, callee: Id) Allocator.Error!void {
-        const index = std.math.cast(u32, self.edges.items.len) orelse return error.OutOfMemory;
-        if (index == std.math.maxInt(u32)) return error.OutOfMemory;
+        const index = try collections.nextBiasedId(self.edges.items.len);
         const previous: OptionalEdgeIndex = if (self.heads.get(@backingInt(callee))) |head| .some(head) else .none;
         try self.edges.append(self.allocator, .{ .caller = caller, .next = previous });
         self.heads.set(@backingInt(callee), @fromBackingInt(index));

@@ -735,7 +735,7 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
     const strings_offset = end;
     end += strings.items.len;
     const total = std.mem.alignForward(u64, end, 16);
-    if (total > std.math.maxInt(u32)) return error.HostTooLarge;
+    if (std.math.cast(u32, total) == null) return error.HostTooLarge;
 
     const out = try allocator.alignedAlloc(u8, .@"16", @intCast(total));
     @memset(out, 0);

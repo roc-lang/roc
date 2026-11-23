@@ -48,8 +48,7 @@ const LocalId = LIR.LocalId;
 const LocalSet = collections.DenseMap(LocalId, void);
 
 /// One `set_local`, chained to the next write of its target.
-const Write = struct { stmt: CFStmtId, next: u32 };
-const no_write = std.math.maxInt(u32);
+const Write = struct { stmt: CFStmtId, next: collections.OptionalU32 };
 
 /// Prune one procedure with task-local scratch; rewritten LIR stays in the store.
 /// `guarded_reads` holds the static data slots whose reads can fail (see
@@ -227,7 +226,7 @@ const Pass = struct {
             const stmt = store.getCFStmt(stmt_id);
             if (stmt != .set_local) continue;
             const first = try self.first_write.getOrPut(stmt.set_local.target);
-            try self.writes.append(self.allocator, .{ .stmt = stmt_id, .next = if (first.found_existing) first.value_ptr.* else no_write });
+            try self.writes.append(self.allocator, .{ .stmt = stmt_id, .next = if (first.found_existing) .some(first.value_ptr.*) else .none });
             first.value_ptr.* = @intCast(self.writes.items.len - 1);
         }
 
@@ -288,8 +287,8 @@ const Pass = struct {
         const store = self.store;
         while (true) {
             if (self.qualified.pop()) |param| {
-                var cursor = self.first_write.get(param) orelse no_write;
-                while (cursor != no_write) : (cursor = self.writes.items[cursor].next) {
+                var next_write = self.first_write.get(param);
+                while (next_write) |cursor| : (next_write = self.writes.items[cursor].next.get()) {
                     const write = self.writes.items[cursor].stmt;
                     const stmt = store.getCFStmt(write).set_local;
                     try self.deleted.put(write, stmt.next);

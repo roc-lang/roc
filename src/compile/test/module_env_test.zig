@@ -377,6 +377,9 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     const segment_idx = try env.addExpr(.{ .e_str_segment = .{ .literal = str_literal_idx } }, base.Region.from_raw_offsets(0, 5));
     const expr_idx = try env.addExpr(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @backingInt(segment_idx), .len = 1 } } } }, base.Region.from_raw_offsets(0, 5));
 
+    // Type variables are indexed by node, and node zero is the store's
+    // reserved node.
+    _ = try env.types.freshFromContent(.err);
     const segment_var = try env.types.freshFromContent(.err);
     try std.testing.expectEqual(ModuleEnv.varFrom(segment_idx), segment_var);
 

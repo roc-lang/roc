@@ -263,8 +263,7 @@ pub const Native = struct {
         return edge(image, entry);
     }
     pub fn symbolAtom(image: Image, symbol: u32) ?u32 {
-        const atom = image.view.symbolAtoms()[symbol];
-        return if (atom == UnitImage.no_atom) null else atom;
+        return image.view.symbolAtoms()[symbol].get();
     }
     pub fn reference(target: unit_walk_Target) ?SymbolRef {
         return switch (target) {

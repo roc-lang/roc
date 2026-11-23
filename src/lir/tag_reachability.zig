@@ -25,11 +25,10 @@ pub fn run(result: *LirProgram.Result) Allocator.Error!void {
     try pass.run();
 }
 
-const payload_struct_slot = std.math.maxInt(u32);
-
 const PayloadSlot = struct {
     variant: u32,
-    payload: u32,
+    /// The payload field read; absent for a read of the whole payload struct.
+    payload: collections.OptionalU32,
 };
 
 /// Known discriminants of a tag value. Discriminants below 64 are bits of
@@ -297,11 +296,11 @@ const Pass = struct {
             .field => self.mergeFieldRead(target, op.source, op.index),
             .tag_payload => self.mergePayloadRead(target, op.source, .{
                 .variant = op.tag_discriminant,
-                .payload = op.index,
+                .payload = .some(op.index),
             }),
             .tag_payload_struct => self.mergePayloadRead(target, op.source, .{
                 .variant = op.tag_discriminant,
-                .payload = payload_struct_slot,
+                .payload = .none,
             }),
         };
     }
@@ -335,9 +334,9 @@ const Pass = struct {
             const stmt = self.store.getCFStmtImmediate(construction);
             if (stmt.* != .assign_tag or stmt.assign_tag.discriminant != slot.variant) continue;
             const payload = stmt.assign_tag.payload orelse continue;
-            if (slot.payload == payload_struct_slot) {
-                if (try self.localInfoMut(target).mergeFrom(self.allocator, self.localInfo(payload))) changed = true;
-            } else if (try self.mergeFieldFromInfo(target, self.localInfo(payload), slot.payload)) {
+            if (slot.payload.get()) |field_index| {
+                if (try self.mergeFieldFromInfo(target, self.localInfo(payload), field_index)) changed = true;
+            } else if (try self.localInfoMut(target).mergeFrom(self.allocator, self.localInfo(payload))) {
                 changed = true;
             }
         }
@@ -369,8 +368,8 @@ const Pass = struct {
             defer kept.deinit(self.allocator);
             for (0..branches.len) |index| {
                 const branch = GuardedList.at(branches, index);
-                if (branch.value > std.math.maxInt(u32)) continue;
-                if (tags.contains(@intCast(branch.value))) {
+                const tag = std.math.cast(u32, branch.value) orelse continue;
+                if (tags.contains(tag)) {
                     try kept.append(self.allocator, branch);
                 }
             }

@@ -397,8 +397,7 @@ pub fn writeToSharedMemory(
         if (location == .pool) continue;
 
         for (data_export.relocations) |relocation| {
-            if (relocation.offset > std.math.maxInt(usize)) return error.InvalidDevRunImage;
-            const relocation_offset: usize = @intCast(relocation.offset);
+            const relocation_offset = std.math.cast(usize, relocation.offset) orelse return error.InvalidDevRunImage;
             if (relocation_offset > data_export.bytes.len or @sizeOf(usize) > data_export.bytes.len - relocation_offset) {
                 return error.InvalidDevRunImage;
             }
@@ -651,8 +650,7 @@ pub fn requiredCapacityFromOffset(
         if (!std.math.isPowerOfTwo(StaticDataPool.exportAlignment(data_export))) return error.InvalidStaticDataAlignment;
         if (placement == .pooled) continue;
         for (data_export.relocations) |relocation| {
-            if (relocation.offset > std.math.maxInt(usize)) return error.InvalidDevRunImage;
-            const relocation_offset: usize = @intCast(relocation.offset);
+            const relocation_offset = std.math.cast(usize, relocation.offset) orelse return error.InvalidDevRunImage;
             if (relocation_offset > data_export.bytes.len or @sizeOf(usize) > data_export.bytes.len - relocation_offset) {
                 return error.InvalidDevRunImage;
             }
@@ -914,7 +912,7 @@ const SymbolNames = struct {
         if (!entry.found_existing) {
             errdefer _ = self.refs.remove(name);
             const end = try addNoOverflow(self.byte_len, name.len);
-            if (end > std.math.maxInt(u32)) return error.InvalidDevRunImage;
+            if (std.math.cast(u32, end) == null) return error.InvalidDevRunImage;
             entry.value_ptr.* = .{ .ref = .{ .offset = @intCast(self.byte_len), .len = @intCast(name.len) }, .kinds = 0 };
             self.byte_len = end;
         }
@@ -955,13 +953,11 @@ fn countReservedFunctionStubs(
 }
 
 fn addNoOverflow(a: usize, b: usize) ImageError!usize {
-    if (b > std.math.maxInt(usize) - a) return error.InvalidDevRunImage;
-    return a + b;
+    return std.math.add(usize, a, b) catch error.InvalidDevRunImage;
 }
 
 fn mulNoOverflow(a: usize, b: usize) ImageError!usize {
-    if (a != 0 and b > std.math.maxInt(usize) / a) return error.InvalidDevRunImage;
-    return a * b;
+    return std.math.mul(usize, a, b) catch error.InvalidDevRunImage;
 }
 
 fn addAllocationCapacity(capacity: usize, alignment: usize, len: usize) ImageError!usize {
@@ -1003,15 +999,13 @@ fn sliceFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, r
 }
 
 fn asBoundedOffset(offset: u64, bound: usize) ImageError!usize {
-    if (offset > std.math.maxInt(usize)) return error.InvalidDevRunImage;
-    const result: usize = @intCast(offset);
+    const result = std.math.cast(usize, offset) orelse return error.InvalidDevRunImage;
     if (result > bound) return error.InvalidDevRunImage;
     return result;
 }
 
 fn asBoundedLen(len: u64) ImageError!usize {
-    if (len > std.math.maxInt(usize)) return error.InvalidDevRunImage;
-    return @intCast(len);
+    return std.math.cast(usize, len) orelse error.InvalidDevRunImage;
 }
 
 test "run image offsets reject values outside the host buffer" {

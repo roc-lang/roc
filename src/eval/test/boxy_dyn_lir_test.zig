@@ -145,6 +145,7 @@ const Builder = struct {
         erased_capture_arg: ?LocalId = null,
         erased_reuse_arg: ?LocalId = null,
         tail_group: ?LIR.TailGroupId = null,
+        tail_carry: bool = false,
         uses_pending_cell: bool = false,
     }) TestError!LirProcSpecId {
         defer self.proc_locals.clearRetainingCapacity();
@@ -162,6 +163,7 @@ const Builder = struct {
             .erased_capture_arg = .of(options.erased_capture_arg),
             .erased_reuse_arg = .of(options.erased_reuse_arg),
             .tail_group = .of(options.tail_group),
+            .tail_carry = options.tail_carry,
             .uses_pending_cell = options.uses_pending_cell,
         }, .none);
     }
@@ -513,8 +515,8 @@ const Builder = struct {
             .target = target,
             .data = try self.store.addStmtRow(LIR.PackedErasedFnData, .{
                 .proc = worker,
-                .capture = capture,
-                .capture_layout = .opaque_ptr,
+                .capture = .some(capture),
+                .capture_layout = .some(.opaque_ptr),
                 .on_drop = .none,
             }),
             .next = next,
@@ -1380,7 +1382,7 @@ const TailProgram = struct {
         const leaf_desc = try b.local(.opaque_ptr);
         const leaf_x = try b.dynLocal(leaf_desc, .param);
         const leaf_result = try b.dynLocal(leaf_desc, .result);
-        const leaf = try b.proc(&.{ leaf_x, leaf_desc }, try b.ret(leaf_x), b.dynamic, .{ .dyn_result = leaf_result, .tail_group = group });
+        const leaf = try b.proc(&.{ leaf_x, leaf_desc }, try b.ret(leaf_x), b.dynamic, .{ .dyn_result = leaf_result, .tail_group = group, .tail_carry = true });
 
         // `hop(x) = leaf(copy of x)`: the copy lives in `hop`'s own frame, which
         // the call to `leaf` replaces.
@@ -1390,7 +1392,7 @@ const TailProgram = struct {
         const copy = try b.dynLocal(desc, .frame);
         const out = try b.dynLocal(desc, .frame);
         const hop_body = try b.dyn(null, .frame_alloc, try b.dyn(copy, .{ .copy = .{ .src = x, .desc = desc } }, try b.tailCall(out, leaf, &.{ copy, desc }, try b.ret(out))));
-        const hop = try b.proc(&.{ x, desc }, hop_body, b.dynamic, .{ .dyn_result = result, .tail_group = group });
+        const hop = try b.proc(&.{ x, desc }, hop_body, b.dynamic, .{ .dyn_result = result, .tail_group = group, .tail_carry = true });
 
         const str_desc = try b.local(.opaque_ptr);
         const left = try b.local(.str);

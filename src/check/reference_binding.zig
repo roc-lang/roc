@@ -41,6 +41,7 @@ pub fn source(env: *ModuleEnv, mapper: anytype) @TypeOf(mapper.*).Error!void {
                 },
                 // Annotation payloads share side records. Those are handled
                 // below once, independently of live/replaced node aliases.
+                .reserved,
                 .statement_decl,
                 .statement_var,
                 .statement_var_uninitialized,

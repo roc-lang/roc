@@ -132,11 +132,14 @@ pub fn firstFreshJoinPoint(store: *const LirStore) u32 {
     for (0..store.cfStmtCount()) |index| {
         const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(index)));
         if (stmt.* != .join) continue;
-        const raw = @backingInt(stmt.join.id);
-        if (raw == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
-        next = @max(next, raw + 1);
+        next = @max(next, joinPointAfter(@backingInt(stmt.join.id)));
     }
     return next;
+}
+
+/// The join-point id after `raw`.
+fn joinPointAfter(raw: u32) u32 {
+    return std.math.add(u32, raw, 1) catch base.invariant("{s}", .{"join-point id space exhausted"});
 }
 
 /// A local reached by forwarding through `assign_ref .local` aliases, paired
@@ -164,16 +167,13 @@ pub const JoinParamIndex = struct {
 
     pub fn record(self: *JoinParamIndex, join: @FieldType(LIR.CFStmt, "join")) Allocator.Error!void {
         try self.params.put(join.id, join.params);
-        const raw = @backingInt(join.id);
-        if (raw == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
-        self.next_join_point = @max(self.next_join_point, raw + 1);
+        self.next_join_point = @max(self.next_join_point, joinPointAfter(@backingInt(join.id)));
     }
 
     /// Reserve an identity in the same domain used by subtree clones.
     pub fn freshJoinPoint(self: *JoinParamIndex) LIR.JoinPointId {
-        if (self.next_join_point == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
         const id: LIR.JoinPointId = @fromBackingInt(self.next_join_point);
-        self.next_join_point += 1;
+        self.next_join_point = joinPointAfter(self.next_join_point);
         return id;
     }
 
@@ -506,12 +506,12 @@ pub fn forEachStmtRead(
             const s = store.stmtRow(inline_stmt.data);
             note(ctx, s.closure);
             emitSpan(store, ctx, note, s.args);
-            if (s.reuse_source) |reuse_source| note(ctx, reuse_source);
+            if (s.reuse_source.get()) |reuse_source| note(ctx, reuse_source);
         },
         .assign_packed_erased_fn => |inline_stmt| {
             const s = store.stmtRow(inline_stmt.data);
-            if (s.capture) |capture| note(ctx, capture);
-            if (s.reuse) |reuse| note(ctx, reuse);
+            if (s.capture.get()) |capture| note(ctx, capture);
+            if (s.reuse.get()) |reuse| note(ctx, reuse);
         },
         .assign_low_level => |s| {
             const args = store.getLocalSpan(s.args);
@@ -1346,9 +1346,10 @@ pub fn shareLoopExits(
     // parameters, ending in the jump to its join.
     var shared = collections.DenseMap(CFStmtId, CFStmtId).init(allocator);
     defer shared.deinit();
-    const in_region = try allocator.alloc(u32, count);
+    // The start of the exit region each statement was last gathered into.
+    const in_region = try allocator.alloc(collections.OptionalU32, count);
     defer allocator.free(in_region);
-    @memset(in_region, std.math.maxInt(u32));
+    @memset(in_region, .none);
     const claimed = try allocator.alloc(bool, count);
     defer allocator.free(claimed);
     @memset(claimed, false);
@@ -1378,7 +1379,8 @@ pub fn shareLoopExits(
         declared.clearRetainingCapacity();
         pending.clearRetainingCapacity();
         try pending.append(allocator, start);
-        in_region[start] = start;
+        const region: collections.OptionalU32 = .some(start);
+        in_region[start] = region;
         var entered_once = !claimed[start];
         var region_cursor: usize = 0;
         while (region_cursor < pending.items.len) : (region_cursor += 1) {
@@ -1390,8 +1392,8 @@ pub fn shareLoopExits(
             for (successors.items) |next| {
                 const to = index_of.get(next).?;
                 if (entered[to] or claimed[to]) entered_once = false;
-                if (in_region[to] == start) continue;
-                in_region[to] = start;
+                if (in_region[to] == region) continue;
+                in_region[to] = region;
                 try pending.append(allocator, to);
             }
         }
@@ -1400,7 +1402,7 @@ pub fn shareLoopExits(
         // are an exit of their own, entered from both.
         for (pending.items[1..]) |current| {
             for (parents[parent_start[current]..parent_start[current + 1]]) |parent| {
-                if (in_region[parent] == start) continue;
+                if (in_region[parent] == region) continue;
                 entered_once = false;
                 if (entered[current]) continue;
                 entered[current] = true;
@@ -2526,7 +2528,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                             .args = try self.mapLocalSpan(s.args),
                             .arg_plan = s.arg_plan,
                             .reuse_closure = s.reuse_closure,
-                            .reuse_source = try self.mapMaybeLocal(s.reuse_source),
+                            .reuse_source = .of(try self.mapMaybeLocal(s.reuse_source.get())),
                             .result_reuse = s.result_reuse,
                         }),
                         .next = inline_stmt.next,
@@ -2538,12 +2540,12 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                         .target = try self.mapLocal(inline_stmt.target),
                         .data = try self.store.addStmtRow(LIR.PackedErasedFnData, .{
                             .proc = s.proc,
-                            .capture = try self.mapMaybeLocal(s.capture),
+                            .capture = .of(try self.mapMaybeLocal(s.capture.get())),
                             .capture_layout = s.capture_layout,
                             .on_drop = s.on_drop,
                             .on_copy = s.on_copy,
                             .frozen_capture_layout = s.frozen_capture_layout,
-                            .reuse = try self.mapMaybeLocal(s.reuse),
+                            .reuse = .of(try self.mapMaybeLocal(s.reuse.get())),
                             .reuse_unique = s.reuse_unique,
                             .frame = s.frame,
                         }),
@@ -3029,9 +3031,8 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 if (self.join_params) |params| {
                     entry.value_ptr.* = params.freshJoinPoint();
                 } else {
-                    if (self.next_join_point == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
                     entry.value_ptr.* = @fromBackingInt(self.next_join_point);
-                    self.next_join_point += 1;
+                    self.next_join_point = joinPointAfter(self.next_join_point);
                 }
             }
             return entry.value_ptr.*;
@@ -3622,14 +3623,14 @@ test "body cloning preserves committed list map output layout" {
         .rc_effect = try store.addRcEffect(LIR.LowLevel.list_map_can_reuse.rcEffect()),
         .args = try store.addLocalSpan(&.{}),
         .extra = try store.addOptionalStmtRow(LIR.LowLevelExtra, .{
-            .map_output_elem = .u64,
+            .map_output_elem = .some(.u64),
         }),
         .next = ret,
     } }, .test_fixture);
     var cloner = try BodyCloner(TestRetRewriter).init(&store, .{});
     defer cloner.deinit();
     const cloned = store.getCFStmt(try cloner.cloneStmt(source)).assign_low_level;
-    try std.testing.expectEqual(@as(?layout_mod.Idx, .u64), store.stmtRowOrDefault(cloned.extra).map_output_elem);
+    try std.testing.expectEqual(@as(?layout_mod.Idx, .u64), store.stmtRowOrDefault(cloned.extra).map_output_elem.get());
 }
 
 test "dynamic product metadata clones descriptors and preserves shared shapes" {

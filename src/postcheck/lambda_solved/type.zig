@@ -86,21 +86,33 @@ pub const FnMember = struct {
 };
 
 /// The owner of a type variable class: the binding group whose solving
-/// created it, numbered from `first_group_owner`, or one of the two
-/// sentinels. A class takes the oldest owner of the variables it joined.
+/// created it, numbered from `first_group_owner`, `global_owner`, or
+/// `unowned`. A class takes the oldest owner of the variables it joined
+/// (`olderOwner`); a smaller owner number is older, and `unowned` is younger
+/// than every owner.
 pub const Owner = u32;
-
-/// Owner of variables created outside every binding group's solve, once
-/// solving has finished: older than every group.
-pub const global_owner: Owner = 0;
-
-/// Owner number of the first binding group.
-pub const first_group_owner: Owner = 1;
 
 /// Owner of variables created before any group is solved (registered
 /// function types and local types): no group has related them yet, so they
 /// belong to the first group whose solving relates them.
-pub const unowned: Owner = std.math.maxInt(u32);
+pub const unowned: Owner = 0;
+
+/// Owner of variables created outside every binding group's solve, once
+/// solving has finished: older than every group.
+pub const global_owner: Owner = 1;
+
+/// Owner number of the first binding group.
+pub const first_group_owner: Owner = 2;
+
+/// Whether owner `a` is older than owner `b`.
+pub fn ownerOlder(a: Owner, b: Owner) bool {
+    return a != unowned and (b == unowned or a < b);
+}
+
+/// The older of two owners.
+pub fn olderOwner(a: Owner, b: Owner) Owner {
+    return if (ownerOlder(b, a)) b else a;
+}
 
 /// One entry of a nominal record's declared fields; consumed by layout and
 /// descriptor planning (the backing row stays lexicographic).
@@ -161,9 +173,9 @@ pub const Content = union(enum) {
         /// Clone context tying the occurrences of one Monotype within one
         /// instance of a Monotype cycle to one var, so a recursive
         /// back-reference reaches
-        /// the node it recurs into. `no_leaf_context` for a leaf that begins
-        /// a tree of its own.
-        ctx: u32 = no_leaf_context,
+        /// the node it recurs into. Absent for a leaf that begins a tree of
+        /// its own.
+        ctx: collections.OptionalU32 = .none,
     },
 };
 
@@ -230,9 +242,6 @@ fn contentOf(node: StoredNode, named_payloads: []const NamedContent, erased_payl
         .mono => |leaf| .{ .mono = leaf },
     };
 }
-
-/// Sentinel for a lazy leaf that has not been reached by any expansion yet.
-pub const no_leaf_context: u32 = std.math.maxInt(u32);
 
 test "lambda solved named backing preserves generated-private authority" {
     const content = Content{ .named = .{
@@ -358,7 +367,8 @@ pub const Store = struct {
     }
 
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeVarId {
-        if (self.vars.items.len >= std.math.maxInt(u32)) return error.OutOfMemory;
+        // `MaybeTypeVarId` stores an id plus one.
+        if (std.math.cast(u32, self.vars.items.len + 1) == null) return error.OutOfMemory;
         const id: TypeVarId = @fromBackingInt(@as(u32, @intCast(self.vars.items.len)));
         try self.vars.ensureUnusedCapacity(self.allocator, 1);
         try self.analysis_changes.ensureUnusedCapacity(self.allocator, 1);
@@ -391,11 +401,12 @@ pub const Store = struct {
         const id_owner = self.owners.items[@backingInt(self.root(id))];
         const target_owner = self.owners.items[@backingInt(target_root)];
         if (id_owner != target_owner) {
-            const older = @min(id_owner, target_owner);
+            const older = olderOwner(id_owner, target_owner);
+            const younger = if (older == id_owner) target_owner else id_owner;
             if (self.escape_watch) |watched| {
                 // A class the watched group owns joined an older one: the
                 // older class is part of that group's environment now.
-                if (older < watched and @max(id_owner, target_owner) >= watched) {
+                if (ownerOlder(older, watched) and !ownerOlder(younger, watched)) {
                     try self.escapes.append(self.allocator, target_root);
                 }
             }
@@ -498,7 +509,7 @@ pub const Store = struct {
         if (len == 0) return .{ .span = .empty(), .slots = &.{} };
         const start = std.math.cast(u32, list.items.len) orelse return error.OutOfMemory;
         const count = std.math.cast(u32, len) orelse return error.OutOfMemory;
-        if (std.math.maxInt(u32) - start < count) return error.OutOfMemory;
+        _ = std.math.add(u32, start, count) catch return error.OutOfMemory;
         const slots = try list.addManyAsSlice(allocator, len);
         return .{ .span = .{ .start = start, .len = count }, .slots = slots };
     }

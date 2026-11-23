@@ -40,6 +40,7 @@
 //! only changes which task writes which range.
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 const backend = @import("backend");
 const layout = @import("layout");
 const unit_walk = @import("unit_walk.zig");
@@ -183,8 +184,6 @@ const max_body_size = 7_654_321;
 const page_size: u64 = 64 * 1024;
 const memory_limit: u64 = 1 << 32;
 const stack_alignment: u64 = 16;
-
-const none: u32 = std.math.maxInt(u32);
 
 /// `__memory_base`: static data is at its linked addresses.
 const memory_base: u32 = 0;
@@ -736,15 +735,16 @@ const External = struct {
 
 /// Every index a placed image's sites resolve to.
 const Placement = struct {
-    /// Composed function index of each local function, or `none`.
-    functions: []u32,
-    /// Address of each segment, or `none` when it is not placed.
-    segments: []u32,
+    /// Composed function index of each local function, absent for one the
+    /// link leaves out.
+    functions: []collections.OptionalU32,
+    /// Address of each segment, absent when it is not placed.
+    segments: []collections.OptionalU32,
     /// Composed global index of each global the image defines.
     globals: []u32,
     /// What each import resolves to: a function or global index, a data
-    /// address, or a table number; `none` when no reached site names it.
-    imports: []u32,
+    /// address, or a table number; absent when no reached site names it.
+    imports: []collections.OptionalU32,
 };
 
 /// The composed program: every decision of the layout.
@@ -767,11 +767,11 @@ const Layout = struct {
     elements: std.ArrayList(u32) = .empty,
     /// The defined globals, in index order after the imported ones.
     globals: std.ArrayList(GlobalDef) = .empty,
-    stack_pointer_global: u32 = none,
-    memory_base_global: u32 = none,
-    table_base_global: u32 = none,
+    stack_pointer_global: collections.OptionalU32 = .none,
+    memory_base_global: collections.OptionalU32 = .none,
+    table_base_global: collections.OptionalU32 = .none,
     memory: Memory = .{},
-    ctors_function: u32 = none,
+    ctors_function: collections.OptionalU32 = .none,
     /// The functions `__wasm_call_ctors` calls, in order.
     ctor_calls: []const u32 = &.{},
     /// Stack rooms of the defined functions, by defined index; empty
@@ -901,7 +901,7 @@ pub fn composeModule(
             if (entry.flags & WasmUnitImage.export_object_exported == 0) continue;
             const name = host.name(entry.name);
             if ((try exported.getOrPut(arena, name)).found_existing) continue;
-            try exports.append(arena, .{ .name = name, .kind = 0, .index = plan.placements[0].functions[entry.function] });
+            try exports.append(arena, .{ .name = name, .kind = 0, .index = plan.placements[0].functions[entry.function].get().? });
         }
     }
     if (program.wrap_exports) try wrapExports(&plan, exports.items);
@@ -962,19 +962,19 @@ fn exportEntry(plan: *Layout, name: []const u8, target: Resolved) Allocator.Erro
             const placement = plan.placements[found.image];
             const function_exports: u32 = @intCast(view.exports().len);
             const data_exports: u32 = @intCast(view.dataExports().len);
-            if (found.symbol < function_exports) return .{ .name = name, .kind = 0, .index = placement.functions[view.exports()[found.symbol].function] };
+            if (found.symbol < function_exports) return .{ .name = name, .kind = 0, .index = placement.functions[view.exports()[found.symbol].function].get().? };
             if (found.symbol < function_exports + data_exports) {
                 const data_export = view.dataExports()[found.symbol - function_exports];
-                const address = placement.segments[data_export.segment] + data_export.offset;
+                const address = placement.segments[data_export.segment].get().? + data_export.offset;
                 return .{ .name = name, .kind = 3, .index = try plan.defineGlobal(.{ .valtype = 0x7f, .mutable = false, .init = address }) };
             }
             return .{ .name = name, .kind = 3, .index = placement.globals[found.symbol - function_exports - data_exports] };
         },
         .synthetic => |synthetic| return switch (synthetic) {
-            .stack_pointer => .{ .name = name, .kind = 3, .index = plan.stack_pointer_global },
+            .stack_pointer => .{ .name = name, .kind = 3, .index = plan.stack_pointer_global.get().? },
             .memory_base => .{ .name = name, .kind = 3, .index = try baseGlobal(plan, &plan.memory_base_global, memory_base) },
             .table_base => .{ .name = name, .kind = 3, .index = try baseGlobal(plan, &plan.table_base_global, table_base) },
-            .call_ctors => .{ .name = name, .kind = 0, .index = plan.ctors_function },
+            .call_ctors => .{ .name = name, .kind = 0, .index = plan.ctors_function.get().? },
             .indirect_function_table => .{ .name = name, .kind = 1, .index = 0 },
             .stack_low, .stack_high, .heap_base, .heap_end, .data_end, .global_base, .dso_handle => .{ .name = name, .kind = 3, .index = try plan.defineGlobal(.{ .valtype = 0x7f, .mutable = false, .init = syntheticAddress(plan, synthetic) }) },
         },
@@ -984,9 +984,11 @@ fn exportEntry(plan: *Layout, name: []const u8, target: Resolved) Allocator.Erro
 
 /// The immutable global holding a base, defined the first time a site or
 /// an export names it.
-fn baseGlobal(plan: *Layout, global: *u32, value: u32) Allocator.Error!u32 {
-    if (global.* == none) global.* = try plan.defineGlobal(.{ .valtype = 0x7f, .mutable = false, .init = value });
-    return global.*;
+fn baseGlobal(plan: *Layout, global: *collections.OptionalU32, value: u32) Allocator.Error!u32 {
+    if (global.get()) |index| return index;
+    const index = try plan.defineGlobal(.{ .valtype = 0x7f, .mutable = false, .init = value });
+    global.* = .some(index);
+    return index;
 }
 
 fn syntheticAddress(plan: *const Layout, synthetic: Synthetic) u64 {
@@ -1019,15 +1021,15 @@ fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleCo
         for (map, 0..) |*slot, local| slot.* = try plan.types.add(view, @intCast(local));
         plan.types.maps[image] = map;
         plan.placements[image] = .{
-            .functions = try arena.alloc(u32, view.functions().len),
-            .segments = try arena.alloc(u32, view.segments().len),
+            .functions = try arena.alloc(collections.OptionalU32, view.functions().len),
+            .segments = try arena.alloc(collections.OptionalU32, view.segments().len),
             .globals = try arena.alloc(u32, view.globals().len),
-            .imports = try arena.alloc(u32, view.imports().len),
+            .imports = try arena.alloc(collections.OptionalU32, view.imports().len),
         };
         // Numbering functions and laying out memory each write every entry
         // of their column; an import's entry is read before any pass writes
-        // it, so only that column starts at `none`.
-        @memset(plan.placements[image].imports, none);
+        // it, so only that column starts absent.
+        @memset(plan.placements[image].imports, .none);
         if (view.stackChecks()) plan.stack_checks = true;
     }
 
@@ -1043,8 +1045,8 @@ fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleCo
                 const module_name = view.name(import.module);
                 const field = view.name(import.field);
                 const type_index: u32 = if (wanted == .function) blk: {
-                    if (import.type == WasmUnitImage.no_type) base.invariant("wasm fast dev link invariant violated: the embedder import {s} has no signature", .{field});
-                    break :blk plan.types.maps[image][import.type];
+                    const import_type = import.type.get() orelse base.invariant("wasm fast dev link invariant violated: the embedder import {s} has no signature", .{field});
+                    break :blk plan.types.maps[image][import_type];
                 } else 0;
                 const key = try std.fmt.allocPrint(arena, "{d}\x00{s}\x00{s}", .{ @backingInt(wanted), module_name, field });
                 const weak = import.flags & WasmUnitImage.import_weak != 0;
@@ -1061,7 +1063,7 @@ fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleCo
                     try plan.externals.append(arena, .{ .module = module_name, .field = field, .name = view.name(import.name), .kind = wanted, .type = type_index, .valtype = import.valtype, .mutable = import.mutable != 0, .weak = weak });
                 }
                 // Globals are numbered after functions; fixed below.
-                plan.placements[image].imports[index] = gop.value_ptr.*;
+                plan.placements[image].imports[index] = .some(gop.value_ptr.*);
             }
         }
         if (wanted == .function) plan.function_externals = @intCast(plan.externals.items.len);
@@ -1072,7 +1074,7 @@ fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleCo
         const state = program.state(image);
         for (view.imports(), state.targets, state.imports_used, plan.placements[image].imports) |import, target, used, *slot| {
             if (!used or target != .external or import.kind != @backingInt(WasmUnitImage.ImportKind.global)) continue;
-            slot.* -= plan.function_externals;
+            slot.* = .some(slot.get().? - plan.function_externals);
         }
     }
 
@@ -1082,15 +1084,15 @@ fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleCo
     for (program.order) |image| {
         for (plan.placements[image].functions, 0..) |*slot, local| {
             if (!program.reached(image, @intCast(local))) {
-                slot.* = none;
+                slot.* = .none;
                 continue;
             }
-            slot.* = plan.functionCount();
+            slot.* = .some(plan.functionCount());
             try plan.defined.append(arena, .{ .image = .{ .image = image, .local = @intCast(local) } });
         }
     }
     if (program.ctors) {
-        plan.ctors_function = plan.functionCount();
+        plan.ctors_function = .some(plan.functionCount());
         try plan.defined.append(arena, .ctors);
         _ = try plan.types.addShape(&.{}, &.{});
         plan.ctor_calls = try ctorsOrder(&plan, arena);
@@ -1103,14 +1105,14 @@ fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleCo
             if (!used or target != .weak_undefined or import.kind != @backingInt(WasmUnitImage.ImportKind.function)) continue;
             // A function import only a data segment's table slot names has
             // no signature, and its slot is 0 without a stub.
-            if (import.type == WasmUnitImage.no_type) continue;
+            const import_type = import.type.get() orelse continue;
             const name = view.name(import.name);
             const gop = try stubs.getOrPut(arena, name);
             if (!gop.found_existing) {
                 gop.value_ptr.* = plan.functionCount();
-                try plan.defined.append(arena, .{ .stub = .{ .type = plan.types.maps[image][import.type], .name = try std.fmt.allocPrint(arena, "undefined_weak:{s}", .{name}) } });
+                try plan.defined.append(arena, .{ .stub = .{ .type = plan.types.maps[image][import_type], .name = try std.fmt.allocPrint(arena, "undefined_weak:{s}", .{name}) } });
             }
-            slot.* = gop.value_ptr.*;
+            slot.* = .some(gop.value_ptr.*);
         }
     }
 
@@ -1125,7 +1127,7 @@ fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleCo
         }
     }
     if (mode == .module) {
-        plan.stack_pointer_global = try plan.defineGlobal(.{ .valtype = 0x7f, .mutable = true, .init = 0 });
+        plan.stack_pointer_global = .some(try plan.defineGlobal(.{ .valtype = 0x7f, .mutable = true, .init = 0 }));
         for (program.order) |image| {
             const view = items[image].view;
             for (view.globals(), plan.placements[image].globals) |global, *slot| {
@@ -1138,7 +1140,7 @@ fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleCo
 
     // Memory.
     if (config) |module_config| try planMemory(&plan, module_config, outcome) else planObjectMemory(&plan);
-    if (mode == .module) plan.globals.items[plan.stack_pointer_global - plan.global_externals].init = plan.memory.stack_high;
+    if (mode == .module) plan.globals.items[plan.stack_pointer_global.get().? - plan.global_externals].init = plan.memory.stack_high;
 
     // Every reached import's value, and the table slots.
     const function_total = plan.functionCount();
@@ -1149,8 +1151,8 @@ fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleCo
     for (program.order) |image| {
         const view = items[image].view;
         const placement = plan.placements[image];
-        for (view.tableRequests()) |local| if (placement.functions[local] != none) {
-            requested[placement.functions[local]] = true;
+        for (view.tableRequests()) |local| if (placement.functions[local].get()) |function| {
+            requested[function] = true;
         };
         const state = program.state(image);
         for (view.imports(), state.targets, state.imports_used, placement.imports) |import, target, used, *slot| {
@@ -1161,9 +1163,9 @@ fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleCo
                     .stack_pointer => plan.stack_pointer_global,
                     .memory_base => plan.memory_base_global,
                     .table_base => plan.table_base_global,
-                    .indirect_function_table => 0,
+                    .indirect_function_table => .some(0),
                     .call_ctors => plan.ctors_function,
-                    .stack_low, .stack_high, .heap_base, .heap_end, .data_end, .global_base, .dso_handle => @intCast(syntheticAddress(&plan, synthetic)),
+                    .stack_low, .stack_high, .heap_base, .heap_end, .data_end, .global_base, .dso_handle => .some(@intCast(syntheticAddress(&plan, synthetic))),
                 },
                 // Functions and globals were numbered with the externals
                 // above; an object leaves data and its table undefined.
@@ -1171,13 +1173,15 @@ fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleCo
                 // A weak function's stub was numbered above; a weak data
                 // symbol's address is 0.
                 .weak_undefined => if (import.kind == @backingInt(WasmUnitImage.ImportKind.data)) {
-                    slot.* = 0;
+                    slot.* = .some(0);
                 },
                 .missing => unreachable, // the link reports a missing symbol before it lays anything out
             }
             // A weak function nothing defines has slot 0, the null pointer.
             if (target == .weak_undefined) continue;
-            if (import.flags & WasmUnitImage.import_address_taken != 0 and import.kind == @backingInt(WasmUnitImage.ImportKind.function) and slot.* != none) requested[slot.*] = true;
+            if (import.flags & WasmUnitImage.import_address_taken != 0 and import.kind == @backingInt(WasmUnitImage.ImportKind.function)) {
+                if (slot.get()) |function| requested[function] = true;
+            }
         }
     }
     for (requested, 0..) |wanted, function| if (wanted) {
@@ -1190,8 +1194,8 @@ fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleCo
 }
 
 /// The composed index a definition resolves to: a function index, a data
-/// address, or a global index.
-fn definedValue(plan: *const Layout, found: SymbolRef) u32 {
+/// address, or a global index; absent for a function the link leaves out.
+fn definedValue(plan: *const Layout, found: SymbolRef) collections.OptionalU32 {
     const view = plan.program.items[found.image].view;
     const placement = plan.placements[found.image];
     const function_exports: u32 = @intCast(view.exports().len);
@@ -1199,9 +1203,9 @@ fn definedValue(plan: *const Layout, found: SymbolRef) u32 {
     if (found.symbol < function_exports) return placement.functions[view.exports()[found.symbol].function];
     if (found.symbol < function_exports + data_exports) {
         const data_export = view.dataExports()[found.symbol - function_exports];
-        return placement.segments[data_export.segment] + data_export.offset;
+        return .some(placement.segments[data_export.segment].get().? + data_export.offset);
     }
-    return placement.globals[found.symbol - function_exports - data_exports];
+    return .some(placement.globals[found.symbol - function_exports - data_exports]);
 }
 
 /// Lay out memory as `linker.wasmStackLayout` does: the stack first and
@@ -1231,7 +1235,7 @@ fn planMemory(plan: *Layout, config: ModuleConfig, outcome: *Outcome) LinkError!
             const function_count: u32 = @intCast(view.functions().len);
             for (view.segments(), plan.placements[image].segments, 0..) |segment, *slot, index| {
                 if (!program.reached(image, function_count + @as(u32, @intCast(index)))) {
-                    slot.* = none;
+                    slot.* = .none;
                     continue;
                 }
                 if ((segment.flags & WasmUnitImage.segment_zero_fill != 0) != zero_fill_pass) continue;
@@ -1241,7 +1245,7 @@ fn planMemory(plan: *Layout, config: ModuleConfig, outcome: *Outcome) LinkError!
                     outcome.memory = .{ .what = .memory_too_large, .needed = at + segment.size, .configured = memory_limit };
                     return error.MemoryLayout;
                 }
-                slot.* = @intCast(at);
+                slot.* = .some(@intCast(at));
                 at += segment.size;
             }
         }
@@ -1309,11 +1313,11 @@ fn planObjectMemory(plan: *Layout) void {
         const function_count: u32 = @intCast(view.functions().len);
         for (view.segments(), plan.placements[image].segments, 0..) |segment, *slot, index| {
             if (!program.reached(image, function_count + @as(u32, @intCast(index)))) {
-                slot.* = none;
+                slot.* = .none;
                 continue;
             }
             at = std.mem.alignForward(u64, at, @as(u64, 1) << @intCast(segment.alignment_log2));
-            slot.* = @intCast(at);
+            slot.* = .some(@intCast(at));
             at += segment.size;
         }
     }
@@ -1359,10 +1363,10 @@ fn stackRooms(arena: Allocator, plan: *const Layout) Allocator.Error![]u64 {
         out.checked = function.flags & WasmUnitImage.function_checked != 0;
         for (item.view.functionCalls(function)) |call| {
             switch (@as(WasmUnitImage.TargetKind, @fromBackingInt(call.target_kind))) {
-                .function => try edges.append(arena, .{ .callee = placement.functions[call.target] - first, .depth = call.depth }),
+                .function => try edges.append(arena, .{ .callee = placement.functions[call.target].get().? - first, .depth = call.depth }),
                 .import => switch (program.state(ref.image).targets[call.target]) {
                     .defined => |found| if (program.items[found.image].side() == .app) {
-                        try edges.append(arena, .{ .callee = definedValue(plan, found) - first, .depth = call.depth });
+                        try edges.append(arena, .{ .callee = definedValue(plan, found).get().? - first, .depth = call.depth });
                     },
                     // The host's code is the host's own business, and a
                     // weak function's stub traps.
@@ -1398,7 +1402,8 @@ fn checkParameters(arena: Allocator, program: *const Program, inputs: Inputs, ou
         if (item.side() != .app) continue;
         const state = program.state(image);
         for (item.view.imports(), state.targets, state.imports_used) |import, target, used| {
-            if (!used or import.kind != @backingInt(WasmUnitImage.ImportKind.function) or import.type == WasmUnitImage.no_type) continue;
+            if (!used or import.kind != @backingInt(WasmUnitImage.ImportKind.function)) continue;
+            const import_type = import.type.get() orelse continue;
             const name = item.view.name(import.name);
             if (unit_walk.findSorted(inputs.hosted, name) == null) continue;
             switch (target) {
@@ -1406,7 +1411,7 @@ fn checkParameters(arena: Allocator, program: *const Program, inputs: Inputs, ou
                 .synthetic, .external, .weak_undefined, .missing => {},
             }
             if ((try seen.getOrPut(arena, name)).found_existing) continue;
-            const params = item.view.types()[import.type].param_count;
+            const params = item.view.types()[import_type].param_count;
             if (params > limit) try problems.append(arena, .{ .symbol = try arena.dupe(u8, name), .hosted = true, .param_count = params });
         }
     }
@@ -1792,7 +1797,7 @@ fn ctorsOrder(plan: *const Layout, arena: Allocator) Allocator.Error![]const u32
     var entries: std.ArrayList(Entry) = .empty;
     for (plan.program.order) |image| {
         const view = plan.program.items[image].view;
-        for (view.initFuncs()) |init_func| try entries.append(arena, .{ .priority = init_func.priority, .function = plan.placements[image].functions[init_func.function] });
+        for (view.initFuncs()) |init_func| try entries.append(arena, .{ .priority = init_func.priority, .function = plan.placements[image].functions[init_func.function].get().? });
     }
     std.mem.sortUnstable(Entry, entries.items, {}, struct {
         fn lessThan(_: void, a: Entry, b: Entry) bool {
@@ -1817,7 +1822,7 @@ fn synthesizedBodySize(plan: *const Layout, ref: Layout.DefinedRef) u64 {
         },
         .stub => size += 1,
         .wrapper => |wrapper| {
-            size += 1 + lebSize(plan.ctors_function);
+            size += 1 + lebSize(plan.ctors_function.get().?);
             const params = plan.types.paramCount(wrapper.type);
             for (0..params) |param| size += 1 + lebSize(param);
             size += 1 + lebSize(wrapper.function);
@@ -1840,7 +1845,7 @@ fn writeSynthesizedBody(plan: *const Layout, ref: Layout.DefinedRef, out_bytes: 
         .stub => out.byte(0x00),
         .wrapper => |wrapper| {
             out.byte(0x10);
-            out.leb(plan.ctors_function);
+            out.leb(plan.ctors_function.get().?);
             const params = plan.types.paramCount(wrapper.type);
             for (0..params) |param| {
                 out.byte(0x20);
@@ -1857,7 +1862,7 @@ fn writeSynthesizedBody(plan: *const Layout, ref: Layout.DefinedRef, out_bytes: 
 /// LLD's command exports do when nothing names `__wasm_call_ctors`.
 fn wrapExports(plan: *Layout, exports: []ExportEntry) Allocator.Error!void {
     for (exports) |*entry| {
-        if (entry.kind != 0 or entry.index == plan.ctors_function) continue;
+        if (entry.kind != 0 or plan.ctors_function.get() == entry.index) continue;
         const function = entry.index;
         const type_index = if (function < plan.function_externals) plan.externals.items[function].type else definedType(plan, plan.defined.items[function - plan.function_externals]);
         const wrapper = plan.functionCount();
@@ -1932,8 +1937,9 @@ const Task = struct {
         const plan = context.plan;
         const view = plan.program.items[image].view;
         const placement = plan.placements[image];
-        for (view.segments()[first..][0..count], placement.segments[first..][0..count]) |segment, address| {
-            if (address == none or segment.flags & WasmUnitImage.segment_zero_fill != 0) continue;
+        for (view.segments()[first..][0..count], placement.segments[first..][0..count]) |segment, placed| {
+            const address = placed.get() orelse continue;
+            if (segment.flags & WasmUnitImage.segment_zero_fill != 0) continue;
             const at = context.data_payload + (address - plan.memory.emit_start);
             const out = context.out[@intCast(at)..][0..segment.size];
             @memcpy(out, view.segmentBytes(segment));
@@ -1969,22 +1975,22 @@ fn siteValue(plan: *const Layout, image: u32, site: WasmUnitImage.Site, room: u6
         .type_index_leb => plan.types.maps[image][site.target],
         .global_index_leb => switch (target_kind) {
             .global => placement.globals[site.target],
-            .import => placement.imports[site.target],
+            .import => placement.imports[site.target].get().?,
             .function, .data, .type => unreachable, // `View` admits only global targets for global sites
         },
         .table_number_leb => 0,
         .memory_addr_leb, .memory_addr_sleb, .memory_addr_rel_sleb, .memory_addr_i32 => blk: {
             if (weak_undefined) break :blk 0;
             const address: u32 = switch (target_kind) {
-                .data => placement.segments[site.target],
-                .import => placement.imports[site.target],
+                .data => placement.segments[site.target].get().?,
+                .import => placement.imports[site.target].get().?,
                 .function, .type, .global => unreachable, // `View` admits only data targets for memory sites
             };
             break :blk address +% @as(u32, @bitCast(site.addend)) -% if (kind == .memory_addr_rel_sleb) memory_base else 0;
         },
         .stack_room_sleb => blk: {
             const room32 = std.math.cast(u32, room) orelse base.invariant("wasm stack room invariant violated: check room {d} exceeds the address space", .{room});
-            break :blk placement.imports[site.target] +% room32 +% @as(u32, @bitCast(site.addend));
+            break :blk placement.imports[site.target].get().? +% room32 +% @as(u32, @bitCast(site.addend));
         },
     };
 }
@@ -1995,8 +2001,7 @@ fn functionTarget(placement: Placement, target_kind: WasmUnitImage.TargetKind, t
         .import => placement.imports[target],
         .data, .type, .global => unreachable, // `View` admits only function targets for function and table sites
     };
-    std.debug.assert(index != none);
-    return index;
+    return index.get().?;
 }
 
 fn addTasks(gpa: Allocator, tasks: *std.ArrayList(Task), context: *const TaskContext) Allocator.Error!void {
@@ -2134,15 +2139,15 @@ fn writeObject(gpa: Allocator, arena: Allocator, plan: *const Layout, inputs: In
         });
     }
     // Every placed segment under a local name.
-    const segment_symbols = try arena.alloc([]u32, program.items.len);
+    const segment_symbols = try arena.alloc([]collections.OptionalU32, program.items.len);
     var segment_count: u32 = 0;
     for (program.order, 0..) |image, position| {
         const view = program.items[image].view;
-        segment_symbols[image] = try arena.alloc(u32, view.segments().len);
+        segment_symbols[image] = try arena.alloc(collections.OptionalU32, view.segments().len);
         for (view.segments(), plan.placements[image].segments, segment_symbols[image], 0..) |segment, address, *symbol, index| {
-            symbol.* = none;
-            if (address == none) continue;
-            symbol.* = @intCast(symbols.items.len);
+            symbol.* = .none;
+            if (address == .none) continue;
+            symbol.* = .some(@intCast(symbols.items.len));
             try symbols.append(arena, .{ .kind = .data, .flags = SymFlag.BINDING_LOCAL, .name = try std.fmt.allocPrint(arena, "roc_wasm_data_{d}_{d}", .{ position, index }), .index = segment_count, .offset = 0, .size = segment.size });
             segment_count += 1;
         }
@@ -2158,39 +2163,42 @@ fn writeObject(gpa: Allocator, arena: Allocator, plan: *const Layout, inputs: In
         if (program.walk.states[found.image] == null) continue;
         const view = program.items[found.image].view;
         switch (symbolKind(view, found.symbol)) {
-            .function => try symbols.append(arena, .{ .kind = .function, .flags = 0, .name = name, .index = definedValue(plan, found) }),
+            .function => try symbols.append(arena, .{ .kind = .function, .flags = 0, .name = name, .index = definedValue(plan, found).get().? }),
             .data => {
                 const function_exports: u32 = @intCast(view.exports().len);
                 const data_export = view.dataExports()[found.symbol - function_exports];
-                const segment_symbol = symbols.items[segment_symbols[found.image][data_export.segment]];
+                const segment_symbol = symbols.items[segment_symbols[found.image][data_export.segment].get().?];
                 try symbols.append(arena, .{ .kind = .data, .flags = 0, .name = name, .index = segment_symbol.index, .offset = data_export.offset, .size = data_export.size });
             },
-            .global => try symbols.append(arena, .{ .kind = .global, .flags = 0, .name = name, .index = definedValue(plan, found) }),
+            .global => try symbols.append(arena, .{ .kind = .global, .flags = 0, .name = name, .index = definedValue(plan, found).get().? }),
         }
     }
     // Undefined data symbols, by name.
     var data_symbols: std.StringHashMapUnmanaged(u32) = .empty;
-    const import_symbols = try arena.alloc([]u32, program.items.len);
+    const import_symbols = try arena.alloc([]collections.OptionalU32, program.items.len);
     for (program.order) |image| {
         const view = program.items[image].view;
         const state = program.state(image);
-        import_symbols[image] = try arena.alloc(u32, view.imports().len);
-        for (view.imports(), state.targets, state.imports_used, plan.placements[image].imports, import_symbols[image]) |import, target, used, value, *symbol| {
-            symbol.* = none;
+        import_symbols[image] = try arena.alloc(collections.OptionalU32, view.imports().len);
+        for (view.imports(), state.targets, state.imports_used, plan.placements[image].imports, import_symbols[image]) |import, target, used, slot, *symbol| {
+            symbol.* = .none;
             if (!used) continue;
             switch (target) {
                 .defined => |found| symbol.* = switch (symbolKind(program.items[found.image].view, found.symbol)) {
-                    .function => function_symbols[value - plan.function_externals],
+                    .function => .some(function_symbols[slot.get().? - plan.function_externals]),
                     .data => blk: {
                         const found_view = program.items[found.image].view;
                         const data_export = found_view.dataExports()[found.symbol - @as(u32, @intCast(found_view.exports().len))];
                         break :blk segment_symbols[found.image][data_export.segment];
                     },
-                    .global => global_symbol_base + (value - plan.global_externals),
+                    .global => .some(global_symbol_base + (slot.get().? - plan.global_externals)),
                 },
                 .external => switch (@as(WasmUnitImage.ImportKind, @fromBackingInt(import.kind))) {
-                    .function, .global => symbol.* = external_symbols[if (import.kind == @backingInt(WasmUnitImage.ImportKind.function)) value else value + plan.function_externals],
-                    .table => symbol.* = table_symbol,
+                    .function, .global => {
+                        const value = slot.get().?;
+                        symbol.* = .some(external_symbols[if (import.kind == @backingInt(WasmUnitImage.ImportKind.function)) value else value + plan.function_externals]);
+                    },
+                    .table => symbol.* = .some(table_symbol),
                     .data => {
                         const name = view.name(import.name);
                         const weak = import.flags & WasmUnitImage.import_weak != 0;
@@ -2201,7 +2209,7 @@ fn writeObject(gpa: Allocator, arena: Allocator, plan: *const Layout, inputs: In
                             gop.value_ptr.* = @intCast(symbols.items.len);
                             try symbols.append(arena, .{ .kind = .data, .flags = SymFlag.UNDEFINED | (if (weak) SymFlag.BINDING_WEAK else 0), .name = name });
                         }
-                        symbol.* = gop.value_ptr.*;
+                        symbol.* = .some(gop.value_ptr.*);
                     },
                 },
                 .synthetic, .weak_undefined, .missing => unreachable, // an object resolves an import to a definition or leaves it undefined
@@ -2340,8 +2348,8 @@ fn writeObject(gpa: Allocator, arena: Allocator, plan: *const Layout, inputs: In
         var payload: u64 = lebSize(segment_count);
         for (program.order) |image| {
             const view = program.items[image].view;
-            for (view.segments(), plan.placements[image].segments) |segment, address| {
-                if (address == none) continue;
+            for (view.segments(), plan.placements[image].segments) |segment, placed| {
+                const address = placed.get() orelse continue;
                 payload += 1 + 1 + slebSize(@as(i32, @bitCast(address))) + 1 + lebSize(segment.size) + segment.size;
             }
         }
@@ -2350,8 +2358,8 @@ fn writeObject(gpa: Allocator, arena: Allocator, plan: *const Layout, inputs: In
         w.leb(segment_count);
         for (program.order, 0..) |image, position| {
             const view = program.items[image].view;
-            for (view.segments(), plan.placements[image].segments, 0..) |segment, address, index| {
-                if (address == none) continue;
+            for (view.segments(), plan.placements[image].segments, 0..) |segment, placed, index| {
+                const address = placed.get() orelse continue;
                 w.leb(0);
                 w.byte(0x41);
                 w.sleb(@as(i32, @bitCast(address)));
@@ -2425,7 +2433,7 @@ fn writeObject(gpa: Allocator, arena: Allocator, plan: *const Layout, inputs: In
         for (program.order) |image| {
             const view = program.items[image].view;
             for (view.initFuncs()) |init_func| {
-                const function = plan.placements[image].functions[init_func.function];
+                const function = plan.placements[image].functions[init_func.function].get().?;
                 try appendLeb(arena, &init, init_func.priority);
                 try appendLeb(arena, &init, function_symbols[function - plan.function_externals]);
                 count += 1;
@@ -2451,9 +2459,9 @@ const ObjectSymbols = struct {
     /// By defined function index.
     functions: []const u32,
     /// By image, then segment.
-    segments: []const []u32,
+    segments: []const []collections.OptionalU32,
     /// By image, then import.
-    imports: []const []u32,
+    imports: []const []collections.OptionalU32,
     /// The symbol of the first defined global.
     global_base: u32,
 };
@@ -2464,9 +2472,9 @@ fn objectReloc(plan: *const Layout, image: u32, site: WasmUnitImage.Site, room: 
     const target_kind: WasmUnitImage.TargetKind = @fromBackingInt(site.target_kind);
     const placement = plan.placements[image];
     const symbol: u32 = switch (target_kind) {
-        .function => symbols.functions[placement.functions[site.target] - plan.function_externals],
-        .data => symbols.segments[image][site.target],
-        .import => symbols.imports[image][site.target],
+        .function => symbols.functions[placement.functions[site.target].get().? - plan.function_externals],
+        .data => symbols.segments[image][site.target].get().?,
+        .import => symbols.imports[image][site.target].get().?,
         .global => symbols.global_base + (placement.globals[site.target] - plan.global_externals),
         .type => plan.types.maps[image][site.target],
     };
@@ -2494,18 +2502,18 @@ fn objectFieldValue(plan: *const Layout, image: u32, site: WasmUnitImage.Site) u
     const placement = plan.placements[image];
     return switch (kind) {
         .function_index_leb => switch (target_kind) {
-            .function => placement.functions[site.target],
-            .import => placement.imports[site.target],
+            .function => placement.functions[site.target].get().?,
+            .import => placement.imports[site.target].get().?,
             .data, .type, .global => unreachable, // `View` admits only function targets for function sites
         },
         .type_index_leb => plan.types.maps[image][site.target],
         .global_index_leb => switch (target_kind) {
             .global => placement.globals[site.target],
-            .import => placement.imports[site.target],
+            .import => placement.imports[site.target].get().?,
             .function, .data, .type => unreachable, // `View` admits only global targets for global sites
         },
         .memory_addr_leb, .memory_addr_sleb, .memory_addr_rel_sleb, .memory_addr_i32 => switch (target_kind) {
-            .data => placement.segments[site.target] +% @as(u32, @bitCast(site.addend)),
+            .data => placement.segments[site.target].get().? +% @as(u32, @bitCast(site.addend)),
             .import => 0,
             .function, .type, .global => unreachable, // `View` admits only data targets for memory sites
         },
@@ -2609,8 +2617,8 @@ test "a composed module places the reached code and data and patches every site"
         .data_exports = &.{},
         .table_requests = &.{},
         .imports = &.{
-            .{ .module = "env", .name = "roc_main", .kind = .function, .type = 0 },
-            .{ .module = "env", .name = "canary", .kind = .function, .type = 1 },
+            .{ .module = "env", .name = "roc_main", .kind = .function, .type = .some(0) },
+            .{ .module = "env", .name = "canary", .kind = .function, .type = .some(1) },
         },
     });
     defer allocator.free(host);
@@ -2917,7 +2925,7 @@ test "a weak symbol nothing defines is null instead of an import" {
         .data_exports = &.{},
         .table_requests = &.{},
         .imports = &.{
-            .{ .module = "env", .name = "maybe", .kind = .function, .type = 0, .address_taken = true, .weak = true },
+            .{ .module = "env", .name = "maybe", .kind = .function, .type = .some(0), .address_taken = true, .weak = true },
             .{ .module = "env", .name = "maybe_data", .kind = .data, .weak = true },
         },
     });
@@ -2971,7 +2979,7 @@ test "a composed object relocates every site and does not depend on the units' o
         .segments = &.{.{ .bytes = "AAAA", .size = 4, .alignment_log2 = 2, .sites = &.{} }},
         .data_exports = &.{},
         .table_requests = &.{},
-        .imports = &.{.{ .module = "env", .name = "helper", .kind = .function, .type = 1 }},
+        .imports = &.{.{ .module = "env", .name = "helper", .kind = .function, .type = .some(1) }},
     });
     defer allocator.free(unit_a);
     const helper_body = try testBody(arena, &.{ &.{0x41}, &test_zero_leb, &.{ 0x1a, 0x0b } });
@@ -3069,7 +3077,7 @@ test "a constant two units carry under one content name is placed once" {
         .data_exports = &.{.{ .name = shared_name, .segment = 0, .offset = 0, .size = 4, .weak = true }},
         .table_requests = &.{},
         .imports = &.{
-            .{ .module = "env", .name = "helper", .kind = .function, .type = 1 },
+            .{ .module = "env", .name = "helper", .kind = .function, .type = .some(1) },
             .{ .module = "env", .name = shared_name, .kind = .data },
         },
     });

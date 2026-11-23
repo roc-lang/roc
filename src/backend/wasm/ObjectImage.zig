@@ -153,18 +153,13 @@ pub fn convert(gpa: Allocator, bytes: []const u8, options: Options, unsupported:
 
     // Segments and their sites.
     const data_relocs = try arena.dupe(WasmLinking.RelocationEntry, module.reloc_data.entries.items);
-    std.mem.sort(WasmLinking.RelocationEntry, data_relocs, {}, struct {
-        fn lessThan(_: void, a: WasmLinking.RelocationEntry, b: WasmLinking.RelocationEntry) bool {
-            if (segmentOf(a) != segmentOf(b)) return segmentOf(a) < segmentOf(b);
-            return a.getOffset() < b.getOffset();
-        }
-    }.lessThan);
+    std.mem.sort(WasmLinking.RelocationEntry, data_relocs, {}, WasmLinking.RelocationEntry.dataSegmentLessThan);
     const segments = try arena.alloc(WasmUnitImage.InputSegment, module.data_segments.items.len);
     next_reloc = 0;
     for (segments, module.data_segments.items, 0..) |*segment, source, index| {
         const segment_bytes = try arena.dupe(u8, source.data);
         var sites: std.ArrayList(WasmUnitImage.InputSite) = .empty;
-        while (next_reloc < data_relocs.len and segmentOf(data_relocs[next_reloc]) == index) : (next_reloc += 1) {
+        while (next_reloc < data_relocs.len and data_relocs[next_reloc].belongsToDataSegment(index)) : (next_reloc += 1) {
             const entry = data_relocs[next_reloc];
             const site = try siteOf(entry, entry.getOffset(), true, symbols, import_count, global_import_count, &types, &imports, false, unsupported);
             if (site.offset + 4 > segment_bytes.len) return error.InvalidSection;
@@ -299,7 +294,7 @@ pub fn convert(gpa: Allocator, bytes: []const u8, options: Options, unsupported:
     const image_imports = try arena.alloc(WasmUnitImage.InputImport, imports.list.items.len);
     for (image_imports, imports.list.items) |*out, import| {
         out.* = import.input;
-        if (import.module_type) |module_type| out.type = try types.of(module_type);
+        if (import.module_type) |module_type| out.type = .some(try types.of(module_type));
     }
 
     return WasmUnitImage.encode(gpa, .{
@@ -320,13 +315,6 @@ pub fn convert(gpa: Allocator, bytes: []const u8, options: Options, unsupported:
 /// `SegmentInfo.flags` bits.
 const segment_flag_tls: u32 = 2;
 const segment_flag_retain: u32 = 4;
-
-fn segmentOf(entry: WasmLinking.RelocationEntry) u32 {
-    return switch (entry) {
-        .index => |index| index.data_segment_index,
-        .offset => |offset| offset.data_segment_index,
-    };
-}
 
 fn depth32(depth: u64) error{ImageTooLarge}!u32 {
     return std.math.cast(u32, depth) orelse error.ImageTooLarge;

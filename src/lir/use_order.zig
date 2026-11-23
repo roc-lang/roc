@@ -12,7 +12,6 @@ const Allocator = std.mem.Allocator;
 const LIR = core.LIR;
 const LirStore = core.LirStore;
 const GuardedList = LirStore.GuardedList;
-const no_local = std.math.maxInt(u32);
 const StmtColumn = collections.OptionalIndexColumn(LIR.CFStmtId);
 
 /// Exact topology construction count for reuse tests.
@@ -25,7 +24,7 @@ pub const UseAnswers = struct {
         stmt: LIR.CFStmtId,
         local: LIR.LocalId,
         answer: bool,
-        next: u32,
+        next: collections.OptionalU32,
     };
 
     allocator: Allocator,
@@ -42,22 +41,21 @@ pub const UseAnswers = struct {
     }
 
     pub fn get(self: *const UseAnswers, stmt: LIR.CFStmtId, local: LIR.LocalId) ?bool {
-        var cursor = self.heads.get(stmt) orelse return null;
-        while (cursor != no_local) {
+        var next = self.heads.get(stmt);
+        while (next) |cursor| {
             const entry = self.entries.items[cursor];
             if (entry.local == local) return entry.answer;
-            cursor = entry.next;
+            next = entry.next.get();
         }
         return null;
     }
 
     /// Records the answer for a query `get` has not answered.
     pub fn put(self: *UseAnswers, stmt: LIR.CFStmtId, local: LIR.LocalId, answer: bool) Allocator.Error!void {
-        const position = std.math.cast(u32, self.entries.items.len) orelse return error.OutOfMemory;
-        if (position == no_local) return error.OutOfMemory;
+        const position = try collections.nextBiasedId(self.entries.items.len);
         const head = try self.heads.getOrPut(stmt);
-        if (!head.found_existing) head.value_ptr.* = no_local;
-        try self.entries.append(self.allocator, .{ .stmt = stmt, .local = local, .answer = answer, .next = head.value_ptr.* });
+        const next: collections.OptionalU32 = if (head.found_existing) .some(head.value_ptr.*) else .none;
+        try self.entries.append(self.allocator, .{ .stmt = stmt, .local = local, .answer = answer, .next = next });
         head.value_ptr.* = position;
     }
 };
@@ -88,7 +86,7 @@ pub const UseOrder = struct {
     marks: collections.EpochSet(u32, .stamps, .internal),
     /// The local the current marks describe, and whether they were made
     /// from its reads (rather than a caller's statement set).
-    marked_local: u32,
+    marked_local: collections.OptionalId(LIR.LocalId),
     marked_uses: bool,
     work: std.ArrayList(u32),
     /// The current marking's initial statements and the marked local's
@@ -364,7 +362,7 @@ pub const UseOrder = struct {
             .allocator = allocator,
             .topology = topology,
             .marks = .borrow(topology.tables.mark_gen),
-            .marked_local = no_local,
+            .marked_local = .none,
             .marked_uses = false,
             .work = .empty,
         };
@@ -502,7 +500,8 @@ pub const UseOrder = struct {
         if (store.getCFStmtImmediate(@fromBackingInt(@intCast(stmt))).* == .jump) return null;
         const Single = struct {
             count: u32 = 0,
-            succ: u32 = no_local,
+            /// The last successor noted; read only when `count` is one.
+            succ: u32 = undefined,
             fn note(self_single: *@This(), succ: u32) void {
                 self_single.count += 1;
                 self_single.succ = succ;
@@ -876,9 +875,9 @@ pub const UseOrder = struct {
     pub fn usesAfter(self: *UseOrder, from: u32, local: LIR.LocalId) Allocator.Error!bool {
         const from_stmt: LIR.CFStmtId = @fromBackingInt(@intCast(from));
         if (self.use_answers) |answers| if (answers.get(from_stmt, local)) |answer| return answer;
-        if (self.marked_local != @backingInt(local) or !self.marked_uses) {
+        if (self.marked_local != collections.OptionalId(LIR.LocalId).some(local) or !self.marked_uses) {
             try self.markFrom(local, self.topology.reads_of.row(local));
-            self.marked_local = @backingInt(local);
+            self.marked_local = .some(local);
             self.marked_uses = true;
         }
         const answer = self.after(from, local);
@@ -890,7 +889,7 @@ pub const UseOrder = struct {
     /// `local` is redefined, for `after` queries about that local.
     pub fn markAmong(self: *UseOrder, local: LIR.LocalId, among: []const u32) Allocator.Error!void {
         try self.markFrom(local, among);
-        self.marked_local = @backingInt(local);
+        self.marked_local = .some(local);
         self.marked_uses = false;
     }
 

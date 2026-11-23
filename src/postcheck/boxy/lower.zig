@@ -169,9 +169,10 @@ pub const ModuleUnit = struct {
     expect_sites: bool = false,
 };
 
-/// The ownership signature and tail-drive summary a unit's ARC solved for
-/// one exported worker: what a call to it from another object compiles
-/// against (`LIR.LirProcSpec` `rc_*` fields and `may_leave_pending`).
+/// The ownership signature, tail-drive summary and tail carry a unit's ARC
+/// solved for one exported worker: what a call to it from another object
+/// compiles against (`LIR.LirProcSpec` `rc_*` fields, `may_leave_pending`
+/// and `tail_carry`).
 pub const ExportInterface = struct {
     rc_borrowed_params: u64 = 0,
     rc_ret_borrowed: bool = false,
@@ -181,6 +182,7 @@ pub const ExportInterface = struct {
     rc_ret_unique_fields: u64 = 0,
     rc_ret_conditions: []const u32 = &.{},
     may_leave_pending: bool = false,
+    tail_carry: bool = false,
     /// The outcome table of the outcome-restitution variant the worker's
     /// object outputs (`LIR.LirProcSpec.rc_outcomes`); empty when it
     /// outputs none. That variant has an interface of its own, under the
@@ -199,7 +201,7 @@ pub const ExportInterface = struct {
     /// For a template's worker: its template's position in its module's
     /// checked table, which a needs list naming the worker by identity
     /// resolves it to (`LirProgram.BoxyExport.template`).
-    template: u32 = LirProgram.BoxyExport.no_template,
+    template: collections.OptionalU32 = .none,
     /// Whether another unit may read this interface: the module's export
     /// digest covers only these (`LirProgram.BoxyExport.visible`).
     visible: bool = false,
@@ -294,6 +296,7 @@ pub const ExportInterfaces = struct {
             .rc_ret_unique_fields = spec.rc_ret_unique_fields,
             .rc_ret_conditions = conditions,
             .may_leave_pending = spec.may_leave_pending,
+            .tail_carry = spec.tail_carry,
             .rc_outcomes = outcomes,
             .nonescaping_fn_params = spec.nonescaping_fn_params,
             .capture_reuse_fn_params = spec.capture_reuse_fn_params,
@@ -328,11 +331,12 @@ test "export interface snapshot owns the complete calling contract" {
         .rc_ret_unique_fields = 4,
         .rc_ret_conditions = &.{ 7, 8, 9 },
         .may_leave_pending = true,
+        .tail_carry = true,
         .rc_outcomes = &.{ 0, 0, 1, 2 },
         .nonescaping_fn_params = 5,
         .capture_reuse_fn_params = 4,
         .table_needs = "producer needs",
-        .template = 4,
+        .template = .some(4),
         .visible = true,
     };
     try producer.put(identity, expected);
@@ -883,11 +887,6 @@ pub const DictionaryNode = struct {
     /// The requirement this entry resolves; null for a tree's root target.
     requirement: ?DictRequirement,
     kind: Kind,
-    /// The shallowest target on this entry's path that some back edge below
-    /// it returns to, or `no_reach`.
-    reaches: u32 = no_reach,
-
-    pub const no_reach = std.math.maxInt(u32);
 
     pub const Kind = union(enum) {
         /// A requirement no method target resolves.
@@ -903,8 +902,6 @@ pub const DictionaryNode = struct {
         instance: TargetInstance,
         /// The node of each of `instance.requirements`.
         children: []const u32,
-        /// How many targets are above this one on its path.
-        depth: u32,
         /// Whether a back edge returns to this target.
         recursive: bool = false,
     };
@@ -1572,6 +1569,7 @@ pub const Program = struct {
         proc.rc_ret_unique = interface.rc_ret_unique;
         proc.rc_ret_unique_fields = interface.rc_ret_unique_fields;
         proc.may_leave_pending = interface.may_leave_pending;
+        proc.tail_carry = interface.tail_carry;
         proc.nonescaping_fn_params = interface.nonescaping_fn_params;
         proc.capture_reuse_fn_params = interface.capture_reuse_fn_params;
         proc.rc_ret_conditions = self.result.store.addU32Span(interface.rc_ret_conditions) catch |err| switch (err) {
@@ -1870,7 +1868,7 @@ pub const Program = struct {
             map.userLineIdx(line, offset) orelse return base.SourceLoc.none
         else
             line;
-        return .{ .file = self.source_files[@backingInt(index)], .line = user_line + 1, .column = column + 1 };
+        return .{ .file = .some(self.source_files[@backingInt(index)]), .line = user_line + 1, .column = column + 1 };
     }
 
     /// The source location a procedure template's worker reports: where the
@@ -3129,7 +3127,7 @@ pub const Program = struct {
         var result: NominalOverrides = .{ null, null, null };
         if (nominal.has_backing) {
             const view = self.module(nominal.decl.module);
-            const declaration = view.types().nominalDeclarationById(nominal.decl.decl);
+            const declaration = view.types().nominalDeclarationById(nominal.decl.decl.get().?);
             const owner: static_dispatch.MethodOwner = if (nominal.builtin) |builtin| (if (builtin == .try_)
                 .{ .nominal = declaration.nominal }
             else
@@ -3322,8 +3320,6 @@ pub const Program = struct {
             const done = walk.frames.pop().?;
             const entry = &walk.nodes.items[done.node];
             entry.kind.target.children = done.children.items;
-            entry.reaches = done.reaches;
-            if (walk.frames.items.len > 0) walk.reach(done.reaches);
         }
         return walk.nodes.items;
     }
@@ -3347,7 +3343,6 @@ pub const Program = struct {
         const Frame = struct {
             node: u32,
             next: usize = 0,
-            reaches: u32 = DictionaryNode.no_reach,
             children: std.ArrayList(u32) = .empty,
         };
 
@@ -3363,11 +3358,6 @@ pub const Program = struct {
             return index;
         }
 
-        fn reach(self: *DictionaryWalk, depth: u32) void {
-            const top = &self.frames.items[self.frames.items.len - 1];
-            top.reaches = @min(top.reaches, depth);
-        }
-
         fn visit(self: *DictionaryWalk, requirement: DictRequirement) Allocator.Error!void {
             const resolution = try self.program.resolveRequirement(requirement);
             switch (resolution) {
@@ -3381,16 +3371,13 @@ pub const Program = struct {
                 const on_path = &self.nodes.items[frame.node].kind.target;
                 if (on_path.target != target or !std.mem.eql(TypeId, on_path.instance.bound, instance.bound)) continue;
                 on_path.recursive = true;
-                const depth = on_path.depth;
-                _ = try self.add(.{ .requirement = requirement, .kind = .{ .back_edge = frame.node }, .reaches = depth });
-                return self.reach(depth);
+                _ = try self.add(.{ .requirement = requirement, .kind = .{ .back_edge = frame.node } });
+                return;
             }
-            const depth: u32 = @intCast(self.frames.items.len);
             const node = try self.add(.{ .requirement = requirement, .kind = .{ .target = .{
                 .target = target,
                 .instance = instance,
                 .children = &.{},
-                .depth = depth,
             } } });
             try self.frames.append(self.program.allocator, .{ .node = node });
         }
@@ -3609,7 +3596,7 @@ pub const Program = struct {
             .box => .{ .module = null, .owner = .{ .builtin = .box } },
             .nominal => |nominal| blk: {
                 const view = self.module(nominal.decl.module);
-                const declaration = view.types().nominalDeclarationById(nominal.decl.decl);
+                const declaration = view.types().nominalDeclarationById(nominal.decl.decl.get().?);
                 break :blk .{ .module = nominal.decl.module, .owner = if (nominal.builtin) |builtin| (if (builtin == .try_)
                     .{ .nominal = declaration.nominal }
                 else
@@ -5286,9 +5273,9 @@ fn recordExports(program: *Program) Allocator.Error!void {
     try program.result.boxy_exports.ensureTotalCapacity(result_allocator, @intCast(program.result.exported_procs.items.len));
     for (program.workers.items, visible) |worker, is_visible| {
         if (worker.imported or !Program.exportableKind(worker.key)) continue;
-        const template: u32 = switch (worker.key) {
-            .template => |key| @backingInt(key.template),
-            .lambda, .method_entry, .default, .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => LirProgram.BoxyExport.no_template,
+        const template: collections.OptionalU32 = switch (worker.key) {
+            .template => |key| .some(@backingInt(key.template)),
+            .lambda, .method_entry, .default, .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => .none,
         };
         program.result.boxy_exports.putAssumeCapacity(program.result.store.getProcSpec(worker.proc).identity, .{ .template = template, .visible = is_visible });
     }

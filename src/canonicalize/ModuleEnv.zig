@@ -514,19 +514,14 @@ pub const ForLoopDispatchPlan = extern struct {
 ///
 /// The parser converts numeric text to base-256 byte lists. Canonicalization
 /// copies those bytes here so later stages can construct `Num.Numeral` values
-/// for custom `from_numeral` calls without parsing source text.
+/// for custom `from_numeral` calls without parsing source text. The node a
+/// literal belongs to is recorded by `NumeralNodeIndex`, not here.
 pub const NumeralLiteral = extern struct {
-    node_idx: u32,
     digits_start: u32,
     before_len: u32,
     after_len: u32,
-    after_decimal_digit_count: u64,
     flags: u32,
-    /// The bytes the 8-byte alignment of `after_decimal_digit_count` adds after
-    /// `flags`. Declared rather than implicit so every byte this struct persists
-    /// has a defined value: the checked cache writes its representation verbatim,
-    /// and an implicit gap would write whatever happened to be in that memory.
-    _reserved: u32 = 0,
+    after_decimal_digit_count: u64,
 
     pub const negative_flag: u32 = 1;
     pub const fractional_flag: u32 = 2;
@@ -560,6 +555,88 @@ pub const NumeralLiteral = extern struct {
     }
 };
 
+/// Which source nodes have a `NumeralLiteral`, and where each one's row is:
+/// one bit per node in `node_bits`, and in `word_ranks` the count of rows for
+/// the nodes below each 64-node word. A node's row is that count plus the set
+/// bits below it in its word, so a lookup takes constant time. Rows are
+/// recorded in increasing node order.
+pub const NumeralNodeIndex = struct {
+    node_bits: collections.SafeList(u64),
+    word_ranks: collections.SafeList(u32),
+
+    /// An index with no nodes.
+    pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!NumeralNodeIndex {
+        var node_bits = try collections.SafeList(u64).initCapacity(gpa, 4);
+        errdefer node_bits.deinit(gpa);
+        return .{
+            .node_bits = node_bits,
+            .word_ranks = try collections.SafeList(u32).initCapacity(gpa, 4),
+        };
+    }
+
+    /// Free the index.
+    pub fn deinit(self: *NumeralNodeIndex, gpa: std.mem.Allocator) void {
+        self.node_bits.deinit(gpa);
+        self.word_ranks.deinit(gpa);
+    }
+
+    /// Record that `raw_node` has row `row_index`, the row after every row
+    /// recorded so far. Nodes arrive in increasing order.
+    pub fn append(self: *NumeralNodeIndex, gpa: std.mem.Allocator, raw_node: u32, row_index: u32) std.mem.Allocator.Error!void {
+        const word = raw_node / 64;
+        std.debug.assert(self.lastNode() == null or self.lastNode().? < raw_node);
+        while (self.node_bits.len() <= word) {
+            _ = try self.word_ranks.append(gpa, row_index);
+            _ = self.node_bits.append(gpa, 0) catch |err| {
+                _ = self.word_ranks.pop();
+                return err;
+            };
+        }
+        self.node_bits.items()[word] |= @as(u64, 1) << @intCast(raw_node % 64);
+    }
+
+    /// The row of `raw_node`, or null when it has none.
+    pub fn row(self: *const NumeralNodeIndex, raw_node: u32) ?u32 {
+        const word = raw_node / 64;
+        const words = self.node_bits.items();
+        if (word >= words.len) return null;
+        const bits = words[word];
+        const bit = @as(u64, 1) << @intCast(raw_node % 64);
+        if (bits & bit == 0) return null;
+        return self.word_ranks.items()[word] + @popCount(bits & (bit - 1));
+    }
+
+    fn lastNode(self: *const NumeralNodeIndex) ?u32 {
+        const words = self.node_bits.items();
+        var word = words.len;
+        while (word > 0) {
+            word -= 1;
+            if (words[word] != 0) return @intCast(word * 64 + 63 - @clz(words[word]));
+        }
+        return null;
+    }
+
+    /// The serialized form: the two lists.
+    pub const Serialized = extern struct {
+        node_bits: collections.SafeList(u64).Serialized,
+        word_ranks: collections.SafeList(u32).Serialized,
+
+        /// Serialize `index` into this form.
+        pub fn serialize(self: *@This(), index: *const NumeralNodeIndex, allocator: std.mem.Allocator, writer: *CompactWriter) std.mem.Allocator.Error!void {
+            try self.node_bits.serialize(&index.node_bits, allocator, writer);
+            try self.word_ranks.serialize(&index.word_ranks, allocator, writer);
+        }
+
+        /// The index this form describes, borrowing the serialized buffer.
+        pub fn deserializeInto(self: *const @This(), base_addr: usize) NumeralNodeIndex {
+            return .{
+                .node_bits = self.node_bits.deserializeInto(base_addr),
+                .word_ranks = self.word_ranks.deserializeInto(base_addr),
+            };
+        }
+    };
+};
+
 /// One constrained-scheme use recorded by checking for static-dispatch
 /// evidence. It names the source node, the scheme root used at that edge, and—
 /// for an instantiation—the source-to-fresh var relation needed by its slot.
@@ -569,6 +646,9 @@ pub const NumeralLiteral = extern struct {
 /// checking settles to decide how each callee dispatch requirement was
 /// satisfied at this site.
 pub const SchemeUseRecord = extern struct {
+    /// The node the scheme is used at, or zero, the node store's reserved
+    /// node, for a `dispatch_target` or `where_method_use` edge that no
+    /// source node introduced; such an edge is identified by `slot_data`.
     node_idx: u32,
     /// `Slot`—distinguishes several schemes instantiated at one node (a value
     /// use, an expression-position function stored as a value, the target of
@@ -708,11 +788,10 @@ pub const GeneratedCodecCall = extern struct {
     /// selected method scheme's nested evidence. A call that resolves to a
     /// nested generated derivation names that derivation's source constraint.
     evidence_var: u32,
-    /// The value shape this call handles, or `no_subject_var` when the method
-    /// has no shape-specific call contract.
-    subject_var: u32,
+    /// The value shape this call handles (`Var`), absent when the method has
+    /// no shape-specific call contract.
+    subject_var: collections.OptionalU32,
 
-    pub const no_subject_var = std.math.maxInt(u32);
     pub const SafeList = collections.SafeList(@This());
 };
 
@@ -940,6 +1019,15 @@ pub const BindingScheme = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// The top-level value definition that owns a node: the definition's own
+/// node, its expression, or a node of its pattern.
+pub const TopLevelDefOwner = extern struct {
+    node: u32,
+    def: CIR.Def.Idx,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// Import-facing eligibility of a callable definition for stored constants.
 /// Checking publishes one row per module-global definition and per method
 /// binding's definition, ordered by definition id.
@@ -1090,11 +1178,11 @@ file_dependencies: FileDependency.SafeList,
 deferred_import_refs: DeferredImportRef.SafeList,
 /// The content identity of the module each entry of `imports` resolved to,
 /// parallel to `imports.imports` by index. Written by the import-resolution
-/// drain and `NONE` for an import that resolution rejected. A module that
+/// drain and absent for an import that resolution rejected. A module that
 /// follows an exposed alias out of an imported module reads this table on the
 /// alias's owning environment to reach the module the alias names, without
 /// spelling any module's name.
-import_identities: collections.SafeList(base.ModuleIdentity.Idx),
+import_identities: collections.SafeList(collections.OptionalId(base.ModuleIdentity.Idx)),
 /// The module's source-visible final path segment, such as `Foo` for the
 /// logical module path `Folder/Foo`.
 /// Used for type-module main types and associated-name construction; logical
@@ -1129,10 +1217,10 @@ module_identities: base.SerialStringInterner,
 /// entry, parallel by index. Display-only by itself; identity decisions must
 /// read the paired content hash from `module_identities`.
 module_identity_displays: collections.SafeList(Ident.Idx),
-/// This module's own entry in `module_identities`; `NONE` until the deep
+/// This module's own entry in `module_identities`; absent until the deep
 /// content identity has been computed (after import resolution, before
 /// type-checking).
-self_module_identity: base.ModuleIdentity.Idx,
+self_module_identity: collections.OptionalId(base.ModuleIdentity.Idx),
 /// The digest of `common.source`, taken once where the source bytes were
 /// first in hand. Every identity and cache key that depends on the source
 /// text reads this instead of hashing the text: the content identity above,
@@ -1157,6 +1245,10 @@ invoking_defs: collections.SafeList(CIR.Def.Idx),
 /// Exact stored-constant eligibility of each global or method callable, published after
 /// checking settles its body. Importers consume this instead of scanning CIR.
 callable_checking_facts: CallableCheckingFact.SafeList,
+/// The owning top-level value definition of each node a top-level value
+/// definition owns, in ascending node order. Canonicalization produces it;
+/// checking and importers read it.
+top_level_def_owners: TopLevelDefOwner.SafeList,
 checking_dependency: CheckingDependency,
 
 /// True only after `check.TypedCIR.prepareRuntimeEnv` has prepared this env for
@@ -1187,8 +1279,11 @@ provided_low_level_defs: ProvidedLowLevelDef.SafeList,
 for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList,
 /// Base-256 bytes referenced by `numeral_literals`.
 numeral_digit_bytes: collections.SafeList(u8),
-/// Exact numeric literals attached to source expression and pattern nodes.
+/// Exact numeric literals attached to source expression and pattern nodes,
+/// in node order.
 numeral_literals: NumeralLiteral.SafeList,
+/// The row in `numeral_literals` of each node that has one.
+numeral_nodes: NumeralNodeIndex,
 /// Scope-resolved explicit numeric suffix targets attached by canonicalization.
 numeric_suffix_targets: NumericSuffixTarget.SafeList,
 /// Constrained-scheme uses recorded by checking for static-dispatch evidence;
@@ -1422,9 +1517,9 @@ pub const DeferredRefFailure = enum(u8) {
 /// diagnostic. The list is the only record of this work: nothing walks the
 /// CIR to rediscover it.
 pub const DeferredImportRef = extern struct {
-    /// The import this reference goes through, or `no_import` when the
-    /// reference goes through no module import.
-    import_idx: u32,
+    /// The import this reference goes through, absent when the reference
+    /// goes through no module import.
+    import_idx: collections.OptionalId(CIR.Import.Idx),
     /// Raw node index of the node this entry resolves.
     node_idx: u32,
     /// Dotted path relative to the imported module root (e.g. `Files.Dir.Read`).
@@ -1536,16 +1631,11 @@ pub const DeferredImportRef = extern struct {
         return @bitCast(self.qualified_name_bits);
     }
 
-    /// `import_idx` value for a reference that goes through no module import.
-    /// A file import is such a reference: the file it names is the
-    /// `file_dependencies` entry at `file_dependency_idx`.
-    pub const no_import: u32 = std.math.maxInt(u32);
-
     /// The import this reference goes through, or null for a reference that
-    /// goes through no module import.
+    /// goes through no module import. A file import is such a reference: the
+    /// file it names is the `file_dependencies` entry at `file_dependency_idx`.
     pub fn importIdx(self: @This()) ?CIR.Import.Idx {
-        if (self.import_idx == no_import) return null;
-        return @fromBackingInt(@intCast(self.import_idx));
+        return self.import_idx.get();
     }
 };
 
@@ -1573,6 +1663,7 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.top_level_demand_dependencies_ready = false;
     self.invoking_defs = .{};
     self.callable_checking_facts = .{};
+    self.top_level_def_owners = .{};
     self.checking_dependency = .{};
     self.runtime_prepared = false;
 }
@@ -1631,7 +1722,7 @@ pub fn initWithSourceDigest(
         .qualified_module_name = "", // Recorded by the coordinator
         .module_identities = .{},
         .module_identity_displays = .{},
-        .self_module_identity = base.ModuleIdentity.Idx.NONE,
+        .self_module_identity = .none,
         .source_digest = source_digest,
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, node_capacity),
@@ -1639,6 +1730,7 @@ pub fn initWithSourceDigest(
         .top_level_demand_dependencies_ready = false,
         .invoking_defs = .{},
         .callable_checking_facts = .{},
+        .top_level_def_owners = .{},
         .checking_dependency = .{},
         .runtime_prepared = false,
         .idents = idents,
@@ -1649,6 +1741,7 @@ pub fn initWithSourceDigest(
         .for_loop_dispatch_plans = try ForLoopDispatchPlan.SafeList.initCapacity(gpa, 4),
         .numeral_digit_bytes = try collections.SafeList(u8).initCapacity(gpa, 32),
         .numeral_literals = try NumeralLiteral.SafeList.initCapacity(gpa, 8),
+        .numeral_nodes = try NumeralNodeIndex.init(gpa),
         .numeric_suffix_targets = try NumericSuffixTarget.SafeList.initCapacity(gpa, 8),
         .scheme_uses = try SchemeUseRecord.SafeList.initCapacity(gpa, 8),
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
@@ -1695,6 +1788,7 @@ pub fn deinit(self: *Self) void {
     self.for_loop_dispatch_plans.deinit(self.gpa);
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
+    self.numeral_nodes.deinit(self.gpa);
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
@@ -1718,6 +1812,7 @@ pub fn deinit(self: *Self) void {
     self.top_level_demand_dependencies.deinit(self.gpa);
     self.invoking_defs.deinit(self.gpa);
     self.callable_checking_facts.deinit(self.gpa);
+    self.top_level_def_owners.deinit(self.gpa);
     self.checking_dependency.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
@@ -1767,6 +1862,86 @@ pub fn defInvokes(self: *const Self, def_idx: CIR.Def.Idx) bool {
         }
     }
     return false;
+}
+
+/// Record that `def` owns `node`. Canonicalization records the def node, the
+/// def's expression and every node of the def's pattern for each top-level
+/// value def, in `global_value_defs` order, then calls
+/// `finishTopLevelDefOwners`.
+pub fn addTopLevelDefOwner(self: *Self, def: CIR.Def.Idx, node: CIR.Node.Idx) std.mem.Allocator.Error!void {
+    _ = try self.top_level_def_owners.append(self.gpa, .{ .node = @backingInt(node), .def = def });
+}
+
+/// Put the recorded owners in ascending node order, keeping only the first
+/// recorded owner of each node, so the first def in `global_value_defs` order
+/// owns a node that defs share.
+pub fn finishTopLevelDefOwners(self: *Self) void {
+    const owners = self.top_level_def_owners.items();
+    // A stable sort keeps each node's entries in recording order, so the
+    // first entry of a run is its first owner.
+    std.mem.sort(TopLevelDefOwner, owners, {}, struct {
+        fn lessThan(_: void, a: TopLevelDefOwner, b: TopLevelDefOwner) bool {
+            return a.node < b.node;
+        }
+    }.lessThan);
+    var kept: usize = 0;
+    for (owners) |owner| {
+        if (kept > 0 and owners[kept - 1].node == owner.node) continue;
+        owners[kept] = owner;
+        kept += 1;
+    }
+    self.top_level_def_owners.shrinkRetainingCapacity(kept);
+}
+
+/// Replace the expression of `def_idx` with `expr`, a node created after
+/// canonicalization. When `def_idx` is a top-level value def, `expr` takes the
+/// place of the old expression in the owner table.
+pub fn setTopLevelDefExpr(self: *Self, def_idx: CIR.Def.Idx, expr: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+    const old_node: u32 = @backingInt(nodeIdxFrom(self.store.getDef(def_idx).expr));
+    const new_node: u32 = @backingInt(nodeIdxFrom(expr));
+    try self.top_level_def_owners.ensureUnusedCapacity(self.gpa, 1);
+    self.store.setDefExpr(def_idx, expr);
+
+    const old_position = topLevelDefOwnerLowerBound(self.top_level_def_owners.items(), old_node);
+    const owners = self.top_level_def_owners.items();
+    if (old_position == owners.len or owners[old_position].node != old_node or owners[old_position].def != def_idx) {
+        // A def that does not own its own expression is not a top-level value def.
+        std.debug.assert(self.topLevelDefOwner(nodeIdxFrom(def_idx)) != def_idx);
+        return;
+    }
+    _ = self.top_level_def_owners.orderedRemove(old_position);
+    const new_position = topLevelDefOwnerLowerBound(self.top_level_def_owners.items(), new_node);
+    std.debug.assert(new_position == self.top_level_def_owners.items().len or self.top_level_def_owners.items()[new_position].node != new_node);
+    self.top_level_def_owners.insert(self.gpa, new_position, .{ .node = new_node, .def = def_idx }) catch unreachable; // capacity reserved above
+}
+
+fn topLevelDefOwnerLowerBound(owners: []const TopLevelDefOwner, node: u32) usize {
+    var low: usize = 0;
+    var high: usize = owners.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (owners[mid].node < node) low = mid + 1 else high = mid;
+    }
+    return low;
+}
+
+/// The top-level value definition that owns `node`, if one does.
+pub fn topLevelDefOwner(self: *const Self, node: CIR.Node.Idx) ?CIR.Def.Idx {
+    const owners = self.top_level_def_owners.items();
+    const wanted: u32 = @backingInt(node);
+    var low: usize = 0;
+    var high: usize = owners.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (owners[mid].node < wanted) {
+            low = mid + 1;
+        } else if (owners[mid].node > wanted) {
+            high = mid;
+        } else {
+            return owners[mid].def;
+        }
+    }
+    return null;
 }
 
 /// Import-facing stored-constant eligibility. Every global definition and every
@@ -4124,7 +4299,7 @@ pub const Serialized = extern struct {
     imports: CIR.Import.Store.Serialized,
     file_dependencies: FileDependency.SafeList.Serialized,
     deferred_import_refs: DeferredImportRef.SafeList.Serialized,
-    import_identities: collections.SafeList(base.ModuleIdentity.Idx).Serialized,
+    import_identities: collections.SafeList(collections.OptionalId(base.ModuleIdentity.Idx)).Serialized,
     module_name: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
     display_module_name_idx_reserved: u32, // Reserved space for display_module_name_idx field (interned during deserialization)
     display_module_name_idx_padding: u32 = 0,
@@ -4141,6 +4316,7 @@ pub const Serialized = extern struct {
     top_level_demand_dependencies: DependencyGraph.Dependency.SafeList.Serialized,
     invoking_defs: collections.SafeList(CIR.Def.Idx).Serialized,
     callable_checking_facts: CallableCheckingFact.SafeList.Serialized,
+    top_level_def_owners: TopLevelDefOwner.SafeList.Serialized,
     checking_dependency: CheckingDependency.Serialized,
     top_level_demand_dependencies_ready: bool,
     runtime_prepared: bool,
@@ -4154,6 +4330,7 @@ pub const Serialized = extern struct {
     for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList.Serialized,
     numeral_digit_bytes: collections.SafeList(u8).Serialized,
     numeral_literals: NumeralLiteral.SafeList.Serialized,
+    numeral_nodes: NumeralNodeIndex.Serialized,
     numeric_suffix_targets: NumericSuffixTarget.SafeList.Serialized,
     scheme_uses: SchemeUseRecord.SafeList.Serialized,
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
@@ -4255,6 +4432,7 @@ pub const Serialized = extern struct {
         );
         try self.invoking_defs.serialize(&env.invoking_defs, allocator, writer);
         try self.callable_checking_facts.serialize(&env.callable_checking_facts, allocator, writer);
+        try self.top_level_def_owners.serialize(&env.top_level_def_owners, allocator, writer);
         try self.checking_dependency.serialize(&env.checking_dependency, allocator, writer);
 
         // Set gpa and module_name to zeros;
@@ -4288,6 +4466,7 @@ pub const Serialized = extern struct {
         try self.for_loop_dispatch_plans.serialize(&env.for_loop_dispatch_plans, allocator, writer);
         try self.numeral_digit_bytes.serialize(&env.numeral_digit_bytes, allocator, writer);
         try self.numeral_literals.serialize(&env.numeral_literals, allocator, writer);
+        try self.numeral_nodes.serialize(&env.numeral_nodes, allocator, writer);
         try self.numeric_suffix_targets.serialize(&env.numeric_suffix_targets, allocator, writer);
         try self.scheme_uses.serialize(&env.scheme_uses, allocator, writer);
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
@@ -4395,6 +4574,7 @@ pub const Serialized = extern struct {
             .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
             .invoking_defs = self.invoking_defs.deserializeInto(base_addr),
             .callable_checking_facts = self.callable_checking_facts.deserializeInto(base_addr),
+            .top_level_def_owners = self.top_level_def_owners.deserializeInto(base_addr),
             .checking_dependency = self.checking_dependency.deserializeInto(base_addr),
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
@@ -4405,6 +4585,7 @@ pub const Serialized = extern struct {
             .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
             .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
+            .numeral_nodes = self.numeral_nodes.deserializeInto(base_addr),
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
@@ -4506,10 +4687,9 @@ pub fn recordForLoopDispatchPlan(
 
 /// Record exact base-256 digits for a numeric source node.
 ///
-/// The table is kept sorted by `node_idx` so lookups are O(log n).
 /// Canonicalization records each literal right after allocating its node, so
-/// appends arrive in increasing node order and the sort costs nothing; an
-/// out-of-order record shifts the tail to keep the order invariant.
+/// records arrive in increasing node order; `numeral_nodes` finds a node's
+/// row in constant time.
 pub fn recordNumeralLiteral(
     self: *Self,
     node_idx: Node.Idx,
@@ -4523,11 +4703,11 @@ pub fn recordNumeralLiteral(
 ) std.mem.Allocator.Error!void {
     const raw_node: u32 = @backingInt(node_idx);
     const digits_start: u32 = @intCast(self.numeral_digit_bytes.len());
+    const row_index: u32 = @intCast(self.numeral_literals.len());
     _ = try self.numeral_digit_bytes.appendSlice(self.gpa, before);
     _ = try self.numeral_digit_bytes.appendSlice(self.gpa, after);
 
     const literal = NumeralLiteral{
-        .node_idx = raw_node,
         .digits_start = digits_start,
         .before_len = @intCast(before.len),
         .after_len = @intCast(after.len),
@@ -4537,12 +4717,17 @@ pub fn recordNumeralLiteral(
             (if (had_decimal_point) NumeralLiteral.decimal_point_flag else 0) |
             (if (is_materialized) NumeralLiteral.materialized_flag else 0),
     };
-    try upsertSortedByNode(NumeralLiteral, &self.numeral_literals, self.gpa, literal);
+    _ = try self.numeral_literals.append(self.gpa, literal);
+    self.numeral_nodes.append(self.gpa, raw_node, row_index) catch |err| {
+        _ = self.numeral_literals.pop();
+        return err;
+    };
 }
 
 /// Return exact base-256 digits for a numeric source node.
 pub fn numeralLiteralForNode(self: *const Self, node_idx: Node.Idx) ?NumeralLiteral {
-    return findSortedByNode(NumeralLiteral, self.numeral_literals.items(), @backingInt(node_idx));
+    const row = self.numeral_nodes.row(@backingInt(node_idx)) orelse return null;
+    return self.numeral_literals.items()[row];
 }
 
 /// First index whose `node_idx` is >= `raw_node` in a node-sorted table.
@@ -5180,6 +5365,8 @@ fn storeAdder(comptime name: []const u8) fn (*Self, StoreValue(name), Region) st
     return struct {
         fn add(self: *Self, value: StoreValue(name), region: Region) std.mem.Allocator.Error!StoreIdx(name) {
             const idx = try @field(NodeStore, name)(&self.store, value, region);
+            // Index zero is the store's reserved node.
+            std.debug.assert(@backingInt(idx) != 0);
             self.debugAssertArraysInSync();
             return idx;
         }
@@ -5190,6 +5377,7 @@ fn storeAdder(comptime name: []const u8) fn (*Self, StoreValue(name), Region) st
 /// This function asserts that the nodes and regions are in sync.
 pub fn addDiagnostic(self: *Self, reason: CIR.Diagnostic) std.mem.Allocator.Error!CIR.Diagnostic.Idx {
     const expr_idx = try self.store.addDiagnostic(reason);
+    std.debug.assert(@backingInt(expr_idx) != 0);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
@@ -5633,9 +5821,7 @@ pub fn internModuleIdentity(
 pub fn importIdentity(self: *const Self, import_idx: CIR.Import.Idx) ?base.ModuleIdentity.Idx {
     const idx: usize = @backingInt(import_idx);
     if (idx >= self.import_identities.len()) return null;
-    const identity = self.import_identities.items()[idx];
-    if (identity.isNone()) return null;
-    return identity;
+    return self.import_identities.items()[idx].get();
 }
 
 /// Record the content identity of the module an import resolved to. The table
@@ -5648,9 +5834,9 @@ pub fn setImportIdentity(
 ) std.mem.Allocator.Error!void {
     const idx: usize = @backingInt(import_idx);
     while (self.import_identities.len() <= idx) {
-        _ = try self.import_identities.append(self.gpa, base.ModuleIdentity.Idx.NONE);
+        _ = try self.import_identities.append(self.gpa, .none);
     }
-    self.import_identities.items()[idx] = identity;
+    self.import_identities.items()[idx] = .some(identity);
 }
 
 /// Look up a module content identity in this env's table without inserting.
@@ -5661,7 +5847,6 @@ pub fn lookupModuleIdentity(self: *const Self, hash: *const base.ModuleIdentity.
 
 /// The 32-byte content identity hash for an env-local identity index.
 pub fn moduleIdentityHash(self: *const Self, idx: base.ModuleIdentity.Idx) *const base.ModuleIdentity.Hash {
-    std.debug.assert(!idx.isNone());
     const bytes = self.module_identities.getText(@backingInt(idx));
     std.debug.assert(bytes.len == 32);
     return @ptrCast(bytes.ptr);
@@ -5670,7 +5855,6 @@ pub fn moduleIdentityHash(self: *const Self, idx: base.ModuleIdentity.Idx) *cons
 /// Display ident for an env-local identity index. Diagnostics only—never
 /// use for identity decisions.
 pub fn moduleIdentityDisplayIdent(self: *const Self, idx: base.ModuleIdentity.Idx) Ident.Idx {
-    std.debug.assert(!idx.isNone());
     return self.module_identity_displays.items()[@backingInt(idx)];
 }
 
@@ -5683,17 +5867,14 @@ pub fn moduleIdentityDisplayText(self: *const Self, idx: base.ModuleIdentity.Idx
 
 /// This module's own deep content identity hash; null until finalized.
 pub fn contentIdentityHash(self: *const Self) ?*const base.ModuleIdentity.Hash {
-    if (self.self_module_identity.isNone()) return null;
-    return self.moduleIdentityHash(self.self_module_identity);
+    return self.moduleIdentityHash(self.self_module_identity.get() orelse return null);
 }
 
 /// This module's own identity table entry. Panics if not yet finalized:
 /// callers run after import resolution, where the identity must exist.
 pub fn selfModuleIdentity(self: *const Self) base.ModuleIdentity.Idx {
-    if (self.self_module_identity.isNone()) {
+    return self.self_module_identity.get() orelse
         base.invariant("module content identity not finalized for module '{s}'", .{self.module_name});
-    }
-    return self.self_module_identity;
 }
 
 /// Record this module's deep content identity. Idempotent for an equal hash;
@@ -5705,7 +5886,7 @@ pub fn setContentIdentity(self: *Self, hash: base.ModuleIdentity.Hash) std.mem.A
         }
         return;
     }
-    self.self_module_identity = try self.internModuleIdentity(&hash, self.display_module_name_idx);
+    self.self_module_identity = .some(try self.internModuleIdentity(&hash, self.display_module_name_idx));
 }
 
 /// Compute and record this module's deep content identity from its resolved
@@ -5716,7 +5897,7 @@ pub fn ensureContentIdentity(
     self: *Self,
     imported_envs: []const *const Self,
 ) std.mem.Allocator.Error!void {
-    if (!self.self_module_identity.isNone()) return;
+    if (self.self_module_identity != .none) return;
 
     var import_hashes = try std.ArrayList(base.ModuleIdentity.Hash).initCapacity(self.gpa, imported_envs.len);
     defer import_hashes.deinit(self.gpa);
@@ -5831,6 +6012,24 @@ pub fn getLineStarts(self: *const Self) []const u32 {
     return self.common.getLineStartsAll();
 }
 
+test "NumeralNodeIndex finds each recorded node's row and no other node's" {
+    const gpa = std.testing.allocator;
+    var index = try NumeralNodeIndex.init(gpa);
+    defer index.deinit(gpa);
+    const nodes = [_]u32{ 0, 3, 63, 64, 65, 200, 1000, 1001 };
+    for (nodes, 0..) |node, row_index| try index.append(gpa, node, @intCast(row_index));
+    var expected_row: u32 = 0;
+    var node: u32 = 0;
+    while (node < 1100) : (node += 1) {
+        if (std.mem.findScalar(u32, &nodes, node) != null) {
+            try std.testing.expectEqual(@as(?u32, expected_row), index.row(node));
+            expected_row += 1;
+        } else {
+            try std.testing.expectEqual(@as(?u32, null), index.row(node));
+        }
+    }
+}
+
 test "NumeralLiteral: serialized bytes are a function of the recorded literals" {
     // The numeral pool is copied verbatim into `Builtin.bin` and into every checked
     // module cache entry, so its bytes must depend on the literals alone. Before this
@@ -5849,13 +6048,11 @@ test "NumeralLiteral: serialized bytes are a function of the recorded literals" 
             // the stale bytes in deliberately is what makes this test able to fail.
             for (list.items(), 0..) |*slot, i| {
                 @memset(std.mem.asBytes(slot), poison);
-                slot.node_idx = @intCast(i);
                 slot.digits_start = @intCast(i * 4);
                 slot.before_len = @intCast(i);
                 slot.after_len = @intCast(i + 1);
                 slot.after_decimal_digit_count = i;
                 slot.flags = NumeralLiteral.materialized_flag;
-                slot._reserved = 0;
             }
             return list;
         }
@@ -5897,7 +6094,7 @@ test "NumeralLiteral: serialized bytes are a function of the recorded literals" 
     try std.testing.expectEqual(@as(u64, 5), loaded.len());
     for (0..5) |i| {
         const literal = loaded.get(@fromBackingInt(@intCast(@as(u32, @intCast(i))))).*;
-        try std.testing.expectEqual(@as(u32, @intCast(i)), literal.node_idx);
+        try std.testing.expectEqual(@as(u32, @intCast(i * 4)), literal.digits_start);
         try std.testing.expectEqual(@as(u64, i), literal.after_decimal_digit_count);
         try std.testing.expect(literal.isMaterialized());
     }

@@ -11,7 +11,7 @@ requires{}{n:0[import S	exposing[
 # EXPECTED
 UNCLOSED STRING - fuzz_crash_061.md:1:9:1:10
 UNEXPECTED TYPE SYNTAX - fuzz_crash_061.md:2:14:2:15
-EXPECTED CLOSING BRACE - fuzz_crash_061.md:1:1:1:9
+EXPECTED CLOSING BRACE - fuzz_crash_061.md:2:15:2:16
 EXPECTED CLOSING BRACKET - fuzz_crash_061.md:2:16:2:22
 # PROBLEMS
 ~~~clojure
@@ -51,7 +51,7 @@ EXPECTED CLOSING BRACKET - fuzz_crash_061.md:2:16:2:22
 	(report
 		(severity runtime_error)
 		(title "Expected Closing Brace")
-		(region (start 1 1) (end 1 9))
+		(region (start 2 15) (end 2 16))
 		(headline
 			(reflow "I was parsing a `requires` section, and I expected a closing `}`."))
 		(document
@@ -67,13 +67,11 @@ EXPECTED CLOSING BRACKET - fuzz_crash_061.md:2:16:2:22
 			(line-break)
 			(line-break)
 			(text "I found ")
-			(annotated code "platform")
+			(annotated code "[")
 			(text " here.")
 			(line-break)
-			(reflow "That word is reserved by Roc, so it cannot be used as a name in this position.")
 			(line-break)
-			(line-break)
-			(source-region (file "fuzz_crash_061.md") (start 1 1) (end 1 9) (annotation error) (line-text "platform\""))))
+			(source-region (file "fuzz_crash_061.md") (start 2 15) (end 2 16) (annotation error) (line-text "requires{}{n:0[import S\texposing["))))
 	(report
 		(severity runtime_error)
 		(title "Expected Closing Bracket")

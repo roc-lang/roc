@@ -157,7 +157,7 @@ pub const Operands = struct {
             .call_erased => |call| {
                 result.single(call.closure);
                 if (call.args) |args| result.single(args);
-                if (call.reuse_source) |source| result.single(source);
+                if (call.reuse_source.get()) |source| result.single(source);
             },
             .closure => |closure| {
                 result.single(closure.capture);
@@ -289,7 +289,7 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
             .closure = try Remap.one(context, call.closure),
             .args = try Remap.opt(context, call.args),
             .reuse_closure = call.reuse_closure,
-            .reuse_source = try Remap.opt(context, call.reuse_source),
+            .reuse_source = .of(try Remap.opt(context, call.reuse_source.get())),
             .result_reuse = call.result_reuse,
             .deferred = call.deferred,
             .drive = call.drive,
@@ -322,7 +322,7 @@ test "dynamic erased call inventory includes its ownership source" {
         .closure = closure,
         .args = args,
         .reuse_closure = true,
-        .reuse_source = owner,
+        .reuse_source = .some(owner),
     } });
     try std.testing.expectEqualSlices(LocalId, &.{ closure, args, owner }, operands.singles[0..operands.single_count]);
 }

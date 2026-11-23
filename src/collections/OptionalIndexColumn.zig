@@ -3,7 +3,7 @@
 //! Entry 0 means absent and `n + 1` means index `n`. Every store's length is
 //! bounded by `SafeList`'s `maxInt(u32)` rows, with `maxInt(u32)` reserved as
 //! the empty-range start, so the largest real index is `maxInt(u32) - 1` and
-//! `n + 1` never wraps; `set` asserts that bound.
+//! `n + 1` never wraps.
 //!
 //! The storage policy is chosen once, by the constructor: `initFilled` is an
 //! ordinary allocation cleared to absent, for columns whose entries are mostly

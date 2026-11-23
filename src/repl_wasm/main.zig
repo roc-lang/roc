@@ -206,8 +206,7 @@ fn inputMetadata(info: ReplSession.InputInfo) SnippetMetadata {
 }
 
 fn advanceRevision() error{RevisionExhausted}!u32 {
-    if (session_revision == std.math.maxInt(u32)) return error.RevisionExhausted;
-    session_revision += 1;
+    session_revision = std.math.add(u32, session_revision, 1) catch return error.RevisionExhausted;
     return session_revision;
 }
 

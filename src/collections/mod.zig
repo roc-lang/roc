@@ -72,8 +72,12 @@ pub const OptionalIndexColumn = @import("OptionalIndexColumn.zig").OptionalIndex
 pub const OptionalId = @import("optional_id.zig").OptionalId;
 /// Compact optional values for a private one-based ID domain.
 pub const ZeroSentinelId = @import("optional_id.zig").ZeroSentinelId;
+/// The next zero-based `u32` id whose biased optional form also fits.
+pub const nextBiasedId = @import("optional_id.zig").nextBiasedId;
 /// An optional raw `u32` in four bytes.
 pub const OptionalU32 = @import("optional_id.zig").OptionalU32;
+/// An optional raw `u8` in one byte; zero means absent.
+pub const OptionalU8 = @import("optional_id.zig").OptionalU8;
 /// An optional small enum in one byte.
 pub const OptionalEnum = @import("optional_id.zig").OptionalEnum;
 /// An optional struct at the struct's own size, keyed by one biased field.

@@ -930,7 +930,7 @@ pub inline fn checkedByteCount(count: usize, element_width: usize, roc_ops: *Roc
 /// Whether `count * element_width` would overflow `usize`. Separate so tests
 /// can reach it without crashing.
 pub inline fn byteCountOverflows(count: usize, element_width: usize) bool {
-    return element_width != 0 and count > std.math.maxInt(usize) / element_width;
+    return @mulWithOverflow(count, element_width)[1] != 0;
 }
 
 /// Returns `data_bytes + header_bytes`, or crashes if the sum overflows `usize`.
@@ -941,7 +941,7 @@ pub inline fn checkedAllocLen(data_bytes: usize, header_bytes: usize, roc_ops: *
 
 /// Whether `data_bytes + header_bytes` would overflow `usize`.
 pub inline fn allocLenOverflows(data_bytes: usize, header_bytes: usize) bool {
-    return data_bytes > std.math.maxInt(usize) - header_bytes;
+    return @addWithOverflow(data_bytes, header_bytes)[1] != 0;
 }
 
 /// Allocates memory with space for a reference count, for C compatibility

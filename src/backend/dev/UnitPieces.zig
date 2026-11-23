@@ -24,7 +24,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RUPC";
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 5;
+pub const format_version: u32 = 7;
 
 /// One source file the pieces' lines name, in the order the set indexes them.
 pub const SourceFile = struct {
@@ -147,13 +147,13 @@ pub fn encode(allocator: Allocator, pieces: *const Pieces) Allocator.Error![]u8 
             try writer.byte(formByte(ref.form));
             try writer.word(ref.target);
             try writer.word(ref.delta);
-            try writer.word(ref.veneer.get() orelse std.math.maxInt(u32));
+            try writer.word(@backingInt(ref.veneer));
         }
         try writer.word(@intCast(excerpt.symbolic_refs.len));
         for (excerpt.symbolic_refs) |ref| {
             try writer.word(ref.site);
             try writer.byte(formByte(ref.form));
-            try writer.word(ref.veneer orelse std.math.maxInt(u32));
+            try writer.word(@backingInt(collections.OptionalU32.of(ref.veneer)));
             switch (ref.binding) {
                 .unresolved => try writer.byte(0),
                 .absent => try writer.byte(1),
@@ -273,7 +273,7 @@ pub fn decode(allocator: Allocator, bytes: []const u8) ReadError!Pieces {
                 .form = try readForm(&reader),
                 .target = try reader.word(),
                 .delta = try reader.word(),
-                .veneer = .of(optionalWord(try reader.word())),
+                .veneer = optionalWord(try reader.word()),
             };
             if (ref.target >= excerpt_count) return error.MalformedPieces;
         }
@@ -281,7 +281,7 @@ pub fn decode(allocator: Allocator, bytes: []const u8) ReadError!Pieces {
         for (symbolic_refs) |*ref| {
             const site = try reader.word();
             const form = try readForm(&reader);
-            const veneer = optionalWord(try reader.word());
+            const veneer = optionalWord(try reader.word()).get();
             const binding: @FieldType(CodeExcerpt.SymbolicReference, "binding") = switch (try reader.byte()) {
                 0 => .unresolved,
                 1 => .absent,
@@ -387,19 +387,20 @@ fn readForm(reader: *Reader) ReadError!CodeExcerpt.Form {
     };
 }
 
-fn optionalWord(value: u32) ?u32 {
-    return if (value == std.math.maxInt(u32)) null else value;
+/// A word the writer stored as `collections.OptionalU32`: zero for absence.
+fn optionalWord(value: u32) collections.OptionalU32 {
+    return @fromBackingInt(value);
 }
 
 fn writeLoc(writer: *Writer, loc: base.SourceLoc) Allocator.Error!void {
-    try writer.word(loc.file);
+    try writer.word(@backingInt(loc.file));
     try writer.word(loc.line);
     try writer.word(loc.column);
 }
 
 fn readLoc(reader: *Reader, file_count: usize) ReadError!base.SourceLoc {
-    const loc: base.SourceLoc = .{ .file = try reader.word(), .line = try reader.word(), .column = try reader.word() };
-    if (loc.hasLocation() and loc.file >= file_count) return error.MalformedPieces;
+    const loc: base.SourceLoc = .{ .file = @fromBackingInt(try reader.word()), .line = try reader.word(), .column = try reader.word() };
+    if (loc.hasLocation() and loc.fileIndex() >= file_count) return error.MalformedPieces;
     return loc;
 }
 
@@ -592,11 +593,11 @@ test "pieces round-trip through their encoding" {
         .frame = .{ .prologue_size = 4, .stack_alloc = 16, .frame_size = 32, .callee_saved_mask = 3, .epilogue_offset = 2, .uses_frame_pointer = true },
         .refs = try sa.dupe(CodeExcerpt.Reference, &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0, .veneer = .none }}),
         .symbolic_refs = try sa.dupe(CodeExcerpt.SymbolicReference, &.{.{ .site = 2, .form = .addr, .target = .{ .rc_helper = try sa.dupe(u8, "roc__helper") } }}),
-        .lines = try sa.dupe(CodeExcerpt.LineEntry, &.{.{ .offset = 0, .loc = .{ .file = 0, .line = 3, .column = 1 }, .region = base.Region.from_raw_offsets(5, 9) }}),
+        .lines = try sa.dupe(CodeExcerpt.LineEntry, &.{.{ .offset = 0, .loc = .{ .file = .some(0), .line = 3, .column = 1 }, .region = base.Region.from_raw_offsets(5, 9) }}),
         .failure_sites = try sa.dupe(CodeExcerpt.FailureSite, &.{.{ .offset = 4, .meaning = .checked_error }}),
         .relocations = try sa.dupe(CodeExcerpt.NamedRelocation, &.{.{ .offset = 0, .name = try sa.dupe(u8, "roc_alloc"), .scope = .shared, .kind = .{ .function = .aarch64_call26 } }}),
         .data = try sa.dupe(CodeExcerpt.DataItem, &.{.{ .name = try sa.dupe(u8, "roc__hcafe"), .bytes = try sa.dupe(u8, "constant"), .alignment = 8, .symbol_offset = 0 }}),
-        .loc = .{ .file = 0, .line = 2, .column = 0 },
+        .loc = .{ .file = .some(0), .line = 2, .column = 0 },
         .name = "Main.answer",
     };
     excerpts[1] = .{

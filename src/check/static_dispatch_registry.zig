@@ -1231,11 +1231,9 @@ pub const SiteEvidenceEntry = extern struct {
     /// at this site, in the scheme's `scheme_vars` order.
     subst_start: u32 = 0,
     subst_len: u32 = 0,
-    /// For a stored nested-function use, `@backingInt` of the checked type of
-    /// the instance the containing value stores; `no_site_instance` otherwise.
-    instance_ty: u32 = no_site_instance,
-
-    pub const no_site_instance = std.math.maxInt(u32);
+    /// For a stored nested-function use, the checked type of the instance the
+    /// containing value stores; absent otherwise.
+    instance_ty: collections.OptionalId(CheckedTypeId) = .none,
 };
 
 /// Public `EvidencePathStep` declaration: one semantic step from a type to a
@@ -1248,16 +1246,14 @@ pub const EvidencePathStep = dispatch_evidence.PathStep;
 /// param vector share their common prefixes.
 pub const EvidencePathNode = dispatch_evidence.PathNode;
 
-pub const no_evidence_path_node = dispatch_evidence.no_path_node;
-
 /// Public `EvidencePathMemo` declaration: resolves published path nodes once
 /// each per root.
 pub const EvidencePathMemo = dispatch_evidence.PathMemo;
 
 /// Public `EvidencePath` declaration: a published path, named by its last node
-/// in the template table's `evidence_path_nodes`.
+/// in the template table's `evidence_path_nodes`, absent for the empty path.
 pub const EvidencePath = struct {
-    last: u32 = no_evidence_path_node,
+    last: collections.OptionalU32 = .none,
     len: u32 = 0,
 };
 
@@ -1853,7 +1849,7 @@ pub const StaticDispatchPlanTable = struct {
         var constraint_index = try StaticDispatchConstraintIndex.fromModule(allocator, module, bodies);
         defer constraint_index.deinit(allocator);
 
-        var node_idx: u32 = 0;
+        var node_idx: u32 = CIR.Node.first_idx;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const tag = module.nodeTag(@fromBackingInt(@intCast(node_idx)));
             if (tag != .expr_dispatch_call and
@@ -2024,15 +2020,14 @@ pub const StaticDispatchPlanTable = struct {
             has_subject: bool,
             subject_bucket: u64,
         };
-        const no_role_candidate = std.math.maxInt(u32);
         const GeneratedCodecRoleCandidate = struct {
             subject_ty: ?CheckedTypeId,
             role: u32,
-            next: u32 = no_role_candidate,
+            next: collections.OptionalU32 = .none,
         };
         // A role key's candidates, chained through `role_candidate_pool` in
-        // the order they were added.
-        const GeneratedCodecRoleChain = struct { first: u32, last: u32 };
+        // the order they were added; absent ends for an empty chain.
+        const GeneratedCodecRoleChain = struct { first: collections.OptionalU32 = .none, last: collections.OptionalU32 = .none };
         var role_candidates: std.AutoHashMapUnmanaged(GeneratedCodecRoleKey, GeneratedCodecRoleChain) = .empty;
         defer role_candidates.deinit(allocator);
         var role_candidate_pool: std.ArrayListUnmanaged(GeneratedCodecRoleCandidate) = .empty;
@@ -2049,21 +2044,22 @@ pub const StaticDispatchPlanTable = struct {
                 const method = try names.internMethodIdent(module.identStoreConst(), @bitCast(call.method_ident));
                 const dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @fromBackingInt(@intCast(call.dispatcher_var)));
                 const callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @fromBackingInt(@intCast(call.callable_var)));
-                const subject_ty = if (call.subject_var == ModuleEnv.GeneratedCodecCall.no_subject_var)
-                    null
+                const subject_ty = if (call.subject_var.get()) |subject_var|
+                    try checkedTypeIdForVar(allocator, module, checked_types, @fromBackingInt(@intCast(subject_var)))
                 else
-                    try checkedTypeIdForVar(allocator, module, checked_types, @fromBackingInt(@intCast(call.subject_var)));
+                    null;
                 const role_key = GeneratedCodecRoleKey{
                     .method = method,
                     .has_subject = subject_ty != null,
                     .subject_bucket = if (subject_ty) |subject| checked_type_view.aliasTransparentBucketKey(subject) else 0,
                 };
                 const candidates_entry = try role_candidates.getOrPut(allocator, role_key);
-                if (!candidates_entry.found_existing) candidates_entry.value_ptr.* = .{ .first = no_role_candidate, .last = no_role_candidate };
+                if (!candidates_entry.found_existing) candidates_entry.value_ptr.* = .{};
                 var method_role: ?u32 = null;
-                var candidate_index = candidates_entry.value_ptr.first;
-                while (candidate_index != no_role_candidate) : (candidate_index = role_candidate_pool.items[candidate_index].next) {
+                var next_candidate = candidates_entry.value_ptr.first;
+                while (next_candidate.get()) |candidate_index| {
                     const candidate = role_candidate_pool.items[candidate_index];
+                    next_candidate = candidate.next;
                     if (subject_ty == null) {
                         method_role = candidate.role;
                         break;
@@ -2086,12 +2082,12 @@ pub const StaticDispatchPlanTable = struct {
                         .role = method_role.?,
                     });
                     const chain = candidates_entry.value_ptr;
-                    if (chain.last == no_role_candidate) {
-                        chain.first = added;
+                    if (chain.last.get()) |last| {
+                        role_candidate_pool.items[last].next = .some(added);
                     } else {
-                        role_candidate_pool.items[chain.last].next = added;
+                        chain.first = .some(added);
                     }
-                    chain.last = added;
+                    chain.last = .some(added);
                 }
                 try generated_codec_calls.append(allocator, .{
                     .method = method,
@@ -2206,8 +2202,7 @@ pub const StaticDispatchPlanTable = struct {
             if (bodies.literalPatternGuard(pattern) == null) continue;
             const source = module_env.store.literalDispatchPlanForNode(@fromBackingInt(@intCast(raw))) orelse unreachable; // literalPatternGuard reports only pattern nodes that carry a literal dispatch plan
             const context = source.patternContext(&module_env.store) orelse unreachable; // recordLiteralDispatchPlan allocates a pattern context for every pattern node's plan
-            std.debug.assert(context.equality_fn_var_plus_one != 0);
-            const constraint_fn: Var = @fromBackingInt(@intCast(context.equality_fn_var_plus_one - 1));
+            const constraint_fn: Var = context.equality_fn_var.get().?;
             const args = [_]StaticDispatchOperand{
                 .{ .literal_pattern_value = pattern }, .{ .literal_pattern_conversion = pattern },
             };
@@ -2443,8 +2438,7 @@ pub const StaticDispatchPlanTable = struct {
     /// `expr` places into its containing value.
     pub fn siteInstanceType(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?CheckedTypeId {
         const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence.items(), @backingInt(expr), siteEvidenceOrder) orelse return null;
-        if (found.instance_ty == SiteEvidenceEntry.no_site_instance) return null;
-        return @fromBackingInt(@intCast(found.instance_ty));
+        return found.instance_ty.get();
     }
 
     pub fn siteSubstitution(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?[]const CheckedTypeId {
@@ -2532,7 +2526,7 @@ const StaticDispatchConstraintIndex = struct {
         var live_fn_vars: collections.DenseMapUnmanaged(Var, void) = .empty;
         defer live_fn_vars.deinit(allocator);
 
-        var node_idx: u32 = 0;
+        var node_idx: u32 = CIR.Node.first_idx;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
             const node_tag = module.nodeTag(@fromBackingInt(@intCast(node_idx)));

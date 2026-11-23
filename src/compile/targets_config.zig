@@ -1049,11 +1049,10 @@ fn scalarUnsigned(scalar: checked.ConstScalar, reason: *TargetConfigResolveReaso
         },
     };
 
-    if (value > std.math.maxInt(usize)) {
+    return std.math.cast(usize, value) orelse {
         reason.* = .integer_out_of_range;
         return null;
-    }
-    return @intCast(value);
+    };
 }
 
 fn signedScalarUnsigned(value: anytype, reason: *TargetConfigResolveReason) ?u128 {

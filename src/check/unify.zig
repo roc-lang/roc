@@ -5050,7 +5050,7 @@ fn mergeStaticDispatchConstraintMetadata(
     if (merged.provenance.intro_expr == .none) {
         merged.provenance.intro_expr = other.provenance.intro_expr;
     }
-    if (!merged.interpolation.isPresent()) {
+    if (merged.interpolation == .none) {
         merged.interpolation = other.interpolation;
     }
     return merged;

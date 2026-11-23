@@ -46,12 +46,6 @@ pub const Symbol = packed struct(u64) {
     pub fn hash(self: Symbol) u64 {
         return self.id;
     }
-
-    pub const none: Symbol = .{ .id = std.math.maxInt(u64) };
-
-    pub fn isNone(self: Symbol) bool {
-        return self.id == none.id;
-    }
 };
 
 /// Content identity of a lowered procedure: a digest of everything that
@@ -183,22 +177,20 @@ pub const CFStmtId = enum(u32) {
 };
 
 /// Identifier of one virtual source frame introduced by inlining, or `none`.
-/// A frame's id is its row in `LirStore.inline_scopes` plus one, so a zeroed
-/// column holds `none`.
+/// A frame's id is its row in `LirStore.inline_scopes` as a
+/// `collections.OptionalU32`, so a zeroed column holds `none`.
 pub const InlineScopeId = enum(u32) {
     none = 0,
     _,
 
     /// The id of the frame at `inline_scopes` row `row_index`.
     pub fn fromRow(row_index: u32) InlineScopeId {
-        std.debug.assert(row_index < std.math.maxInt(u32));
-        return @fromBackingInt(row_index + 1);
+        return @fromBackingInt(@backingInt(collections.OptionalU32.some(row_index)));
     }
 
     /// The `inline_scopes` row of a frame.
     pub fn row(self: InlineScopeId) u32 {
-        std.debug.assert(self != .none);
-        return @backingInt(self) - 1;
+        return @as(collections.OptionalU32, @fromBackingInt(@backingInt(self))).get().?;
     }
 };
 
@@ -1214,14 +1206,12 @@ pub fn StmtRowId(comptime T: type) type {
 
         /// The id of position `index` of the row's column.
         pub fn fromPosition(index: u32) Self {
-            std.debug.assert(index < std.math.maxInt(u32));
-            return @fromBackingInt(index + 1);
+            return @fromBackingInt(@backingInt(collections.OptionalU32.some(index)));
         }
 
         /// The position of a row in its column.
         pub fn position(self: Self) u32 {
-            std.debug.assert(self != .none);
-            return @backingInt(self) - 1;
+            return @as(collections.OptionalU32, @fromBackingInt(@backingInt(self))).get().?;
         }
     };
 }
@@ -1288,7 +1278,7 @@ pub const LowLevelExtra = struct {
     /// Committed output element layout for `list_map_can_reuse`. Consumers
     /// with different storage representations use this explicit fact rather
     /// than reconstructing the transform function return type.
-    map_output_elem: ?layout.Idx = null,
+    map_output_elem: collections.OptionalId(layout.Idx) = .none,
     /// Set on a list operation a `.boxy` generic body emits: its last
     /// argument is the `opaque_ptr` descriptor of the list's elements, which
     /// supplies the element width, alignment, and reference counting the
@@ -1328,17 +1318,20 @@ pub const RcHelperRef = union(enum) {
 /// ARC; no backend tail-call inference is required.
 pub const TailCallLink = enum(u32) {
     /// The call is not a self-tail site.
-    none = std.math.maxInt(u32),
+    none = 0,
     /// The call is the last self-tail site of its chain.
-    last = std.math.maxInt(u32) - 1,
+    last = 1,
     /// The call is a self-tail site; the value is the next site's
-    /// `CFStmtId`.
+    /// `CFStmtId` plus `first_next`.
     _,
+
+    const first_next: u32 = 2;
 
     /// The link of a self-tail site whose chain continues at `next`.
     pub fn site(next_site: ?CFStmtId) TailCallLink {
         const id = next_site orelse return .last;
-        return @fromBackingInt(@backingInt(id));
+        std.debug.assert(@backingInt(id) < max_cf_stmt_count);
+        return @fromBackingInt(@backingInt(id) + first_next);
     }
 
     pub fn isSite(self: TailCallLink) bool {
@@ -1349,12 +1342,12 @@ pub const TailCallLink = enum(u32) {
     pub fn next(self: TailCallLink) ?CFStmtId {
         std.debug.assert(self != .none);
         if (self == .last) return null;
-        return @fromBackingInt(@backingInt(self));
+        return @fromBackingInt(@backingInt(self) - first_next);
     }
 };
 
-/// The largest statement count, leaving the top two `CFStmtId` values for
-/// `TailCallLink`'s tags.
+/// The largest statement count, so every `CFStmtId` plus
+/// `TailCallLink.first_next` fits a `TailCallLink`.
 pub const max_cf_stmt_count: u32 = std.math.maxInt(u32) - 1;
 
 /// The fields of a `LiteralValue.static_data` read set only for a
@@ -1410,9 +1403,9 @@ pub const ErasedCallData = struct {
     /// transparent nominal/tag wrapper of `closure`; both must denote the
     /// same erased-callable allocation, while this local carries its owned
     /// unit. Debug certification proves that allocation identity through
-    /// the exact representation-transparent producer chain. Null names
+    /// the exact representation-transparent producer chain. Absent names
     /// `closure` itself.
-    reuse_source: ?LocalId = null,
+    reuse_source: collections.OptionalId(LocalId) = .none,
     /// The call's result holds exactly one erased-callable slot, so the
     /// callee can repack a transferred allocation as its result. Such a call
     /// is solved as demanding its closure's unit.
@@ -1432,13 +1425,13 @@ pub const ErasedCallData = struct {
 /// stored out of line (see `StmtRowId`).
 pub const PackedErasedFnData = struct {
     proc: LirProcSpecId,
-    capture: ?LocalId,
-    capture_layout: ?layout.Idx,
+    capture: collections.OptionalId(LocalId),
+    capture_layout: collections.OptionalId(layout.Idx),
     on_drop: ErasedCallableOnDrop,
     /// Explicit retain callback for copying the inline capture.
     on_copy: ErasedCallableOnDrop = .none,
     /// Frozen callbacks see the runtime prefix too, without a hot-reload adapter.
-    frozen_capture_layout: ?layout.Idx = null,
+    frozen_capture_layout: collections.OptionalId(layout.Idx) = .none,
     /// Optional local containing a consumed erased callable allocation to
     /// repack. The local itself is present statically, but its runtime value
     /// may be null when an ABI caller declined to transfer ownership.
@@ -1448,7 +1441,7 @@ pub const PackedErasedFnData = struct {
     /// consumed allocation is uniquely owned at the statement. Otherwise,
     /// consumers must runtime-check uniqueness and take the fresh allocate
     /// path when the old allocation is shared.
-    reuse: ?LocalId = null,
+    reuse: collections.OptionalId(LocalId) = .none,
     reuse_unique: bool = false,
     /// Set after ARC on a packing whose callable never outlives the frame
     /// building it (design.md "Frame Callables"): the callable lives in
@@ -1581,9 +1574,9 @@ pub const DynOp = union(enum) {
         /// when the call is driven.
         reuse_closure: bool = false,
         /// The local whose ownership unit a transfer moves, which denotes
-        /// `closure`'s allocation (`lir/erased_owner.zig`). Null names
+        /// `closure`'s allocation (`lir/erased_owner.zig`). Absent names
         /// `closure` itself.
-        reuse_source: ?LocalId = null,
+        reuse_source: collections.OptionalId(LocalId) = .none,
         /// The call's result holds exactly one erased-callable slot, so the
         /// callee can repack a transferred allocation as its result. Such a
         /// call is solved as demanding its closure's unit.
@@ -1918,7 +1911,7 @@ pub const FailureMeaning = union(enum) {
 /// The local whose ownership unit an erased call transfers when its closure
 /// dies at the call: the explicit reuse source, or the closure itself.
 pub fn erasedCallOwner(assign: anytype) LocalId {
-    return assign.reuse_source orelse assign.closure;
+    return assign.reuse_source.get() orelse assign.closure;
 }
 
 /// What a procedure body contains, recorded by whoever emitted its statements.
@@ -2086,6 +2079,12 @@ pub const LirProcSpec = struct {
     /// being replaced, so a backend that passes arguments that way gives
     /// every member of a group one storage contract for them.
     tail_group: collections.OptionalId(TailGroupId) = .none,
+    /// Whether this procedure takes a tail carry (`takesTailCarry`). ARC sets
+    /// it on every Roc-ABI member of a `tail_group` with a dynamic parameter,
+    /// since a frame-replacing call can enter exactly those; a body-less
+    /// `external` proc gets the value its object published, because the
+    /// group is a fact of bodies only the defining unit holds.
+    tail_carry: bool = false,
     /// What the body contains, for pass admission.
     shapes: ProcShapes = .{},
     /// Explicit native-stack probing requirement for this proc.
@@ -2149,6 +2148,15 @@ pub const LirProcSpec = struct {
     /// calls, and an erased-callable one reads the cell from its invocation.
     pub fn takesPendingCell(self: LirProcSpec) bool {
         return self.abi == .roc and self.may_leave_pending;
+    }
+
+    /// Whether this procedure takes a tail carry: a hidden parameter after
+    /// its arguments and dynamic result holding the storage a frame-replacing
+    /// call moved its dynamic arguments into, because their bytes lived in
+    /// the frame it replaced. The procedure releases its carry when it
+    /// returns or replaces its own frame. Every other caller passes none.
+    pub fn takesTailCarry(self: LirProcSpec) bool {
+        return self.abi == .roc and self.tail_carry;
     }
 };
 

@@ -55,7 +55,7 @@ test "a write-first table handed over with an unwritten entry fails the invarian
 }
 
 test "an optional index column rejects the reserved index" {
-    try death_test.expectPanic("reached unreachable code", storeReservedIndex, .{});
+    try death_test.expectPanic("integer overflow", storeReservedIndex, .{});
 }
 
 test "a sealed reserved list refuses to grow" {

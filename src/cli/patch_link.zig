@@ -29,6 +29,7 @@
 //! belong to the coordinating thread.
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 const backend = @import("backend");
 const host_prelink = @import("host_prelink.zig");
 const unit_walk = @import("unit_walk.zig");
@@ -275,8 +276,8 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     }
     // Symbols of code the link leaves out get no entry: each placed
     // image's symbol table index maps to its entry's position among the
-    // image's kept symbols, or `no_symbol`.
-    const symbol_slots = try gpa.alloc([]u32, images.items.len);
+    // image's kept symbols, absent for an omitted one.
+    const symbol_slots = try gpa.alloc([]collections.OptionalU32, images.items.len);
     @memset(symbol_slots, &.{});
     defer {
         for (order.items) |index| gpa.free(symbol_slots[index]);
@@ -286,15 +287,15 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     var strtab_size: u64 = if (host_strtab) |strtab| strtab.size else 1;
     for (order.items) |index| {
         const view = images.items[index].view;
-        const slots = try gpa.alloc(u32, view.symbols().len);
+        const slots = try gpa.alloc(collections.OptionalU32, view.symbols().len);
         symbol_slots[index] = slots;
         var kept: u32 = 0;
         for (view.symbolAtoms(), slots) |atom, *slot| {
-            if (atom != UnitImage.no_atom and !reached_atoms[index][atom]) {
-                slot.* = no_symbol;
+            if (if (atom.get()) |present| !reached_atoms[index][present] else false) {
+                slot.* = .none;
                 continue;
             }
-            slot.* = kept;
+            slot.* = .some(kept);
             kept += 1;
         }
         places[index].first_symbol = 1 + app_symbol_count;
@@ -378,7 +379,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
                     // of an image the link may not place, or an atom it may
                     // leave out; no placed field reads it.
                     const target_atoms = reached_atoms[found.image];
-                    if (target_atoms.len == 0 or (atom != UnitImage.no_atom and !target_atoms[atom])) {
+                    if (target_atoms.len == 0 or (if (atom.get()) |present| !target_atoms[present] else false)) {
                         std.debug.assert(!state.imports_used[import]);
                         break :app 0;
                     }
@@ -438,7 +439,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
             const first = view.atomRange(atom).start;
             while (atom < atoms_reached.len and atoms_reached[atom]) atom += 1;
             const end = view.atomRange(atom - 1).end;
-            try fanout.addCopies(gpa, &copy_list, view.block()[first..end], context.fileOffsetOf(place.block) + place.atoms[first_atom]);
+            try fanout.addCopies(gpa, &copy_list, view.block()[first..end], context.fileOffsetOf(place.block) + place.atoms[first_atom].get().?);
         }
         if (view.data().len != 0) try fanout.addCopies(gpa, &copy_list, view.data(), context.fileOffsetOf(place.data));
         for ([_]UnitImage.Region{ .debug_abbrev, .debug_info, .debug_line }, 0..) |region, slot| {
@@ -561,16 +562,14 @@ fn findHostSymbol(context: *const anyopaque, name: []const u8) ?u64 {
     return host.findSymbol(name);
 }
 
-/// `Context.symbol_slots` entry of a symbol the output's symbol table omits.
-const no_symbol: u32 = std.math.maxInt(u32);
-
 const Place = struct {
     block: u64 = 0,
     /// The size of the image's compacted block: its reached atoms, in
     /// order, without the unreached ones (`compactAtoms`).
     block_size: u64 = 0,
-    /// For each atom, its offset in the compacted block, or `hole`.
-    atoms: []u32 = &.{},
+    /// For each atom, its offset in the compacted block, absent for an
+    /// atom the link leaves out.
+    atoms: []collections.OptionalU32 = &.{},
     /// On AArch64, the image's veneers, one per import in import order.
     veneers: u64 = 0,
     data: u64 = 0,
@@ -597,8 +596,7 @@ const Place = struct {
     /// How far back from its image offset the reached atom `atom` sits in
     /// the compacted block.
     fn shift(self: Place, view: UnitImage.View, atom: u32) u64 {
-        std.debug.assert(self.atoms[atom] != hole);
-        return view.atoms()[atom] - self.atoms[atom];
+        return view.atoms()[atom] - self.atoms[atom].get().?;
     }
 
     /// The address of symbol `symbol_index` of the image placed here; a
@@ -607,13 +605,10 @@ const Place = struct {
         const symbol = view.symbols()[symbol_index];
         const region: UnitImage.Region = @fromBackingInt(symbol.region);
         if (region != .block) return self.base(region) + symbol.value;
-        const atom = view.symbolAtoms()[symbol_index];
+        const atom = view.symbolAtoms()[symbol_index].get().?;
         return self.block + symbol.value - self.shift(view, atom);
     }
 };
-
-/// `Place.atoms` entry of an atom the link leaves out.
-const hole: u32 = std.math.maxInt(u32);
 
 /// Lay out the reached atoms of `view`'s block without the unreached ones.
 /// Each run of consecutive reached atoms keeps its bytes together and
@@ -621,17 +616,17 @@ const hole: u32 = std.math.maxInt(u32);
 /// in it keeps the alignment its image offset has (the strongest the
 /// object could have required of it, at most the block's), so a run moves
 /// back by a multiple of that alignment. Returns each atom's offset in the
-/// compacted block, `hole` for an unreached one, and the compacted size.
-fn compactAtoms(gpa: Allocator, view: UnitImage.View, reached: []const bool) Allocator.Error!struct { offsets: []u32, size: u64 } {
+/// compacted block, absent for an unreached one, and the compacted size.
+fn compactAtoms(gpa: Allocator, view: UnitImage.View, reached: []const bool) Allocator.Error!struct { offsets: []collections.OptionalU32, size: u64 } {
     const starts = view.atoms();
     // One sweep writes every atom's entry, so the table needs no fill.
-    const offsets = try gpa.alloc(u32, starts.len);
+    const offsets = try gpa.alloc(collections.OptionalU32, starts.len);
     const block_align: u64 = view.blockAlign();
     var cursor: u64 = 0;
     var atom: usize = 0;
     while (atom < starts.len) {
         if (!reached[atom]) {
-            offsets[atom] = hole;
+            offsets[atom] = .none;
             atom += 1;
             continue;
         }
@@ -642,7 +637,7 @@ fn compactAtoms(gpa: Allocator, view: UnitImage.View, reached: []const bool) All
         const old_end: u64 = view.atomRange(@intCast(atom - 1)).end;
         std.debug.assert(cursor <= old_start);
         const new_start = cursor + (old_start - cursor) % run_align;
-        for (first..atom) |index| offsets[index] = @intCast(new_start + (starts[index] - old_start));
+        for (first..atom) |index| offsets[index] = .some(@intCast(new_start + (starts[index] - old_start)));
         cursor = new_start + (old_end - old_start);
     }
     return .{ .offsets = offsets, .size = cursor };
@@ -671,8 +666,8 @@ const Context = struct {
     /// For each placed image, which of its atoms are reached.
     reached_atoms: []const []const bool,
     /// For each placed image, each symbol's position among the image's
-    /// entries in the output symbol table, or `no_symbol`.
-    symbol_slots: []const []const u32,
+    /// entries in the output symbol table, absent for an omitted one.
+    symbol_slots: []const []const collections.OptionalU32,
 
     /// The file offset of an address in the app region's file-backed bytes.
     fn fileOffsetOf(self: *const Context, address: u64) u64 {
@@ -748,9 +743,9 @@ const Task = struct {
         const symbols = view.symbols()[range.first..][0..range.count];
         const slots = context.symbol_slots[range.image][range.first..][0..range.count];
         var written: u64 = 0;
-        for (symbols, slots, 0..) |symbol, slot, at| {
+        for (symbols, slots, 0..) |symbol, symbol_slot, at| {
             // A symbol of code the link left out has no entry.
-            if (slot == no_symbol) continue;
+            const slot = symbol_slot.get() orelse continue;
             const entry = context.out[@intCast(context.symtab_offset + (place.first_symbol + slot) * sym_size)..][0..sym_size];
             written += sym_size;
             const region: UnitImage.Region = @fromBackingInt(symbol.region);
@@ -784,11 +779,11 @@ const Task = struct {
         const addresses = context.resolved[range.image];
         const atoms_reached = context.reached_atoms[range.image];
         for (view.sites()[range.first..][0..range.count]) |site| {
-            if (site.atom != UnitImage.no_atom and !atoms_reached[site.atom]) continue;
+            if (site.atom.get()) |atom| if (!atoms_reached[atom]) continue;
             const region: UnitImage.Region = @fromBackingInt(site.region);
             const kind: UnitImage.SiteKind = @fromBackingInt(site.kind);
             // A field in the block sits where its atom moved to.
-            const offset: u64 = if (site.atom != UnitImage.no_atom) site.offset - place.shift(view, site.atom) else site.offset;
+            const offset: u64 = if (site.atom.get()) |atom| site.offset - place.shift(view, atom) else site.offset;
             const site_address = place.base(region) + offset;
             const out = context.regionOut(place, view, region);
             const field = out[@intCast(offset)..][0..@intCast(UnitImage.kindWidth(kind))];
@@ -842,7 +837,7 @@ const Task = struct {
                 if (!kind.moved(from_shift, place.shift(view, ref.target))) continue;
                 const offset = ref.offset - from_shift;
                 const field = out[@intCast(offset)..][0..kind.width()];
-                const value = @as(i64, @intCast(place.block + place.atoms[ref.target])) + ref.addend;
+                const value = @as(i64, @intCast(place.block + place.atoms[ref.target].get().?)) + ref.addend;
                 if (!UnitImage.applyRef(field, kind, value, place.block + offset)) {
                     base.invariant("fast dev link invariant violated: a resolved reference no longer reaches its target", .{});
                 }
@@ -874,7 +869,7 @@ fn valueRange(view: UnitImage.View, found: SymbolRef, window: host_prelink.Windo
 /// one in a reached atom's data, within `range` when there is one.
 fn relativeSite(site: UnitImage.Site, atoms_reached: []const bool, range: ?[2]u64) bool {
     if (@as(UnitImage.SiteKind, @fromBackingInt(site.kind)) != .abs64) return false;
-    if (site.atom != UnitImage.no_atom and !atoms_reached[site.atom]) return false;
+    if (site.atom.get()) |atom| if (!atoms_reached[atom]) return false;
     switch (@as(UnitImage.Region, @fromBackingInt(site.region))) {
         .data => {},
         // The object writer keeps pointer-bearing read-only data writable.
@@ -979,21 +974,21 @@ test "compaction packs runs of reached atoms and keeps each run's alignment" {
     // leaves; the block keeps its size.
     const held = try compactAtoms(allocator, view, &.{ true, false, true, true });
     defer allocator.free(held.offsets);
-    try std.testing.expectEqualSlices(u32, &.{ 0, hole, 16, 24 }, held.offsets);
+    try std.testing.expectEqualSlices(collections.OptionalU32, &.{ .some(0), .none, .some(16), .some(24) }, held.offsets);
     try std.testing.expectEqual(@as(u64, 32), held.size);
     // A run whose atoms are all 8-aligned moves back by 8.
     const moved = try compactAtoms(allocator, view, &.{ false, true, false, true });
     defer allocator.free(moved.offsets);
-    try std.testing.expectEqualSlices(u32, &.{ hole, 0, hole, 8 }, moved.offsets);
+    try std.testing.expectEqualSlices(collections.OptionalU32, &.{ .none, .some(0), .none, .some(8) }, moved.offsets);
     try std.testing.expectEqual(@as(u64, 16), moved.size);
     // The 16-aligned atom inside a run pins the whole run.
     const pinned = try compactAtoms(allocator, view, &.{ false, true, true, false });
     defer allocator.free(pinned.offsets);
-    try std.testing.expectEqualSlices(u32, &.{ hole, 8, 16, hole }, pinned.offsets);
+    try std.testing.expectEqualSlices(collections.OptionalU32, &.{ .none, .some(8), .some(16), .none }, pinned.offsets);
     try std.testing.expectEqual(@as(u64, 24), pinned.size);
     // A run moves back by a multiple of its alignment.
     const by_sixteen = try compactAtoms(allocator, view, &.{ false, false, true, true });
     defer allocator.free(by_sixteen.offsets);
-    try std.testing.expectEqualSlices(u32, &.{ hole, hole, 0, 8 }, by_sixteen.offsets);
+    try std.testing.expectEqualSlices(collections.OptionalU32, &.{ .none, .none, .some(0), .some(8) }, by_sixteen.offsets);
     try std.testing.expectEqual(@as(u64, 16), by_sixteen.size);
 }

@@ -570,7 +570,9 @@ pub const Interpreter = struct {
     const FrameSlotColumn = collections.OptionalIndexColumn(FrameSlotId);
 
     const FrameSlotIndex = struct {
-        span: LIR.LocalSpan,
+        /// The frame-local span this index was built from; absent while it
+        /// is not built.
+        span: collections.OptionalStruct(LIR.LocalSpan, "start"),
         base: u32,
         slot_of: FrameSlotColumn,
         /// The slots of the frame's zero-sized locals.
@@ -1048,9 +1050,9 @@ pub const Interpreter = struct {
     pub fn getFailedSourceFile(self: *const LirInterpreter) ?base.SourceFileEntry {
         if (!self.failed_stmt_loc.hasLocation()) return null;
         return .{
-            .name = self.store.sourceFileName(self.failed_stmt_loc.file),
-            .qualified_name = self.store.sourceFileQualifiedName(self.failed_stmt_loc.file),
-            .module_identity = self.store.sourceFileModuleIdentity(self.failed_stmt_loc.file),
+            .name = self.store.sourceFileName(self.failed_stmt_loc.fileIndex()),
+            .qualified_name = self.store.sourceFileQualifiedName(self.failed_stmt_loc.fileIndex()),
+            .module_identity = self.store.sourceFileModuleIdentity(self.failed_stmt_loc.fileIndex()),
         };
     }
 
@@ -1546,12 +1548,12 @@ pub const Interpreter = struct {
                 if (self.active_stmt_id) |stmt_id| {
                     const loc = self.store.stmtLoc(stmt_id);
                     if (loc.hasLocation()) {
-                        debugPrint("  source={s}:{d}:{d}\n", .{ self.store.sourceFileName(loc.file), loc.line, loc.column });
+                        debugPrint("  source={s}:{d}:{d}\n", .{ self.store.sourceFileName(loc.fileIndex()), loc.line, loc.column });
                     }
                 }
                 const proc_loc = self.store.procLoc(frame.proc_id);
                 if (proc_loc.hasLocation()) {
-                    debugPrint("  proc_source={s}:{d}:{d}\n", .{ self.store.sourceFileName(proc_loc.file), proc_loc.line, proc_loc.column });
+                    debugPrint("  proc_source={s}:{d}:{d}\n", .{ self.store.sourceFileName(proc_loc.fileIndex()), proc_loc.line, proc_loc.column });
                 }
                 const params = self.store.getLocalSpan(proc.args);
                 debugPrint("  proc params:", .{});
@@ -2329,7 +2331,7 @@ pub const Interpreter = struct {
     /// erased-callable header and the capture, as `evalPackedErasedFn`
     /// lays them out.
     fn frameCallableBytes(self: *LirInterpreter, data: LIR.PackedErasedFnData) usize {
-        const capture_value_size: usize = if (data.capture_layout) |capture_layout| self.helper.sizeOf(capture_layout) else 0;
+        const capture_value_size: usize = if (data.capture_layout.get()) |capture_layout| self.helper.sizeOf(capture_layout) else 0;
         return frame_callable_prefix + builtins.erased_callable.payloadSize(erased_callable_context_capture_offset + capture_value_size);
     }
 
@@ -2372,14 +2374,16 @@ pub const Interpreter = struct {
     ) Allocator.Error!FrameSlotIndex {
         const entry = try self.frame_slot_indexes.getOrPut(proc_id);
         if (entry.found_existing) {
-            if (entry.value_ptr.span.start == span.start and entry.value_ptr.span.len == span.len) return entry.value_ptr.*;
+            if (entry.value_ptr.span.get()) |built| {
+                if (built.start == span.start and built.len == span.len) return entry.value_ptr.*;
+            }
             entry.value_ptr.deinit(self.allocator);
         }
-        // Until the index is built, the entry names a span no procedure has,
-        // so a failed build is rebuilt on the next entry.
-        entry.value_ptr.* = .{ .span = .{ .start = std.math.maxInt(u32), .len = std.math.maxInt(u32) }, .base = 0, .slot_of = .{} };
+        // Until the index is built, the entry names no span, so a failed
+        // build is rebuilt on the next entry.
+        entry.value_ptr.* = .{ .span = .none, .base = 0, .slot_of = .{} };
         if (locals.len == 0) {
-            entry.value_ptr.span = span;
+            entry.value_ptr.span = .some(span);
             return entry.value_ptr.*;
         }
         const base_id = @backingInt(GuardedList.at(locals, 0));
@@ -2443,7 +2447,7 @@ pub const Interpreter = struct {
             }
         }
         entry.value_ptr.* = .{
-            .span = span,
+            .span = .some(span),
             .base = base_id,
             .slot_of = slot_of,
             .zst_slots = zst_slots,
@@ -3915,19 +3919,19 @@ pub const Interpreter = struct {
         assign: anytype,
         target_layout: layout_mod.Idx,
     ) Error!Value {
-        const has_capture = assign.capture != null;
-        if (has_capture != (assign.capture_layout != null)) {
+        const has_capture = assign.capture != .none;
+        if (has_capture != (assign.capture_layout != .none)) {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: packed erased fn capture/layout presence differed",
                 .{},
             );
         }
 
-        const capture_value_size: usize = if (assign.capture_layout) |capture_layout|
+        const capture_value_size: usize = if (assign.capture_layout.get()) |capture_layout|
             self.helper.sizeOf(capture_layout)
         else
             0;
-        if (assign.capture_layout) |capture_layout| {
+        if (assign.capture_layout.get()) |capture_layout| {
             const capture_align = self.helper.sizeAlignOf(capture_layout).alignment.toByteUnits();
             if (capture_align > builtins.erased_callable.capture_alignment) {
                 return self.invariantFailedError(
@@ -3944,7 +3948,7 @@ pub const Interpreter = struct {
             const data = frameCallableData(frame, stmt_id);
             @as(*isize, @ptrCast(@alignCast(data - @sizeOf(usize)))).* = builtins.utils.REFCOUNT_FRAME;
             break :blk data;
-        } else if (assign.reuse) |reuse_local| blk: {
+        } else if (assign.reuse.get()) |reuse_local| blk: {
             const reuse_value = try self.getLocalChecked(frame, reuse_local);
             if (self.readBoxedDataPointer(reuse_value)) |reuse_ptr| {
                 if (builtins.erased_callable.payloadPtr(reuse_ptr).capture_size >= capture_size and
@@ -3998,7 +4002,7 @@ pub const Interpreter = struct {
         };
 
         const context = erasedCallableInterpreterContextFromPayload(data_ptr);
-        const capture_value = if (assign.capture) |capture_local|
+        const capture_value = if (assign.capture.get()) |capture_local|
             try self.getLocalChecked(frame, capture_local)
         else
             null;
@@ -4014,7 +4018,7 @@ pub const Interpreter = struct {
         };
 
         if (capture_value) |value| {
-            const capture_layout = assign.capture_layout orelse self.invariantFailed(
+            const capture_layout = assign.capture_layout.get() orelse self.invariantFailed(
                 "LIR/interpreter invariant violated: erased callable proc {d} has a capture but no capture layout",
                 .{@backingInt(assign.proc)},
             );

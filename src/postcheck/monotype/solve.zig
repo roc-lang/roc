@@ -464,22 +464,8 @@ pub const InterfaceConstraints = struct {
         finished: Type.MaybeTypeId = .none,
     };
     /// A related group index or none. Groups are numbered densely among a
-    /// capture's open nodes, so an index never reaches `none`.
-    pub const MaybeRelatedGroup = enum(u32) {
-        none = std.math.maxInt(u32),
-        _,
-
-        fn of(group: ?u32) MaybeRelatedGroup {
-            const present = group orelse return .none;
-            std.debug.assert(present != std.math.maxInt(u32));
-            return @fromBackingInt(present);
-        }
-
-        fn get(self: MaybeRelatedGroup) ?u32 {
-            if (self == .none) return null;
-            return @backingInt(self);
-        }
-    };
+    /// capture's open nodes.
+    pub const MaybeRelatedGroup = collections.OptionalU32;
     pub const Kind = struct {
         resolved: ?ResolvedFieldKind,
         cells: ?FieldKindCells,
@@ -875,7 +861,6 @@ pub const InterfaceConstraints = struct {
             if (T == names.TagNameId) return self.text(ns.tagLabelText(value));
             if (T == MaybeNodeId) return self.write(?NodeId, value.get());
             if (T == Type.MaybeTypeId) return self.write(?Type.TypeId, value.get());
-            if (T == MaybeRelatedGroup) return self.write(?u32, value.get());
             if (comptime collections.CompactOptionalPayload(T)) |Payload| return self.write(?Payload, value.get());
             switch (@typeInfo(T)) {
                 .@"struct" => |info| inline for (info.field_names, info.field_types) |field_name, field_type| {
@@ -1529,7 +1514,6 @@ pub const InterfaceConstraints = struct {
         if (T == FieldKindId) return context.kind(value);
         if (T == MaybeNodeId) return .of(try mapValue(context, ?NodeId, value.get()));
         if (T == Type.MaybeTypeId) return .of(try mapValue(context, ?Type.TypeId, value.get()));
-        if (T == MaybeRelatedGroup) return .of(try mapValue(context, ?u32, value.get()));
         if (comptime collections.CompactOptionalPayload(T)) |Payload| return .of(try mapValue(context, ?Payload, value.get()));
         return switch (@typeInfo(T)) {
             .@"struct" => |info| blk: {
@@ -2976,8 +2960,8 @@ pub const InstGraph = struct {
     /// column's capacity is kept at least `nodes`'s, so a node fitting in
     /// `nodes` fits everywhere and costs one capacity check.
     fn reserveNode(self: *InstGraph) Allocator.Error!void {
-        // `MaybeNodeId` stores an id plus one, so `maxInt(u32)` is never an id.
-        if (self.nodes.items.len >= std.math.maxInt(u32)) return error.OutOfMemory;
+        // `MaybeNodeId` stores an id plus one.
+        if (std.math.cast(u32, self.nodes.items.len + 1) == null) return error.OutOfMemory;
         if (self.nodes.items.len < self.nodes.capacity) return;
         const capacity = std.math.add(usize, self.nodes.capacity, @max(self.nodes.capacity / 2, 8)) catch return error.OutOfMemory;
         // `nodes` grows last: a failed column growth leaves it within every
@@ -10824,7 +10808,7 @@ test "relation mutation invalidates active snapshots before freezing" {
 /// Leave every node visited in the last epoch before the wrap, so the next
 /// containment walk must wrap and may trust no existing stamp.
 fn stampEveryNodeAtLastContainmentEpoch(graph: *InstGraph) void {
-    graph.containment_visit_epochs.epoch.current = std.math.maxInt(u32) - 1;
+    graph.containment_visit_epochs.epoch.current = std.math.maxInt(u32);
     for (0..graph.containment_visit_epochs.len()) |node| graph.containment_visit_epochs.insert(@intCast(node));
 }
 

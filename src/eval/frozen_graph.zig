@@ -82,7 +82,7 @@ pub fn Graph(comptime AllocationKey: type) type {
         pub fn addNode(self: *Self, name: []const u8, byte_count: usize, alignment_: u32) Allocator.Error!SymbolId {
             errdefer self.output.free(name);
             // A node the target's address space cannot hold cannot exist there.
-            if (self.word() == 4 and byte_count > std.math.maxInt(u32)) return error.OutOfMemory;
+            if (self.word() == 4 and std.math.cast(u32, byte_count) == null) return error.OutOfMemory;
             const node_bytes = try self.output.alloc(u8, byte_count);
             errdefer self.output.free(node_bytes);
             @memset(node_bytes, 0);

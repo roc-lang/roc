@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 const lir = @import("lir");
 
 const Allocator = std.mem.Allocator;
@@ -24,12 +25,12 @@ pub fn dumpAllocationMap(self: Self, address: usize) void {
     for (0..self.count(.lines)) |index| {
         const start = lineStart(self, index);
         const line = self.lineEntryAt(start) orelse continue;
-        if (line.loc.file == base.SourceLoc.no_file) continue;
+        if (!line.loc.hasLocation()) continue;
         const region_index = self.lastAtOrBefore(self.count(.regions), start, regionStart) orelse continue;
         var end = wordAt(self.bytes, self.regionRow(region_index) + @sizeOf(u32));
         if (index + 1 < self.count(.lines)) end = @min(end, lineStart(self, index + 1));
         if (end <= start) continue;
-        const file = self.sourceFile(line.loc.file);
+        const file = self.sourceFile(line.loc.fileIndex());
         std.debug.print("alloc-code start={x} end={x} file={s} line={d}\n", .{ address + start, address + end, file.name, line.loc.line });
     }
 }
@@ -89,7 +90,7 @@ pub fn encode(allocator: Allocator, input: Input) Allocator.Error![]u8 {
     }
     for (input.lines) |line| {
         try word(&bytes, allocator, line.offset);
-        try word(&bytes, allocator, line.loc.file);
+        try word(&bytes, allocator, @backingInt(line.loc.file));
         try word(&bytes, allocator, line.loc.line);
         try word(&bytes, allocator, line.loc.column);
         try word(&bytes, allocator, line.region.start.offset);
@@ -158,8 +159,8 @@ pub fn validate(bytes: []const u8) bool {
     }
     const files = table.count(.files);
     for (0..table.count(.lines)) |index| {
-        const file = wordAt(bytes, table.lineRow(index) + @sizeOf(u32));
-        if (file != base.SourceLoc.no_file and file >= files) return false;
+        const file: collections.OptionalU32 = @fromBackingInt(wordAt(bytes, table.lineRow(index) + @sizeOf(u32)));
+        if (file.get()) |present| if (present >= files) return false;
     }
     return true;
 }
@@ -179,7 +180,7 @@ pub fn lineEntryAt(self: Self, offset: u32) ?Line {
     return .{
         .offset = line,
         .loc = .{
-            .file = wordAt(self.bytes, row + 1 * @sizeOf(u32)),
+            .file = @fromBackingInt(wordAt(self.bytes, row + 1 * @sizeOf(u32))),
             .line = wordAt(self.bytes, row + 2 * @sizeOf(u32)),
             .column = wordAt(self.bytes, row + 3 * @sizeOf(u32)),
         },
@@ -284,8 +285,8 @@ test "a table answers what the code generator's own tables answer" {
     const encoded = try encode(std.testing.allocator, .{
         .regions = &.{ .{ .start = 16, .end = 64 }, .{ .start = 80, .end = 96 } },
         .lines = &.{
-            .{ .offset = 16, .loc = .{ .file = 0, .line = 3, .column = 1 }, .region = base.Region.from_raw_offsets(10, 20) },
-            .{ .offset = 32, .loc = .{ .file = 1, .line = 9, .column = 5 }, .region = base.Region.from_raw_offsets(30, 40) },
+            .{ .offset = 16, .loc = .{ .file = .some(0), .line = 3, .column = 1 }, .region = base.Region.from_raw_offsets(10, 20) },
+            .{ .offset = 32, .loc = .{ .file = .some(1), .line = 9, .column = 5 }, .region = base.Region.from_raw_offsets(30, 40) },
         },
         .sites = &.{
             .{ .offset = 40, .meaning = .{ .exhaustiveness = .{ .module = module, .checked_site = null } } },

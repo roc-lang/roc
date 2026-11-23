@@ -884,6 +884,30 @@ fn parseOptionalLiteralTypeSuffix(self: *Parser) std.mem.Allocator.Error!?AST.Li
     return try self.parseLiteralTypeSuffix();
 }
 
+/// A number token's stored literal and the deprecated suffix it was spelled with.
+const NumberLiteral = struct {
+    literal: NumericLiteral.Idx,
+    deprecated_suffix: NumericLiteral.DeprecatedSuffix,
+};
+
+/// Record the numeric literal of the `Int` or `Float` token at `token`. The
+/// tokenizer's record supplies the facts when it is exact; otherwise they
+/// are derived from the token's text.
+fn addNumberLiteral(self: *Parser, token: Token.Idx, kind: NumericLiteral.Kind) std.mem.Allocator.Error!NumberLiteral {
+    const scanned = self.tok_buf.scannedNumber(token);
+    if (scanned.flags.exact) {
+        return .{
+            .literal = try self.store.addScannedNumericLiteral(scanned, kind),
+            .deprecated_suffix = scanned.suffix,
+        };
+    }
+    const split = NumericLiteral.splitSource(self.tokenText(token), kind);
+    return .{
+        .literal = try self.store.addNumericLiteral(split, kind),
+        .deprecated_suffix = split.deprecated_suffix,
+    };
+}
+
 fn pushDeprecatedNumberSuffixDiagnostic(self: *Parser, suffix: NumericLiteral.DeprecatedSuffix, region: AST.TokenizedRegion) std.mem.Allocator.Error!void {
     if (suffix != .none) {
         try self.pushDiagnostic(.deprecated_number_suffix, region);
@@ -904,35 +928,69 @@ pub fn pushMalformed(self: *Parser, comptime T: type, tag: AST.Diagnostic.Tag, s
         self.advance(); // TODO: find a better point to advance to
     }
 
+    // Create a diagnostic region that points to the problematic token
+    // If the parser has moved too far from the start, use the start token for better error location
+    const diagnostic_start = if (self.pos > start and (self.pos - start) > 2) start else @min(pos, self.pos);
+    const diagnostic_end = if (self.pos > start and (self.pos - start) > 2) start + 1 else @max(pos, self.pos);
+    // If start equals end, make it a single-token region
+    const diagnostic_region = AST.TokenizedRegion{
+        .start = diagnostic_start,
+        .end = if (diagnostic_start == diagnostic_end) diagnostic_start + 1 else diagnostic_end,
+    };
+
+    // AST node should span the entire malformed expression
+    return try self.addMalformedNode(T, tag, diagnostic_region, .{ .start = start, .end = self.pos });
+}
+
+/// Report a malformed construct at an explicit token.
+///
+/// The diagnostic covers exactly the token at `error_pos`, and the malformed
+/// node spans from `node_start`, the construct's first token, to wherever the
+/// parser ends up after stepping past the token it is on.
+fn pushMalformedAt(
+    self: *Parser,
+    comptime T: type,
+    tag: AST.Diagnostic.Tag,
+    node_start: TokenIdx,
+    error_pos: TokenIdx,
+) std.mem.Allocator.Error!T {
+    if (self.peek() != .EndOfFile) {
+        self.advance();
+    }
+
+    return try self.addMalformedNode(
+        T,
+        tag,
+        .{ .start = error_pos, .end = error_pos + 1 },
+        .{ .start = node_start, .end = self.pos },
+    );
+}
+
+/// Record a diagnostic and return a malformed node for it. Past the
+/// diagnostic limit, nothing is recorded and every call returns one shared
+/// malformed node.
+fn addMalformedNode(
+    self: *Parser,
+    comptime T: type,
+    tag: AST.Diagnostic.Tag,
+    diagnostic_region: AST.TokenizedRegion,
+    node_region: AST.TokenizedRegion,
+) std.mem.Allocator.Error!T {
     if (self.diagnostics.items.len < MAX_PARSE_DIAGNOSTICS) {
-        // Create a diagnostic region that points to the problematic token
-        // If the parser has moved too far from the start, use the start token for better error location
-        const diagnostic_start = if (self.pos > start and (self.pos - start) > 2) start else @min(pos, self.pos);
-        const diagnostic_end = if (self.pos > start and (self.pos - start) > 2) start + 1 else @max(pos, self.pos);
-        // If start equals end, make it a single-token region
-        const diagnostic_region = AST.TokenizedRegion{
-            .start = diagnostic_start,
-            .end = if (diagnostic_start == diagnostic_end) diagnostic_start + 1 else diagnostic_end,
-        };
-
-        // AST node should span the entire malformed expression
-        const ast_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
-
         try self.diagnostics.append(self.gpa, .{
             .tag = tag,
             .region = diagnostic_region,
         });
 
-        return try self.store.addMalformed(T, tag, ast_region);
+        return try self.store.addMalformed(T, tag, node_region);
     } else {
         // Return a cached malformed node to avoid creating excessive nodes after the diagnostic limit.
         if (self.cached_malformed_node == null) {
-            const malformed_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
             const nid = try self.store.nodes.append(self.gpa, .{
                 .tag = .malformed,
                 .main_token = 0,
                 .data = .{ .lhs = @backingInt(AST.Diagnostic.Tag.expr_unexpected_token), .rhs = 0 },
-                .region = malformed_region,
+                .region = node_region,
             });
             self.cached_malformed_node = nid;
         }
@@ -1439,19 +1497,6 @@ fn parseExposedCollectionTokens(
     }
 }
 
-inline fn parseHeaderExposedCollectionTokens(
-    self: *Parser,
-    open_error: AST.Diagnostic.Tag,
-    close_error: AST.Diagnostic.Tag,
-    malformed_close_error: AST.Diagnostic.Tag,
-    missing_open_pos: Token.Idx,
-) std.mem.Allocator.Error!ExposedCollectionResult {
-    if (self.peek() != .OpenSquare) {
-        return .{ .malformed = .{ .tag = open_error, .pos = missing_open_pos } };
-    }
-    return try self.parseExposedCollectionTokens(open_error, close_error, malformed_close_error);
-}
-
 fn parseRecordFieldCollectionTokens(
     self: *Parser,
     start: Token.Idx,
@@ -1499,9 +1544,9 @@ fn parseModuleHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx
     const start = self.pos;
     std.debug.assert(self.peek() == .KwModule);
     self.advance();
-    const exposed = switch (try self.parseHeaderExposedCollectionTokens(.header_expected_open_square, .header_expected_close_square, .import_exposing_no_close, start)) {
+    const exposed = switch (try self.parseExposedCollectionTokens(.header_expected_open_square, .header_expected_close_square, .import_exposing_no_close)) {
         .ok => |ok| ok,
-        .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
+        .malformed => |bad| return try self.pushMalformedAt(AST.Header.Idx, bad.tag, start, bad.pos),
     };
     return try self.store.addHeader(.{ .module = .{
         .region = .{ .start = start, .end = self.pos },
@@ -1513,9 +1558,9 @@ fn parseHostedHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx
     const start = self.pos;
     std.debug.assert(self.peek() == .KwHosted);
     self.advance();
-    const exposed = switch (try self.parseHeaderExposedCollectionTokens(.header_expected_open_square, .header_expected_close_square, .import_exposing_no_close, start)) {
+    const exposed = switch (try self.parseExposedCollectionTokens(.header_expected_open_square, .header_expected_close_square, .import_exposing_no_close)) {
         .ok => |ok| ok,
-        .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
+        .malformed => |bad| return try self.pushMalformedAt(AST.Header.Idx, bad.tag, start, bad.pos),
     };
     return try self.store.addHeader(.{ .hosted = .{
         .region = .{ .start = start, .end = self.pos },
@@ -1528,9 +1573,9 @@ fn parsePackageHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Id
     std.debug.assert(self.peek() == .KwPackage);
     self.advance();
 
-    const exposed = switch (try self.parseHeaderExposedCollectionTokens(.expected_provides_open_square, .header_expected_close_square, .import_exposing_no_close, start)) {
+    const exposed = switch (try self.parseExposedCollectionTokens(.expected_provides_open_square, .header_expected_close_square, .import_exposing_no_close)) {
         .ok => |ok| ok,
-        .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
+        .malformed => |bad| return try self.pushMalformedAt(AST.Header.Idx, bad.tag, start, bad.pos),
     };
     try self.recordPackageHeaderModules(exposed.span);
     const deps = if (self.peek() == .OpenCurly) switch (try self.parseOpenedDependencyRecordTokens(start, false)) {
@@ -1582,7 +1627,7 @@ fn parseOpenedDependencyRecordTokens(
         const entry_start = self.pos;
         if (self.peek() != .LowerIdent) {
             self.store.clearScratchFrom(AST.RecordField, fields_scratch_top);
-            return .{ .malformed = try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_name, header_start) };
+            return .{ .malformed = try self.pushMalformedAt(AST.Header.Idx, .expected_package_or_platform_name, header_start, self.pos) };
         }
         const name_tok = self.pos;
         self.advance();
@@ -1590,7 +1635,7 @@ fn parseOpenedDependencyRecordTokens(
         const field_value: AST.RecordField.Value = if (self.peek() != .OpColon) blk: {
             if (strict_package_paths) {
                 self.store.clearScratchFrom(AST.RecordField, fields_scratch_top);
-                return .{ .malformed = try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_colon, header_start) };
+                return .{ .malformed = try self.pushMalformedAt(AST.Header.Idx, .expected_package_or_platform_colon, header_start, self.pos) };
             }
             break :blk .punned;
         } else blk: {
@@ -1599,7 +1644,7 @@ fn parseOpenedDependencyRecordTokens(
             const value = if (is_platform) platform_value: {
                 if (platform != null) {
                     self.store.clearScratchFrom(AST.RecordField, fields_scratch_top);
-                    return .{ .malformed = try self.pushMalformed(AST.Header.Idx, .multiple_platforms, header_start) };
+                    return .{ .malformed = try self.pushMalformedAt(AST.Header.Idx, .multiple_platforms, header_start, self.pos) };
                 }
                 self.advance();
                 if (self.peek() == .StringStart) break :platform_value try self.parseStringExprTokens();
@@ -1614,11 +1659,11 @@ fn parseOpenedDependencyRecordTokens(
                     } });
                 }
                 self.store.clearScratchFrom(AST.RecordField, fields_scratch_top);
-                return .{ .malformed = try self.pushMalformed(AST.Header.Idx, .expected_platform_string, header_start) };
+                return .{ .malformed = try self.pushMalformedAt(AST.Header.Idx, .expected_platform_string, header_start, self.pos) };
             } else ordinary_value: {
                 if (strict_package_paths and self.peek() != .StringStart) {
                     self.store.clearScratchFrom(AST.RecordField, fields_scratch_top);
-                    return .{ .malformed = try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_string, header_start) };
+                    return .{ .malformed = try self.pushMalformedAt(AST.Header.Idx, .expected_package_or_platform_string, header_start, self.pos) };
                 }
                 break :ordinary_value try self.runExprRoot(0);
             };
@@ -1637,7 +1682,7 @@ fn parseOpenedDependencyRecordTokens(
     }
     if (self.peek() != .CloseCurly) {
         self.store.clearScratchFrom(AST.RecordField, fields_scratch_top);
-        return .{ .malformed = try self.pushMalformed(AST.Header.Idx, .expected_package_platform_close_curly, header_start) };
+        return .{ .malformed = try self.pushMalformedAt(AST.Header.Idx, .expected_package_platform_close_curly, header_start, self.pos) };
     }
     const packages_layout = self.directCollectionLayout();
     self.advance();
@@ -1763,13 +1808,13 @@ fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
     std.debug.assert(self.peek() == .KwApp);
     self.advance();
 
-    const provided = switch (try self.parseHeaderExposedCollectionTokens(.expected_provides_open_square, .header_expected_close_square, .import_exposing_no_close, start)) {
+    const provided = switch (try self.parseExposedCollectionTokens(.expected_provides_open_square, .header_expected_close_square, .import_exposing_no_close)) {
         .ok => |ok| ok,
-        .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
+        .malformed => |bad| return try self.pushMalformedAt(AST.Header.Idx, bad.tag, start, bad.pos),
     };
 
     if (self.peek() != .OpenCurly) {
-        return try self.pushMalformed(AST.Header.Idx, .expected_app_open_curly, start);
+        return try self.pushMalformedAt(AST.Header.Idx, .expected_app_open_curly, start, self.pos);
     }
     const deps = switch (try self.parseOpenedDependencyRecordTokens(start, true)) {
         .ok => |ok| ok,
@@ -2172,10 +2217,10 @@ fn parseTargetConfigTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetConf
 fn parseTargetsSectionTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetsSection.Idx {
     const start = self.pos;
     self.expect(.OpColon) catch {
-        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_colon, start);
+        return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_colon, start, self.pos);
     };
     self.expect(.OpenCurly) catch {
-        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_open_curly, start);
+        return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_open_curly, start, self.pos);
     };
 
     var inputs_dir: ?TokenIdx = null;
@@ -2184,19 +2229,19 @@ fn parseTargetsSectionTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetsS
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
         if (self.peek() != .LowerIdent) {
             self.store.clearScratchFrom(AST.TargetEntry, entries_top);
-            return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
+            return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_field_name, start, self.pos);
         }
         const field_name_tok = self.pos;
         self.advance();
         self.expect(.OpColon) catch {
             self.store.clearScratchFrom(AST.TargetEntry, entries_top);
-            return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_colon, start);
+            return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_field_colon, start, self.pos);
         };
 
         if (self.peek() == .StringStart) {
             if (!std.mem.eql(u8, self.tokenText(field_name_tok), "inputs_dir")) {
                 self.store.clearScratchFrom(AST.TargetEntry, entries_top);
-                return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
+                return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_field_name, start, field_name_tok);
             }
             // inputs_dir: "targets/" directory directive
             self.advance();
@@ -2220,7 +2265,7 @@ fn parseTargetsSectionTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetsS
             }));
         } else {
             self.store.clearScratchFrom(AST.TargetEntry, entries_top);
-            return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
+            return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_field_name, start, self.pos);
         }
 
         _ = self.consumeComma();
@@ -2228,7 +2273,7 @@ fn parseTargetsSectionTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetsS
 
     self.expect(.CloseCurly) catch {
         self.store.clearScratchFrom(AST.TargetEntry, entries_top);
-        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_close_curly, start);
+        return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_close_curly, start, self.pos);
     };
     return try self.store.addTargetsSection(.{
         .inputs_dir = inputs_dir,
@@ -2240,18 +2285,18 @@ fn parseTargetsSectionTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetsS
 fn parseSymbolMapEntryTokens(self: *Parser) std.mem.Allocator.Error!AST.SymbolMapEntry.Idx {
     const start = self.pos;
     self.expect(.StringStart) catch {
-        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_string, start);
+        return try self.pushMalformedAt(AST.SymbolMapEntry.Idx, .expected_symbol_string, start, self.pos);
     };
     if (self.peek() != .StringPart) {
-        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_string, start);
+        return try self.pushMalformedAt(AST.SymbolMapEntry.Idx, .expected_symbol_string, start, self.pos);
     }
     const symbol = self.pos;
     self.advance();
     self.expect(.StringEnd) catch {
-        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_string, start);
+        return try self.pushMalformedAt(AST.SymbolMapEntry.Idx, .expected_symbol_string, start, self.pos);
     };
     self.expect(.OpColon) catch {
-        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_map_colon, start);
+        return try self.pushMalformedAt(AST.SymbolMapEntry.Idx, .expected_symbol_map_colon, start, self.pos);
     };
 
     var module: ?TokenIdx = null;
@@ -2265,7 +2310,7 @@ fn parseSymbolMapEntryTokens(self: *Parser) std.mem.Allocator.Error!AST.SymbolMa
             self.advance();
         }
         if (self.peek() != .NoSpaceDotLowerIdent) {
-            return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_map_function, start);
+            return try self.pushMalformedAt(AST.SymbolMapEntry.Idx, .expected_symbol_map_function, start, self.pos);
         }
         func = self.pos;
         self.advance();
@@ -2273,7 +2318,7 @@ fn parseSymbolMapEntryTokens(self: *Parser) std.mem.Allocator.Error!AST.SymbolMa
         func = self.pos;
         self.advance();
     } else {
-        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_map_function, start);
+        return try self.pushMalformedAt(AST.SymbolMapEntry.Idx, .expected_symbol_map_function, start, self.pos);
     }
 
     return try self.store.addSymbolMapEntry(.{
@@ -2316,34 +2361,34 @@ fn parsePlatformHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.I
     self.advance();
 
     self.expect(.StringStart) catch {
-        return try self.pushMalformed(AST.Header.Idx, .expected_platform_name_start, self.pos);
+        return try self.pushMalformedAt(AST.Header.Idx, .expected_platform_name_start, start, self.pos);
     };
     const name = self.pos;
     self.expect(.StringPart) catch {
-        return try self.pushMalformed(AST.Header.Idx, .expected_platform_name_string, self.pos);
+        return try self.pushMalformedAt(AST.Header.Idx, .expected_platform_name_string, start, self.pos);
     };
     self.expect(.StringEnd) catch {
-        return try self.pushMalformed(AST.Header.Idx, .expected_platform_name_end, self.pos);
+        return try self.pushMalformedAt(AST.Header.Idx, .expected_platform_name_end, start, self.pos);
     };
 
     self.expect(.KwRequires) catch {
-        return try self.pushMalformed(AST.Header.Idx, .expected_requires, self.pos);
+        return try self.pushMalformedAt(AST.Header.Idx, .expected_requires, start, self.pos);
     };
     const requires_entries = switch (try self.parseRequiresEntriesTokens()) {
         .span => |span| span,
-        .malformed => |tag| return try self.pushMalformed(AST.Header.Idx, tag, start),
+        .malformed => |tag| return try self.pushMalformedAt(AST.Header.Idx, tag, start, self.pos),
     };
 
     self.expect(.KwExposes) catch {
-        return try self.pushMalformed(AST.Header.Idx, .expected_exposes, self.pos);
+        return try self.pushMalformedAt(AST.Header.Idx, .expected_exposes, start, self.pos);
     };
-    const exposes = switch (try self.parseHeaderExposedCollectionTokens(.expected_exposes_open_square, .expected_exposes_close_square, .expected_exposes_close_square, self.pos)) {
+    const exposes = switch (try self.parseExposedCollectionTokens(.expected_exposes_open_square, .expected_exposes_close_square, .expected_exposes_close_square)) {
         .ok => |ok| ok.collection,
-        .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
+        .malformed => |bad| return try self.pushMalformedAt(AST.Header.Idx, bad.tag, start, bad.pos),
     };
 
     self.expect(.KwPackages) catch {
-        return try self.pushMalformed(AST.Header.Idx, .expected_packages, self.pos);
+        return try self.pushMalformedAt(AST.Header.Idx, .expected_packages, start, self.pos);
     };
     const packages = try self.parseRecordFieldCollectionTokens(
         self.pos,
@@ -2353,7 +2398,7 @@ fn parsePlatformHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.I
     );
 
     self.expect(.KwProvides) catch {
-        return try self.pushMalformed(AST.Header.Idx, .expected_provides, self.pos);
+        return try self.pushMalformedAt(AST.Header.Idx, .expected_provides, start, self.pos);
     };
     const provides = try self.parseSymbolMapCollectionTokens(
         .expected_provides_open_curly,
@@ -3657,8 +3702,8 @@ fn runExprStatementKernel(
                 if (tok == .Int) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .int);
-                    const literal = try self.store.addNumericLiteral(deprecated, .int);
+                    const deprecated = try self.addNumberLiteral(start, .int);
+                    const literal = deprecated.literal;
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
 
@@ -3694,8 +3739,8 @@ fn runExprStatementKernel(
                 if (tok == .Float) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .frac);
-                    const literal = try self.store.addNumericLiteral(deprecated, .frac);
+                    const deprecated = try self.addNumberLiteral(start, .frac);
+                    const literal = deprecated.literal;
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
 
@@ -6673,8 +6718,8 @@ fn runExprStatementKernel(
                 if (tok == .Float) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .frac);
-                    const literal = try self.store.addNumericLiteral(deprecated, .frac);
+                    const deprecated = try self.addNumberLiteral(start, .frac);
+                    const literal = deprecated.literal;
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
                     if (try self.typeSuffixFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_suffix| {
@@ -6718,8 +6763,8 @@ fn runExprStatementKernel(
                 if (tok == .Int) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .int);
-                    const literal = try self.store.addNumericLiteral(deprecated, .int);
+                    const deprecated = try self.addNumberLiteral(start, .int);
+                    const literal = deprecated.literal;
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
                     if (try self.typeSuffixFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_suffix| {

@@ -37,7 +37,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RBWU".*;
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 3;
+pub const format_version: u32 = 5;
 
 /// The alignment an image's bytes need in memory for `View`.
 pub const alignment: std.mem.Alignment = .@"16";
@@ -130,9 +130,28 @@ pub const segment_zero_fill: u32 = 1;
 /// `Header.flags` bit: the unit's code checks stack bounds, and every
 /// function carries its stack frame facts.
 pub const image_stack_checks: u32 = 1;
-/// `Import.type` of an import whose signature the unit does not know: a
-/// function only named by a table slot in a data segment.
-pub const no_type: u32 = std.math.maxInt(u32);
+
+/// An optional signature index in four bytes: zero is absent, and any other
+/// word stores the index plus one. This file depends on `std` alone, so it
+/// carries its own form of `collections.OptionalU32`.
+pub const OptionalType = enum(u32) {
+    none = 0,
+    _,
+
+    pub fn some(index: u32) OptionalType {
+        return @fromBackingInt(index + 1);
+    }
+
+    pub fn of(index: ?u32) OptionalType {
+        return if (index) |present| some(present) else .none;
+    }
+
+    /// The signature index, or null when absent.
+    pub fn get(self: OptionalType) ?u32 {
+        if (self == .none) return null;
+        return @backingInt(self) - 1;
+    }
+};
 
 /// One function signature: its value types, parameters then results, in
 /// the value-type blob.
@@ -245,8 +264,10 @@ pub const Import = extern struct {
     module: u32,
     name: u32,
     field: u32,
-    /// For a function: its signature, or `no_type`.
-    type: u32,
+    /// For a function: its signature; absent for a function whose signature
+    /// the unit does not know (one only named by a table slot in a data
+    /// segment) and for every other kind.
+    type: OptionalType,
     kind: u8,
     /// For a global: its value type and whether it is mutable.
     valtype: u8,
@@ -450,9 +471,9 @@ pub const View = struct {
             if (import.flags & ~(import_address_taken | import_weak) != 0) return error.InvalidImage;
             const kind = std.enums.fromInt(ImportKind, import.kind) orelse return error.InvalidImage;
             switch (kind) {
-                .function => if (import.type != no_type and import.type >= self.header.type_count) return error.InvalidImage,
-                .global => if (import.type != no_type or !validValType(import.valtype) or import.mutable > 1) return error.InvalidImage,
-                .table, .data => if (import.type != no_type) return error.InvalidImage,
+                .function => if (import.type.get()) |type_index| if (type_index >= self.header.type_count) return error.InvalidImage,
+                .global => if (import.type != .none or !validValType(import.valtype) or import.mutable > 1) return error.InvalidImage,
+                .table, .data => if (import.type != .none) return error.InvalidImage,
             }
         }
     }
@@ -762,8 +783,8 @@ pub const InputImport = struct {
     /// The field an embedder import keeps; null when it is the symbol name.
     field: ?[]const u8 = null,
     kind: ImportKind,
-    /// For a function: its signature, or `no_type`.
-    type: u32 = no_type,
+    /// For a function: its signature, if the unit knows it.
+    type: OptionalType = .none,
     /// For a global.
     valtype: u8 = 0,
     mutable: bool = false,
@@ -911,7 +932,7 @@ pub fn encode(allocator: Allocator, input: Input) EncodeError![]align(alignment.
     const code_offset = place(&size, code_out.items.len);
     const data_offset = place(&size, data_out.items.len);
     const strings_offset = place(&size, strings.bytes.items.len);
-    if (size > std.math.maxInt(u32)) return error.ImageTooLarge;
+    if (std.math.cast(u32, size) == null) return error.ImageTooLarge;
 
     const out = try allocator.alignedAlloc(u8, alignment, size);
     errdefer allocator.free(out);
@@ -1030,7 +1051,7 @@ fn testInput(tables: *TestTables, body_a: []const u8, body_b: []const u8, segmen
         };
         const b_sites = [_]InputSite{.{ .offset = 1, .kind = .function_index_leb, .target_kind = .function, .target = 0, .addend = 0 }};
         const segment_sites = [_]InputSite{.{ .offset = 0, .kind = .table_index_i32, .target_kind = .function, .target = 1, .addend = 0 }};
-        const imports = [_]InputImport{ .{ .module = "env", .name = "roc_alloc", .kind = .function, .type = 0 }, .{ .module = "env", .name = "__stack_pointer", .kind = .global, .valtype = 0x7F, .mutable = true } };
+        const imports = [_]InputImport{ .{ .module = "env", .name = "roc_alloc", .kind = .function, .type = .some(0) }, .{ .module = "env", .name = "__stack_pointer", .kind = .global, .valtype = 0x7F, .mutable = true } };
         const data_exports = [_]InputDataExport{.{ .name = "roc_answer", .segment = 1, .offset = 0, .size = 8 }};
         const requests = [_]u32{1};
     };

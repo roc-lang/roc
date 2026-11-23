@@ -68,7 +68,6 @@ const deferred_symbol_base: u32 = 0xF000_0000;
 
 /// The placeholder symbol a relocation against deferred entity `ref` carries.
 pub fn deferredSymbol(ref: u32) SymbolIndex {
-    std.debug.assert(ref < std.math.maxInt(u32) - deferred_symbol_base);
     return SymbolIndex.fromRaw(deferred_symbol_base + ref);
 }
 
