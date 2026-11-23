@@ -15769,8 +15769,6 @@ const SpeculationPath = enum(u2) {
     /// It asked the unifier, whose writes stayed in an overlay until the
     /// answer was known.
     ask,
-    /// It decided by reading the types, before writing anything.
-    read_first,
     /// It related the types for real, with no speculation: a failure only
     /// happens in a program that already fails to check.
     committed,
@@ -15788,12 +15786,11 @@ fn printSpeculationStats(self: *const Self) void {
     for (std.enums.values(SpeculationSite)) |site| {
         const counts = self.speculation_counts[@backingInt(site)];
         if (std.meta.eql(counts, @as(@TypeOf(counts), @splat(0)))) continue;
-        std.debug.print("checker-speculation: {s} {s} probe={d} ask={d} read_first={d} committed={d}\n", .{
+        std.debug.print("checker-speculation: {s} {s} probe={d} ask={d} committed={d}\n", .{
             self.cir.module_name,
             @tagName(site),
             counts[@backingInt(SpeculationPath.probe)],
             counts[@backingInt(SpeculationPath.ask)],
-            counts[@backingInt(SpeculationPath.read_first)],
             counts[@backingInt(SpeculationPath.committed)],
         });
     }
@@ -32099,7 +32096,6 @@ fn projectExpectedTagPayload(
     // Without a record field to borrow, every refusal below is read before
     // the copy writes anything, and the copy itself cannot fail.
     const field = aggregate_type.record_field orelse {
-        self.noteSpeculation(.expected_tag_payload, .read_first);
         return self.copyExpectedTagPayload(aggregate_type.var_, name, arity, env);
     };
     // Borrowing a nominal record's field opens its backing before the field
@@ -32283,21 +32279,6 @@ fn projectExpectedAggregateShape(
             self.var_set.clearRetainingCapacity();
             if (cell_contains_error) return false;
         }
-        switch (try self.readRelation(aggregate_type.var_, shape_var, .relate)) {
-            .succeeds => {
-                self.noteSpeculation(.expected_aggregate_shape, .read_first);
-                const result = try self.runUnify(aggregate_type.var_, shape_var, env, unifyOptionsForContext(aggregate_type.context, .write_no_report));
-                std.debug.assert(result.isEstablished());
-                return true;
-            },
-            .fails => {
-                self.noteSpeculation(.expected_aggregate_shape, .read_first);
-                return false;
-            },
-            .undecided => {},
-        }
-    }
-    if (aggregate_type.projected_cell and aggregate_type.record_field == null) {
         self.noteSpeculation(.expected_aggregate_shape, .ask);
         return self.unifyIfRelates(aggregate_type.var_, shape_var, env, unifyOptionsForContext(aggregate_type.context, .write_no_report));
     }
@@ -32359,19 +32340,6 @@ fn commitProjectedStoredValue(
     actual: Var,
     env: *Env,
 ) std.mem.Allocator.Error!bool {
-    switch (try self.readRelation(projected, actual, .relate)) {
-        .succeeds => {
-            self.noteSpeculation(.projected_stored_value, .read_first);
-            const result = try self.runUnify(projected, actual, env, .{ .on_mismatch = .write_no_report });
-            std.debug.assert(result.isEstablished());
-            return true;
-        },
-        .fails => {
-            self.noteSpeculation(.projected_stored_value, .read_first);
-            return false;
-        },
-        .undecided => {},
-    }
     self.noteSpeculation(.projected_stored_value, .ask);
     return self.unifyIfRelates(projected, actual, env, .{});
 }
@@ -35572,17 +35540,6 @@ fn discardedVarUpdate(self: *Self, expr_idx: CIR.Expr.Idx, empty_rec: Var) std.m
 /// by a unification that is rolled back and records no problems. The gating
 /// probe for Discarded Var Update (`discardedVarUpdate`).
 fn probeCanUseAs(self: *Self, expected_var: Var, actual_var: Var) std.mem.Allocator.Error!bool {
-    switch (try self.readRelation(expected_var, actual_var, .decide)) {
-        .succeeds => {
-            self.noteSpeculation(.discarded_var_update, .read_first);
-            return true;
-        },
-        .fails => {
-            self.noteSpeculation(.discarded_var_update, .read_first);
-            return false;
-        },
-        .undecided => {},
-    }
     var ask = self.beginAsk(null);
     self.noteSpeculation(.discarded_var_update, .ask);
     defer self.askDiscard(&ask);
@@ -40741,23 +40698,6 @@ fn seedLambdaParamsFromContext(
     if (contextual.context != .fn_call_arg and !contextual.projected_cell and contextual.record_field == null) return null;
     if (contextual.record_field == null and !self.varResolvesToKnownType(contextual.var_)) return null;
 
-    if (contextual.record_field == null) {
-        switch (try self.readPlainLambdaSeed(args, contextual)) {
-            .refused => {
-                self.noteSpeculation(.lambda_seed, .read_first);
-                return null;
-            },
-            .seeds => {
-                self.noteSpeculation(.lambda_seed, .read_first);
-                const seed_fn_var, const seed_ret = try self.lambdaSeedSkeleton(args, env, region);
-                const result = try self.runUnify(contextual.var_, seed_fn_var, env, unifyOptionsForContext(contextual.context, .write_no_report));
-                std.debug.assert(result.isEstablished());
-                return seed_ret;
-            },
-            .undecided => {},
-        }
-    }
-
     while (true) {
         var ask = self.beginAsk(env);
         self.noteSpeculation(.lambda_seed, .ask);
@@ -40806,52 +40746,6 @@ fn lambdaSeedSkeleton(self: *Self, args: CIR.Pattern.Span, env: *Env, region: Re
         .ret = seed_ret,
     } } }, env, region);
     return .{ seed_fn_var, seed_ret };
-}
-
-/// How reading decides a lambda seed whose context is related as it is.
-const PlainLambdaSeed = enum {
-    /// The skeleton relation succeeds, binding each parameter and the fresh
-    /// result to the expected function's.
-    seeds,
-    /// The skeleton relation fails before it writes anything, so there is
-    /// no seed.
-    refused,
-    /// Reading does not settle the relation.
-    undecided,
-};
-
-/// Decide a lambda seed against `contextual.var_` by reading (design.md
-/// "Lambda Parameters Seeded From Context"). When every parameter is a
-/// distinct unconstrained flexible variable that carries no checker decision,
-/// the skeleton over them relates to a function of the same arity by
-/// binding each parameter, and the fresh result, to the expected function's;
-/// a function of another arity fails at the arity, before anything is
-/// written. A projected cell that reaches an erroneous type seeds nothing.
-fn readPlainLambdaSeed(self: *Self, args: CIR.Pattern.Span, contextual: Expected.ExpectedType) Allocator.Error!PlainLambdaSeed {
-    std.debug.assert(contextual.record_field == null);
-    const param_count = args.span.len;
-    for (0..param_count) |i| {
-        const param = self.types.resolveVar(lambdaArgVar(self, args, i));
-        if (!bindableFlex(param, .relate)) return .undecided;
-        for (0..i) |earlier| {
-            if (self.types.resolveVar(lambdaArgVar(self, args, earlier)).var_ == param.var_) return .undecided;
-        }
-    }
-    const func = self.funcThroughAliases(contextual.var_) orelse return .undecided;
-    if (func.args.len() != param_count) return .refused;
-    if (contextual.projected_cell and self.types.mayContainErrorState()) {
-        self.var_set.clearRetainingCapacity();
-        const contains_error = try self.varContainsError(contextual.var_, &self.var_set);
-        self.var_set.clearRetainingCapacity();
-        if (contains_error) return .refused;
-    }
-    if (std.debug.runtime_safety) {
-        // A parameter pattern's own variable is fresh, so no context reaches it.
-        const arg_vars_top = try self.pushLambdaArgVars(args);
-        defer self.scratch_vars.clearFrom(arg_vars_top);
-        std.debug.assert(!try self.varReachesAny(contextual.var_, self.scratch_vars.sliceFromStart(arg_vars_top)));
-    }
-    return .seeds;
 }
 
 /// Whether a var already resolves to a type constructor (through aliases), so
@@ -42226,21 +42120,6 @@ fn relateOwnedTagToExpectedNominal(
     if (expectation.record_field != null) return false;
     const nominal = self.types.resolveThroughAliases(expectation.var_).desc.content.unwrapNominalType() orelse return false;
     if (!nominal.canLiftInner(self.cir.selfModuleIdentity())) return false;
-    // A tag without a payload relates its one-tag row to the selected
-    // constructor's opened row by binding its own fresh extension, so when
-    // the target only binds to the expectation both relations succeed.
-    if (constructor.arity == 0 and try self.relationOnlyBinds(target, expectation.var_, .relate)) {
-        self.noteSpeculation(.owned_tag_nominal, .read_first);
-        const template = try self.selectedConstructorTemplate(nominal, constructor, region) orelse return false;
-        const backing = (try self.openNominalBackingFromTemplate(nominal, template, env, region, .instantiation)) orelse
-            unreachable; // selectedConstructorTemplate found the declaration valid
-        const actual = try self.freshFromContent(content, env, region);
-        const row_result = try self.runUnify(backing, actual, env, .{ .on_mismatch = .write_no_report });
-        std.debug.assert(row_result.isEstablished());
-        const target_result = try self.runUnify(target, expectation.var_, env, .{ .on_mismatch = .write_no_report });
-        std.debug.assert(target_result.isEstablished());
-        return true;
-    }
     var asking = self.beginInstantiatingAsk(env);
     self.noteSpeculation(.owned_tag_nominal, .ask);
     const related = related: {
@@ -46885,7 +46764,7 @@ fn deduplicateGeneralizedDispatchRequirements(
                 entry.value_ptr.* = constraint.fn_var;
                 continue;
             }
-            const merged = try self.unifyShapeEquivalentCallables(entry.value_ptr.*, constraint.fn_var, anchors, env);
+            const merged = try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.*, constraint.fn_var, env);
             self.canonical_key_writer.invalidateAnchoredKeys();
             if (merged) {
                 try self.appendGeneralizedIdentityVars(entry.value_ptr.*, pending_receivers, value, env);
@@ -46973,7 +46852,7 @@ fn deduplicateGeneralizedDispatchRequirements(
         const entry = seen.getOrPutAssumeCapacity(key);
         if (entry.found_existing) {
             const same_callable = self.types.resolveVar(entry.value_ptr.fn_var).var_ == self.types.resolveVar(requirement.constraint.fn_var).var_ or
-                try self.unifyShapeEquivalentCallables(entry.value_ptr.fn_var, requirement.constraint.fn_var, anchors, env);
+                try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.fn_var, requirement.constraint.fn_var, env);
             self.canonical_key_writer.invalidateAnchoredKeys();
             if (same_callable) {
                 try self.recordDeduplicatedDispatchRelation(requirement.constraint.fn_var, entry.value_ptr.fn_var);
@@ -47761,120 +47640,6 @@ fn methodConflictUseVar(self: *Self, duplicate: SameMethodRequirement, roots: []
             intro_region.end.offset <= definition_region.end.offset) return intro_var;
     }
     return roots[0].binding.get() orelse roots[0].owner;
-}
-
-/// `unifyEquivalentGeneralizedCallables` for two callables whose anchored
-/// shape keys (`generalizedCallableShape`) were equal. Their keys are
-/// computed again from the store as it stands; equal keys mean the same
-/// structure up to renaming their unanchored variables, with the same
-/// constraints. Relating such a pair can only fail at an erroneous type, an
-/// application of an invalid declaration, two distinct unanchored rigid
-/// variables meeting, or a deferred requirement callable the relation links
-/// first, a function whose undecided effect depends on others, or a row
-/// repeating a label; when reading both callables finds none of these, the
-/// relation succeeds and runs directly.
-fn unifyShapeEquivalentCallables(
-    self: *Self,
-    retained_fn_var: Var,
-    duplicate_fn_var: Var,
-    anchors: *const collections.DenseMap(Var, void),
-    env: *Env,
-) Allocator.Error!bool {
-    if (self.types.resolveVar(retained_fn_var).var_ == self.types.resolveVar(duplicate_fn_var).var_) return false;
-    if (try self.callableRelatesByShape(retained_fn_var, anchors) and
-        try self.callableRelatesByShape(duplicate_fn_var, anchors) and
-        std.meta.eql(
-            try self.canonical_key_writer.fromVarWithAnchoredIdentities(self.types.resolveVar(retained_fn_var).var_, anchors),
-            try self.canonical_key_writer.fromVarWithAnchoredIdentities(self.types.resolveVar(duplicate_fn_var).var_, anchors),
-        ))
-    {
-        self.noteSpeculation(.equivalent_callables, .read_first);
-        const result = try self.runUnify(retained_fn_var, duplicate_fn_var, env, .{ .on_mismatch = .write_no_report });
-        std.debug.assert(result.isEstablished());
-        return true;
-    }
-    return self.unifyEquivalentGeneralizedCallables(retained_fn_var, duplicate_fn_var, env);
-}
-
-/// Whether `root` reaches, through its structure and its variables'
-/// constraints, no erroneous type, no application of an invalid declaration,
-/// no rigid variable outside `anchors`, no deferred requirement callable, no
-/// function with effect dependencies, and no row chained into another row
-/// part (`unifyShapeEquivalentCallables`).
-fn callableRelatesByShape(self: *Self, root: Var, anchors: *const collections.DenseMap(Var, void)) Allocator.Error!bool {
-    var visited = collections.DenseMap(Var, void).init(self.gpa);
-    defer visited.deinit();
-    const stack = &self.type_visit_stack;
-    const stack_base = stack.items.len;
-    defer stack.items.len = stack_base;
-    try stack.append(self.gpa, root);
-    while (stack.items.len > stack_base) {
-        const resolved = self.types.resolveVar(stack.pop().?);
-        if (visited.contains(resolved.var_)) continue;
-        try visited.put(resolved.var_, {});
-        if (resolved.desc.flags.deferred_callable) return false;
-        switch (resolved.desc.content) {
-            .err => return false,
-            .field_presence => {},
-            .flex => |flex| if (!try self.pushDistinctConstraintCallables(flex.constraints)) return false,
-            .rigid => |rigid| {
-                if (!anchors.contains(resolved.var_)) return false;
-                if (!try self.pushDistinctConstraintCallables(rigid.constraints)) return false;
-            },
-            .alias => |alias| {
-                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
-                try stack.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
-            },
-            .structure => |flat_type| switch (flat_type) {
-                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
-                .nominal_type => |nominal| {
-                    if (self.types.nominalDeclIsInvalid(nominal)) return false;
-                    try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal));
-                },
-                .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    // A key does not tell a pure function from one whose
-                    // effect is undecided, whose dependencies a relation to a
-                    // pure one demands pure.
-                    if (func.effect_deps.len() != 0) return false;
-                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
-                    try stack.append(self.gpa, func.ret);
-                },
-                .record => |record| {
-                    // A row chained into another row part can repeat a label.
-                    if (!self.rowEndsAtTail(record.ext)) return false;
-                    const fields = self.types.getRecordFieldsSlice(record.fields);
-                    for (fields.items(.presence)) |presence| {
-                        try stack.append(self.gpa, presence.typeVar());
-                        if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
-                    }
-                    try stack.append(self.gpa, record.ext);
-                },
-                .tag_union => |tag_union| {
-                    if (!self.rowEndsAtTail(tag_union.ext)) return false;
-                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |tag_args| {
-                        try stack.appendSlice(self.gpa, self.types.sliceVars(tag_args));
-                    }
-                    try stack.append(self.gpa, tag_union.ext);
-                },
-                .empty_record, .empty_tag_union => {},
-            },
-        }
-    }
-    return true;
-}
-
-/// Push the callables of `constraints` onto `type_visit_stack`, unless two
-/// of them require one method, which a relation of two such lists pairs by
-/// name rather than by position.
-fn pushDistinctConstraintCallables(self: *Self, constraints: StaticDispatchConstraint.SafeList.Range) Allocator.Error!bool {
-    const items = self.types.sliceStaticDispatchConstraints(constraints);
-    for (items, 0..) |constraint, index| {
-        for (items[0..index]) |earlier| {
-            if (earlier.fn_name.eql(constraint.fn_name)) return false;
-        }
-        try self.type_visit_stack.append(self.gpa, constraint.fn_var);
-    }
-    return true;
 }
 
 fn unifyEquivalentGeneralizedCallables(self: *Self, retained_fn_var: Var, duplicate_fn_var: Var, env: *Env) Allocator.Error!bool {
@@ -50979,21 +50744,6 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
         for (constraints) |constraint| {
             if (constraint.kind != .try_suffix) continue;
             const actual = self.tryArgsFromVar(ModuleEnv.varFrom(constraint.actual_expr)) orelse continue;
-
-            // A body result that only binds to the seed takes it directly.
-            if (try self.relationOnlyBinds(frame.body_result, actual.ok, .relate)) {
-                self.noteSpeculation(.return_constraints, .read_first);
-                const region = self.cir.store.getExprRegion(constraint.actual_expr);
-                const inferred_err = try self.fresh(env, region);
-                const inferred_try = try self.freshFromContent(try self.mkTryContent(actual.ok, inferred_err), env, region);
-                const result = try self.runUnify(frame.body_result, inferred_try, env, unifyOptionsForContext(
-                    constraint.kind.problemContext(body_tail_try),
-                    .write_no_report,
-                ));
-                std.debug.assert(result.isEstablished());
-                body_try = self.tryArgsFromVar(frame.body_result);
-                break;
-            }
 
             const seeded = while (true) {
                 var ask = self.beginAsk(env);
@@ -57330,15 +57080,6 @@ fn constrainInterpolationPartToStr(self: *Self, part: InterpolationPartMetadata,
     if (resolved_expr.desc.content == .err) return false;
 
     const constraints_range = contentConstraintRange(resolved_expr.desc.content) orelse StaticDispatchConstraint.SafeList.Range.empty();
-
-    // A part that already is `Str`, or only binds to it, carries no
-    // constraint to accept.
-    if (constraints_range.len() == 0 and try self.readRelation(expected_str_var, part.var_, .relate) == .succeeds) {
-        self.noteSpeculation(.interpolation_part, .read_first);
-        const result = try self.runUnify(expected_str_var, part.var_, env, .{ .on_mismatch = .write_no_report });
-        std.debug.assert(result.isEstablished());
-        return false;
-    }
 
     const compatible = blk: {
         var asking = self.beginInstantiatingAsk(env);
@@ -66563,257 +66304,6 @@ fn recordRolledBackTypeMismatch(self: *Self, actual: Var, expected: Var, ctx: pr
     } });
 }
 
-/// How a relation can be decided by reading its operands before anything is
-/// written (`readRelation`).
-const ReadRelation = enum {
-    /// The relation can only succeed: the operands are one class, or the
-    /// same structure down to shared classes, or one operand is an
-    /// unconstrained flexible variable the other does not reach, which the
-    /// relation only binds.
-    succeeds,
-    /// The relation fails at its operands themselves, before it relates
-    /// anything they hold or writes anything (`relationCannotSucceed`).
-    fails,
-    /// Reading does not settle the relation.
-    undecided,
-};
-
-/// The most pairs `relationIsStructurallyIdentical` compares before it
-/// leaves a relation undecided.
-const identical_relation_pair_budget = 64;
-
-/// The most flexible variables `relationIsStructurallyIdentical` binds
-/// before it leaves a relation undecided.
-const identical_relation_bindings = 16;
-
-/// What a site does with a relation reading decides (`readRelation`).
-const RelationUse = enum {
-    /// The site only needs to know that the relation succeeds; it does not
-    /// run it.
-    decide,
-    /// The site runs the relation directly. Binding a literal's type would
-    /// determine the literal, which a probe settles later than a direct
-    /// relation does, so a literal's type is not bound.
-    relate,
-};
-
-/// Whether a resolved class is a flexible variable a relation may only bind:
-/// unconstrained, carrying no checker decision, not generalized, and, for a
-/// relation the site runs, no literal's type.
-fn bindableFlex(resolved: types_mod.ResolvedVarDesc, comptime use: RelationUse) bool {
-    const flex = switch (resolved.desc.content) {
-        .flex => |flex| flex,
-        .rigid, .alias, .field_presence, .structure, .err => return false,
-    };
-    return flex.constraints.len() == 0 and
-        (use == .decide or flex.literal == .none) and
-        resolved.desc.rank != .generalized and
-        std.meta.eql(resolved.desc.flags, types_mod.types.DescriptorFlags{});
-}
-
-/// Whether a class's flags leave every relation of it that does not lift an
-/// anonymous structure into a nominal type exactly as without them: a frozen
-/// class merges keeping its descriptor, and the marks of an opened nominal
-/// backing's structure and of an annotation's tag union are read only when
-/// such a lift is decided.
-fn relationNeutralFlags(flags: types_mod.types.DescriptorFlags) bool {
-    const neutral: types_mod.types.DescriptorFlags = .{
-        .frozen = true,
-        .nominal_backing_structure = true,
-        .annotation_tag_union = true,
-    };
-    return @as(u16, @bitCast(flags)) & ~@as(u16, @bitCast(neutral)) == 0;
-}
-
-/// Whether relating two record fields of one name relates their kinds
-/// (`unifySharedFieldPresence`): `null` is a required field, otherwise the
-/// field's kind variable. Kinds of one class, two equal kinds, or a
-/// flag-free kind variable facing a kind or another such variable relate;
-/// a required field relates to a required or defaulted kind or such a
-/// variable.
-fn fieldKindsRelate(self: *Self, left: ?Var, right: ?Var) bool {
-    const left_var = left orelse return self.requiredFieldRelatesToKind(right);
-    const right_var = right orelse return self.requiredFieldRelatesToKind(left);
-    const left_kind = self.types.resolveVar(left_var);
-    const right_kind = self.types.resolveVar(right_var);
-    if (left_kind.var_ == right_kind.var_) return true;
-    if (fieldKindIsFreeVariable(left_kind)) return fieldKindIsFreeVariable(right_kind) or right_kind.desc.content == .field_presence;
-    if (fieldKindIsFreeVariable(right_kind)) return left_kind.desc.content == .field_presence;
-    if (left_kind.desc.content != .field_presence or right_kind.desc.content != .field_presence) return false;
-    return std.meta.eql(left_kind.desc.content.field_presence, right_kind.desc.content.field_presence);
-}
-
-fn requiredFieldRelatesToKind(self: *Self, kind: ?Var) bool {
-    const kind_var = kind orelse return true;
-    const resolved = self.types.resolveVar(kind_var);
-    if (fieldKindIsFreeVariable(resolved)) return true;
-    return switch (resolved.desc.content) {
-        .field_presence => |presence| presence != .optional,
-        .flex, .rigid, .alias, .structure, .err => false,
-    };
-}
-
-/// A field kind variable not yet decided, with no constraint or flag.
-fn fieldKindIsFreeVariable(resolved: types_mod.ResolvedVarDesc) bool {
-    return switch (resolved.desc.content) {
-        .flex => |flex| flex.constraints.len() == 0 and flex.literal == .none and
-            std.meta.eql(resolved.desc.flags, types_mod.types.DescriptorFlags{}),
-        .rigid, .alias, .field_presence, .structure, .err => false,
-    };
-}
-
-/// Whether `root` reaches no flexible, erroneous, or field-kind variable, no
-/// function of undecided effect, no field of undecided kind, and no class
-/// carrying a checker decision a relation reads, within the shared `visited`
-/// budget.
-fn isGroundWithin(self: *Self, root: Var, visited: *usize) bool {
-    var stack: [identical_relation_pair_budget]Var = undefined;
-    var len: usize = 1;
-    stack[0] = root;
-    const Push = struct {
-        fn one(items: *[identical_relation_pair_budget]Var, count: *usize, var_: Var) bool {
-            if (count.* == items.len) return false;
-            items[count.*] = var_;
-            count.* += 1;
-            return true;
-        }
-        fn all(items: *[identical_relation_pair_budget]Var, count: *usize, vars: []const Var) bool {
-            for (vars) |var_| if (!one(items, count, var_)) return false;
-            return true;
-        }
-    };
-    while (len > 0) {
-        len -= 1;
-        visited.* += 1;
-        if (visited.* > identical_relation_pair_budget) return false;
-        const resolved = self.types.resolveVar(stack[len]);
-        if (!relationNeutralFlags(resolved.desc.flags)) return false;
-        switch (resolved.desc.content) {
-            .flex, .field_presence, .err => return false,
-            .rigid => {},
-            .alias => |alias| {
-                if (!Push.all(&stack, &len, self.types.sliceAliasAllArgs(alias))) return false;
-                if (!Push.one(&stack, &len, self.types.getAliasBackingVar(alias))) return false;
-            },
-            .structure => |flat| switch (flat) {
-                .empty_record, .empty_tag_union => {},
-                .tuple => |tuple| if (!Push.all(&stack, &len, self.types.sliceVars(tuple.elems))) return false,
-                .nominal_type => |nominal| if (!Push.all(&stack, &len, self.types.sliceNominalArgs(nominal))) return false,
-                .fn_pure, .fn_effectful => |func| {
-                    if (func.effect_deps.len() != 0) return false;
-                    if (!Push.all(&stack, &len, self.types.sliceVars(func.args))) return false;
-                    if (!Push.one(&stack, &len, func.ret)) return false;
-                },
-                .fn_unbound => return false,
-                .record => |record| {
-                    const fields = self.types.getRecordFieldsSlice(record.fields);
-                    for (fields.items(.presence)) |presence| {
-                        if (presence.presence_var.get() != null) return false;
-                        if (!Push.one(&stack, &len, presence.var_)) return false;
-                    }
-                    if (!Push.one(&stack, &len, record.ext)) return false;
-                },
-                .tag_union => |tag_union| {
-                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |args| {
-                        if (!Push.all(&stack, &len, self.types.sliceVars(args))) return false;
-                    }
-                    if (!Push.one(&stack, &len, tag_union.ext)) return false;
-                },
-            },
-        }
-    }
-    return true;
-}
-
-/// Decide the relation of `a` and `b` by reading them (design.md
-/// "Solver-Mutating Rewrites", read-first relations). A relation reading
-/// leaves undecided is related speculatively by the caller.
-fn readRelation(self: *Self, a: Var, b: Var, comptime use: RelationUse) std.mem.Allocator.Error!ReadRelation {
-    if (self.relationIsStructurallyIdentical(a, b, use)) return .succeeds;
-    if (try self.relationOnlyBinds(a, b, use) or try self.relationOnlyBinds(b, a, use)) return .succeeds;
-    if (self.relationCannotSucceed(a, b)) return .fails;
-    return .undecided;
-}
-
-/// The function a function structure holds.
-fn flatFunc(flat: types_mod.FlatType) types_mod.Func {
-    return switch (flat) {
-        .fn_pure, .fn_effectful, .fn_unbound => |func| func,
-        .tuple, .nominal_type, .record, .empty_record, .tag_union, .empty_tag_union => unreachable, // the caller checked the kind is a function
-    };
-}
-
-/// Whether relating `a` and `b` fails at the two operands themselves, with
-/// nothing written and nothing they hold related: both are structures,
-/// neither an alias, an application of an invalid declaration or a deferred
-/// requirement callable, and their kinds never relate (a tuple and anything
-/// else; two applications of different declarations, or of one with
-/// different argument counts; a nominal type and a tuple, a function or an
-/// empty row; a function and a non-function; functions of different arity,
-/// or a pure and an effectful one; a record row and a tag row; tuples of
-/// different length; a tag union with tags and the empty tag union). A
-/// nominal type and a non-empty record or tag union may relate by lifting,
-/// so they are not read.
-fn relationCannotSucceed(self: *Self, a: Var, b: Var) bool {
-    const left = self.types.resolveVar(a);
-    const right = self.types.resolveVar(b);
-    if (left.desc.flags.deferred_callable or right.desc.flags.deferred_callable) return false;
-    const left_flat = switch (left.desc.content) {
-        .structure => |flat| flat,
-        .flex, .rigid, .alias, .field_presence, .err => return false,
-    };
-    const right_flat = switch (right.desc.content) {
-        .structure => |flat| flat,
-        .flex, .rigid, .alias, .field_presence, .err => return false,
-    };
-    for ([_]types_mod.FlatType{ left_flat, right_flat }) |flat| {
-        if (flat == .nominal_type and self.types.nominalDeclIsInvalid(flat.nominal_type)) return false;
-    }
-    const Kind = enum { tuple, nominal, function, record_row, empty_record, tag_row, empty_tag_union };
-    const kindOf = struct {
-        fn of(flat: types_mod.FlatType) Kind {
-            return switch (flat) {
-                .tuple => .tuple,
-                .nominal_type => .nominal,
-                .fn_pure, .fn_effectful, .fn_unbound => .function,
-                .record => .record_row,
-                .empty_record => .empty_record,
-                .tag_union => .tag_row,
-                .empty_tag_union => .empty_tag_union,
-            };
-        }
-    }.of;
-    const left_kind = kindOf(left_flat);
-    const right_kind = kindOf(right_flat);
-    if (left_kind == .tuple or right_kind == .tuple) {
-        if (left_kind != right_kind) return true;
-        return left_flat.tuple.elems.len() != right_flat.tuple.elems.len();
-    }
-    if (left_kind == .function or right_kind == .function) {
-        if (left_kind != right_kind) return true;
-        const left_func = flatFunc(left_flat);
-        const right_func = flatFunc(right_flat);
-        if ((left_flat == .fn_pure and right_flat == .fn_effectful) or (left_flat == .fn_effectful and right_flat == .fn_pure)) return true;
-        return left_func.args.len() != right_func.args.len();
-    }
-    if (left_kind == .nominal and right_kind == .nominal) {
-        const left_nominal = left_flat.nominal_type;
-        const right_nominal = right_flat.nominal_type;
-        if (!unifier.sameNominalIdentity(left_nominal, right_nominal)) return true;
-        return left_nominal.args.count != right_nominal.args.count;
-    }
-    if (left_kind == .nominal or right_kind == .nominal) {
-        const other = if (left_kind == .nominal) right_kind else left_kind;
-        return other == .empty_record or other == .empty_tag_union;
-    }
-    const left_record = left_kind == .record_row or left_kind == .empty_record;
-    const right_record = right_kind == .record_row or right_kind == .empty_record;
-    if (left_record != right_record) return true;
-    if (left_kind == .tag_row and right_kind == .empty_tag_union) return left_flat.tag_union.tags.len() != 0;
-    if (right_kind == .tag_row and left_kind == .empty_tag_union) return right_flat.tag_union.tags.len() != 0;
-    return false;
-}
-
 /// Small random types over a module's `Str`, `U64` and `Choice(a) := [Yes(a), No]`, for tests
 /// that compare ways of relating them (`RandomTypeGen.init`).
 const RandomTypeGen = struct {
@@ -67020,38 +66510,6 @@ const RandomTypeGen = struct {
     }
 };
 
-test "read-first relations agree with the unifier on random small type pairs" {
-    const TestEnv = @import("test/TestEnv.zig");
-    var test_env = try TestEnv.initOpen("ReadRelation", RandomTypeGen.source);
-    defer test_env.deinit();
-    const checker = &test_env.checker;
-    var prng = std.Random.DefaultPrng.init(0x5eed);
-    var gen = try RandomTypeGen.init(&test_env, prng.random());
-    defer gen.pool.deinit(checker.gpa);
-
-    var decided: [3]usize = @splat(0);
-    for (0..4000) |_| {
-        const a, const b = try gen.pair();
-        const verdicts = [_]ReadRelation{
-            try checker.readRelation(a, b, .decide),
-            try checker.readRelation(a, b, .relate),
-        };
-        var ask = checker.beginAsk(null);
-        const result = try checker.askRelate(&ask, a, b, .{});
-        checker.askDiscard(&ask);
-        for (verdicts) |verdict| {
-            switch (verdict) {
-                .succeeds => try std.testing.expect(result.isEstablished()),
-                .fails => try std.testing.expect(!result.isAccepted()),
-                .undecided => {},
-            }
-            decided[@backingInt(verdict)] += 1;
-        }
-    }
-    // The generator reaches every verdict.
-    for (decided) |count| try std.testing.expect(count != 0);
-}
-
 test "an ask relates random small type pairs as a direct relation does, and a discarded ask changes nothing" {
     const TestEnv = @import("test/TestEnv.zig");
     var prng_asked = std.Random.DefaultPrng.init(0xa5c);
@@ -67106,276 +66564,6 @@ test "an ask relates random small type pairs as a direct relation does, and a di
         }
     }
     try std.testing.expect(kept > 100 and discarded > 100);
-}
-
-/// Whether `target` is an unconstrained flexible variable that `value` does
-/// not reach, so relating the two binds `target` to `value` and nothing else.
-fn relationOnlyBinds(self: *Self, target: Var, value: Var, comptime use: RelationUse) std.mem.Allocator.Error!bool {
-    const resolved = self.types.resolveVar(target);
-    if (!bindableFlex(resolved, use)) return false;
-    return !try self.varReachesAny(value, &.{resolved.var_});
-}
-
-/// Whether `a` and `b` are one class or the same structure all the way down
-/// to shared classes or to an unconstrained flexible variable facing a ground
-/// type, read without writing. A relation of two such operands only merges
-/// classes of equal content and binds those variables, so it succeeds. Rows must list the
-/// same labels with the same payloads and share their extension; any other
-/// difference, a flexible or erroneous variable not shared, or a comparison
-/// larger than `identical_relation_pair_budget` is not identical.
-fn relationIsStructurallyIdentical(self: *Self, a: Var, b: Var, comptime use: RelationUse) bool {
-    var pending: [identical_relation_pair_budget][2]Var = undefined;
-    var pending_len: usize = 0;
-    var compared: usize = 0;
-    // Flexible variables the relation binds, each to the class of a ground
-    // type, and those classes.
-    var bound_flex: [identical_relation_bindings]Var = undefined;
-    var bound_to: [identical_relation_bindings]Var = undefined;
-    var bound_len: usize = 0;
-    pending[0] = .{ a, b };
-    pending_len = 1;
-    pairs: while (pending_len > 0) {
-        pending_len -= 1;
-        const operands = pending[pending_len];
-        compared += 1;
-        if (compared > identical_relation_pair_budget) return false;
-        const left = self.types.resolveVar(operands[0]);
-        const right = self.types.resolveVar(operands[1]);
-        if (left.var_ == right.var_) continue;
-        // An unconstrained flexible variable facing a ground type is bound
-        // to it. Ground types hold no flexible variable, so the binding can
-        // make nothing infinite; a variable met twice must face one class.
-        const binding: ?struct { flex: Var, value: Var } = if (bindableFlex(left, use))
-            .{ .flex = left.var_, .value = right.var_ }
-        else if (bindableFlex(right, use))
-            .{ .flex = right.var_, .value = left.var_ }
-        else
-            null;
-        if (binding) |bind| {
-            for (bound_flex[0..bound_len], bound_to[0..bound_len]) |flex, value| {
-                if (flex != bind.flex) continue;
-                if (self.types.resolveVar(value).var_ != bind.value) return false;
-                continue :pairs;
-            }
-            if (bound_len == identical_relation_bindings) return false;
-            if (!self.isGroundWithin(bind.value, &compared)) return false;
-            bound_flex[bound_len] = bind.flex;
-            bound_to[bound_len] = bind.value;
-            bound_len += 1;
-            continue;
-        }
-        // A checker decision a class carries can change how its relation
-        // merges, so only classes carrying none of those are compared.
-        if (!relationNeutralFlags(left.desc.flags) or !relationNeutralFlags(right.desc.flags)) return false;
-        const Push = struct {
-            fn pair(stack: *[identical_relation_pair_budget][2]Var, len: *usize, x: Var, y: Var) bool {
-                if (len.* == stack.len) return false;
-                stack[len.*] = .{ x, y };
-                len.* += 1;
-                return true;
-            }
-            fn all(stack: *[identical_relation_pair_budget][2]Var, len: *usize, xs: []const Var, ys: []const Var) bool {
-                if (xs.len != ys.len) return false;
-                for (xs, ys) |x, y| if (!pair(stack, len, x, y)) return false;
-                return true;
-            }
-        };
-        switch (left.desc.content) {
-            .flex, .rigid, .field_presence, .err => return false,
-            .alias => |left_alias| {
-                // Structural aliases are transparent: an alias relates to
-                // anything but the same alias through its backing.
-                const right_alias = switch (right.desc.content) {
-                    .alias => |alias| alias,
-                    .structure => {
-                        if (!Push.pair(&pending, &pending_len, self.types.getAliasBackingVar(left_alias), right.var_)) return false;
-                        continue;
-                    },
-                    .flex, .rigid, .field_presence, .err => return false,
-                };
-                if (!unifier.sameAliasIdentity(left_alias, right_alias)) {
-                    if (!Push.pair(&pending, &pending_len, self.types.getAliasBackingVar(left_alias), self.types.getAliasBackingVar(right_alias))) return false;
-                    continue;
-                }
-                if (!Push.all(&pending, &pending_len, self.types.sliceAliasAllArgs(left_alias), self.types.sliceAliasAllArgs(right_alias))) return false;
-                if (!Push.pair(&pending, &pending_len, self.types.getAliasBackingVar(left_alias), self.types.getAliasBackingVar(right_alias))) return false;
-            },
-            .structure => |left_flat| {
-                const right_flat = switch (right.desc.content) {
-                    .structure => |flat| flat,
-                    .alias => |right_alias| {
-                        if (!Push.pair(&pending, &pending_len, left.var_, self.types.getAliasBackingVar(right_alias))) return false;
-                        continue;
-                    },
-                    .flex, .rigid, .field_presence, .err => return false,
-                };
-                if (std.meta.activeTag(left_flat) != std.meta.activeTag(right_flat)) {
-                    // A tag union lifts into a nominal type whose backing
-                    // holds its tags. Only a site that does not run the
-                    // relation reads a lift: running it opens the backing
-                    // outside a probe, which keeps the opening for later
-                    // relations to share, where a committed probe would
-                    // have opened it again.
-                    if (use == .relate) return false;
-                    const anon, const nominal = if (left_flat == .tag_union and right_flat == .nominal_type)
-                        .{ left, right_flat.nominal_type }
-                    else if (right_flat == .tag_union and left_flat == .nominal_type)
-                        .{ right, left_flat.nominal_type }
-                    else
-                        return false;
-                    var lift_pairs: [identical_relation_pair_budget][2]Var = undefined;
-                    const lift = self.readTagUnionLift(anon, nominal, &lift_pairs) orelse return false;
-                    for (lift_pairs[0..lift.pairs]) |lift_pair| {
-                        if (!Push.pair(&pending, &pending_len, lift_pair[0], lift_pair[1])) return false;
-                    }
-                    // The anonymous row's extension binds to what the
-                    // backing holds beyond its tags, which no other pair
-                    // may name.
-                    for (bound_flex[0..bound_len]) |flex| if (flex == lift.ext) return false;
-                    if (bound_len == identical_relation_bindings) return false;
-                    bound_flex[bound_len] = lift.ext;
-                    bound_to[bound_len] = anon.var_;
-                    bound_len += 1;
-                    continue;
-                }
-                switch (left_flat) {
-                    .empty_record, .empty_tag_union => {},
-                    .tuple => |left_tuple| {
-                        if (!Push.all(&pending, &pending_len, self.types.sliceVars(left_tuple.elems), self.types.sliceVars(right_flat.tuple.elems))) return false;
-                    },
-                    .nominal_type => |left_nominal| {
-                        const right_nominal = right_flat.nominal_type;
-                        if (!unifier.sameNominalIdentity(left_nominal, right_nominal)) return false;
-                        if (!Push.all(&pending, &pending_len, self.types.sliceNominalArgs(left_nominal), self.types.sliceNominalArgs(right_nominal))) return false;
-                    },
-                    .fn_pure, .fn_effectful => |left_func| {
-                        const right_func = switch (right_flat) {
-                            .fn_pure, .fn_effectful => |func| func,
-                            .record, .tuple, .nominal_type, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => unreachable, // the active tags are equal
-                        };
-                        if (left_func.effect_deps.len() != 0 or right_func.effect_deps.len() != 0) return false;
-                        if (!Push.all(&pending, &pending_len, self.types.sliceVars(left_func.args), self.types.sliceVars(right_func.args))) return false;
-                        if (!Push.pair(&pending, &pending_len, left_func.ret, right_func.ret)) return false;
-                    },
-                    .fn_unbound => return false,
-                    .record => |left_record| {
-                        const right_record = right_flat.record;
-                        const left_fields = self.types.getRecordFieldsSlice(left_record.fields);
-                        const right_fields = self.types.getRecordFieldsSlice(right_record.fields);
-                        if (left_fields.len != right_fields.len) return false;
-                        for (left_fields.items(.name), right_fields.items(.name), left_fields.items(.presence), right_fields.items(.presence)) |left_name, right_name, left_presence, right_presence| {
-                            if (!left_name.eql(right_name)) return false;
-                            if (!self.fieldKindsRelate(left_presence.presence_var.get(), right_presence.presence_var.get())) return false;
-                            if (!Push.pair(&pending, &pending_len, left_presence.var_, right_presence.var_)) return false;
-                        }
-                        if (!self.rowEndsAtTail(left_record.ext) or !self.rowEndsAtTail(right_record.ext)) return false;
-                        if (!Push.pair(&pending, &pending_len, left_record.ext, right_record.ext)) return false;
-                    },
-                    .tag_union => |left_union| {
-                        const right_union = right_flat.tag_union;
-                        const left_tags = self.types.getTagsSlice(left_union.tags);
-                        const right_tags = self.types.getTagsSlice(right_union.tags);
-                        if (left_tags.len != right_tags.len) return false;
-                        for (left_tags.items(.name), right_tags.items(.name), left_tags.items(.args), right_tags.items(.args)) |left_name, right_name, left_args, right_args| {
-                            if (!left_name.eql(right_name)) return false;
-                            if (!Push.all(&pending, &pending_len, self.types.sliceVars(left_args), self.types.sliceVars(right_args))) return false;
-                        }
-                        if (!self.rowEndsAtTail(left_union.ext) or !self.rowEndsAtTail(right_union.ext)) return false;
-                        if (!Push.pair(&pending, &pending_len, left_union.ext, right_union.ext)) return false;
-                    },
-                }
-            },
-        }
-    }
-    return true;
-}
-
-/// A tag union's lift into a nominal type, read without opening the
-/// nominal's backing (`readTagUnionLift`).
-const TagUnionLift = struct {
-    /// The tag union's extension, which the lift binds.
-    ext: Var,
-    /// How many payload pairs the lift relates.
-    pairs: usize,
-};
-
-/// Read the lift of the tag union `anon` into an application of `nominal`
-/// (`unifyTagUnionWithNominal`) when it can only succeed apart from its
-/// payload pairs, which go in `out`: the tag union carries no flag and ends
-/// in an unconstrained, non-generalized flexible variable flagged at most as
-/// a tag row's extension; the nominal's declaration is valid, takes
-/// no context arguments and may be lifted into here; its backing is a closed
-/// tag union written directly, holding every tag of `anon` with the same
-/// arity, each of whose payloads is one of the declaration's formals. Opening
-/// the backing substitutes the application's argument for each formal, so
-/// each payload pair is that argument and `anon`'s payload, and the lift
-/// binds `anon`'s extension to the backing's remaining tags.
-fn readTagUnionLift(self: *Self, anon: types_mod.ResolvedVarDesc, nominal: types_mod.NominalType, out: *[identical_relation_pair_budget][2]Var) ?TagUnionLift {
-    if (!std.meta.eql(anon.desc.flags, types_mod.types.DescriptorFlags{})) return null;
-    const anon_union = anon.desc.content.structure.tag_union;
-    // A tag row's extension must stay a tag row, which the rest of the
-    // backing's row is.
-    const ext = self.types.resolveVar(anon_union.ext);
-    const ext_flex = switch (ext.desc.content) {
-        .flex => |flex| flex,
-        .rigid, .alias, .field_presence, .structure, .err => return null,
-    };
-    if (ext_flex.constraints.len() != 0 or ext_flex.literal != .none or ext.desc.rank == .generalized) return null;
-    if (!std.meta.eql(ext.desc.flags, types_mod.types.DescriptorFlags{ .requires_tag_row = true }) and
-        !std.meta.eql(ext.desc.flags, types_mod.types.DescriptorFlags{})) return null;
-    if (!nominal.canLiftInner(self.cir.selfModuleIdentity())) return null;
-    const decl_idx = self.types.lookupNominalDecl(nominal) orelse return null;
-    const decl = self.types.getNominalDecl(decl_idx);
-    if (!decl.isValid() or decl.flags.context_len != 0) return null;
-    const backing_union = switch (self.types.resolveVar(decl.backing).desc.content) {
-        .structure => |flat| switch (flat) {
-            .tag_union => |tag_union| tag_union,
-            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return null,
-        },
-        .flex, .rigid, .alias, .field_presence, .err => return null,
-    };
-    switch (self.types.resolveVar(backing_union.ext).desc.content) {
-        .structure => |flat| if (flat != .empty_tag_union) return null,
-        .flex, .rigid, .alias, .field_presence, .err => return null,
-    }
-    const formals = self.types.sliceVars(decl.formals);
-    const args = self.types.sliceNominalArgs(nominal);
-    if (formals.len != args.len) return null;
-    const backing_tags = self.types.getTagsSlice(backing_union.tags);
-    const anon_tags = self.types.getTagsSlice(anon_union.tags);
-    var pairs: usize = 0;
-    for (anon_tags.items(.name), anon_tags.items(.args)) |name, anon_args| {
-        const backing_args = for (backing_tags.items(.name), backing_tags.items(.args)) |backing_name, backing_args| {
-            if (backing_name.eql(name)) break backing_args;
-        } else return null;
-        const backing_payloads = self.types.sliceVars(backing_args);
-        const anon_payloads = self.types.sliceVars(anon_args);
-        if (backing_payloads.len != anon_payloads.len) return null;
-        for (backing_payloads, anon_payloads) |backing_payload, anon_payload| {
-            const payload_root = self.types.resolveVar(backing_payload).var_;
-            const formal_index = for (formals, 0..) |formal, index| {
-                if (self.types.resolveVar(formal).var_ == payload_root) break index;
-            } else return null;
-            if (pairs == out.len) return null;
-            out[pairs] = .{ args[formal_index], anon_payload };
-            pairs += 1;
-        }
-    }
-    return .{ .ext = ext.var_, .pairs = pairs };
-}
-
-/// Whether a row's extension ends it: closed, or a variable. A row whose
-/// extension is another row part is a chain, which can repeat a label
-/// (design.md "Row Union Normalization"), so its relation is not read.
-fn rowEndsAtTail(self: *Self, ext: Var) bool {
-    return switch (self.types.resolveVar(ext).desc.content) {
-        .flex, .rigid => true,
-        .structure => |flat| switch (flat) {
-            .empty_record, .empty_tag_union => true,
-            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union => false,
-        },
-        .alias, .field_presence, .err => false,
-    };
 }
 
 /// Ask whether `body_var` can be used as `target` without leaking a rigid of
@@ -67487,17 +66675,7 @@ fn checkBranchBodyAgainstExpected(
     // Probe (1): does the body match the annotated return type? That relation
     // reads only this branch's value.
     try self.collectScopeRigids(&scope, expected_ret, env);
-    const compatible = switch (try self.readRelation(related_var, expected_ret, .decide)) {
-        .succeeds => if (scope.rigids.items.len == 0) read: {
-            self.noteSpeculation(.branch_compatible, .read_first);
-            break :read true;
-        } else try self.probeBranchCompatible(related_var, expected_ret, &scope),
-        .fails => read: {
-            self.noteSpeculation(.branch_compatible, .read_first);
-            break :read false;
-        },
-        .undecided => try self.probeBranchCompatible(related_var, expected_ret, &scope),
-    };
+    const compatible = try self.probeBranchCompatible(related_var, expected_ret, &scope);
     if (!compatible) {
         if (widening) |w| self.discardResultWidening(w);
         const previous_relation = try self.enterRelation(.of(.value, body_expr_idx, 0));
@@ -67514,18 +66692,7 @@ fn checkBranchBodyAgainstExpected(
     // ask. Success keeps the merge (regions/rank/deferred constraints
     // already propagated into env); failure falls through to the report below
     // AFTER the ask is discarded, so the snapshots it takes see the pristine vars.
-    // A fold that reading shows can only succeed relates directly.
-    const read: ReadRelation = if (widening == null) try self.readRelation(related_var, acc, .relate) else .undecided;
-    if (read == .succeeds) {
-        self.noteSpeculation(.branch_fold, .read_first);
-        const result = try self.runUnify(related_var, acc, env, unifyOptionsForContext(ctx, .write_no_report));
-        std.debug.assert(result.isAccepted());
-        try self.claimRecordedProblems();
-        return .related;
-    }
-    if (read == .fails) {
-        self.noteSpeculation(.branch_fold, .read_first);
-    } else {
+    {
         var ask = self.beginAsk(env);
         self.noteSpeculation(.branch_fold, .ask);
         const result = try self.askRelate(&ask, related_var, acc, unifyOptionsForContext(ctx, .write_no_report));
