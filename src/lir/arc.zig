@@ -2285,7 +2285,7 @@ const Inserter = struct {
     /// the source shared by its base and owned variants. Places are indexed
     /// by frame ordinal; span and view facts are allocated only when queried.
     ownership_places: []collections.OptionalId(LIR.LocalId) = &.{},
-    operand_first: []u32 = &.{},
+    operand_first: []collections.OptionalU32 = &.{},
     operand_sharing: std.AutoHashMapUnmanaged(LIR.LocalSpan, []const bool) = .empty,
     view_shell_shapes: collections.DenseMapUnmanaged(LIR.LocalId, ViewShellShape) = .empty,
     /// Parameter locals the current variant's demand vector seeds as born
@@ -6082,22 +6082,22 @@ const Inserter = struct {
         const shared = try self.emission_allocator.alloc(bool, span.len);
         @memset(shared, false);
         if (self.operand_first.len == 0) {
-            self.operand_first = try self.emission_allocator.alloc(u32, self.domain().frame_locals.len);
+            self.operand_first = try self.emission_allocator.alloc(collections.OptionalU32, self.domain().frame_locals.len);
         }
         const locals = self.store.getLocalSpan(span);
         // Only touched places need clearing; no frame-wide reset per call.
         for (0..span.len) |i| {
             const place = self.ownershipPlaceLeader(GuardedList.at(locals, i));
-            self.operand_first[self.domain().frameIndexOf(place)] = std.math.maxInt(u32);
+            self.operand_first[self.domain().frameIndexOf(place)] = .none;
         }
         for (0..span.len) |i| {
             const place = self.ownershipPlaceLeader(GuardedList.at(locals, i));
             const first = &self.operand_first[self.domain().frameIndexOf(place)];
-            if (first.* == std.math.maxInt(u32)) {
-                first.* = @intCast(i);
-            } else {
-                shared[first.*] = true;
+            if (first.get()) |first_position| {
+                shared[first_position] = true;
                 shared[i] = true;
+            } else {
+                first.* = .some(@intCast(i));
             }
         }
         entry.value_ptr.* = shared;

@@ -570,7 +570,9 @@ pub const Interpreter = struct {
     const FrameSlotColumn = collections.OptionalIndexColumn(FrameSlotId);
 
     const FrameSlotIndex = struct {
-        span: LIR.LocalSpan,
+        /// The frame-local span this index was built from; absent while it
+        /// is not built.
+        span: collections.OptionalStruct(LIR.LocalSpan, "start"),
         base: u32,
         slot_of: FrameSlotColumn,
         /// The slots of the frame's zero-sized locals.
@@ -2372,14 +2374,16 @@ pub const Interpreter = struct {
     ) Allocator.Error!FrameSlotIndex {
         const entry = try self.frame_slot_indexes.getOrPut(proc_id);
         if (entry.found_existing) {
-            if (entry.value_ptr.span.start == span.start and entry.value_ptr.span.len == span.len) return entry.value_ptr.*;
+            if (entry.value_ptr.span.get()) |built| {
+                if (built.start == span.start and built.len == span.len) return entry.value_ptr.*;
+            }
             entry.value_ptr.deinit(self.allocator);
         }
-        // Until the index is built, the entry names a span no procedure has,
-        // so a failed build is rebuilt on the next entry.
-        entry.value_ptr.* = .{ .span = .{ .start = std.math.maxInt(u32), .len = std.math.maxInt(u32) }, .base = 0, .slot_of = .{} };
+        // Until the index is built, the entry names no span, so a failed
+        // build is rebuilt on the next entry.
+        entry.value_ptr.* = .{ .span = .none, .base = 0, .slot_of = .{} };
         if (locals.len == 0) {
-            entry.value_ptr.span = span;
+            entry.value_ptr.span = .some(span);
             return entry.value_ptr.*;
         }
         const base_id = @backingInt(GuardedList.at(locals, 0));
@@ -2443,7 +2447,7 @@ pub const Interpreter = struct {
             }
         }
         entry.value_ptr.* = .{
-            .span = span,
+            .span = .some(span),
             .base = base_id,
             .slot_of = slot_of,
             .zst_slots = zst_slots,

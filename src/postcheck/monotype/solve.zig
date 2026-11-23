@@ -10808,7 +10808,7 @@ test "relation mutation invalidates active snapshots before freezing" {
 /// Leave every node visited in the last epoch before the wrap, so the next
 /// containment walk must wrap and may trust no existing stamp.
 fn stampEveryNodeAtLastContainmentEpoch(graph: *InstGraph) void {
-    graph.containment_visit_epochs.epoch.current = std.math.maxInt(u32) - 1;
+    graph.containment_visit_epochs.epoch.current = std.math.maxInt(u32);
     for (0..graph.containment_visit_epochs.len()) |node| graph.containment_visit_epochs.insert(@intCast(node));
 }
 

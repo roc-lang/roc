@@ -9,7 +9,9 @@ const Self = @This();
 
 allocator: Allocator,
 ranks: std.ArrayList(u32) = .empty,
-generation: std.atomic.Value(usize) = .init(std.math.maxInt(usize)),
+/// The prepared generation's index limit plus one, or zero when no
+/// generation is prepared.
+generation: std.atomic.Value(usize) = .init(0),
 mutex: std.atomic.Mutex = .unlocked,
 
 pub fn init(allocator: Allocator) Self {
@@ -36,7 +38,7 @@ pub fn destroy(self: *Self) void {
 
 /// Borrow the ranks only when they cover the current index domain.
 pub fn current(self: *const Self, limit: usize) ?[]const u32 {
-    if (self.generation.load(.acquire) != limit) return null;
+    if (self.generation.load(.acquire) != limit + 1) return null;
     return self.ranks.items;
 }
 
@@ -119,7 +121,7 @@ pub fn ensure(self: *Self, first: u32, limit: usize, count: usize, context: anyt
     // previous generation intact and a later request can retry.
     try self.ranks.resize(self.allocator, limit);
     for (entries, 0..) |entry, rank| self.ranks.items[entry.index] = @intCast(rank);
-    self.generation.store(limit, .release);
+    self.generation.store(limit + 1, .release);
     return self.ranks.items;
 }
 

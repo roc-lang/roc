@@ -10,6 +10,7 @@
 const std = @import("std");
 const base = @import("base");
 const can = @import("can");
+const collections = @import("collections");
 
 const CIR = can.CIR;
 const CirVisitor = @import("cir_visitor.zig").CirVisitor;
@@ -26,8 +27,10 @@ pub const Binding = struct {
     pattern_idx: CIR.Pattern.Idx,
     /// The region where this binding is visible (from definition to end of scope)
     visible_from: u32,
-    /// The region where this binding's scope ends
-    visible_to: u32,
+    /// Where this binding's scope ends, or `.none` for a module-level binding,
+    /// whose scope runs past the module's last byte: a cursor in text edited
+    /// since the module was checked can sit beyond it.
+    visible_to: collections.OptionalU32,
     /// What introduced this binding
     owner: Owner,
 
@@ -75,13 +78,13 @@ pub const ScopeMap = struct {
         // Top-level defs are visible from their definition to the end of the module
         for (store.sliceDefs(module_env.all_defs)) |def_idx| {
             const def = store.getDef(def_idx);
-            try self.extractBindingsFromPattern(module_env, def.pattern, 0, std.math.maxInt(u32), .{ .def = def_idx });
+            try self.extractBindingsFromPattern(module_env, def.pattern, 0, .none, .{ .def = def_idx });
             visitor.walkExpr(store, def.expr);
             if (walk.oom) |err| return err;
         }
 
         for (store.sliceStatements(module_env.all_statements)) |stmt_idx| {
-            try self.extractStatementBindings(module_env, stmt_idx, std.math.maxInt(u32));
+            try self.extractStatementBindings(module_env, stmt_idx, .none);
             visitor.walkStatement(store, stmt_idx);
             if (walk.oom) |err| return err;
         }
@@ -96,7 +99,24 @@ pub const ScopeMap = struct {
 
     /// Check if a binding is visible at the given offset
     pub fn isVisibleAt(binding: Binding, offset: u32) bool {
-        return binding.visible_from <= offset and offset < binding.visible_to;
+        return binding.visible_from <= offset and reachesBefore(binding, offset);
+    }
+
+    /// Whether `binding`'s scope extends past `offset`.
+    fn reachesBefore(binding: Binding, offset: u32) bool {
+        const end = binding.visible_to.get() orelse return true;
+        return offset < end;
+    }
+
+    /// Whether the scopes of `a` and `b` share an offset, counting each scope's
+    /// end as inside it.
+    pub fn scopesOverlap(a: Binding, b: Binding) bool {
+        return reachesOrEnds(a, b.visible_from) and reachesOrEnds(b, a.visible_from);
+    }
+
+    fn reachesOrEnds(binding: Binding, offset: u32) bool {
+        const end = binding.visible_to.get() orelse return true;
+        return offset <= end;
     }
 
     /// Visitor context that records the bindings each scope-introducing node
@@ -148,7 +168,7 @@ pub const ScopeMap = struct {
         /// Records `pattern`'s bindings as visible throughout `body`.
         fn bindInBody(walk: *ScopeWalk, pattern: CIR.Pattern.Idx, body: CIR.Expr.Idx, owner: Binding.Owner) Allocator.Error!void {
             const body_region = walk.module_env.store.getExprRegion(body);
-            try walk.scope_map.extractBindingsFromPattern(walk.module_env, pattern, body_region.start.offset, body_region.end.offset, owner);
+            try walk.scope_map.extractBindingsFromPattern(walk.module_env, pattern, body_region.start.offset, .some(body_region.end.offset), owner);
         }
 
         fn recordExprBindings(walk: *ScopeWalk, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) Allocator.Error!void {
@@ -158,7 +178,7 @@ pub const ScopeMap = struct {
                     // Each statement binding is visible from its statement to the end of the block
                     const block_end = store.getExprRegion(expr_idx).end.offset;
                     for (store.sliceStatements(block.stmts)) |stmt_idx| {
-                        try walk.scope_map.extractStatementBindings(walk.module_env, stmt_idx, block_end);
+                        try walk.scope_map.extractStatementBindings(walk.module_env, stmt_idx, .some(block_end));
                     }
                 },
                 .e_lambda => |lambda| {
@@ -237,8 +257,8 @@ pub const ScopeMap = struct {
     };
 
     /// Record the bindings a declaration statement introduces, visible from the
-    /// statement to `scope_end`.
-    fn extractStatementBindings(self: *ScopeMap, module_env: *ModuleEnv, stmt_idx: CIR.Statement.Idx, scope_end: u32) Allocator.Error!void {
+    /// statement to `scope_end` (`.none` for a module-level statement).
+    fn extractStatementBindings(self: *ScopeMap, module_env: *ModuleEnv, stmt_idx: CIR.Statement.Idx, scope_end: collections.OptionalU32) Allocator.Error!void {
         const pattern = switch (module_env.store.getSourceStatement(stmt_idx)) {
             .s_decl => |decl| decl.pattern,
             inline .s_var, .s_var_uninitialized => |var_decl| var_decl.pattern_idx,
@@ -272,7 +292,7 @@ pub const ScopeMap = struct {
         module_env: *ModuleEnv,
         pattern_idx: CIR.Pattern.Idx,
         visible_from: u32,
-        visible_to: u32,
+        visible_to: collections.OptionalU32,
         owner: Binding.Owner,
     ) Allocator.Error!void {
         const pattern = module_env.store.getSourcePattern(pattern_idx);
@@ -404,6 +424,6 @@ test "ScopeMap traverses a flattened field access receiver" {
     try std.testing.expect(binding.ident.eql(parameter_name));
     try std.testing.expectEqual(parameter, binding.pattern_idx);
     try std.testing.expectEqual(@as(u32, 20), binding.visible_from);
-    try std.testing.expectEqual(@as(u32, 30), binding.visible_to);
+    try std.testing.expectEqual(@as(?u32, 30), binding.visible_to.get());
     try std.testing.expect(binding.owner == .parameter);
 }

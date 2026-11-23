@@ -935,11 +935,8 @@ else
     2 * 1024 * 1024 * 1024 * 1024; // 2TB for 64-bit Linux
 
 fn configuredSharedMemorySize() usize {
-    if (comptime build_options.shared_memory_size > std.math.maxInt(usize)) {
+    return comptime std.math.cast(usize, build_options.shared_memory_size) orelse
         @compileError("-Dshared-memory-size does not fit in usize for this target");
-    }
-
-    return @intCast(build_options.shared_memory_size);
 }
 
 /// Floor for the retry loop in `createSharedMemory`. Set to the

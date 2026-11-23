@@ -159,8 +159,7 @@ const ActivePairs = struct {
             if (node.pair.second == pair.second) return false;
             cursor = node.next;
         }
-        const index = std.math.cast(u32, self.nodes.items.len) orelse return error.OutOfMemory;
-        if (index == std.math.maxInt(u32)) return error.OutOfMemory;
+        const index = try collections.nextBiasedId(self.nodes.items.len);
         try self.nodes.ensureUnusedCapacity(allocator, 1);
         try self.heads.put(allocator, pair.first, index);
         self.nodes.appendAssumeCapacity(.{ .pair = pair, .next = head });
@@ -1244,11 +1243,11 @@ const Solver = struct {
         for (fns) |fn_id| try self.gen_stack.append(self.allocator, self.program.fn_tys.items[@backingInt(fn_id)]);
         // Each stack entry is a child; its parent is pushed as an edge.
         // A root entry has no parent.
-        var parents: std.ArrayList(?u32) = .empty;
+        var parents: std.ArrayList(collections.OptionalU32) = .empty;
         defer parents.deinit(self.allocator);
-        try parents.appendNTimes(self.allocator, null, fns.len);
+        try parents.appendNTimes(self.allocator, .none, fns.len);
         while (self.gen_stack.pop()) |next| {
-            const parent = parents.pop().?;
+            const parent = parents.pop().?.get();
             const root = types.rootCompressed(next);
             if (Type.ownerOlder(types.owners.items[@backingInt(root)], owner)) continue;
             if (self.gen_env.contains(root)) continue;
@@ -1275,7 +1274,7 @@ const Solver = struct {
             try self.appendGeneralizationChildren(root);
             for (self.gen_children.items) |child| {
                 try self.gen_stack.append(self.allocator, child);
-                try parents.append(self.allocator, index);
+                try parents.append(self.allocator, .some(index));
             }
         }
 
@@ -2868,7 +2867,7 @@ const Solver = struct {
         };
         var cloner = TypeCloner.init(self);
         cloner.lazy_ctx = ctx;
-        cloner.lazy_parent = leaf.id;
+        cloner.lazy_parent = .some(leaf.id);
         defer cloner.deinit();
         const mono_content = self.lifted.types.get(leaf.id);
         // Only type arguments need ties to occurrences in the backing. A
@@ -5258,8 +5257,12 @@ const Solver = struct {
             const Entry = struct { name: Name, position: u32 };
 
             len: u32,
+            /// The index's run in the pool; an index with no entries owns no
+            /// run.
             entries_start: u32,
             entries_len: u32,
+
+            const fresh: Self = .{ .len = 0, .entries_start = 0, .entries_len = 0 };
 
             fn lessThan(_: void, lhs: Entry, rhs: Entry) bool {
                 const lhs_key = @backingInt(lhs.name);
@@ -5270,7 +5273,7 @@ const Solver = struct {
             /// Index the row `span` of `types` into `pool`, reusing this
             /// index's run when it ends the pool.
             fn rebuild(self: *Self, allocator: Allocator, pool: *std.ArrayList(Entry), types: *const Type.Store, span: Type.Span) Allocator.Error!void {
-                if (@as(usize, self.entries_start) + self.entries_len == pool.items.len) pool.shrinkRetainingCapacity(self.entries_start);
+                if (self.entries_len != 0 and @as(usize, self.entries_start) + self.entries_len == pool.items.len) pool.shrinkRetainingCapacity(self.entries_start);
                 const start = std.math.cast(u32, pool.items.len) orelse return error.OutOfMemory;
                 _ = std.math.add(u32, start, span.len) catch return error.OutOfMemory;
                 try pool.ensureUnusedCapacity(allocator, span.count());
@@ -5373,7 +5376,7 @@ const Solver = struct {
         const gop = try indexes.getOrPut(self.allocator, span.start);
         // A fresh index owns no run, so filling it never reuses the pool's
         // last run.
-        if (!gop.found_existing) gop.value_ptr.* = .{ .len = 0, .entries_start = std.math.maxInt(u32), .entries_len = 0 };
+        if (!gop.found_existing) gop.value_ptr.* = Index.fresh;
         if (gop.value_ptr.len != span.len) try gop.value_ptr.rebuild(self.allocator, pool, &self.program.types, span);
         return pool.items[gop.value_ptr.entries_start..][0..gop.value_ptr.entries_len];
     }
@@ -6175,10 +6178,12 @@ const TypeCloner = struct {
     /// clone-invariant ones in the shared context and the rest as
     /// `existingClone` decides, reusing a context's existing var when the
     /// Monotype already occurs in it. Absent when the expanding leaf has no
-    /// context. Used by `expandMonoRoot`.
-    lazy_ctx: ?collections.OptionalU32 = null,
-    /// The Monotype of the leaf a lazy expansion materializes.
-    lazy_parent: MonoType.TypeId = undefined,
+    /// context. Read only in lazy mode (`lazy_parent` present). Used by
+    /// `expandMonoRoot`.
+    lazy_ctx: collections.OptionalU32 = .none,
+    /// The Monotype of the leaf a lazy expansion materializes; present
+    /// exactly in one-level mode.
+    lazy_parent: MonoType.MaybeTypeId = .none,
     /// The argument scope (`Solver.arg_scopes`) of the lazy expansion: a
     /// named type's own, which registers its positional components, or the
     /// one the expanding leaf was created under, which only reads it.
@@ -6264,7 +6269,8 @@ const TypeCloner = struct {
     /// fields of one record, or a callback's argument and result, never
     /// share callable slots merely because their Monotypes are equal.
     fn existingClone(self: *TypeCloner, ty: MonoType.TypeId) Allocator.Error!?Type.TypeVarId {
-        if (self.lazy_ctx) |parent_ctx| {
+        if (self.lazy_parent != .none) {
+            const parent_ctx = self.lazy_ctx;
             // A clone-invariant child is the same shared clone wherever it
             // occurs, exactly as a clone-invariant root is: it has nothing to
             // solve, so unifying two of its occurrences reaches one var
@@ -6334,7 +6340,7 @@ const TypeCloner = struct {
     fn sameInstance(self: *const TypeCloner, parent_ctx: collections.OptionalU32, ty: MonoType.TypeId) bool {
         if (parent_ctx == .none) return false;
         const component = self.solver.cycle_components[@backingInt(ty)];
-        return component != .none and component == self.solver.cycle_components[@backingInt(self.lazy_parent)];
+        return component != .none and component == self.solver.cycle_components[@backingInt(self.lazy_parent.get().?)];
     }
 
     /// Record that `created` reads this expansion's argument scope, and bind
@@ -6410,7 +6416,7 @@ const TypeCloner = struct {
     /// Lower one Monotype content whose components are cloned already or,
     /// in lazy mode, become lazy leaves.
     fn lowerContent(self: *TypeCloner, content: MonoType.Content) Allocator.Error!Type.Content {
-        std.debug.assert(self.lazy_ctx != null);
+        std.debug.assert(self.lazy_parent != .none);
         const allocator = self.solver.allocator;
         var build = CloneBuild{ .content = content };
         self.solver.acquireCloneLists(&build);

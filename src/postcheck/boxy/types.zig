@@ -1087,6 +1087,13 @@ pub const Store = struct {
         try self.scratch_key.appendSlice(self.allocator, std.mem.asBytes(&value));
     }
 
+    /// A presence byte, then the value when present, so absence never
+    /// matches a real value.
+    fn keyOptionalU32(self: *Store, value: ?u32) Allocator.Error!void {
+        try self.scratch_key.append(self.allocator, @intFromBool(value != null));
+        if (value) |present| try self.keyU32(present);
+    }
+
     fn keyType(self: *Store, id: TypeId) Allocator.Error!void {
         try self.keyU32(@backingInt(id));
     }
@@ -1126,7 +1133,7 @@ pub const Store = struct {
                     }
                     closed = closed and self.isClosed(field.ty) and field.kind != .variable_slot;
                 }
-                try self.keyU32(if (record.ext) |ext| @backingInt(ext) else std.math.maxInt(u32));
+                try self.keyOptionalU32(if (record.ext) |ext| @backingInt(ext) else null);
                 if (record.ext) |ext| closed = closed and self.isClosed(ext);
                 if (record.declared) |declared| {
                     try self.keySpan(declared.padding);
@@ -1140,7 +1147,7 @@ pub const Store = struct {
                     }
                     for (declared.padding) |padding| closed = closed and self.isClosed(padding);
                 }
-                try self.keyU32(if (record.tail_node) |position| position else std.math.maxInt(u32));
+                try self.keyOptionalU32(record.tail_node);
             },
             .tuple => |items| {
                 try self.keySpan(items);
@@ -1153,9 +1160,9 @@ pub const Store = struct {
                     try self.keySpan(tag.payloads);
                     for (tag.payloads) |payload| closed = closed and self.isClosed(payload);
                 }
-                try self.keyU32(if (tag_union.ext) |ext| @backingInt(ext) else std.math.maxInt(u32));
+                try self.keyOptionalU32(if (tag_union.ext) |ext| @backingInt(ext) else null);
                 if (tag_union.ext) |ext| closed = closed and self.isClosed(ext);
-                try self.keyU32(if (tag_union.tail_node) |position| position else std.math.maxInt(u32));
+                try self.keyOptionalU32(tag_union.tail_node);
             },
             .list => |elem| {
                 try self.keyType(elem);

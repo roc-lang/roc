@@ -350,8 +350,8 @@ stores those IDs unchanged, and every iteration over entries excludes the unused
 slot. This choice never silently renumbers IDs crossing a compiler boundary.
 Borrowed column views own no allocation.
 
-Internally counted epochs start at one. Before an advance would reach
-`maxInt(u32)`, the stamps are cleared and the epoch restarts at one. Natural
+Internally counted epochs start at one. When an advance would overflow the
+epoch's width, the stamps are cleared and the epoch restarts at one. Natural
 epochs are increasing producer-owned IDs; restarting their domain requires
 clearing the stamps. Data are read only under a matching stamp.
 

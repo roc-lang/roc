@@ -587,8 +587,7 @@ fn addDeclToBucket(
     }
     const bucket = gop.value_ptr;
     const overflow = bucket.overflow.get() orelse blk: {
-        const len = std.math.cast(u32, self.bucket_overflow.items.len) orelse return error.OutOfMemory;
-        if (len == std.math.maxInt(u32)) return error.OutOfMemory;
+        const len = try collections.nextBiasedId(self.bucket_overflow.items.len);
         const overflow: OverflowIdx = @fromBackingInt(len);
         try self.bucket_overflow.append(self.gpa, .empty);
         bucket.overflow = .some(overflow);

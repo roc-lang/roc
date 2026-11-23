@@ -482,7 +482,9 @@ pub const Digests = struct {
         hasher.update(std.mem.asBytes(&template.closed_row_nodes.len));
         for (templates.evidence_params_pool.items()[template.evidence_params.start..][0..template.evidence_params.len]) |param| {
             hashBytes(hasher, artifact.canonical_names.methodNameText(param.method));
-            hasher.update(std.mem.asBytes(&(param.slot.get() orelse @as(u32, std.math.maxInt(u32)))));
+            const slot = param.slot.get();
+            hasher.update(&.{@intFromBool(slot != null)});
+            if (slot) |present| hasher.update(std.mem.asBytes(&present));
         }
         hasher.update(std.mem.asBytes(&@as(u32, @intCast(templates.templateLiteralRequirements(&template).len))));
     }

@@ -24,7 +24,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RUPC";
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 6;
+pub const format_version: u32 = 7;
 
 /// One source file the pieces' lines name, in the order the set indexes them.
 pub const SourceFile = struct {
@@ -147,13 +147,13 @@ pub fn encode(allocator: Allocator, pieces: *const Pieces) Allocator.Error![]u8 
             try writer.byte(formByte(ref.form));
             try writer.word(ref.target);
             try writer.word(ref.delta);
-            try writer.word(ref.veneer.get() orelse std.math.maxInt(u32));
+            try writer.word(@backingInt(ref.veneer));
         }
         try writer.word(@intCast(excerpt.symbolic_refs.len));
         for (excerpt.symbolic_refs) |ref| {
             try writer.word(ref.site);
             try writer.byte(formByte(ref.form));
-            try writer.word(ref.veneer orelse std.math.maxInt(u32));
+            try writer.word(@backingInt(collections.OptionalU32.of(ref.veneer)));
             switch (ref.binding) {
                 .unresolved => try writer.byte(0),
                 .absent => try writer.byte(1),
@@ -273,7 +273,7 @@ pub fn decode(allocator: Allocator, bytes: []const u8) ReadError!Pieces {
                 .form = try readForm(&reader),
                 .target = try reader.word(),
                 .delta = try reader.word(),
-                .veneer = .of(optionalWord(try reader.word())),
+                .veneer = optionalWord(try reader.word()),
             };
             if (ref.target >= excerpt_count) return error.MalformedPieces;
         }
@@ -281,7 +281,7 @@ pub fn decode(allocator: Allocator, bytes: []const u8) ReadError!Pieces {
         for (symbolic_refs) |*ref| {
             const site = try reader.word();
             const form = try readForm(&reader);
-            const veneer = optionalWord(try reader.word());
+            const veneer = optionalWord(try reader.word()).get();
             const binding: @FieldType(CodeExcerpt.SymbolicReference, "binding") = switch (try reader.byte()) {
                 0 => .unresolved,
                 1 => .absent,
@@ -387,8 +387,9 @@ fn readForm(reader: *Reader) ReadError!CodeExcerpt.Form {
     };
 }
 
-fn optionalWord(value: u32) ?u32 {
-    return if (value == std.math.maxInt(u32)) null else value;
+/// A word the writer stored as `collections.OptionalU32`: zero for absence.
+fn optionalWord(value: u32) collections.OptionalU32 {
+    return @fromBackingInt(value);
 }
 
 fn writeLoc(writer: *Writer, loc: base.SourceLoc) Allocator.Error!void {

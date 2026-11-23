@@ -1500,7 +1500,8 @@ local_type_references: std.ArrayListUnmanaged(LocalTypeReference) = .empty,
 local_type_reference_frame_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
 /// For each type declared in a function body that has a context (design.md
 /// "Body-Local Type Context"), the shallowest candidate depth of its
-/// variables. Final once `finalizeLocalTypeContexts` runs.
+/// variables, or `no_context_depth`. Final once `finalizeLocalTypeContexts`
+/// runs.
 local_type_contexts: collections.DenseMapUnmanaged(CIR.Statement.Idx, u32) = .empty,
 local_type_contexts_final: bool = false,
 /// For each nominal type declared in a function body that has a context, a
@@ -3148,8 +3149,7 @@ fn recordSchemeRequirementCandidate(
     if (self.constraintIsLiteralConversion(constraint)) return;
     std.debug.assert((source == .creation) == (structural_origin == null));
     const owner_root = self.prospectiveSchemeOwner(self.active_scheme_root) orelse return;
-    const candidate_idx = std.math.cast(u32, self.scheme_requirement_candidates.items.len) orelse return error.OutOfMemory;
-    if (candidate_idx == std.math.maxInt(u32)) return error.OutOfMemory;
+    const candidate_idx = try collections.nextBiasedId(self.scheme_requirement_candidates.items.len);
     try self.scheme_requirement_candidates.ensureUnusedCapacity(self.gpa, 1);
     const owner_entry = try self.scheme_requirement_candidate_chains_by_owner.getOrPut(self.gpa, owner_root);
     const prev_of_owner: collections.OptionalU32 = if (owner_entry.found_existing) blk: {
@@ -5361,6 +5361,11 @@ fn appendLocalProcedureDispatchRefs(self: *Self, dispatch_refs: *std.ArrayListUn
     }
 }
 
+/// The local type context depth of a type with no variable but platform
+/// abstract types: no shallower than any reference's enclosing frames, so it
+/// makes no candidate contextual.
+const no_context_depth: u32 = std.math.maxInt(u32);
+
 /// Settle what checking reads from body-local type contexts once every body
 /// is checked (design.md "Body-Local Type Context"): each recorded reference
 /// to a type with a context makes the candidates enclosing it from the
@@ -5380,7 +5385,7 @@ fn finalizeLocalTypeContexts(self: *Self) Allocator.Error!void {
         // A platform abstract type is a variable of the module, not of an
         // enclosing function: it makes no candidate contextual and no
         // binding owns it, so a type can never leave its scope.
-        var depth: u32 = std.math.maxInt(u32);
+        var depth: u32 = no_context_depth;
         for (context) |rigid| {
             if (self.isPlatformAbstractTypeBinder(rigid)) continue;
             depth = @min(depth, self.rigidVarCandidateDepth(rigid));
@@ -6645,8 +6650,7 @@ const LocalFunctionCaptures = struct {
             const referenced = self.checker.localLookupPattern(expr) orelse continue;
             if (!self.isOuterRef(&self.scope, referenced)) continue;
             if (owner) |function| {
-                const link = std.math.cast(u32, self.ref_links.items.len) orelse return error.OutOfMemory;
-                if (link == std.math.maxInt(u32)) return error.OutOfMemory;
+                const link = try collections.nextBiasedId(self.ref_links.items.len);
                 try self.ref_links.append(gpa, .{ .referenced = referenced, .next = .none });
                 const chain = self.refs.getPtr(function).?;
                 if (chain.last.get()) |last| {
@@ -54362,8 +54366,7 @@ const UsePositions = struct {
     }
 
     fn append(self: *UsePositions, gpa: Allocator, use_idx: u32, position: usize) Allocator.Error!void {
-        const link = std.math.cast(u32, self.links.items.len) orelse return error.OutOfMemory;
-        if (link == std.math.maxInt(u32)) return error.OutOfMemory;
+        const link = try collections.nextBiasedId(self.links.items.len);
         try self.links.ensureUnusedCapacity(gpa, 1);
         const chain = try self.chains.getOrPut(gpa, use_idx);
         if (chain.found_existing) {
