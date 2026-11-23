@@ -2755,7 +2755,7 @@ const ScannedOutcome = enum { not_a_number, exact, inexact };
 /// Tokenize `text` as one number token and, when the tokenizer's record is
 /// exact, require it to give the facts, digits and deprecated suffix that
 /// `parseInto` derives from the token's text.
-fn expectScannedMatchesText(gpa: std.mem.Allocator, text: []const u8) !ScannedOutcome {
+fn expectScannedMatchesText(gpa: std.mem.Allocator, text: []const u8) (std.mem.Allocator.Error || error{TestExpectedEqual})!ScannedOutcome {
     errdefer std.debug.print("number text: '{s}'\n", .{text});
     var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
     defer env.deinit(gpa);

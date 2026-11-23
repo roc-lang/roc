@@ -1043,7 +1043,7 @@ const FloatPathCounts = struct {
 
 /// Require `floatBits` to give the exact reference's bits, and the bits the
 /// correctly rounded `std.fmt.parseFloat` gives, at both float widths.
-fn expectFloatBitsMatchReference(gpa: Allocator, text: []const u8, counts: *FloatPathCounts) !void {
+fn expectFloatBitsMatchReference(gpa: Allocator, text: []const u8, counts: *FloatPathCounts) (Allocator.Error || std.fmt.ParseFloatError || error{TestExpectedEqual})!void {
     errdefer std.debug.print("decimal text: '{s}'\n", .{text});
     const parsed = try testParse(gpa, text);
     defer parsed.deinit(gpa);
@@ -1157,7 +1157,7 @@ test "floatBits equals the exact conversion on composed decimal literals" {
 /// Append the exact decimal spelling of the midpoint between the positive
 /// float with bits `bits` and the next float up: `(2m + 1) * 2^(e - 1)` for
 /// the float's integer mantissa `m` and exponent `e`.
-fn appendFloatMidpoint(comptime F: type, gpa: Allocator, text: *std.ArrayList(u8), bits: FloatBitsInt(F)) !void {
+fn appendFloatMidpoint(comptime F: type, gpa: Allocator, text: *std.ArrayList(u8), bits: FloatBitsInt(F)) (Allocator.Error || error{InvalidBase})!void {
     const big = std.math.big.int.Managed;
     const mantissa_bits = std.math.floatMantissaBits(F);
     const biased_exponent: i32 = @intCast(bits >> mantissa_bits);
