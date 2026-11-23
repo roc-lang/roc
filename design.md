@@ -12224,7 +12224,12 @@ succeed (`readRelation`): the operands are one class; or they are the same
 structure all the way down to shared classes, where every compared class
 carries no descriptor flags, records hold only required fields, rows end
 at a closed row or a variable rather than chaining into another row part,
-and function types carry no effect dependencies; or one operand is an
+and function types carry no effect dependencies, except that an
+unconstrained, flag-free, non-generalized flexible variable may face a
+ground type (one reaching no flexible, erroneous or field-kind variable, no
+function of undecided effect, no field of undecided kind and no flagged
+class), which the relation binds, and a variable met twice must face one
+class both times; or one operand is an
 unconstrained, flag-free, non-generalized flexible variable the other does
 not reach, which the relation only binds. Anything else, including a
 comparison larger than a fixed budget, leaves the relation undecided, and

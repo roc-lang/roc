@@ -32097,15 +32097,35 @@ fn projectExpectedTagPayload(
     env: *Env,
 ) Allocator.Error!?Var.SafeList.Range {
     const aggregate_type = expected.aggregateType() orelse return null;
+    // Without a record field to borrow, every refusal below is read before
+    // the copy writes anything, and the copy itself cannot fail.
+    const field = aggregate_type.record_field orelse {
+        self.noteSpeculation(.expected_tag_payload, .read_first);
+        return self.copyExpectedTagPayload(aggregate_type.var_, name, arity, env);
+    };
+    // Borrowing a nominal record's field opens its backing before the field
+    // can be refused, so a refusal discards that opening with the probe.
     var commit_probe = try self.beginCommitProbe(env);
     self.noteSpeculation(.expected_tag_payload, .speculative);
     var committed = false;
     defer if (!committed) commit_probe.rollback();
+    const source = try self.borrowExpectedRecordField(aggregate_type.var_, field, env) orelse return null;
+    const copied_args = try self.copyExpectedTagPayload(source, name, arity, env) orelse return null;
+    committed = true;
+    try commit_probe.commit();
+    return copied_args;
+}
 
-    const source = if (aggregate_type.record_field) |field|
-        try self.borrowExpectedRecordField(aggregate_type.var_, field, env) orelse return null
-    else
-        aggregate_type.var_;
+/// The payload slots of tag `name` in the expected type `source`, copied
+/// together, or null when `source` holds an error or no such tag of `arity`.
+/// Every refusal is read before anything is written.
+fn copyExpectedTagPayload(
+    self: *Self,
+    source: Var,
+    name: Ident.Idx,
+    arity: usize,
+    env: *Env,
+) Allocator.Error!?Var.SafeList.Range {
     self.var_set.clearRetainingCapacity();
     const contains_error = try self.varContainsError(source, &self.var_set);
     self.var_set.clearRetainingCapacity();
@@ -32157,10 +32177,7 @@ fn projectExpectedTagPayload(
         try self.scratch_vars.append(try copier.instantiateVar(slot));
     }
     try self.registerExpectedShapeVars(fresh_start, env);
-    const copied_args = try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_top));
-    committed = true;
-    try commit_probe.commit();
-    return copied_args;
+    return try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_top));
 }
 
 test "tag projection copies selected slots together without copying other variants" {
@@ -32253,11 +32270,6 @@ fn projectExpectedAggregateShape(
     env: *Env,
 ) std.mem.Allocator.Error!bool {
     const aggregate_type = expected.aggregateType() orelse return false;
-    var commit_probe = try self.beginCommitProbe(env);
-    self.noteSpeculation(.expected_aggregate_shape, .speculative);
-    var committed = false;
-    defer if (!committed) commit_probe.rollback();
-
     if (aggregate_type.projected_cell and aggregate_type.record_field == null) {
         // Copying an already-copied shape would give an isomorphic fresh copy
         // of every level beneath it, once per level of nesting. A sibling may
@@ -32269,6 +32281,19 @@ fn projectExpectedAggregateShape(
             self.var_set.clearRetainingCapacity();
             if (cell_contains_error) return false;
         }
+        if (try self.readRelation(aggregate_type.var_, shape_var) == .succeeds) {
+            self.noteSpeculation(.expected_aggregate_shape, .read_first);
+            const result = try self.runUnify(aggregate_type.var_, shape_var, env, unifyOptionsForContext(aggregate_type.context, .write_no_report));
+            std.debug.assert(result.isEstablished());
+            return true;
+        }
+    }
+    var commit_probe = try self.beginCommitProbe(env);
+    self.noteSpeculation(.expected_aggregate_shape, .speculative);
+    var committed = false;
+    defer if (!committed) commit_probe.rollback();
+
+    if (aggregate_type.projected_cell and aggregate_type.record_field == null) {
         const result = try commit_probe.unifyInContext(aggregate_type.var_, shape_var, aggregate_type.context);
         if (!result.isEstablished()) return false;
         committed = true;
@@ -32321,6 +32346,12 @@ fn commitProjectedStoredValue(
     actual: Var,
     env: *Env,
 ) std.mem.Allocator.Error!bool {
+    if (try self.readRelation(projected, actual) == .succeeds) {
+        self.noteSpeculation(.projected_stored_value, .read_first);
+        const result = try self.runUnify(projected, actual, env, .{ .on_mismatch = .write_no_report });
+        std.debug.assert(result.isEstablished());
+        return true;
+    }
     var commit_probe = try self.beginCommitProbe(env);
     self.noteSpeculation(.projected_stored_value, .speculative);
     var committed = false;
@@ -66166,6 +66197,84 @@ const ReadRelation = enum {
 /// leaves a relation undecided.
 const identical_relation_pair_budget = 64;
 
+/// The most flexible variables `relationIsStructurallyIdentical` binds
+/// before it leaves a relation undecided.
+const identical_relation_bindings = 16;
+
+/// Whether a resolved class is a flexible variable a relation may only bind:
+/// unconstrained, carrying no checker decision, and not generalized.
+fn bindableFlex(resolved: types_mod.ResolvedVarDesc) bool {
+    const flex = switch (resolved.desc.content) {
+        .flex => |flex| flex,
+        .rigid, .alias, .field_presence, .structure, .err => return false,
+    };
+    return flex.constraints.len() == 0 and
+        resolved.desc.rank != .generalized and
+        std.meta.eql(resolved.desc.flags, types_mod.types.DescriptorFlags{});
+}
+
+/// Whether `root` reaches no flexible, erroneous, or field-kind variable, no
+/// function of undecided effect, no field of undecided kind, and no class
+/// carrying a checker decision, within the shared `visited` budget.
+fn isGroundWithin(self: *Self, root: Var, visited: *usize) bool {
+    var stack: [identical_relation_pair_budget]Var = undefined;
+    var len: usize = 1;
+    stack[0] = root;
+    const Push = struct {
+        fn one(items: *[identical_relation_pair_budget]Var, count: *usize, var_: Var) bool {
+            if (count.* == items.len) return false;
+            items[count.*] = var_;
+            count.* += 1;
+            return true;
+        }
+        fn all(items: *[identical_relation_pair_budget]Var, count: *usize, vars: []const Var) bool {
+            for (vars) |var_| if (!one(items, count, var_)) return false;
+            return true;
+        }
+    };
+    while (len > 0) {
+        len -= 1;
+        visited.* += 1;
+        if (visited.* > identical_relation_pair_budget) return false;
+        const resolved = self.types.resolveVar(stack[len]);
+        if (!std.meta.eql(resolved.desc.flags, types_mod.types.DescriptorFlags{})) return false;
+        switch (resolved.desc.content) {
+            .flex, .field_presence, .err => return false,
+            .rigid => {},
+            .alias => |alias| {
+                if (!Push.all(&stack, &len, self.types.sliceAliasAllArgs(alias))) return false;
+                if (!Push.one(&stack, &len, self.types.getAliasBackingVar(alias))) return false;
+            },
+            .structure => |flat| switch (flat) {
+                .empty_record, .empty_tag_union => {},
+                .tuple => |tuple| if (!Push.all(&stack, &len, self.types.sliceVars(tuple.elems))) return false,
+                .nominal_type => |nominal| if (!Push.all(&stack, &len, self.types.sliceNominalArgs(nominal))) return false,
+                .fn_pure, .fn_effectful => |func| {
+                    if (func.effect_deps.len() != 0) return false;
+                    if (!Push.all(&stack, &len, self.types.sliceVars(func.args))) return false;
+                    if (!Push.one(&stack, &len, func.ret)) return false;
+                },
+                .fn_unbound => return false,
+                .record => |record| {
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    for (fields.items(.presence)) |presence| {
+                        if (presence.presence_var.get() != null) return false;
+                        if (!Push.one(&stack, &len, presence.var_)) return false;
+                    }
+                    if (!Push.one(&stack, &len, record.ext)) return false;
+                },
+                .tag_union => |tag_union| {
+                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |args| {
+                        if (!Push.all(&stack, &len, self.types.sliceVars(args))) return false;
+                    }
+                    if (!Push.one(&stack, &len, tag_union.ext)) return false;
+                },
+            },
+        }
+    }
+    return true;
+}
+
 /// Decide the relation of `a` and `b` by reading them (design.md
 /// "Solver-Mutating Rewrites", read-first relations). A relation reading
 /// leaves undecided is related speculatively by the caller.
@@ -66190,8 +66299,9 @@ fn relationOnlyBinds(self: *Self, target: Var, value: Var) std.mem.Allocator.Err
 }
 
 /// Whether `a` and `b` are one class or the same structure all the way down
-/// to shared classes, read without writing. A relation of two such operands
-/// only merges classes of equal content, so it succeeds. Rows must list the
+/// to shared classes or to an unconstrained flexible variable facing a ground
+/// type, read without writing. A relation of two such operands only merges
+/// classes of equal content and binds those variables, so it succeeds. Rows must list the
 /// same labels with the same payloads and share their extension; any other
 /// difference, a flexible or erroneous variable not shared, or a comparison
 /// larger than `identical_relation_pair_budget` is not identical.
@@ -66199,9 +66309,14 @@ fn relationIsStructurallyIdentical(self: *Self, a: Var, b: Var) bool {
     var pending: [identical_relation_pair_budget][2]Var = undefined;
     var pending_len: usize = 0;
     var compared: usize = 0;
+    // Flexible variables the relation binds, each to the class of a ground
+    // type, and those classes.
+    var bound_flex: [identical_relation_bindings]Var = undefined;
+    var bound_to: [identical_relation_bindings]Var = undefined;
+    var bound_len: usize = 0;
     pending[0] = .{ a, b };
     pending_len = 1;
-    while (pending_len > 0) {
+    pairs: while (pending_len > 0) {
         pending_len -= 1;
         const operands = pending[pending_len];
         compared += 1;
@@ -66209,6 +66324,28 @@ fn relationIsStructurallyIdentical(self: *Self, a: Var, b: Var) bool {
         const left = self.types.resolveVar(operands[0]);
         const right = self.types.resolveVar(operands[1]);
         if (left.var_ == right.var_) continue;
+        // An unconstrained flexible variable facing a ground type is bound
+        // to it. Ground types hold no flexible variable, so the binding can
+        // make nothing infinite; a variable met twice must face one class.
+        const binding: ?struct { flex: Var, value: Var } = if (bindableFlex(left))
+            .{ .flex = left.var_, .value = right.var_ }
+        else if (bindableFlex(right))
+            .{ .flex = right.var_, .value = left.var_ }
+        else
+            null;
+        if (binding) |bind| {
+            for (bound_flex[0..bound_len], bound_to[0..bound_len]) |flex, value| {
+                if (flex != bind.flex) continue;
+                if (self.types.resolveVar(value).var_ != bind.value) return false;
+                continue :pairs;
+            }
+            if (bound_len == identical_relation_bindings) return false;
+            if (!self.isGroundWithin(bind.value, &compared)) return false;
+            bound_flex[bound_len] = bind.flex;
+            bound_to[bound_len] = bind.value;
+            bound_len += 1;
+            continue;
+        }
         // A checker decision a class carries can change how its relation
         // merges, so only classes carrying none are compared.
         if (!std.meta.eql(left.desc.flags, types_mod.types.DescriptorFlags{}) or
@@ -66229,18 +66366,31 @@ fn relationIsStructurallyIdentical(self: *Self, a: Var, b: Var) bool {
         switch (left.desc.content) {
             .flex, .rigid, .field_presence, .err => return false,
             .alias => |left_alias| {
+                // Structural aliases are transparent: an alias relates to
+                // anything but the same alias through its backing.
                 const right_alias = switch (right.desc.content) {
                     .alias => |alias| alias,
-                    else => return false,
+                    .structure => {
+                        if (!Push.pair(&pending, &pending_len, self.types.getAliasBackingVar(left_alias), right.var_)) return false;
+                        continue;
+                    },
+                    .flex, .rigid, .field_presence, .err => return false,
                 };
-                if (!unifier.sameAliasIdentity(left_alias, right_alias)) return false;
+                if (!unifier.sameAliasIdentity(left_alias, right_alias)) {
+                    if (!Push.pair(&pending, &pending_len, self.types.getAliasBackingVar(left_alias), self.types.getAliasBackingVar(right_alias))) return false;
+                    continue;
+                }
                 if (!Push.all(&pending, &pending_len, self.types.sliceAliasAllArgs(left_alias), self.types.sliceAliasAllArgs(right_alias))) return false;
                 if (!Push.pair(&pending, &pending_len, self.types.getAliasBackingVar(left_alias), self.types.getAliasBackingVar(right_alias))) return false;
             },
             .structure => |left_flat| {
                 const right_flat = switch (right.desc.content) {
                     .structure => |flat| flat,
-                    else => return false,
+                    .alias => |right_alias| {
+                        if (!Push.pair(&pending, &pending_len, left.var_, self.types.getAliasBackingVar(right_alias))) return false;
+                        continue;
+                    },
+                    .flex, .rigid, .field_presence, .err => return false,
                 };
                 if (std.meta.activeTag(left_flat) != std.meta.activeTag(right_flat)) return false;
                 switch (left_flat) {
