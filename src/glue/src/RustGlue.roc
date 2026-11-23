@@ -26,7 +26,8 @@ make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
 	input = GlueInput.from_types(types_list)
 	type_table = TypeTable.from_list(input.types)
-	rust_content = generate_rust_file(input.hosted_functions, type_table, input.provides_entries)
+	duplicate_names = duplicate_type_names(input.hosted_functions, type_table)?
+	rust_content = generate_rust_file(input.hosted_functions, type_table, input.provides_entries, duplicate_names)
 
 	Ok([{ name: "roc_platform_abi.rs", content: rust_content }])
 }
@@ -306,13 +307,18 @@ expect name_to_struct_name("Builder.print_value!") == "BuilderPrintValue"
 ## Checks `name_to_struct_name` for this representative case.
 expect name_to_struct_name("__AnonStruct10") == "AnonStruct10"
 
-## Roc names that more than one host type is emitted under: named multi-variant
-## tag unions and named records whose name appears in the type table with
-## different shapes. The result is computed once per glue run and reused while
-## rendering type names.
-duplicate_type_names : TypeTable -> List(Str)
-duplicate_type_names = |type_table|
-	List.concat(type_table.duplicate_tag_union_names(), type_table.duplicate_record_names())
+## Roc names whose host types are emitted under shape-derived names: named
+## multi-variant tag unions and named records whose name appears in the type
+## table with different shapes, and those whose declarations would collide
+## with another declaration in the generated file. The result is computed once
+## per glue run and reused while rendering type names.
+duplicate_type_names : List(HostedFunctionInfo), TypeTable -> Try(List(Str), Str)
+duplicate_type_names = |hosted_functions, type_table|
+	TypeNamePlan.shape_named(
+		reserved_type_names_rust(hosted_functions, type_table),
+		List.concat(type_table.duplicate_tag_union_names(), type_table.duplicate_record_names()),
+		|shape_named| declared_types_rust(type_table, shape_named),
+	)
 
 ## Return the default Rust struct name for a multi-variant tag union.
 ##
@@ -351,35 +357,182 @@ hosted_module_name_to_struct_name = |name|
 		}
 	}
 
-generated_type_names_rust : TypeTable, List(Str) -> List(Str)
-generated_type_names_rust = |type_table, duplicate_names| {
-	var $names = []
+## Type names the runtime support in every generated file declares, imports,
+## or takes unqualified from the Rust prelude, and `Self`, which Rust keeps for
+## itself. A host type declared under one of them would redefine or shadow it.
+runtime_type_names_rust : List(Str)
+runtime_type_names_rust = [
+	"AtomicIsize",
+	"Clone",
+	"Copy",
+	"DefaultAllocators",
+	"DefaultHandlers",
+	"Drop",
+	"Layout",
+	"NonNull",
+	"Option",
+	"Ordering",
+	"RocBox",
+	"RocBoxPayloadDecref",
+	"RocBoxRelease",
+	"RocBoxSpineRelease",
+	"RocDec",
+	"RocErasedCallable",
+	"RocErasedCallableFn",
+	"RocErasedCallableOnDrop",
+	"RocErasedCallablePayload",
+	"RocErasedCallableRelease",
+	"RocHeldList",
+	"RocHost",
+	"RocI16x8",
+	"RocI16x8Native",
+	"RocI32x4",
+	"RocI32x4Native",
+	"RocI64x2",
+	"RocI64x2Native",
+	"RocI8x16",
+	"RocI8x16Native",
+	"RocList",
+	"RocListRelease",
+	"RocListSpineRelease",
+	"RocListWith",
+	"RocNoopRelease",
+	"RocOpaqueList",
+	"RocOwned",
+	"RocRelease",
+	"RocStr",
+	"RocStrRelease",
+	"RocU16x8",
+	"RocU16x8Native",
+	"RocU32x4",
+	"RocU32x4Native",
+	"RocU64x2",
+	"RocU64x2Native",
+	"RocU8x16",
+	"RocU8x16Native",
+	"Self",
+]
+
+## Type names the generated file declares whatever the type table's own types
+## are named: the runtime support and each hosted function's argument and
+## result types.
+reserved_type_names_rust : List(HostedFunctionInfo), TypeTable -> List(Str)
+reserved_type_names_rust = |hosted_functions, type_table| {
+	arg_shape = ArgShape.from_table(type_table)
+	var $names = runtime_type_names_rust
+
+	for func in hosted_functions {
+		struct_name = name_to_struct_name(func.name)
+
+		match arg_shape.record_lookup(func.ret_type_id) {
+			ArgRecordFound(_) => {
+				$names = $names.append("${struct_name}RetRecord")
+			}
+			ArgNotRecord => {}
+		}
+
+		match arg_shape.hosted_args(func) {
+			NoMeaningfulArgs => {}
+			SingleRecordArg(_) => {
+				$names = $names.append("${struct_name}Args")
+				$names = $names.append("${struct_name}ArgsRelease")
+			}
+			PositionalArgs(_) => {
+				$names = $names.append("${struct_name}Args")
+			}
+		}
+	}
+
+	$names
+}
+
+## Every top-level type name the generated file declares for the host type at
+## `type_id` when it emits that type as `struct_name`: the type itself and each
+## helper type named after it.
+type_names_declared_as_rust : TypeTable, U64, Str -> List(Str)
+type_names_declared_as_rust = |type_table, type_id, struct_name|
+	match type_table.get(type_id) {
+		RocRecord(rec) =>
+			if rec.name != "" {
+				[struct_name, "${struct_name}Release"]
+			} else {
+				[]
+			}
+		RocTagUnion(tu) =>
+			if List.len(tu.tags) >= 2 and tu.name != "" {
+				abi_layout = type_table.layout(type_id)
+				if abi_layout.tag_union_has_payload() {
+					abi_tags = abi_tag_layouts(abi_layout)
+					var $names = [
+						struct_name,
+						"${struct_name}Tag",
+						"${struct_name}Payload",
+						"${struct_name}PayloadAlignment",
+						"${struct_name}Release",
+					]
+					var $tag_idx = 0
+					for tag in tu.tags {
+						if abi_tag_has_payload(abi_tag_at(abi_tags, $tag_idx)) and List.len(tag.payload) > 1 {
+							$names = $names.append("${struct_name}${capitalize_first(tag.name)}Payload")
+						}
+						$tag_idx = $tag_idx + 1
+					}
+					$names
+				} else {
+					[struct_name, "${struct_name}Release"]
+				}
+			} else {
+				[]
+			}
+		_ => []
+	}
+
+## What the generated file declares for each named host type when the Roc
+## names in `duplicate_names` are emitted under shape-derived names.
+declared_types_rust : TypeTable, List(Str) -> List(TypeNamePlan.Declared)
+declared_types_rust = |type_table, duplicate_names| {
+	var $declared = []
 	var $type_id = 0
 
 	for type_info in type_table_entries(type_table) {
-		match type_info.repr {
-			RocRecord(rec) =>
-				if rec.name != "" {
-					$names = $names.append(record_struct_name(type_table, duplicate_names, $type_id, rec))
-				}
-			RocTagUnion(tu) =>
-				if List.len(tu.tags) >= 2 and tu.name != "" {
-					struct_name = default_tag_union_struct_name(type_table, duplicate_names, $type_id, tu)
-					$names = $names.append(struct_name)
-					if type_info.layout.tag_union_has_payload() {
-						$names = $names.append("${struct_name}Tag")
-						$names = $names.append("${struct_name}Payload")
-						for tag in type_info.layout.tag_layouts() {
-							if abi_tag_has_payload(tag) and List.len(tag.payload) > 1 {
-								$names = $names.append("${struct_name}${capitalize_first(tag.name)}Payload")
-							}
-						}
+		if type_info.shape_id == $type_id {
+			match type_info.repr {
+				RocRecord(rec) =>
+					if rec.name != "" {
+						struct_name = record_struct_name(type_table, duplicate_names, $type_id, rec)
+						$declared = $declared.append({
+							roc_name: rec.name,
+							shape_id: $type_id,
+							names: type_names_declared_as_rust(type_table, $type_id, struct_name),
+						})
 					}
-				}
-			_ => {}
+				RocTagUnion(tu) =>
+					if List.len(tu.tags) >= 2 and tu.name != "" {
+						struct_name = default_tag_union_struct_name(type_table, duplicate_names, $type_id, tu)
+						$declared = $declared.append({
+							roc_name: tu.name,
+							shape_id: $type_id,
+							names: type_names_declared_as_rust(type_table, $type_id, struct_name),
+						})
+					}
+				_ => {}
+			}
 		}
 
 		$type_id = $type_id + 1
+	}
+
+	$declared
+}
+
+## Every type name the generated file declares before any preferred name or
+## alias is chosen.
+declared_type_names_rust : List(HostedFunctionInfo), TypeTable, List(Str) -> List(Str)
+declared_type_names_rust = |hosted_functions, type_table, duplicate_names| {
+	var $names = reserved_type_names_rust(hosted_functions, type_table)
+
+	for declared in declared_types_rust(type_table, duplicate_names) {
+		$names = List.concat($names, declared.names)
 	}
 
 	$names
@@ -559,28 +712,35 @@ type_alias_roots_rust = |hosted_functions, provides_list, type_table, ambiguous_
 preferred_type_names_rust : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> TypeNamePlan.PreferredNames
 preferred_type_names_rust = |hosted_functions, provides_list, type_table, duplicate_names|
 	TypeNamePlan.from_table(type_table).preferred_names(
-		generated_type_names_rust(type_table, duplicate_names),
+		declared_type_names_rust(hosted_functions, type_table, duplicate_names),
 		type_name_roots_rust(hosted_functions, provides_list, type_table, duplicate_names),
+		|type_id, struct_name| type_names_declared_as_rust(type_table, type_id, struct_name),
 	)
 
 ## RustGlue must keep distinct concrete structs for generic Roc types such as
 ## `Try` because different hosted functions can use different payload layouts.
 ## These aliases give platform authors stable API names for secondary names that
 ## share a concrete layout.
-add_type_alias_rust : { content : Str, seen : List(Str) }, Str, Str -> { content : Str, seen : List(Str) }
+add_type_alias_rust : { content : Str, seen : Set(Str) }, Str, Str -> { content : Str, seen : Set(Str) }
 add_type_alias_rust = |state, alias, target| {
-	if alias == target or List.contains(state.seen, alias) {
+	if alias == target or state.seen.contains(alias) {
 		state
 	} else {
 		{
 			content: Str.concat(state.content, "pub type ${alias} = ${target};\n"),
-			seen: state.seen.append(alias),
+			seen: state.seen.insert(alias),
 		}
 	}
 }
 
-add_tag_union_aliases_rust : { content : Str, seen : List(Str) }, Str, Str, AbiLayout -> { content : Str, seen : List(Str) }
+add_tag_union_aliases_rust : { content : Str, seen : Set(Str) }, Str, Str, AbiLayout -> { content : Str, seen : Set(Str) }
 add_tag_union_aliases_rust = |state, alias, target, abi_layout| {
+	# The helper aliases are named after the union's alias, so they are its
+	# helpers only when that alias names the union.
+	if alias != target and state.seen.contains(alias) {
+		return state
+	}
+
 	with_main_alias = add_type_alias_rust(state, alias, target)
 
 	if abi_layout.tag_union_has_payload() {
@@ -593,7 +753,7 @@ add_tag_union_aliases_rust = |state, alias, target, abi_layout| {
 
 generate_platform_type_aliases_rust : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str), TypeNamePlan.PreferredNames -> Str
 generate_platform_type_aliases_rust = |hosted_functions, provides_list, type_table, duplicate_names, preferred_names| {
-	var $state = { content: "", seen: generated_type_names_rust(type_table, duplicate_names) }
+	var $state = { content: "", seen: preferred_names.declared_names() }
 	name_plan = TypeNamePlan.from_table(type_table)
 
 	for plan in name_plan.alias_plan(type_alias_roots_rust(hosted_functions, provides_list, type_table, duplicate_names)) {
@@ -879,9 +1039,8 @@ generate_payload_struct_decl_rust = |doc, struct_name, type_table, duplicate_nam
 # =============================================================================
 
 ## Generate the complete Rust source file
-generate_rust_file : List(HostedFunctionInfo), TypeTable, List(ProvidesEntry) -> Str
-generate_rust_file = |hosted_functions, type_table, provides_list| {
-	duplicate_names = duplicate_type_names(type_table)
+generate_rust_file : List(HostedFunctionInfo), TypeTable, List(ProvidesEntry), List(Str) -> Str
+generate_rust_file = |hosted_functions, type_table, provides_list, duplicate_names| {
 	preferred_names = preferred_type_names_rust(hosted_functions, provides_list, type_table, duplicate_names)
 
 	generate_rust_file_header

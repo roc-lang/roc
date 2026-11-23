@@ -154,3 +154,32 @@ test "issue 13113: a subsequent requirement may use the established abstract ali
     defer env.deinit();
     try env.assertNoErrors();
 }
+
+test "provides accepts a monomorphic entrypoint beside a nominal type that holds the same builtin type" {
+    const declarations = [_][]const u8{
+        \\Key := { text : Str }
+        \\entry : Str -> Str
+        \\entry = |text| text
+        ,
+        \\Key := [Named(Str), Unnamed]
+        \\entry : U64 -> Str
+        \\entry = |_| "name"
+        ,
+        \\entry : U64 -> List(Str)
+        \\entry = |_| []
+        \\Key := { text : Str }
+        ,
+    };
+    inline for (declarations) |declaration| {
+        var env = try TestEnv.init("Platform",
+            \\platform ""
+            \\    requires {}
+            \\    exposes []
+            \\    packages {}
+            \\    provides { "roc_entry": entry }
+            \\
+        ++ "\n" ++ declaration);
+        defer env.deinit();
+        try env.assertNoErrors();
+    }
+}

@@ -822,9 +822,11 @@ const CustomCase = enum {
     glue_boxed_iter_stream,
     glue_boxed_app_type,
     glue_generic_nominal_shapes,
+    glue_declared_name_collisions,
     glue_opaque_ownership,
     glue_application_only_requires,
     glue_c_tests,
+    glue_type_name_plan_tests,
     roc_test_skips_url_dependency_expects,
     issue_12592_inference_reuse_current_tests,
 };
@@ -2856,9 +2858,11 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "issue 12887: Box(Iter) and Box(Stream) are boxes of their backing record in every generator", .body = .{ .custom = .glue_boxed_iter_stream } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: a heap payload holding the app's type by value is opaque in every generator", .body = .{ .custom = .glue_boxed_app_type } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: each instantiation of a generic nominal is its own type in every generator", .body = .{ .custom = .glue_generic_nominal_shapes } },
+    .{ .id = 0, .suite = .glue, .name = "issue 13350: declared names stay distinct in every generator", .body = .{ .custom = .glue_declared_name_collisions } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: a value holding an opaque Roc value has no host release in any generator", .body = .{ .custom = .glue_opaque_ownership } },
     .{ .id = 0, .suite = .glue, .name = "issue 11504: application requirements are not glue roots", .body = .{ .custom = .glue_application_only_requires } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
+    .{ .id = 0, .suite = .glue, .name = "TypeNamePlan.roc expect tests pass", .body = .{ .custom = .glue_type_name_plan_tests } },
 };
 
 // Subcommand suite cases
@@ -7538,9 +7542,11 @@ fn runCustomCase(
         .glue_boxed_iter_stream => customGlueBoxedIterStream(io, allocator, &env, &timer, timeout_ms),
         .glue_boxed_app_type => customGlueBoxedAppType(io, allocator, &env, &timer, timeout_ms),
         .glue_generic_nominal_shapes => customGlueGenericNominalShapes(io, allocator, &env, &timer, timeout_ms),
+        .glue_declared_name_collisions => customGlueDeclaredNameCollisions(io, allocator, &env, &timer, timeout_ms),
         .glue_opaque_ownership => customGlueOpaqueOwnership(io, allocator, &env, &timer, timeout_ms),
         .glue_application_only_requires => customGlueApplicationOnlyRequires(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
+        .glue_type_name_plan_tests => customGlueTypeNamePlanTests(io, allocator, &env, &timer, timeout_ms),
         .roc_test_skips_url_dependency_expects => customRocTestSkipsUrlDependencyExpects(io, allocator, &env, &timer, timeout_ms),
         .issue_12592_inference_reuse_current_tests => customIssue12592(io, allocator, &env, &timer, timeout_ms),
     };
@@ -20903,6 +20909,58 @@ fn customGlueBoxedAppType(io: std.Io, allocator: Allocator, env: *const CaseEnv,
     });
 }
 
+fn customGlueDeclaredNameCollisions(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // A generated file has one namespace for its top-level type names, and
+    // this platform fills it with names that would collide: tags whose
+    // payload aliases are named like the union's own helpers, types named
+    // like another type's helpers, like a hosted function's argument and
+    // result types, like the name preferred for a hosted function's result,
+    // and like the runtime support, and two types whose module-qualified
+    // names join to one host name. Every generator must still emit a file
+    // that compiles, which `checkGlueOutput` checks.
+    //
+    // A payload alias named like a helper is dropped rather than emitted
+    // beside it, and the remaining aliases stay. C declares no release
+    // helper, so there `EventRelease` is free for the alias.
+    return checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/declared-name-collisions/main.roc", .{
+        .zig = &.{ "pub const EventRelease = struct {", "pub const EventPress = Key;" },
+        .c = &.{ "typedef Key EventPress;", "typedef Key EventRelease;" },
+        .rust = &.{ "pub struct EventRelease;", "pub type EventPress = Key;" },
+        // A helper alias is emitted only with the alias it is named after,
+        // and `HostLoadResult` is a type here, not an alias.
+        .absent = &.{ "pub type EventRelease", "pub const EventRelease = Key;", "HostLoadResultPayload" },
+        // Each Roc type is still its own host type, with its own fields,
+        // under whichever name it was declared.
+        .zig_checks =
+        \\fn Param(comptime function: anytype, comptime index: usize) type {
+        \\    return @typeInfo(@TypeOf(function)).@"fn".param_types[index].?;
+        \\}
+        \\fn expectField(comptime Struct: type, comptime name: []const u8) void {
+        \\    if (!@hasField(Struct, name)) @compileError("expected " ++ @typeName(Struct) ++ " to have the field " ++ name);
+        \\}
+        \\comptime {
+        \\    expectField(Param(abi.take_signal_named, 0), "held");
+        \\    expectField(Param(abi.take_signal_named, 1), "index");
+        \\    expectField(Param(abi.take_signal_named, 2), "bytes");
+        \\    expectField(Param(abi.take_signal_named, 3), "depth");
+        \\    expectField(Param(abi.take_signal_named, 4), "boundary");
+        \\    expectField(Param(abi.take_signal_named, 5), "stored");
+        \\    expectField(Param(abi.take_runtime_named, 0), "text");
+        \\    expectField(Param(abi.take_runtime_named, 2), "ops");
+        \\    expectField(Param(abi.take_runtime_named, 3), "count");
+        \\    expectField(Param(abi.take_runtime_named, 5), "size");
+        \\    expectField(Param(abi.take_runtime_named, 7), "slots");
+        \\    expectField(Param(abi.take_host_named, 0), "text");
+        \\    expectField(Param(abi.take_host_named, 1), "status");
+        \\    expectField(Param(abi.take_host_named, 2), "loaded");
+        \\    expectField(Param(abi.take_host_named, 3), "index");
+        \\    expectField(Param(abi.take_joined, 0), "first");
+        \\    expectField(Param(abi.take_joined, 1), "second");
+        \\}
+        ,
+    });
+}
+
 fn customGlueOpaqueOwnership(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     // A box or list over a value of the application's type is a Roc reference
     // the host owns and cannot release: the allocation header and the payload
@@ -22146,6 +22204,16 @@ fn customGlueZigKeywordTagNames(io: std.Io, allocator: Allocator, env: *const Ca
 fn customGlueCTests(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "test", "--opt=interpreter", "src/glue/src/CGlue.roc" },
+        .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "unreachable" } },
+    })) |failure| return failure;
+    return null;
+}
+
+/// Runs the expects of the glue platform's shared naming plan, and of the
+/// platform modules it imports, from their sources.
+fn customGlueTypeNamePlanTests(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "test", "--opt=interpreter", "src/glue/platform/TypeNamePlan.roc" },
         .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "unreachable" } },
     })) |failure| return failure;
     return null;

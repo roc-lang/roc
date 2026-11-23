@@ -201,7 +201,8 @@ id are different host types. `TypeTable.duplicate_record_names` and
 `TypeTable.duplicate_tag_union_names` report those names, and
 `TypeTable.shape_suffix` gives each shape its suffix, so the generated names
 are `TypesWrapType2` and `TypesWrapType5` in every language. A name that is
-not shared keeps its bare form.
+not shared keeps its bare form unless a declaration made under it would
+collide with another one (see "One Namespace Per Generated File").
 
 An ambiguous bare name is never emitted, not even as an alias: `TypesWrap`
 would denote one instantiation chosen by table order. Roots that reach such a
@@ -210,6 +211,41 @@ type are aliased by their own position instead (`Take_wrapsArg0`,
 
 Generators must not decide type identity themselves, by comparing names,
 sizes, or field lists.
+
+### One Namespace Per Generated File
+
+A generated file has one namespace for its top-level type names, and every
+name a generator puts there is built by joining other names: a module and a
+type (`A.BC` and `AB.C` are both `ABC`), a type and a helper suffix
+(`EventRelease`, `EventTag`, `EventPayload`), a union, a tag, and a suffix
+(`EventPressPayload`), or a hosted function and a suffix (`HostSendArgs`).
+Nothing about Roc's own naming rules keeps two of those from being equal, or
+from equaling a name the runtime support declares, imports, or uses for a
+parameter. `TypeNamePlan` therefore decides who gets each name, in this order
+of precedence:
+
+1. Reserved names: the runtime support's names and each hosted function's
+   argument and result types. Each generator lists its own
+   (`runtime_type_names_*`, `reserved_type_names_*`); a declaration added to a
+   generator's runtime support is added to that list.
+2. Each host type's own name and the helper names derived from it, which a
+   generator reports through `type_names_declared_as_*`. When one of them is
+   reserved, or is also declared for another host type, the name denotes
+   neither, and `TypeNamePlan.shape_named` adds the Roc names involved to the
+   ones emitted under shape-derived names. A generator's `duplicate_names` is
+   that complete list. Two host types whose shape-derived names still collide
+   make the glue run fail with an error that names both.
+3. Preferred names (`HostLoadResult` for the `Try` a hosted `Host.load!`
+   returns), granted only when every name the type would declare under the
+   preferred name is free.
+4. Aliases, emitted only under names nothing above declares. A tag union's
+   `Payload` and `Tag` aliases are emitted only with the alias they are named
+   after.
+
+So a collision renames the declarations that collide and drops the aliases
+that collide, and what remains always compiles. `issue 13350: declared names
+stay distinct in every generator` builds a platform out of such collisions and
+compiles all three outputs.
 
 ## Regenerating the C Header Snapshot
 
