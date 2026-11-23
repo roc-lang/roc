@@ -35559,6 +35559,10 @@ fn discardedVarUpdate(self: *Self, expr_idx: CIR.Expr.Idx, empty_rec: Var) std.m
 /// by a unification that is rolled back and records no problems. The gating
 /// probe for Discarded Var Update (`discardedVarUpdate`).
 fn probeCanUseAs(self: *Self, expected_var: Var, actual_var: Var) std.mem.Allocator.Error!bool {
+    if (try self.readRelation(expected_var, actual_var) == .succeeds) {
+        self.noteSpeculation(.discarded_var_update, .read_first);
+        return true;
+    }
     var probe = try self.beginProbe(null);
     self.noteSpeculation(.discarded_var_update, .speculative);
     defer probe.rollback();
@@ -66406,7 +66410,7 @@ fn relationIsStructurallyIdentical(self: *Self, a: Var, b: Var) bool {
                     .fn_pure, .fn_effectful => |left_func| {
                         const right_func = switch (right_flat) {
                             .fn_pure, .fn_effectful => |func| func,
-                            else => unreachable, // the active tags are equal
+                            .record, .tuple, .nominal_type, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => unreachable, // the active tags are equal
                         };
                         if (left_func.effect_deps.len() != 0 or right_func.effect_deps.len() != 0) return false;
                         if (!Push.all(&pending, &pending_len, self.types.sliceVars(left_func.args), self.types.sliceVars(right_func.args))) return false;

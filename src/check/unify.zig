@@ -5885,6 +5885,10 @@ pub const Scratch = struct {
 // declaration-less synthetic nominals. The ident comparison cannot replace
 // the statement for decl-backed builtins, whose minted idents ("U8") and
 // declared relative names ("Num.U8") are spelled differently.
+
+/// Whether two aliases name one declaration: the same origin module and the
+/// same declaring statement, or the same name when neither records a
+/// statement.
 pub fn sameAliasIdentity(a: Alias, b: Alias) bool {
     if (a.origin_module != b.origin_module) return false;
     if (a.source_decl.present or b.source_decl.present) {

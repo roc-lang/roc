@@ -17050,12 +17050,15 @@ Other solved-graph mutations:
   Introduction (above). Uses the existing `unifyWith` descriptor-introduction
   mechanism for a proved concrete builtin conversion; does not mutate the
   context's type or introduce a redirect rule.
-- `checkBranchBodyAgainstExpected`'s read-first relations (`readRelation`)
-  —mechanism: Read-First Relations (above). A branch whose relation to the
-  annotated result reading shows can only succeed skips the rolled-back
+- Read-first relations (`readRelation`)—mechanism: Read-First Relations
+  (above). In `checkBranchBodyAgainstExpected`, a branch whose relation to
+  the annotated result reading shows can only succeed skips the rolled-back
   probe, and a fold into the branch accumulator that reading shows can only
   succeed runs the same `runUnify` the commit probe would have committed,
-  outside a probe.
+  outside a probe. `projectExpectedAggregateShape`'s projected-cell relation
+  and `commitProjectedStoredValue` do the same for their commit probes.
+  `projectExpectedTagPayload` without a borrowed record field reads every
+  refusal before its copy writes anything, so it opens no probe.
 - `bindSchemeAliasDestructs` / `optionalDestructBinderType`—policy: Field
   Kinds, scheme alias destructure binding (above). A probe of whether a
   declaration's value is a binding scheme, and of whether each field kind of
