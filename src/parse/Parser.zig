@@ -2193,10 +2193,10 @@ fn parseTargetConfigTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetConf
 fn parseTargetsSectionTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetsSection.Idx {
     const start = self.pos;
     self.expect(.OpColon) catch {
-        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_colon, start);
+        return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_colon, start, self.pos);
     };
     self.expect(.OpenCurly) catch {
-        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_open_curly, start);
+        return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_open_curly, start, self.pos);
     };
 
     var inputs_dir: ?TokenIdx = null;
@@ -2205,19 +2205,19 @@ fn parseTargetsSectionTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetsS
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
         if (self.peek() != .LowerIdent) {
             self.store.clearScratchFrom(AST.TargetEntry, entries_top);
-            return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
+            return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_field_name, start, self.pos);
         }
         const field_name_tok = self.pos;
         self.advance();
         self.expect(.OpColon) catch {
             self.store.clearScratchFrom(AST.TargetEntry, entries_top);
-            return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_colon, start);
+            return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_field_colon, start, self.pos);
         };
 
         if (self.peek() == .StringStart) {
             if (!std.mem.eql(u8, self.tokenText(field_name_tok), "inputs_dir")) {
                 self.store.clearScratchFrom(AST.TargetEntry, entries_top);
-                return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
+                return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_field_name, start, field_name_tok);
             }
             // inputs_dir: "targets/" directory directive
             self.advance();
@@ -2241,7 +2241,7 @@ fn parseTargetsSectionTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetsS
             }));
         } else {
             self.store.clearScratchFrom(AST.TargetEntry, entries_top);
-            return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
+            return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_field_name, start, self.pos);
         }
 
         _ = self.consumeComma();
@@ -2249,7 +2249,7 @@ fn parseTargetsSectionTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetsS
 
     self.expect(.CloseCurly) catch {
         self.store.clearScratchFrom(AST.TargetEntry, entries_top);
-        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_close_curly, start);
+        return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_close_curly, start, self.pos);
     };
     return try self.store.addTargetsSection(.{
         .inputs_dir = inputs_dir,
@@ -2261,18 +2261,18 @@ fn parseTargetsSectionTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetsS
 fn parseSymbolMapEntryTokens(self: *Parser) std.mem.Allocator.Error!AST.SymbolMapEntry.Idx {
     const start = self.pos;
     self.expect(.StringStart) catch {
-        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_string, start);
+        return try self.pushMalformedAt(AST.SymbolMapEntry.Idx, .expected_symbol_string, start, self.pos);
     };
     if (self.peek() != .StringPart) {
-        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_string, start);
+        return try self.pushMalformedAt(AST.SymbolMapEntry.Idx, .expected_symbol_string, start, self.pos);
     }
     const symbol = self.pos;
     self.advance();
     self.expect(.StringEnd) catch {
-        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_string, start);
+        return try self.pushMalformedAt(AST.SymbolMapEntry.Idx, .expected_symbol_string, start, self.pos);
     };
     self.expect(.OpColon) catch {
-        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_map_colon, start);
+        return try self.pushMalformedAt(AST.SymbolMapEntry.Idx, .expected_symbol_map_colon, start, self.pos);
     };
 
     var module: ?TokenIdx = null;
@@ -2286,7 +2286,7 @@ fn parseSymbolMapEntryTokens(self: *Parser) std.mem.Allocator.Error!AST.SymbolMa
             self.advance();
         }
         if (self.peek() != .NoSpaceDotLowerIdent) {
-            return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_map_function, start);
+            return try self.pushMalformedAt(AST.SymbolMapEntry.Idx, .expected_symbol_map_function, start, self.pos);
         }
         func = self.pos;
         self.advance();
@@ -2294,7 +2294,7 @@ fn parseSymbolMapEntryTokens(self: *Parser) std.mem.Allocator.Error!AST.SymbolMa
         func = self.pos;
         self.advance();
     } else {
-        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_map_function, start);
+        return try self.pushMalformedAt(AST.SymbolMapEntry.Idx, .expected_symbol_map_function, start, self.pos);
     }
 
     return try self.store.addSymbolMapEntry(.{
