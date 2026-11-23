@@ -2552,10 +2552,10 @@ takes its modules in dependency order). A read records no root read
 (`CompileTimeRootReadTable`), as no `.boxy` evaluation of a root does: the
 read root is complete whenever the reader is. The checked artifact still carries each such root's
 request, entry wrapper template, and const template: the root graph walks no
-wrapper of a completed root, but a module's object defines each completed
-root's wrapper for the other objects of a link, and runtime reads restore
-the stored value through the const template, exactly as for an evaluated
-root.
+wrapper of a completed root, but a module's object defines the wrapper of a
+completed root whose value holds a function (Per-Module Output), and
+runtime reads restore the stored value through the const template, exactly
+as for an evaluated root.
 
 #### Value-Form Expressions Stay In Their Bodies
 
@@ -2806,9 +2806,22 @@ it never emits runtime initialization code. Static reachability and compaction
 retain and remap both child slots and referenced procedures. Identical frozen
 nodes can share storage by their contents and relocations.
 
-A body that reads a stored value built from parts holds one statement, the
-read of the value's own slot. `.boxy` lowering resolves a list's items, a
-product's fields, a tag's payloads, and a box's payload to their child slots
+A stored value that is data alone, holding no function value and no failed
+value anywhere inside it, is one slot naming its ConstStore node
+(`Program.storedDataAlone`), whatever it holds: the data encoder writes it
+from the store through its type's plan, so the work of every pass and backend
+is independent of how many values it holds, and only the encoder's is
+proportional to them. The encoder writes each stored value straight into
+the bytes of the value holding it, and shares among its readers the frozen
+descriptor of every value that owns an allocation (a stored list, a box, an
+allocated string, and a product or tag a recursive type keeps behind a box),
+so each allocation is frozen once however many values hold it; any other
+scalar, product or tag is written for each holder.
+
+A body that reads any other stored value, built from parts, holds one
+statement, the read of the value's own slot. `.boxy` lowering resolves a
+list's items, a product's fields, a tag's payloads, and a box's payload to
+their child slots
 without reading any of them (`Task.restore_part`), and a completed callable's
 type table and capture record are parts of its slot the same way. A stored
 function value is the one part restored as a value, because its restore
@@ -7722,6 +7735,13 @@ requirement signatures themselves can refer to those templates and are checked
 afterward. App checking substitutes one fresh,
 outermost-rank inference variable per binder, shared across all requirements,
 so definition generalization cannot give sibling requirements different types.
+An annotated required definition is related to its
+requirement after its boundary has generalized it, so that relation uses an
+instance of its scheme, as a caller's use does: a binder never joins a
+scheme's quantified classes, and no monomorphic definition a binder reaches
+shares a generalized variable. The source-free invocation that names the
+solved requirement (above) is a further instance of that scheme, and it is
+related to the requirement the same way.
 Each platform alias's explicit `(origin module, source declaration)` key and
 backing identity root select that same substitution during requirement copying.
 The solved identity slots carry the inferred types into the pairing; no copied
@@ -19329,6 +19349,16 @@ Nothing a module emits depends on a module that imports it:
   program whose roots may name modules no unit lowers; exact procedure aliases
   likewise emit no evaluator wrapper, because their checked forwarding metadata
   directs every use to the referenced procedure rather than an evaluated value;
+  the wrappers of its numeral, quote and interpolation conversion roots are
+  not, since every use of a converted literal restores the root's stored
+  value or converts the literal in place, and neither is a validation root's,
+  which has no value for any body to read;
+  nor is the wrapper of a constant whose stored value is data alone
+  (`Program.storedDataAlone`) and whose template no longer names an entry
+  procedure, because every read of such a constant restores the stored value
+  into the reading body, so a constant no body reads puts no data in any
+  object; a stored function value's wrapper is emitted, since its restore
+  lowers the workers the value names, which other objects link against;
 - its conversion workers are its own and memoized within it alone;
 - ARC solves each of its procedures' ownership signatures from the procedure's
   body and its callees, and a call from another module demands no ownership
@@ -19350,6 +19380,27 @@ Nothing a module emits depends on a module that imports it:
 This is the invariant the per-module Boxy cache (Caching Under `.boxy`) rests
 on, and it is the reason modules can be lowered independently and in
 parallel.
+
+A unit's calls compile against the export interfaces other units recorded, so
+a unit lowers only after the unit of every module its lowering sees (its
+checked module's lowering visibility, the modules of
+`collectImportedArtifactViews`): a lowering names workers only of modules it
+sees. Its dependencies (`Coordinator.unitDependencyKeys`) are its direct
+imports and every seen module outside its import closure; a seen module inside
+the closure is a dependency of a dependency, whose unit is done before the
+dependency's. A module sees a module outside its import closure when a type
+reaches it without an import. An app's entrypoint takes its platform's
+requirement types, so the app's descriptor of such a type names the method
+workers of the module declaring it (`Program.nominalOverrides`), a platform
+module the app need not import: an app whose `main!` takes `List(OsStr)` and
+calls `len` on it compiles against `OsStr`'s export records. Everything that
+orders units takes its edges from that one set: the coordinator's
+`BoxyObjects`, the link's `buildBoxyLibraryObjects`, the set of objects a
+compile-time program links against, and the order a test program loads its
+unit images in (`unitLoadOrder`). So no unit lowers while a unit it can call
+is still running, and no image loads before one whose symbols it imports.
+Dependencies are acyclic: imports are, and a module outside the app's import
+closure that the app sees is a platform module, which does not see the app.
 
 Unit lowering finishes the closure of those module-definition workers and
 records their export inventory in `seedUnitWorkers`, with which of them are
@@ -19445,9 +19496,14 @@ and Per-Module Output is the invariant that makes it possible:
   edit to a private function's body, a new private definition, or a new
   expression inside an exposed function's body that leaves its ownership
   signature and needs alone rebuilds the edited module only, because no
-  worker's name is a position in its module (NAMES, below). A unit's task
+  worker's name is a position in its module (NAMES, below). An app sees the
+  module declaring a platform requirement type without importing it
+  (Per-Module Output); the app's checking policy digest covers its platform
+  requirement context, the platform root's content identity over its whole
+  import closure, so the app's key covers that module's export records as
+  well. A unit's task
   computes its key on its lane, once its
-  imports' units are done: the module's own part of its digests (its stored
+  dependencies' units are done: the module's own part of its digests (its stored
   values and public surface, the bulk of the hashing) is hashed there, or
   earlier by a lane no unit was ready for, and the imports' parts come from
   the digest table their units recorded into, which the lanes share under a
@@ -19853,10 +19909,9 @@ evaluation (`BoxyLinkedImages`), by symbol. A module with no object yet is
 compiled whole and filed by the compilation that first needs it, whichever
 command that is; the root module's own constant code is compiled for the
 evaluation and discarded. A module can have an object only once every
-compile-time root of its own is complete: in its object, an evaluated root's
-entry wrapper restores the stored value, which the other objects of a link read
-through it, so an object lowered while a root was still pending would compute
-the root's body at every read instead. The coordinator's unit scheduler
+compile-time root of its own is complete: a body that reads an evaluated root
+restores its stored value where it reads, so an object lowered while a root was
+still pending would compute the root's body at every read instead. The coordinator's unit scheduler
 (`compile.coordinator.BoxyObjects`) therefore builds each module's object as
 soon as the module can have one and the compilation needs it, and no sooner: a
 module restored from the checked cache with its roots complete, or one with no
@@ -19866,15 +19921,16 @@ says whether its evaluation will run a program against its imports' objects
 (`CompileTimeFinalization.evaluationLinksImportObjects`: a root still to
 evaluate under `.boxy` that the checked-value writer does not complete, and no
 platform requirements), so every compilation, `roc check` included, asks for
-the objects of such a module's import closure the moment the module is
-type-checked, and the units of those that can have an object build while
+the objects of such a module's dependencies (its imports and the modules its
+lowering sees outside its import closure, Per-Module Output) the moment the
+module is type-checked, and the units of those that can have an object build while
 checking continues. The evaluation asks for them again, for every such module,
 before it completes the value-form roots and builds the root graph, which
 matters after the scheduler starts over under the link's names. Each unit lowers
-only once its imports have standalone objects, since its calls compile against
-their export interfaces. If an import cannot have an object in this compilation
-(for example, a hosted declaration without its platform), neither can its
-importers. Programs evaluating roots against such imports use shared lowering;
+only once its dependencies have standalone objects, since its calls compile
+against their export interfaces. If a dependency cannot have an object in this
+compilation (for example, a hosted declaration without its platform), neither
+can its dependents. Programs evaluating roots against such imports use shared lowering;
 they still wait for every checked value they read. Independent units
 run on the post-check executor alongside checking, the other units, and the
 evaluations of other modules. The evaluations run the same way: a module's
@@ -19897,7 +19953,7 @@ function-value stages finish. On cancellation or preparation failure, evaluation
 discards unsubmitted programs and joins submitted work before freeing the graph,
 module lists, or image set any worker borrowed; its bookkeeping needs no new
 allocation and it stores no additional results. A module's evaluation thus waits only for
-the values its roots read and the objects of its own import closure. The link
+the values its roots read and the objects of its own dependency closure. The link
 waits for every unit after program evaluation. Platform-only evaluation before
 pairing joins running object tasks before storing its values, but retains
 queued app units: their imports can still have roots that program evaluation

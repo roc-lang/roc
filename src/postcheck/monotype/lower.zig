@@ -5884,10 +5884,11 @@ fn inlineLiteralStorage(view: ModuleView, expr: CIR.Expr.Idx) Common.StaticDataS
     };
 }
 
-const ConstNodeAddress = struct {
-    module: checked.ModuleId,
-    node: checked.ConstNodeId,
-};
+/// What is known of a property of each stored node of one module
+/// (`Builder.ConstNodeProperty`), by node.
+const ConstNodeAnswers = std.ArrayList(ConstNodeAnswer);
+
+const ConstNodeAnswer = enum(u8) { unknown, holds, fails };
 
 /// Key for a memoized structural-derivation helper def. `value_ty` is the type
 /// being derived over; `result_ty` is the derivation's auxiliary type (the
@@ -6369,9 +6370,13 @@ const Builder = struct {
     /// ordered commit boundary; raw ids are only a fast exact-key path, while
     /// structural equality remains the reuse authority across instantiations.
     static_data_uses: std.ArrayList(StaticDataUse),
-    static_data_eligibility: std.AutoHashMap(ConstNodeAddress, bool),
-    /// Whether each stored node's value is data alone (`constNodeIsStoredData`).
-    stored_data: std.AutoHashMap(ConstNodeAddress, bool),
+    /// Whether each stored node's value has a stable static data
+    /// representation (`constNodeHasStableStaticDataRepresentation`), by
+    /// lowering module.
+    static_data_eligibility: collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers),
+    /// Whether each stored node's value is data alone
+    /// (`constNodeIsStoredData`), by lowering module.
+    stored_data: collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers),
     hosted_catalog: []HostedCatalogEntry = &.{},
     /// Exact `(owner, method)` -> target map over every reachable module's
     /// method registry, for compiler-generated component lookups (structural
@@ -6532,8 +6537,8 @@ const Builder = struct {
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .static_data_ids = std.AutoHashMap(StaticDataUse, Common.StaticDataId).init(allocator),
             .static_data_uses = .empty,
-            .static_data_eligibility = std.AutoHashMap(ConstNodeAddress, bool).init(allocator),
-            .stored_data = std.AutoHashMap(ConstNodeAddress, bool).init(allocator),
+            .static_data_eligibility = collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers).init(allocator),
+            .stored_data = collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers).init(allocator),
             .evidence_arena = base.SingleThreadArena.init(allocator),
             .const_evidence_memo = std.AutoHashMap(ConstEvidenceMemoKey, StoredConstFnEvidence).init(allocator),
             .const_evidence_by_content = std.AutoHashMap(u64, StoredConstFnEvidence).init(allocator),
@@ -6783,8 +6788,11 @@ const Builder = struct {
         self.method_targets.deinit(self.allocator);
         self.inspect_overrides.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
-        self.static_data_eligibility.deinit();
-        self.stored_data.deinit();
+        for ([_]*collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers){ &self.static_data_eligibility, &self.stored_data }) |tables| {
+            var answers = tables.valueIterator();
+            while (answers.next()) |table| table.deinit(self.allocator);
+            tables.deinit();
+        }
         self.static_data_uses.deinit(self.allocator);
         self.static_data_ids.deinit();
         self.nested_site_cache.deinit();
@@ -13022,7 +13030,7 @@ const Builder = struct {
         view: ModuleView,
         node: checked.ConstNodeId,
     ) Allocator.Error!bool {
-        var walk = ConstNodeProperty{ .builder = self, .view = view, .property = .stable_static_data };
+        var walk = try ConstNodeProperty.init(self, view, .stable_static_data);
         return try ConstNodeProperty.Eval.run(self.allocator, &walk, node);
     }
 
@@ -13032,6 +13040,8 @@ const Builder = struct {
         builder: *Builder,
         view: ModuleView,
         property: Property,
+        /// The property's answers for the nodes of `view`'s store.
+        answers: []ConstNodeAnswer,
 
         const Property = enum {
             /// The value has a static data representation that post-check
@@ -13043,16 +13053,31 @@ const Builder = struct {
 
         const Eval = collections.AnyAll.Evaluation(checked.ConstNodeId, ConstNodeProperty);
 
-        fn memo(self: *const ConstNodeProperty) *std.AutoHashMap(ConstNodeAddress, bool) {
-            return switch (self.property) {
-                .stable_static_data => &self.builder.static_data_eligibility,
-                .stored_data => &self.builder.stored_data,
+        /// A walk of `property` over `view`'s stored nodes, sharing the
+        /// answers earlier walks of it found there.
+        fn init(builder: *Builder, view: ModuleView, property: Property) Allocator.Error!ConstNodeProperty {
+            const tables = switch (property) {
+                .stable_static_data => &builder.static_data_eligibility,
+                .stored_data => &builder.stored_data,
             };
+            const entry = try tables.getOrPut(view.lowering_module orelse
+                Common.invariant("checked module view was read before its lowering module id was seeded"));
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            const table = entry.value_ptr;
+            const known = table.items.len;
+            if (known < view.const_store.nodeCount()) {
+                try table.resize(builder.allocator, view.const_store.nodeCount());
+                @memset(table.items[known..], .unknown);
+            }
+            return .{ .builder = builder, .view = view, .property = property, .answers = table.items };
         }
 
         pub fn enter(self: *ConstNodeProperty, items: Eval.Items, node: checked.ConstNodeId) Allocator.Error!Eval.Expansion {
-            const address = ConstNodeAddress{ .module = self.view.key, .node = node };
-            if (self.memo().get(address)) |holds| return .{ .value = holds };
+            switch (self.answers[@backingInt(node)]) {
+                .holds => return .{ .value = true },
+                .fails => return .{ .value = false },
+                .unknown => {},
+            }
             const leaf: ?bool = switch (self.view.const_store.get(node)) {
                 .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
                 .pending => Common.invariant("pending ConstStore node reached a stored value property"),
@@ -13110,7 +13135,7 @@ const Builder = struct {
                 },
             };
             if (leaf) |holds| {
-                try self.memo().put(address, holds);
+                self.answers[@backingInt(node)] = if (holds) .holds else .fails;
                 return .{ .value = holds };
             }
             return .{ .group = .all };
@@ -13118,7 +13143,7 @@ const Builder = struct {
 
         pub fn exit(self: *ConstNodeProperty, node: checked.ConstNodeId, result: ?bool) Allocator.Error!void {
             const holds = result orelse return;
-            try self.memo().put(.{ .module = self.view.key, .node = node }, holds);
+            self.answers[@backingInt(node)] = if (holds) .holds else .fails;
         }
     };
 
@@ -13156,7 +13181,7 @@ const Builder = struct {
     /// the stored nodes alone. Memoized per node over explicit `ConstStore`
     /// edges.
     fn constNodeIsStoredData(self: *Builder, view: ModuleView, node: checked.ConstNodeId) Allocator.Error!bool {
-        var walk = ConstNodeProperty{ .builder = self, .view = view, .property = .stored_data };
+        var walk = try ConstNodeProperty.init(self, view, .stored_data);
         return try ConstNodeProperty.Eval.run(self.allocator, &walk, node);
     }
 
