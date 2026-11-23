@@ -37,7 +37,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RBWU".*;
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 4;
+pub const format_version: u32 = 5;
 
 /// The alignment an image's bytes need in memory for `View`.
 pub const alignment: std.mem.Alignment = .@"16";
@@ -784,7 +784,7 @@ pub const InputImport = struct {
     field: ?[]const u8 = null,
     kind: ImportKind,
     /// For a function: its signature, if the unit knows it.
-    type: ?u32 = null,
+    type: OptionalType = .none,
     /// For a global.
     valtype: u8 = 0,
     mutable: bool = false,
@@ -898,7 +898,7 @@ pub fn encode(allocator: Allocator, input: Input) EncodeError![]align(alignment.
         .module = try strings.add(import.module),
         .name = try strings.add(import.name),
         .field = try strings.add(import.field orelse import.name),
-        .type = .of(import.type),
+        .type = import.type,
         .kind = @backingInt(import.kind),
         .valtype = import.valtype,
         .mutable = @intFromBool(import.mutable),
@@ -1051,7 +1051,7 @@ fn testInput(tables: *TestTables, body_a: []const u8, body_b: []const u8, segmen
         };
         const b_sites = [_]InputSite{.{ .offset = 1, .kind = .function_index_leb, .target_kind = .function, .target = 0, .addend = 0 }};
         const segment_sites = [_]InputSite{.{ .offset = 0, .kind = .table_index_i32, .target_kind = .function, .target = 1, .addend = 0 }};
-        const imports = [_]InputImport{ .{ .module = "env", .name = "roc_alloc", .kind = .function, .type = 0 }, .{ .module = "env", .name = "__stack_pointer", .kind = .global, .valtype = 0x7F, .mutable = true } };
+        const imports = [_]InputImport{ .{ .module = "env", .name = "roc_alloc", .kind = .function, .type = .some(0) }, .{ .module = "env", .name = "__stack_pointer", .kind = .global, .valtype = 0x7F, .mutable = true } };
         const data_exports = [_]InputDataExport{.{ .name = "roc_answer", .segment = 1, .offset = 0, .size = 8 }};
         const requests = [_]u32{1};
     };

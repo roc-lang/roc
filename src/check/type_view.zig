@@ -373,10 +373,9 @@ fn view(self: *Self, dependencies: *const Dependencies, dependency: u32, scope: 
     }
     const slot = &views.*[dependency];
     if (slot.get()) |existing| return existing;
-    const index = try addOffset(self.source_len, @intCast(self.nodes.items.len));
-    // An optional Var (a view slot, a field's presence) cannot hold the
-    // all-ones Var.
-    if (index == std.math.maxInt(u32)) return error.OutOfMemory;
+    // An optional Var (a view slot, a field's presence) stores the Var plus
+    // one, so the Var's biased form must fit too.
+    const index = try collections.nextBiasedId(try addOffset(self.source_len, @intCast(self.nodes.items.len)));
     const result: Var = @fromBackingInt(index);
     try self.nodes.append(self.gpa, .{ .scope = normalized, .dependency = dependency });
     slot.* = .some(result);

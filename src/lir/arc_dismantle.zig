@@ -3346,10 +3346,10 @@ const ComponentBuckets = struct {
 /// Whether a read whose source belongs to view `through` goes through a view
 /// in `held` on its way out to `stop`, the view whose container is being
 /// solved (null for any other container).
-fn readsThroughHeldView(analysis: *const Analysis, held: *const std.AutoHashMapUnmanaged(u32, void), through: OptionalU32, stop: ?u32) bool {
+fn readsThroughHeldView(analysis: *const Analysis, held: *const std.AutoHashMapUnmanaged(u32, void), through: OptionalU32, stop: OptionalU32) bool {
     var next_view = through.get();
     while (next_view) |view| : (next_view = analysis.view_parent.get(view).get()) {
-        if (stop == view) break;
+        if (stop == OptionalU32.some(view)) break;
         if (held.contains(view)) return true;
     }
     return false;
@@ -4218,7 +4218,7 @@ pub fn compute(
                 if (candidate.disqualified) continue;
                 // Every read of a view's container went through the view, so only
                 // views nested inside it can hold a read's slots.
-                const reads_stop: ?u32 = if (entry.view) candidate_index else null;
+                const reads_stop: OptionalU32 = if (entry.view) .some(candidate_index) else .none;
                 defer {
                     while (added_alias_parents.pop()) |parent| {
                         const edge = borrow_child_edges.pop().?;

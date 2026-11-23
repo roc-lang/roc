@@ -681,6 +681,11 @@ pub const ContentNames = struct {
 
     const domain = "roc.static.data.v2";
 
+    /// The `Rendered.low` of a rendering that referred back to no active
+    /// stack depth: deeper than every depth, so `@min` with it keeps the
+    /// other operand and it is never below a depth.
+    const no_back_reference: u32 = std.math.maxInt(u32);
+
     pub fn init(allocator: Allocator, set: *const Set) Allocator.Error!ContentNames {
         var self = ContentNames{ .allocator = allocator, .arena = collections.SingleThreadArena.init(allocator) };
         errdefer self.deinit();
@@ -773,8 +778,8 @@ pub const ContentNames = struct {
     }
 
     /// Writes the digest of `item`'s rendering and returns the shallowest
-    /// stack depth that rendering referred back to.
-    fn write(self: *ContentNames, hasher: *Sha256, item: DataItem) Allocator.Error!?u32 {
+    /// stack depth that rendering referred back to, or `no_back_reference`.
+    fn write(self: *ContentNames, hasher: *Sha256, item: DataItem) Allocator.Error!u32 {
         const rendered = try self.render(item);
         writeNaming(hasher, rendered.naming);
         return rendered.low;
@@ -789,8 +794,9 @@ pub const ContentNames = struct {
 
     const Rendered = struct {
         naming: Naming,
-        /// The shallowest stack depth the rendering referred back to, if any.
-        low: ?u32,
+        /// The shallowest stack depth the rendering referred back to, or
+        /// `no_back_reference`.
+        low: u32,
     };
 
     fn writeNaming(hasher: *Sha256, naming: Naming) void {
@@ -809,7 +815,7 @@ pub const ContentNames = struct {
     /// How `item` is named where a rendering refers to it.
     fn render(self: *ContentNames, item: DataItem) Allocator.Error!Rendered {
         if (self.active.get(item.name)) |depth| return .{ .naming = .{ .cycle = self.depth - depth }, .low = depth };
-        if (self.digests.get(item.name)) |digest| return .{ .naming = .{ .data = digest }, .low = null };
+        if (self.digests.get(item.name)) |digest| return .{ .naming = .{ .data = digest }, .low = no_back_reference };
         const depth = self.depth;
         try self.active.putNoClobber(self.allocator, item.name, depth);
         self.depth += 1;
@@ -824,7 +830,7 @@ pub const ContentNames = struct {
         sub.update(item.bytes);
         writeWord(&sub, item.alignment);
         writeWord(&sub, item.symbol_offset);
-        var low: ?u32 = null;
+        var low: u32 = no_back_reference;
         // Relocations are rendered in offset order; ones already in that
         // order are read in place.
         const in_order = std.sort.isSorted(DataRelocation, item.relocations, {}, relocationOffsetBefore);
@@ -856,7 +862,7 @@ pub const ContentNames = struct {
             }
             if (previous.?.target) |rendered| {
                 writeNaming(&sub, rendered.naming);
-                if (rendered.low) |rendered_low| low = if (low) |current| @min(current, rendered_low) else rendered_low;
+                low = @min(low, rendered.low);
             } else {
                 sub.update("named");
                 writeWord(&sub, @intCast(relocation.name.len));
@@ -864,9 +870,9 @@ pub const ContentNames = struct {
             }
         }
         const digest = sub.finalResult();
-        if (low == null or low.? >= depth) {
+        if (low >= depth) {
             try self.digests.put(self.allocator, item.name, digest);
-            return .{ .naming = .{ .data = digest }, .low = null };
+            return .{ .naming = .{ .data = digest }, .low = no_back_reference };
         }
         return .{ .naming = .{ .data = digest }, .low = low };
     }

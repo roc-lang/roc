@@ -672,13 +672,20 @@ pub const ModuleState = struct {
     /// borrowed from that entry, which the module's checked artifact keeps
     /// alive. Evaluation that reopens the module continues from them.
     cached_reports: check.CheckedReports = .{},
-    /// Minimum dependency depth from root
+    /// Minimum dependency depth from root, or `unreached_depth` while no
+    /// module the root reaches imports it.
     depth: u32,
     /// Accumulated compile time for this module (parse + canonicalize + type-check)
     compile_time_ns: u64,
     /// Time this build spent type checking this module and publishing its
     /// checked artifact, excluding compile-time evaluation run inside the check.
     type_check_ns: u64 = 0,
+
+    /// The `depth` of a module the root does not reach: deeper than every
+    /// reached module, so ordering by depth puts it last and a smaller depth
+    /// always replaces it. Relaxing through it saturates (`+|`), so it never
+    /// lowers a depth.
+    pub const unreached_depth: u32 = std.math.maxInt(u32);
 
     pub fn init(name: []const u8, qualified_name: []const u8, path: []const u8) ModuleState {
         return .{
@@ -694,7 +701,7 @@ pub const ModuleState = struct {
             .dependents = std.ArrayList(ModuleId).empty,
             .external_dependents = std.ArrayList(ModuleRef).empty,
             .reports = std.ArrayList(Report).empty,
-            .depth = std.math.maxInt(u32),
+            .depth = unreached_depth,
             .compile_time_ns = 0,
         };
     }
@@ -1422,12 +1429,14 @@ pub const BoxyObjectLowering = struct {
 /// can have one (design.md "Caching Under `.boxy`"). A module can have an
 /// object once every compile-time root of its own is complete: the object
 /// restores their stored values, which the other objects of a link read
-/// through it. Its unit lowers once its imports' units are done, since its
-/// calls compile against their export interfaces. The units run on the
-/// post-check executor in their own session, alongside checking, the
-/// compile-time evaluations, and one another; a module's evaluation waits
-/// only for the objects of its import closure, and `roc build` links the
-/// objects this compilation built or restored without restoring them again.
+/// through it. Its unit lowers once the units of its dependencies are done
+/// (`Coordinator.unitDependencyKeys`: its imports, and every module its
+/// lowering sees outside its import closure), since its calls compile
+/// against their export interfaces. The units run on the post-check
+/// executor in their own session, alongside checking, the compile-time
+/// evaluations, and one another; a module's evaluation waits only for the
+/// objects of its dependency closure, and `roc build` links the objects
+/// this compilation built or restored without restoring them again.
 const BoxyObjects = struct {
     coordinator: *Coordinator,
     function_cache: @import("boxy_function_units.zig").Cache,
@@ -1442,11 +1451,12 @@ const BoxyObjects = struct {
     records: std.AutoHashMapUnmanaged([32]u8, Record) = .empty,
     /// The units offered and not yet known, by module.
     units: std.AutoHashMapUnmanaged([32]u8, *UnitTask) = .empty,
-    /// The units waiting for each module's object: its importers among the
-    /// units whose imports are not all known. Keep the checked artifact, not
-    /// its task: another import may rule the task out before this one settles.
+    /// The units waiting for each module's object: its dependents among the
+    /// units whose dependencies are not all known. Keep the checked artifact,
+    /// not its task: another dependency may rule the task out before this one
+    /// settles.
     waiting: std.AutoHashMapUnmanaged([32]u8, std.ArrayList(*const Artifact)) = .empty,
-    /// Units whose imports are all known, not submitted yet.
+    /// Units whose dependencies are all known, not submitted yet.
     ready: std.ArrayList(*UnitTask) = .empty,
     /// The compile-time programs the evaluation asked to build, not
     /// submitted yet (`BoxyObjectSource.submit`).
@@ -1460,6 +1470,9 @@ const BoxyObjects = struct {
     unbound_hosted: std.ArrayList(*const Artifact) = .empty,
     /// Settled program inputs for this naming epoch (`closureKnown`).
     closures_known: std.AutoHashMapUnmanaged([32]u8, enum { objects, shared }) = .empty,
+    /// Each module's dependencies (`Coordinator.unitDependencyKeys`), a
+    /// function of its checked module and its imports', owned by `arena`.
+    dependencies: std.AutoHashMapUnmanaged([32]u8, []const [32]u8) = .empty,
     /// Completed immutable import closures, owned by `arena` for this naming epoch.
     object_sets: std.AutoHashMapUnmanaged([32]u8, eval.CompileTimeFinalization.BoxyObjectSet) = .empty,
     /// The pieces of every object recorded with its pieces, kept for the
@@ -1546,6 +1559,7 @@ const BoxyObjects = struct {
         self.program_completions.deinit(gpa);
         self.unbound_hosted.deinit(gpa);
         self.closures_known.deinit(gpa);
+        self.dependencies.deinit(gpa);
         self.object_sets.deinit(gpa);
         for (self.owned_pieces.items) |pieces| {
             pieces.deinit();
@@ -1614,7 +1628,8 @@ const BoxyObjects = struct {
         return known;
     }
 
-    /// The objects of `module`'s import closure, imports first, for the
+    /// The objects of `module`'s dependency closure
+    /// (`Coordinator.unitDependencyKeys`), dependencies first, for the
     /// compile-time program evaluating `module`'s roots, once `objectsReady`
     /// found them known.
     fn objectSet(context: *anyopaque, module: *const Artifact) Error!?eval.CompileTimeFinalization.BoxyObjectSet {
@@ -1626,8 +1641,9 @@ const BoxyObjects = struct {
         defer visited.deinit(self.coordinator.gpa);
         const builtin_artifact = &self.coordinator.builtin_modules.checked_artifact;
         if (!try self.visit(builtin_artifact, &visited, &ordered)) return null;
-        for (module.direct_import_module_keys.items()) |key| {
-            const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse return null;
+        const dependency_keys = try self.dependenciesOf(module);
+        for (dependency_keys) |key| {
+            const imported = self.coordinator.checkedArtifactByKey(.{ .bytes = key }) orelse return null;
             if (!try self.visit(imported, &visited, &ordered)) return null;
         }
         const result = eval.CompileTimeFinalization.BoxyObjectSet{
@@ -1699,8 +1715,9 @@ const BoxyObjects = struct {
         return all.items;
     }
 
-    /// Append the known objects of `artifact` and its imports to `ordered`,
-    /// imports first. False when one has no object of its own.
+    /// Append the known objects of `artifact` and its dependencies
+    /// (`Coordinator.unitDependencyKeys`) to `ordered`, dependencies first.
+    /// False when one has no object of its own.
     fn visit(self: *BoxyObjects, artifact: *const Artifact, visited: *std.AutoHashMapUnmanaged([32]u8, *const Artifact), ordered: *std.ArrayList(Object)) Error!bool {
         const gpa = self.coordinator.gpa;
         const entry = try visited.getOrPut(gpa, artifact.key.bytes);
@@ -1708,8 +1725,9 @@ const BoxyObjects = struct {
         entry.value_ptr.* = artifact;
         const known = self.records.get(artifact.key.bytes) orelse Coordinator.coordinatorInvariant("a compile-time program's import closure was not known when its objects were gathered", .{});
         const object = known.object orelse return false;
-        for (artifact.direct_import_module_keys.items()) |key| {
-            const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse return false;
+        const dependency_keys = try self.dependenciesOf(artifact);
+        for (dependency_keys) |key| {
+            const imported = self.coordinator.checkedArtifactByKey(.{ .bytes = key }) orelse return false;
             if (!try self.visit(imported, visited, ordered)) return false;
         }
         try ordered.append(self.arena.allocator(), object);
@@ -1723,14 +1741,16 @@ const BoxyObjects = struct {
         return if (known.object != null) .available else .unavailable;
     }
 
-    /// A standalone object implies its imports have objects too. Only direct
-    /// inputs (including Builtin) need checking. One negative record selects
-    /// shared lowering even if another input is still pending.
+    /// A standalone object implies its dependencies have objects too. Only
+    /// the module's own dependencies (`Coordinator.unitDependencyKeys`,
+    /// with Builtin) need checking. One negative record selects shared
+    /// lowering even if another input is still pending.
     fn closureKnown(self: *BoxyObjects, module: *const Artifact) Allocator.Error!bool {
         var inputs = self.availability(self.coordinator.builtin_modules.checked_artifact.key.bytes);
-        for (module.direct_import_module_keys.items()) |key| {
+        const dependency_keys = try self.dependenciesOf(module);
+        for (dependency_keys) |key| {
             if (inputs == .unavailable) break;
-            switch (self.availability(key.bytes)) {
+            switch (self.availability(key)) {
                 .available => {},
                 .pending => inputs = .pending,
                 .unavailable => inputs = .unavailable,
@@ -1902,7 +1922,7 @@ const BoxyObjects = struct {
         objects: *BoxyObjects,
         artifact: *const Artifact,
         prepared: Prepared,
-        /// The imports whose objects are not known yet.
+        /// The dependencies whose objects are not known yet.
         remaining: u32,
         outcome: union(enum) { pending, failed: Error, done: boxy_unit.Built } = .pending,
         /// Under detailed timing, when the unit was offered and when its
@@ -1940,9 +1960,10 @@ const BoxyObjects = struct {
         }
     };
 
-    /// Build `artifact`'s object once its imports' are known, if it can have
-    /// one now. A module that cannot have one yet is offered again when it
-    /// can; one that never can is known to have none.
+    /// Build `artifact`'s object once its dependencies' are known
+    /// (`Coordinator.unitDependencyKeys`), if it can have one now. A module
+    /// that cannot have one yet is offered again when it can; one that never
+    /// can is known to have none.
     fn offer(self: *BoxyObjects, artifact: *const Artifact) Error!void {
         const gpa = self.coordinator.gpa;
         if (self.records.contains(artifact.key.bytes) or self.units.contains(artifact.key.bytes)) return;
@@ -1958,15 +1979,16 @@ const BoxyObjects = struct {
         }
         const offered_ns = lir.CheckedPipeline.Timing.startDetail(self.lowering.config.timing);
         var remaining: u32 = 0;
-        for (artifact.direct_import_module_keys.items()) |key| {
-            const imported = self.checkedImport(key);
+        const dependency_keys = try self.dependenciesOf(artifact);
+        for (dependency_keys) |key| {
+            const imported = self.checkedDependency(key);
             try self.offer(imported);
-            switch (self.availability(key.bytes)) {
+            switch (self.availability(key)) {
                 .available => continue,
                 .unavailable => return self.noObject(artifact),
                 .pending => {},
             }
-            const waiting = try self.waiting.getOrPut(gpa, key.bytes);
+            const waiting = try self.waiting.getOrPut(gpa, key);
             if (!waiting.found_existing) waiting.value_ptr.* = .empty;
             try waiting.value_ptr.append(gpa, artifact);
             remaining += 1;
@@ -1987,17 +2009,31 @@ const BoxyObjects = struct {
         try self.submitReady();
     }
 
-    /// Offer the import closure of `module`, which the compile-time program
-    /// evaluating its roots runs against.
+    /// Offer the dependency closure of `module`, which the compile-time
+    /// program evaluating its roots runs against.
     fn offerClosure(self: *BoxyObjects, module: *const Artifact) Error!void {
         try self.offer(&self.coordinator.builtin_modules.checked_artifact);
-        for (module.direct_import_module_keys.items()) |key| {
-            try self.offer(self.checkedImport(key));
+        const dependency_keys = try self.dependenciesOf(module);
+        for (dependency_keys) |key| {
+            try self.offer(self.checkedDependency(key));
         }
     }
 
-    fn checkedImport(self: *BoxyObjects, key: CheckedArtifact.CheckedModuleArtifactKey) *const Artifact {
-        return self.coordinator.checkedArtifactByKey(key.digest()) orelse Coordinator.coordinatorInvariant("a Boxy unit references an unpublished checked import", .{});
+    /// `artifact`'s dependencies (`Coordinator.unitDependencyKeys`),
+    /// computed once.
+    fn dependenciesOf(self: *BoxyObjects, artifact: *const Artifact) Allocator.Error![]const [32]u8 {
+        if (self.dependencies.get(artifact.key.bytes)) |known| return known;
+        const gpa = self.coordinator.gpa;
+        const keys = try self.coordinator.unitDependencyKeys(gpa, artifact);
+        defer gpa.free(keys);
+        try self.dependencies.ensureUnusedCapacity(gpa, 1);
+        const kept = try self.arena.allocator().dupe([32]u8, keys);
+        self.dependencies.putAssumeCapacity(artifact.key.bytes, kept);
+        return kept;
+    }
+
+    fn checkedDependency(self: *BoxyObjects, key: [32]u8) *const Artifact {
+        return self.coordinator.checkedArtifactByKey(.{ .bytes = key }) orelse Coordinator.coordinatorInvariant("a Boxy unit references an unpublished checked module", .{});
     }
 
     /// Whether this compilation links `artifact`'s object as the scheduler
@@ -3055,6 +3091,50 @@ pub const Coordinator = struct {
         }
 
         return try views.toOwnedSlice(allocator);
+    }
+
+    /// The modules whose objects `artifact`'s unit, and a compile-time
+    /// program of its roots, are built against directly (design.md
+    /// "Per-Module Output"), by checked key, each once: its direct imports,
+    /// and every other module its lowering sees
+    /// (`collectImportedArtifactViews`) that its import closure does not
+    /// hold. A lowering names workers only of modules it sees, and a seen
+    /// module of the import closure is a dependency of a dependency, which
+    /// every user of this set already waits for. A module sees a module
+    /// outside its import closure when a type reaches it without an import:
+    /// an app's entrypoint takes its platform's requirement types, so the
+    /// app's lowering names the workers of the modules declaring them. The
+    /// caller owns the result.
+    pub fn unitDependencyKeys(
+        self: *Coordinator,
+        allocator: Allocator,
+        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error![]const [32]u8 {
+        var keys = std.ArrayList([32]u8).empty;
+        errdefer keys.deinit(allocator);
+        var import_closure = std.AutoHashMapUnmanaged([32]u8, void).empty;
+        defer import_closure.deinit(allocator);
+        var pending = std.ArrayList([32]u8).empty;
+        defer pending.deinit(allocator);
+        for (artifact.direct_import_module_keys.items()) |key| {
+            if ((try import_closure.getOrPut(allocator, key.bytes)).found_existing) continue;
+            try keys.append(allocator, key.bytes);
+            try pending.append(allocator, key.bytes);
+        }
+        while (pending.pop()) |key| {
+            const imported = self.checkedArtifactByKey(.{ .bytes = key }) orelse base.invariant("compile.coordinator missing direct dependency checked artifact", .{});
+            for (imported.direct_import_module_keys.items()) |next| {
+                if ((try import_closure.getOrPut(allocator, next.bytes)).found_existing) continue;
+                try pending.append(allocator, next.bytes);
+            }
+        }
+        for (artifact.lowering_visibility.module_ids.items()) |key| {
+            if (std.mem.eql(u8, &key.bytes, &artifact.key.bytes)) continue;
+            if (rootRelationContainsArtifact(artifact, key)) continue;
+            if ((try import_closure.getOrPut(allocator, key.bytes)).found_existing) continue;
+            try keys.append(allocator, key.bytes);
+        }
+        return try keys.toOwnedSlice(allocator);
     }
 
     fn collectTypecheckAvailableArtifactViewsSeeded(

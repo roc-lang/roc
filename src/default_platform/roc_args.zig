@@ -73,13 +73,12 @@ fn sentinelSlice(comptime T: type, pointer: [*:0]T) []const T {
 fn allocateList(length: usize, alloc: AllocFn) ?RocList {
     if (length == 0) return RocList.empty();
     if (length > std.math.maxInt(usize) >> capacity_shift) return null;
-    if (length > std.math.maxInt(usize) / @sizeOf(RocStr)) return null;
 
     const header_size = 2 * @sizeOf(usize);
-    const data_size = length * @sizeOf(RocStr);
-    if (data_size > std.math.maxInt(usize) - header_size) return null;
+    const data_size = std.math.mul(usize, length, @sizeOf(RocStr)) catch return null;
+    const allocation_size = std.math.add(usize, header_size, data_size) catch return null;
 
-    const allocation: [*]u8 = @ptrCast(alloc(header_size + data_size, @alignOf(RocStr)));
+    const allocation: [*]u8 = @ptrCast(alloc(allocation_size, @alignOf(RocStr)));
     const data = allocation + header_size;
     const header: [*]usize = @ptrCast(@alignCast(data));
     (header - 2)[0] = length;
@@ -105,8 +104,7 @@ fn sanitizedUtf8Length(input: []const u8) ?usize {
     while (input_index < input.len) {
         const sequence_len = validSequenceLength(input[input_index..]);
         const written_len: usize = if (sequence_len == 0) replacement.len else sequence_len;
-        if (output_len > std.math.maxInt(usize) - written_len) return null;
-        output_len += written_len;
+        output_len = std.math.add(usize, output_len, written_len) catch return null;
         input_index += if (sequence_len == 0) 1 else sequence_len;
     }
     return output_len;
@@ -150,8 +148,7 @@ fn utf16Utf8Length(input: []const u16) ?usize {
     while (input_index < input.len) {
         const decoded = decodeUtf16(input, input_index);
         const encoded_len = utf8CodepointLength(decoded.codepoint);
-        if (output_len > std.math.maxInt(usize) - encoded_len) return null;
-        output_len += encoded_len;
+        output_len = std.math.add(usize, output_len, encoded_len) catch return null;
         input_index += decoded.code_units;
     }
     return output_len;
@@ -229,8 +226,8 @@ fn allocateStr(length: usize, alloc: AllocFn) ?RocStr {
     }
 
     if (length > std.math.maxInt(usize) >> capacity_shift) return null;
-    if (length > std.math.maxInt(usize) - @sizeOf(usize)) return null;
-    const allocation: [*]u8 = @ptrCast(alloc(@sizeOf(usize) + length, @alignOf(usize)));
+    const allocation_size = std.math.add(usize, @sizeOf(usize), length) catch return null;
+    const allocation: [*]u8 = @ptrCast(alloc(allocation_size, @alignOf(usize)));
     const data = allocation + @sizeOf(usize);
     const refcount: *usize = @ptrCast(@alignCast(data - @sizeOf(usize)));
     refcount.* = 1;

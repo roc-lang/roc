@@ -2774,14 +2774,14 @@ const Gen = struct {
     fn nameBound(self: *Gen, fields: LocalId, fields_ty: TypeId, bound: Bound) Allocator.Error!LocalId {
         const u64_ty = try self.u64Ty();
         const Context = struct { bound: Bound, fields_ty: TypeId };
-        // The accumulator is the bound so far, `none` before the first.
-        const none = try self.u64Value(std.math.maxInt(u64));
-        const folded = try self.foldList(fields, fields_ty, u64_ty, none, Context{ .bound = bound, .fields_ty = fields_ty }, struct {
-            fn each(ctx: Context, gen: *Gen, handle: LocalId, acc: LocalId, _: LocalId) Allocator.Error!LocalId {
+        // The accumulator is the bound so far. The first field's length
+        // starts it, so an empty set keeps the initial 0.
+        return self.foldList(fields, fields_ty, u64_ty, try self.u64Value(0), Context{ .bound = bound, .fields_ty = fields_ty }, struct {
+            fn each(ctx: Context, gen: *Gen, handle: LocalId, acc: LocalId, index: LocalId) Allocator.Error!LocalId {
                 const handle_ty = gen.store().get(ctx.fields_ty).list;
                 const len = (try gen.field(handle, handle_ty, "name_len")).value;
                 const merged = try gen.merge(try gen.u64Ty());
-                const first = try gen.isEq(acc, try gen.u64Value(std.math.maxInt(u64)));
+                const first = try gen.isEq(index, try gen.u64Value(0));
                 const later = try gen.branchIf(first);
                 try gen.jump(merged.id, &.{merged.param}, &.{len});
                 gen.b.hole = later;
@@ -2797,13 +2797,6 @@ const Gen = struct {
                 return merged.param;
             }
         }.each);
-        const merged = try self.merge(u64_ty);
-        const nonempty = try self.branchIf(try self.isEq(folded, none));
-        try self.jump(merged.id, &.{merged.param}, &.{try self.u64Value(0)});
-        self.b.hole = nonempty;
-        try self.jump(merged.id, &.{merged.param}, &.{folded});
-        self.b.hole = merged.after;
-        return merged.param;
     }
 
     /// The iterator over a field set's handles from `position`: all of them

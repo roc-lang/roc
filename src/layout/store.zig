@@ -82,8 +82,7 @@ const GraphChildren = struct {
 /// that names it. A table that has already filled every position reports
 /// allocation failure rather than narrowing past the field.
 fn nextRowPosition(comptime Position: type, len: u64) std.mem.Allocator.Error!Position {
-    if (len > std.math.maxInt(Position)) return error.OutOfMemory;
-    return @intCast(len);
+    return std.math.cast(Position, len) orelse error.OutOfMemory;
 }
 
 /// Errors that can occur during layout computation
@@ -583,9 +582,9 @@ pub const Store = struct {
 
     pub fn reserveLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
         // Every layout index must fit `Idx`.
-        if (self.layouts.len() > std.math.maxInt(@typeInfo(Idx).@"enum".tag_type)) return error.OutOfMemory;
+        const idx: Idx = @fromBackingInt(std.math.cast(@typeInfo(Idx).@"enum".tag_type, self.layouts.len()) orelse return error.OutOfMemory);
         const safe_list_idx = try self.layouts.append(self.allocator, layout);
-        const idx: Idx = @fromBackingInt(@intCast(@backingInt(safe_list_idx)));
+        std.debug.assert(@backingInt(safe_list_idx) == @backingInt(idx));
         _ = try self.resolved_list_layouts.append(self.allocator, .of(self.computeResolvedListLayoutIdx(idx)));
         // A layout reserved outside a graph commit names only finished
         // layouts, so it closes no cycle. A graph commit marks the cycles

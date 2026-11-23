@@ -37,7 +37,7 @@ test "ScopeMap.isVisibleAt returns true for offset within range" {
         .ident = testIdent(0),
         .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 10,
-        .visible_to = 50,
+        .visible_to = .some(50),
         .owner = .binder,
     };
 
@@ -52,7 +52,7 @@ test "ScopeMap.isVisibleAt returns false for offset outside range" {
         .ident = testIdent(0),
         .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 10,
-        .visible_to = 50,
+        .visible_to = .some(50),
         .owner = .binder,
     };
 
@@ -68,7 +68,7 @@ test "ScopeMap.isVisibleAt handles zero-width binding" {
         .ident = testIdent(0),
         .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 10,
-        .visible_to = 10, // Zero width
+        .visible_to = .some(10), // Zero width
         .owner = .binder,
     };
 
@@ -83,7 +83,7 @@ test "ScopeMap.isVisibleAt ignores the binding's owner" {
         .ident = testIdent(0),
         .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 0,
-        .visible_to = 100,
+        .visible_to = .some(100),
         .owner = .parameter,
     };
 
@@ -91,7 +91,7 @@ test "ScopeMap.isVisibleAt ignores the binding's owner" {
         .ident = testIdent(1),
         .pattern_idx = @fromBackingInt(@intCast(1)),
         .visible_from = 0,
-        .visible_to = 100,
+        .visible_to = .some(100),
         .owner = .binder,
     };
 
@@ -102,12 +102,12 @@ test "ScopeMap.isVisibleAt ignores the binding's owner" {
     try std.testing.expect(local_binding.owner == .binder);
 }
 
-test "ScopeMap.isVisibleAt handles max offset" {
+test "ScopeMap.isVisibleAt treats a module-level scope as unbounded" {
     const binding = Binding{
         .ident = testIdent(0),
         .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 0,
-        .visible_to = std.math.maxInt(u32),
+        .visible_to = .none,
         .owner = .binder,
     };
 
@@ -135,7 +135,7 @@ test "ScopeMap manually added bindings are queryable" {
         .ident = testIdent(1),
         .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 0,
-        .visible_to = 100,
+        .visible_to = .some(100),
         .owner = .binder,
     });
 
@@ -143,7 +143,7 @@ test "ScopeMap manually added bindings are queryable" {
         .ident = testIdent(2),
         .pattern_idx = @fromBackingInt(@intCast(1)),
         .visible_from = 50,
-        .visible_to = 100,
+        .visible_to = .some(100),
         .owner = .binder,
     });
 
@@ -181,14 +181,14 @@ test "Binding struct has expected fields" {
         .ident = testIdent(42),
         .pattern_idx = @fromBackingInt(@intCast(7)),
         .visible_from = 100,
-        .visible_to = 200,
+        .visible_to = .some(200),
         .owner = .parameter,
     };
 
     try std.testing.expectEqual(@as(u29, 42), binding.ident.idx);
     try std.testing.expectEqual(@as(u32, 7), @backingInt(binding.pattern_idx));
     try std.testing.expectEqual(@as(u32, 100), binding.visible_from);
-    try std.testing.expectEqual(@as(u32, 200), binding.visible_to);
+    try std.testing.expectEqual(@as(?u32, 200), binding.visible_to.get());
     try std.testing.expect(binding.owner == .parameter);
 }
 
@@ -210,7 +210,7 @@ test "ScopeMap bindings can track nested scopes" {
         .ident = testIdent(1), // x
         .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 0,
-        .visible_to = 100,
+        .visible_to = .some(100),
         .owner = .binder,
     });
 
@@ -219,7 +219,7 @@ test "ScopeMap bindings can track nested scopes" {
         .ident = testIdent(2), // y
         .pattern_idx = @fromBackingInt(@intCast(1)),
         .visible_from = 20,
-        .visible_to = 80,
+        .visible_to = .some(80),
         .owner = .binder,
     });
 
@@ -227,7 +227,7 @@ test "ScopeMap bindings can track nested scopes" {
         .ident = testIdent(3), // z
         .pattern_idx = @fromBackingInt(@intCast(2)),
         .visible_from = 40,
-        .visible_to = 80,
+        .visible_to = .some(80),
         .owner = .binder,
     });
 

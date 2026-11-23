@@ -324,7 +324,7 @@ pub const Binding = struct {
     ident: Ident.Idx,
     pattern_idx: CIR.Pattern.Idx,
     visible_from: u32,
-    visible_to: u32,
+    visible_to: collections.OptionalU32, // .none for module-level bindings
     owner: Owner, // .def, .statement, .parameter, or .binder
 };
 ```

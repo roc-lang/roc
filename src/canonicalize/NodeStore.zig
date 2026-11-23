@@ -4510,8 +4510,9 @@ pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
     };
 }
 
-/// Updates the expression field of an existing definition.
-/// This is used during constant folding to replace expressions with their folded equivalents.
+/// Updates the expression field of an existing definition. Callers that
+/// replace a top-level value def's expression go through
+/// `ModuleEnv.setTopLevelDefExpr`, which keeps the owner table current.
 pub fn setDefExpr(store: *NodeStore, def_idx: CIR.Def.Idx, new_expr: CIR.Expr.Idx) void {
     const nid: Node.Idx = @fromBackingInt(@intCast(@backingInt(def_idx)));
     const node = store.nodes.get(nid);

@@ -1854,14 +1854,6 @@ pub const StaticDispatchConstraint = struct {
             imported,
         };
 
-        pub const none = InterpolationMetadata{
-            .expr_region = OptRegion.none,
-            // Absent metadata has no item type; readers check `isPresent` first.
-            .item_var = undefined,
-            .interpolated_parts = .empty(),
-            .regions = .this_module,
-        };
-
         pub fn isPresent(self: InterpolationMetadata) bool {
             return self.expr_region.get() != null;
         }

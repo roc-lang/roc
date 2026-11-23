@@ -1802,8 +1802,8 @@ const CompileTimeRequestScheduler = struct {
         defer reached.deinit(self.allocator);
         var pending = std.ArrayList(u32).empty;
         defer pending.deinit(self.allocator);
-        var best: ?usize = null;
-        var best_count: usize = std.math.maxInt(usize);
+        const Best = struct { start: usize, count: usize };
+        var best: ?Best = null;
         for (self.emitted, 0..) |emitted, start| {
             if (emitted) continue;
             reached.reset();
@@ -1817,12 +1817,9 @@ const CompileTimeRequestScheduler = struct {
                     try pending.append(self.allocator, dependency);
                 }
             }
-            if (count < best_count) {
-                best = start;
-                best_count = count;
-            }
+            if (best == null or count < best.?.count) best = .{ .start = start, .count = count };
         }
-        return best orelse checkedArtifactInvariant("request scheduling looked for a group with every request emitted", .{});
+        return (best orelse checkedArtifactInvariant("request scheduling looked for a group with every request emitted", .{})).start;
     }
 
     fn buildEdges(self: *CompileTimeRequestScheduler) Allocator.Error!void {
@@ -4424,8 +4421,7 @@ const CheckedTypePairSet = struct {
 
     /// Add `pair`, reporting whether it was already present.
     fn insert(self: *CheckedTypePairSet, pair: CheckedTypeExactPair) Allocator.Error!bool {
-        const row_index = std.math.cast(u32, self.rows.items.len) orelse return error.OutOfMemory;
-        if (row_index == std.math.maxInt(u32)) return error.OutOfMemory;
+        const row_index = try collections.nextBiasedId(self.rows.items.len);
         try self.rows.ensureUnusedCapacity(self.first_by_left.allocator, 1);
         const head = try self.first_by_left.getOrPut(pair.left);
         const first: collections.OptionalU32 = if (head.found_existing) .some(head.value_ptr.*) else .none;
@@ -17015,8 +17011,7 @@ const EvidencePass = struct {
         var hasher = std.hash.Wyhash.init(0);
         for (entries) |entry| std.hash.autoHash(&hasher, entry);
         const bucket_key = hasher.final();
-        const row_index = std.math.cast(u32, self.callable_contracts.items.len) orelse return error.OutOfMemory;
-        if (row_index == std.math.maxInt(u32)) return error.OutOfMemory;
+        const row_index = try collections.nextBiasedId(self.callable_contracts.items.len);
         try self.callable_contracts.ensureUnusedCapacity(self.allocator, 1);
         const bucket = try self.callable_contract_buckets.getOrPut(self.allocator, bucket_key);
         const newest: collections.OptionalU32 = if (bucket.found_existing) .some(bucket.value_ptr.*) else .none;
@@ -26230,8 +26225,8 @@ pub fn valueFormValueExpr(bodies: CheckedBodies, expr: CIR.Expr.Idx) CIR.Expr.Id
 /// publication resolves them.
 fn valueFormCandidate(bodies: CheckedBodies, id: CIR.Expr.Idx) ?checked_bodies_mod.ExprData {
     switch (bodies.env.store.getExpr(id)) {
-        .e_num, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external, .e_block, .e_lookup_local, .e_lookup_external, .e_lookup_associated_resolved => {},
-        .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
+        .e_num, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external, .e_block, .e_lookup_local, .e_lookup_external, .e_lookup_associated_resolved => {},
+        .e_frac_f32, .e_frac_f64, .e_bytes_literal, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
     }
     if (bodies.exprIsRetired(id)) return null;
     return bodies.exprData(id);
@@ -33960,7 +33955,6 @@ pub const CheckedModuleArtifact = struct {
     pub fn verifyReadyForCompileTimeLowering(self: *const CheckedModuleArtifact) void {
         if (builtin.mode != .debug) return;
 
-        std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
         std.debug.assert(self.checked_types.roots.items().len == self.checked_types.payloads.items().len);
         verifyRootRequestSubsets(self.root_requests);
 
@@ -35031,7 +35025,6 @@ pub const CheckedModuleArtifact = struct {
         self.compile_time_debug.validate(self.compile_time_roots.roots.items().len) catch checkedArtifactInvariant("compile-time debug observation has an invalid root or message range", .{});
         if (builtin.mode != .debug) return;
 
-        std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
         verifyRootRequestSubsets(self.root_requests);
         self.verifyMethodIntrinsicRuntimeTargets();
 

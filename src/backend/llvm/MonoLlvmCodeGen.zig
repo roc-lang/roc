@@ -4409,11 +4409,13 @@ pub const MonoLlvmCodeGen = struct {
             try self.stmt_visit_marks.resize(self.allocator, count);
             @memset(self.stmt_visit_marks.items[old_len..], 0);
         }
-        if (self.stmt_visit_epoch == std.math.maxInt(u32)) {
+        const next_epoch, const overflowed = @addWithOverflow(self.stmt_visit_epoch, 1);
+        if (overflowed != 0) {
             @memset(self.stmt_visit_marks.items, 0);
-            self.stmt_visit_epoch = 0;
+            self.stmt_visit_epoch = 1;
+        } else {
+            self.stmt_visit_epoch = next_epoch;
         }
-        self.stmt_visit_epoch += 1;
     }
 
     /// Mark `stmt_id` visited in the current walk; false if it already was.

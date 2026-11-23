@@ -23,10 +23,6 @@ const Names = desc_mod.Names;
 const Methods = desc_mod.Methods;
 const Kind = desc_mod.Kind;
 
-/// The `size` of a recursive placeholder until it is closed: never zero, so
-/// a recursion box over it holds an allocation.
-const open_size = std.math.maxInt(u32);
-
 /// One record field: its label and its value's descriptor.
 pub const FieldInput = struct {
     name: *const Name,
@@ -58,6 +54,9 @@ pub const Builder = struct {
     labels: std.AutoHashMapUnmanaged(*const TypeDesc, []const ?*const Name) = .empty,
     /// Each names block `names` built, by descriptor.
     names_blocks: std.AutoHashMapUnmanaged(*const TypeDesc, ?*const Names) = .empty,
+    /// The recursive placeholders `recursiveOpen` made that `recursiveClose`
+    /// has not filled. A recursion box over one holds an allocation.
+    open_shells: std.AutoHashMapUnmanaged(*const TypeDesc, void) = .empty,
 
     pub fn init(allocator: std.mem.Allocator, width: desc_mod.PointerWidth) Builder {
         const word = width.bytes();
@@ -146,20 +145,22 @@ pub const Builder = struct {
     /// The implicit box a layout inserts to break a recursive type. Its
     /// payload may be an open recursive placeholder (`recursiveOpen`).
     pub fn recursiveBox(self: *Builder, payload: *const TypeDesc) *const TypeDesc {
-        return self.container(.recursive_box, payload, payload.size != 0);
+        return self.container(.recursive_box, payload, payload.size != 0 or self.open_shells.contains(payload));
     }
 
     /// A placeholder for a recursive type's descriptor, for its components'
     /// recursive boxes to point at until `recursiveClose` fills it.
     pub fn recursiveOpen(self: *Builder) *const TypeDesc {
-        var shell = desc_mod.leaf(.zst, .u8, 0, 1, .align_1, false);
-        shell.size = open_size;
-        return self.one(shell);
+        const shell = self.one(desc_mod.leaf(.zst, .u8, 0, 1, .align_1, false));
+        self.open_shells.put(self.arena.allocator(), shell, {}) catch @panic("out of memory building a test descriptor");
+        return shell;
     }
 
     /// Fill the placeholder `shell` with the recursive type's descriptor
     /// `desc`.
     pub fn recursiveClose(self: *Builder, shell: *const TypeDesc, desc: *const TypeDesc) *const TypeDesc {
+        const was_open = self.open_shells.remove(shell);
+        std.debug.assert(was_open);
         @constCast(shell).* = desc.*;
         if (self.labels.get(desc)) |labels| self.putLabels(shell, labels);
         return shell;
@@ -374,13 +375,18 @@ pub const Builder = struct {
                 .field_index = member.field_index,
                 .offset = offset,
                 .is_padding = @intFromBool(member.is_padding),
-                .field_slot = std.math.maxInt(u32),
+                .field_slot = undefined,
                 .desc = member.desc,
             };
             labels[slot] = member.name;
         }
+        // `memory_order` is a permutation of the members, so this writes each
+        // entry's `field_slot` exactly once.
+        const slotted = self.alloc(bool, members.len);
+        @memset(slotted, false);
         for (entries[0..members.len], 0..) |entry, slot| {
-            std.debug.assert(entry.field_index < members.len and entries[entry.field_index].field_slot == std.math.maxInt(u32));
+            std.debug.assert(entry.field_index < members.len and !slotted[entry.field_index]);
+            slotted[entry.field_index] = true;
             entries[entry.field_index].field_slot = @intCast(slot);
         }
 

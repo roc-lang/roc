@@ -3120,7 +3120,7 @@ pub const SyntaxChecker = struct {
         for (bindings) |binding| {
             if (@backingInt(binding.pattern_idx) == @backingInt(target_pattern)) continue;
             if (!std.mem.eql(u8, module_env.common.idents.getText(binding.ident), new_name)) continue;
-            if (binding.visible_from <= target.visible_to and target.visible_from <= binding.visible_to) {
+            if (scope_map.ScopeMap.scopesOverlap(binding, target)) {
                 return .taken;
             }
         }

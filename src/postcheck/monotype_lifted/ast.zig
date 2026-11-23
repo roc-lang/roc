@@ -997,11 +997,10 @@ pub const Program = struct {
         for (self.string_literals.unsafeRawItemsForView()[start..]) |literal| literal.deinit(self.allocator);
     }
 
-    /// The id the next function takes. The largest `u32` is never a
-    /// function id, so it can mark an absent one.
+    /// The id the next function takes, leaving room for its biased optional
+    /// form (`collections.OptionalId(FnId)`).
     fn nextFnId(self: *const Program) std.mem.Allocator.Error!FnId {
-        const raw = std.math.cast(u32, self.fns.len()) orelse return error.OutOfMemory;
-        if (raw == std.math.maxInt(u32)) return error.OutOfMemory;
+        const raw = try collections.nextBiasedId(self.fns.len());
         return @fromBackingInt(raw);
     }
 
@@ -1701,9 +1700,9 @@ pub const Program = struct {
         allocator: std.mem.Allocator,
         groups: BindingGroups,
     ) std.mem.Allocator.Error!?SharedLocal {
-        const owners = try allocator.alloc(LocalClaims.Owner, self.localCount());
+        const owners = try allocator.alloc(LocalClaims.OptionalOwner, self.localCount());
         defer allocator.free(owners);
-        @memset(owners, LocalClaims.Owner.none);
+        @memset(owners, .none);
         var claims: LocalClaims = .{ .owners = owners };
         var pending = std.ArrayList(ExprChild).empty;
         defer pending.deinit(allocator);
@@ -2592,22 +2591,25 @@ const LocalClaims = struct {
     const Owner = struct {
         group: u32,
         fn_id: FnId,
-
-        const none: Owner = .{ .group = std.math.maxInt(u32), .fn_id = undefined };
     };
 
-    owners: []Owner,
+    /// Zero (`.none`) for a local no group has named yet.
+    const OptionalOwner = collections.OptionalStruct(Owner, "group");
+
+    owners: []OptionalOwner,
     group: u32 = 0,
     /// Set before each function's locals are claimed.
     fn_id: FnId = undefined,
     shared: ?SharedLocal = null,
 
     pub fn bindLocal(self: *LocalClaims, local: LocalId) std.mem.Allocator.Error!void {
-        const owner = &self.owners[@backingInt(local)];
-        if (owner.group == Owner.none.group) {
-            owner.* = .{ .group = self.group, .fn_id = self.fn_id };
-        } else if (owner.group != self.group and self.shared == null) {
-            self.shared = .{ .local = local, .first = owner.fn_id, .second = self.fn_id };
+        const slot = &self.owners[@backingInt(local)];
+        if (slot.get()) |owner| {
+            if (owner.group != self.group and self.shared == null) {
+                self.shared = .{ .local = local, .first = owner.fn_id, .second = self.fn_id };
+            }
+        } else {
+            slot.* = .some(.{ .group = self.group, .fn_id = self.fn_id });
         }
     }
 };

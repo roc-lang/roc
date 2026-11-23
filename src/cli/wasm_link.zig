@@ -2617,8 +2617,8 @@ test "a composed module places the reached code and data and patches every site"
         .data_exports = &.{},
         .table_requests = &.{},
         .imports = &.{
-            .{ .module = "env", .name = "roc_main", .kind = .function, .type = 0 },
-            .{ .module = "env", .name = "canary", .kind = .function, .type = 1 },
+            .{ .module = "env", .name = "roc_main", .kind = .function, .type = .some(0) },
+            .{ .module = "env", .name = "canary", .kind = .function, .type = .some(1) },
         },
     });
     defer allocator.free(host);
@@ -2925,7 +2925,7 @@ test "a weak symbol nothing defines is null instead of an import" {
         .data_exports = &.{},
         .table_requests = &.{},
         .imports = &.{
-            .{ .module = "env", .name = "maybe", .kind = .function, .type = 0, .address_taken = true, .weak = true },
+            .{ .module = "env", .name = "maybe", .kind = .function, .type = .some(0), .address_taken = true, .weak = true },
             .{ .module = "env", .name = "maybe_data", .kind = .data, .weak = true },
         },
     });
@@ -2979,7 +2979,7 @@ test "a composed object relocates every site and does not depend on the units' o
         .segments = &.{.{ .bytes = "AAAA", .size = 4, .alignment_log2 = 2, .sites = &.{} }},
         .data_exports = &.{},
         .table_requests = &.{},
-        .imports = &.{.{ .module = "env", .name = "helper", .kind = .function, .type = 1 }},
+        .imports = &.{.{ .module = "env", .name = "helper", .kind = .function, .type = .some(1) }},
     });
     defer allocator.free(unit_a);
     const helper_body = try testBody(arena, &.{ &.{0x41}, &test_zero_leb, &.{ 0x1a, 0x0b } });
@@ -3077,7 +3077,7 @@ test "a constant two units carry under one content name is placed once" {
         .data_exports = &.{.{ .name = shared_name, .segment = 0, .offset = 0, .size = 4, .weak = true }},
         .table_requests = &.{},
         .imports = &.{
-            .{ .module = "env", .name = "helper", .kind = .function, .type = 1 },
+            .{ .module = "env", .name = "helper", .kind = .function, .type = .some(1) },
             .{ .module = "env", .name = shared_name, .kind = .data },
         },
     });

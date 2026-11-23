@@ -31,7 +31,6 @@ const hoist_roots = @import("can").HoistRoots;
 const output_type_roots = @import("output_type_roots.zig");
 const dispatch_evidence = @import("dispatch_evidence.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
-const top_level_def_owners = @import("top_level_def_owners.zig");
 
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
@@ -107,6 +106,10 @@ const PlatformRequiredDef = struct {
     required_ident: Ident.Idx,
     /// Where the platform's requires clause declares this requirement.
     platform_region: Region,
+    /// The annotated definition is a scheme and its requirement relation to
+    /// an instance of that scheme was established. The platform's invocation
+    /// instance is then related to the requirement the same way.
+    relates_scheme_instances: bool = false,
 };
 
 /// A platform requirement type instantiated into this module's store, plus
@@ -1132,9 +1135,6 @@ local_procedure_outer_refs: std.ArrayListUnmanaged(LocalProcedureOuterRef) = .em
 promoted_local_procedures: std.ArrayListUnmanaged(hoist_roots.PromotedLocalProcedure) = .empty,
 /// Binding patterns of `promoted_local_procedures`.
 promoted_local_procedure_patterns: collections.DenseMapUnmanaged(CIR.Pattern.Idx, void) = .empty,
-/// Whether this module's `top_level_def_owners` table is recorded. It is
-/// recorded on the first lookup that needs it, and before publication.
-top_level_def_owners_published: bool = false,
 /// Constraint callables of dispatch edges whose selected target, or the
 /// target of a dispatch derived from them, is a local procedure that was not
 /// promoted. Settled with `promoted_local_procedure_patterns`.
@@ -1500,7 +1500,8 @@ local_type_references: std.ArrayListUnmanaged(LocalTypeReference) = .empty,
 local_type_reference_frame_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
 /// For each type declared in a function body that has a context (design.md
 /// "Body-Local Type Context"), the shallowest candidate depth of its
-/// variables. Final once `finalizeLocalTypeContexts` runs.
+/// variables, or `no_context_depth`. Final once `finalizeLocalTypeContexts`
+/// runs.
 local_type_contexts: collections.DenseMapUnmanaged(CIR.Statement.Idx, u32) = .empty,
 local_type_contexts_final: bool = false,
 /// For each nominal type declared in a function body that has a context, a
@@ -2067,7 +2068,6 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .local_procedure_outer_refs = .settled,
     .promoted_local_procedures = .keyed,
     .promoted_local_procedure_patterns = .keyed,
-    .top_level_def_owners_published = .keyed,
     .contextual_local_dispatch_fn_vars = .keyed,
     .contextual_local_dispatch_exprs = .keyed,
     .executable_root_defs = .input,
@@ -3149,8 +3149,7 @@ fn recordSchemeRequirementCandidate(
     if (self.constraintIsLiteralConversion(constraint)) return;
     std.debug.assert((source == .creation) == (structural_origin == null));
     const owner_root = self.prospectiveSchemeOwner(self.active_scheme_root) orelse return;
-    const candidate_idx = std.math.cast(u32, self.scheme_requirement_candidates.items.len) orelse return error.OutOfMemory;
-    if (candidate_idx == std.math.maxInt(u32)) return error.OutOfMemory;
+    const candidate_idx = try collections.nextBiasedId(self.scheme_requirement_candidates.items.len);
     try self.scheme_requirement_candidates.ensureUnusedCapacity(self.gpa, 1);
     const owner_entry = try self.scheme_requirement_candidate_chains_by_owner.getOrPut(self.gpa, owner_root);
     const prev_of_owner: collections.OptionalU32 = if (owner_entry.found_existing) blk: {
@@ -5362,6 +5361,11 @@ fn appendLocalProcedureDispatchRefs(self: *Self, dispatch_refs: *std.ArrayListUn
     }
 }
 
+/// The local type context depth of a type with no variable but platform
+/// abstract types: no shallower than any reference's enclosing frames, so it
+/// makes no candidate contextual.
+const no_context_depth: u32 = std.math.maxInt(u32);
+
 /// Settle what checking reads from body-local type contexts once every body
 /// is checked (design.md "Body-Local Type Context"): each recorded reference
 /// to a type with a context makes the candidates enclosing it from the
@@ -5381,7 +5385,7 @@ fn finalizeLocalTypeContexts(self: *Self) Allocator.Error!void {
         // A platform abstract type is a variable of the module, not of an
         // enclosing function: it makes no candidate contextual and no
         // binding owns it, so a type can never leave its scope.
-        var depth: u32 = std.math.maxInt(u32);
+        var depth: u32 = no_context_depth;
         for (context) |rigid| {
             if (self.isPlatformAbstractTypeBinder(rigid)) continue;
             depth = @min(depth, self.rigidVarCandidateDepth(rigid));
@@ -6646,8 +6650,7 @@ const LocalFunctionCaptures = struct {
             const referenced = self.checker.localLookupPattern(expr) orelse continue;
             if (!self.isOuterRef(&self.scope, referenced)) continue;
             if (owner) |function| {
-                const link = std.math.cast(u32, self.ref_links.items.len) orelse return error.OutOfMemory;
-                if (link == std.math.maxInt(u32)) return error.OutOfMemory;
+                const link = try collections.nextBiasedId(self.ref_links.items.len);
                 try self.ref_links.append(gpa, .{ .referenced = referenced, .next = .none });
                 const chain = self.refs.getPtr(function).?;
                 if (chain.last.get()) |last| {
@@ -16073,7 +16076,6 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.recordCheckingOutputs();
     var checking_scope = try checking_interface.makeScope(self.gpa, self.cir, self.builtin_ctx.builtin_module, self.imported_modules, self.owner_modules);
     defer checking_scope.deinit();
-    try self.publishTopLevelDefOwners();
     try checking_interface.publish(self.cir, &checking_scope, defReference);
 
     self.debugAssertNominalDeclTableComplete();
@@ -16141,11 +16143,10 @@ fn recordErroneousNodes(self: *Self) Allocator.Error!void {
     var errors = ErroneousTypeMemo.init(self);
     defer errors.deinit();
     const store = &self.cir.store;
-    var top_level_def_patterns = collections.DenseMap(CIR.Pattern.Idx, CIR.Def.Idx).init(self.gpa);
-    defer top_level_def_patterns.deinit();
-    for (store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
-        try top_level_def_patterns.put(store.getDef(def_idx).pattern, def_idx);
-    }
+    // The owner table and the walk below both ascend by node, so one cursor
+    // finds each node's owner.
+    const owners = self.cir.top_level_def_owners.items();
+    var owner_cursor: usize = 0;
     var erroneous: std.ArrayList(u32) = .empty;
     defer erroneous.deinit(self.gpa);
     var raw_node: u32 = CIR.Node.first_idx;
@@ -16158,7 +16159,11 @@ fn recordErroneousNodes(self: *Self) Allocator.Error!void {
         else if (isPatternNodeTag(tag)) blk: {
             const pattern_idx: CIR.Pattern.Idx = @fromBackingInt(raw_node);
             if (store.getPattern(pattern_idx) == .runtime_error) break :blk true;
-            const type_var = if (top_level_def_patterns.get(pattern_idx)) |def_idx| ModuleEnv.varFrom(def_idx) else ModuleEnv.varFrom(pattern_idx);
+            while (owner_cursor < owners.len and owners[owner_cursor].node < raw_node) owner_cursor += 1;
+            // A def's own pattern is checked through the def's variable.
+            const def_pattern_owner: ?CIR.Def.Idx = if (owner_cursor < owners.len and owners[owner_cursor].node == raw_node and
+                store.getDef(owners[owner_cursor].def).pattern == pattern_idx) owners[owner_cursor].def else null;
+            const type_var = if (def_pattern_owner) |def_idx| ModuleEnv.varFrom(def_idx) else ModuleEnv.varFrom(pattern_idx);
             break :blk try errors.contains(type_var);
         } else if (isStatementNodeTag(tag))
             store.getStatement(@fromBackingInt(raw_node)) == .s_runtime_error
@@ -17997,7 +18002,7 @@ const StoredConstScan = struct {
             .callee => |callee| {
                 if (self.hoistedPromotedLocalProcedureForExpr(callee.module, callee.callee)) |lambda| {
                     try items.add(.{ .local_procedure = lambda });
-                } else if (try self.hoistedCallableDefForExpr(callee.module, callee.callee)) |callable_def| {
+                } else if (self.hoistedCallableDefForExpr(callee.module, callee.callee)) |callable_def| {
                     try items.add(.{ .callable_def = callable_def });
                 } else return .{ .value = true };
                 return .{ .group = .all };
@@ -18264,12 +18269,12 @@ fn hoistedCallableDefForExpr(
     self: *Self,
     module: *const ModuleEnv,
     expr: CIR.Expr.Idx,
-) Allocator.Error!?HoistedCallableDef {
+) ?HoistedCallableDef {
     return switch (module.store.getExpr(expr)) {
-        .e_lookup_local => |lookup| self.hoistedTopLevelDefForNode(module, ModuleEnv.nodeIdxFrom(lookup.pattern_idx)),
+        .e_lookup_local => |lookup| hoistedTopLevelDefForNode(module, ModuleEnv.nodeIdxFrom(lookup.pattern_idx)),
         .e_lookup_external => |external| blk: {
             const imported_module = self.hoistedImportedModule(module, external.module_idx) orelse break :blk null;
-            break :blk self.hoistedTopLevelDefForNode(imported_module, @fromBackingInt(@intCast(external.target_node_idx)));
+            break :blk hoistedTopLevelDefForNode(imported_module, @fromBackingInt(@intCast(external.target_node_idx)));
         },
         .e_lookup_associated_resolved => |resolved| blk: {
             const target_module = self.moduleEnvForIdentity(module, resolved.module_identity);
@@ -18345,25 +18350,9 @@ fn hoistedImportedModule(
     return self.imported_modules[module_idx];
 }
 
-fn hoistedTopLevelDefForNode(
-    self: *Self,
-    module: *const ModuleEnv,
-    node: CIR.Node.Idx,
-) Allocator.Error!?HoistedCallableDef {
-    if (module == self.cir) {
-        try self.publishTopLevelDefOwners();
-    } else {
-        // An imported module recorded its table when it was checked.
-        std.debug.assert(module.checking_dependency.published);
-    }
+fn hoistedTopLevelDefForNode(module: *const ModuleEnv, node: CIR.Node.Idx) ?HoistedCallableDef {
     const def = module.topLevelDefOwner(node) orelse return null;
     return .{ .module = module, .def = def };
-}
-
-fn publishTopLevelDefOwners(self: *Self) Allocator.Error!void {
-    if (self.top_level_def_owners_published) return;
-    try top_level_def_owners.publish(self.gpa, self.cir);
-    self.top_level_def_owners_published = true;
 }
 
 fn exprHasDedicatedLiteralConversionRoot(self: *Self, expr: CIR.Expr.Idx) bool {
@@ -22018,6 +22007,20 @@ fn instantiatePlatformRequirementUses(self: *Self, env: *Env) Allocator.Error!vo
         }
         self.gpa.free(solution.identity_vars);
         solution.identity_vars = identities;
+        // An annotated scheme definition's requirement was related to one
+        // instance of its scheme (`finishDef`). This invocation is another
+        // instance, so the requirement constrains it the same way; the
+        // relation already held for an alpha-equivalent instance.
+        const required = self.platform_required_defs.get(solution.def).?;
+        if (required.relates_scheme_instances) {
+            const relation = try self.unifyInContext(
+                solution.solved_var,
+                instance,
+                env,
+                .{ .platform_requirement = .{ .required_ident = required.required_ident, .platform_region = required.platform_region } },
+            );
+            std.debug.assert(relation.isEstablished());
+        }
         solution.solved_var = instance;
     }
 }
@@ -22625,12 +22628,39 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
             // The platform uses the definition as a caller does, so it may
             // relate the definition's rows at a wider union.
             try self.releaseBoundedAnnotationRows(annotation_idx);
-            _ = try self.unifyInContext(
+            // A singleton definition's body boundary has already generalized
+            // it, so the requirement relates to an instance of its scheme,
+            // exactly as a caller's use does. The requirement holds the
+            // for-clause binders, outermost-rank variables shared by every
+            // requirement; relating them to the generalized graph itself
+            // would merge them into the scheme's quantified classes, and
+            // every definition the binders reach afterwards would share
+            // generalized variables without being a scheme.
+            const definition_var = ModuleEnv.varFrom(def.expr);
+            const previous_source = self.instantiation_source_expr;
+            self.instantiation_source_expr = def.expr;
+            const definition_use = try self.instantiateBindingVar(
+                definition_var,
+                env,
+                .use_root_instantiated,
+                .none,
+            );
+            self.instantiation_source_expr = previous_source;
+            const relation = try self.unifyInContext(
                 required.expected_var,
-                ModuleEnv.varFrom(def.expr),
+                definition_use,
                 env,
                 .{ .platform_requirement = .{ .required_ident = required.required_ident, .platform_region = required.platform_region } },
             );
+            // A definition the requirement rejects does not satisfy it, so
+            // the platform's invocation has no definition to call: the
+            // binding becomes a runtime error, as a rejected annotation's
+            // does.
+            if (!relation.isEstablished()) {
+                try self.markErroneousValueExpr(def.expr);
+            } else if (definition_use != definition_var) {
+                self.platform_required_defs.getPtr(def_idx).?.relates_scheme_instances = true;
+            }
         }
     }
     // A rejected annotation retires its binding: the right-hand side, checked
@@ -39556,7 +39586,7 @@ fn traceHostedErrorOrigin(self: *Self, condition: CIR.Expr.Idx, called: bool, me
                         }
                     }
                 }
-                const target = (try self.hoistedCallableDefForExpr(self.cir, position.expr)) orelse break :walk null;
+                const target = self.hoistedCallableDefForExpr(self.cir, position.expr) orelse break :walk null;
                 if (target.module != self.cir) {
                     const origin = target.module.diagnosticHostedReturn(target.def) orelse break :walk null;
                     if (!position.called) break :walk null;
@@ -41705,7 +41735,7 @@ test "issue 11214 - hoisted associated lookup preserves ownership when both indi
     // Both stores have the same structure, so the lookup's indices name a
     // real def in Root as well, without any bounds failure. Assert the target
     // owner as well as the def.
-    const target = (try root.checker.hoistedCallableDefForExpr(module, callee)).?;
+    const target = root.checker.hoistedCallableDefForExpr(module, callee).?;
     try std.testing.expectEqual(@as(*const ModuleEnv, module), target.module);
     const imported_def = module.store.getDef(target.def);
     const root_def = root.module_env.store.getDef(target.def);
@@ -52890,7 +52920,7 @@ fn localValueMethodBinding(self: *Self, method_lookup: StaticDispatchMethodBindi
                 expr = (try self.localDeclExprForPattern(lookup.pattern_idx)) orelse return true;
             },
             .e_lookup_external, .e_lookup_associated_resolved => {
-                const def = (try self.hoistedCallableDefForExpr(self.cir, expr)) orelse return true;
+                const def = self.hoistedCallableDefForExpr(self.cir, expr) orelse return true;
                 const def_pattern = def.module.store.getDef(def.def).pattern;
                 const def_types: *const types_mod.Store = if (def.module == self.cir) self.types else &def.module.types;
                 return def_types.resolveThroughAliases(ModuleEnv.varFrom(def_pattern)).desc.content.unwrapFunc() == null;
@@ -54336,8 +54366,7 @@ const UsePositions = struct {
     }
 
     fn append(self: *UsePositions, gpa: Allocator, use_idx: u32, position: usize) Allocator.Error!void {
-        const link = std.math.cast(u32, self.links.items.len) orelse return error.OutOfMemory;
-        if (link == std.math.maxInt(u32)) return error.OutOfMemory;
+        const link = try collections.nextBiasedId(self.links.items.len);
         try self.links.ensureUnusedCapacity(gpa, 1);
         const chain = try self.chains.getOrPut(gpa, use_idx);
         if (chain.found_existing) {

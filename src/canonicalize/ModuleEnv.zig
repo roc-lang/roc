@@ -1246,8 +1246,8 @@ invoking_defs: collections.SafeList(CIR.Def.Idx),
 /// checking settles its body. Importers consume this instead of scanning CIR.
 callable_checking_facts: CallableCheckingFact.SafeList,
 /// The owning top-level value definition of each node a top-level value
-/// definition owns, in ascending node order. Checking produces it; importers
-/// read it.
+/// definition owns, in ascending node order. Canonicalization produces it;
+/// checking and importers read it.
 top_level_def_owners: TopLevelDefOwner.SafeList,
 checking_dependency: CheckingDependency,
 
@@ -1864,14 +1864,65 @@ pub fn defInvokes(self: *const Self, def_idx: CIR.Def.Idx) bool {
     return false;
 }
 
-/// Replace the checked record of which top-level value definition owns each
-/// node. `owners` must be in strictly ascending node order.
-pub fn setTopLevelDefOwners(self: *Self, owners: []const TopLevelDefOwner) std.mem.Allocator.Error!void {
-    var list = try TopLevelDefOwner.SafeList.initCapacity(self.gpa, owners.len);
-    errdefer list.deinit(self.gpa);
-    _ = try list.appendSlice(self.gpa, owners);
-    self.top_level_def_owners.deinit(self.gpa);
-    self.top_level_def_owners = list;
+/// Record that `def` owns `node`. Canonicalization records the def node, the
+/// def's expression and every node of the def's pattern for each top-level
+/// value def, in `global_value_defs` order, then calls
+/// `finishTopLevelDefOwners`.
+pub fn addTopLevelDefOwner(self: *Self, def: CIR.Def.Idx, node: CIR.Node.Idx) std.mem.Allocator.Error!void {
+    _ = try self.top_level_def_owners.append(self.gpa, .{ .node = @backingInt(node), .def = def });
+}
+
+/// Put the recorded owners in ascending node order, keeping only the first
+/// recorded owner of each node, so the first def in `global_value_defs` order
+/// owns a node that defs share.
+pub fn finishTopLevelDefOwners(self: *Self) void {
+    const owners = self.top_level_def_owners.items();
+    // A stable sort keeps each node's entries in recording order, so the
+    // first entry of a run is its first owner.
+    std.mem.sort(TopLevelDefOwner, owners, {}, struct {
+        fn lessThan(_: void, a: TopLevelDefOwner, b: TopLevelDefOwner) bool {
+            return a.node < b.node;
+        }
+    }.lessThan);
+    var kept: usize = 0;
+    for (owners) |owner| {
+        if (kept > 0 and owners[kept - 1].node == owner.node) continue;
+        owners[kept] = owner;
+        kept += 1;
+    }
+    self.top_level_def_owners.shrinkRetainingCapacity(kept);
+}
+
+/// Replace the expression of `def_idx` with `expr`, a node created after
+/// canonicalization. When `def_idx` is a top-level value def, `expr` takes the
+/// place of the old expression in the owner table.
+pub fn setTopLevelDefExpr(self: *Self, def_idx: CIR.Def.Idx, expr: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+    const old_node: u32 = @backingInt(nodeIdxFrom(self.store.getDef(def_idx).expr));
+    const new_node: u32 = @backingInt(nodeIdxFrom(expr));
+    try self.top_level_def_owners.ensureUnusedCapacity(self.gpa, 1);
+    self.store.setDefExpr(def_idx, expr);
+
+    const old_position = topLevelDefOwnerLowerBound(self.top_level_def_owners.items(), old_node);
+    const owners = self.top_level_def_owners.items();
+    if (old_position == owners.len or owners[old_position].node != old_node or owners[old_position].def != def_idx) {
+        // A def that does not own its own expression is not a top-level value def.
+        std.debug.assert(self.topLevelDefOwner(nodeIdxFrom(def_idx)) != def_idx);
+        return;
+    }
+    _ = self.top_level_def_owners.orderedRemove(old_position);
+    const new_position = topLevelDefOwnerLowerBound(self.top_level_def_owners.items(), new_node);
+    std.debug.assert(new_position == self.top_level_def_owners.items().len or self.top_level_def_owners.items()[new_position].node != new_node);
+    self.top_level_def_owners.insert(self.gpa, new_position, .{ .node = new_node, .def = def_idx }) catch unreachable; // capacity reserved above
+}
+
+fn topLevelDefOwnerLowerBound(owners: []const TopLevelDefOwner, node: u32) usize {
+    var low: usize = 0;
+    var high: usize = owners.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (owners[mid].node < node) low = mid + 1 else high = mid;
+    }
+    return low;
 }
 
 /// The top-level value definition that owns `node`, if one does.
