@@ -1826,6 +1826,16 @@ fn setupTestPlatforms(
         .dest_paths = &.{"test/wasm/wasm_import_conflict/platform/targets/wasm32/host.wasm"},
     }));
 
+    // A wasm host whose export reaches one of its platform's two provides,
+    // and which defines nothing else.
+    prepared_hosts_step.dependOn(buildAndCopyWasmHostObject(b, wasm_target, optimize, strip, omit_frame_pointer, .{
+        .name = "unreached_provide_host",
+        .root_source_file = "test/wasm/issue_13195_unreached_provide/wasm_host.zig",
+        .imports = &.{},
+        .bundle_compiler_rt = false,
+        .dest_paths = &.{"test/wasm/issue_13195_unreached_provide/platform/targets/wasm32/host.wasm"},
+    }));
+
     for (glibc_cross_targets) |cross_target| {
         if (generateGlibcStub(b, b.resolveTargetQuery(cross_target.query), cross_target.name)) |stubs| {
             prepared_hosts_step.dependOn(&stubs.step);

@@ -33060,8 +33060,11 @@ symbol the link defines (`__stack_pointer`, `__memory_base` and
 to the host's definitions, else to the embedder; a host import resolves only
 to the names the app gives the host (its provides, exported data and the
 WebAssembly 1.0 stack accessors), then to the link's symbols, else to the
-embedder. An atom walk from the platform's exports, the stack exports, the
-host's retained atoms and the provides decides what is placed. Index spaces
+embedder. An atom walk from the platform's exports, the stack exports and
+the host's retained atoms decides what is placed: a provide nothing among
+them reaches is left out with everything only it reaches, the hosted imports
+it calls included, so a module imports from its embedder only what placed
+code names. Index spaces
 follow placement order (host, support, units by content digest; within an
 image, its order), memory follows `linker.wasmStackLayout` with initialized
 segments first and zero-filled ones after (emitted as zeros only when memory
