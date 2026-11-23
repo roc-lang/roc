@@ -15119,14 +15119,14 @@ descriptor slots, none of which hold that context, so such a method is not an
 inspect override. A top-level method bound to a computed callable (see
 "Procedure Aliases") has no such context: its stored value is restored
 wherever inspection calls it, so it is an override when its instance
-qualifies. `Wrap(a) -> Str` qualifies, and so do an unannotated method
+qualifies. `Wrap(a) -> Str` qualifies, and so do an unconstrained `a -> Str`, whose
+instance at `T -> Str` takes the owner, an unannotated method
 whose argument is a record its owner's backing matches (`|c| "N(${c.count.to_str()})"`
 for an owner backed by `{ count : U64 }`) and an unannotated method whose
 result is a string literal: its declared result is a variable constrained by
 `from_quote` or `from_interpolation`, which `Str` satisfies. `Wrap(I64) -> Str`,
 `Pair(a, a) -> Str`,
-`Wrap(a) -> Str where [a.to_inspect : a -> Str]`, an unconstrained `a -> Str`,
-extra arguments, effectful functions, results `Str` cannot be (a numeral, `I64`,
+`Wrap(a) -> Str where [a.to_inspect : a -> Str]`, extra arguments, effectful functions, results `Str` cannot be (a numeral, `I64`,
 a rigid variable), and results that are `Str` only when one of `T`'s variables
 is (interpolating a payload of type `a`) do not. Inspection ignores an
 ineligible method and renders the value's default form; per the method-naming
@@ -15139,8 +15139,11 @@ type variables and its result with `Str`, and satisfies every requirement the
 copy carries exactly as the dispatch pass does, repeating as satisfying one
 binds further variables—a numeral by a builtin number type that fits it, a
 quote or interpolation conversion by `Str` (an interpolation's parts by
-becoming `Str`), any other requirement by its receiver's method. The method's
-own type is never changed. When the instance exists, is pure, and still takes
+becoming `Str`), any other requirement by its receiver's method. A method
+whose scheme is generalized keeps its own type; a method whose type is not
+generalized (a value computed by a call) is its own instance, so when it
+qualifies its argument and result become the owner and `Str`, and when it
+does not its type is left as it was. When the instance exists, is pure, and still takes
 the owner over distinct type variables that carry no requirements, checking
 records it as inspection's use of the method
 (`ModuleEnv.inspect_override_instances`) with its scheme-use record,

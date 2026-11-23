@@ -45685,9 +45685,11 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
 /// The method is an override exactly when such an instance exists: its
 /// scheme, annotated or inferred, however general, can be used at `T -> Str`
 /// with every requirement the instance carries satisfied. Publication
-/// publishes the use's evidence as it does a dispatch target's. The method's
-/// own type is never changed: the instance is a fresh copy, related exactly
-/// as a call site at `T -> Str` relates one.
+/// publishes the use's evidence as it does a dispatch target's. A generalized
+/// method keeps its own type: the instance is a fresh copy, related exactly
+/// as a call site at `T -> Str` relates one. A method whose type is not
+/// generalized is its own instance, so a qualifying one's type becomes the
+/// instance.
 fn recordInspectOverrideInstances(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.cir.method_defs.entries.items()) |entry| {
         if (!entry.key.methodIdent().eql(self.cir.idents.to_inspect)) continue;
@@ -68170,4 +68172,17 @@ test "a dispatch state repeats a row label exactly when the canonical key writer
         const other = try Case.tagRow(store, &.{a}, empty_tags);
         try Case.expectAgreement(checker, receiver, try Case.callable(store, other), false);
     }
+}
+
+test "an unconstrained to_inspect taking any value is an inspect override" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("Insp",
+        \\Foo := [Foo].{
+        \\    to_inspect : a -> Str
+        \\    to_inspect = |_| "foo"
+        \\}
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), test_env.module_env.inspect_override_instances.len());
 }
