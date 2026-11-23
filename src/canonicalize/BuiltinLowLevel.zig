@@ -982,13 +982,7 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
                 } }, base.Region.zero());
 
                 // Now replace the e_anno_only expression with the e_lambda
-                // Def structure is stored in def_data list
-                const def_node_idx = @as(@TypeOf(env.store.nodes).Idx, @fromBackingInt(@intCast(@backingInt(def_idx))));
-                const def_node = env.store.nodes.get(def_node_idx);
-                const def_data_idx = def_node.getPayload().def.def_data_idx;
-
-                // Update the expr field in def_data
-                env.store.def_data.items()[def_data_idx].expr = @backingInt(expr_idx);
+                try env.setTopLevelDefExpr(def_idx, expr_idx);
 
                 // Track this replaced def index
                 try new_def_indices.append(gpa, def_idx);
