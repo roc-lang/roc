@@ -190,6 +190,197 @@ pub const Owned = struct {
     }
 };
 
+/// The value facts the tokenizer records for a number token while it scans
+/// the token's digits, so no later stage reads the token's text again.
+///
+/// When `flags.exact` is set the value is `±significand * 10^exponent10`
+/// written exactly as the token spells it: `significand` holds every
+/// mantissa digit from the first nonzero one (trailing zeros included, the
+/// decimal point removed), and `exponent10` is the written exponent minus the
+/// count of digits after the decimal point. A base-prefixed integer has
+/// `exponent10 == 0` and its digits' value in `significand`. `parseScanned`
+/// turns such a record into the same facts `parseInto` derives from the
+/// token's text. When `flags.exact` is clear the literal does not fit this
+/// form (too many digits, an exponent too large, or a spelling whose text
+/// `parseInto` reads differently from the tokenizer) and its facts come from
+/// `parseInto`.
+pub const Scanned = struct {
+    significand: u64,
+    exponent10: i32,
+    suffix: DeprecatedSuffix,
+    flags: Flags,
+
+    /// Boolean facts packed into a byte for storage.
+    pub const Flags = packed struct(u8) {
+        exact: bool = true,
+        is_negative: bool = false,
+        had_decimal_point: bool = false,
+        _padding: u5 = 0,
+    };
+
+    /// Most significant decimal digits an exact record holds: every
+    /// 19-digit decimal number fits a u64.
+    pub const max_significant_digits = 19;
+    /// Largest `exponent10` of an exact record, so the integer value
+    /// `significand * 10^exponent10` fits a u128.
+    pub const max_exponent10 = 19;
+    /// Largest written exponent magnitude the tokenizer accumulates exactly.
+    pub const max_written_exponent: u32 = 999_999_999;
+
+    /// A record whose value facts come from `parseInto`.
+    pub const inexact: Scanned = .{ .significand = 0, .exponent10 = 0, .suffix = .none, .flags = .{ .exact = false } };
+};
+
+/// The base-256 digits `parseScanned` produces: `before_len` digits before
+/// the decimal point, then `after_len` digits after it, most significant first.
+pub const ScannedDigits = struct {
+    bytes: [24]u8 = undefined,
+    before_len: u8 = 0,
+    after_len: u8 = 0,
+
+    /// The digits before the decimal point.
+    pub fn before(self: *const ScannedDigits) []const u8 {
+        return self.bytes[0..self.before_len];
+    }
+
+    /// The digits after the decimal point.
+    pub fn after(self: *const ScannedDigits) []const u8 {
+        return self.bytes[self.before_len..][0..self.after_len];
+    }
+
+    /// Both digit runs, before then after.
+    pub fn all(self: *const ScannedDigits) []const u8 {
+        return self.bytes[0 .. @as(usize, self.before_len) + self.after_len];
+    }
+
+    fn appendMagnitude(self: *ScannedDigits, magnitude: u128) u8 {
+        const start = @as(usize, self.before_len) + self.after_len;
+        const len: u8 = @intCast((@bitSizeOf(u128) - @clz(magnitude) + 7) / 8);
+        var index: u8 = 0;
+        while (index < len) : (index += 1) {
+            const shift: u7 = @intCast((len - 1 - index) * 8);
+            self.bytes[start + index] = @truncate(magnitude >> shift);
+        }
+        return len;
+    }
+};
+
+const pow10_u64 = blk: {
+    var table: [20]u64 = undefined;
+    table[0] = 1;
+    for (1..table.len) |index| table[index] = table[index - 1] * 10;
+    break :blk table;
+};
+
+/// 10^0 through 10^18, the powers `compactScannedFrac` scales by.
+const pow10_u128 = blk: {
+    var table: [19]u128 = undefined;
+    table[0] = 1;
+    for (1..table.len) |index| table[index] = table[index - 1] * 10;
+    break :blk table;
+};
+
+/// Derive a literal's numeric facts from the tokenizer's exact record, with
+/// its base-256 digits written to `digits`. The result equals what
+/// `parseInto` derives from the same token's suffix-free text.
+pub fn parseScanned(scanned: Scanned, kind: Kind, digits: *ScannedDigits) Parsed {
+    std.debug.assert(scanned.flags.exact);
+    const is_negative = scanned.flags.is_negative;
+    digits.* = .{};
+    switch (kind) {
+        .int => {
+            std.debug.assert(scanned.exponent10 == 0 and !scanned.flags.had_decimal_point);
+            const magnitude = scanned.significand;
+            digits.before_len = digits.appendMagnitude(magnitude);
+            const value: i128 = if (is_negative) -@as(i128, magnitude) else magnitude;
+            return .{
+                .kind = .int,
+                .compact = .{ .int = .{ .bytes = @bitCast(value), .kind = .i128 } },
+                .before_len = digits.before_len,
+                .after_len = 0,
+                .after_decimal_digit_count = 0,
+                .is_negative = is_negative,
+                .had_decimal_point = false,
+                .is_materialized = true,
+            };
+        },
+        .frac => {
+            const significand = scanned.significand;
+            var before: u128 = undefined;
+            var after: u64 = undefined;
+            var scale: u64 = undefined;
+            if (scanned.exponent10 >= 0) {
+                std.debug.assert(scanned.exponent10 <= Scanned.max_exponent10);
+                before = @as(u128, significand) * pow10_u64[@intCast(scanned.exponent10)];
+                after = 0;
+                scale = 0;
+            } else {
+                scale = @intCast(-@as(i64, scanned.exponent10));
+                if (scale >= pow10_u64.len) {
+                    before = 0;
+                    after = significand;
+                } else {
+                    before = significand / pow10_u64[@intCast(scale)];
+                    after = significand % pow10_u64[@intCast(scale)];
+                }
+            }
+            digits.before_len = digits.appendMagnitude(before);
+            digits.after_len = digits.appendMagnitude(after);
+            return .{
+                .kind = .frac,
+                .compact = compactScannedFrac(before, after, scale, is_negative),
+                .before_len = digits.before_len,
+                .after_len = digits.after_len,
+                .after_decimal_digit_count = scale,
+                .is_negative = is_negative,
+                .had_decimal_point = scanned.flags.had_decimal_point,
+                .is_materialized = true,
+            };
+        },
+    }
+}
+
+/// `compactFrac` for a fractional value given as integers: `before` and the
+/// `scale`-digit fraction `after`.
+fn compactScannedFrac(before: u128, after: u64, scale: u64, is_negative: bool) Compact {
+    var trimmed_after = after;
+    var trimmed_scale = scale;
+    if (trimmed_after == 0) {
+        trimmed_scale = 0;
+    } else {
+        while (trimmed_after % 10 == 0) {
+            trimmed_after /= 10;
+            trimmed_scale -= 1;
+        }
+    }
+    if (trimmed_scale > 18) return .exact;
+    const shift: u32 = @intCast(trimmed_scale);
+    const scaled = @mulWithOverflow(before, pow10_u128[shift]);
+    if (scaled[1] != 0) return .exact;
+    const combined = @addWithOverflow(scaled[0], trimmed_after);
+    if (combined[1] != 0) return .exact;
+    const magnitude = combined[0];
+
+    if (magnitude <= @as(u128, std.math.maxInt(i16)) + @intFromBool(is_negative)) {
+        const signed: i32 = if (is_negative) -@as(i32, @intCast(magnitude)) else @intCast(magnitude);
+        return .{ .small_dec = .{
+            .numerator = @intCast(signed),
+            .denominator_power_of_ten = @intCast(trimmed_scale),
+        } };
+    }
+
+    const dec_scaled = @mulWithOverflow(magnitude, pow10_u128[18 - shift]);
+    if (dec_scaled[1] != 0) return .exact;
+    const max_positive: u128 = @intCast(std.math.maxInt(i128));
+    const limit = if (is_negative) max_positive + 1 else max_positive;
+    if (dec_scaled[0] > limit) return .exact;
+    if (is_negative) {
+        if (dec_scaled[0] == max_positive + 1) return .{ .dec = .fromI128(std.math.minInt(i128)) };
+        return .{ .dec = .fromI128(-@as(i128, @intCast(dec_scaled[0]))) };
+    }
+    return .{ .dec = .fromI128(@intCast(dec_scaled[0])) };
+}
+
 /// A numeric token's text split from its deprecated suffix, if any.
 pub const Split = struct {
     number_text: []const u8,
@@ -382,6 +573,12 @@ pub const digit_separator = '_';
 pub inline fn isDigitInRadix(byte: u8, radix: u8) bool {
     const value = digitValue(byte) orelse return false;
     return value < radix;
+}
+
+/// The value of `byte` as a digit of `radix`, or null when it is not one.
+pub inline fn digitInRadix(byte: u8, comptime radix: u8) ?u8 {
+    const value = digitValue(byte) orelse return null;
+    return if (value < radix) value else null;
 }
 
 /// Whether `byte` opens the exponent of a fractional literal.

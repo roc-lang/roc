@@ -3735,6 +3735,14 @@ use recursive grammar functions, and it does not keep source substrings as an
 implicit parsing cursor. Source text may be consulted only through token
 metadata, for diagnostics, literal decoding, and identifier interning.
 
+Tokenization decodes each number token's value while it scans the digits: the
+token carries a record (`NumericLiteral.Scanned`) holding up to 19 significant
+digits as an integer, a decimal exponent, the sign and the deprecated suffix.
+When that record is exact the parser derives the literal's facts from it
+alone; a literal outside its form (more digits, a larger exponent, or a
+spelling the text decoder reads differently) is marked inexact by the
+tokenizer and decoded from its text. Both derivations produce identical facts.
+
 ### Redundant explicit returns
 
 Parsing records which explicit returns occupy function result positions. Each

@@ -514,19 +514,14 @@ pub const ForLoopDispatchPlan = extern struct {
 ///
 /// The parser converts numeric text to base-256 byte lists. Canonicalization
 /// copies those bytes here so later stages can construct `Num.Numeral` values
-/// for custom `from_numeral` calls without parsing source text.
+/// for custom `from_numeral` calls without parsing source text. The node a
+/// literal belongs to is recorded by `NumeralNodeIndex`, not here.
 pub const NumeralLiteral = extern struct {
-    node_idx: u32,
     digits_start: u32,
     before_len: u32,
     after_len: u32,
-    after_decimal_digit_count: u64,
     flags: u32,
-    /// The bytes the 8-byte alignment of `after_decimal_digit_count` adds after
-    /// `flags`. Declared rather than implicit so every byte this struct persists
-    /// has a defined value: the checked cache writes its representation verbatim,
-    /// and an implicit gap would write whatever happened to be in that memory.
-    _reserved: u32 = 0,
+    after_decimal_digit_count: u64,
 
     pub const negative_flag: u32 = 1;
     pub const fractional_flag: u32 = 2;
@@ -558,6 +553,88 @@ pub const NumeralLiteral = extern struct {
         // declaration points at this file when a field is added or reordered.
         collections.serde_validation.assertFullyDefined(@This(), "ModuleEnv.NumeralLiteral");
     }
+};
+
+/// Which source nodes have a `NumeralLiteral`, and where each one's row is:
+/// one bit per node in `node_bits`, and in `word_ranks` the count of rows for
+/// the nodes below each 64-node word. A node's row is that count plus the set
+/// bits below it in its word, so a lookup takes constant time. Rows are
+/// recorded in increasing node order.
+pub const NumeralNodeIndex = struct {
+    node_bits: collections.SafeList(u64),
+    word_ranks: collections.SafeList(u32),
+
+    /// An index with no nodes.
+    pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!NumeralNodeIndex {
+        var node_bits = try collections.SafeList(u64).initCapacity(gpa, 4);
+        errdefer node_bits.deinit(gpa);
+        return .{
+            .node_bits = node_bits,
+            .word_ranks = try collections.SafeList(u32).initCapacity(gpa, 4),
+        };
+    }
+
+    /// Free the index.
+    pub fn deinit(self: *NumeralNodeIndex, gpa: std.mem.Allocator) void {
+        self.node_bits.deinit(gpa);
+        self.word_ranks.deinit(gpa);
+    }
+
+    /// Record that `raw_node` has row `row_index`, the row after every row
+    /// recorded so far. Nodes arrive in increasing order.
+    pub fn append(self: *NumeralNodeIndex, gpa: std.mem.Allocator, raw_node: u32, row_index: u32) std.mem.Allocator.Error!void {
+        const word = raw_node / 64;
+        std.debug.assert(self.lastNode() == null or self.lastNode().? < raw_node);
+        while (self.node_bits.len() <= word) {
+            _ = try self.word_ranks.append(gpa, row_index);
+            _ = self.node_bits.append(gpa, 0) catch |err| {
+                _ = self.word_ranks.pop();
+                return err;
+            };
+        }
+        self.node_bits.items()[word] |= @as(u64, 1) << @intCast(raw_node % 64);
+    }
+
+    /// The row of `raw_node`, or null when it has none.
+    pub fn row(self: *const NumeralNodeIndex, raw_node: u32) ?u32 {
+        const word = raw_node / 64;
+        const words = self.node_bits.items();
+        if (word >= words.len) return null;
+        const bits = words[word];
+        const bit = @as(u64, 1) << @intCast(raw_node % 64);
+        if (bits & bit == 0) return null;
+        return self.word_ranks.items()[word] + @popCount(bits & (bit - 1));
+    }
+
+    fn lastNode(self: *const NumeralNodeIndex) ?u32 {
+        const words = self.node_bits.items();
+        var word = words.len;
+        while (word > 0) {
+            word -= 1;
+            if (words[word] != 0) return @intCast(word * 64 + 63 - @clz(words[word]));
+        }
+        return null;
+    }
+
+    /// The serialized form: the two lists.
+    pub const Serialized = extern struct {
+        node_bits: collections.SafeList(u64).Serialized,
+        word_ranks: collections.SafeList(u32).Serialized,
+
+        /// Serialize `index` into this form.
+        pub fn serialize(self: *@This(), index: *const NumeralNodeIndex, allocator: std.mem.Allocator, writer: *CompactWriter) std.mem.Allocator.Error!void {
+            try self.node_bits.serialize(&index.node_bits, allocator, writer);
+            try self.word_ranks.serialize(&index.word_ranks, allocator, writer);
+        }
+
+        /// The index this form describes, borrowing the serialized buffer.
+        pub fn deserializeInto(self: *const @This(), base_addr: usize) NumeralNodeIndex {
+            return .{
+                .node_bits = self.node_bits.deserializeInto(base_addr),
+                .word_ranks = self.word_ranks.deserializeInto(base_addr),
+            };
+        }
+    };
 };
 
 /// One constrained-scheme use recorded by checking for static-dispatch
@@ -1189,8 +1266,11 @@ provided_low_level_defs: ProvidedLowLevelDef.SafeList,
 for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList,
 /// Base-256 bytes referenced by `numeral_literals`.
 numeral_digit_bytes: collections.SafeList(u8),
-/// Exact numeric literals attached to source expression and pattern nodes.
+/// Exact numeric literals attached to source expression and pattern nodes,
+/// in node order.
 numeral_literals: NumeralLiteral.SafeList,
+/// The row in `numeral_literals` of each node that has one.
+numeral_nodes: NumeralNodeIndex,
 /// Scope-resolved explicit numeric suffix targets attached by canonicalization.
 numeric_suffix_targets: NumericSuffixTarget.SafeList,
 /// Constrained-scheme uses recorded by checking for static-dispatch evidence;
@@ -1646,6 +1726,7 @@ pub fn initWithSourceDigest(
         .for_loop_dispatch_plans = try ForLoopDispatchPlan.SafeList.initCapacity(gpa, 4),
         .numeral_digit_bytes = try collections.SafeList(u8).initCapacity(gpa, 32),
         .numeral_literals = try NumeralLiteral.SafeList.initCapacity(gpa, 8),
+        .numeral_nodes = try NumeralNodeIndex.init(gpa),
         .numeric_suffix_targets = try NumericSuffixTarget.SafeList.initCapacity(gpa, 8),
         .scheme_uses = try SchemeUseRecord.SafeList.initCapacity(gpa, 8),
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
@@ -1692,6 +1773,7 @@ pub fn deinit(self: *Self) void {
     self.for_loop_dispatch_plans.deinit(self.gpa);
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
+    self.numeral_nodes.deinit(self.gpa);
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
@@ -4151,6 +4233,7 @@ pub const Serialized = extern struct {
     for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList.Serialized,
     numeral_digit_bytes: collections.SafeList(u8).Serialized,
     numeral_literals: NumeralLiteral.SafeList.Serialized,
+    numeral_nodes: NumeralNodeIndex.Serialized,
     numeric_suffix_targets: NumericSuffixTarget.SafeList.Serialized,
     scheme_uses: SchemeUseRecord.SafeList.Serialized,
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
@@ -4285,6 +4368,7 @@ pub const Serialized = extern struct {
         try self.for_loop_dispatch_plans.serialize(&env.for_loop_dispatch_plans, allocator, writer);
         try self.numeral_digit_bytes.serialize(&env.numeral_digit_bytes, allocator, writer);
         try self.numeral_literals.serialize(&env.numeral_literals, allocator, writer);
+        try self.numeral_nodes.serialize(&env.numeral_nodes, allocator, writer);
         try self.numeric_suffix_targets.serialize(&env.numeric_suffix_targets, allocator, writer);
         try self.scheme_uses.serialize(&env.scheme_uses, allocator, writer);
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
@@ -4402,6 +4486,7 @@ pub const Serialized = extern struct {
             .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
             .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
+            .numeral_nodes = self.numeral_nodes.deserializeInto(base_addr),
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
@@ -4503,10 +4588,9 @@ pub fn recordForLoopDispatchPlan(
 
 /// Record exact base-256 digits for a numeric source node.
 ///
-/// The table is kept sorted by `node_idx` so lookups are O(log n).
 /// Canonicalization records each literal right after allocating its node, so
-/// appends arrive in increasing node order and the sort costs nothing; an
-/// out-of-order record shifts the tail to keep the order invariant.
+/// records arrive in increasing node order; `numeral_nodes` finds a node's
+/// row in constant time.
 pub fn recordNumeralLiteral(
     self: *Self,
     node_idx: Node.Idx,
@@ -4520,11 +4604,11 @@ pub fn recordNumeralLiteral(
 ) std.mem.Allocator.Error!void {
     const raw_node: u32 = @backingInt(node_idx);
     const digits_start: u32 = @intCast(self.numeral_digit_bytes.len());
+    const row_index: u32 = @intCast(self.numeral_literals.len());
     _ = try self.numeral_digit_bytes.appendSlice(self.gpa, before);
     _ = try self.numeral_digit_bytes.appendSlice(self.gpa, after);
 
     const literal = NumeralLiteral{
-        .node_idx = raw_node,
         .digits_start = digits_start,
         .before_len = @intCast(before.len),
         .after_len = @intCast(after.len),
@@ -4534,12 +4618,17 @@ pub fn recordNumeralLiteral(
             (if (had_decimal_point) NumeralLiteral.decimal_point_flag else 0) |
             (if (is_materialized) NumeralLiteral.materialized_flag else 0),
     };
-    try upsertSortedByNode(NumeralLiteral, &self.numeral_literals, self.gpa, literal);
+    _ = try self.numeral_literals.append(self.gpa, literal);
+    self.numeral_nodes.append(self.gpa, raw_node, row_index) catch |err| {
+        _ = self.numeral_literals.pop();
+        return err;
+    };
 }
 
 /// Return exact base-256 digits for a numeric source node.
 pub fn numeralLiteralForNode(self: *const Self, node_idx: Node.Idx) ?NumeralLiteral {
-    return findSortedByNode(NumeralLiteral, self.numeral_literals.items(), @backingInt(node_idx));
+    const row = self.numeral_nodes.row(@backingInt(node_idx)) orelse return null;
+    return self.numeral_literals.items()[row];
 }
 
 /// First index whose `node_idx` is >= `raw_node` in a node-sorted table.
@@ -5824,6 +5913,24 @@ pub fn getLineStarts(self: *const Self) []const u32 {
     return self.common.getLineStartsAll();
 }
 
+test "NumeralNodeIndex finds each recorded node's row and no other node's" {
+    const gpa = std.testing.allocator;
+    var index = try NumeralNodeIndex.init(gpa);
+    defer index.deinit(gpa);
+    const nodes = [_]u32{ 0, 3, 63, 64, 65, 200, 1000, 1001 };
+    for (nodes, 0..) |node, row_index| try index.append(gpa, node, @intCast(row_index));
+    var expected_row: u32 = 0;
+    var node: u32 = 0;
+    while (node < 1100) : (node += 1) {
+        if (std.mem.findScalar(u32, &nodes, node) != null) {
+            try std.testing.expectEqual(@as(?u32, expected_row), index.row(node));
+            expected_row += 1;
+        } else {
+            try std.testing.expectEqual(@as(?u32, null), index.row(node));
+        }
+    }
+}
+
 test "NumeralLiteral: serialized bytes are a function of the recorded literals" {
     // The numeral pool is copied verbatim into `Builtin.bin` and into every checked
     // module cache entry, so its bytes must depend on the literals alone. Before this
@@ -5842,13 +5949,11 @@ test "NumeralLiteral: serialized bytes are a function of the recorded literals" 
             // the stale bytes in deliberately is what makes this test able to fail.
             for (list.items(), 0..) |*slot, i| {
                 @memset(std.mem.asBytes(slot), poison);
-                slot.node_idx = @intCast(i);
                 slot.digits_start = @intCast(i * 4);
                 slot.before_len = @intCast(i);
                 slot.after_len = @intCast(i + 1);
                 slot.after_decimal_digit_count = i;
                 slot.flags = NumeralLiteral.materialized_flag;
-                slot._reserved = 0;
             }
             return list;
         }
@@ -5890,7 +5995,7 @@ test "NumeralLiteral: serialized bytes are a function of the recorded literals" 
     try std.testing.expectEqual(@as(u64, 5), loaded.len());
     for (0..5) |i| {
         const literal = loaded.get(@fromBackingInt(@intCast(@as(u32, @intCast(i))))).*;
-        try std.testing.expectEqual(@as(u32, @intCast(i)), literal.node_idx);
+        try std.testing.expectEqual(@as(u32, @intCast(i * 4)), literal.digits_start);
         try std.testing.expectEqual(@as(u64, i), literal.after_decimal_digit_count);
         try std.testing.expect(literal.isMaterialized());
     }

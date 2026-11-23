@@ -301,6 +301,8 @@ pub const ModuleType = enum {
             .types => .{
                 .root = "src/types/mod.zig",
                 .deps = &.{ .tracy, .base, .collections },
+                // Numeric literal float conversion uses the vendored Eisel-Lemire.
+                .extra_imports = &.{"vendor_parse_float"},
                 .tests = .{ .unit = .{} },
             },
             .reporting => .{
