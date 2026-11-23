@@ -6609,14 +6609,11 @@ fn runExprStatementKernel(
                 open_syntax.peekPayload(StatementAssociatedStatementState).expr_block_depth == expr_blocks.depth())
             {
                 const state = open_syntax.popStatementPayload(.statement_type_associated_statement, StatementAssociatedStatementState);
-                if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
-                    const stmt = self.store.getStatement(completed);
-                    if (stmt == .expr and self.peek() == .CloseCurly) {
-                        try self.pushDiagnostic(.nominal_associated_cannot_have_final_expression, .{
-                            .start = state.statement_pos,
-                            .end = self.pos,
-                        });
-                    }
+                if (self.store.nodes.field(.tag)[@backingInt(completed)] == .expr) {
+                    try self.pushDiagnostic(.associated_block_cannot_have_expression, .{
+                        .start = state.statement_pos,
+                        .end = self.pos,
+                    });
                 }
                 try self.store.addScratch(AST.Statement, completed);
                 continue :expr_kernel .associated_next;
