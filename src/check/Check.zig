@@ -8985,12 +8985,7 @@ fn unifyEnv(self: *Self) unifier.Env {
         .unify_scratch = &self.unify_scratch,
         .occurs_scratch = &self.occurs_scratch,
         .context_variable_probe = .{ .ctx = self, .contextVariable = probeContextVariable },
-        .deferred_callables = .{
-            .ctx = self,
-            .link = linkDeferredCallableHook,
-            .link_recording = linkDeferredCallableRecordingHook,
-            .link_all = linkAllDeferredCallablesHook,
-        },
+        .deferred_callables = .{ .ctx = self, .link = linkDeferredCallableHook, .link_all = linkAllDeferredCallablesHook },
     };
 }
 
@@ -43818,7 +43813,7 @@ fn askRelate(self: *Self, ask: *Ask, a: Var, b: Var, opts: unifier.Options) Allo
     const saved_fresh_region_var = self.unify_fresh_region_var;
     self.unify_fresh_region_var = b;
     defer self.unify_fresh_region_var = saved_fresh_region_var;
-    const result = try unifier.unifyRecording(&unify_env, a, b, unify_opts);
+    const result = try unifier.unify(&unify_env, a, b, unify_opts);
     if (result == .mismatch and ask.repeated_label_row == null) {
         if (self.unify_scratch.repeatedLabelRow()) |row| {
             if (self.types.predatesAsk(row)) ask.repeated_label_row = .{ .row = row, .actual = b };
@@ -54139,8 +54134,11 @@ fn saveDeferredCallables(
 /// requirement callables a use's instantiation deferred exactly as that
 /// instantiation would have, continuing from what it copied and under its
 /// state, link each placeholder to its callable's copy, and register the
-/// copies as the instantiation would have.
-fn linkUseCallables(self: *Self, comptime mode: types_mod.WriteMode, use_idx: u32) Allocator.Error!void {
+/// copies as the instantiation would have. `linker` is who links it: the
+/// unifier, through its deferred-callable hook, writes the redirect as one of
+/// its own writes (`Store.unifierDangerousSetVarRedirect`), which an open ask
+/// journals.
+fn linkUseCallables(self: *Self, comptime linker: CallableLinker, use_idx: u32) Allocator.Error!void {
     const use = self.use_instances.items[use_idx];
     if (use.deferred_linked) return;
     self.use_instances.items[use_idx].deferred_linked = true;
@@ -54166,7 +54164,10 @@ fn linkUseCallables(self: *Self, comptime mode: types_mod.WriteMode, use_idx: u3
     };
     for (self.use_deferred_callables.items[use.deferred_start..][0..use.deferred_len]) |deferred| {
         const copy = try instantiator.instantiateDeferredCallable(deferred);
-        try self.types.dangerousSetVarRedirectIn(mode, .deferred_requirement_callable, deferred.placeholder, copy);
+        switch (linker) {
+            .unifier => try self.types.unifierDangerousSetVarRedirect(.deferred_requirement_callable, deferred.placeholder, copy),
+            .checker => try self.types.dangerousSetVarRedirect(.deferred_requirement_callable, deferred.placeholder, copy),
+        }
     }
     self.link_new_copies.clearRetainingCapacity();
     var copies = self.link_var_map.iterator();
@@ -54202,7 +54203,7 @@ fn linkUseCallables(self: *Self, comptime mode: types_mod.WriteMode, use_idx: u3
     // Inside a probe or an ask the copies are part of the speculation: a
     // rollback or a discarded ask undoes them and the link with them, and the
     // outermost commit or a kept ask registers them.
-    if (mode == .recording or self.probe_depth != 0 or self.commit_probe_active) {
+    if (self.types.askOpen() or self.probe_depth != 0 or self.commit_probe_active) {
         const copies_start: u32 = @intCast(self.probe_link_copies.items.len);
         try self.probe_link_copies.appendSlice(self.gpa, self.link_new_copies.items);
         try self.probe_links.append(self.gpa, .{
@@ -54320,7 +54321,7 @@ fn linkEntryUses(self: *Self, entry: DeferredConstraintCheck) Allocator.Error!vo
     if (self.uses_with_deferred_callables.items.len == 0) return;
     for (self.types.sliceStaticDispatchConstraints(entry.constraints)) |constraint| {
         const use_idx = self.use_instance_by_fn_var.get(constraint.fn_var) orelse continue;
-        try self.linkUseCallables(.direct, use_idx);
+        try self.linkUseCallables(.checker, use_idx);
     }
 }
 
@@ -54335,7 +54336,7 @@ fn linkDeferredUsesFrom(self: *Self, min_rank: Rank) Allocator.Error!void {
         if (!use.deferred_linked and use.state != .replayed and
             @backingInt(self.use_link_contexts.items[use.link.get().?].rank) >= @backingInt(min_rank))
         {
-            try self.linkUseCallables(.direct, use_idx);
+            try self.linkUseCallables(.checker, use_idx);
         }
         const done = self.use_instances.items[use_idx];
         const in_probe = self.probe_depth != 0 or self.commit_probe_active;
@@ -54353,18 +54354,14 @@ fn linkAllDeferredUses(self: *Self) Allocator.Error!void {
     try self.linkDeferredUsesFrom(.generalized);
 }
 
+/// Who links a use's deferred requirement callables (`linkUseCallables`).
+const CallableLinker = enum { unifier, checker };
+
 fn linkDeferredCallableHook(ctx: *anyopaque, placeholder: Var) Allocator.Error!void {
     const self: *Self = @ptrCast(@alignCast(ctx));
     const use_idx = self.use_instance_by_fn_var.get(placeholder) orelse
         base.invariant("a deferred requirement callable has no use to link it", .{});
-    try self.linkUseCallables(.direct, use_idx);
-}
-
-fn linkDeferredCallableRecordingHook(ctx: *anyopaque, placeholder: Var) Allocator.Error!void {
-    const self: *Self = @ptrCast(@alignCast(ctx));
-    const use_idx = self.use_instance_by_fn_var.get(placeholder) orelse
-        base.invariant("a deferred requirement callable has no use to link it", .{});
-    try self.linkUseCallables(.recording, use_idx);
+    try self.linkUseCallables(.unifier, use_idx);
 }
 
 fn linkAllDeferredCallablesHook(ctx: *anyopaque) Allocator.Error!void {

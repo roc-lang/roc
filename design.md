@@ -4642,8 +4642,8 @@ representative is not required to be a storage root slot. `is_root` on a
 resolved variable means that the queried variable is the checked
 representative, which is the only root notion checker consumers may use.
 
-An ask's recording writes journal storage-parent, structural-rank, and
-root-metadata mutations, and discarding it restores all three byte-for-byte. Serializing the sealed store
+The unifier's writes inside an ask journal storage-parent, structural-rank,
+and root-metadata mutations, and discarding it restores all three byte-for-byte. Serializing the sealed store
 includes both metadata stores, so loading a cached store preserves its checked
 representatives and balanced structure. A declared solver-mutating redirect
 joins whole classes through the same balanced mechanism while explicitly
@@ -4657,9 +4657,8 @@ either top-level operand so the ask's owner can discard the relation.
 Occurrence-directed mismatch poisoning is permanent recovery against the live
 equivalence classes; running it inside an ask would both do work whose
 result must be discarded and make correctness depend on the queried
-occurrence's current representative. The recording unifier requires the
-non-poisoning behavior for every relation it runs, and ordinary poisoning
-unification asserts that no ask is open.
+occurrence's current representative. Poisoning unification asserts that no
+ask is open.
 
 A failed unification is different from a successful class union. Either
 operand can be one checked occurrence already connected to a shared binding: a
@@ -12217,16 +12216,22 @@ probe-then-mutate rewrite requires a declared rule in this document first;
 A site that must relate two types to learn whether they relate, and keep
 the relation only when they do, asks the unifier (`Check.beginAsk`,
 `askRelate`, `askYes`/`askNo`, and `unifyIfRelates` for a site that keeps
-or drops one relation as it stands). The unifier is one body specialized at
-compile time on how it writes the type store (`types.WriteMode`): every
-ordinary relation runs the `.direct` specialization, whose writes record
-nothing, and an ask runs the `.recording` one (`unify.unifyRecording`),
-which journals the old value of every slot, descriptor, root, union rank,
-derived map plan row and tag tail closing row that predates the ask before
-writing it, and compresses no storage path. A recording relation records no
-problem and poisons nothing. While the ask is open the type store's free
-list is set aside, so every class created is appended, and the descriptors
-the relation's merges orphan wait until the ask ends.
+or drops one relation as it stands). There is one unifier, and the type
+store has two families of in-place writes. The unifier's writes
+(`Store.unifierUnion` and the other `unifier*` functions, and the store
+internals they reach) compare the entry's index with the open ask's
+baseline, which is 0 while no ask is open, and when the entry predates the
+ask journal its old value before writing it: every slot, descriptor, root,
+union rank, derived map plan row and tag tail closing row. They compress a
+storage path only when the baseline is 0. Every other write is plain: it
+compares and journals nothing. That only the unifier overwrites an entry
+that predates an open ask is a compiler invariant: debug builds assert that
+a plain write reaches only entries the ask appended, and that a unifier
+write while an ask is open comes from the running unifier
+(`Store.enterUnifier`). A relation inside an ask records no problem and
+poisons nothing. While the ask is open the type store's free list is set
+aside, so every class created is appended, and the descriptors the
+relation's merges orphan wait until the ask ends.
 
 An ask is the unifier alone. What a relation leaves for the checker (fresh
 variables to rank and give regions, deferred dispatch constraints, literals
@@ -12238,13 +12243,13 @@ stand and the orphaned descriptors are freed; discarded, every journaled
 entry is restored, everything appended is dropped, and the free list is put
 back, so the store is as it was; what the unifier's scratch holds about the
 relation's mismatch stays for the site's report, as after a probe. The
-one piece of checker code a recording relation runs is the deferred
-requirement callable link (Deferred requirement callables): its redirect is
-written in the recording specialization, the use it links is recorded, and a
+one piece of checker code the unifier runs is the deferred requirement
+callable link (Deferred requirement callables): its redirect is one of the
+unifier's writes, the use it links is recorded, and a
 discarded ask unlinks it and drops the regions of the copies it made; a kept
 ask registers the copies.
 
-A recording relation that meets a row repeating a label stops there. When
+A relation inside an ask that meets a row repeating a label stops there. When
 that row predates the ask, the ask is discarded and the row is normalized
 (Row Union Normalization), which reports the row's conflict when it has
 one. A site whose ask holds one relation, or that relates first and then
@@ -12265,7 +12270,7 @@ pass.
 
 The invariants that make an ask safe are compiler invariants, asserted in
 debug builds: asks never nest and never open inside a probe; while one is
-open, no direct write and no compressing resolve reaches an entry that
+open, no plain write and no compressing resolve reaches an entry that
 predates it; and a discarded ask leaves every other checker list as long as
 it was when the ask began. The module test "an ask relates random small type
 pairs as a direct relation does, and a discarded ask changes nothing" pins
@@ -15563,7 +15568,8 @@ them. A use is linked when a drain is about to process one of its relations,
 when a unification is about to relate one of its placeholders, before an
 error report snapshots any type, before the rank it was instantiated at is
 generalized, and when module finalization begins. A link inside an ask is
-part of the speculation: its redirect is a recording write, discarding the
+part of the speculation: its redirect is one of the unifier's writes, which
+the ask journals; discarding the
 ask undoes it and its copies and leaves the use unlinked, and keeping the ask
 registers them. Builds with runtime safety check that
 no instantiation copies a placeholder, and that by the end of checking every
