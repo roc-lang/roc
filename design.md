@@ -1601,9 +1601,9 @@ completes and the checked-value writer completes, and how many value-form
 expressions their bodies keep.
 
 `ROC_CHECKER_SPECULATION_STATS` prints, for each module the type checker
-checks, how many times each speculative checking site related types
-speculatively and how many times it decided by reading them first
-(Read-First Relations).
+checks, how many times each speculative checking site decided a relation in
+a probe, by asking the unifier, by reading first (Read-First Relations), and
+by relating for real.
 
 ### Every Rejection Is Explicit Recovery
 
@@ -12224,24 +12224,57 @@ succeed (`readRelation`): the operands are one class; or they are the same
 structure all the way down to shared classes, where every compared class
 carries no descriptor flags, records hold only required fields, rows end
 at a closed row or a variable rather than chaining into another row part,
-and function types carry no effect dependencies, except that an
-unconstrained, flag-free, non-generalized flexible variable may face a
-ground type (one reaching no flexible, erroneous or field-kind variable, no
-function of undecided effect, no field of undecided kind and no flagged
-class), which the relation binds, and a variable met twice must face one
-class both times; or one operand is an
-unconstrained, flag-free, non-generalized flexible variable the other does
-not reach, which the relation only binds. Anything else, including a
-comparison larger than a fixed budget, leaves the relation undecided, and
-the site relates speculatively exactly as before. This is a mechanism: a
-site whose probe would have rolled back skips it, and a site whose probe
-would have committed runs the same `runUnify` outside the probe, which
-writes what the committed probe kept. A relation the read decides holds no
+and function types carry no effect dependencies, except that a bindable
+flexible variable may face a ground type (one reaching no flexible,
+erroneous or field-kind variable, no function of undecided effect, no field
+of undecided kind and no flagged class), which the relation binds, and a
+variable met twice must face one class both times; or one operand is a
+bindable flexible variable the other does not reach, which the relation
+only binds. A bindable variable is unconstrained, flag-free and not
+generalized, and, when the site runs the relation rather than only needing
+its verdict, is no literal's type: binding a literal's type determines the
+literal, which a probe settles at the next dispatch pass and a direct
+relation settles at once. Anything else, including a comparison larger than
+a fixed budget, leaves the relation undecided, and the site relates
+speculatively exactly as before. This is a mechanism: a site whose probe
+would have rolled back skips it, and a site whose probe would have committed
+runs the same `runUnify` outside the probe, which writes what the committed
+probe kept. A relation the read decides for a site that runs it holds no
 static dispatch constraint and merges no flexible variable other than the
-binding one, so nothing a probe defers or journals arises. The checker
-counts, per site, how often it related speculatively and how often it read
-first; `ROC_CHECKER_SPECULATION_STATS` prints the counts for every checked
-module.
+binding one, so nothing a probe defers or journals arises.
+
+Some sites read a relation through what they know of its operands:
+
+- A lambda seed (Lambda Parameters Seeded From Context) whose parameters are
+  distinct bindable variables relates its skeleton to a function of the
+  same arity by binding each parameter, and its fresh result, to the
+  expected function's; a function of another arity fails at the arity
+  before anything is written.
+- The `?` seed of an inferred `Try` result (Try Return-Row
+  Composition) whose body result is a bindable variable the success type
+  does not reach binds it to the seed.
+- A tag without a payload related to an expected nominal type binds its
+  one-tag row's fresh extension to the selected constructor's opened row,
+  so when the expression's own variable only binds to the expectation both
+  relations succeed.
+- An interpolation part that already is `Str`, or only binds to it, and
+  carries no constraint relates directly.
+- Two generalized requirement callables whose anchored shape keys are equal
+  (`unifyShapeEquivalentCallables`) are the same structure up to renaming
+  their unanchored variables. Their keys are computed again from the store
+  as it stands, and when neither reaches an erroneous type, an application
+  of an invalid declaration, an unanchored rigid variable, a deferred
+  requirement callable, a function with effect dependencies, a row chained
+  into another row part, or two requirements of one method on one variable,
+  their relation succeeds and runs directly.
+- A same-method requirement relation (`relateSameMethodRequirements`) whose
+  probe succeeded and was rolled back, to read the conflict's description
+  or the method type's finiteness from the types as they were, relates
+  again directly.
+
+The checker counts, per site, how often it decided a relation in a probe, by
+asking the unifier, by reading first, or by relating for real;
+`ROC_CHECKER_SPECULATION_STATS` prints the counts for every checked module.
 
 ### Concrete Builtin Numeral Introduction
 
@@ -12505,6 +12538,8 @@ polymorphism a program could use. The rule reads only explicit context:
 - The relation runs in one commit-probe. An expectation the lambda does not
   fit (a different arity, or erroneous context) is rolled back with its copy,
   and the owning relation reports the mismatch exactly as without the seed.
+  A lambda whose parameters are plain variables, against a context related
+  as it is, is decided by reading instead (Read-First Relations).
 - An annotated lambda is checked against its annotation and is not seeded.
 
 The successful skeleton relation also retains its return slot as structural
@@ -17058,7 +17093,13 @@ Other solved-graph mutations:
   outside a probe. `projectExpectedAggregateShape`'s projected-cell relation
   and `commitProjectedStoredValue` do the same for their commit probes.
   `projectExpectedTagPayload` without a borrowed record field reads every
-  refusal before its copy writes anything, so it opens no probe.
+  refusal before its copy writes anything, so it opens no probe. The `?`
+  seed in `processReturnConstraints`, a payload-free tag in
+  `relateOwnedTagToExpectedNominal`, an interpolation part in
+  `constrainInterpolationPartToStr`, shape-equivalent callables in
+  `unifyShapeEquivalentCallables` and the repeated relation in
+  `relateSameMethodRequirements` run the relation their probe would have
+  committed directly, when reading decides it succeeds.
 - `bindSchemeAliasDestructs` / `optionalDestructBinderType`—policy: Field
   Kinds, scheme alias destructure binding (above). A probe of whether a
   declaration's value is a binding scheme, and of whether each field kind of
@@ -17078,8 +17119,9 @@ Other solved-graph mutations:
   Context (above). A probe of whether the expected context names a type
   constructor gates an ordinary unification of a skeleton over an
   unannotated lambda's parameters with that context, committed only when it
-  succeeds. It writes nothing outside unification and introduces no redirect
-  rule.
+  succeeds, or run directly when reading decides it succeeds
+  (`readPlainLambdaSeed`). It writes nothing outside unification and
+  introduces no redirect rule.
 
 - `rowForMerge` (record and tag-union rows)—mechanism: row-extension
   preservation during ordinary unification. Both operand equivalence classes
@@ -17091,12 +17133,6 @@ Other solved-graph mutations:
   before the default commits and withdrawn when the decision left the class
   flex. The write never changes content or links classes; only diagnostics
   consult it, under Diagnostics About Defaulted Types (below).
-- `snapshotPreDefaultType` (`setClassContentInSavepoint`)—mechanism: restores
-  each default-decided class's recorded pre-default flex content solely to
-  render a diagnostic, under a store savepoint that is always rolled back
-  before returning. The write is to the class itself, a frozen class included,
-  since the view is of the whole class and the rollback restores it. No solved
-  type, dispatch decision, or plan metadata observes it.
 - `stateRowVariableRequirementsOnTheirValues`—policy: Methods On Open Rows
   (above). After an annotation's type is generated and before anything is
   related to it, each `where` requirement on a row variable the annotation
@@ -23797,8 +23833,8 @@ The report's type is the class as the program wrote it: every default-decided
 class reachable from the receiver is shown with the union of its recorded
 pre-default requirements, and literal-conversion requirements are omitted,
 since a literal's own conversion is the literal rather than a requirement on
-its type. That restoration is written under a store savepoint that is always
-rolled back, so no solved type changes. The report is about the recorded
+its type. The snapshot only shows those classes that way
+(`snapshotVarForErrorWithFlexViews`); no solved type is written. The report is about the recorded
 variable that stated the failed requirement (`defaultDecidedRecordStating`):
 a default can merge two recorded variables' classes, as when a selected
 method makes two literals one type, and whether it has yet depends on the

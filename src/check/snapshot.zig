@@ -365,10 +365,22 @@ pub const Store = struct {
     render_graphs: std.ArrayList(?*RenderGraph) = .empty,
     active_capture: u32 = 0,
     format_context: ?FormatContext = null,
+    /// Classes the capture in progress shows as undetermined variables
+    /// instead of their solved content (`snapshotVarForErrorWithFlexViews`).
+    flex_views: ?*const FlexViews = null,
     test_capture_steps: if (@import("builtin").is_test) usize else void = if (@import("builtin").is_test) 0 else {},
     test_format_work: if (@import("builtin").is_test) usize else void = if (@import("builtin").is_test) 0 else {},
 
     const CaptureKey = struct { var_: Var, polarity: types.Polarity };
+
+    /// How a capture shows a class as an undetermined variable.
+    pub const FlexView = struct {
+        name: ?Ident.Idx,
+        constraints: []const types.StaticDispatchConstraint,
+    };
+
+    /// The classes a capture shows as undetermined variables, by root.
+    pub const FlexViews = std.AutoArrayHashMapUnmanaged(Var, FlexView);
 
     pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
@@ -605,6 +617,36 @@ pub const Store = struct {
         return self.pending_values.pop().?;
     }
 
+    /// `snapshotVarForError`, showing each class `views` names, by root, as
+    /// the undetermined variable its view describes rather than its solved
+    /// content. The store is only read.
+    pub fn snapshotVarForErrorWithFlexViews(
+        self: *Self,
+        store: *const TypesStore,
+        type_writer: *TypeWriter,
+        var_: types.Var,
+        views: *const FlexViews,
+    ) std.mem.Allocator.Error!SnapshotContentIdx {
+        std.debug.assert(self.flex_views == null);
+        self.flex_views = views;
+        defer self.flex_views = null;
+        return self.snapshotVarForError(store, type_writer, var_);
+    }
+
+    /// The content a capture reads for a resolved class: its solved content,
+    /// or the undetermined variable a flex view shows it as.
+    fn viewedContent(self: *const Self, resolved: types.ResolvedVarDesc) ViewedContent {
+        if (self.flex_views) |views| {
+            if (views.get(resolved.var_)) |view| return .{ .flex_view = view };
+        }
+        return .{ .solved = resolved.desc.content };
+    }
+
+    const ViewedContent = union(enum) {
+        solved: types.Content,
+        flex_view: FlexView,
+    };
+
     /// Snapshot one var's head: hand back a recursion marker for a var already
     /// on the path, and otherwise mark it as being visited and either record
     /// its content immediately (contents with no children) or push the frame
@@ -621,8 +663,9 @@ pub const Store = struct {
         // If we've already reached this variable on the current path, then
         // return it as a recursive type. Try to extract the name from the
         // content for better error messages.
+        const viewed = self.viewedContent(resolved);
         if (self.seen_vars.contains(resolved.var_)) {
-            const recursive_name: ?Ident.Idx = switch (resolved.desc.content) {
+            const recursive_name: ?Ident.Idx = if (viewed == .flex_view) viewed.flex_view.name else switch (resolved.desc.content) {
                 .flex => |flex| flex.name,
                 .rigid => |rigid| rigid.name,
                 .alias => |alias| alias.ident.ident_idx,
@@ -648,6 +691,33 @@ pub const Store = struct {
             .resolved_var = resolved.var_,
             .polarity = polarity,
         };
+        if (viewed == .flex_view) {
+            const view = viewed.flex_view;
+            // An uncommitted record tail reads as the closed row it stands
+            // for (design.md "Uncommitted Record Tails").
+            if (resolved.desc.flags.forKind(.flex).uncommitted_record_tail) {
+                try self.finishFrame(fill, SnapshotContent{ .structure = .empty_record });
+                return true;
+            }
+            if (view.constraints.len == 0) {
+                try self.finishFrame(fill, SnapshotContent{ .flex = SnapshotFlex{
+                    .name = view.name,
+                    .var_ = resolved.var_,
+                    .constraints = try self.static_dispatch_constraints.appendSlice(self.gpa, &.{}),
+                    .literal = .none,
+                } });
+                return true;
+            }
+            try self.frames.append(self.gpa, .{ .identity = .{
+                .fill = fill,
+                .result = .flex,
+                .name = view.name,
+                .literal = .none,
+                .constraints = view.constraints,
+                .scratch_top = self.scratch_static_dispatch_constraints.top(),
+            } });
+            return false;
+        }
         switch (resolved.desc.content) {
             .err => {
                 try self.finishFrame(fill, SnapshotContent.err);

@@ -2114,21 +2114,6 @@ pub const Store = struct {
         try self.setDescRow(desc_idx, desc.encode(identity, self));
     }
 
-    /// Show `target_var`'s whole class with `content` until the active
-    /// savepoint rolls back: a diagnostic's view of a class as it stood
-    /// before a decision. The view is of the class itself, so a frozen class
-    /// shows it too; the rollback restores the shared descriptor.
-    pub fn setClassContentInSavepoint(self: *Self, target_var: Var, content: Content) Allocator.Error!void {
-        self.debugAssertUnsealed();
-        std.debug.assert(self.savepoint_active);
-        const resolved = self.resolveVar(target_var);
-        self.noteContentRewrite(resolved.desc.content);
-        var desc = resolved.desc;
-        desc.content = content;
-        desc.flags = desc.flags.forKind(types.ContentKind.of(content));
-        try self.setDescUnguarded(resolved.desc_idx, desc);
-    }
-
     /// Whether the solver can still refine or poison what this content
     /// denotes: a variable, a field presence, or an error.
     fn kindIsLeaf(kind: types.ContentKind) bool {
