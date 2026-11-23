@@ -32132,6 +32132,19 @@ boxy caller passes its arguments and receives the result in that ABI
 directly. It must not change the hosted dispatch index, hosted symbol
 name, natural C ABI signature, ownership rule, or generated glue declaration.
 
+Every hosted lambda a module holds is one of its recorded hosted definitions
+(`ModuleEnv.hosted_defs`), and so has a row in the checked module's hosted
+procedure table: the platform declarations the hosted transform rewrote, and
+the `echo!` canonicalization gives a default app. That table is the only
+source of a hosted procedure's host symbol and dispatch slot, so a hosted
+lambda outside it could not be lowered. A default app compiled without its
+staged platform (as `roc test` compiles it) has no platform header in scope,
+and each of its declarations takes its own dispatch slot in a stable order.
+Lowering reaches a hosted procedure wherever code that calls it is lowered,
+whether or not anything runs the call: a compile-time program lowers a
+function value a constant holds, and the scheme a literal argument root
+converts in, without ever calling the hosted procedure.
+
 ## Root Application Preparation
 
 The parser's header and declaration index determine an entry module's platform
