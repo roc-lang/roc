@@ -1600,6 +1600,11 @@ many roots hoisting selected, how many of those an evaluator
 completes and the checked-value writer completes, and how many value-form
 expressions their bodies keep.
 
+`ROC_CHECKER_SPECULATION_STATS` prints, for each module the type checker
+checks, how many times each speculative checking site related types
+speculatively and how many times it decided by reading them first
+(Read-First Relations).
+
 ### Every Rejection Is Explicit Recovery
 
 `roc check`, `roc build`, and `roc run` all lower every checked program, so
@@ -12210,6 +12215,29 @@ adding or citing a member, which is greppable and reviewable. A new
 probe-then-mutate rewrite requires a declared rule in this document first;
 "it makes a test pass" is not a rule.
 
+### Read-First Relations
+
+A speculative checking site (a probe that relates two types and keeps or
+discards the result) may instead decide a relation by reading its operands
+before anything is written, when the read shows the relation can only
+succeed (`readRelation`): the operands are one class; or they are the same
+structure all the way down to shared classes, where every compared class
+carries no descriptor flags, records hold only required fields, rows end
+at a closed row or a variable rather than chaining into another row part,
+and function types carry no effect dependencies; or one operand is an
+unconstrained, flag-free, non-generalized flexible variable the other does
+not reach, which the relation only binds. Anything else, including a
+comparison larger than a fixed budget, leaves the relation undecided, and
+the site relates speculatively exactly as before. This is a mechanism: a
+site whose probe would have rolled back skips it, and a site whose probe
+would have committed runs the same `runUnify` outside the probe, which
+writes what the committed probe kept. A relation the read decides holds no
+static dispatch constraint and merges no flexible variable other than the
+binding one, so nothing a probe defers or journals arises. The checker
+counts, per site, how often it related speculatively and how often it read
+first; `ROC_CHECKER_SPECULATION_STATS` prints the counts for every checked
+module.
+
 ### Concrete Builtin Numeral Introduction
 
 A numeric expression may omit constructing its `from_numeral` signature graph
@@ -14257,10 +14285,19 @@ Five consumers keep the rule exact:
   must lose its pattern-only mark (Pattern-Only Tags); that changes no type.
   A part left with no labels redirects to its extension
   (`RedirectRule.row_union_normalization`), taking the lower of the two ranks
-  as unification would. A row's repeated pairs relate together or not at
+  as unification would. A row's repeated pairs relate in order; the first
+  pair whose relation fails, or makes an acyclic row anonymously recursive,
+  is the row's conflict, and a row the relation meets that repeats a label
+  of its own is a mismatch of that relation, so the conflict stays the
+  outer row's. Outside a speculation the pairs relate together or not at
   all: they are first probed as one set against throwaway problem stores,
-  with an occurs check of the row after each, and rolled back, so a rejected
-  row records nothing and leaves no relation on the types it shares. Relations can bind further tails and expose further repeats; the
+  with an occurs check of the row after each, and rolled back, so a
+  rejected row records nothing and leaves no relation on the types it
+  shares. Inside a commit probe, where `runUnify` can meet a repeating row
+  first, the type store already holds that probe's savepoint and holds no
+  second one, so the pairs relate for real with the same checks
+  (`relating_repeated_row_label`), and the relations before a conflict
+  stand until the probe commits or rolls back. Relations can bind further tails and expose further repeats; the
   chain is rescanned until none remain, and each pass removes a label.
 - The type-key writer reports a repeated label to the checker
   instead of keying it, in the requests the checker makes while inference is
@@ -17008,6 +17045,12 @@ Other solved-graph mutations:
   Introduction (above). Uses the existing `unifyWith` descriptor-introduction
   mechanism for a proved concrete builtin conversion; does not mutate the
   context's type or introduce a redirect rule.
+- `checkBranchBodyAgainstExpected`'s read-first relations (`readRelation`)
+  —mechanism: Read-First Relations (above). A branch whose relation to the
+  annotated result reading shows can only succeed skips the rolled-back
+  probe, and a fold into the branch accumulator that reading shows can only
+  succeed runs the same `runUnify` the commit probe would have committed,
+  outside a probe.
 - `bindSchemeAliasDestructs` / `optionalDestructBinderType`—policy: Field
   Kinds, scheme alias destructure binding (above). A probe of whether a
   declaration's value is a binding scheme, and of whether each field kind of
