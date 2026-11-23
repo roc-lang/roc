@@ -12236,7 +12236,17 @@ field-kind variable, no function of undecided effect, no field of undecided
 kind and no class flagged other than relation-neutrally), which the
 relation binds, and a variable met twice must face one class both times;
 or one operand is a bindable flexible variable the other does not reach,
-which the relation only binds. Reading also shows that a relation fails
+which the relation only binds. For a site that only needs the verdict, a
+tag union facing a nominal type also compares through the lift
+(`readTagUnionLift`): the tag union carries no flag and ends in an
+unconstrained flexible variable, the nominal's declaration is valid, takes
+no context arguments and may be lifted into, and its backing is a closed
+tag union written directly holding every tag of the union with the same
+arity, each payload one of the declaration's formals, so the lift relates
+each payload to the application's argument for that formal and binds the
+union's extension. A site that runs the relation does not read a lift,
+since running it outside a probe keeps the backing's opening for later
+relations to share. Reading also shows that a relation fails
 when it fails at the two operands themselves, before anything they hold is
 related or anything is written (`relationCannotSucceed`): both are
 structures, neither an alias, an application of an invalid declaration or

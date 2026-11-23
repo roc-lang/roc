@@ -66693,6 +66693,9 @@ test "read-first relations agree with the unifier on random small type pairs" {
         \\text = "t"
         \\count : U64
         \\count = 1
+        \\Choice(a) := [Yes(a), No]
+        \\pick : Choice(U64)
+        \\pick = Choice.No
     );
     defer test_env.deinit();
     const checker = &test_env.checker;
@@ -66701,12 +66704,13 @@ test "read-first relations agree with the unifier on random small type pairs" {
         random: std.Random,
         str_content: Content,
         u64_content: Content,
-        names: [4]Ident.Idx,
+        choice: types_mod.NominalType,
+        names: [6]Ident.Idx,
         pool: std.ArrayListUnmanaged(Var) = .empty,
 
         fn leafOrStructure(gen: *@This(), depth: u32) Allocator.Error!Var {
             const store = gen.checker.types;
-            const choices: u32 = if (depth == 0) 6 else 13;
+            const choices: u32 = if (depth == 0) 6 else 15;
             const var_ = switch (gen.random.uintLessThan(u32, choices)) {
                 0, 1 => if (gen.pool.items.len != 0)
                     gen.pool.items[gen.random.uintLessThan(usize, gen.pool.items.len)]
@@ -66758,6 +66762,8 @@ test "read-first relations agree with the unifier on random small type pairs" {
                     if (gen.random.uintLessThan(u32, 4) == 0) try store.markAnnotationTagUnion(tag_union);
                     break :blk tag_union;
                 },
+                13 => try gen.choiceOf(try gen.leafOrStructure(depth - 1)),
+                14 => try gen.choiceTags(try gen.leafOrStructure(depth - 1)),
                 else => unreachable, // the choice is below `choices`
             };
             try gen.pool.append(gen.checker.gpa, var_);
@@ -66772,7 +66778,13 @@ test "read-first relations agree with the unifier on random small type pairs" {
                 return .{ try gen.leafOrStructure(0), try gen.leafOrStructure(0) };
             }
             var out: [2]Var = undefined;
-            switch (gen.random.uintLessThan(u32, 5)) {
+            switch (gen.random.uintLessThan(u32, 6)) {
+                5 => {
+                    const payload = try gen.shapedPair(depth - 1);
+                    const nominal = try gen.choiceOf(payload[0]);
+                    const tags = try gen.choiceTags(payload[1]);
+                    out = if (gen.random.boolean()) .{ nominal, tags } else .{ tags, nominal };
+                },
                 0 => {
                     const elems = try gen.shapedPair(depth - 1);
                     for (&out, elems) |*var_, elem| var_.* = try store.freshFromContent(try gen.checker.mkListContent(elem));
@@ -66813,6 +66825,29 @@ test "read-first relations agree with the unifier on random small type pairs" {
             return out;
         }
 
+        /// `Choice(arg)`.
+        fn choiceOf(gen: *@This(), arg: Var) Allocator.Error!Var {
+            var nominal = gen.choice;
+            nominal.args = try gen.checker.types.appendVars(&.{arg});
+            return gen.checker.types.freshFromContent(.{ .structure = .{ .nominal_type = nominal } });
+        }
+
+        /// An anonymous union of some of `Choice`'s tags, or of a tag it
+        /// lacks, over a fresh extension.
+        fn choiceTags(gen: *@This(), payload: Var) Allocator.Error!Var {
+            const store = gen.checker.types;
+            const yes = try store.mkTag(gen.names[4], &.{payload});
+            const no = try store.mkTag(gen.names[5], &.{});
+            const other = try store.mkTag(gen.names[0], &.{});
+            const tags: []const types_mod.Tag = switch (gen.random.uintLessThan(u32, 4)) {
+                0 => &.{ no, yes },
+                1 => &.{yes},
+                2 => &.{no},
+                else => &.{ other, yes },
+            };
+            return store.freshFromContent(try store.mkTagUnion(tags, try store.fresh()));
+        }
+
         fn fieldKind(gen: *@This(), value: Var) Allocator.Error!types_mod.RecordField.Presence {
             const store = gen.checker.types;
             return switch (gen.random.uintLessThan(u32, 5)) {
@@ -66828,14 +66863,15 @@ test "read-first relations agree with the unifier on random small type pairs" {
             return env.checker.types.resolveVar(ModuleEnv.varFrom(try env.defExpr(name))).desc.content;
         }
     }.of;
-    var names: [4]Ident.Idx = undefined;
-    for ([_][]const u8{ "A", "B", "x", "y" }, &names) |text, *name| name.* = try test_env.module_env.insertIdent(Ident.for_text(text));
+    var names: [6]Ident.Idx = undefined;
+    for ([_][]const u8{ "A", "B", "x", "y", "Yes", "No" }, &names) |text, *name| name.* = try test_env.module_env.insertIdent(Ident.for_text(text));
     var prng = std.Random.DefaultPrng.init(0x5eed);
     var gen: Gen = .{
         .checker = checker,
         .random = prng.random(),
         .str_content = try content_of(&test_env, "text"),
         .u64_content = try content_of(&test_env, "count"),
+        .choice = (try content_of(&test_env, "pick")).structure.nominal_type,
         .names = names,
     };
     defer gen.pool.deinit(checker.gpa);
@@ -66973,7 +67009,35 @@ fn relationIsStructurallyIdentical(self: *Self, a: Var, b: Var, comptime use: Re
                     },
                     .flex, .rigid, .field_presence, .err => return false,
                 };
-                if (std.meta.activeTag(left_flat) != std.meta.activeTag(right_flat)) return false;
+                if (std.meta.activeTag(left_flat) != std.meta.activeTag(right_flat)) {
+                    // A tag union lifts into a nominal type whose backing
+                    // holds its tags. Only a site that does not run the
+                    // relation reads a lift: running it opens the backing
+                    // outside a probe, which keeps the opening for later
+                    // relations to share, where a committed probe would
+                    // have opened it again.
+                    if (use == .relate) return false;
+                    const anon, const nominal = if (left_flat == .tag_union and right_flat == .nominal_type)
+                        .{ left, right_flat.nominal_type }
+                    else if (right_flat == .tag_union and left_flat == .nominal_type)
+                        .{ right, left_flat.nominal_type }
+                    else
+                        return false;
+                    var lift_pairs: [identical_relation_pair_budget][2]Var = undefined;
+                    const lift = self.readTagUnionLift(anon, nominal, &lift_pairs) orelse return false;
+                    for (lift_pairs[0..lift.pairs]) |lift_pair| {
+                        if (!Push.pair(&pending, &pending_len, lift_pair[0], lift_pair[1])) return false;
+                    }
+                    // The anonymous row's extension binds to what the
+                    // backing holds beyond its tags, which no other pair
+                    // may name.
+                    for (bound_flex[0..bound_len]) |flex| if (flex == lift.ext) return false;
+                    if (bound_len == identical_relation_bindings) return false;
+                    bound_flex[bound_len] = lift.ext;
+                    bound_to[bound_len] = anon.var_;
+                    bound_len += 1;
+                    continue;
+                }
                 switch (left_flat) {
                     .empty_record, .empty_tag_union => {},
                     .tuple => |left_tuple| {
@@ -67024,6 +67088,80 @@ fn relationIsStructurallyIdentical(self: *Self, a: Var, b: Var, comptime use: Re
         }
     }
     return true;
+}
+
+/// A tag union's lift into a nominal type, read without opening the
+/// nominal's backing (`readTagUnionLift`).
+const TagUnionLift = struct {
+    /// The tag union's extension, which the lift binds.
+    ext: Var,
+    /// How many payload pairs the lift relates.
+    pairs: usize,
+};
+
+/// Read the lift of the tag union `anon` into an application of `nominal`
+/// (`unifyTagUnionWithNominal`) when it can only succeed apart from its
+/// payload pairs, which go in `out`: the tag union carries no flag and ends
+/// in an unconstrained, non-generalized flexible variable flagged at most as
+/// a tag row's extension; the nominal's declaration is valid, takes
+/// no context arguments and may be lifted into here; its backing is a closed
+/// tag union written directly, holding every tag of `anon` with the same
+/// arity, each of whose payloads is one of the declaration's formals. Opening
+/// the backing substitutes the application's argument for each formal, so
+/// each payload pair is that argument and `anon`'s payload, and the lift
+/// binds `anon`'s extension to the backing's remaining tags.
+fn readTagUnionLift(self: *Self, anon: types_mod.ResolvedVarDesc, nominal: types_mod.NominalType, out: *[identical_relation_pair_budget][2]Var) ?TagUnionLift {
+    if (!std.meta.eql(anon.desc.flags, types_mod.types.DescriptorFlags{})) return null;
+    const anon_union = anon.desc.content.structure.tag_union;
+    // A tag row's extension must stay a tag row, which the rest of the
+    // backing's row is.
+    const ext = self.types.resolveVar(anon_union.ext);
+    const ext_flex = switch (ext.desc.content) {
+        .flex => |flex| flex,
+        .rigid, .alias, .field_presence, .structure, .err => return null,
+    };
+    if (ext_flex.constraints.len() != 0 or ext_flex.literal != .none or ext.desc.rank == .generalized) return null;
+    if (!std.meta.eql(ext.desc.flags, types_mod.types.DescriptorFlags{ .requires_tag_row = true }) and
+        !std.meta.eql(ext.desc.flags, types_mod.types.DescriptorFlags{})) return null;
+    if (!nominal.canLiftInner(self.cir.selfModuleIdentity())) return null;
+    const decl_idx = self.types.lookupNominalDecl(nominal) orelse return null;
+    const decl = self.types.getNominalDecl(decl_idx);
+    if (!decl.isValid() or decl.flags.context_len != 0) return null;
+    const backing_union = switch (self.types.resolveVar(decl.backing).desc.content) {
+        .structure => |flat| switch (flat) {
+            .tag_union => |tag_union| tag_union,
+            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return null,
+        },
+        .flex, .rigid, .alias, .field_presence, .err => return null,
+    };
+    switch (self.types.resolveVar(backing_union.ext).desc.content) {
+        .structure => |flat| if (flat != .empty_tag_union) return null,
+        .flex, .rigid, .alias, .field_presence, .err => return null,
+    }
+    const formals = self.types.sliceVars(decl.formals);
+    const args = self.types.sliceNominalArgs(nominal);
+    if (formals.len != args.len) return null;
+    const backing_tags = self.types.getTagsSlice(backing_union.tags);
+    const anon_tags = self.types.getTagsSlice(anon_union.tags);
+    var pairs: usize = 0;
+    for (anon_tags.items(.name), anon_tags.items(.args)) |name, anon_args| {
+        const backing_args = for (backing_tags.items(.name), backing_tags.items(.args)) |backing_name, backing_args| {
+            if (backing_name.eql(name)) break backing_args;
+        } else return null;
+        const backing_payloads = self.types.sliceVars(backing_args);
+        const anon_payloads = self.types.sliceVars(anon_args);
+        if (backing_payloads.len != anon_payloads.len) return null;
+        for (backing_payloads, anon_payloads) |backing_payload, anon_payload| {
+            const payload_root = self.types.resolveVar(backing_payload).var_;
+            const formal_index = for (formals, 0..) |formal, index| {
+                if (self.types.resolveVar(formal).var_ == payload_root) break index;
+            } else return null;
+            if (pairs == out.len) return null;
+            out[pairs] = .{ args[formal_index], anon_payload };
+            pairs += 1;
+        }
+    }
+    return .{ .ext = ext.var_, .pairs = pairs };
 }
 
 /// Whether a row's extension ends it: closed, or a variable. A row whose
