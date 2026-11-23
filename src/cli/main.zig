@@ -8353,6 +8353,36 @@ fn rocBuildOnce(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     }
 }
 
+/// Names a default app's output after its original path, not the staged copy.
+/// Sets the basename rather than `output`, so the target's default extension
+/// (`.exe` on Windows) is still appended.
+fn setDefaultAppOutputBasename(ctx: *CliCtx, args: *cli_args.BuildArgs, original_path: []const u8) Allocator.Error!void {
+    if (args.output != null or args.synthetic_output_basename != null) return;
+    args.synthetic_output_basename = try base.module_path.getModuleNameAlloc(ctx.arena, original_path);
+}
+
+test "default app output keeps the target's default extension" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(testing.allocator, arena.allocator(), &io_state, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    var args: cli_args.BuildArgs = .{ .path = "/tmp/roc-staging/hello.roc" };
+    try setDefaultAppOutputBasename(&ctx, &args, "examples/hello.roc");
+    const base_path = try buildOutputBasePath(&ctx, args);
+    try testing.expectEqualStrings("hello.exe", try buildFinalOutputPath(&ctx, args, base_path, .exe, .x64win));
+    try testing.expectEqualStrings("hello", try buildFinalOutputPath(&ctx, args, base_path, .exe, .x64musl));
+
+    // An explicit --output is used as-is.
+    var explicit: cli_args.BuildArgs = .{ .path = "/tmp/roc-staging/hello.roc", .output = "out/app" };
+    try setDefaultAppOutputBasename(&ctx, &explicit, "examples/hello.roc");
+    const explicit_base = try buildOutputBasePath(&ctx, explicit);
+    try testing.expectEqualStrings("out/app", try buildFinalOutputPath(&ctx, explicit, explicit_base, .exe, .x64win));
+}
+
 fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, staged: *default_app.Staged) CliMainError!BuildResult {
     defer staged.deinit(ctx.gpa);
 
@@ -8391,9 +8421,7 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, staged: *default_a
     synthetic_args.synthetic_root_original_source = staged.original_source;
     synthetic_args.synthetic_root_header_len = staged.header_len;
     synthetic_args.synthetic_root_header_lines = staged.header_lines;
-    if (synthetic_args.output == null) {
-        synthetic_args.output = args.synthetic_output_basename orelse try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
-    }
+    try setDefaultAppOutputBasename(ctx, &synthetic_args, args.path);
 
     switch (synthetic_args.opt) {
         .dev => return rocBuildNative(ctx, synthetic_args),
