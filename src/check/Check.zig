@@ -319,11 +319,10 @@ optional_field_accesses: std.ArrayList(OptionalFieldAccess) = .empty,
 literal_field_kinds: std.ArrayList(LiteralFieldKind) = .empty,
 /// Decisions retained until the contributing record classes have settled.
 absorbed_defaults: std.ArrayList(unifier.AbsorbedRecordDefault) = .empty,
-/// Fresh record expressions registered while checking their construction,
-/// each with the variable its record skeleton was built on. Settled equality
-/// classes distribute accepted omission decisions to every contributing
-/// literal; ordinary type unions carry no construction metadata.
-record_constructions: std.ArrayList(RecordConstruction) = .empty,
+/// Fresh record expressions registered while checking their construction.
+/// Settled equality classes distribute accepted omission decisions to every
+/// contributing literal; ordinary type unions carry no construction metadata.
+record_constructions: std.ArrayList(CIR.Expr.Idx) = .empty,
 literal_field_kind_watermark: usize = 0,
 /// Update-field probes are committed at their owning generalization boundary
 /// so an unresolved scheme cannot change runtime field layout per caller.
@@ -15672,17 +15671,6 @@ const LiteralFieldKind = struct {
 const PendingRecordUpdate = struct {
     presence_var: Var,
     region: Region,
-};
-
-/// A fresh record literal (see `record_constructions`). `record_var` is the
-/// variable the literal's record skeleton was unified into, which joins the
-/// class whose absorbed defaults the literal omits. The expression's own
-/// variable differs when the frame checks its body against an annotation or
-/// expected type: it joins the annotation's root, an alias node when the
-/// annotation names an alias, which is a class of its own.
-const RecordConstruction = struct {
-    expr: CIR.Expr.Idx,
-    record_var: Var,
 };
 
 /// One declaration type parameter of a defaulted field's instantiated type:
@@ -33171,7 +33159,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
             try self.unifyWith(expr_var, list_content, env);
         },
         .e_empty_record => {
-            try self.record_constructions.append(self.gpa, .{ .expr = expr_idx, .record_var = expr_var });
+            try self.record_constructions.append(self.gpa, expr_idx);
             try self.unifyWith(expr_var, .{ .structure = .{ .record = .{
                 .fields = try self.types.appendRecordFields(&.{}),
                 .ext = try self.freshUncommittedTail(env, expr_region),
@@ -34307,7 +34295,7 @@ fn resumeRecordCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: 
     const source_fields = self.cir.store.sliceRecordFields(e.fields);
 
     if (!state.started) {
-        try self.record_constructions.append(self.gpa, .{ .expr = expr_idx, .record_var = expr_var });
+        try self.record_constructions.append(self.gpa, expr_idx);
 
         // Build a record skeleton with one payload slot per supplied field.
         // Relating an orphan expected copy to this skeleton admits omitted
@@ -44290,11 +44278,17 @@ fn distributeRecordOmittedDefaults(self: *Self) Allocator.Error!void {
     defer emitted.deinit();
     var output = try ModuleEnv.RecordOmittedDefault.SafeList.initCapacity(self.cir.gpa, @intCast(entries.len));
     errdefer output.deinit(self.cir.gpa);
-    for (self.record_constructions.items) |construction| {
-        const expr_idx = construction.expr;
+    for (self.record_constructions.items) |expr_idx| {
         if (self.hoistExprInvalidated(expr_idx) or self.erroneous_value_exprs.contains(expr_idx)) continue;
-        if (self.types.resolveVar(ModuleEnv.varFrom(expr_idx)).desc.content == .err) continue;
-        const resolved = self.types.resolveVar(construction.record_var);
+        var resolved = self.types.resolveVar(ModuleEnv.varFrom(expr_idx));
+        // An annotated or expected-typed literal builds its record on a
+        // separate body variable and relates its own variable to the
+        // annotation. When the annotation names an alias, the expression's
+        // root is that alias node, and unification related the alias's
+        // backing to the body's record class.
+        while (resolved.desc.content == .alias) {
+            resolved = self.types.resolveVar(self.types.getAliasBackingVar(resolved.desc.content.alias));
+        }
         if (resolved.desc.content == .err) continue;
         const group = by_root.get(resolved.var_) orelse continue;
         const seen = try emitted.getOrPut(expr_idx);
