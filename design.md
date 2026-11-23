@@ -12221,9 +12221,19 @@ store has two families of in-place writes. The unifier's writes
 (`Store.unifierUnion` and the other `unifier*` functions, and the store
 internals they reach) compare the entry's index with the open ask's
 baseline, which is 0 while no ask is open, and when the entry predates the
-ask journal its old value before writing it: every slot, descriptor, root,
-union rank, derived map plan row and tag tail closing row. They compress a
-storage path only when the baseline is 0. Every other write is plain: it
+ask journal its old value before writing it, in one undo log of tagged
+entries: a slot, descriptor, root or union rank, and the insertion, removal
+or replacement of a derived map plan row or tag tail closing row. They
+compress a storage path only when the baseline is 0. Discarding the ask
+replays the log strictly backwards, after dropping the plan and closing rows
+of classes the ask created, which sort after every older class. What an ask
+remembers when it begins is the slot and descriptor counts (the baselines)
+and the lengths of the lists the unifier can grow: variables, record fields,
+tags, interpolation parts and metadata (an opened nominal backing, and a
+deferred requirement callable the unifier links, copy constraints), numeral
+facts, static dispatch constraints, folded dispatch relations and
+pattern-only tag copies. The log needs no length, since it is empty whenever
+an ask begins. Every other write is plain: it
 compares and journals nothing. That only the unifier overwrites an entry
 that predates an open ask is a compiler invariant: debug builds assert that
 a plain write reaches only entries the ask appended, and that a unifier

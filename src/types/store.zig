@@ -22,15 +22,29 @@ const Allocator = std.mem.Allocator;
 /// ask. Only the unifier overwrites such an entry: a compiler invariant.
 const WriteFamily = enum { plain, unifier };
 
-/// One journaled in-place write to a pre-existing slot (for trail rollback).
-const SlotUndo = struct { idx: SlotStore.Idx, old: Slot };
-/// One journaled in-place write to a pre-existing descriptor, holding the
-/// stored row it replaced.
-const DescUndo = struct { idx: DescStore.Idx, old: Desc.Row };
-/// One journaled in-place write to a pre-existing equivalence-class root.
-const RootMetaUndo = struct { idx: DescStore.Idx, old: RootMeta };
-/// One journaled in-place write to a structural union rank.
-const UnionRankUndo = struct { idx: SlotStore.Idx, old: u8 };
+/// One entry of the undo log (`Store.undo_log`): an in-place write the
+/// unifier made, while an ask was open, to an entry that predates the ask,
+/// holding what the write replaced. Discarding the ask replays the log
+/// strictly backwards.
+const Undo = union(enum) {
+    slot: struct { idx: SlotStore.Idx, old: Slot },
+    /// The stored row a descriptor held, without generalization marks.
+    desc: struct { idx: DescStore.Idx, old: Desc.Row },
+    root_meta: struct { idx: DescStore.Idx, old: RootMeta },
+    union_rank: struct { idx: SlotStore.Idx, old: u8 },
+    /// A row inserted into `derived_map_plans` at this index.
+    plan_inserted: u32,
+    /// The row removed from `derived_map_plans` at `index`.
+    plan_removed: struct { index: u32, entry: DerivedMapPlanEntry },
+    /// The plan the row at `index` of `derived_map_plans` held.
+    plan_replaced: struct { index: u32, old: DerivedMapPlan },
+    /// A row inserted into `tag_tail_closings` at this index.
+    closing_inserted: u32,
+    /// The row removed from `tag_tail_closings` at `index`.
+    closing_removed: struct { index: u32, entry: TagTailClosingEntry },
+    /// The closing the row at `index` of `tag_tail_closings` held.
+    closing_replaced: struct { index: u32, old: TagTailClosing },
+};
 
 const Desc = types.Descriptor;
 const Var = types.Var;
@@ -415,18 +429,12 @@ pub const Store = struct {
     /// unifier write tests with one comparison (`journalsWrite`).
     ask_baseline_slots: u32 = 0,
     ask_baseline_descs: u32 = 0,
-    slot_trail: std.ArrayListUnmanaged(SlotUndo) = .empty,
+    /// The open ask's undo log (`Undo`), in write order; empty while no ask
+    /// is open, since asks never nest and ending one empties it.
+    undo_log: std.ArrayListUnmanaged(Undo) = .empty,
     /// Advances whenever a slot write can change which class a var resolves
     /// to, so a caller that indexed resolved classes knows when to re-index.
     slot_generation: u64 = 0,
-    desc_trail: std.ArrayListUnmanaged(DescUndo) = .empty,
-    root_meta_trail: std.ArrayListUnmanaged(RootMetaUndo) = .empty,
-    union_rank_trail: std.ArrayListUnmanaged(UnionRankUndo) = .empty,
-    /// `derived_map_plans` as it stood when the open ask first changed it,
-    /// valid while `derived_map_plans_journaled`; discarding the ask restores
-    /// it.
-    derived_map_plans_undo: std.ArrayListUnmanaged(DerivedMapPlanEntry) = .empty,
-    derived_map_plans_journaled: bool = false,
     /// The checking step that closed each uncommitted tag tail class a match
     /// closed (`TagTailClosing`), sorted by class descriptor so lookups
     /// binary-search. Like the tail's mark, a merge keeps it, a member
@@ -434,11 +442,6 @@ pub const Store = struct {
     /// Only a type mismatch's report reads it. Runtime-only: never
     /// serialized or cloned; sealing releases it.
     tag_tail_closings: std.ArrayListUnmanaged(TagTailClosingEntry) = .empty,
-    /// `tag_tail_closings` as it stood when the open ask first changed it,
-    /// valid while `tag_tail_closings_journaled`; discarding the ask restores
-    /// it.
-    tag_tail_closings_undo: std.ArrayListUnmanaged(TagTailClosingEntry) = .empty,
-    tag_tail_closings_journaled: bool = false,
 
     /// Descriptors no slot names any more: a class merge keeps one side's
     /// descriptor and orphans the other's. The next class created takes the
@@ -796,20 +799,10 @@ pub const Store = struct {
         self.function_free_descs = .{};
         self.detach_members_scratch.deinit(self.gpa);
         self.detach_members_scratch = .empty;
-        self.slot_trail.deinit(self.gpa);
-        self.slot_trail = .empty;
-        self.desc_trail.deinit(self.gpa);
-        self.desc_trail = .empty;
-        self.root_meta_trail.deinit(self.gpa);
-        self.root_meta_trail = .empty;
-        self.union_rank_trail.deinit(self.gpa);
-        self.union_rank_trail = .empty;
-        self.derived_map_plans_undo.deinit(self.gpa);
-        self.derived_map_plans_undo = .empty;
+        self.undo_log.deinit(self.gpa);
+        self.undo_log = .empty;
         self.tag_tail_closings.deinit(self.gpa);
         self.tag_tail_closings = .empty;
-        self.tag_tail_closings_undo.deinit(self.gpa);
-        self.tag_tail_closings_undo = .empty;
         self.free_descs.deinit(self.gpa);
         self.free_descs = .empty;
         self.pending_free_descs.deinit(self.gpa);
@@ -912,15 +905,12 @@ pub const Store = struct {
 
     // ask (see `WriteMode`) //
 
-    /// What discarding an ask restores: trail positions and the append-only
-    /// list lengths to rewind to. The slot/desc baselines live on the store
-    /// as `ask_baseline_*` because they are also the per-write journaling
-    /// threshold.
+    /// The lengths of the append-only lists the unifier grows, which
+    /// discarding an ask rewinds to. The slot and descriptor counts live on
+    /// the store as `ask_baseline_*`, because they are also the unifier
+    /// writes' journaling test, and the undo log needs no length: it is
+    /// empty whenever an ask begins.
     pub const AskMark = struct {
-        slot_trail_len: usize,
-        desc_trail_len: usize,
-        root_meta_trail_len: usize,
-        union_rank_trail_len: usize,
         vars_len: usize,
         record_fields_len: usize,
         tags_len: usize,
@@ -970,16 +960,11 @@ pub const Store = struct {
         };
     }
 
-    /// The trail positions and list lengths an ask restores.
+    /// The list lengths an ask restores.
     fn markForRestore(self: *const Self) AskMark {
         std.debug.assert(self.pending_free_descs.items.len == 0);
-        std.debug.assert(!self.derived_map_plans_journaled);
-        std.debug.assert(!self.tag_tail_closings_journaled);
+        std.debug.assert(self.undo_log.items.len == 0);
         return .{
-            .slot_trail_len = self.slot_trail.items.len,
-            .desc_trail_len = self.desc_trail.items.len,
-            .root_meta_trail_len = self.root_meta_trail.items.len,
-            .union_rank_trail_len = self.union_rank_trail.items.len,
             .vars_len = self.vars.items.len,
             .record_fields_len = self.record_fields.len(),
             .tags_len = self.tags.len(),
@@ -990,16 +975,6 @@ pub const Store = struct {
             .static_dispatch_relation_merges_len = self.static_dispatch_relation_merges.items.len,
             .pattern_only_tag_copies_len = self.pattern_only_tag_copies.items.len,
         };
-    }
-
-    /// Forget the undo entries journaled since `mark`, keeping the writes.
-    fn dropTrails(self: *Self, mark: *const AskMark) void {
-        self.desc_trail.shrinkRetainingCapacity(mark.desc_trail_len);
-        self.slot_trail.shrinkRetainingCapacity(mark.slot_trail_len);
-        self.root_meta_trail.shrinkRetainingCapacity(mark.root_meta_trail_len);
-        self.union_rank_trail.shrinkRetainingCapacity(mark.union_rank_trail_len);
-        self.derived_map_plans_journaled = false;
-        self.tag_tail_closings_journaled = false;
     }
 
     /// Assert that no ask is open. Mismatch poisoning is permanent error
@@ -1015,40 +990,40 @@ pub const Store = struct {
         self.class_watch.noteRollback();
         self.settled_descs.clear();
         self.function_free_descs.clear();
-        // Replay journaled in-place writes in reverse so each pre-existing entry
-        // lands back on its original value.
-        var di = self.desc_trail.items.len;
-        while (di > mark.desc_trail_len) {
-            di -= 1;
-            const u = self.desc_trail.items[di];
-            self.descs.setRow(u.idx, u.old);
-        }
-        self.desc_trail.shrinkRetainingCapacity(mark.desc_trail_len);
+        // Rows for classes appended since the ask began sort after every
+        // older class, and their writes are not journaled: drop them first,
+        // so the rows of older classes stand at the indices their journaled
+        // writes name.
+        var plans_len = self.derived_map_plans.items().len;
+        while (plans_len > 0 and @backingInt(self.derived_map_plans.items()[plans_len - 1].class) >= self.ask_baseline_descs) plans_len -= 1;
+        self.derived_map_plans.shrinkRetainingCapacity(plans_len);
+        var closings_len = self.tag_tail_closings.items.len;
+        while (closings_len > 0 and @backingInt(self.tag_tail_closings.items[closings_len - 1].class) >= self.ask_baseline_descs) closings_len -= 1;
+        self.tag_tail_closings.shrinkRetainingCapacity(closings_len);
 
-        var mi = self.root_meta_trail.items.len;
-        while (mi > mark.root_meta_trail_len) {
-            mi -= 1;
-            const u = self.root_meta_trail.items[mi];
-            self.root_metas.set(rootMetaIdx(u.idx), u.old);
+        // Replay the log strictly backwards, so each pre-existing entry lands
+        // back on its original value. A removed row goes back into room the
+        // list had when the row was removed.
+        var index = self.undo_log.items.len;
+        while (index > 0) {
+            index -= 1;
+            switch (self.undo_log.items[index]) {
+                .slot => |u| {
+                    self.slots.set(u.idx, u.old);
+                    self.slot_generation += 1;
+                },
+                .desc => |u| self.descs.setRow(u.idx, u.old),
+                .root_meta => |u| self.root_metas.set(rootMetaIdx(u.idx), u.old),
+                .union_rank => |u| self.union_ranks.set(unionRankIdx(u.idx), u.old),
+                .plan_inserted => |at| _ = self.derived_map_plans.orderedRemove(at),
+                .plan_removed => |u| self.derived_map_plans.insertAssumeCapacity(u.index, u.entry),
+                .plan_replaced => |u| self.derived_map_plans.items()[u.index].plan = u.old,
+                .closing_inserted => |at| _ = self.tag_tail_closings.orderedRemove(at),
+                .closing_removed => |u| self.tag_tail_closings.insertAssumeCapacity(u.index, u.entry),
+                .closing_replaced => |u| self.tag_tail_closings.items[u.index].closing = u.old,
+            }
         }
-        self.root_meta_trail.shrinkRetainingCapacity(mark.root_meta_trail_len);
-
-        var ri = self.union_rank_trail.items.len;
-        while (ri > mark.union_rank_trail_len) {
-            ri -= 1;
-            const u = self.union_rank_trail.items[ri];
-            self.union_ranks.set(unionRankIdx(u.idx), u.old);
-        }
-        self.union_rank_trail.shrinkRetainingCapacity(mark.union_rank_trail_len);
-
-        var si = self.slot_trail.items.len;
-        while (si > mark.slot_trail_len) {
-            si -= 1;
-            const u = self.slot_trail.items[si];
-            self.slots.set(u.idx, u.old);
-            self.slot_generation += 1;
-        }
-        self.slot_trail.shrinkRetainingCapacity(mark.slot_trail_len);
+        self.undo_log.clearRetainingCapacity();
 
         // Drop everything appended since the mark. The slot/desc baselines are
         // the store fields (also the journaling threshold); the rest come from
@@ -1066,26 +1041,6 @@ pub const Store = struct {
         self.static_dispatch_constraints.shrinkRetainingCapacity(mark.static_dispatch_constraints_len);
         self.static_dispatch_relation_merges.shrinkRetainingCapacity(mark.static_dispatch_relation_merges_len);
         self.pattern_only_tag_copies.shrinkRetainingCapacity(mark.pattern_only_tag_copies_len);
-        if (self.derived_map_plans_journaled) {
-            // The list held the journaled rows, so its capacity holds them.
-            self.derived_map_plans.clearRetainingCapacity();
-            _ = self.derived_map_plans.appendSliceAssumeCapacity(self.derived_map_plans_undo.items);
-            self.derived_map_plans_journaled = false;
-        }
-        if (self.tag_tail_closings_journaled) {
-            // The list held the journaled rows, so its capacity holds them.
-            self.tag_tail_closings.clearRetainingCapacity();
-            self.tag_tail_closings.appendSliceAssumeCapacity(self.tag_tail_closings_undo.items);
-            self.tag_tail_closings_journaled = false;
-        }
-        // Rows for classes appended since the mark are written without a
-        // journal and sort after every older class.
-        var plans_len = self.derived_map_plans.items().len;
-        while (plans_len > 0 and @backingInt(self.derived_map_plans.items()[plans_len - 1].class) >= self.ask_baseline_descs) plans_len -= 1;
-        self.derived_map_plans.shrinkRetainingCapacity(plans_len);
-        var closings_len = self.tag_tail_closings.items.len;
-        while (closings_len > 0 and @backingInt(self.tag_tail_closings.items[closings_len - 1].class) >= self.ask_baseline_descs) closings_len -= 1;
-        self.tag_tail_closings.shrinkRetainingCapacity(closings_len);
 
         // The merges are undone, so nothing they orphaned is dead.
         self.pending_free_descs.clearRetainingCapacity();
@@ -1116,7 +1071,8 @@ pub const Store = struct {
     pub fn endAskYes(self: *Self, mark: *const AskMark) Allocator.Error!void {
         self.debugAssertUnsealed();
         std.debug.assert(self.ask_open);
-        self.dropTrails(mark);
+        _ = mark;
+        self.undo_log.clearRetainingCapacity();
         self.ask_open = false;
         self.ask_baseline_slots = 0;
         self.ask_baseline_descs = 0;
@@ -1304,7 +1260,7 @@ pub const Store = struct {
     fn setSlot(self: *Self, comptime family: WriteFamily, idx: SlotStore.Idx, val: Slot) Allocator.Error!void {
         self.debugAssertUnsealed();
         if (self.journalsWrite(family, @backingInt(idx), self.ask_baseline_slots)) {
-            try self.slot_trail.append(self.gpa, .{ .idx = idx, .old = self.slots.get(idx) });
+            try self.undo_log.append(self.gpa, .{ .slot = .{ .idx = idx, .old = self.slots.get(idx) } });
         }
         switch (self.slots.get(idx)) {
             .root => |desc_idx| {
@@ -1393,7 +1349,7 @@ pub const Store = struct {
         var old = self.descs.getRow(idx);
         old.word.generalizing = false;
         old.word.rank_adjusted = false;
-        try self.desc_trail.append(self.gpa, .{ .idx = idx, .old = old });
+        try self.undo_log.append(self.gpa, .{ .desc = .{ .idx = idx, .old = old } });
     }
 
     /// Record the class of each of `vars` as settled. The caller guarantees
@@ -1429,7 +1385,7 @@ pub const Store = struct {
     fn setRootMeta(self: *Self, comptime family: WriteFamily, idx: DescStore.Idx, val: RootMeta) Allocator.Error!void {
         self.debugAssertUnsealed();
         if (self.journalsWrite(family, @backingInt(idx), self.ask_baseline_descs)) {
-            try self.root_meta_trail.append(self.gpa, .{ .idx = idx, .old = self.getRootMeta(idx) });
+            try self.undo_log.append(self.gpa, .{ .root_meta = .{ .idx = idx, .old = self.getRootMeta(idx) } });
         }
         self.class_watch.noteWrite(idx);
         self.root_metas.set(rootMetaIdx(idx), val);
@@ -1439,7 +1395,7 @@ pub const Store = struct {
         self.debugAssertUnsealed();
         const slot_idx = Self.varToSlotIdx(storage_var);
         if (self.journalsWrite(family, @backingInt(slot_idx), self.ask_baseline_slots)) {
-            try self.union_rank_trail.append(self.gpa, .{ .idx = slot_idx, .old = self.getUnionRank(storage_var) });
+            try self.undo_log.append(self.gpa, .{ .union_rank = .{ .idx = slot_idx, .old = self.getUnionRank(storage_var) } });
         }
         self.union_ranks.set(unionRankIdx(slot_idx), rank);
     }
@@ -1565,24 +1521,21 @@ pub const Store = struct {
         return self.derived_map_plans.items()[slot.index].plan;
     }
 
-    /// Before a recording write first changes a plan row of a class that
-    /// predates the open ask, keep a copy for discarding the ask.
-    fn journalDerivedMapPlans(self: *Self, comptime family: WriteFamily, class: DescStore.Idx) Allocator.Error!void {
-        if (!self.journalsWrite(family, @backingInt(class), self.ask_baseline_descs) or self.derived_map_plans_journaled) return;
-        self.derived_map_plans_undo.clearRetainingCapacity();
-        try self.derived_map_plans_undo.appendSlice(self.gpa, self.derived_map_plans.items());
-        self.derived_map_plans_journaled = true;
-    }
-
+    /// A write of `family` to the plan row of `class` journals it (in the
+    /// undo log) when the class predates the open ask.
     fn putClassDerivedMapPlan(self: *Self, comptime family: WriteFamily, class: DescStore.Idx, plan: DerivedMapPlan) Allocator.Error!void {
         self.debugAssertUnsealed();
         const slot = self.derivedMapPlanSlot(class);
         if (slot.found and std.meta.eql(self.derived_map_plans.items()[slot.index].plan, plan)) return;
-        try self.journalDerivedMapPlans(family, class);
+        const journals = self.journalsWrite(family, @backingInt(class), self.ask_baseline_descs);
+        if (journals) try self.undo_log.ensureUnusedCapacity(self.gpa, 1);
+        const index: u32 = @intCast(slot.index);
         if (slot.found) {
+            if (journals) self.undo_log.appendAssumeCapacity(.{ .plan_replaced = .{ .index = index, .old = self.derived_map_plans.items()[slot.index].plan } });
             self.derived_map_plans.items()[slot.index].plan = plan;
         } else {
             try self.derived_map_plans.insert(self.gpa, slot.index, .{ .class = class, .plan = plan });
+            if (journals) self.undo_log.appendAssumeCapacity(.{ .plan_inserted = index });
         }
     }
 
@@ -1590,7 +1543,9 @@ pub const Store = struct {
         self.debugAssertUnsealed();
         const slot = self.derivedMapPlanSlot(class);
         if (!slot.found) return;
-        try self.journalDerivedMapPlans(family, class);
+        if (self.journalsWrite(family, @backingInt(class), self.ask_baseline_descs)) {
+            try self.undo_log.append(self.gpa, .{ .plan_removed = .{ .index = @intCast(slot.index), .entry = self.derived_map_plans.items()[slot.index] } });
+        }
         _ = self.derived_map_plans.orderedRemove(slot.index);
     }
 
@@ -1655,24 +1610,21 @@ pub const Store = struct {
         return self.tag_tail_closings.items[slot.index].closing;
     }
 
-    /// Before a recording write first changes a closing row of a class that
-    /// predates the open ask, keep a copy for discarding the ask.
-    fn journalTagTailClosings(self: *Self, comptime family: WriteFamily, class: DescStore.Idx) Allocator.Error!void {
-        if (!self.journalsWrite(family, @backingInt(class), self.ask_baseline_descs) or self.tag_tail_closings_journaled) return;
-        self.tag_tail_closings_undo.clearRetainingCapacity();
-        try self.tag_tail_closings_undo.appendSlice(self.gpa, self.tag_tail_closings.items);
-        self.tag_tail_closings_journaled = true;
-    }
-
+    /// A write of `family` to the closing row of `class` journals it (in
+    /// the undo log) when the class predates the open ask.
     fn putClassTagTailClosing(self: *Self, comptime family: WriteFamily, class: DescStore.Idx, closing: TagTailClosing) Allocator.Error!void {
         self.debugAssertUnsealed();
         const slot = self.tagTailClosingSlot(class);
         if (slot.found and self.tag_tail_closings.items[slot.index].closing == closing) return;
-        try self.journalTagTailClosings(family, class);
+        const journals = self.journalsWrite(family, @backingInt(class), self.ask_baseline_descs);
+        if (journals) try self.undo_log.ensureUnusedCapacity(self.gpa, 1);
+        const index: u32 = @intCast(slot.index);
         if (slot.found) {
+            if (journals) self.undo_log.appendAssumeCapacity(.{ .closing_replaced = .{ .index = index, .old = self.tag_tail_closings.items[slot.index].closing } });
             self.tag_tail_closings.items[slot.index].closing = closing;
         } else {
             try self.tag_tail_closings.insert(self.gpa, slot.index, .{ .class = class, .closing = closing });
+            if (journals) self.undo_log.appendAssumeCapacity(.{ .closing_inserted = index });
         }
     }
 
@@ -1680,7 +1632,9 @@ pub const Store = struct {
         self.debugAssertUnsealed();
         const slot = self.tagTailClosingSlot(class);
         if (!slot.found) return;
-        try self.journalTagTailClosings(family, class);
+        if (self.journalsWrite(family, @backingInt(class), self.ask_baseline_descs)) {
+            try self.undo_log.append(self.gpa, .{ .closing_removed = .{ .index = @intCast(slot.index), .entry = self.tag_tail_closings.items[slot.index] } });
+        }
         _ = self.tag_tail_closings.orderedRemove(slot.index);
     }
 
@@ -4506,8 +4460,7 @@ test "canonicalizing for seal gives children representatives and flattens rows" 
     try std.testing.expectEqual(plan, store.derivedMapPlan(joined).?);
     try std.testing.expectEqual(decl, store.lookupNominalDeclByKey(origin, 7).?);
     try std.testing.expectEqual(elem, store.getNominalDecl(decl).backing);
-    try std.testing.expectEqual(@as(usize, 0), store.desc_trail.capacity);
-    try std.testing.expectEqual(@as(usize, 0), store.derived_map_plans_undo.capacity);
+    try std.testing.expectEqual(@as(usize, 0), store.undo_log.capacity);
     try std.testing.expectEqual(@as(usize, 0), store.frozen_anchors.capacity());
     try std.testing.expect(!store.isSettled(elem));
 
@@ -4578,7 +4531,7 @@ test "sealing releases checker-only buffers without allocating" {
         try store.markSettled(&.{value});
         try store.class_watch.watched.resize(gpa, 8, false);
         try store.class_watch.watched_list.ensureTotalCapacity(gpa, 8);
-        inline for (.{ "detach_members_scratch", "slot_trail", "desc_trail", "root_meta_trail", "union_rank_trail", "derived_map_plans_undo", "free_descs", "pending_free_descs" }) |field| {
+        inline for (.{ "detach_members_scratch", "undo_log", "free_descs", "pending_free_descs" }) |field| {
             try @field(store, field).ensureTotalCapacity(gpa, 8);
         }
         try store.static_dispatch_constraint_room.ensureTotalCapacity(gpa, 8);
