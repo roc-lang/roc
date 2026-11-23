@@ -1019,6 +1019,15 @@ pub const BindingScheme = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// The top-level value definition that owns a node: the definition's own
+/// node, its expression, or a node of its pattern.
+pub const TopLevelDefOwner = extern struct {
+    node: u32,
+    def: CIR.Def.Idx,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// Import-facing eligibility of a callable definition for stored constants.
 /// Checking publishes one row per module-global definition and per method
 /// binding's definition, ordered by definition id.
@@ -1236,6 +1245,10 @@ invoking_defs: collections.SafeList(CIR.Def.Idx),
 /// Exact stored-constant eligibility of each global or method callable, published after
 /// checking settles its body. Importers consume this instead of scanning CIR.
 callable_checking_facts: CallableCheckingFact.SafeList,
+/// The owning top-level value definition of each node a top-level value
+/// definition owns, in ascending node order. Checking produces it; importers
+/// read it.
+top_level_def_owners: TopLevelDefOwner.SafeList,
 checking_dependency: CheckingDependency,
 
 /// True only after `check.TypedCIR.prepareRuntimeEnv` has prepared this env for
@@ -1650,6 +1663,7 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.top_level_demand_dependencies_ready = false;
     self.invoking_defs = .{};
     self.callable_checking_facts = .{};
+    self.top_level_def_owners = .{};
     self.checking_dependency = .{};
     self.runtime_prepared = false;
 }
@@ -1716,6 +1730,7 @@ pub fn initWithSourceDigest(
         .top_level_demand_dependencies_ready = false,
         .invoking_defs = .{},
         .callable_checking_facts = .{},
+        .top_level_def_owners = .{},
         .checking_dependency = .{},
         .runtime_prepared = false,
         .idents = idents,
@@ -1797,6 +1812,7 @@ pub fn deinit(self: *Self) void {
     self.top_level_demand_dependencies.deinit(self.gpa);
     self.invoking_defs.deinit(self.gpa);
     self.callable_checking_facts.deinit(self.gpa);
+    self.top_level_def_owners.deinit(self.gpa);
     self.checking_dependency.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
@@ -1846,6 +1862,35 @@ pub fn defInvokes(self: *const Self, def_idx: CIR.Def.Idx) bool {
         }
     }
     return false;
+}
+
+/// Replace the checked record of which top-level value definition owns each
+/// node. `owners` must be in strictly ascending node order.
+pub fn setTopLevelDefOwners(self: *Self, owners: []const TopLevelDefOwner) std.mem.Allocator.Error!void {
+    var list = try TopLevelDefOwner.SafeList.initCapacity(self.gpa, owners.len);
+    errdefer list.deinit(self.gpa);
+    _ = try list.appendSlice(self.gpa, owners);
+    self.top_level_def_owners.deinit(self.gpa);
+    self.top_level_def_owners = list;
+}
+
+/// The top-level value definition that owns `node`, if one does.
+pub fn topLevelDefOwner(self: *const Self, node: CIR.Node.Idx) ?CIR.Def.Idx {
+    const owners = self.top_level_def_owners.items();
+    const wanted: u32 = @backingInt(node);
+    var low: usize = 0;
+    var high: usize = owners.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (owners[mid].node < wanted) {
+            low = mid + 1;
+        } else if (owners[mid].node > wanted) {
+            high = mid;
+        } else {
+            return owners[mid].def;
+        }
+    }
+    return null;
 }
 
 /// Import-facing stored-constant eligibility. Every global definition and every
@@ -4220,6 +4265,7 @@ pub const Serialized = extern struct {
     top_level_demand_dependencies: DependencyGraph.Dependency.SafeList.Serialized,
     invoking_defs: collections.SafeList(CIR.Def.Idx).Serialized,
     callable_checking_facts: CallableCheckingFact.SafeList.Serialized,
+    top_level_def_owners: TopLevelDefOwner.SafeList.Serialized,
     checking_dependency: CheckingDependency.Serialized,
     top_level_demand_dependencies_ready: bool,
     runtime_prepared: bool,
@@ -4335,6 +4381,7 @@ pub const Serialized = extern struct {
         );
         try self.invoking_defs.serialize(&env.invoking_defs, allocator, writer);
         try self.callable_checking_facts.serialize(&env.callable_checking_facts, allocator, writer);
+        try self.top_level_def_owners.serialize(&env.top_level_def_owners, allocator, writer);
         try self.checking_dependency.serialize(&env.checking_dependency, allocator, writer);
 
         // Set gpa and module_name to zeros;
@@ -4476,6 +4523,7 @@ pub const Serialized = extern struct {
             .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
             .invoking_defs = self.invoking_defs.deserializeInto(base_addr),
             .callable_checking_facts = self.callable_checking_facts.deserializeInto(base_addr),
+            .top_level_def_owners = self.top_level_def_owners.deserializeInto(base_addr),
             .checking_dependency = self.checking_dependency.deserializeInto(base_addr),
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,

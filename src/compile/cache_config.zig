@@ -442,7 +442,10 @@ pub const Constants = struct {
     /// 205: selected data hoists carry their callable-slot proof and validation
     /// candidates survive until request eligibility is known.
     /// 206: absent optional ids and indices are stored as zero.
-    pub const CACHE_VERSION = 207;
+    /// 207: each module records the top-level value definition that owns each
+    /// of its nodes.
+    /// 208: combines the 207 entry with each module's numeral-node index.
+    pub const CACHE_VERSION = 208;
 };
 
 /// Configuration for the Roc cache system.
