@@ -32289,11 +32289,18 @@ fn projectExpectedAggregateShape(
             self.var_set.clearRetainingCapacity();
             if (cell_contains_error) return false;
         }
-        if (try self.readRelation(aggregate_type.var_, shape_var, .relate) == .succeeds) {
-            self.noteSpeculation(.expected_aggregate_shape, .read_first);
-            const result = try self.runUnify(aggregate_type.var_, shape_var, env, unifyOptionsForContext(aggregate_type.context, .write_no_report));
-            std.debug.assert(result.isEstablished());
-            return true;
+        switch (try self.readRelation(aggregate_type.var_, shape_var, .relate)) {
+            .succeeds => {
+                self.noteSpeculation(.expected_aggregate_shape, .read_first);
+                const result = try self.runUnify(aggregate_type.var_, shape_var, env, unifyOptionsForContext(aggregate_type.context, .write_no_report));
+                std.debug.assert(result.isEstablished());
+                return true;
+            },
+            .fails => {
+                self.noteSpeculation(.expected_aggregate_shape, .read_first);
+                return false;
+            },
+            .undecided => {},
         }
     }
     var commit_probe = try self.beginCommitProbe(env);
@@ -32354,11 +32361,18 @@ fn commitProjectedStoredValue(
     actual: Var,
     env: *Env,
 ) std.mem.Allocator.Error!bool {
-    if (try self.readRelation(projected, actual, .relate) == .succeeds) {
-        self.noteSpeculation(.projected_stored_value, .read_first);
-        const result = try self.runUnify(projected, actual, env, .{ .on_mismatch = .write_no_report });
-        std.debug.assert(result.isEstablished());
-        return true;
+    switch (try self.readRelation(projected, actual, .relate)) {
+        .succeeds => {
+            self.noteSpeculation(.projected_stored_value, .read_first);
+            const result = try self.runUnify(projected, actual, env, .{ .on_mismatch = .write_no_report });
+            std.debug.assert(result.isEstablished());
+            return true;
+        },
+        .fails => {
+            self.noteSpeculation(.projected_stored_value, .read_first);
+            return false;
+        },
+        .undecided => {},
     }
     var commit_probe = try self.beginCommitProbe(env);
     self.noteSpeculation(.projected_stored_value, .probe);
@@ -35567,9 +35581,16 @@ fn discardedVarUpdate(self: *Self, expr_idx: CIR.Expr.Idx, empty_rec: Var) std.m
 /// by a unification that is rolled back and records no problems. The gating
 /// probe for Discarded Var Update (`discardedVarUpdate`).
 fn probeCanUseAs(self: *Self, expected_var: Var, actual_var: Var) std.mem.Allocator.Error!bool {
-    if (try self.readRelation(expected_var, actual_var, .decide) == .succeeds) {
-        self.noteSpeculation(.discarded_var_update, .read_first);
-        return true;
+    switch (try self.readRelation(expected_var, actual_var, .decide)) {
+        .succeeds => {
+            self.noteSpeculation(.discarded_var_update, .read_first);
+            return true;
+        },
+        .fails => {
+            self.noteSpeculation(.discarded_var_update, .read_first);
+            return false;
+        },
+        .undecided => {},
     }
     var probe = try self.beginProbe(null);
     self.noteSpeculation(.discarded_var_update, .probe);
@@ -66422,6 +66443,9 @@ const ReadRelation = enum {
     /// unconstrained flexible variable the other does not reach, which the
     /// relation only binds.
     succeeds,
+    /// The relation fails at its operands themselves, before it relates
+    /// anything they hold or writes anything (`relationCannotSucceed`).
+    fails,
     /// Reading does not settle the relation.
     undecided,
 };
@@ -66459,9 +66483,61 @@ fn bindableFlex(resolved: types_mod.ResolvedVarDesc, comptime use: RelationUse) 
         std.meta.eql(resolved.desc.flags, types_mod.types.DescriptorFlags{});
 }
 
+/// Whether a class's flags leave every relation of it that does not lift an
+/// anonymous structure into a nominal type exactly as without them: a frozen
+/// class merges keeping its descriptor, and the marks of an opened nominal
+/// backing's structure and of an annotation's tag union are read only when
+/// such a lift is decided.
+fn relationNeutralFlags(flags: types_mod.types.DescriptorFlags) bool {
+    const neutral: types_mod.types.DescriptorFlags = .{
+        .frozen = true,
+        .nominal_backing_structure = true,
+        .annotation_tag_union = true,
+    };
+    return @as(u16, @bitCast(flags)) & ~@as(u16, @bitCast(neutral)) == 0;
+}
+
+/// Whether relating two record fields of one name relates their kinds
+/// (`unifySharedFieldPresence`): `null` is a required field, otherwise the
+/// field's kind variable. Kinds of one class, two equal kinds, or a
+/// flag-free kind variable facing a kind or another such variable relate;
+/// a required field relates to a required or defaulted kind or such a
+/// variable.
+fn fieldKindsRelate(self: *Self, left: ?Var, right: ?Var) bool {
+    const left_var = left orelse return self.requiredFieldRelatesToKind(right);
+    const right_var = right orelse return self.requiredFieldRelatesToKind(left);
+    const left_kind = self.types.resolveVar(left_var);
+    const right_kind = self.types.resolveVar(right_var);
+    if (left_kind.var_ == right_kind.var_) return true;
+    if (fieldKindIsFreeVariable(left_kind)) return fieldKindIsFreeVariable(right_kind) or right_kind.desc.content == .field_presence;
+    if (fieldKindIsFreeVariable(right_kind)) return left_kind.desc.content == .field_presence;
+    if (left_kind.desc.content != .field_presence or right_kind.desc.content != .field_presence) return false;
+    return std.meta.eql(left_kind.desc.content.field_presence, right_kind.desc.content.field_presence);
+}
+
+fn requiredFieldRelatesToKind(self: *Self, kind: ?Var) bool {
+    const kind_var = kind orelse return true;
+    const resolved = self.types.resolveVar(kind_var);
+    if (fieldKindIsFreeVariable(resolved)) return true;
+    return switch (resolved.desc.content) {
+        .field_presence => |presence| presence != .optional,
+        .flex, .rigid, .alias, .structure, .err => false,
+    };
+}
+
+/// A field kind variable not yet decided, with no constraint or flag.
+fn fieldKindIsFreeVariable(resolved: types_mod.ResolvedVarDesc) bool {
+    return switch (resolved.desc.content) {
+        .flex => |flex| flex.constraints.len() == 0 and flex.literal == .none and
+            std.meta.eql(resolved.desc.flags, types_mod.types.DescriptorFlags{}),
+        .rigid, .alias, .field_presence, .structure, .err => false,
+    };
+}
+
 /// Whether `root` reaches no flexible, erroneous, or field-kind variable, no
 /// function of undecided effect, no field of undecided kind, and no class
-/// carrying a checker decision, within the shared `visited` budget.
+/// carrying a checker decision a relation reads, within the shared `visited`
+/// budget.
 fn isGroundWithin(self: *Self, root: Var, visited: *usize) bool {
     var stack: [identical_relation_pair_budget]Var = undefined;
     var len: usize = 1;
@@ -66483,7 +66559,7 @@ fn isGroundWithin(self: *Self, root: Var, visited: *usize) bool {
         visited.* += 1;
         if (visited.* > identical_relation_pair_budget) return false;
         const resolved = self.types.resolveVar(stack[len]);
-        if (!std.meta.eql(resolved.desc.flags, types_mod.types.DescriptorFlags{})) return false;
+        if (!relationNeutralFlags(resolved.desc.flags)) return false;
         switch (resolved.desc.content) {
             .flex, .field_presence, .err => return false,
             .rigid => {},
@@ -66527,7 +66603,273 @@ fn isGroundWithin(self: *Self, root: Var, visited: *usize) bool {
 fn readRelation(self: *Self, a: Var, b: Var, comptime use: RelationUse) std.mem.Allocator.Error!ReadRelation {
     if (self.relationIsStructurallyIdentical(a, b, use)) return .succeeds;
     if (try self.relationOnlyBinds(a, b, use) or try self.relationOnlyBinds(b, a, use)) return .succeeds;
+    if (self.relationCannotSucceed(a, b)) return .fails;
     return .undecided;
+}
+
+/// The function a function structure holds.
+fn flatFunc(flat: types_mod.FlatType) types_mod.Func {
+    return switch (flat) {
+        .fn_pure, .fn_effectful, .fn_unbound => |func| func,
+        .tuple, .nominal_type, .record, .empty_record, .tag_union, .empty_tag_union => unreachable, // the caller checked the kind is a function
+    };
+}
+
+/// Whether relating `a` and `b` fails at the two operands themselves, with
+/// nothing written and nothing they hold related: both are structures,
+/// neither an alias, an application of an invalid declaration or a deferred
+/// requirement callable, and their kinds never relate (a tuple and anything
+/// else; two applications of different declarations, or of one with
+/// different argument counts; a nominal type and a tuple, a function or an
+/// empty row; a function and a non-function; functions of different arity,
+/// or a pure and an effectful one; a record row and a tag row; tuples of
+/// different length; a tag union with tags and the empty tag union). A
+/// nominal type and a non-empty record or tag union may relate by lifting,
+/// so they are not read.
+fn relationCannotSucceed(self: *Self, a: Var, b: Var) bool {
+    const left = self.types.resolveVar(a);
+    const right = self.types.resolveVar(b);
+    if (left.desc.flags.deferred_callable or right.desc.flags.deferred_callable) return false;
+    const left_flat = switch (left.desc.content) {
+        .structure => |flat| flat,
+        .flex, .rigid, .alias, .field_presence, .err => return false,
+    };
+    const right_flat = switch (right.desc.content) {
+        .structure => |flat| flat,
+        .flex, .rigid, .alias, .field_presence, .err => return false,
+    };
+    for ([_]types_mod.FlatType{ left_flat, right_flat }) |flat| {
+        if (flat == .nominal_type and self.types.nominalDeclIsInvalid(flat.nominal_type)) return false;
+    }
+    const Kind = enum { tuple, nominal, function, record_row, empty_record, tag_row, empty_tag_union };
+    const kindOf = struct {
+        fn of(flat: types_mod.FlatType) Kind {
+            return switch (flat) {
+                .tuple => .tuple,
+                .nominal_type => .nominal,
+                .fn_pure, .fn_effectful, .fn_unbound => .function,
+                .record => .record_row,
+                .empty_record => .empty_record,
+                .tag_union => .tag_row,
+                .empty_tag_union => .empty_tag_union,
+            };
+        }
+    }.of;
+    const left_kind = kindOf(left_flat);
+    const right_kind = kindOf(right_flat);
+    if (left_kind == .tuple or right_kind == .tuple) {
+        if (left_kind != right_kind) return true;
+        return left_flat.tuple.elems.len() != right_flat.tuple.elems.len();
+    }
+    if (left_kind == .function or right_kind == .function) {
+        if (left_kind != right_kind) return true;
+        const left_func = flatFunc(left_flat);
+        const right_func = flatFunc(right_flat);
+        if ((left_flat == .fn_pure and right_flat == .fn_effectful) or (left_flat == .fn_effectful and right_flat == .fn_pure)) return true;
+        return left_func.args.len() != right_func.args.len();
+    }
+    if (left_kind == .nominal and right_kind == .nominal) {
+        const left_nominal = left_flat.nominal_type;
+        const right_nominal = right_flat.nominal_type;
+        if (!unifier.sameNominalIdentity(left_nominal, right_nominal)) return true;
+        return left_nominal.args.count != right_nominal.args.count;
+    }
+    if (left_kind == .nominal or right_kind == .nominal) {
+        const other = if (left_kind == .nominal) right_kind else left_kind;
+        return other == .empty_record or other == .empty_tag_union;
+    }
+    const left_record = left_kind == .record_row or left_kind == .empty_record;
+    const right_record = right_kind == .record_row or right_kind == .empty_record;
+    if (left_record != right_record) return true;
+    if (left_kind == .tag_row and right_kind == .empty_tag_union) return left_flat.tag_union.tags.len() != 0;
+    if (right_kind == .tag_row and left_kind == .empty_tag_union) return right_flat.tag_union.tags.len() != 0;
+    return false;
+}
+
+test "read-first relations agree with the unifier on random small type pairs" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initOpen("ReadRelation",
+        \\text : Str
+        \\text = "t"
+        \\count : U64
+        \\count = 1
+    );
+    defer test_env.deinit();
+    const checker = &test_env.checker;
+    const Gen = struct {
+        checker: *Self,
+        random: std.Random,
+        str_content: Content,
+        u64_content: Content,
+        names: [4]Ident.Idx,
+        pool: std.ArrayListUnmanaged(Var) = .empty,
+
+        fn leafOrStructure(gen: *@This(), depth: u32) Allocator.Error!Var {
+            const store = gen.checker.types;
+            const choices: u32 = if (depth == 0) 6 else 13;
+            const var_ = switch (gen.random.uintLessThan(u32, choices)) {
+                0, 1 => if (gen.pool.items.len != 0)
+                    gen.pool.items[gen.random.uintLessThan(usize, gen.pool.items.len)]
+                else
+                    try store.fresh(),
+                2 => try store.fresh(),
+                3 => try store.freshFromContent(.{ .rigid = types_mod.Rigid.init(gen.names[0]) }),
+                4 => try store.freshFromContent(gen.str_content),
+                5 => try store.freshFromContent(gen.u64_content),
+                6 => try store.freshFromContent(try gen.checker.mkListContent(try gen.leafOrStructure(depth - 1))),
+                7 => try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{
+                    try gen.leafOrStructure(depth - 1),
+                    try gen.leafOrStructure(depth - 1),
+                }) } } }),
+                8, 9 => blk: {
+                    const arg = try gen.leafOrStructure(depth - 1);
+                    const ret = try gen.leafOrStructure(depth - 1);
+                    const func: types_mod.Func = .{ .args = try store.appendVars(&.{arg}), .ret = ret };
+                    break :blk try store.freshFromContent(.{ .structure = switch (gen.random.uintLessThan(u32, 3)) {
+                        0 => .{ .fn_pure = func },
+                        1 => .{ .fn_effectful = func },
+                        else => .{ .fn_unbound = func },
+                    } });
+                },
+                10 => blk: {
+                    const x = try gen.leafOrStructure(depth - 1);
+                    const fields = if (gen.random.boolean())
+                        try store.appendRecordFields(&.{.{ .name = gen.names[2], .presence = try gen.fieldKind(x) }})
+                    else
+                        try store.appendRecordFields(&.{
+                            .{ .name = gen.names[2], .presence = .required(x) },
+                            .{ .name = gen.names[3], .presence = try gen.fieldKind(try gen.leafOrStructure(depth - 1)) },
+                        });
+                    const ext = if (gen.random.boolean())
+                        try store.freshFromContent(.{ .structure = .empty_record })
+                    else
+                        try store.fresh();
+                    break :blk try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
+                },
+                11, 12 => blk: {
+                    const tag_a = try store.mkTag(gen.names[0], &.{});
+                    const tag_b = try store.mkTag(gen.names[1], &.{try gen.leafOrStructure(depth - 1)});
+                    const ext = if (gen.random.boolean())
+                        try store.freshFromContent(.{ .structure = .empty_tag_union })
+                    else
+                        try store.fresh();
+                    const tags: []const types_mod.Tag = if (gen.random.boolean()) &.{ tag_a, tag_b } else &.{tag_b};
+                    const tag_union = try store.freshFromContent(try store.mkTagUnion(tags, ext));
+                    if (gen.random.uintLessThan(u32, 4) == 0) try store.markAnnotationTagUnion(tag_union);
+                    break :blk tag_union;
+                },
+                else => unreachable, // the choice is below `choices`
+            };
+            try gen.pool.append(gen.checker.gpa, var_);
+            return var_;
+        }
+
+        /// Two types of one shape whose leaves, field kinds and marks are
+        /// chosen apart, so their relation reaches deep pairs.
+        fn shapedPair(gen: *@This(), depth: u32) Allocator.Error![2]Var {
+            const store = gen.checker.types;
+            if (depth == 0 or gen.random.uintLessThan(u32, 4) == 0) {
+                return .{ try gen.leafOrStructure(0), try gen.leafOrStructure(0) };
+            }
+            var out: [2]Var = undefined;
+            switch (gen.random.uintLessThan(u32, 5)) {
+                0 => {
+                    const elems = try gen.shapedPair(depth - 1);
+                    for (&out, elems) |*var_, elem| var_.* = try store.freshFromContent(try gen.checker.mkListContent(elem));
+                },
+                1 => {
+                    const first = try gen.shapedPair(depth - 1);
+                    const second = try gen.shapedPair(depth - 1);
+                    for (&out, 0..) |*var_, side| var_.* = try store.freshFromContent(.{ .structure = .{ .tuple = .{
+                        .elems = try store.appendVars(&.{ first[side], second[side] }),
+                    } } });
+                },
+                2 => {
+                    const arg = try gen.shapedPair(depth - 1);
+                    const ret = try gen.shapedPair(depth - 1);
+                    for (&out, 0..) |*var_, side| {
+                        const func: types_mod.Func = .{ .args = try store.appendVars(&.{arg[side]}), .ret = ret[side] };
+                        var_.* = try store.freshFromContent(.{ .structure = if (gen.random.boolean()) .{ .fn_pure = func } else .{ .fn_unbound = func } });
+                    }
+                },
+                3 => {
+                    const x = try gen.shapedPair(depth - 1);
+                    const ext = try store.freshFromContent(.{ .structure = .empty_record });
+                    for (&out, 0..) |*var_, side| var_.* = try store.freshFromContent(.{ .structure = .{ .record = .{
+                        .fields = try store.appendRecordFields(&.{.{ .name = gen.names[2], .presence = try gen.fieldKind(x[side]) }}),
+                        .ext = if (gen.random.boolean()) ext else try store.freshFromContent(.{ .structure = .empty_record }),
+                    } } });
+                },
+                else => {
+                    const payload = try gen.shapedPair(depth - 1);
+                    const ext = try store.freshFromContent(.{ .structure = .empty_tag_union });
+                    for (&out, 0..) |*var_, side| {
+                        const tag = try store.mkTag(gen.names[1], &.{payload[side]});
+                        var_.* = try store.freshFromContent(try store.mkTagUnion(&.{tag}, ext));
+                        if (gen.random.uintLessThan(u32, 3) == 0) try store.markAnnotationTagUnion(var_.*);
+                    }
+                },
+            }
+            return out;
+        }
+
+        fn fieldKind(gen: *@This(), value: Var) Allocator.Error!types_mod.RecordField.Presence {
+            const store = gen.checker.types;
+            return switch (gen.random.uintLessThan(u32, 5)) {
+                0, 1 => .required(value),
+                2 => .unknown(try store.fresh(), value),
+                3 => .unknown(try store.freshFromContent(.{ .field_presence = .required }), value),
+                else => .unknown(try store.freshFromContent(.{ .field_presence = .optional }), value),
+            };
+        }
+    };
+    const content_of = struct {
+        fn of(env: *TestEnv, name: []const u8) TestEnv.TestEnvError!Content {
+            return env.checker.types.resolveVar(ModuleEnv.varFrom(try env.defExpr(name))).desc.content;
+        }
+    }.of;
+    var names: [4]Ident.Idx = undefined;
+    for ([_][]const u8{ "A", "B", "x", "y" }, &names) |text, *name| name.* = try test_env.module_env.insertIdent(Ident.for_text(text));
+    var prng = std.Random.DefaultPrng.init(0x5eed);
+    var gen: Gen = .{
+        .checker = checker,
+        .random = prng.random(),
+        .str_content = try content_of(&test_env, "text"),
+        .u64_content = try content_of(&test_env, "count"),
+        .names = names,
+    };
+    defer gen.pool.deinit(checker.gpa);
+
+    var decided: [3]usize = @splat(0);
+    for (0..4000) |_| {
+        const depth = gen.random.uintLessThan(u32, 4);
+        const a, const b = switch (gen.random.uintLessThan(u32, 3)) {
+            0 => .{ try gen.leafOrStructure(depth), try gen.leafOrStructure(depth) },
+            1 => blk: {
+                // A structural copy over the same leaves often relates.
+                const a = try gen.leafOrStructure(depth);
+                break :blk .{ a, try checker.types.freshFromContent(checker.types.resolveVar(a).desc.content) };
+            },
+            else => try gen.shapedPair(depth),
+        };
+        const verdicts = [_]ReadRelation{
+            try checker.readRelation(a, b, .decide),
+            try checker.readRelation(a, b, .relate),
+        };
+        var probe = try checker.beginProbe(null);
+        const result = try checker.probeUnifyResultWithoutRecordingProblems(a, b);
+        probe.rollback();
+        for (verdicts) |verdict| {
+            switch (verdict) {
+                .succeeds => try std.testing.expect(result.isEstablished()),
+                .fails => try std.testing.expect(!result.isAccepted()),
+                .undecided => {},
+            }
+            decided[@backingInt(verdict)] += 1;
+        }
+    }
+    // The generator reaches every verdict.
+    for (decided) |count| try std.testing.expect(count != 0);
 }
 
 /// Whether `target` is an unconstrained flexible variable that `value` does
@@ -66587,9 +66929,8 @@ fn relationIsStructurallyIdentical(self: *Self, a: Var, b: Var, comptime use: Re
             continue;
         }
         // A checker decision a class carries can change how its relation
-        // merges, so only classes carrying none are compared.
-        if (!std.meta.eql(left.desc.flags, types_mod.types.DescriptorFlags{}) or
-            !std.meta.eql(right.desc.flags, types_mod.types.DescriptorFlags{})) return false;
+        // merges, so only classes carrying none of those are compared.
+        if (!relationNeutralFlags(left.desc.flags) or !relationNeutralFlags(right.desc.flags)) return false;
         const Push = struct {
             fn pair(stack: *[identical_relation_pair_budget][2]Var, len: *usize, x: Var, y: Var) bool {
                 if (len.* == stack.len) return false;
@@ -66660,7 +67001,7 @@ fn relationIsStructurallyIdentical(self: *Self, a: Var, b: Var, comptime use: Re
                         if (left_fields.len != right_fields.len) return false;
                         for (left_fields.items(.name), right_fields.items(.name), left_fields.items(.presence), right_fields.items(.presence)) |left_name, right_name, left_presence, right_presence| {
                             if (!left_name.eql(right_name)) return false;
-                            if (left_presence.presence_var.get() != null or right_presence.presence_var.get() != null) return false;
+                            if (!self.fieldKindsRelate(left_presence.presence_var.get(), right_presence.presence_var.get())) return false;
                             if (!Push.pair(&pending, &pending_len, left_presence.var_, right_presence.var_)) return false;
                         }
                         if (!self.rowEndsAtTail(left_record.ext) or !self.rowEndsAtTail(right_record.ext)) return false;
@@ -66808,10 +67149,17 @@ fn checkBranchBodyAgainstExpected(
     // Probe (1): does the body match the annotated return type? That relation
     // reads only this branch's value.
     try self.collectScopeRigids(&scope, expected_ret, env);
-    const compatible = if (scope.rigids.items.len == 0 and try self.readRelation(related_var, expected_ret, .decide) == .succeeds) read: {
-        self.noteSpeculation(.branch_compatible, .read_first);
-        break :read true;
-    } else try self.probeBranchCompatible(related_var, expected_ret, &scope);
+    const compatible = switch (try self.readRelation(related_var, expected_ret, .decide)) {
+        .succeeds => if (scope.rigids.items.len == 0) read: {
+            self.noteSpeculation(.branch_compatible, .read_first);
+            break :read true;
+        } else try self.probeBranchCompatible(related_var, expected_ret, &scope),
+        .fails => read: {
+            self.noteSpeculation(.branch_compatible, .read_first);
+            break :read false;
+        },
+        .undecided => try self.probeBranchCompatible(related_var, expected_ret, &scope),
+    };
     if (!compatible) {
         if (widening) |w| self.discardResultWidening(w);
         const previous_relation = try self.enterRelation(.of(.value, body_expr_idx, 0));
@@ -66829,14 +67177,17 @@ fn checkBranchBodyAgainstExpected(
     // already propagated into env); failure falls through to the report below
     // AFTER the scope's rollback, so the snapshots it takes see the pristine vars.
     // A fold that reading shows can only succeed relates directly.
-    if (widening == null and try self.readRelation(related_var, acc, .relate) == .succeeds) {
+    const read: ReadRelation = if (widening == null) try self.readRelation(related_var, acc, .relate) else .undecided;
+    if (read == .succeeds) {
         self.noteSpeculation(.branch_fold, .read_first);
         const result = try self.runUnify(related_var, acc, env, unifyOptionsForContext(ctx, .write_no_report));
         std.debug.assert(result.isAccepted());
         try self.claimRecordedProblems();
         return .related;
     }
-    {
+    if (read == .fails) {
+        self.noteSpeculation(.branch_fold, .read_first);
+    } else {
         var commit_probe = try self.beginCommitProbe(env);
         self.noteSpeculation(.branch_fold, .probe);
         var committed = false;

@@ -12222,15 +12222,30 @@ discards the result) may instead decide a relation by reading its operands
 before anything is written, when the read shows the relation can only
 succeed (`readRelation`): the operands are one class; or they are the same
 structure all the way down to shared classes, where every compared class
-carries no descriptor flags, records hold only required fields, rows end
-at a closed row or a variable rather than chaining into another row part,
-and function types carry no effect dependencies, except that a bindable
-flexible variable may face a ground type (one reaching no flexible,
-erroneous or field-kind variable, no function of undecided effect, no field
-of undecided kind and no flagged class), which the relation binds, and a
-variable met twice must face one class both times; or one operand is a
-bindable flexible variable the other does not reach, which the relation
-only binds. A bindable variable is unconstrained, flag-free and not
+carries no descriptor flags other than relation-neutral ones (frozen, the
+mark of an opened nominal backing's structure, and the mark of an
+annotation's tag union, which only a lift of an anonymous structure into a
+nominal type reads), the fields of two records of one name have kinds that
+relate (one kind class, equal kinds, an unconstrained flag-free kind
+variable facing a kind or another such variable, or a required field facing
+a required or defaulted kind or such a variable), rows end at a closed row
+or a variable rather than chaining into another row part, and function
+types carry no effect dependencies, except that a bindable flexible
+variable may face a ground type (one reaching no flexible, erroneous or
+field-kind variable, no function of undecided effect, no field of undecided
+kind and no class flagged other than relation-neutrally), which the
+relation binds, and a variable met twice must face one class both times;
+or one operand is a bindable flexible variable the other does not reach,
+which the relation only binds. Reading also shows that a relation fails
+when it fails at the two operands themselves, before anything they hold is
+related or anything is written (`relationCannotSucceed`): both are
+structures, neither an alias, an application of an invalid declaration or
+a deferred requirement callable, and their kinds never relate, such as two
+applications of different declarations, a function and a non-function,
+functions of different arity, or a record row and a tag row; a nominal type
+and a non-empty record or tag union can relate by lifting and are not
+read. A site whose probe would have failed does what it does after a failed
+probe. A bindable variable is unconstrained, flag-free and not
 generalized, and, when the site runs the relation rather than only needing
 its verdict, is no literal's type: binding a literal's type determines the
 literal, which a probe settles at the next dispatch pass and a direct
