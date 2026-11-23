@@ -12301,6 +12301,66 @@ The checker counts, per site, how often it decided a relation in a probe, by
 asking the unifier, by reading first, or by relating for real;
 `ROC_CHECKER_SPECULATION_STATS` prints the counts for every checked module.
 
+### Asks
+
+A site that must relate two types to learn whether they relate, and keep
+the relation only when they do, asks the unifier (`Check.beginAsk`,
+`askRelate`, `askYes`/`askNo`, and `unifyIfRelates` for a site that keeps
+or drops one relation as it stands). The unifier is one body specialized at
+compile time on how it writes the type store (`types.WriteMode`): every
+ordinary relation runs the `.direct` specialization, whose writes record
+nothing, and an ask runs the `.recording` one (`unify.unifyRecording`),
+which journals the old value of every slot, descriptor, root, union rank,
+derived map plan row and tag tail closing row that predates the ask before
+writing it, and compresses no storage path. A recording relation records no
+problem and poisons nothing. While the ask is open the type store's free
+list is set aside, so every class created is appended, and the descriptors
+the relation's merges orphan wait until the ask ends.
+
+An ask is the unifier alone. What a relation leaves for the checker (fresh
+variables to rank and give regions, deferred dispatch constraints, literals
+it determined, defaults it absorbed) stays in the unifier's scratch until
+the ask is kept, when the checker takes it exactly as after a direct
+relation (`finishUnify`). A site that reads the tentative result before
+deciding reads it through non-compressing resolves. Kept, the ask's writes
+stand and the orphaned descriptors are freed; discarded, every journaled
+entry is restored, everything appended is dropped, and the free list is put
+back, so the store is as it was; what the unifier's scratch holds about the
+relation's mismatch stays for the site's report, as after a probe. The
+one piece of checker code a recording relation runs is the deferred
+requirement callable link (Deferred requirement callables): its redirect is
+written in the recording specialization, the use it links is recorded, and a
+discarded ask unlinks it and drops the regions of the copies it made; a kept
+ask registers the copies.
+
+A recording relation that meets a row repeating a label stops there. When
+that row predates the ask, the ask is discarded and the row is normalized
+(Row Union Normalization), which reports the row's conflict when it has
+one. A site whose ask holds one relation, or that relates first and then
+reads, asks again; a site whose ask holds several relations treats the ask
+as failed.
+
+Some sites instantiate schemes between their relations (an inspect
+override's instance, a flexible constraint's default method, a rejected
+call's fresh function type, an interpolation part's method, the constructor
+an owned tag lifts into). Instantiation grows checker lists that an
+ordinary ask leaves alone (scheme uses, dispatchers, open literals and the
+like), so such an ask (`InstantiatingAsk`) also holds those lists' lengths
+and truncates them when discarded, and its checker code runs as it ran in
+the commit probe these sites used: the probe flags are set while the ask is
+open, so an instantiation inside it registers no use for whole-use replay,
+and the literals its kept relations determine wait for the next dispatch
+pass.
+
+The invariants that make an ask safe are compiler invariants, asserted in
+debug builds: asks never nest and never open inside a probe; while one is
+open, no direct write and no compressing resolve reaches an entry that
+predates it; and a discarded ask leaves every other checker list as long as
+it was when the ask began. The module test "an ask relates random small type
+pairs as a direct relation does, and a discarded ask changes nothing" pins
+that a kept ask solves the same types as a direct relation and a discarded
+one restores the store byte for byte.
+
 ### Concrete Builtin Numeral Introduction
 
 A numeric expression may omit constructing its `from_numeral` signature graph
