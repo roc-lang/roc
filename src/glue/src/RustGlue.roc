@@ -156,12 +156,14 @@ type_repr_to_rust = |type_table, duplicate_names, preferred_names, type_id, type
 	}
 }
 
-## Resolve a tag union to a Rust type. Single-variant unions are unwrapped to their payload.
+## Resolve a tag union to a Rust type. A single-variant union is unwrapped to
+## its payload, or names the generated struct of its several payloads.
 ## Multi-variant unions with a name return a generated struct name.
 resolve_tag_union_type_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, TagUnionRepr -> Str
 resolve_tag_union_type_rust = |type_table, duplicate_names, preferred_names, type_id, tu|
-	match TypeTable.single_variant_payload(tu) {
+	match type_table.single_variant_payload(type_id, tu) {
 		SinglePayload(payload_id) => type_id_to_rust(type_table, duplicate_names, preferred_names, payload_id)
+		SinglePayloadStruct(_) => tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)
 		SingleNoPayload => "*mut c_void"
 		NotSingleVariant =>
 			if tu.name != "" {
@@ -363,18 +365,26 @@ generated_type_names_rust = |type_table, duplicate_names| {
 					$names = $names.append(record_struct_name(type_table, duplicate_names, $type_id, rec))
 				}
 			RocTagUnion(tu) =>
-				if List.len(tu.tags) >= 2 and tu.name != "" {
-					struct_name = default_tag_union_struct_name(type_table, duplicate_names, $type_id, tu)
-					$names = $names.append(struct_name)
-					if type_info.layout.tag_union_has_payload() {
-						$names = $names.append("${struct_name}Tag")
-						$names = $names.append("${struct_name}Payload")
-						for tag in type_info.layout.tag_layouts() {
-							if abi_tag_has_payload(tag) and List.len(tag.payload) > 1 {
-								$names = $names.append("${struct_name}${capitalize_first(tag.name)}Payload")
+				match type_table.single_variant_payload($type_id, tu) {
+					SinglePayloadStruct(_) => {
+						$names = $names.append(default_tag_union_struct_name(type_table, duplicate_names, $type_id, tu))
+					}
+					NotSingleVariant =>
+						if tu.name != "" {
+							struct_name = default_tag_union_struct_name(type_table, duplicate_names, $type_id, tu)
+							$names = $names.append(struct_name)
+							if type_info.layout.tag_union_has_payload() {
+								$names = $names.append("${struct_name}Tag")
+								$names = $names.append("${struct_name}Payload")
+								for tag in type_info.layout.tag_layouts() {
+									if abi_tag_has_payload(tag) and List.len(tag.payload) > 1 {
+										$names = $names.append("${struct_name}${capitalize_first(tag.name)}Payload")
+									}
+								}
 							}
 						}
-					}
+					SinglePayload(_) => {}
+					SingleNoPayload => {}
 				}
 			_ => {}
 		}
@@ -2224,12 +2234,28 @@ generate_tag_union_structs_rust = |type_table, duplicate_names, preferred_names|
 	for type_info in type_table_entries(type_table) {
 		match type_info.repr {
 			RocTagUnion(tu) =>
-				if List.len(tu.tags) >= 2 and tu.name != "" {
-					struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, $type_id, tu)
-					if !(List.contains($seen_names, struct_name)) {
-						$seen_names = $seen_names.append(struct_name)
-						$structs = Str.concat($structs, generate_single_tag_union_rust(type_table, duplicate_names, preferred_names, $type_id, tu, type_info.layout))
+				match type_table.single_variant_payload($type_id, tu) {
+					SinglePayloadStruct(tag_layout) => {
+						struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, $type_id, tu)
+						if !(List.contains($seen_names, struct_name)) {
+							$seen_names = $seen_names.append(struct_name)
+							doc = "/// Payloads of the only variant of ${tu.name}, which stores no discriminant.\n"
+							$structs = Str.concat(
+								$structs,
+								generate_record_struct_decl_rust(doc, struct_name, type_table, duplicate_names, preferred_names, tag_layout.payload_fields, Bool.False, type_info.layout),
+							)
+						}
 					}
+					NotSingleVariant =>
+						if tu.name != "" {
+							struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, $type_id, tu)
+							if !(List.contains($seen_names, struct_name)) {
+								$seen_names = $seen_names.append(struct_name)
+								$structs = Str.concat($structs, generate_single_tag_union_rust(type_table, duplicate_names, preferred_names, $type_id, tu, type_info.layout))
+							}
+						}
+					SinglePayload(_) => {}
+					SingleNoPayload => {}
 				}
 			_ => {}
 		}
@@ -2501,8 +2527,9 @@ release_policy_for_type_id_rust = |type_table, duplicate_names, preferred_names,
 				"${record_struct_name(type_table, duplicate_names, type_id, rec)}Release"
 			}
 		RocTagUnion(tu) =>
-			match TypeTable.single_variant_payload(tu) {
+			match type_table.single_variant_payload(type_id, tu) {
 				SinglePayload(payload_id) => release_policy_for_type_id_rust(type_table, duplicate_names, preferred_names, payload_id)
+				SinglePayloadStruct(_) => "${tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)}Release"
 				SingleNoPayload => "RocNoopRelease"
 				NotSingleVariant =>
 					if tu.name == "" {
@@ -2539,8 +2566,9 @@ type_ident_rust = |type_table, duplicate_names, preferred_names, type_id|
 		# union resolves through its payload's fragment: that function can
 		# return a rendered type such as `RocList<RocStr>`, which is not an
 		# identifier.
-			match TypeTable.single_variant_payload(tu) {
+			match type_table.single_variant_payload(type_id, tu) {
 				SinglePayload(payload_id) => type_ident_rust(type_table, duplicate_names, preferred_names, payload_id)
+				SinglePayloadStruct(_) => to_lower_snake_case(tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu))
 				SingleNoPayload => "type${U64.to_str(type_id)}"
 				NotSingleVariant =>
 					if tu.name != "" {
@@ -2572,7 +2600,7 @@ decref_stmt_for_type_id_rust = |type_table, duplicate_names, preferred_names, ty
 }
 
 decref_stmt_for_repr_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, TypeRepr, Str -> Str
-decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type_id, type_repr, expr| {
+decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, type_id, type_repr, expr| {
 	match type_repr {
 		RocStr => "    unsafe { ${expr}.decref(roc_host); }\n"
 		RocList(elem_id) => {
@@ -2607,8 +2635,9 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 				"    unsafe { ${expr}.decref(roc_host); }\n"
 			}
 		RocTagUnion(tu) =>
-			match TypeTable.single_variant_payload(tu) {
+			match type_table.single_variant_payload(type_id, tu) {
 				SinglePayload(payload_id) => decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, payload_id, expr)
+				SinglePayloadStruct(_) => "    unsafe { ${expr}.decref(roc_host); }\n"
 				SingleNoPayload => ""
 				NotSingleVariant =>
 					if tu.name != "" {
@@ -2629,7 +2658,7 @@ incref_stmt_for_type_id_rust = |type_table, duplicate_names, preferred_names, ty
 }
 
 incref_stmt_for_repr_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, TypeRepr, Str -> Str
-incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type_id, type_repr, expr| {
+incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, type_id, type_repr, expr| {
 	match type_repr {
 		RocStr => "    unsafe { ${expr}.incref(amount); }\n"
 		RocList(_) => "    unsafe { ${expr}.incref(amount); }\n"
@@ -2644,8 +2673,9 @@ incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 				"    unsafe { ${expr}.incref(amount); }\n"
 			}
 		RocTagUnion(tu) =>
-			match TypeTable.single_variant_payload(tu) {
+			match type_table.single_variant_payload(type_id, tu) {
 				SinglePayload(payload_id) => incref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, payload_id, expr)
+				SinglePayloadStruct(_) => "    unsafe { ${expr}.incref(amount); }\n"
 				SingleNoPayload => ""
 				NotSingleVariant =>
 					if tu.name != "" {
@@ -2912,12 +2942,24 @@ generate_refcount_helpers_rust = |type_table, duplicate_names, preferred_names| 
 					}
 				}
 			RocTagUnion(tu) =>
-				if List.len(tu.tags) >= 2 and tu.name != "" {
-					struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, $type_id, tu)
-					if !(List.contains($seen_names, struct_name)) {
-						$seen_names = $seen_names.append(struct_name)
-						$helpers = Str.concat($helpers, generate_tag_union_refcount_helpers_rust(type_table, duplicate_names, preferred_names, $type_id, tu))
+				match type_table.single_variant_payload($type_id, tu) {
+					SinglePayloadStruct(tag_layout) => {
+						struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, $type_id, tu)
+						if !(List.contains($seen_names, struct_name)) {
+							$seen_names = $seen_names.append(struct_name)
+							$helpers = Str.concat($helpers, generate_abi_refcount_helpers_rust(type_table, duplicate_names, preferred_names, struct_name, tag_layout.payload_fields))
+						}
 					}
+					NotSingleVariant =>
+						if tu.name != "" {
+							struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, $type_id, tu)
+							if !(List.contains($seen_names, struct_name)) {
+								$seen_names = $seen_names.append(struct_name)
+								$helpers = Str.concat($helpers, generate_tag_union_refcount_helpers_rust(type_table, duplicate_names, preferred_names, $type_id, tu))
+							}
+						}
+					SinglePayload(_) => {}
+					SingleNoPayload => {}
 				}
 			_ => {}
 		}

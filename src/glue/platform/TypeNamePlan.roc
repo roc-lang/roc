@@ -89,7 +89,7 @@ TypeNamePlan := { table : TypeTable }.{
 		type_repr = type_table.get(type_id)
 		match type_repr {
 			RocTagUnion(tu) =>
-				match TypeTable.single_variant_payload(tu) {
+				match type_table.single_variant_payload(type_id, tu) {
 					SinglePayload(payload_id) =>
 						collect_preferred_for_type_id(
 							state,
@@ -99,6 +99,21 @@ TypeNamePlan := { table : TypeTable }.{
 							module_base,
 							next_visited,
 						)
+					SinglePayloadStruct(tag_layout) => {
+						child_base = "${alias_base}${RocName.capitalize_first(tag_layout.name)}"
+						var $next = state
+						for payload_id in tag_layout.payload {
+							$next = collect_preferred_for_type_id(
+								$next,
+								type_table,
+								payload_id,
+								child_base,
+								module_base,
+								next_visited,
+							)
+						}
+						$next
+					}
 					SingleNoPayload => state
 					NotSingleVariant =>
 						if tu.name != "" {
@@ -166,7 +181,7 @@ TypeNamePlan := { table : TypeTable }.{
 					state
 				}
 			RocTagUnion(tu) =>
-				match TypeTable.single_variant_payload(tu) {
+				match type_table.single_variant_payload(type_id, tu) {
 					SinglePayload(payload_id) =>
 						collect_aliases_for_type_id(
 							state,
@@ -176,6 +191,21 @@ TypeNamePlan := { table : TypeTable }.{
 							module_base,
 							next_visited,
 						)
+					SinglePayloadStruct(tag_layout) => {
+						child_base = "${alias_base}${RocName.capitalize_first(tag_layout.name)}"
+						var $next = add_alias(state, alias_base, type_id, PlainAlias)
+						for payload_id in tag_layout.payload {
+							$next = collect_aliases_for_type_id(
+								$next,
+								type_table,
+								payload_id,
+								child_base,
+								module_base,
+								next_visited,
+							)
+						}
+						$next
+					}
 					SingleNoPayload => state
 					NotSingleVariant =>
 						if tu.name != "" {

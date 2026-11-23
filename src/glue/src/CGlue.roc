@@ -103,8 +103,9 @@ type_repr_to_c = |type_table, duplicate_record_names, duplicate_tag_names, prefe
 
 resolve_tag_union_type_c : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, U64, TagUnionRepr -> Str
 resolve_tag_union_type_c = |type_table, duplicate_record_names, duplicate_tag_names, preferred_names, type_id, tu|
-	match TypeTable.single_variant_payload(tu) {
+	match type_table.single_variant_payload(type_id, tu) {
 		SinglePayload(payload_id) => type_id_to_c(type_table, duplicate_record_names, duplicate_tag_names, preferred_names, payload_id)
+		SinglePayloadStruct(_) => tag_union_struct_name(type_table, preferred_names, duplicate_tag_names, type_id, tu)
 		SingleNoPayload => "void"
 		NotSingleVariant =>
 			if tu.name != "" {
@@ -115,10 +116,10 @@ resolve_tag_union_type_c = |type_table, duplicate_record_names, duplicate_tag_na
 		}
 
 ## Transitively flattened vector-member count of the type when its leaves are
-## exclusively 128-bit vectors (counting through record fields and transparent
-## single-variant tag wrappers); 0 for any other type. Counts saturate at 5:
-## callers only distinguish the 2..4 range, which is the memory-class shape
-## that needs the vector/byte union spelling.
+## exclusively 128-bit vectors (counting through record fields and
+## single-variant tag unions, which are their payloads); 0 for any other type.
+## Counts saturate at 5: callers only distinguish the 2..4 range, which is the
+## memory-class shape that needs the vector/byte union spelling.
 homogeneous_vector_member_count : TypeTable, U64 -> U64
 homogeneous_vector_member_count = |type_table, type_id|
 	match type_table.get(type_id) {
@@ -154,22 +155,18 @@ homogeneous_vector_member_count = |type_table, type_id|
 			}
 		}
 		RocTagUnion(tu) =>
-			match TypeTable.single_variant_payload(tu) {
+			match type_table.single_variant_payload(type_id, tu) {
 				SinglePayload(payload_id) => homogeneous_vector_member_count(type_table, payload_id)
+				SinglePayloadStruct(tag_layout) => homogeneous_vector_field_count(type_table, tag_layout.payload_fields)
 				SingleNoPayload => 0
 				NotSingleVariant => 0
 			}
 		_ => 0
 	}
 
-## Whether a record with these committed fields is a memory-class vector
-## aggregate: every member is (an aggregate of) 128-bit vectors and there are
-## two to four of them in total. C classifies such an aggregate as homogeneous
-## and would pass it in registers, but the Roc host ABI passes it in memory—
-## the convention Zig and Rust hosts compile to—so C glue spells its members
-## as vector/byte unions to pin the memory-class classification.
-c_needs_vector_union_spelling : TypeTable, List(AbiFieldLayout) -> Bool
-c_needs_vector_union_spelling = |type_table, fields| {
+## `homogeneous_vector_member_count` of a struct with these committed fields.
+homogeneous_vector_field_count : TypeTable, List(AbiFieldLayout) -> U64
+homogeneous_vector_field_count = |type_table, fields| {
 	var $total = 0
 	var $homogeneous = !(List.is_empty(fields))
 	for field in fields {
@@ -186,7 +183,23 @@ c_needs_vector_union_spelling = |type_table, fields| {
 			$total = $total + member
 		}
 	}
-	$homogeneous and $total >= 2 and $total <= 4
+	if $homogeneous {
+		$total
+	} else {
+		0
+	}
+}
+
+## Whether a struct with these committed fields is a memory-class vector
+## aggregate: every member is (an aggregate of) 128-bit vectors and there are
+## two to four of them in total. C classifies such an aggregate as homogeneous
+## and would pass it in registers, but the Roc host ABI passes it in memory—
+## the convention Zig and Rust hosts compile to—so C glue spells its members
+## as vector/byte unions to pin the memory-class classification.
+c_needs_vector_union_spelling : TypeTable, List(AbiFieldLayout) -> Bool
+c_needs_vector_union_spelling = |type_table, fields| {
+	total = homogeneous_vector_field_count(type_table, fields)
+	total >= 2 and total <= 4
 }
 
 c_vector_union_comment : Str
@@ -270,7 +283,7 @@ generated_type_names_c = |type_table, duplicate_records, duplicate_tags| {
 					$names = $names.append(record_struct_name(type_table, duplicate_records, $type_id, rec))
 				}
 			RocTagUnion(tu) =>
-				if List.len(tu.tags) >= 2 and tu.name != "" {
+				if type_table.declares_tag_union($type_id, tu) {
 					$names = $names.append(default_tag_union_struct_name(type_table, duplicate_tags, $type_id, tu))
 				}
 			_ => {}
@@ -645,7 +658,7 @@ generate_opaque_type_decls = |type_table, duplicate_records, duplicate_tags, pre
 					}
 				}
 			RocTagUnion(tu) =>
-				if List.len(tu.tags) >= 2 and tu.name != "" {
+				if type_table.declares_tag_union($type_id, tu) {
 					type_name = tag_union_struct_name(type_table, preferred_names, duplicate_tags, $type_id, tu)
 					if !(List.contains($seen_names, type_name)) {
 						$seen_names = $seen_names.append(type_name)
@@ -696,8 +709,23 @@ generate_type_decl_c = |state, type_table, duplicate_records, duplicate_tags, pr
 				}
 			}
 		RocTagUnion(tu) =>
-			match TypeTable.single_variant_payload(tu) {
+			match type_table.single_variant_payload(type_id, tu) {
 				SinglePayload(payload_id) => generate_type_decl_c(state, type_table, duplicate_records, duplicate_tags, preferred_names, payload_id)
+				SinglePayloadStruct(tag_layout) => {
+					type_name = tag_union_struct_name(type_table, preferred_names, duplicate_tags, type_id, tu)
+					if List.contains(state.seen_names, type_name) {
+						state
+					} else {
+						var $next = { content: state.content, seen_names: state.seen_names.append(type_name) }
+						for payload_id in tag_layout.payload {
+							$next = generate_type_decl_c($next, type_table, duplicate_records, duplicate_tags, preferred_names, payload_id)
+						}
+						{
+							content: Str.concat($next.content, generate_struct_type_decl(type_table, duplicate_records, duplicate_tags, preferred_names, type_name, tag_layout.payload_fields, type_info.layout)),
+							seen_names: $next.seen_names,
+						}
+					}
+				}
 				SingleNoPayload => state
 				NotSingleVariant =>
 					if tu.name == "" {
@@ -924,6 +952,13 @@ generate_record_type_decl = |type_table, duplicate_records, duplicate_tags, pref
 		return generate_opaque_type_decl(type_name, abi_layout.size64, abi_layout.alignment64, abi_layout.size32, abi_layout.alignment32)
 	}
 
+	generate_struct_type_decl(type_table, duplicate_records, duplicate_tags, preferred_names, type_name, fields, abi_layout)
+}
+
+## Define `struct type_name` from its committed fields, which are a record's
+## fields or the payloads of a single-variant tag union.
+generate_struct_type_decl : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, Str, List(AbiFieldLayout), AbiLayout -> Str
+generate_struct_type_decl = |type_table, duplicate_records, duplicate_tags, preferred_names, type_name, fields, abi_layout| {
 	wrap_vector_members = c_needs_vector_union_spelling(type_table, fields)
 	fields64 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, fields, Pointer64, wrap_vector_members)
 	fields32 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, fields, Pointer32, wrap_vector_members)

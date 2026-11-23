@@ -822,6 +822,7 @@ const CustomCase = enum {
     glue_boxed_iter_stream,
     glue_boxed_app_type,
     glue_generic_nominal_shapes,
+    glue_single_tag_multi_payload,
     glue_opaque_ownership,
     glue_application_only_requires,
     glue_c_tests,
@@ -2856,6 +2857,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "issue 12887: Box(Iter) and Box(Stream) are boxes of their backing record in every generator", .body = .{ .custom = .glue_boxed_iter_stream } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: a heap payload holding the app's type by value is opaque in every generator", .body = .{ .custom = .glue_boxed_app_type } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: each instantiation of a generic nominal is its own type in every generator", .body = .{ .custom = .glue_generic_nominal_shapes } },
+    .{ .id = 0, .suite = .glue, .name = "issue 13348: a one-tag union with several payloads is a struct of them in every generator", .body = .{ .custom = .glue_single_tag_multi_payload } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: a value holding an opaque Roc value has no host release in any generator", .body = .{ .custom = .glue_opaque_ownership } },
     .{ .id = 0, .suite = .glue, .name = "issue 11504: application requirements are not glue roots", .body = .{ .custom = .glue_application_only_requires } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
@@ -7538,6 +7540,7 @@ fn runCustomCase(
         .glue_boxed_iter_stream => customGlueBoxedIterStream(io, allocator, &env, &timer, timeout_ms),
         .glue_boxed_app_type => customGlueBoxedAppType(io, allocator, &env, &timer, timeout_ms),
         .glue_generic_nominal_shapes => customGlueGenericNominalShapes(io, allocator, &env, &timer, timeout_ms),
+        .glue_single_tag_multi_payload => customGlueSingleTagMultiPayload(io, allocator, &env, &timer, timeout_ms),
         .glue_opaque_ownership => customGlueOpaqueOwnership(io, allocator, &env, &timer, timeout_ms),
         .glue_application_only_requires => customGlueApplicationOnlyRequires(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
@@ -21150,6 +21153,133 @@ fn customGlueGenericNominalShapes(io: std.Io, allocator: Allocator, env: *const 
         }
     }
     return null;
+}
+
+fn customGlueSingleTagMultiPayload(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // Issue 13348: a union with one tag stores no discriminant, so the host
+    // holds exactly its payloads. With several payloads that is a struct of
+    // all of them; describing it by its first payload alone gives every
+    // function that passes one the wrong C signature.
+    if (checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/single-tag-multi-payload/main.roc", .{
+        .zig = &.{},
+        .c = &.{ "    RocList _1;", "struct Wrapped {", "extern uint64_t take_record_first(Wrapped arg0);" },
+        .rust = &.{ "    pub _1: RocListWith<u64, false>,", "pub struct Wrapped {", "pub fn take_record_first(arg0: Wrapped) -> u64;" },
+        .absent = &.{
+            "pub fn roc_step(arg0: u64) -> u64;",
+            "extern uint64_t roc_step(uint64_t arg0);",
+            "pub extern fn roc_step(arg0: u64) callconv(.c) u64;",
+        },
+        .zig_checks =
+        \\fn Param(comptime function: anytype, comptime index: usize) type {
+        \\    return @typeInfo(@TypeOf(function)).@"fn".param_types[index].?;
+        \\}
+        \\fn Result(comptime function: anytype) type {
+        \\    return @typeInfo(@TypeOf(function)).@"fn".return_type.?;
+        \\}
+        \\fn expectSame(comptime A: type, comptime B: type) void {
+        \\    if (A != B) @compileError("expected " ++ @typeName(A) ++ " and " ++ @typeName(B) ++ " to be one type");
+        \\}
+        \\fn expectDistinct(comptime A: type, comptime B: type) void {
+        \\    if (A == B) @compileError("expected two types, found " ++ @typeName(A) ++ " twice");
+        \\}
+        \\const Stepped = Result(abi.roc_step);
+        \\comptime {
+        \\    // Both payloads are fields, and the union stores nothing else.
+        \\    expectSame(@FieldType(Stepped, "_0"), u64);
+        \\    expectSame(@FieldType(Stepped, "_1"), abi.RocListWith(u64, false));
+        \\    if (@sizeOf(Stepped) != @sizeOf(u64) + @sizeOf(abi.RocListWith(u64, false)))
+        \\        @compileError("a one-tag union stores its payloads and nothing else");
+        \\
+        \\    // One union is one type wherever it is reached.
+        \\    expectSame(Param(abi.take_steps, 0), Stepped);
+        \\    expectSame(@FieldType(Param(abi.take_holders, 0), "step"), Stepped);
+        \\    expectSame(Param(abi.take_holders, 1), abi.RocList(Stepped));
+        \\    expectSame(@typeInfo(Param(abi.take_holders, 2)).pointer.child, Stepped);
+        \\    expectSame(Result(Param(abi.take_holders, 3).payload_held), Stepped);
+        \\
+        \\    // Unions that share a tag name and differ in payloads are told apart.
+        \\    const StrStepped = Param(abi.take_steps, 1);
+        \\    expectDistinct(StrStepped, Stepped);
+        \\    expectSame(@FieldType(StrStepped, "_0"), u8);
+        \\    expectSame(@FieldType(StrStepped, "_1"), abi.RocStr);
+        \\
+        \\    // Nominal unions, including each instantiation of a generic one.
+        \\    expectSame(@FieldType(Param(abi.take_nominals, 0), "_1"), abi.RocListWith(u64, false));
+        \\    expectSame(@FieldType(Param(abi.take_nominals, 1), "_0"), u8);
+        \\    expectSame(@FieldType(Param(abi.take_nominals, 1), "_1"), u8);
+        \\    expectSame(@FieldType(Param(abi.take_nominals, 2), "_0"), abi.RocStr);
+        \\    expectSame(@FieldType(Param(abi.take_nominals, 2), "_1"), abi.RocStr);
+        \\
+        \\    // A record in the first payload does not stand for the union.
+        \\    const Wrapped = Param(abi.take_record_first, 0);
+        \\    expectSame(@FieldType(@FieldType(Wrapped, "_0"), "a"), u64);
+        \\    expectSame(@FieldType(Wrapped, "_1"), u8);
+        \\}
+        \\
+        \\// Exported callers force analysis of the ownership methods, including
+        \\// the release of a later payload from inside each kind of holder.
+        \\export fn retain_and_release(roc_host: *abi.RocHost, n: u64) void {
+        \\    const stepped = abi.roc_step(n);
+        \\    stepped.incref(1);
+        \\    stepped.decref(roc_host);
+        \\    stepped.decref(roc_host);
+        \\}
+        \\export fn release_holders(
+        \\    roc_host: *abi.RocHost,
+        \\    record: *const Param(abi.take_holders, 0),
+        \\    list: *const Param(abi.take_holders, 1),
+        \\    held: *const Param(abi.take_holders, 3),
+        \\) void {
+        \\    record.incref(1);
+        \\    record.decref(roc_host);
+        \\    list.deinit(roc_host);
+        \\    held.incref(1);
+        \\    held.decref(roc_host);
+        \\}
+        ,
+    })) |failure| return failure;
+
+    // C would pass a struct of two to four vectors in registers, and the Roc
+    // host ABI passes it in memory, so C glue spells such a struct's members
+    // as vector/byte unions. A one-tag union of vectors is that struct, on its
+    // own and when counted through from a record that holds it. Zig has no
+    // `extern struct` of vectors, so this is checked for C alone.
+    const output_dir = createWorkSubdir(io, allocator, env, "c-vector-glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "--no-cache", GlueLanguage.c.glueSpec(), output_dir, "test/glue/single-tag-vector-payloads/main.roc" },
+        .not_contains = &.{
+            .{ .stream = .stderr, .text = "panic" },
+            .{ .stream = .stderr, .text = "unreachable" },
+            .{ .stream = .stderr, .text = "invariant violated" },
+        },
+    })) |failure| return failure;
+    const generated_path = std.fs.path.join(allocator, &.{ output_dir, GlueLanguage.c.generatedFileName() }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated glue path: {}", .{err});
+    const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
+        return customFailure(allocator, timer, "failed to read generated C header: {}", .{err});
+    for ([_][]const u8{
+        "    union { RocU8x16 value; uint8_t bytes[16]; } _0;",
+        "    union { RocU8x16 value; uint8_t bytes[16]; } _1;",
+        "    union { Lanes value; uint8_t bytes[32]; } inner;",
+        "    RocU8x16 _0;\n    uint64_t _1;",
+        "extern uint64_t take_lanes(Lanes arg0);",
+    }) |needle| {
+        if (std.mem.find(u8, generated, needle) == null) {
+            return customFailure(allocator, timer, "generated C header missing {s}", .{needle});
+        }
+    }
+    const test_c_path = std.fs.path.join(allocator, &.{ output_dir, "test_header.c" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate test C path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_c_path, .data = "#include \"roc_platform_abi.h\"\n" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write test C file: {}", .{err});
+    const test_o_path = std.fs.path.join(allocator, &.{ output_dir, "test_header.o" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate test object path: {}", .{err});
+    const include_flag = std.fmt.allocPrint(allocator, "-I{s}", .{output_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate include flag: {}", .{err});
+    return runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig", "cc", "-c", "-std=c11", "-Wall", "-Werror", include_flag, test_c_path, "-o", test_o_path,
+    }, project_root_path, .{ .args = &.{} });
 }
 
 fn customGlueApplicationOnlyRequires(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {

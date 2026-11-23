@@ -32555,6 +32555,15 @@ one instantiation can occupy several rows. Generators emit one declaration per
 shape, give shapes that share a name distinct names derived from the shape id,
 and never emit the shared bare name, as a declaration or as an alias.
 
+A tag union with one variant stores no discriminant, so its host type is its
+payload, which is how the C ABI classification of host-boundary values sees it
+too. With one payload, that is the payload's own type. With several payloads
+that occupy storage, it is a struct of the variant's committed payload fields,
+which generators declare under the union's name like any other declared type,
+with the ownership operations of a record. When no payload occupies storage,
+the union has no host value. A generator never lets one payload stand for the
+others.
+
 Glue's type table describes values. A function value, wherever it appears
 (boxed, in a record or tag payload, or in a stored signature), is one
 erased-callable pointer whose own layout does not depend on its argument or
