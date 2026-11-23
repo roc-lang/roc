@@ -1020,6 +1020,13 @@ fn topLevelConstNode(
 }
 
 fn constWasmImportMemory(checked_module: *const checked.CheckedModuleArtifact, node: checked.ConstNodeId) ?WasmImportMemory {
+    if (checked_module.const_store.imageOf(node)) |image| {
+        const literal = checked_module.const_store.imageLiteral(image) orelse return null;
+        return switch (literal) {
+            .tag => |name| WasmImportMemory.fromTagName(checked_module.canonical_names.tagLabelText(name)),
+            .scalar, .str => null,
+        };
+    }
     const value = checked_module.const_store.get(node);
     if (value == .nominal) return constWasmImportMemory(checked_module, value.nominal.backing);
     if (value != .tag or value.tag.payloads.len != 0) return null;
@@ -1031,6 +1038,14 @@ fn constUnsigned(
     node: checked.ConstNodeId,
     reason: *TargetConfigResolveReason,
 ) ?usize {
+    if (checked_module.const_store.imageOf(node)) |image| {
+        if (checked_module.const_store.imageLiteral(image)) |literal| switch (literal) {
+            .scalar => |scalar| return scalarUnsigned(scalar, reason),
+            .tag, .str => {},
+        };
+        reason.* = .expected_unsigned_integer;
+        return null;
+    }
     const value = checked_module.const_store.get(node);
     if (value == .nominal) return constUnsigned(checked_module, value.nominal.backing, reason);
     if (value == .scalar) return scalarUnsigned(value.scalar, reason);

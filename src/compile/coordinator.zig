@@ -9130,9 +9130,7 @@ fn compileAppRootIdentityExpecting(
             if (!std.mem.eql(u8, root.canonical_names.exportNameText(entry.source_name), expected.name)) continue;
             const state = root.const_templates.get(entry.value.const_ref).state;
             try std.testing.expect(state == .stored_const);
-            var value = root.const_store.get(state.stored_const.node);
-            while (value == .nominal) value = root.const_store.get(value.nominal.backing);
-            std.testing.expectEqual(expected.value, value.scalar.i64) catch return error.TestUnexpectedResult;
+            std.testing.expectEqual(expected.value, testStoredI64(root, state.stored_const.node)) catch return error.TestUnexpectedResult;
             found = true;
         }
         try std.testing.expect(found);
@@ -9740,11 +9738,7 @@ fn compileForReuseWithStrategy(allocator: Allocator, cache_dir: []const u8, app_
         if (pattern != .assign) continue;
         try names.append(allocator, try allocator.dupe(u8, env.getIdent(pattern.assign.ident)));
         var stored: ?i64 = null;
-        if (root.payload == .const_node) {
-            var node = app.const_store.get(root.payload.const_node);
-            while (node == .nominal) node = app.const_store.get(node.nominal.backing);
-            if (node == .scalar and node.scalar == .i64) stored = node.scalar.i64;
-        }
+        if (root.payload == .const_node) stored = testStoredI64(app, root.payload.const_node);
         try values.append(allocator, stored);
     }
     const stderr = try stderr_capture.bytes.toOwnedSlice(allocator);
@@ -14704,9 +14698,8 @@ test "Boxy checked constants share across checkouts and survive unrelated applic
             try std.testing.expect(!coord.hasUserErrors());
             const root = artifact.compile_time_roots.root(root_id);
             try std.testing.expect(root.payload == .const_node);
-            const node = artifact.const_store.get(root.payload.const_node);
-            try std.testing.expect(node == .scalar and node.scalar == .i64);
-            return .{ .key = artifact.key.bytes, .cached = cached, .stored_before_evaluation = stored, .value = node.scalar.i64 };
+            const value = testStoredI64(artifact, root.payload.const_node) orelse return error.TestUnexpectedResult;
+            return .{ .key = artifact.key.bytes, .cached = cached, .stored_before_evaluation = stored, .value = value };
         }
     };
     const first_path = try tmp.dir.realPathFileAlloc(std.testing.io, "checkout-a/app.roc", gpa);
@@ -14863,10 +14856,20 @@ fn runCheckOnly(
     const app = try Named.artifact(&coord, "app");
     for (app.compile_time_roots.roots.items()) |root| {
         if (root.payload != .const_node) continue;
-        const node = app.const_store.get(root.payload.const_node);
-        if (node == .scalar and node.scalar == .i64) result.answer = node.scalar.i64;
+        if (testStoredI64(app, root.payload.const_node)) |answer| result.answer = answer;
     }
     return result;
+}
+
+/// The `I64` a test's stored constant `node` of `artifact` holds, or null
+/// when it holds another value.
+fn testStoredI64(artifact: *const CheckedModuleArtifact, node: CheckedArtifact.ConstNodeId) ?i64 {
+    const image = artifact.const_store.imageOf(node) orelse return null;
+    const literal = artifact.const_store.imageLiteral(image) orelse return null;
+    return switch (literal) {
+        .scalar => |scalar| if (scalar == .i64) scalar.i64 else null,
+        .tag, .str => null,
+    };
 }
 
 /// The cache files under `parent`'s `cache`, by file name, with their bytes.
@@ -15076,8 +15079,7 @@ fn runEditLoop(allocator: Allocator, path: []const u8, cache: []const u8) CheckO
     const app = try Named.artifact(&coord, "app");
     for (app.compile_time_roots.roots.items()) |root| {
         if (root.payload != .const_node) continue;
-        const node = app.const_store.get(root.payload.const_node);
-        if (node == .scalar and node.scalar == .i64) result.answer = node.scalar.i64;
+        if (testStoredI64(app, root.payload.const_node)) |answer| result.answer = answer;
     }
     return result;
 }

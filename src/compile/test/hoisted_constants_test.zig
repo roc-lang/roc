@@ -533,14 +533,11 @@ test "hoisted list constants lower to internal static data in request order" {
     defer lowered.deinit();
 
     if (lowered.lir_result.static_data_values.items.len != 2) return error.StaticDataInitializerCountMismatch;
-    try expectStaticInitializersMaterializationOnly(&lowered.lir_result);
-    const first_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[0].initializer.get().?);
-    const second_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[1].initializer.get().?);
-    const first_body = first_initializer.body.get() orelse return error.StaticDataLiteralNotFound;
-    const second_body = second_initializer.body.get() orelse return error.StaticDataLiteralNotFound;
-    // Queued initializers lower in request order. ARC leaves initializers as
-    // lowered, so their bodies' statement ids still show that order.
-    if (@backingInt(first_body) >= @backingInt(second_body)) return error.StaticDataInitializerRequestOrderMismatch;
+    // Each list is a stored image, which static data freezes straight from
+    // the store: no initializer builds it.
+    for (lowered.lir_result.static_data_values.items) |value| {
+        try std.testing.expect(value.initializer.get() == null and value.stored != null);
+    }
     try expectStaticDataLiteralPresent(&lowered.lir_result);
 
     const exports = try static_data_exports.buildStaticData(
@@ -3081,6 +3078,14 @@ fn scalarConstNodeI64(
     artifact: check.CheckedArtifact.ImportedModuleView,
     node: check.CheckedArtifact.ConstNodeId,
 ) HoistedConstantsTestError!i64 {
+    // A number is data alone, stored as its image.
+    if (artifact.const_store.imageOf(node)) |image| {
+        const literal = artifact.const_store.imageLiteral(image) orelse return error.HoistedConstWasNotI64;
+        return switch (literal) {
+            .scalar => |scalar| if (scalar == .i64) scalar.i64 else error.HoistedConstWasNotI64,
+            .tag, .str => error.HoistedConstWasNotI64,
+        };
+    }
     const value = artifact.const_store.get(node);
     const actual = switch (value) {
         .scalar => |scalar| switch (scalar) {

@@ -5850,6 +5850,18 @@ fn constStringBackingLength(str: check.ConstStore.ConstString) u64 {
     return str.capacity;
 }
 
+/// How many items the list image `image` holds, or zero when its value is
+/// not a list.
+fn imageListLen(store: *const check.ConstStore.ConstStore, image: check.ConstStore.ConstImageId) u32 {
+    const view = store.image(image);
+    var ty = view.root_type;
+    while (true) switch (store.type_store.get(ty)) {
+        .named => |named| ty = (named.backing.get() orelse return 0).ty,
+        .list => return @intCast(std.mem.readInt(u64, view.bytes[check.ConstStore.image_word_size..][0..check.ConstStore.image_word_size], .little)),
+        .primitive, .record, .tuple, .tag_union, .box, .func, .erased, .zst => return 0,
+    };
+}
+
 fn constStaticDataStorage(view: ModuleView, node: checked.ConstNodeId) Common.StaticDataStorage {
     // A root stored as an image needs a string's backing when it is a
     // string, possibly inside named types (design.md "Stored Images").
@@ -8772,7 +8784,10 @@ const Builder = struct {
         defer ctx.deinit();
 
         const draft = FinalBodyOutputGuard.begin(self);
-        const restored = try ctx.restoreConstValue(view, type_view, const_node.id, ret_ty, request.const_locator, false);
+        const restored = if (view.const_store.imageOf(const_node.id)) |image|
+            try ctx.restoredRootImageAtType(view, const_node.id, image, request.checked_type, ret_ty)
+        else
+            try ctx.restoreConstValue(view, type_view, const_node.id, ret_ty, request.const_locator, false);
         if (self.comptime_value_reads) try body_draft.recordRestoredRootRead(restored, view.key, root);
         try body_draft.addScopeRoot(restored);
         const draft_end = draft.end(self);
@@ -13000,6 +13015,11 @@ const Builder = struct {
                         .checked_type = request.checked_type,
                     } };
                 },
+                .stored_root => |root| .{ .stored = .{
+                    .module = root.module,
+                    .node = root.node,
+                    .checked_type = root.checked_type,
+                } },
                 .inline_literal => |literal| .{ .inline_literal = literal },
             },
             .ty = ty,
@@ -13030,7 +13050,7 @@ const Builder = struct {
     fn constNodeMayUseStaticDataCandidate(self: *Builder, view: ModuleView, node: checked.ConstNodeId) Allocator.Error!bool {
         // A root whose image holds a literal is decided by that literal, by
         // the rule `constValueMayUseStaticDataCandidate` applies to nodes.
-        if (try self.constNodeImageLiteral(view, node)) |literal| return switch (literal) {
+        if (self.constNodeImageLiteral(view, node)) |literal| return switch (literal) {
             .scalar, .tag => false,
             .str => |str| str.capacity != str.bytes.len,
         };
@@ -13041,9 +13061,9 @@ const Builder = struct {
     /// stored as an image and its value is a number, a payload-free tag
     /// of a union whose every payload is zero-sized, or a string
     /// (`ConstStore.imageLiteral`).
-    fn constNodeImageLiteral(self: *Builder, view: ModuleView, node: checked.ConstNodeId) Allocator.Error!?check.ConstStore.ImageLiteral {
+    fn constNodeImageLiteral(_: *Builder, view: ModuleView, node: checked.ConstNodeId) ?check.ConstStore.ImageLiteral {
         const image = view.const_store.imageOf(node) orelse return null;
-        return try view.const_store.nodeImageLiteral(self.allocator, node, image, view.names);
+        return view.const_store.imageLiteral(image);
     }
 
     /// Whether a ConstStore node and everything it contains has a stable
@@ -13188,17 +13208,9 @@ const Builder = struct {
     /// node records. Null for any other value, including the empty and
     /// packed lists without spare capacity, which restore as literals.
     fn storedListShape(self: *Builder, view: ModuleView, node: checked.ConstNodeId) Allocator.Error!?StoredListShape {
-        // A box or product stored as an image is frozen from its image,
-        // whatever it holds: neither has an immediate layout, which only
-        // scalars, strings and tag unions do.
-        if (view.const_store.imageOf(node) != null) {
-            var current = view.const_store.get(node);
-            while (current == .nominal) current = view.const_store.get(current.nominal.backing);
-            switch (current) {
-                .box, .tuple, .record => return .{ .item_count = 0 },
-                .image, .pending, .zst, .scalar, .str, .list, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => {},
-            }
-        }
+        // A value stored as an image is frozen from its image, whatever it
+        // holds (design.md "Stored Images").
+        if (view.const_store.imageOf(node)) |image| return .{ .item_count = imageListLen(view.const_store, image) };
         const list = switch (view.const_store.get(node)) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .image => Common.invariant("a stored image reached a ConstStore node restore"),
@@ -13230,7 +13242,8 @@ const Builder = struct {
         var value = value_in;
         while (true) switch (value) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-            .image => Common.invariant("a stored image reached a ConstStore node restore"),
+            // A value stored as an image that holds no literal is one datum.
+            .image => return true,
             .pending => Common.invariant("pending ConstStore node reached static data selection"),
             .zst,
             .scalar,
@@ -49140,7 +49153,7 @@ const BodyContext = struct {
         static_data_const_locator: ?checked.ConstLocator,
         own_scope: bool,
     ) Allocator.Error!DraftExprId {
-        if (try self.builder.constNodeImageLiteral(store_view, node)) |literal| return try self.imageLiteralExpr(store_view, literal, ty);
+        if (self.builder.constNodeImageLiteral(store_view, node)) |literal| return try self.imageLiteralExpr(store_view, literal, ty);
         const opened = try self.enterConstRestoreScope(own_scope);
         errdefer if (opened) self.dropConstRestoreScope();
         const restored = try runConstRestore(self, store_view, type_view, node, ty, static_data_const_locator);
@@ -49433,7 +49446,7 @@ const BodyContext = struct {
         static_data_const_locator: ?checked.ConstLocator,
         own_scope: bool,
     ) Allocator.Error!DraftExprId {
-        if (try self.builder.constNodeImageLiteral(store_view, root)) |literal| return try self.imageLiteralExprAtNode(store_view, literal, root_request_node);
+        if (self.builder.constNodeImageLiteral(store_view, root)) |literal| return try self.imageLiteralExprAtNode(store_view, literal, root_request_node);
         const opened = try self.enterConstRestoreScope(own_scope);
         errdefer if (opened) self.dropConstRestoreScope();
         var frames: std.ArrayListUnmanaged(ConstAtNodeFrame) = .empty;
@@ -53058,7 +53071,7 @@ const BodyContext = struct {
             const root_ty = try self.closedCheckedMonoOf(view, argument.ty);
             if (root_ty != ty and !try self.typeStore().typeEql(self.nameStore(), root_ty, ty)) continue;
             if (@import("builtin").mode == .debug) try self.assertLiteralArgumentValuesAgree(candidates, view, node, ty);
-            const restored = switch (view.const_store.get(node)) {
+            const restored = if (view.const_store.imageOf(node)) |image| try self.restoredRootImage(view, node, image, argument.ty, value_node) else switch (view.const_store.get(node)) {
                 // The root's conversion failed and the root reported it in
                 // its module: reaching the value is reaching a failure
                 // already reported, as reaching code checking rejected is,
@@ -53073,6 +53086,69 @@ const BodyContext = struct {
             return restored;
         }
         return null;
+    }
+
+    /// The value of the compile-time root of `view` whose stored image
+    /// `image` is node `node`, at `checked_type` of `view` and graph node
+    /// `request_node`: its literal when it holds one, and otherwise one
+    /// static datum frozen from the image (design.md "Stored Images").
+    fn restoredRootImage(
+        self: *BodyContext,
+        view: ModuleView,
+        node: checked.ConstNodeId,
+        image: check.ConstStore.ConstImageId,
+        checked_type: checked.CheckedTypeId,
+        request_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const cell = DraftTypeCell.fromGraphNode(request_node);
+        if (view.const_store.imageLiteral(image)) |literal| switch (literal) {
+            .scalar, .tag => return try self.imageLiteralExprAtNode(view, literal, request_node),
+            .str => |str| if (str.capacity == str.bytes.len) return try self.imageLiteralExprAtNode(view, literal, request_node),
+        };
+        return try self.storedRootImageCandidate(view, node, image, checked_type, cell);
+    }
+
+    /// `restoredRootImage` at the sealed type `ty`.
+    fn restoredRootImageAtType(
+        self: *BodyContext,
+        view: ModuleView,
+        node: checked.ConstNodeId,
+        image: check.ConstStore.ConstImageId,
+        checked_type: checked.CheckedTypeId,
+        ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        const cell = DraftTypeCell.fromSealed(ty);
+        if (view.const_store.imageLiteral(image)) |literal| switch (literal) {
+            .scalar, .tag => return try self.imageLiteralExpr(view, literal, ty),
+            .str => |str| if (str.capacity == str.bytes.len) return try self.imageLiteralExpr(view, literal, ty),
+        };
+        return try self.storedRootImageCandidate(view, node, image, checked_type, cell);
+    }
+
+    /// The stored static data candidate of root image `image`, node `node`
+    /// of `view`, at `checked_type` of `view`, typed `cell`.
+    fn storedRootImageCandidate(
+        self: *BodyContext,
+        view: ModuleView,
+        node: checked.ConstNodeId,
+        image: check.ConstStore.ConstImageId,
+        checked_type: checked.CheckedTypeId,
+        cell: DraftTypeCell,
+    ) Allocator.Error!DraftExprId {
+        const id = try self.draftStaticDataRequestAt(.{
+            .source = .{ .stored = .{
+                .checked_type_module = view.key,
+                .module = view.key,
+                .node = node,
+                .checked_type = checked_type,
+            } },
+            .ty = cell,
+        }, .{ .stored_root = .{ .module = view.key, .node = node, .checked_type = checked_type } });
+        return try self.addExprWithTypeCell(cell, .{ .static_data_candidate = .{
+            .static_data = id,
+            .storage = constStaticDataStorage(view, node),
+            .value = .{ .stored = .{ .item_count = imageListLen(view.const_store, image) } },
+        } });
     }
 
     /// Whether a validate-only `literal_argument` root converts this literal
@@ -53298,7 +53374,10 @@ const BodyContext = struct {
             Common.invariant("literal conversion root link named a non-conversion root");
         switch (root.payload) {
             .const_node => |node| {
-                const restored = try self.restoreConstNodeAtNode(self.view, self.view, node, request_node);
+                const restored = if (self.view.const_store.imageOf(node)) |image|
+                    try self.restoredRootImage(self.view, node, image, root.checked_type, request_node)
+                else
+                    try self.restoreConstNodeAtNode(self.view, self.view, node, request_node);
                 try self.draft.recordRestoredRootRead(restored, self.view.key, root_id);
                 return restored;
             },

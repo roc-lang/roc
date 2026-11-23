@@ -2035,10 +2035,20 @@ pub const RuntimeSchemaRequest = struct {
 pub const StaticDataValue = union(enum) {
     /// A checked constant's stored value, or one stored node of it.
     stored: Common.StaticDataRequest,
+    /// The stored image of a compile-time root that no constant names, such
+    /// as a `literal_argument` root's (design.md "Stored Images").
+    stored_root: StoredRootStaticData,
     /// A value-form expression its body keeps
     /// (`CompileTimeRootTable.inline_literals`), built by the candidate's
     /// initializer expression.
     inline_literal: InlineLiteralStaticData,
+};
+
+/// The stored image `node` of `module`, at `checked_type` of that module.
+pub const StoredRootStaticData = struct {
+    module: checked.ModuleId,
+    node: checked.ConstNodeId,
+    checked_type: checked.CheckedTypeId,
 };
 
 /// The value-form expression `expr` of `module` that its body keeps.

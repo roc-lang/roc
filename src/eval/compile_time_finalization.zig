@@ -2334,8 +2334,8 @@ const ValueFormModuleWriting = struct {
         const root_schema_started = Timing.startStep(options.timing);
         const root_schema = try schema.root(module.key.digest(), request);
         Timing.finishStep(options.timing, root_schema_started, .value_form_root_schemas);
-        const payload: checked.CompileTimeRootPayload = .{ .const_node = try writer.storeCheckedRoot(root_schema.plan, root_schema.ret_layout, root.rootExpr(), root.reads_constants) };
         const root_type = try writer.storeType(root_schema.ret_type);
+        const payload: checked.CompileTimeRootPayload = .{ .const_node = try writer.storeCheckedRoot(root_schema.plan, root_schema.ret_layout, root_type, root.rootExpr(), root.reads_constants) };
         module.compile_time_roots.fillPayload(root_id, payload);
         finishConstRoot(module, root, payload, root_type);
         self.writing.completed += 1;

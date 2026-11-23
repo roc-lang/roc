@@ -6971,7 +6971,7 @@ pub const Builder = struct {
     fn restoreImageStep(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, image: check.ConstStore.ConstImageId, raw_ty: TypeId) Allocator.Error!void {
         const names = self.program.constNames(source);
         const key: lower.Program.StoredValueKey = .{ .module = source.module, .node = node, .ty = raw_ty };
-        const literal = try self.program.constStore(source).nodeImageLiteral(self.allocator, node, image, names);
+        const literal = self.program.constStore(source).imageLiteral(image);
         const enum_tag: ?types.NameId = if (literal) |decoded| switch (decoded) {
             .tag => |name| try self.enumTagOf(raw_ty, names.tagLabelText(name)),
             .scalar, .str => null,

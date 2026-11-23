@@ -112,17 +112,19 @@ fn measureLiteralList(literal_count: usize) TestError!Measurement {
         if (root.kind != .constant) continue;
         constants += 1;
         try std.testing.expect(root.payload == .const_node);
-        const value = artifact.const_store.get(root.payload.const_node);
-        try std.testing.expect(value == .list and value.list.items == .nodes);
-        try std.testing.expectEqual(literal_count, value.list.items.nodes.len);
-        for (value.list.items.nodes, 0..) |node, index| {
-            const word = artifact.const_store.get(node);
-            try std.testing.expect(word == .nominal);
-            const bytes = artifact.const_store.get(word.nominal.backing);
-            try std.testing.expect(bytes == .list and bytes.list.items == .packed_bytes);
+        // The list is stored as its image: its descriptor, then its items,
+        // each a nominal over a list of bytes, whose bytes follow.
+        const image = artifact.const_store.image(artifact.const_store.imageOf(root.payload.const_node) orelse return error.TestUnexpectedResult);
+        const word = 8;
+        try std.testing.expectEqual(@as(u64, literal_count), std.mem.readInt(u64, image.bytes[word..][0..word], .little));
+        const items: usize = @intCast(std.mem.readInt(u64, image.bytes[0..word], .little));
+        for (0..literal_count) |index| {
+            const item = image.bytes[items + index * 3 * word ..][0 .. 3 * word];
+            const len: usize = @intCast(std.mem.readInt(u64, item[word..][0..word], .little));
+            const start: usize = @intCast(std.mem.readInt(u64, item[0..word], .little));
             const expected = try std.fmt.allocPrint(gpa, "w{d}", .{index});
             defer gpa.free(expected);
-            try std.testing.expectEqualStrings(expected, artifact.const_store.blobData(bytes.list.items.packed_bytes.bytes));
+            try std.testing.expectEqualStrings(expected, image.bytes[start..][0..len]);
         }
     }
     try std.testing.expectEqual(@as(usize, 1), constants);

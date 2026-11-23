@@ -5,6 +5,7 @@ const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
 const collections = @import("collections");
+const layout_shape = @import("layout_shape");
 
 const checked_ids = @import("checked_ids.zig");
 const names = @import("canonical_names.zig");
@@ -710,12 +711,6 @@ pub const ConstImage = struct {
     digest: [32]u8,
 };
 
-/// The image of a value also held as nodes (`ConstStore.attachImage`).
-pub const NodeImage = extern struct {
-    node: ConstNodeId,
-    image: ConstImageId,
-};
-
 /// A stored image with its pools resolved (`ConstStore.image`).
 pub const ConstImageView = struct {
     bytes: []const u8,
@@ -973,34 +968,6 @@ pub const ConstTypeStore = struct {
 
     pub fn tagSpan(self: *const ConstTypeStore, range: ConstRange) []const TypeTag {
         return self.tag_pool.items()[range.start .. range.start + range.len];
-    }
-
-    /// Whether a value of `id` occupies no bytes: `id` is the zero-sized
-    /// type, a record or tuple of zero-sized components, a tag union of at
-    /// most one tag whose payloads are zero-sized, or a named type whose
-    /// backing is one. `allocator` is scratch.
-    pub fn isZeroSized(self: *const ConstTypeStore, allocator: Allocator, id: ConstTypeId) Allocator.Error!bool {
-        var seen: std.AutoHashMapUnmanaged(ConstTypeId, void) = .empty;
-        defer seen.deinit(allocator);
-        var pending: std.ArrayList(ConstTypeId) = .empty;
-        defer pending.deinit(allocator);
-        try pending.append(allocator, id);
-        while (pending.pop()) |ty| {
-            if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
-            switch (self.get(ty)) {
-                .zst => {},
-                .named => |named| try pending.append(allocator, (named.backing.get() orelse return false).ty),
-                .record => |range| for (self.fieldSpan(range)) |field| try pending.append(allocator, field.ty),
-                .tuple => |range| try pending.appendSlice(allocator, self.typeSpan(range)),
-                .tag_union => |range| {
-                    const tags = self.tagSpan(range);
-                    if (tags.len > 1) return false;
-                    for (tags) |tag| try pending.appendSlice(allocator, self.typeSpan(tag.payloads));
-                },
-                .primitive, .list, .box, .func, .erased => return false,
-            }
-        }
-        return true;
     }
 
     pub fn declaredFieldSpan(self: *const ConstTypeStore, range: ConstRange) []const TypeDeclaredField {
@@ -1477,8 +1444,6 @@ pub const ConstStore = struct {
     image_bytes: collections.SafeList(u8),
     /// Flat pool of image pointer-word offsets.
     image_pointers: collections.SafeList(u32),
-    /// The images of values also held as nodes, by node, ascending.
-    node_images: collections.SafeList(NodeImage),
     /// Content index over the blobs, by their bytes: every blob is entered
     /// once, so equal bytes name one blob. Stored with the store, so a
     /// loaded store deduplicates new blobs against the ones it loaded.
@@ -1522,7 +1487,6 @@ pub const ConstStore = struct {
             .images = .{},
             .image_bytes = .{},
             .image_pointers = .{},
-            .node_images = .{},
         };
     }
 
@@ -1546,7 +1510,7 @@ pub const ConstStore = struct {
         hasher.update(std.mem.asBytes(&@as(u64, input.bytes.len)));
         hasher.update(input.bytes);
         hasher.update(std.mem.asBytes(&@as(u64, input.pointers.len)));
-        hasher.update(std.mem.sliceAsBytes(input.pointers));
+        for (input.pointers) |offset| hasher.update(std.mem.asBytes(&offset));
         return hasher.finalResult();
     }
 
@@ -1558,26 +1522,12 @@ pub const ConstStore = struct {
         return node;
     }
 
-    /// Record `image` as the image of the value `node` holds as nodes.
-    /// Nodes are imaged in ascending order.
-    pub fn attachImage(self: *ConstStore, node: ConstNodeId, image_id: ConstImageId) Allocator.Error!void {
-        const items = self.node_images.items();
-        if (items.len != 0 and @backingInt(items[items.len - 1].node) >= @backingInt(node)) constStoreInvariant("nodes were imaged out of order");
-        _ = try self.node_images.append(self.allocator, .{ .node = node, .image = image_id });
-    }
-
-    /// The image of the value `node` holds as nodes, if it has one.
+    /// The image `node` holds, when it is a value stored as an image.
     pub fn imageOf(self: *const ConstStore, node: ConstNodeId) ?ConstImageId {
-        const items = self.node_images.items();
-        var low: usize = 0;
-        var high: usize = items.len;
-        while (low < high) {
-            const mid = low + (high - low) / 2;
-            const at = @backingInt(items[mid].node);
-            if (at == @backingInt(node)) return items[mid].image;
-            if (at < @backingInt(node)) low = mid + 1 else high = mid;
-        }
-        return null;
+        return switch (self.values.items()[@backingInt(node)]) {
+            .image => |image_id| image_id,
+            .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => null,
+        };
     }
 
     /// Store an image, computing its digest.
@@ -1622,9 +1572,9 @@ pub const ConstStore = struct {
     }
 
     /// The literal form of image `id` (`ImageLiteral`), read through its
-    /// root type, whose names are in `name_store`; null for a value that
-    /// has none. `allocator` is scratch.
-    pub fn imageLiteral(self: *const ConstStore, allocator: Allocator, id: ConstImageId, name_store: *const names.CanonicalNameStore) Allocator.Error!?ImageLiteral {
+    /// root type, whose tag names are in its module's name store; null for a
+    /// value that has none.
+    pub fn imageLiteral(self: *const ConstStore, id: ConstImageId) ?ImageLiteral {
         const view = self.image(id);
         const bytes = view.rootBytes();
         var ty = view.root_type;
@@ -1652,15 +1602,12 @@ pub const ConstStore = struct {
             },
             .tag_union => |range| {
                 const tags = self.type_store.tagSpan(range);
-                for (tags) |tag| for (self.type_store.typeSpan(tag.payloads)) |payload| {
-                    if (!try self.type_store.isZeroSized(allocator, payload)) return null;
-                };
+                // The union's every payload is zero-sized exactly when its
+                // value is its discriminant alone.
+                if (bytes.len != layout_shape.discriminantSize(tags.len)) return null;
                 // The discriminant is the index of the tag among the union's
                 // tags in byte-wise name order, which is the order a stored
                 // tag union lists them in; a union of one tag has none.
-                if (builtin.mode == .debug) for (tags[0..tags.len -| 1], tags[@min(tags.len, 1)..]) |left, right| {
-                    if (!std.mem.lessThan(u8, name_store.tagLabelText(left.name), name_store.tagLabelText(right.name))) constStoreInvariant("a stored tag union's tags are not in name order");
-                };
                 const index: usize = switch (bytes.len) {
                     0 => 0,
                     1 => bytes[0],
@@ -1685,24 +1632,6 @@ pub const ConstStore = struct {
             .primitive => |primitive| return primitive,
             .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
         };
-    }
-
-    /// `imageLiteral` of the image of the value `node` holds as nodes too.
-    /// The image is the value's source; the nodes must hold the same value.
-    pub fn nodeImageLiteral(self: *const ConstStore, allocator: Allocator, node: ConstNodeId, id: ConstImageId, name_store: *const names.CanonicalNameStore) Allocator.Error!?ImageLiteral {
-        const literal = try self.imageLiteral(allocator, id, name_store);
-        if (builtin.mode == .debug) {
-            var current = node;
-            while (self.get(current) == .nominal) current = self.get(current).nominal.backing;
-            const value = self.get(current);
-            const agrees = if (literal) |decoded| switch (decoded) {
-                .scalar => |scalar| value == .scalar and std.meta.eql(value.scalar, scalar),
-                .tag => |name| value == .tag and value.tag.payloads.len == 0 and std.mem.eql(u8, value.tag.tag_name, name_store.tagLabelText(name)),
-                .str => |str| value == .str and value.str.capacity == str.capacity and std.mem.eql(u8, self.strBytes(value.str.bytes), str.bytes),
-            } else value != .scalar and value != .str;
-            if (!agrees) constStoreInvariant("an image's literal differs from its nodes");
-        }
-        return literal;
     }
 
     fn appendNodes(self: *ConstStore, nodes: []const ConstNodeId) Allocator.Error!ConstRange {
@@ -2047,12 +1976,11 @@ pub const ConstStore = struct {
         images: artifact_serialize.SerializedSlice(ConstImage) = .{},
         image_bytes: artifact_serialize.SerializedSlice(u8) = .{},
         image_pointers: artifact_serialize.SerializedSlice(u32) = .{},
-        node_images: artifact_serialize.SerializedSlice(NodeImage) = .{},
 
         comptime {
-            // 15 value/function/image side lists + 7 nested type-store lists
+            // 14 value/function/image side lists + 7 nested type-store lists
             // + the blob index's cells.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 23);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 22);
         }
 
         /// Every blob is indexed, so the index holds exactly as many entries
@@ -2303,7 +2231,6 @@ pub const ConstStore = struct {
         self.images.deinit(self.allocator);
         self.image_bytes.deinit(self.allocator);
         self.image_pointers.deinit(self.allocator);
-        self.node_images.deinit(self.allocator);
         self.* = ConstStore.init(self.allocator);
     }
 

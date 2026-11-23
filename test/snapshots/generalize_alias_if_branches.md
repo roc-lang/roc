@@ -85,11 +85,11 @@ main = (picked(1), picked("a"))
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 243)
+				(e-call (constraint-fn-var 244)
 					(e-lookup-local
 						(p-assign (ident "picked")))
 					(e-num (value "1")))
-				(e-call (constraint-fn-var 246)
+				(e-call (constraint-fn-var 247)
 					(e-lookup-local
 						(p-assign (ident "picked")))
 					(e-string

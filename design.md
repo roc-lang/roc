@@ -2515,28 +2515,24 @@ result type exactly as that evaluator's lowering computes them, by a program
 of the same modules that lowers nothing (`postcheck.Boxy.ValueSchema`). Under
 `.lss` too, every root that reads no function value is the `.boxy`
 evaluator's ("Compile-Time Evaluation Under `.lss`"), so this is the one
-representation either strategy stores such a root in. One store writer
-serves both producers (`eval/const_store_writer.zig`): the plan-directed walk,
-the node shapes it fills, the field and variant order, packed scalar and
-product lists, nominal wrapping, and the stored type are shared, and only
-where a value's parts come from differs: an evaluator's result memory, the
-checked expression's parts, or the stored value of a constant the expression
-reads. A numeral's bytes are the bytes lowering gives the literal
-(`exact_numeral.encodeBits`), and a literal list or string has no capacity
-beyond its items (Static Lists And Strings Keep Their Capacity). A read of a
-constant is the constant's stored value, capacity included: the writer
-copies the read root's nodes into the reading root's store under the
-reading root's own plan, choosing each tag's variant by name, so a read at a
-wider tag row stores the same value, and copying a packed list's bytes as
-they are, since a list of one item type packs one way. It reads a root of
-the module being written from the store being written, since every artifact
-of one checked identity owns its own store, and an imported root from the
-schema's view of its module.
-Every part of a value-form root is a node of its own: the writer shares no
-node between two parts, equal or not, nor with the root it reads. Sharing is
-an evaluator's record that two parts were one allocation, and a checked
-expression has no allocations to record. Equal string and packed list bytes
-are still stored once, because the store interns blob data by content.
+representation either strategy stores such a root in. A value-form root is
+data alone, so it is stored as its image (Stored Images), and the writer
+(`ConstStoreWriter.ValueFormImage`) writes that image straight from the
+checked expression, part by part at the 64-bit layout of the root's type,
+exactly as `NativeRootExport.imageRoot` writes an evaluation of the same
+expression: a numeral's bytes are the bytes lowering gives the literal
+(`exact_numeral.encodeBits`), a literal list or string has no capacity
+beyond its items (Static Lists And Strings Keep Their Capacity), each list's
+items are in an allocation of their own, and each tag is written as the
+discriminant of the variant its plan names. A read of a constant is the
+constant's stored value, capacity included: the read root's image is
+embedded in the reading root's block once, its pointer words relocated, and
+the part holds a copy of its root bytes. It reads a root of the module being
+written from the store being written, since every artifact of one checked
+identity owns its own store, and an imported root from the schema's view of
+its module. The writer shares no allocation between two parts, equal or
+not: sharing is an evaluator's record that two parts were one allocation,
+and a checked expression has no allocations to record.
 
 A value-form root reads only roots the writer completes, so finalization
 completes every pending one before any evaluator starts: the evaluators'
@@ -2808,10 +2804,11 @@ nodes can share storage by their contents and relocations.
 
 A stored value that is data alone, holding no function value and no failed
 value anywhere inside it, is one slot naming its ConstStore node
-(`Program.storedDataAlone`), whatever it holds: the data encoder writes it
-from the store through its type's plan, so the work of every pass and backend
-is independent of how many values it holds, and only the encoder's is
-proportional to them. The encoder writes each stored value straight into
+(`Program.storedDataAlone`), whatever it holds: a root's image (Stored
+Images), which the data encoder copies as one block, or a data part of a
+stored function value, which it writes from the store through its type's
+plan, so the work of every pass and backend is independent of how many
+values it holds, and only the encoder's is proportional to them. The encoder writes each stored value straight into
 the bytes of the value holding it, and shares among its readers the frozen
 descriptor of every value that owns an allocation (a stored list, a box, an
 allocated string, and a product or tag a recursive type keeps behind a box),
@@ -31013,11 +31010,13 @@ specialization and each commit their own LIR and ARC output; they do not repeat
 checked-to-Monotype lowering.
 
 The evaluator produces a runtime value. Checking then stores that eval
-result as checked-stage data in the checked module's `ConstStore`. `ConstStore`
-stores checked Roc values only. It does not contain Monotype nodes, Lambda
-Solved data, Lambda Mono decision data, runtime addresses, allocation identity,
-layout ids, runtime discriminants, field offsets, LIR locals, LIR procedure
-ids, backend symbols, backend bytes, or host handles.
+result as checked-stage data in the checked module's `ConstStore`: a value
+that is data alone as its image, the memory it occupies at the 64-bit layout
+of its stored type (Stored Images), and a value holding a function or a
+failure as nodes. `ConstStore` contains no Monotype nodes, Lambda Solved
+data, Lambda Mono decision data, runtime addresses, allocation identity,
+layout ids, LIR locals, LIR procedure ids, backend symbols, or host handles;
+an image's pointer words hold offsets into its own block.
 
 Compile-time finalization evaluates dependency-ready roots in batches. Each
 batch is lowered to LIR once, ARC is inserted once, the dev backend emits native
@@ -31176,54 +31175,76 @@ deadline or finalization stop.
 ### Stored Images
 
 A compile-time root whose value is data alone, holding no function value
-and no failed value, is stored as an image (`ConstStore.ConstImage`): one
-block holding the value at offset 0 and then every live allocation it
-reaches, at the 64-bit little-endian layout of the root's stored type, with
-the offsets of the words that point into the block. A pointer word holds the
-block offset it points at. Allocations carry static refcount headers, lists
-and strings keep their capacity (Static Lists And Strings Keep Their
-Capacity), every NaN is Roc's one NaN, and no list or string is a seamless
-slice. The producer decides the form: a root whose const plan can hold no
-function is data alone. A value holding a function or a failure is stored as
-nodes.
+and no failed value, is stored as an image (`ConstStore.ConstImage`), the
+root node's value (`ConstValue.image`): one block holding the value at
+offset 0 and then every live allocation it reaches, at the 64-bit
+little-endian layout of the root's stored type, with the offsets of the
+words that point into the block, the type the value was stored at
+(`ConstImage.root_type`), the content digest of its layout, and its own
+digest. A pointer word holds the block offset it points at. Allocations
+carry static refcount headers, lists and strings keep their capacity (Static
+Lists And Strings Keep Their Capacity), every NaN is Roc's one NaN, and no
+list or string is a seamless slice. The producer decides the form: a root
+whose const plan can hold no function is data alone. A value holding a
+function or a failure is stored as nodes, and so is every part of it.
 
-An evaluated root's image is written by one copying pass over evaluator
-memory guided by the root's const plan (`NativeRootExport.imageRoot` over
-`frozen_graph.ImageGraph`, the freezer static-data slots use): a list of
-scalars is one copy, and a shared allocation is copied once. The image's
-digest is computed once, as the image is stored, over the content digest of
-the root's layout (`layout.Digests`, a function of the layout's structure
-alone, the same in every program and on every target), the block, and the
-pointer offsets. Everything that names the value by content reads that
-digest: a module's interface and object-input digests
+Every producer of a data root writes its image. An evaluated root's image is
+written by one copying pass over evaluator memory guided by the root's const
+plan (`NativeRootExport.imageRoot` over `frozen_graph.ImageGraph`, the
+freezer static-data slots use): a list of scalars is one copy, and a shared
+allocation is copied once. That pass writes the 64-bit layout whatever the
+width of the evaluation, reading the evaluator's memory at its own width, so
+a 32-bit compiler host (the interpreter path) stores the images a 64-bit one
+does. A value-form root (Value-Form Roots) is written as its image straight
+from its checked expression (`ConstStoreWriter.ValueFormImage`), part by
+part at the 64-bit layout exactly as the evaluation of the same expression
+is written: each list's items in an allocation of their own, and a constant
+it reads is that constant's image, embedded once with its pointer words
+relocated. A literal argument root is an evaluated root.
+
+The image's digest is computed once, as the image is stored, over the
+content digest of the root's layout (`layout.Digests`, a function of the
+layout's structure alone, the same in every program and on every target),
+the block, and the pointer offsets. Everything that names the value by
+content reads that digest: a module's interface and object-input digests
 (`boxy_interface.Digests.hashRootValue`) never walk an imaged value. Object
 keys are needed without a cache manager too: a runtime unit takes the object
 compile-time evaluation built in the same compilation by its key
 (`BuildEnv.boxyObjectWithKey`).
 
-A read copies the block once as one static data node and relocates each
-pointer word by the node's address; the root's own bytes are the slot's
-value, its pointer words relocated into the block. That is a read at the
-image's own layout, which the read's layout digest equal to the image's
-decides. A read at another layout (a 32-bit target, or a tag row an LSS row
-join widened past the stored one) is re-encoded at compile time through the
-read's const plan.
+**Reads.** A read at the image's own layout copies the block once as one
+static data node and relocates each pointer word by the node's address; the
+root's own bytes are the slot's value, its pointer words relocated into the
+block (`StaticInitializerMachine.freezeImage`). The read's layout digest
+equal to the image's decides it. A read at another layout, a 32-bit target's
+or a tag row an LSS row join widened past the stored one, re-encodes the
+image at compile time (`reencodeImage`): the reader commits the stored
+type's layout at the 64-bit width from the type alone, through the shared
+layout graph every strategy's layouts are committed through
+(`ImageLayouts`), reads the image's bytes at that layout and writes each
+part at its own layout through the read's const plan, tags matched by name.
+No second description of the producer's layout is stored: layout is a
+function of type and pointer width only, and a debug compiler asserts that
+the committed layout's digest is the image's.
 
 Reads of number roots, discriminant-only tags and strings stay literals in
-LIR (range proving, branch folding and overflow elision read them). An image
-records the type its value was stored at (`ConstImage.root_type`), and a
-reader decodes such a literal from the image through that type
+LIR (range proving, branch folding and overflow elision read them). A reader
+decodes such a literal from the image through its stored type
 (`ConstStore.imageLiteral`), never from the reader's own type, which an LSS
 row join may have widened: a number is the root's bytes at its primitive; a
 string is its descriptor's bytes and capacity; and a payload-free tag of a
-union whose every payload is zero-sized is the tag at the index the root's
-bytes hold among the union's tags in byte-wise name order (the order that
-assigns discriminants). Each reader then applies its own rule: Boxy keeps a
-number, and a tag its committed layout stores as a discriminant alone, as
-its literal and reads everything else as static data
+union whose value is its discriminant alone (the root is exactly the
+discriminant's width, `layout_shape.discriminantSize`) is the tag at the
+index the root's bytes hold among the union's tags in byte-wise name order
+(the order that assigns discriminants). Each reader then applies its own
+rule: Boxy keeps a number, and a tag its committed layout stores as a
+discriminant alone, as its literal and reads everything else as static data
 (`Builder.restoreImageStep`); Monotype keeps a number, a tag, and a string
 without spare capacity as its literal (`BodyContext.imageLiteralExpr`),
-wrapped in one `.nominal` per nominal layer of the read's type.
+wrapped in one `.nominal` per nominal layer of the read's type, and makes
+every other image root a stored static data candidate, which Solved-to-LIR
+lowering never treats as immediate. The wasm target-configuration reader
+reads its constants' literals the same way.
 
 An image is at the layouts of the strategy whose evaluator wrote it, so a
 checked module's cache entry is filed under its typing inputs and the
@@ -31231,6 +31252,10 @@ compilation's strategy (`coordinator.checkedEntryKey`): each strategy keeps
 its own entry, and no stored value is shared between `--specialize=yes` and
 `--specialize=no`. Layout depends on pointer width alone, so one image serves
 every 64-bit target.
+
+Compiler hosts are little-endian, as the checked cache's raw-byte format
+already requires (a big-endian host fails to compile), so an image's bytes
+are the evaluation's own.
 
 ## Test Root Ownership
 

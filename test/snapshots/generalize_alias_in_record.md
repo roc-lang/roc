@@ -82,7 +82,7 @@ NO CHANGE
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 241)
+				(e-call (constraint-fn-var 242)
 					(e-field-access
 						(receiver
 							(e-lookup-local
@@ -90,7 +90,7 @@ NO CHANGE
 						(segments
 							(segment (name "f") (mode "required"))))
 					(e-num (value "1")))
-				(e-call (constraint-fn-var 248)
+				(e-call (constraint-fn-var 249)
 					(e-field-access
 						(receiver
 							(e-lookup-local

@@ -105,17 +105,21 @@ pub fn freezeRootIntoSlot(
 }
 
 /// A frozen root as one block (`frozen_graph.ImageGraph`), the stored image
-/// of a value that is data alone. The program must be the host's 64-bit
-/// little-endian one, whose layouts images are at. The result's slices
-/// belong to `graph`, which the caller deinitializes.
+/// of a value that is data alone, at the 64-bit layout of its type whatever
+/// the width of the evaluation that left it in memory. The program is the
+/// host's, at the host's width. The result's slices belong to `graph`,
+/// which the caller deinitializes.
 pub fn imageRoot(
     graph: *ImageGraph,
     root: Program.RootShape,
     value: Value,
 ) Error!ImageGraph.Result {
-    if (graph.program.layouts.targetUsize().size() != 8 or word_size != 8 or @import("builtin").cpu.arch.endian() != .little) {
-        invariant("a stored image requires a 64-bit little-endian evaluation");
-    }
+    // Compiler hosts are little-endian (as the checked cache's raw-byte
+    // format requires), so an image's bytes are the evaluation's.
+    if (comptime @import("builtin").cpu.arch.endian() != .little) @compileError("stored images require a little-endian compiler host");
+    // An in-process evaluation runs at the host's pointer width; the image
+    // is written at the 64-bit layout whatever that width is.
+    if (std.debug.runtime_safety and graph.program.layouts.targetUsize().size() != word_size) invariant("an image's source evaluation is not at the host's width");
     var builder = ImageBuilder{ .graph = graph.*, .callables = .{} };
     defer graph.* = builder.graph;
     defer builder.jobs.deinit(builder.graph.allocator);
@@ -276,11 +280,14 @@ fn BuilderOf(comptime GraphT: type) type {
             // The descriptor keeps the capacity the string was evaluated with;
             // the allocation holds the bytes alone. A string held inline has no
             // capacity of its own beyond its bytes, and a seamless slice's is its
-            // window, so either is inline again whenever its bytes fit.
+            // window, so either is inline again whenever its bytes fit the
+            // destination's descriptor.
             const capacity = if (str.isSmallStr()) slice.len else str.getCapacity();
-            if (builtins.str.RocStr.fitsInSmallStr(capacity)) {
-                var small = builtins.str.RocStr.fromSliceSmall(slice);
-                @memcpy(self.graph.bytes(job.dest, @sizeOf(builtins.str.RocStr)), std.mem.asBytes(&small));
+            const descriptor_size = builtins.str.RocStr.word_count * self.graph.word();
+            if (capacity < descriptor_size) {
+                const descriptor = self.graph.bytes(job.dest, descriptor_size);
+                @memcpy(descriptor[0..slice.len], slice);
+                descriptor[descriptor_size - 1] = builtins.str.RocStr.smallStrFlagByte(slice.len);
                 return;
             }
             const result = try self.graph.reserveAllocation(.{
@@ -292,23 +299,28 @@ fn BuilderOf(comptime GraphT: type) type {
             }, slice.len, 1, false, null);
             if (result.fresh) @memcpy(self.graph.bytes(result.dest, slice.len), slice);
             try self.graph.relocate(job.dest, result.dest);
-            try self.graph.writeWord(job.dest.offsetBy(@offsetOf(builtins.str.RocStr, "capacity_or_alloc_ptr")), builtins.str.RocStr.encodeCapacity(capacity));
-            try self.graph.writeWord(job.dest.offsetBy(@offsetOf(builtins.str.RocStr, "length")), slice.len);
+            // `RocStr`'s words: bytes, capacity, length.
+            try self.graph.writeWord(job.dest.offsetBy(self.graph.word()), builtins.str.RocStr.encodeCapacityForWidth(capacity));
+            try self.graph.writeWord(job.dest.offsetBy(2 * self.graph.word()), slice.len);
         }
 
         fn list(self: *Self, job: Job, element: Program.ConstPlanId) Allocator.Error!void {
             const physical = self.graph.program.layouts.getLayout(job.layout_idx);
             if (physical.tag != .list and physical.tag != .list_of_zst) invariant("list export plan had non-list layout");
             const list_value = job.source.read(builtins.list.RocList);
-            try self.graph.writeWord(job.dest.offsetBy(word_size), list_value.len());
+            // `RocList`'s words: bytes, length, capacity.
+            try self.graph.writeWord(job.dest.offsetBy(self.graph.word()), list_value.len());
             // The descriptor keeps the capacity the list was evaluated with; the
             // allocation holds the items alone. A list of zero-sized items holds
             // no allocation, so its capacity is a count alone.
             const capacity = list_value.getCapacity();
-            try self.graph.writeWord(job.dest.offsetBy(2 * word_size), builtins.list.RocList.encodeCapacity(capacity));
+            try self.graph.writeWord(job.dest.offsetBy(2 * self.graph.word()), builtins.list.RocList.encodeCapacityForWidth(capacity));
             if (physical.tag == .list_of_zst or capacity == 0) return;
             const ptr = list_value.bytes orelse invariant("a native list with capacity had a null pointer");
             const element_layout = physical.getIdx();
+            // An item's size where it was evaluated and where it is written:
+            // they differ for an image written from a 32-bit evaluation.
+            const source_size = self.graph.program.layouts.layoutSize(self.graph.program.layouts.getLayout(element_layout));
             const element_size = self.graph.size(element_layout);
             const result = try self.graph.reserveAllocation(.{
                 .address = @intFromPtr(ptr),
@@ -323,7 +335,7 @@ fn BuilderOf(comptime GraphT: type) type {
             // are one run of bytes.
             if (self.isScalarPlan(element)) return self.scalars(element_layout, .{ .ptr = ptr }, result.dest, list_value.len());
             for (0..list_value.len()) |index| {
-                try self.enqueue(element, element_layout, .{ .ptr = ptr + index * element_size }, result.dest.offsetBy(index * element_size), .value);
+                try self.enqueue(element, element_layout, .{ .ptr = ptr + index * source_size }, result.dest.offsetBy(index * element_size), .value);
             }
         }
 
@@ -332,10 +344,12 @@ fn BuilderOf(comptime GraphT: type) type {
             if (tag_payload and plans.len == 1) return self.enqueue(plans[0], idx, source, dest, .value);
             const physical = self.graph.program.layouts.getLayout(idx);
             if (physical.tag != .struct_) invariant("aggregate export plan had non-struct layout");
+            const layouts = &self.graph.program.layouts;
             for (plans, 0..) |plan, original_index| {
-                const child_layout = self.graph.program.layouts.getStructFieldLayoutByOriginalIndex(physical.getStruct().idx, @intCast(original_index));
-                const offset = self.graph.program.layouts.getStructFieldOffsetByOriginalIndex(physical.getStruct().idx, @intCast(original_index));
-                try self.enqueue(plan, child_layout, source.offset(offset), dest.offsetBy(offset), .value);
+                const child_layout = layouts.getStructFieldLayoutByOriginalIndex(physical.getStruct().idx, @intCast(original_index));
+                const source_offset = layouts.getStructFieldOffsetByOriginalIndex(physical.getStruct().idx, @intCast(original_index));
+                const dest_offset = layouts.getStructFieldOffsetByOriginalIndexAt(physical.getStruct().idx, @intCast(original_index), self.graph.width());
+                try self.enqueue(plan, child_layout, source.offset(source_offset), dest.offsetBy(dest_offset), .value);
             }
         }
 
@@ -345,7 +359,7 @@ fn BuilderOf(comptime GraphT: type) type {
             if (physical.tag != .tag_union) invariant("native tag export had non-tag layout");
             const data = self.graph.program.layouts.getTagUnionData(physical.getTagUnion().idx);
             const discriminant = data.readDiscriminant(job.source.ptr, self.graph.program.layouts.targetUsize());
-            data.writeDiscriminant(self.graph.bytes(job.dest, self.graph.size(job.layout_idx)).ptr, discriminant, self.graph.program.layouts.targetUsize());
+            data.writeDiscriminant(self.graph.bytes(job.dest, self.graph.size(job.layout_idx)).ptr, discriminant, self.graph.width());
             return @intCast(discriminant);
         }
 

@@ -322,7 +322,7 @@ pub const ModuleType = enum {
             },
             .check => .{
                 .root = "src/check/mod.zig",
-                .deps = &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting, .build_options, .fmt },
+                .deps = &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting, .build_options, .fmt, .layout_shape },
                 .tests = .{ .unit = .{ .aggregators = &.{"check tests"} } },
             },
             .tracy => .{

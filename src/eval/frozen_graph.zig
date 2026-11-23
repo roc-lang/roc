@@ -8,6 +8,7 @@
 
 const std = @import("std");
 const compilerInvariant = @import("base").invariant;
+const base_target = @import("base").target;
 const layout = @import("layout");
 const lir = @import("lir");
 const static_data = @import("static_data");
@@ -75,6 +76,11 @@ pub fn Graph(comptime AllocationKey: type) type {
         /// The target alignment of `idx`.
         pub fn alignment(self: *const Self, idx: layout.Idx) u32 {
             return @intCast(self.program.layouts.getLayout(idx).alignment(self.program.layouts.targetUsize()).toByteUnits());
+        }
+
+        /// The pointer width the graph's destinations are at: the program's.
+        pub fn width(self: *const Self) base_target.TargetUsize {
+            return self.program.layouts.targetUsize();
         }
 
         /// Append a zeroed node named `name`, which `output` allocated and
@@ -205,6 +211,11 @@ pub fn ImageGraph(comptime AllocationKey: type) type {
         /// parts of its plans that name code.
         pub const is_image = true;
 
+        /// The symbol every destination of an image names: an image is one
+        /// block, which its destinations address by offset alone, so no
+        /// reader of a destination reads it.
+        const image_block: SymbolId = undefined;
+
         /// Scratch for the allocation table and the result.
         allocator: Allocator,
         program: *const Program.Result,
@@ -219,18 +230,22 @@ pub fn ImageGraph(comptime AllocationKey: type) type {
             self.allocations.deinit(self.allocator);
         }
 
-        /// Images are at the 64-bit layout.
-        pub fn word(self: *const Self) usize {
-            _ = self;
+        /// Images are at the 64-bit layout, whatever the evaluation's
+        /// width.
+        pub fn word(_: *const Self) usize {
             return 8;
         }
 
+        pub fn width(_: *const Self) base_target.TargetUsize {
+            return .u64;
+        }
+
         pub fn size(self: *const Self, idx: layout.Idx) usize {
-            return self.program.layouts.layoutSize(self.program.layouts.getLayout(idx));
+            return self.program.layouts.sizeAt(self.program.layouts.getLayout(idx), .u64);
         }
 
         pub fn alignment(self: *const Self, idx: layout.Idx) u32 {
-            return @intCast(self.program.layouts.getLayout(idx).alignment(self.program.layouts.targetUsize()).toByteUnits());
+            return @intCast(self.program.layouts.getLayout(idx).alignment(.u64).toByteUnits());
         }
 
         /// Reserve `byte_count` zeroed bytes at `alignment_` at the end of
@@ -249,7 +264,7 @@ pub fn ImageGraph(comptime AllocationKey: type) type {
         pub fn root(self: *Self, byte_count: usize, alignment_: u32) Allocator.Error!Destination {
             if (self.block.items.len != 0) invariant("an image's root was reserved twice");
             _ = try self.extend(byte_count, alignment_);
-            return .{ .symbol = @fromBackingInt(0) };
+            return .{ .symbol = image_block };
         }
 
         pub fn bytes(self: *Self, dest: Destination, count: usize) []u8 {
@@ -272,12 +287,27 @@ pub fn ImageGraph(comptime AllocationKey: type) type {
             const header_size: usize = (if (contains_refcounted) @as(usize, 2) else 1) * self.word();
             const payload_offset = std.mem.alignForward(usize, header_size, alignment_);
             const start = try self.extend(std.math.add(usize, payload_offset, byte_count) catch return error.OutOfMemory, @intCast(@max(alignment_, self.word())));
-            const dest = Destination{ .symbol = @fromBackingInt(0), .offset = start + payload_offset };
+            const dest = Destination{ .symbol = image_block, .offset = start + payload_offset };
             // A zero RC header is the runtime's immutable/static allocation
             // marker; `extend` zeroed it.
-            if (contains_refcounted) try self.writeWord(.{ .symbol = @fromBackingInt(0), .offset = dest.offset - 2 * self.word() }, element_count orelse 0);
+            if (contains_refcounted) try self.writeWord(.{ .symbol = image_block, .offset = dest.offset - 2 * self.word() }, element_count orelse 0);
             try self.allocations.put(self.allocator, key, dest);
             return .{ .dest = dest, .fresh = true };
+        }
+
+        /// Append another image's block, `bytes` with pointer words at
+        /// `pointers`, at `alignment_`; its pointer words are relocated to
+        /// point where their targets now are. Returns where it starts.
+        pub fn embed(self: *Self, bytes_: []const u8, pointers: []const u32, alignment_: u32) Allocator.Error!Destination {
+            const start = try self.extend(bytes_.len, alignment_);
+            @memcpy(self.block.items[start..][0..bytes_.len], bytes_);
+            try self.pointers.ensureUnusedCapacity(self.allocator, pointers.len);
+            for (pointers) |offset| {
+                const pointer_word = self.block.items[start + offset ..][0..8];
+                std.mem.writeInt(u64, pointer_word, std.mem.readInt(u64, pointer_word, .little) + start, .little);
+                self.pointers.appendAssumeCapacity(@intCast(start + offset));
+            }
+            return .{ .symbol = image_block, .offset = start };
         }
 
         /// A finished image: the block, its pointer words in ascending
