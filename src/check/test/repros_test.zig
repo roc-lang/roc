@@ -2164,3 +2164,49 @@ test "check - repro - issue 13237 - a named and an ignored payload variable beha
         try test_env.assertOneTypeError("Non Exhaustive Match");
     }
 }
+
+test "check - repro - issue 13372 - a construction typed through an alias owns its omitted defaults" {
+    const cases = [_]struct { source: []const u8, omissions: usize }{
+        // The default `{}` is checked at `Environment`, an alias of `Boot`.
+        .{ .omissions = 2, .source =
+        \\Boot := { url : Str ?? "/" }
+        \\Environment : Boot
+        \\Spec := { environment : Environment ?? {} }
+        \\spec : Spec
+        \\spec = Spec.{}
+        },
+        // An annotation naming the alias.
+        .{ .omissions = 1, .source =
+        \\Boot := { url : Str ?? "/" }
+        \\Environment : Boot
+        \\value : Environment
+        \\value = {}
+        },
+        // A chain of aliases, with a supplied field beside the omitted one.
+        .{ .omissions = 1, .source =
+        \\Boot := { url : Str ?? "/", port : U16 ?? 80 }
+        \\Environment : Boot
+        \\Outer : Environment
+        \\value : Outer
+        \\value = { port: 8080 }
+        },
+        // A parameterized alias.
+        .{ .omissions = 1, .source =
+        \\Boot(a) := { items : List(a) ?? [] }
+        \\Environment(a) : Boot(a)
+        \\value : Environment(U8)
+        \\value = {}
+        },
+    };
+    for (cases) |case| {
+        var env = try TestEnv.init("Test", case.source);
+        defer env.deinit();
+        try env.assertNoErrors();
+        const omissions = env.module_env.record_omitted_defaults.items();
+        try std.testing.expectEqual(case.omissions, omissions.len);
+        for (omissions) |omission| {
+            const expr = env.module_env.store.getExpr(omission.expr);
+            try std.testing.expect(expr == .e_empty_record or expr == .e_record);
+        }
+    }
+}

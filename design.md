@@ -16254,11 +16254,17 @@ Restrictions:
   result, and records each default on its source construction. Both nominal
   lifting paths retain the checked representatives of the record relation,
   alongside its original operands, so a polymorphic call's formal slot cannot
-  hide the literal that supplies it. Checking registers fresh record expressions
-  as they are checked. At settlement, before default-cycle validation, it groups
-  accepted omission decisions by solved record equality and distributes each
-  decision to every registered construction in that class that did not supply
-  the field. This consumes the unifier's explicit default identity, including
+  hide the literal that supplies it. Checking registers each fresh record
+  expression as it is checked, together with the variable its record skeleton
+  was built on. That variable, not the expression's own, names the literal's
+  record class: an annotated or expected-typed expression checks its body on a
+  fresh variable and relates its own variable to the annotation, which is an
+  alias node, a class of its own, when the annotation names an alias. At
+  settlement, before default-cycle validation, it groups accepted omission
+  decisions by solved record equality and distributes each decision to every
+  registered construction in that class that did not supply the field, then
+  publishes the omissions sorted by construction so each consumer finds one
+  construction's omissions by binary search. This consumes the unifier's explicit default identity, including
   when later value relations normalized the field to required; it never
   reconstructs an omission from a nominal declaration or a solved field kind.
   Equal decisions are coalesced before visiting constructors, and only classes
