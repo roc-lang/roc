@@ -1752,6 +1752,8 @@ pub const Program = struct {
     /// holds. Every node the question visits is answered once per lowering.
     pub fn storedDataAlone(self: *Program, source: ConstSource, node: checked.ConstNodeId) Allocator.Error!bool {
         const const_store = self.constStore(source);
+        // The producer stored a value that is data alone as an image.
+        if (const_store.imageOf(node) != null) return true;
         const entry = try self.stored_data_alone.getOrPut(self.allocator, switch (source) {
             .module => |index| index,
         });
@@ -1774,7 +1776,7 @@ pub const Program = struct {
             var single: [1]checked.ConstNodeId = undefined;
             const children: ?[]const checked.ConstNodeId = switch (const_store.get(frame.node)) {
                 .pending => invariant("a stored constant was never filled"),
-                .crash, .checked_error, .fn_value, .boxy_fn => null,
+                .image, .crash, .checked_error, .fn_value, .boxy_fn => null,
                 .zst, .scalar, .str => &.{},
                 .box => |child| blk: {
                     single[0] = child;

@@ -1973,7 +1973,10 @@ test "check - repro - issue 13237 - an Err branch on an all-Ok function's result
     try test_env.assertNoErrors();
 }
 
-test "check - repro - issue 13237 - a top-level value's undecided error payload closes when the module finishes" {
+test "check - repro - issue 13237 - a constant's undecided error payload is quantified" {
+    // The payload variable carries no requirement, so the constant quantifies
+    // it (design.md "Polymorphic Constants"); the `expect` closes its own
+    // copy.
     var test_env = try TestEnv.init("Test",
         \\x : Try(I64, _)
         \\x = Ok(42)
@@ -1981,10 +1984,11 @@ test "check - repro - issue 13237 - a top-level value's undecided error payload 
         \\expect x == Ok(42)
     );
     defer test_env.deinit();
-    try test_env.assertDefType("x", "Try(I64, [])");
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("x", "Try(I64, _a)");
 }
 
-test "check - repro - issue 13237 - a top-level value's payload a use decides is not closed" {
+test "check - repro - issue 13237 - a use deciding a constant's payload decides only its own copy" {
     var test_env = try TestEnv.init("Test",
         \\x : Try(I64, _)
         \\x = Ok(42)
@@ -1993,7 +1997,8 @@ test "check - repro - issue 13237 - a top-level value's payload a use decides is
         \\y = x
     );
     defer test_env.deinit();
-    try test_env.assertDefType("x", "Try(I64, [B])");
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("x", "Try(I64, _a)");
 }
 
 test "check - repro - issue 13237 - a named and an ignored payload variable behave the same" {

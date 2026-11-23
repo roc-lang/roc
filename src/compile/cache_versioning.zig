@@ -86,8 +86,11 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// and of records and tuples holding them, as packed bytes.
 /// Version 56 combines version 55 with checked bindings and stored constant
 /// types that carry no iterator representation fields.
+/// Version 57 stores a compile-time root whose value is data alone as an
+/// image with the type it was stored at, and files each strategy's entry
+/// under its own key.
 /// Platform-pairing entries share it.
-const checked_envelope_version: u32 = 56;
+const checked_envelope_version: u32 = 57;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment. Version 5 rejects builtin-conflicting import

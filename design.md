@@ -5909,11 +5909,13 @@ LIR, LirImage data, object code, or executable binary output must include the lo
 strategy and every target/backend input that can change the lowered
 representation.
 
-The checked module cache stores checked Roc values only. Roc language values are
-target-independent except for pointer-sized Roc values if the language exposes
-them to compile-time evaluation. Compiler runtime representation data are not
-Roc values and must never enter `ConstStore`: runtime addresses, allocation
-identity, layout ids, runtime discriminants, field offsets, LIR proc ids,
+The checked module cache stores checked Roc values. A value that is data
+alone is stored as its image, the memory it occupies at the 64-bit layout of
+its stored type (Stored Images), so its bytes hold that layout's field
+offsets and discriminants and its pointer words hold block offsets; the
+entry is therefore filed per strategy. Beyond that, compiler runtime
+representation data must never enter `ConstStore`: runtime addresses,
+allocation identity, layout ids, LIR proc ids,
 backend symbols, object-format details, and backend state are all outside the
 checked value domain. Host interaction exists only at runtime, so host handles
 and host results cannot be compile-time values. If Roc exposes pointer-sized
@@ -6816,10 +6818,9 @@ recorded separately: evidence already finds them through the type.
 ### Value Bindings Generalize By Expression
 
 Adding an annotation may only make a binding's type less flexible, never more.
-Whether a binding generalizes is therefore decided by its right-hand side
-alone, never by its annotation (`Check.shouldGeneralize`,
-`Check.bindingRhsGeneralizes`); this follows Roc RFC 0010 ("Let-generalization:
-Let's not?"), except that number literals do not generalize either:
+Whether a binding generalizes is therefore decided by its right-hand side and
+its position, never by its annotation (`Check.shouldGeneralize`,
+`Check.bindingRhsGeneralizes`, `Check.topLevelConstantGeneralizes`):
 
 - A binding whose right-hand side is a function definition (a lambda, a
   closure, an annotation-only signature, a hosted lambda, or a derived method)
@@ -6828,19 +6829,25 @@ Let's not?"), except that number literals do not generalize either:
   (local, imported, or associated, as in `shorthand = FooBar.myfunc`),
   generalizes. The reference does no work, and it is exactly as polymorphic
   as the binding it names.
+- A top-level constant generalizes over every type variable of its type that
+  carries no requirement, and keeps every one that carries one weak
+  (Polymorphic Constants, below). `empty = []` and `id = mk({})` are
+  polymorphic; `five = 5` is weak, because its type carries a literal
+  conversion requirement ("weak top-level literal rejects second use at
+  different type", below).
 - Every other value binding is weak: it has one type, shared by every use.
-  This includes `empty = []`, `id = mk({})`, a number literal ("weak top-level
-  literal rejects second use at different type", below), and a conditional,
-  match, or block whose value is a lambda.
+  This includes every local value binding (`empty = []` inside a function
+  body) and a conditional, match, or block whose value is a lambda, when it is
+  local.
 
-A weak top-level value's type may keep a variable that nothing pins, like the
-item type of `empty = []`. The checker rejects such a value with
-`polymorphic_value` ("Polymorphic Value") only when that variable carries a
-static-dispatch requirement (`reportPolymorphicTopLevelValues`), as `expect
-empty == []` gives it one: nothing chooses the type the method comes from.
-Without a requirement the variable is decided (Decided Variables), and every
-use of the value is accepted, whichever function it is passed to:
-`Str.inspect(empty)` renders `[]`.
+A weak top-level value's type may keep a variable that nothing pins. The
+checker rejects such a value with `polymorphic_value` ("Polymorphic Value")
+when that variable carries a static-dispatch requirement
+(`reportPolymorphicTopLevelValues`): nothing chooses the type the method comes
+from. A variable without a requirement is never weak at the top level: the
+constant quantifies it, and each use instantiates it (`expect empty == []`
+compares the `expect`'s own instance, whose item type nothing else fixes, so
+it is decided; Decided Variables).
 
 An expression-position function generalizes only where its consumer
 instantiates it: a binding's right-hand side, or a stored-value construction
@@ -6866,12 +6873,18 @@ construction edge still instantiates whatever it quantifies.
 An annotation cannot make a weak binding polymorphic. An annotation on a weak
 binding that introduces a type variable, named (`a`, `_a`) or an anonymous
 `..`, claims a polymorphism the binding does not have and is rejected with
-`polymorphic_value_annotation` ("Value Is Not Polymorphic"):
+`polymorphic_value_annotation` ("Value Is Not Polymorphic"). A top-level
+constant quantifies every variable its annotation introduces, so its
+annotation is rejected exactly when it has a where clause, which gives an
+introduced variable a requirement (`Check.topLevelValueAnnotationIsRejected`):
+`items : List(a) where [a.to_str : a -> Str]` / `items = []` is rejected, and
+`empty : List(a)` / `empty = []`, `id : a -> a` / `id = mk({})` and
+`parse_left : Parser(List(U8), [Left(U64), ..], _)` are accepted. A local
+binding's annotation is rejected by the rules below:
 
-- `empty : List(a)` / `empty = []`, `id : a -> a` / `id = mk({})`,
-  `f : a -> a` / `f = if c |x| x else |x| x`, `pair : (List(a), U8)`, and a
-  local `xs : List(b)` whose `b` no enclosing annotation introduced are all
-  rejected.
+- A local `xs : List(b)` / `xs = []` whose `b` no enclosing annotation
+  introduced, a local `f : a -> a` / `f = if c |x| x else |x| x`, and a
+  local `pair : (List(a), U8)` are all rejected.
 - A type variable the annotation looks up from an enclosing annotation is not
   introduced by it: inside `f : a -> List(a)`, a local `empty : List(a)` /
   `empty = []` is accepted, because the enclosing binding quantifies `a`.
@@ -6880,11 +6893,13 @@ binding that introduces a type variable, named (`a`, `_a`) or an anonymous
 - A where clause constrains a variable the annotation introduces, so a value
   annotation with one is rejected through that variable.
 - An implicitly opened row extension (an extensionless tag union in an output
-  position, Polarity) is not written, so it is not rejected: on a value it is
-  the row the Polarity table's VALUE rows describe. An explicit
+  position, Polarity) is not written, so it is not rejected: on a local value
+  it is the row the Polarity table's VALUE rows describe. An explicit
   `..` is written. In an output position it means exactly what its absence
-  means, so on a value binding it can only ask for a quantified row; it is
-  rejected, and the report says to remove it.
+  means, so on a local value binding it can only ask for a quantified row; it
+  is rejected, and the report says to remove it. On a top-level constant, as
+  on a function's result, the implicitly opened row is quantified already,
+  and an explicit `..` there is reported as a redundant open tag union.
 
 The report never names a type the program did not write. Its headline says
 the binding "isn't defined as a function (like `|x| ...`)", which is accurate
@@ -6928,17 +6943,134 @@ Both sides are pinned in `src/check/test/value_binding_generalization_test.zig`
 and `src/check/test/issue_12016_test.zig`. Accepted: annotated syntactic
 functions used at two types, value aliases, concrete annotations, `_` holes, a
 local annotation naming only an enclosing variable, the thunk form used at two
-types, a lambda stub, and the issue 12016 program. Rejected: each annotation
-listed above, `...` and `crash` stubs (with their dedicated hint), and a
-rejected binding used at two types (a list, a function value called at two
-types, a local, and a top-level binding used from two functions), each with
-exactly one error; an unannotated weak value used at two types is an ordinary
-mismatch. Using an unannotated top-level value at two wider tag unions is not
-two types either: its uses share one row and widen it together (Value Rows:
-Uses Share One Row).
+types, a lambda stub, the issue 12016 program, and every polymorphic constant
+form (an annotated or unannotated empty list, an eta-reduced call result, a
+tuple and a record holding a type variable, a tag row read at two unions, a
+placeholder constant, and a constant mixing an unconstrained and a
+constrained variable). Rejected: each local annotation listed above, a
+top-level annotation with a where clause, `...` and `crash` stubs in a local
+binding (with their dedicated hint), and a rejected binding used at two types
+(a list, a function value called at two types, a local, and a top-level
+binding used from two functions), each with exactly one error; an
+unannotated weak value used at two types (a local list, or a top-level number
+literal) is an ordinary mismatch.
 `test/echo/value_annotation_not_polymorphic.roc` runs a program past its
 unreached rejected bindings until it reaches one and crashes there, and
 `test/echo/issue_12016_stored_branch_lambdas.roc` runs the stored lambdas.
+
+### Polymorphic Constants
+
+A top-level constant, and a constant the compiler hoists into a compile-time
+root, generalizes over every type variable of its type that carries no
+requirement, whether or not it is annotated. Open tag rows and open record
+rows count as such variables. A variable that carries a requirement does not
+generalize: the constant keeps it weak, exactly as a weak value keeps every
+variable, so number literals keep one shared type. A local value binding that
+is not hoisted is weak as before.
+
+```roc
+empty : List(_a)
+empty = []
+
+parse_left : Parser(List(U8), [Left(U64), ..], _)
+parse_left = Parser.const(|n| Left(n)).skip(Parser.Utf8.codeunit('L')).keep(Parser.Utf8.digits({}))
+
+parse_line : Parser(List(U8), [Left(U64), Right(U64)], _)
+parse_line = Parser.one_of([parse_left, parse_right])
+```
+
+`empty` is read at `List(U8)` and `List(Str)`; `parse_left`'s open output row
+is read at the closed union `parse_line` names.
+
+**What counts as a requirement.** The constant's right-hand side is a
+generalization boundary of its own (`Check.topLevelConstantGeneralizes`: a
+value definition bound to one name, in a binding group of its own, that no
+platform requirement types). Before boundary defaulting and again before the
+boundary generalizes, `Check.keepRequirementVarsWeak` pins at the enclosing
+rank every class at the boundary's rank that carries a requirement, with every
+class the requirement reaches:
+
+- a static-dispatch constraint on a flexible or rigid variable, a literal
+  conversion's among them, and a literal's undetermined type
+  (`Flex.literal`, Deferred Literal Conversion);
+- every dispatch the boundary still has waiting: the deferred
+  static-dispatch queues, a recursive dispatch judged once inference finishes
+  (`open_recursive_dispatches`), a generated codec parked for module
+  finalization (`final_codec_dispatch_constraints`), and a requirement the
+  body copied from a scheme onto a receiver it shares with an enclosing scope,
+  which waits in `instantiation_dispatchers` until that receiver is grounded;
+- the undetermined field kind of a record literal and a record literal's
+  uncommitted tail (the rule below).
+
+**A record literal's uncommitted tail and undetermined field kinds are not
+open rows.** Neither is a variable the program can write: the record has
+exactly its fields, and its tail only lets a use lift it into a nominal type
+(Uncommitted Record Tails), or a kind decide whether a field is optional. A
+polymorphic constant therefore keeps both weak, and every use shares the one
+lift and the one kind decision, as uses of a weak value do. Accepted:
+`shared = { count: 1.U64 }` read once as `c : Counter` and once as
+`shared.describe()` ("a value binding's uses share its lift",
+`uncommitted_record_tail_test.zig`), and an optional field supplied on one
+branch and omitted on the other under a `?:` annotation ("record - opt -
+conditional presence accepted (annotated)", `type_checking_integration.zig`).
+Rejected: the same `shared` read once as `Counter` and once as another
+nominal with the same backing is a mismatch ("a value binding committed by one
+use rejects another nominal"). Quantifying the tail instead would let each use
+lift the constant into a different nominal, and the record literal's one
+construction could no longer carry an omitted optional field for one use and
+not another.
+
+A pinned class is weak: it is one variable shared by every use, related to the
+program by its uses, and closed, defaulted, or reported when the module
+finishes, as a weak value's variable is. Everything else at the boundary's
+rank generalizes. Because the constant quantifies only variables that carry no
+requirement, it owns no requirement: its frame activates no scheme owner, and
+every requirement its body records belongs where a weak value's would.
+
+An annotation introducing a variable is accepted unless a where clause gives
+one of them a requirement (Value Bindings Generalize By Expression). A rigid
+annotation variable cannot acquire a requirement except through such a clause,
+because an unconstrained rigid accepts no method.
+
+Pinned on both sides by `value_binding_generalization_test.zig`,
+`let_polymorphism_integration_test.zig`, the value-row and polarity tests in
+`type_checking_integration.zig`, `issue_13011_test.zig`,
+`issue_11246_test.zig`, `test/echo/polymorphic_constant_empty.roc` and
+`test/echo/polymorphic_constant_parser.roc`.
+
+**Polymorphic recursion cannot reach a constant at a growing type.** A use of
+a constant inside a generic function gives the constant's quantified
+variables types over the function's variables; nothing flows back, so a
+constant takes part in no recursion of the flow graph Polymorphic Recursion
+judges. A generic function that reaches itself at a growing type is rejected
+there whatever constants it reads, so every instance of a constant that a
+program reaches is finite in number and is reached from a closed
+instantiation.
+
+**Evaluation.** Every closed type instance at which a constant is used is
+evaluated at compile time and stored as a constant of its own, one root per
+constant and closed type, as a literal argument root is one per literal and
+closed type (Literal Arguments). Under `.lss` specialization makes every use
+closed, so each requested instance is a compile-time root. Under `.boxy` a use
+at a closed type reads that instance's stored value, and a use at an open type
+inside a generic function is a requirement of that function's scheme: the
+instance is a hidden input of the function, supplied by its caller and
+forwarded up the call chain to the call site where the type is closed, where
+the stored instance is passed. What is passed is the stored value; nothing
+recomputes a constant at run time, and no global mutable state and no
+adapter or re-tagging wrapper exists. Each instance's stored functions are
+built at that closed instance, so their type descriptors are that instance's.
+
+One evaluation of each polymorphic constant, the *canonical* one, instantiates
+every generalized variable at the empty tag union `[]` (rows closed empty). It
+runs in every compilation, `roc check` included, whether or not a use
+requests that instance, and it is the one evaluation that reports the
+constant's `dbg`, `expect` and `crash`. Every other instance's evaluation
+suppresses `dbg` and `expect` output; its failure (a crash, an allocation
+failure) is reported as an ordinary compile-time failure. `roc check` and
+`roc build` report the same things. N instances cost N compile-time
+evaluations and N copies in the binary, and an unannotated constant can gain
+instances silently; both are accepted.
 
 ## Checked Boundary
 
@@ -12538,13 +12670,14 @@ rules:
 | --- | --- | --- |
 | A FUNCTION signature | A quantified flex in the generalized scheme, instantiated fresh at every call | Each caller may use the result at a wider union, independently of every other caller |
 | A LOCAL VALUE binding | ONE weak flex shared by every use in the enclosing body | Uses may widen the shared row, and what accumulates is what every use sees |
-| A TOP-LEVEL VALUE binding | ONE weak flex shared by every use in the module, bounded by the annotation, closed when the module finishes checking | Nothing: the row lists exactly the annotation's tags at every use, and a use needing another tag is a mismatch at the use (Value Rows: Uses Share One Row) |
+| A TOP-LEVEL CONSTANT | A quantified flex in the constant's scheme, instantiated fresh at every use (Polymorphic Constants); one weak flex closed when the module finishes checking only when a requirement keeps the row weak | Each use may read the constant at a wider union, independently of every other use |
 | A HOST-BOUNDARY annotation (a hosted lambda, a `provides` def, a platform `requires` type) | None: the row is generated exactly as written (`AnnotationGenCtx.opening = .as_written`) | Nothing |
 
-A value binding generalizes only when its right-hand side does (Value
+A value binding generalizes by its right-hand side and its position (Value
 Bindings Generalize By Expression), so a FUNCTION row covers functions and
-value aliases and the two VALUE rows cover every other value binding; an
-annotation never moves a binding between them. A host boundary opts out
+value aliases, the CONSTANT row covers top-level constants, and the LOCAL
+VALUE row covers every other value binding; an annotation never moves a
+binding between them. A host boundary opts out
 because the host is a fixed ABI rather than a Roc producer participating in
 unification.
 
@@ -12671,14 +12804,15 @@ positions, shared across its sequential files and paths and released at invocati
 exit. Standalone formatting owns the same data for that call; independent
 workers never share mutable analysis state.
 
-The two VALUE rows treat an inferred value (`x = Boom`) and an annotated one
-alike: the value's body is bounded by the audit, and writing `..` on a value
-is rejected (Value Bindings Generalize By Expression), because a value cannot
-quantify a row. A local value's shared row behaves like any inferred local
-row and is sealed by Monotype's row defaults. A top-level value's row is
-shared by its module's uses and closes when the module finishes checking;
-Value Rows: Uses Share One Row states that rule and why each alternative was
-rejected.
+The LOCAL VALUE row treats an inferred value (`x = Boom`) and an annotated one
+alike: the value's body is bounded by the audit, and writing `..` on a local
+value is rejected (Value Bindings Generalize By Expression), because a local
+value cannot quantify a row. A local value's shared row behaves like any
+inferred local row and is sealed by Monotype's row defaults. A top-level
+constant's row is quantified like a function result's, and a written `..`
+on it is redundant; a row a requirement keeps weak is shared by its module's
+uses and closes when the module finishes checking. Value Rows: Uses Share One
+Row states the weak rule and why each alternative was rejected.
 
 An ALIAS carries its implicit row variables as hidden ordinary rigid
 parameters. `MyResult(a) : Try(a, [MyError])` has an additional internal
@@ -13441,9 +13575,13 @@ decides.
 
 ### Value Rows: Uses Share One Row
 
-A value binding (one that does not generalize; Value Bindings Generalize By
-Expression) has exactly one type and is evaluated once. Its tag rows follow
-one rule whether the value is local or top-level:
+A value binding that does not generalize (a local value binding, or a
+top-level constant's variables that carry a requirement; Value Bindings
+Generalize By Expression, Polymorphic Constants) has exactly one type and is
+evaluated once. A top-level constant's open tag rows carry no requirement, so
+it quantifies them and each use instantiates its own copy; the rules below
+are the rules of a weak row, which is a local value's row or a row a
+requirement keeps weak:
 
 - An UNANNOTATED value's open row is one weak flex shared by every use in the
   enclosing scope. Uses that need wider unions widen the shared row, and the
@@ -13509,15 +13647,14 @@ rebuilds the tag or asks for the annotation it needs.
 
 #### Rejected alternatives
 
-- Generalizing a top-level value over its implicitly opened rows and
-  evaluating it at compile time once per concrete specialization. Each use
-  type would get its own evaluation of the value's body: duplicated work, and
-  `dbg`, `expect`, and compile-time failures observed once per type, which
-  then need deduplication rules; a specialization needed by more than one
-  finalization program evaluates more than once; and a use inside a stored
-  closure's runtime body recomputes the value on every call. Roc RFC 0010
-  rejects generalizing values precisely because a value's computation must
-  not multiply with its uses.
+- Keeping every top-level constant weak (Roc RFC 0010's rule). A constant
+  such as `empty = []` or a parser whose output row is open could then be used
+  at one type only, and an annotation saying otherwise would be rejected.
+  Polymorphic Constants generalize instead and evaluate each closed instance
+  at compile time; the reporting rules there (one canonical evaluation
+  reports `dbg`, `expect` and `crash`) answer the duplication this rule
+  avoided, and a use inside a generic function reads a stored instance passed
+  to it rather than recomputing the constant.
 - A widening copy per use with a conversion at each read (the rule this one
   replaces), or with the value materialized once per read layout at compile
   time. The first converts at runtime; the second needs the frozen-image
@@ -16947,6 +17084,16 @@ site to any family below must classify it here.
 
 Other solved-graph mutations:
 
+- `keepRequirementVarsWeak`—policy: Polymorphic Constants. At a polymorphic
+  constant's generalization boundary, every class at the boundary's rank that
+  carries a requirement, with every class the requirement reaches, is pinned
+  at the enclosing rank (`pinVarAtRank`, the primitive Invariant D pins
+  dispatch obligations with), so the constant quantifies only variables that
+  carry no requirement. Accepted side: `value_binding_generalization_test.zig`
+  (a constant used at two types, a constant mixing an unconstrained and a
+  constrained variable); rejected side: a number-literal constant used at two
+  number types is a mismatch, and a where-clause annotation is rejected.
+
 - `Store.rebindSourceReferences`—mechanism: checking-interface declaration
   normalization (Checked cache identity and native checking interfaces). The
   producer establishes declaration slots before this store-owned operation
@@ -19387,10 +19534,8 @@ outcome files"), which it writes under either strategy.
 and program output. `roc
 check` accepts `--opt` and `--specialize` and ignores both: it has no runtime
 consumer, so it compiles under `.boxy`, whose evaluator completes every one
-of the module's roots. The checked module itself names no strategy: both evaluators store
-the same values, and every compilation hands a literal argument root
-("Literal Arguments") to the `.boxy` evaluator, so a module checked under
-one strategy is served to the other.
+of the module's roots. A checked module's cache entry is filed per strategy (Stored Images): a
+module checked under one strategy is not served to the other.
 
 The per-module Boxy cache is exactly as simple as the checked-module cache,
 and Per-Module Output is the invariant that makes it possible:
@@ -30925,6 +31070,65 @@ Roots that finish before the slow threshold therefore pay only monitor setup and
 signaling overhead, not the reporting period. Roots that exceed the threshold
 are reported, then the worker waits interruptibly until the next per-root report
 deadline or finalization stop.
+
+### Stored Images
+
+A compile-time root whose value is data alone, holding no function value
+and no failed value, is stored as an image (`ConstStore.ConstImage`): one
+block holding the value at offset 0 and then every live allocation it
+reaches, at the 64-bit little-endian layout of the root's stored type, with
+the offsets of the words that point into the block. A pointer word holds the
+block offset it points at. Allocations carry static refcount headers, lists
+and strings keep their capacity (Static Lists And Strings Keep Their
+Capacity), every NaN is Roc's one NaN, and no list or string is a seamless
+slice. The producer decides the form: a root whose const plan can hold no
+function is data alone. A value holding a function or a failure is stored as
+nodes.
+
+An evaluated root's image is written by one copying pass over evaluator
+memory guided by the root's const plan (`NativeRootExport.imageRoot` over
+`frozen_graph.ImageGraph`, the freezer static-data slots use): a list of
+scalars is one copy, and a shared allocation is copied once. The image's
+digest is computed once, as the image is stored, over the content digest of
+the root's layout (`layout.Digests`, a function of the layout's structure
+alone, the same in every program and on every target), the block, and the
+pointer offsets. Everything that names the value by content reads that
+digest: a module's interface and object-input digests
+(`boxy_interface.Digests.hashRootValue`) never walk an imaged value. Object
+keys are needed without a cache manager too: a runtime unit takes the object
+compile-time evaluation built in the same compilation by its key
+(`BuildEnv.boxyObjectWithKey`).
+
+A read copies the block once as one static data node and relocates each
+pointer word by the node's address; the root's own bytes are the slot's
+value, its pointer words relocated into the block. That is a read at the
+image's own layout, which the read's layout digest equal to the image's
+decides. A read at another layout (a 32-bit target, or a tag row an LSS row
+join widened past the stored one) is re-encoded at compile time through the
+read's const plan.
+
+Reads of number roots, discriminant-only tags and strings stay literals in
+LIR (range proving, branch folding and overflow elision read them). An image
+records the type its value was stored at (`ConstImage.root_type`), and a
+reader decodes such a literal from the image through that type
+(`ConstStore.imageLiteral`), never from the reader's own type, which an LSS
+row join may have widened: a number is the root's bytes at its primitive; a
+string is its descriptor's bytes and capacity; and a payload-free tag of a
+union whose every payload is zero-sized is the tag at the index the root's
+bytes hold among the union's tags in byte-wise name order (the order that
+assigns discriminants). Each reader then applies its own rule: Boxy keeps a
+number, and a tag its committed layout stores as a discriminant alone, as
+its literal and reads everything else as static data
+(`Builder.restoreImageStep`); Monotype keeps a number, a tag, and a string
+without spare capacity as its literal (`BodyContext.imageLiteralExpr`),
+wrapped in one `.nominal` per nominal layer of the read's type.
+
+An image is at the layouts of the strategy whose evaluator wrote it, so a
+checked module's cache entry is filed under its typing inputs and the
+compilation's strategy (`coordinator.checkedEntryKey`): each strategy keeps
+its own entry, and no stored value is shared between `--specialize=yes` and
+`--specialize=no`. Layout depends on pointer width alone, so one image serves
+every 64-bit target.
 
 ## Test Root Ownership
 

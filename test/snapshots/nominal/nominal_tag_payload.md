@@ -137,9 +137,9 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "a -> Maybe(a)"))
-		(patt (type "Maybe([])"))
+		(patt (type "Maybe(_a)"))
 		(patt (type "a -> Maybe(a)"))
-		(patt (type "Maybe([])")))
+		(patt (type "Maybe(_a)")))
 	(type_decls
 		(nominal (type "Maybe(a)")
 			(ty-header (name "Maybe")
@@ -147,7 +147,7 @@ NO CHANGE
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "a -> Maybe(a)"))
-		(expr (type "Maybe([])"))
+		(expr (type "Maybe(_a)"))
 		(expr (type "a -> Maybe(a)"))
-		(expr (type "Maybe([])"))))
+		(expr (type "Maybe(_a)"))))
 ~~~

@@ -638,10 +638,10 @@ main! = |args| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 471)
+								(e-call (constraint-fn-var 473)
 									(e-lookup-local
 										(p-assign (ident "pick")))
-									(e-dispatch-call (method "is_empty") (constraint-fn-var 469)
+									(e-dispatch-call (method "is_empty") (constraint-fn-var 471)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "args"))))
@@ -666,10 +666,10 @@ main! = |args| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 481)
+								(e-call (constraint-fn-var 483)
 									(e-lookup-local
 										(p-assign (ident "pick_annotated")))
-									(e-dispatch-call (method "is_empty") (constraint-fn-var 479)
+									(e-dispatch-call (method "is_empty") (constraint-fn-var 481)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "args"))))
@@ -694,7 +694,7 @@ main! = |args| {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_empty") (constraint-fn-var 486)
+								(e-dispatch-call (method "is_empty") (constraint-fn-var 488)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "args"))))
@@ -736,7 +736,7 @@ main! = |args| {
 								(e-if
 									(if-branches
 										(if-branch
-											(e-dispatch-call (method "is_empty") (constraint-fn-var 501)
+											(e-dispatch-call (method "is_empty") (constraint-fn-var 503)
 												(receiver
 													(e-lookup-local
 														(p-assign (ident "args"))))
@@ -775,12 +775,12 @@ main! = |args| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 527)
+								(e-call (constraint-fn-var 529)
 									(e-lookup-local
 										(p-assign (ident "pick")))
-									(e-dispatch-call (method "is_gt") (constraint-fn-var 525)
+									(e-dispatch-call (method "is_gt") (constraint-fn-var 527)
 										(receiver
-											(e-dispatch-call (method "len") (constraint-fn-var 522)
+											(e-dispatch-call (method "len") (constraint-fn-var 524)
 												(receiver
 													(e-lookup-local
 														(p-assign (ident "args"))))
@@ -805,7 +805,7 @@ main! = |args| {
 										(e-string
 											(e-literal (string "other")))))))))
 				(s-expr
-					(e-call (constraint-fn-var 582)
+					(e-call (constraint-fn-var 584)
 						(e-lookup-local
 							(p-assign (ident "echo!")))
 						(e-block
@@ -831,11 +831,11 @@ main! = |args| {
 									(p-assign (ident "alternatives"))))
 							(s-let
 								(p-assign (ident "#interp_5"))
-								(e-call (constraint-fn-var 545)
+								(e-call (constraint-fn-var 547)
 									(e-lookup-local
 										(p-assign (ident "describe_mode")))
 									(e-empty_record)))
-							(e-interpolation (constraint-fn-var 559) (dispatcher-var 194)
+							(e-interpolation (constraint-fn-var 561) (dispatcher-var 194)
 								(first
 									(e-literal (string "")))
 								(parts
@@ -868,14 +868,14 @@ main! = |args| {
 		(patt (type "Str => {}"))
 		(patt (type "Bool -> [A, B]"))
 		(patt (type "Bool -> [A, B]"))
-		(patt (type "[Debug, Release]"))
+		(patt (type "[Debug]"))
 		(patt (type "_arg -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
 		(patt (type "a => [Ok({})] where [a.is_empty : a -> Bool, a.len : a -> c, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.is_gt : c, c -> Bool]")))
 	(expressions
 		(expr (type "Str => {}"))
 		(expr (type "Bool -> [A, B]"))
 		(expr (type "Bool -> [A, B]"))
-		(expr (type "[Debug, Release]"))
+		(expr (type "[Debug]"))
 		(expr (type "_arg -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
 		(expr (type "a => [Ok({})] where [a.is_empty : a -> Bool, a.len : a -> c, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.is_gt : c, c -> Bool]"))))
 ~~~

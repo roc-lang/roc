@@ -1,13 +1,14 @@
-# An annotation cannot make a value that is not a function polymorphic. Each
-# rejected annotation is reported once, even where its binding is used at two
-# types, and the program runs until it reaches a use of a rejected binding,
-# which crashes.
-empty : List(a)
+# An annotation cannot make a value polymorphic over a variable that carries a
+# requirement (a top-level constant's where clause), nor make a local value
+# polymorphic. Each rejected annotation is reported once, even where its
+# binding is used at two types, and the program runs until it reaches a use of
+# a rejected binding, which crashes.
+empty : List(a) where [a.to_str : a -> Str]
 empty = []
 
 mk = |{}| |x| x
 
-id : a -> a
+id : a -> a where [a.to_str : a -> Str]
 id = mk({})
 
 fresh : {} -> List(a)

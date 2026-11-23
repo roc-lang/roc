@@ -192,6 +192,105 @@ pub fn Graph(comptime AllocationKey: type) type {
     };
 }
 
+/// A frozen root written as one block, the stored image of a value that is
+/// data alone (`check.ConstStore.ConstImage`): the root value at offset 0,
+/// then each allocation it reaches behind its static header, and a list of
+/// the words that point into the block, each holding the block offset it
+/// points at. It has `Graph`'s interface, with every destination in the one
+/// block, so the root freezer writes either form.
+pub fn ImageGraph(comptime AllocationKey: type) type {
+    return struct {
+        const Self = @This();
+        /// An image holds no function, so the freezer never reaches the
+        /// parts of its plans that name code.
+        pub const is_image = true;
+
+        /// Scratch for the allocation table and the result.
+        allocator: Allocator,
+        program: *const Program.Result,
+        block: std.ArrayList(u8) = .empty,
+        pointers: std.ArrayList(u32) = .empty,
+        allocations: std.AutoHashMapUnmanaged(AllocationKey, Destination) = .empty,
+        alignment_: u32 = 1,
+
+        pub fn deinit(self: *Self) void {
+            self.block.deinit(self.allocator);
+            self.pointers.deinit(self.allocator);
+            self.allocations.deinit(self.allocator);
+        }
+
+        /// Images are at the 64-bit layout.
+        pub fn word(self: *const Self) usize {
+            _ = self;
+            return 8;
+        }
+
+        pub fn size(self: *const Self, idx: layout.Idx) usize {
+            return self.program.layouts.layoutSize(self.program.layouts.getLayout(idx));
+        }
+
+        pub fn alignment(self: *const Self, idx: layout.Idx) u32 {
+            return @intCast(self.program.layouts.getLayout(idx).alignment(self.program.layouts.targetUsize()).toByteUnits());
+        }
+
+        /// Reserve `byte_count` zeroed bytes at `alignment_` at the end of
+        /// the block and return their offset.
+        fn extend(self: *Self, byte_count: usize, alignment_: u32) Allocator.Error!usize {
+            const start = std.mem.alignForward(usize, self.block.items.len, alignment_);
+            const end = std.math.add(usize, start, byte_count) catch return error.OutOfMemory;
+            // Pointer words and pointer-list entries are 32-bit block offsets.
+            if (end > std.math.maxInt(u32)) return error.OutOfMemory;
+            try self.block.appendNTimes(self.allocator, 0, end - self.block.items.len);
+            self.alignment_ = @max(self.alignment_, alignment_);
+            return start;
+        }
+
+        /// Start the block with the root value's `byte_count` bytes.
+        pub fn root(self: *Self, byte_count: usize, alignment_: u32) Allocator.Error!Destination {
+            if (self.block.items.len != 0) invariant("an image's root was reserved twice");
+            _ = try self.extend(byte_count, alignment_);
+            return .{ .symbol = @fromBackingInt(0) };
+        }
+
+        pub fn bytes(self: *Self, dest: Destination, count: usize) []u8 {
+            return self.block.items[dest.offset..][0..count];
+        }
+
+        pub fn writeWord(self: *Self, dest: Destination, value: u64) Allocator.Error!void {
+            std.mem.writeInt(u64, self.bytes(dest, 8)[0..8], value, .little);
+        }
+
+        /// Make the word at `dest` point at `target`: it holds the block
+        /// offset of `target`, and the pointer list names it.
+        pub fn relocate(self: *Self, dest: Destination, target: Destination) Allocator.Error!void {
+            try self.writeWord(dest, target.offset);
+            try self.pointers.append(self.allocator, @intCast(dest.offset));
+        }
+
+        pub fn reserveAllocation(self: *Self, key: AllocationKey, byte_count: usize, alignment_: u32, contains_refcounted: bool, element_count: ?usize) Allocator.Error!struct { dest: Destination, fresh: bool } {
+            if (self.allocations.get(key)) |existing| return .{ .dest = existing, .fresh = false };
+            const header_size: usize = (if (contains_refcounted) @as(usize, 2) else 1) * self.word();
+            const payload_offset = std.mem.alignForward(usize, header_size, alignment_);
+            const start = try self.extend(std.math.add(usize, payload_offset, byte_count) catch return error.OutOfMemory, @intCast(@max(alignment_, self.word())));
+            const dest = Destination{ .symbol = @fromBackingInt(0), .offset = start + payload_offset };
+            // A zero RC header is the runtime's immutable/static allocation
+            // marker; `extend` zeroed it.
+            if (contains_refcounted) try self.writeWord(.{ .symbol = @fromBackingInt(0), .offset = dest.offset - 2 * self.word() }, element_count orelse 0);
+            try self.allocations.put(self.allocator, key, dest);
+            return .{ .dest = dest, .fresh = true };
+        }
+
+        /// A finished image: the block, its pointer words in ascending
+        /// order, and its alignment, all owned by the graph.
+        pub const Result = struct { bytes: []const u8, pointers: []const u32, alignment: u32 };
+
+        pub fn finish(self: *Self) Result {
+            std.mem.sortUnstable(u32, self.pointers.items, {}, std.sort.asc(u32));
+            return .{ .bytes = self.block.items, .pointers = self.pointers.items, .alignment = self.alignment_ };
+        }
+    };
+}
+
 fn invariant(comptime message: []const u8) noreturn {
     compilerInvariant("frozen graph invariant violated: {s}", .{message});
 }

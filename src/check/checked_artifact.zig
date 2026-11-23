@@ -10573,7 +10573,7 @@ test "independent closed function graphs share one key and add no synthesized ro
     }.inspect);
 }
 
-test "an exhaustive match commits a free payload variable to the empty tag union" {
+test "a constant's free payload variable is quantified and an exhaustive match of it checks" {
     const TestEnv = @import("test/TestEnv.zig");
     const source =
         \\x : Try(I64, _)
@@ -10597,8 +10597,11 @@ test "an exhaustive match commits a free payload variable to the empty tag union
     const nominal = x_content.structure.nominal_type;
     const args = test_env.module_env.types.sliceVars(nominal.args);
     try std.testing.expectEqual(@as(usize, 2), args.len);
+    // The payload variable carries no requirement, so `x` quantifies it
+    // (design.md "Polymorphic Constants"); the match closes its own copy.
     const err_desc = test_env.module_env.types.resolveVar(args[1]).desc;
-    try std.testing.expectEqual(types.Content{ .structure = .empty_tag_union }, err_desc.content);
+    try std.testing.expect(err_desc.content == .flex);
+    try std.testing.expectEqual(types.Rank.generalized, err_desc.rank);
 }
 
 /// Empty per-artifact tables for building `ImportedModuleView`s in tests.
@@ -33616,7 +33619,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 232);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 236);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -39830,8 +39833,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xDB, 0x5C, 0x50, 0x7F, 0xB3, 0xB0, 0x6F, 0x71, 0xE5, 0xA4, 0xE2, 0x00, 0xA9, 0xA4, 0x78, 0xC5,
-        0xC8, 0xBF, 0x21, 0x46, 0x8D, 0x98, 0xD6, 0x86, 0x28, 0xE8, 0xAB, 0xBC, 0xFC, 0xEB, 0x2C, 0x78,
+        0x67, 0xCA, 0x11, 0x4D, 0x6C, 0x6A, 0x13, 0x37, 0xF8, 0xC2, 0x80, 0xFA, 0x03, 0x8A, 0x8C, 0xEE,
+        0x47, 0xDD, 0x80, 0x65, 0x26, 0x97, 0xBD, 0x21, 0xFF, 0x0F, 0xFF, 0x0F, 0x0A, 0xFF, 0xA7, 0x9C,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

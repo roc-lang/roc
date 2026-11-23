@@ -131,6 +131,8 @@ const SymbolicRelocation = struct {
     const Target = union(enum) {
         allocation: SymbolicAllocationId,
         frozen_symbol: StaticDataSymbolId,
+        /// The block of a stored image (`StaticInitializerMachine.image_blocks`).
+        image_block: u32,
         procedure: lir.LIR.LirProcSpecId,
         rc_helper: layout.RcHelperKey,
     };
@@ -166,6 +168,9 @@ const InitializerFrame = struct {
     slots: []?*SymbolicValue,
     written: std.ArrayList(lir.LIR.LocalId),
 };
+
+/// A stored image of one `ConstStore`.
+const ImageBlockKey = struct { store: usize, image: u32 };
 
 /// A stored node frozen through a plan at a layout, in one `ConstStore`.
 const StoredValueKey = struct {
@@ -204,6 +209,14 @@ const StaticInitializerMachine = struct {
     static_roots: []?*SymbolicValue,
     static_active: []bool,
     frozen_roots: collections.OptionalIndexColumn(StaticDataSymbolId),
+    /// The stored images static values point into, each once: a block
+    /// becomes one node, its pointer words relocated by the node's address.
+    image_blocks: std.ArrayList(check.ConstStore.ConstImageView) = .empty,
+    image_block_index: std.AutoHashMapUnmanaged(ImageBlockKey, u32) = .empty,
+    /// Content digests of this program's layouts, which say whether a read
+    /// of an image is at the image's own layout. Its tables live in the
+    /// machine's arena.
+    layout_digests: ?layout.Digests = null,
     string_backings: std.AutoHashMapUnmanaged(@import("base").StringLiteral.Idx, SymbolicAllocationId),
     /// Frames for initializers that are running, followed by released frames
     /// kept for reuse. An initializer reading a static value evaluates that
@@ -513,12 +526,57 @@ const StaticInitializerMachine = struct {
     /// native call depth.
     fn freezeStored(self: *StaticInitializerMachine, stored: lir.Program.StoredStaticValue, value_layout: layout.Idx) MaterializationError!*SymbolicValue {
         const store_ = self.constStoreOf(stored.module);
+        // A 64-bit target reads an image as it is stored when it reads it at
+        // the image's own layout. A read at another layout, such as a tag
+        // row an LSS row join widened, re-encodes the value from its nodes
+        // through the read's plan.
+        if (self.word_size == check.ConstStore.image_word_size) if (store_.imageOf(stored.node)) |image| {
+            if (try self.sameLayout(value_layout, store_.image(image).layout_digest)) return try self.freezeImage(store_, image, value_layout);
+        };
         const root = try self.newValue(value_layout);
         var pending: std.ArrayList(StoredWrite) = .empty;
         defer pending.deinit(self.allocator());
         try pending.append(self.allocator(), .{ .dest = root, .offset = 0, .request = .{ .node = stored.node, .plan = stored.plan, .layout_idx = value_layout } });
         while (pending.pop()) |write| try self.writeStored(&pending, store_, write);
         return root;
+    }
+
+    /// The value of stored image `image_id` at `value_layout`, the layout of
+    /// the type it was stored at: its root's bytes, whose pointer words
+    /// point into the image's block, which is one node of its own.
+    fn freezeImage(self: *StaticInitializerMachine, store_: *const Checked.ConstStore, image_id: check.ConstStore.ConstImageId, value_layout: layout.Idx) MaterializationError!*SymbolicValue {
+        const image = store_.image(image_id);
+        if (self.layouts().layoutSize(self.layoutValue(value_layout)) != image.root_size) staticDataInvariant("a stored image's root differs in size from its layout");
+        const key: ImageBlockKey = .{ .store = @intFromPtr(store_), .image = @backingInt(image_id) };
+        const entry = try self.image_block_index.getOrPut(self.allocator(), key);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = @intCast(self.image_blocks.items.len);
+            try self.image_blocks.append(self.allocator(), image);
+        }
+        const value = try self.allocator().create(SymbolicValue);
+        value.* = .{
+            .layout_idx = value_layout,
+            .bytes = try self.allocator().dupe(u8, image.rootBytes()),
+            .relocations = .empty,
+        };
+        for (image.pointers) |offset| {
+            if (offset >= image.root_size) break;
+            std.mem.writeInt(u64, value.bytes[offset..][0..8], 0, .little);
+            try value.relocations.append(self.allocator(), .{
+                .offset = offset,
+                .target = .{ .image_block = entry.value_ptr.* },
+                .addend = @intCast(std.mem.readInt(u64, image.bytes[offset..][0..8], .little)),
+            });
+        }
+        return value;
+    }
+
+    /// Whether this program's layout `value_layout` is the layout whose
+    /// content digest is `digest`.
+    fn sameLayout(self: *StaticInitializerMachine, value_layout: layout.Idx, digest: [32]u8) Allocator.Error!bool {
+        if (self.layout_digests == null) self.layout_digests = layout.Digests.init(self.allocator(), self.layouts());
+        const own = try self.layout_digests.?.get(value_layout);
+        return std.mem.eql(u8, &own, &digest);
     }
 
     const StoredRequest = struct {
@@ -569,7 +627,7 @@ const StaticInitializerMachine = struct {
         const plans = self.lowered.lir_result.const_plans.items;
         switch (node) {
             .pending => staticDataInvariant("stored static data reached a pending ConstStore node"),
-            .fn_value, .boxy_fn, .crash, .checked_error => staticDataInvariant("stored static data reached a node that is not data"),
+            .image, .fn_value, .boxy_fn, .crash, .checked_error => staticDataInvariant("stored static data reached a node that is not data"),
             .nominal => unreachable, // unwrapStoredNominal stepped past every nominal layer
             .zst => {},
             .scalar => |scalar| {
@@ -739,7 +797,7 @@ const StaticInitializerMachine = struct {
                     request.node = nominal.backing;
                     changed = true;
                 },
-                .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .fn_value, .boxy_fn => {},
+                .image, .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .fn_value, .boxy_fn => {},
             }
             switch (self.lowered.lir_result.const_plans.items[@backingInt(request.plan)]) {
                 .named => |named| {
@@ -761,7 +819,7 @@ const StaticInitializerMachine = struct {
         return switch (node) {
             .list, .box => true,
             .str => |str| str.capacity >= self.word_size * builtins.str.RocStr.word_count,
-            .pending, .zst, .scalar, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => self.layoutValue(layout_idx).tag == .box,
+            .image, .pending, .zst, .scalar, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => self.layoutValue(layout_idx).tag == .box,
         };
     }
 
@@ -890,12 +948,13 @@ const StaticInitializerMachine = struct {
         const len: usize = @intCast(self.readTargetWord(value.bytes, self.word_size * 2));
         for (value.relocations.items) |relocation| {
             if (relocation.offset != 0) continue;
-            const allocation = switch (relocation.target) {
-                .allocation => |id| self.allocations.items[@backingInt(id)],
+            const backing = switch (relocation.target) {
+                .allocation => |id| self.allocations.items[@backingInt(id)].payload.bytes,
+                .image_block => |block| self.image_blocks.items[block].bytes,
                 .frozen_symbol, .procedure, .rc_helper => staticDataInvariant("a static string did not point into an allocation"),
             };
             const start: usize = @intCast(relocation.addend);
-            return allocation.payload.bytes[start..][0..len];
+            return backing[start..][0..len];
         }
         staticDataInvariant("a static big string had no bytes pointer");
     }
@@ -974,7 +1033,8 @@ const StaticInitializerMachine = struct {
         const source = items orelse staticDataInvariant("a static list view had no items pointer");
         const source_allocation = switch (source.target) {
             .allocation => |id| self.allocations.items[@backingInt(id)],
-            .frozen_symbol, .procedure, .rc_helper => staticDataInvariant("a static list view did not point into an allocation"),
+            // An image's lists record their capacity and are never views.
+            .image_block, .frozen_symbol, .procedure, .rc_helper => staticDataInvariant("a static list view did not point into an allocation"),
         };
         if (abi.contains_refcounted) staticDataInvariant("a static list view held refcounted items");
         const elem_layout = abi.elem_layout_idx orelse staticDataInvariant("non-ZST static list had no element layout");
@@ -2115,6 +2175,9 @@ const StaticDataBuilder = struct {
     nodes: std.ArrayList(StaticDataExport),
     initializer_machine: StaticInitializerMachine,
     frozen_allocations: collections.DenseMap(SymbolicAllocationId, PointerTarget),
+    /// The node of each image block (`StaticInitializerMachine.image_blocks`)
+    /// already emitted.
+    frozen_image_blocks: std.AutoHashMapUnmanaged(u32, PointerTarget) = .empty,
     /// The value whose allocations are being frozen, which names them: a
     /// static-data slot, or past the slots a requested value and then a
     /// provided value (design.md, "Object Symbol Names").
@@ -2157,6 +2220,7 @@ const StaticDataBuilder = struct {
     fn deinitScratch(self: *StaticDataBuilder) void {
         self.initializer_machine.deinit();
         self.frozen_allocations.deinit();
+        self.frozen_image_blocks.deinit(self.allocator);
         // The first relocation to each function owns its cached name.
         self.procedure_names.deinit();
         self.helper_names.deinit();
@@ -2403,6 +2467,18 @@ const StaticDataBuilder = struct {
                 };
                 return null;
             },
+            .image_block => |block| {
+                const target = self.frozen_image_blocks.get(block) orelse try self.emitImageBlock(block);
+                dest.* = .{
+                    .offset = source.offset,
+                    .target_symbol_name = target.symbol_name,
+                    .target = .{ .data_symbol = target.symbol },
+                    .addend = target.addend + source.addend,
+                    .kind = source.kind,
+                    .callable_capture_offset = .of(source.callable_capture_offset),
+                };
+                return null;
+            },
             .allocation => |allocation| {
                 var reserved: ?ReservedAllocation = null;
                 const target = self.frozen_allocations.get(allocation) orelse blk: {
@@ -2452,6 +2528,44 @@ const StaticDataBuilder = struct {
                 return null;
             },
         }
+    }
+
+    /// Emit image block `block` as one node: its bytes, with every pointer
+    /// word relocated to the node itself at the offset the word holds. Its
+    /// allocations' static headers are already in the block.
+    fn emitImageBlock(self: *StaticDataBuilder, block: u32) MaterializationError!PointerTarget {
+        const image = self.initializer_machine.image_blocks.items[block];
+        const symbol_name = try lir.Program.staticDataNodeSymbolName(self.allocator, self.owner, self.owner_node);
+        var node_appended = false;
+        errdefer if (!node_appended) self.allocator.free(symbol_name);
+        self.owner_node += 1;
+        const bytes = try self.allocator.dupe(u8, image.bytes);
+        errdefer if (!node_appended) self.allocator.free(bytes);
+        const relocations = try self.allocator.alloc(StaticDataRelocation, image.pointers.len);
+        errdefer if (!node_appended) self.allocator.free(relocations);
+        const node_index = self.nodes.items.len;
+        for (image.pointers, relocations) |offset, *relocation| {
+            const addend = std.mem.readInt(u64, bytes[offset..][0..8], .little);
+            std.mem.writeInt(u64, bytes[offset..][0..8], 0, .little);
+            relocation.* = .{
+                .offset = offset,
+                .target_symbol_name = symbol_name,
+                .target = .{ .data_symbol = @fromBackingInt(@intCast(node_index)) },
+                .addend = @intCast(addend),
+            };
+        }
+        try self.nodes.append(self.allocator, .{
+            .symbol_name = symbol_name,
+            .bytes = bytes,
+            .alignment = @max(image.alignment, self.word_size),
+            .is_global = false,
+            .is_exported = false,
+            .relocations = relocations,
+        });
+        node_appended = true;
+        const target = PointerTarget{ .symbol = @fromBackingInt(@intCast(node_index)), .symbol_name = symbol_name, .addend = 0 };
+        try self.frozen_image_blocks.put(self.allocator, block, target);
+        return target;
     }
 
     /// Reserve an allocation's node and symbol before its relocations are

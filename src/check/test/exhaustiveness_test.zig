@@ -1723,12 +1723,14 @@ test "a Box of a written payload type with values is accepted like a user wrappe
     try expectBoxAndTwinAccepted(comptime withPayload(absent_payload_if_branches, "U8"));
 }
 
-test "a top-level value's undecided Box(_) Err payload closes to Box([]) like a user wrapper's" {
-    inline for (.{ .{ "", "Box" }, .{ my_box, "MyBox" } }) |wrapper| {
+test "a constant's undecided Box(_) Err payload is quantified like a user wrapper's" {
+    // The payload variable carries no requirement, so the constant quantifies
+    // it (design.md "Polymorphic Constants"); each use closes its own copy.
+    inline for (.{ .{ "", "Box", "_a" }, .{ my_box, "MyBox", "_b" } }) |wrapper| {
         var test_env = try TestEnv.init("Test", wrapper[0] ++ "x : Try(Str, " ++ wrapper[1] ++ "(_))\nx = Ok(\"a\")\n");
         defer test_env.deinit();
 
-        try test_env.assertDefType("x", "Try(Str, " ++ wrapper[1] ++ "([]))");
+        try test_env.assertDefType("x", "Try(Str, " ++ wrapper[1] ++ "(" ++ wrapper[2] ++ "))");
     }
 }
 

@@ -2115,7 +2115,7 @@ fn patternIntroducesBinder(view: ModuleView, pattern: CIR.Pattern.Idx) bool {
 fn failedRootMessage(view: anytype, node: checked.ConstNodeId) []const u8 {
     return switch (view.const_store.get(node)) {
         .crash, .checked_error => |message| view.const_store.strBytes(message),
-        .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value, .boxy_fn => Common.invariant("a validate-only root stored a value"),
+        .image, .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value, .boxy_fn => Common.invariant("a validate-only root stored a value"),
     };
 }
 
@@ -5840,9 +5840,16 @@ fn constStringBackingLength(str: check.ConstStore.ConstString) u64 {
 }
 
 fn constStaticDataStorage(view: ModuleView, node: checked.ConstNodeId) Common.StaticDataStorage {
+    // A root stored as an image needs a string's backing when it is a
+    // string, possibly inside named types (design.md "Stored Images").
+    if (view.const_store.imageOf(node)) |image| {
+        if (view.const_store.imageRootPrimitive(image) == .str) return .{ .string_backing = view.const_store.image(image).strCapacityAt(0) };
+        return .aggregate;
+    }
     var current = node;
     while (true) switch (view.const_store.get(current)) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+        .image => Common.invariant("a stored image reached a ConstStore node restore"),
         .str => |str| return .{ .string_backing = constStringBackingLength(str) },
         .nominal => |nominal| current = nominal.backing,
         .pending => Common.invariant("pending const reached static storage metadata production"),
@@ -13017,8 +13024,23 @@ const Builder = struct {
         return id;
     }
 
-    fn constNodeMayUseStaticDataCandidate(self: *Builder, view: ModuleView, node: checked.ConstNodeId) bool {
+    fn constNodeMayUseStaticDataCandidate(self: *Builder, view: ModuleView, node: checked.ConstNodeId) Allocator.Error!bool {
+        // A root whose image holds a literal is decided by that literal, by
+        // the rule `constValueMayUseStaticDataCandidate` applies to nodes.
+        if (try self.constNodeImageLiteral(view, node)) |literal| return switch (literal) {
+            .scalar, .tag => false,
+            .str => |str| str.capacity != str.bytes.len,
+        };
         return self.constValueMayUseStaticDataCandidate(view, view.const_store.get(node));
+    }
+
+    /// The literal the image of root `node` holds, when `node` is a root
+    /// stored as an image and its value is a number, a payload-free tag
+    /// of a union whose every payload is zero-sized, or a string
+    /// (`ConstStore.imageLiteral`).
+    fn constNodeImageLiteral(self: *Builder, view: ModuleView, node: checked.ConstNodeId) Allocator.Error!?check.ConstStore.ImageLiteral {
+        const image = view.const_store.imageOf(node) orelse return null;
+        return try view.const_store.nodeImageLiteral(self.allocator, node, image, view.names);
     }
 
     /// Whether a ConstStore node and everything it contains has a stable
@@ -13076,8 +13098,12 @@ const Builder = struct {
                 .fails => return .{ .value = false },
                 .unknown => {},
             }
+            // The producer stored a value that is data alone as an image,
+            // which is one stable static datum.
+            if (self.view.const_store.imageOf(node) != null) return .{ .value = true };
             const leaf: ?bool = switch (self.view.const_store.get(node)) {
                 .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+                .image => Common.invariant("a stored image reached a ConstStore node restore"),
                 .pending => Common.invariant("pending ConstStore node reached a stored value property"),
                 .fn_value => |fn_id| switch (self.property) {
                     // Static data emits an erased callable as one allocation
@@ -13145,8 +13171,9 @@ const Builder = struct {
         }
     };
 
-    /// What a stored list static data freezes straight from its node
-    /// (`Ast.StoredStaticList`): how many items it has.
+    /// What a stored value static data freezes straight from its node or
+    /// image (`Ast.StoredStaticList`): how many items a list has, and zero
+    /// for a box or product.
     const StoredListShape = struct {
         item_count: u32,
     };
@@ -13157,8 +13184,20 @@ const Builder = struct {
     /// node records. Null for any other value, including the empty and
     /// packed lists without spare capacity, which restore as literals.
     fn storedListShape(self: *Builder, view: ModuleView, node: checked.ConstNodeId) Allocator.Error!?StoredListShape {
+        // A box or product stored as an image is frozen from its image,
+        // whatever it holds: neither has an immediate layout, which only
+        // scalars, strings and tag unions do.
+        if (view.const_store.imageOf(node) != null) {
+            var current = view.const_store.get(node);
+            while (current == .nominal) current = view.const_store.get(current.nominal.backing);
+            switch (current) {
+                .box, .tuple, .record => return .{ .item_count = 0 },
+                .image, .pending, .zst, .scalar, .str, .list, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => {},
+            }
+        }
         const list = switch (view.const_store.get(node)) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+            .image => Common.invariant("a stored image reached a ConstStore node restore"),
             .list => |list| list,
             .pending => Common.invariant("pending ConstStore node reached stored list selection"),
             .zst, .scalar, .str, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => return null,
@@ -13187,6 +13226,7 @@ const Builder = struct {
         var value = value_in;
         while (true) switch (value) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+            .image => Common.invariant("a stored image reached a ConstStore node restore"),
             .pending => Common.invariant("pending ConstStore node reached static data selection"),
             .zst,
             .scalar,
@@ -18071,6 +18111,7 @@ fn activeConstNodeAddress(
 fn constNodeRestoresAsLeaf(value: checked.ConstValue) bool {
     return switch (value) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+        .image => Common.invariant("a stored image reached a ConstStore node restore"),
         .pending, .zst, .scalar, .str, .crash, .checked_error => true,
         .list => |list| switch (list.items) {
             .nodes => false,
@@ -48968,6 +49009,7 @@ const BodyContext = struct {
 
         switch (value) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+            .image => Common.invariant("a stored image reached a ConstStore node restore"),
             .fn_value => {},
             .tag, .record, .tuple => if (nominalConstructionLayer(self.typeStore(), ty)) |layer| {
                 return .{ .layer = .{ .child = node, .backing = layer.backing, .named = layer.named } };
@@ -48983,6 +49025,7 @@ const BodyContext = struct {
         try self.reserveConstNodeBinding(store_view, node, representation, cell);
         switch (value) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+            .image => Common.invariant("a stored image reached a ConstStore node restore"),
             .fn_value => |fn_id| {
                 const part_root = self.static_data_part_root;
                 self.static_data_part_root = null;
@@ -49056,7 +49099,7 @@ const BodyContext = struct {
         }
         if (self.constRestorationIsClosed() and
             try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
-            self.builder.constNodeMayUseStaticDataCandidate(store_view, node))
+            try self.builder.constNodeMayUseStaticDataCandidate(store_view, node))
         {
             const id = try self.draftStaticDataRequest(
                 const_locator,
@@ -49100,10 +49143,72 @@ const BodyContext = struct {
         static_data_const_locator: ?checked.ConstLocator,
         own_scope: bool,
     ) Allocator.Error!DraftExprId {
+        if (try self.builder.constNodeImageLiteral(store_view, node)) |literal| return try self.imageLiteralExpr(store_view, literal, ty);
         const opened = try self.enterConstRestoreScope(own_scope);
         errdefer if (opened) self.dropConstRestoreScope();
         const restored = try runConstRestore(self, store_view, type_view, node, ty, static_data_const_locator);
         return try self.leaveConstRestoreScope(opened, restored);
+    }
+
+    /// The expression of a literal a root's image holds, at `ty`: the
+    /// literal at the innermost backing of `ty`'s nominal layers, wrapped
+    /// in one `.nominal` per layer. A literal is a leaf, so each read
+    /// builds its own copy, as a restored leaf node does.
+    fn imageLiteralExpr(self: *BodyContext, store_view: ModuleView, literal: check.ConstStore.ImageLiteral, ty: Type.TypeId) Allocator.Error!DraftExprId {
+        var layers: std.ArrayListUnmanaged(Type.TypeId) = .empty;
+        defer layers.deinit(self.allocator);
+        var current = ty;
+        while (nominalConstructionLayer(self.typeStore(), current)) |layer| {
+            try layers.append(self.allocator, layer.named);
+            current = layer.backing;
+        }
+        var expr = try self.addExpr(.{ .ty = current, .data = try self.imageLiteralData(store_view, literal, DraftTypeCell.fromSealed(current)) });
+        while (layers.pop()) |named| expr = try self.addExpr(.{ .ty = named, .data = .{ .nominal = expr } });
+        return expr;
+    }
+
+    /// `imageLiteralExpr` at a graph node: the literal at the innermost
+    /// backing of `request_node`'s nominal layers, wrapped per layer.
+    fn imageLiteralExprAtNode(self: *BodyContext, store_view: ModuleView, literal: check.ConstStore.ImageLiteral, request_node: NodeId) Allocator.Error!DraftExprId {
+        var layers: std.ArrayListUnmanaged(NodeId) = .empty;
+        defer layers.deinit(self.allocator);
+        var current = request_node;
+        while (true) {
+            const representation_node = try self.constructorRepresentationNode(current);
+            switch (try self.graph.content(representation_node)) {
+                .named => {
+                    const named = try self.graph.namedNodes(representation_node);
+                    if (named.kind == .alias) Common.invariant("constructor representation retained a transparent alias node");
+                    const backing = named.backing orelse Common.invariant("named constructor graph node had no explicit backing");
+                    try layers.append(self.allocator, representation_node);
+                    current = backing.node;
+                },
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => break,
+            }
+        }
+        const cell = DraftTypeCell.fromGraphNode(current);
+        var expr = try self.addExprWithTypeCell(cell, try self.imageLiteralData(store_view, literal, cell));
+        while (layers.pop()) |representation_node| {
+            expr = try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(representation_node), .{ .nominal = expr });
+        }
+        return expr;
+    }
+
+    /// The expression data of an image's literal typed at `cell`.
+    fn imageLiteralData(self: *BodyContext, store_view: ModuleView, literal: check.ConstStore.ImageLiteral, cell: DraftTypeCell) Allocator.Error!BodyExprData {
+        return switch (literal) {
+            .scalar => |scalar| restoreScalar(scalar),
+            .tag => |name| .{ .tag = .{
+                .name = try tagName(self.nameStoreMut(), store_view, name),
+                .payloads = try self.addExprSpan(&.{}),
+            } },
+            .str => |str| str: {
+                const string: BodyExprData = .{ .str_lit = try self.addStringLiteral(str.bytes) };
+                const spare = str.capacity - str.bytes.len;
+                if (spare == 0) break :str string;
+                break :str try constStrWithSpareCapacity(self, try self.addExprWithTypeCell(cell, string), spare);
+            },
+        };
     }
 
     fn restoredStaticDataCandidateNodeAtNode(
@@ -49124,7 +49229,7 @@ const BodyContext = struct {
         }
         const candidate = self.constRestorationIsClosed() and
             try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
-            self.builder.constNodeMayUseStaticDataCandidate(store_view, node);
+            try self.builder.constNodeMayUseStaticDataCandidate(store_view, node);
         const stored_shape = if (candidate) try self.builder.storedListShape(store_view, node) else null;
         const value: DraftStaticDataCandidateValue = if (stored_shape) |shape|
             .{ .stored = .{ .item_count = shape.item_count } }
@@ -49170,6 +49275,7 @@ const BodyContext = struct {
     ) ?StaticDataPartRoot {
         return switch (store_view.const_store.get(node)) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+            .image => Common.invariant("a stored image reached a ConstStore node restore"),
             .tuple, .record, .tag, .nominal => .{
                 .module = store_view.key,
                 .node = node,
@@ -49190,6 +49296,7 @@ const BodyContext = struct {
         if (node == root.node or !moduleBytesEqual(root.module.bytes, store_view.key.bytes)) return false;
         return switch (store_view.const_store.get(node)) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+            .image => Common.invariant("a stored image reached a ConstStore node restore"),
             .list => |list| switch (list.items) {
                 .nodes => |items| items.len != 0,
                 .empty, .packed_bytes => list.capacity != list.items.len(),
@@ -49329,6 +49436,7 @@ const BodyContext = struct {
         static_data_const_locator: ?checked.ConstLocator,
         own_scope: bool,
     ) Allocator.Error!DraftExprId {
+        if (try self.builder.constNodeImageLiteral(store_view, root)) |literal| return try self.imageLiteralExprAtNode(store_view, literal, root_request_node);
         const opened = try self.enterConstRestoreScope(own_scope);
         errdefer if (opened) self.dropConstRestoreScope();
         var frames: std.ArrayListUnmanaged(ConstAtNodeFrame) = .empty;
@@ -49346,6 +49454,7 @@ const BodyContext = struct {
                 const child = frame.single_child orelse frame.children[index];
                 const child_node = switch (frame.value) {
                     .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+                    .image => Common.invariant("a stored image reached a ConstStore node restore"),
                     .tag => try self.graph.tagConstructionPayloadNode(frame.request_node, frame.tag_name, index),
                     .box, .nominal => frame.single_child_node,
                     .pending, .zst, .scalar, .str, .crash, .checked_error, .list, .tuple, .record, .fn_value => frame.child_nodes[index],
@@ -49383,6 +49492,7 @@ const BodyContext = struct {
         errdefer if (frame_owned) frame.deinit(self.allocator);
         switch (value) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+            .image => Common.invariant("a stored image reached a ConstStore node restore"),
             .fn_value => |fn_id| {
                 const part_root = self.static_data_part_root;
                 self.static_data_part_root = null;
@@ -49409,6 +49519,7 @@ const BodyContext = struct {
         }
         switch (value) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+            .image => Common.invariant("a stored image reached a ConstStore node restore"),
             .list => |list| switch (list.items) {
                 .nodes => |items| {
                     const element_node = try self.graph.listElementNode(request_node);
@@ -49492,6 +49603,7 @@ const BodyContext = struct {
             .constructor, .data => blk: {
                 const data: BodyExprData = switch (frame.value) {
                     .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+                    .image => Common.invariant("a stored image reached a ConstStore node restore"),
                     .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
                     .zst => .unit,
                     .scalar => |scalar| restoreScalar(scalar),
@@ -52958,7 +53070,7 @@ const BodyContext = struct {
                 .crash => |message| try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(value_node), .{ .checked_error = try self.addStringLiteral(
                     view.const_store.strBytes(message),
                 ) }),
-                .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value, .boxy_fn, .checked_error => try self.restoreConstNodeAtNode(view, view, node, value_node),
+                .image, .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value, .boxy_fn, .checked_error => try self.restoreConstNodeAtNode(view, view, node, value_node),
             };
             try self.draft.recordRestoredRootRead(restored, view.key, candidate.root);
             return restored;
@@ -71777,6 +71889,7 @@ fn beginConstRestoreNode(
     var frame: ConstRestoreFrame = .{ .node = node, .ty = ty, .value = value };
     switch (value) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+        .image => Common.invariant("a stored image reached a ConstStore node restore"),
         .box => |payload| frame.single_child = payload,
         .list => |list| switch (list.items) {
             .nodes => |items| frame.children = items,
@@ -71810,6 +71923,7 @@ fn beginConstRestoreNode(
 fn constRestoreChildType(restorer: *BodyContext, frame: *const ConstRestoreFrame, index: usize) Type.TypeId {
     return switch (frame.value) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+        .image => Common.invariant("a stored image reached a ConstStore node restore"),
         .box => boxPayloadType(restorer.typeStore(), frame.ty),
         .list => listElemType(restorer.typeStore(), frame.ty),
         .tuple => GuardedList.at(tupleItemTypes(restorer.typeStore(), frame.ty), index),
@@ -71864,6 +71978,7 @@ fn constRestoreData(
     const lowered = frame.lowered.items;
     return switch (frame.value) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+        .image => Common.invariant("a stored image reached a ConstStore node restore"),
         .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
         .zst => .unit,
         .scalar => |scalar| restoreScalar(scalar),
@@ -72182,6 +72297,7 @@ fn monotypeBackingAuthority(authority: check.ConstStore.TypeBackingAuthority) Ty
 fn constStrNodeByteLen(view: ModuleView, node: checked.ConstNodeId) u32 {
     return switch (view.const_store.get(node)) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+        .image => Common.invariant("a stored image reached a ConstStore node restore"),
         .str => |str| @intCast(view.const_store.strBytes(str.bytes).len),
         .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
     };
@@ -72190,6 +72306,7 @@ fn constStrNodeByteLen(view: ModuleView, node: checked.ConstNodeId) u32 {
 fn constStrNodeBytes(view: ModuleView, node: checked.ConstNodeId) []const u8 {
     return switch (view.const_store.get(node)) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+        .image => Common.invariant("a stored image reached a ConstStore node restore"),
         .str => |str| view.const_store.strBytes(str.bytes),
         .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
     };

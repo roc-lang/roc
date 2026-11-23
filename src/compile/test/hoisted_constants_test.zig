@@ -3111,6 +3111,7 @@ fn scalarConstNodeI64(
         .tag,
         .nominal,
         .fn_value,
+        .image,
         .boxy_fn,
         => return error.HoistedConstWasNotScalar,
     };

@@ -1465,10 +1465,10 @@ pub const StaticDataCandidateValue = union(enum) {
     /// Compiler-only data initializer. Runtime code reads its frozen value.
     runtime: ExprId,
     /// A non-empty list stored in a checked module's `ConstStore` whose items
-    /// reach no function value, crash, or checked error. Static data freezes
-    /// it straight from its stored node, which the candidate's static data
-    /// request names, through the target const plan of the candidate's type,
-    /// so no expression builds it or any of its items.
+    /// reach no function value, crash, or checked error, or a box or product
+    /// stored as an image. Static data freezes it straight from its stored
+    /// node or image, which the candidate's static data request names, so no
+    /// expression builds it or any of its parts.
     stored: StoredStaticList,
 
     /// The compiler-only initializer expression, when one is needed.

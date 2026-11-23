@@ -528,7 +528,12 @@ pub const Digests = struct {
         const payload = root.payloadFor(.boxy);
         hashTag(hasher, @tagName(std.meta.activeTag(payload)));
         switch (payload) {
-            .const_node => |node| try artifact.const_store.hashGraph(self.gpa, node, hasher, context),
+            // A value that is data alone names itself by the digest its
+            // image was stored with, which nothing recomputes.
+            .const_node => |node| if (artifact.const_store.imageOf(node)) |image| {
+                hashTag(hasher, "image");
+                hasher.update(&artifact.const_store.image(image).digest);
+            } else try artifact.const_store.hashGraph(self.gpa, node, hasher, context),
             .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
             .pending, .unevaluated, .discarded, .expect, .runtime => {},
         }

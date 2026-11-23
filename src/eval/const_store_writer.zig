@@ -17,6 +17,7 @@ const lir = @import("lir");
 
 const Interpreter = @import("interpreter.zig").Interpreter;
 const Value = @import("value.zig").Value;
+const NativeRootExport = @import("native_root_export.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -138,6 +139,8 @@ pub const Writer = struct {
     store_requests: std.ArrayList(ValueRequest) = .empty,
     store_nodes: std.ArrayList(checked.ConstNodeId) = .empty,
     store_capture_types: std.ArrayList(const_store.ConstTypeId) = .empty,
+    /// Content digests of the program's layouts, for the images it stores.
+    layout_digests: ?layout.Digests = null,
 
     const ProductPlanKey = struct { plan: LirProgram.ConstPlanId, layout_idx: layout.Idx };
 
@@ -244,6 +247,7 @@ pub const Writer = struct {
         self.checked_components.deinit(self.allocator);
         self.stored_values.deinit();
         self.type_translation.deinit();
+        if (self.layout_digests) |*digests| digests.deinit();
     }
 
     pub fn storeRoot(
@@ -258,7 +262,13 @@ pub const Writer = struct {
 
         const plan = self.constPlan(root.plan);
         return switch (root.request.kind) {
-            .compile_time_constant, .repl_expr => .{ .const_node = try self.storeValue(root.plan, root.ret_layout, .{ .runtime = value }) },
+            .compile_time_constant, .repl_expr => blk: {
+                const node = try self.storeValue(root.plan, root.ret_layout, .{ .runtime = value });
+                // A value whose plan can hold no function is data alone,
+                // which the store also holds as its image.
+                if (try self.planFunctionStrategy(root.plan) == null) try self.attachImage(node, root, value);
+                break :blk .{ .const_node = node };
+            },
             .compile_time_callable => switch (plan) {
                 .fn_value => |set| .{ .fn_value = try self.storeFnValue(set, root.ret_layout, value) },
                 .erased_fn => |set| .{ .fn_value = try self.storeErasedFn(set, value) },
@@ -284,6 +294,30 @@ pub const Writer = struct {
             .dev_expr,
             => writerInvariant("non compile-time root reached ConstStore writer"),
         };
+    }
+
+    /// Store the image of root `root`'s evaluated value `value` beside node
+    /// `node`, which holds the same value.
+    fn attachImage(self: *Writer, node: checked.ConstNodeId, root: LirProgram.ConstRootPlan, value: Value) Error!void {
+        const shape = root.shape();
+        var graph = NativeRootExport.ImageGraph{ .allocator = self.allocator, .program = self.program };
+        defer graph.deinit();
+        const image = try NativeRootExport.imageRoot(&graph, shape, value);
+        const id = try self.store.appendImageData(.{
+            .bytes = image.bytes,
+            .pointers = image.pointers,
+            .alignment = image.alignment,
+            .root_size = @intCast(graph.size(shape.ret_layout)),
+            .root_type = try self.storeRootType(root),
+            .layout_digest = try self.layoutDigest(shape.ret_layout),
+        });
+        try self.store.attachImage(node, id);
+    }
+
+    /// The content digest of the program's layout `idx`.
+    fn layoutDigest(self: *Writer, idx: layout.Idx) Allocator.Error![32]u8 {
+        if (self.layout_digests == null) self.layout_digests = layout.Digests.init(self.allocator, &self.program.layouts);
+        return self.layout_digests.?.get(idx);
     }
 
     /// Store a literal root's value: one value graph, no stored type.
@@ -2051,7 +2085,7 @@ fn storedComponents(stored: StoredPart, count: usize) []const checked.ConstNodeI
     const components = switch (stored.value()) {
         .tuple => |items| items,
         .record => |fields| fields,
-        .pending, .zst, .scalar, .str, .list, .box, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => writerInvariant("a constant read at a tuple or record type is not a stored tuple or record"),
+        .image, .pending, .zst, .scalar, .str, .list, .box, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => writerInvariant("a constant read at a tuple or record type is not a stored tuple or record"),
     };
     if (components.len != count) writerInvariant("a stored product does not have its plan's components");
     return components;

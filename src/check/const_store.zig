@@ -671,9 +671,111 @@ pub const ConstList = struct {
     }
 };
 
+/// Identifier for a stored image (`ConstStore.image`).
+pub const ConstImageId = enum(u32) { _ };
+
+/// Width of every pointer word in a stored image: images are at the 64-bit
+/// little-endian layout.
+pub const image_word_size = 8;
+
+/// A value that is data alone, stored as the memory it occupies: one block
+/// holding the value at offset 0 and then every allocation it reaches, at
+/// the 64-bit little-endian layout of the value's stored type. A word that
+/// points at an allocation holds the block offset of the address it points
+/// at, and `pointers` lists every such word. Allocations carry static
+/// refcount headers, lists and strings keep their capacity, NaNs are Roc's
+/// one NaN, and nothing is a seamless slice, so a reader copies the block
+/// and relocates each listed word by the block's address, and does no work
+/// per value.
+pub const ConstImage = struct {
+    /// The block, in `ConstStore.image_bytes`.
+    bytes: ConstRange,
+    /// Block offsets of the pointer words, ascending, in
+    /// `ConstStore.image_pointers`.
+    pointers: ConstRange,
+    /// The block's alignment: the largest alignment of anything in it.
+    alignment: u32,
+    /// The size of the value at offset 0; the rest of the block is its
+    /// allocations.
+    root_size: u32,
+    /// The type the value was stored at, in `ConstStore.type_store`: the
+    /// type its bytes are read through.
+    root_type: ConstTypeId,
+    /// The content digest (`layout.digest`) of the value's layout, which is
+    /// a function of its structure alone, the same in every program.
+    layout_digest: [32]u8,
+    /// The digest of the value: of `layout_digest`, the bytes, and the
+    /// pointer offsets, computed once as the image is written. Everything
+    /// that names the value by content reads it from here.
+    digest: [32]u8,
+};
+
+/// The image of a value also held as nodes (`ConstStore.attachImage`).
+pub const NodeImage = extern struct {
+    node: ConstNodeId,
+    image: ConstImageId,
+};
+
+/// A stored image with its pools resolved (`ConstStore.image`).
+pub const ConstImageView = struct {
+    bytes: []const u8,
+    pointers: []const u32,
+    alignment: u32,
+    root_size: u32,
+    root_type: ConstTypeId,
+    layout_digest: [32]u8,
+    digest: [32]u8,
+
+    /// The bytes of the value at offset 0.
+    pub fn rootBytes(self: ConstImageView) []const u8 {
+        return self.bytes[0..self.root_size];
+    }
+
+    /// The bytes of the `Str` whose 64-bit descriptor (bytes pointer,
+    /// capacity shifted left by one, length) is at block offset `offset`:
+    /// inline in a small string's descriptor, otherwise at the block offset
+    /// its pointer word holds.
+    pub fn strAt(self: ConstImageView, offset: u32) []const u8 {
+        const descriptor = self.bytes[offset..][0 .. 3 * image_word_size];
+        const last = descriptor[descriptor.len - 1];
+        if (last & 0x80 != 0) return descriptor[0..(last & 0x7f)];
+        const len = std.mem.readInt(u64, descriptor[2 * image_word_size ..][0..image_word_size], .little);
+        if (len == 0) return &.{};
+        const start = std.mem.readInt(u64, descriptor[0..image_word_size], .little);
+        return self.bytes[@intCast(start)..][0..@intCast(len)];
+    }
+
+    /// The capacity of the `Str` whose 64-bit descriptor is at block offset
+    /// `offset`: its length when it is held in its descriptor, otherwise
+    /// its capacity word decoded (no image string is a seamless slice).
+    pub fn strCapacityAt(self: ConstImageView, offset: u32) u64 {
+        const descriptor = self.bytes[offset..][0 .. 3 * image_word_size];
+        const last = descriptor[descriptor.len - 1];
+        if (last & 0x80 != 0) return last & 0x7f;
+        return std.mem.readInt(u64, descriptor[image_word_size..][0..image_word_size], .little) >> 1;
+    }
+};
+
+/// A stored value that every reader keeps as a literal in LIR rather than as
+/// static data, read from its image through the image's root type
+/// (design.md "Stored Images"): a number (a vector's scalar is its 128
+/// bits), a payload-free tag of a union
+/// whose every payload is zero-sized, or a string. A reader decides from
+/// its own layout whether a tag or string stays a literal.
+pub const ImageLiteral = union(enum) {
+    scalar: ConstScalar,
+    /// The tag, as the root type's tag union names it.
+    tag: names.TagNameId,
+    str: struct { bytes: []const u8, capacity: u64 },
+};
+
 /// Compile-time constant stored in checked module data.
 pub const ConstValue = union(enum) {
     pending,
+    /// A value that is data alone, as its image. Only a compile-time root's
+    /// own node is one: a value holding a function or a failure is the only
+    /// value stored as other nodes.
+    image: ConstImageId,
     zst,
     scalar: ConstScalar,
     str: ConstString,
@@ -709,6 +811,7 @@ pub const ConstValue = union(enum) {
 /// (with slices) is reconstructed on demand by `get`.
 const StoredValue = union(enum) {
     pending,
+    image: ConstImageId,
     zst,
     scalar: ConstScalar,
     str: ConstString,
@@ -870,6 +973,34 @@ pub const ConstTypeStore = struct {
 
     pub fn tagSpan(self: *const ConstTypeStore, range: ConstRange) []const TypeTag {
         return self.tag_pool.items()[range.start .. range.start + range.len];
+    }
+
+    /// Whether a value of `id` occupies no bytes: `id` is the zero-sized
+    /// type, a record or tuple of zero-sized components, a tag union of at
+    /// most one tag whose payloads are zero-sized, or a named type whose
+    /// backing is one. `allocator` is scratch.
+    pub fn isZeroSized(self: *const ConstTypeStore, allocator: Allocator, id: ConstTypeId) Allocator.Error!bool {
+        var seen: std.AutoHashMapUnmanaged(ConstTypeId, void) = .empty;
+        defer seen.deinit(allocator);
+        var pending: std.ArrayList(ConstTypeId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, id);
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
+            switch (self.get(ty)) {
+                .zst => {},
+                .named => |named| try pending.append(allocator, (named.backing.get() orelse return false).ty),
+                .record => |range| for (self.fieldSpan(range)) |field| try pending.append(allocator, field.ty),
+                .tuple => |range| try pending.appendSlice(allocator, self.typeSpan(range)),
+                .tag_union => |range| {
+                    const tags = self.tagSpan(range);
+                    if (tags.len > 1) return false;
+                    for (tags) |tag| try pending.appendSlice(allocator, self.typeSpan(tag.payloads));
+                },
+                .primitive, .list, .box, .func, .erased => return false,
+            }
+        }
+        return true;
     }
 
     pub fn declaredFieldSpan(self: *const ConstTypeStore, range: ConstRange) []const TypeDeclaredField {
@@ -1340,6 +1471,14 @@ pub const ConstStore = struct {
     blob_backing: collections.SafeList(u8),
     /// `ConstBlobDataId` -> range into `blob_backing`.
     blob_views: collections.SafeList(ConstRange),
+    /// `ConstImageId` -> image.
+    images: collections.SafeList(ConstImage),
+    /// Flat pool of image blocks.
+    image_bytes: collections.SafeList(u8),
+    /// Flat pool of image pointer-word offsets.
+    image_pointers: collections.SafeList(u32),
+    /// The images of values also held as nodes, by node, ascending.
+    node_images: collections.SafeList(NodeImage),
     /// Content index over the blobs, by their bytes: every blob is entered
     /// once, so equal bytes name one blob. Stored with the store, so a
     /// loaded store deduplicates new blobs against the ones it loaded.
@@ -1380,7 +1519,190 @@ pub const ConstStore = struct {
             .evidence_frame_pool = .{},
             .blob_backing = .{},
             .blob_views = .{},
+            .images = .{},
+            .image_bytes = .{},
+            .image_pointers = .{},
+            .node_images = .{},
         };
+    }
+
+    /// What an image is made of (`appendImage`).
+    pub const ImageInput = struct {
+        bytes: []const u8,
+        pointers: []const u32,
+        alignment: u32,
+        root_size: u32,
+        root_type: ConstTypeId,
+        layout_digest: [32]u8,
+    };
+
+    /// The digest of an image: of its layout digest, block and pointer
+    /// offsets.
+    pub fn imageDigest(input: ImageInput) [32]u8 {
+        var hasher = base.Sha256.init(.{});
+        hasher.update("roc.const.image.v1");
+        hasher.update(&input.layout_digest);
+        hasher.update(std.mem.asBytes(&input.root_size));
+        hasher.update(std.mem.asBytes(&@as(u64, input.bytes.len)));
+        hasher.update(input.bytes);
+        hasher.update(std.mem.asBytes(&@as(u64, input.pointers.len)));
+        hasher.update(std.mem.sliceAsBytes(input.pointers));
+        return hasher.finalResult();
+    }
+
+    /// Store an image as the value of a new node, computing its digest.
+    pub fn appendImage(self: *ConstStore, input: ImageInput) Allocator.Error!ConstNodeId {
+        const image_id = try self.appendImageData(input);
+        const node = try self.reserve();
+        self.values.items()[@backingInt(node)] = .{ .image = image_id };
+        return node;
+    }
+
+    /// Record `image` as the image of the value `node` holds as nodes.
+    /// Nodes are imaged in ascending order.
+    pub fn attachImage(self: *ConstStore, node: ConstNodeId, image_id: ConstImageId) Allocator.Error!void {
+        const items = self.node_images.items();
+        if (items.len != 0 and @backingInt(items[items.len - 1].node) >= @backingInt(node)) constStoreInvariant("nodes were imaged out of order");
+        _ = try self.node_images.append(self.allocator, .{ .node = node, .image = image_id });
+    }
+
+    /// The image of the value `node` holds as nodes, if it has one.
+    pub fn imageOf(self: *const ConstStore, node: ConstNodeId) ?ConstImageId {
+        const items = self.node_images.items();
+        var low: usize = 0;
+        var high: usize = items.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const at = @backingInt(items[mid].node);
+            if (at == @backingInt(node)) return items[mid].image;
+            if (at < @backingInt(node)) low = mid + 1 else high = mid;
+        }
+        return null;
+    }
+
+    /// Store an image, computing its digest.
+    pub fn appendImageData(self: *ConstStore, input: ImageInput) Allocator.Error!ConstImageId {
+        if (builtin.mode == .debug) {
+            if (input.root_size > input.bytes.len) constStoreInvariant("an image's root is larger than its block");
+            var previous: ?u32 = null;
+            for (input.pointers) |offset| {
+                if (previous) |before| if (offset <= before) constStoreInvariant("an image's pointer words are not ascending");
+                if (@as(usize, offset) + image_word_size > input.bytes.len) constStoreInvariant("an image's pointer word is past its block");
+                if (std.mem.readInt(u64, input.bytes[offset..][0..image_word_size], .little) > input.bytes.len) constStoreInvariant("an image's pointer is past its block");
+                previous = offset;
+            }
+        }
+        const bytes = try artifact_serialize.appendSpan(ConstRange, u8, &self.image_bytes, self.allocator, input.bytes);
+        const pointers = try artifact_serialize.appendSpan(ConstRange, u32, &self.image_pointers, self.allocator, input.pointers);
+        const image_id: ConstImageId = @fromBackingInt(std.math.cast(u32, self.images.items().len) orelse return error.OutOfMemory);
+        _ = try self.images.append(self.allocator, .{
+            .bytes = bytes,
+            .pointers = pointers,
+            .alignment = input.alignment,
+            .root_size = input.root_size,
+            .root_type = input.root_type,
+            .layout_digest = input.layout_digest,
+            .digest = imageDigest(input),
+        });
+        return image_id;
+    }
+
+    /// The image `id`, its pools resolved.
+    pub fn image(self: *const ConstStore, id: ConstImageId) ConstImageView {
+        const stored = self.images.items()[@backingInt(id)];
+        return .{
+            .bytes = self.image_bytes.items()[stored.bytes.start .. stored.bytes.start + stored.bytes.len],
+            .pointers = self.image_pointers.items()[stored.pointers.start .. stored.pointers.start + stored.pointers.len],
+            .alignment = stored.alignment,
+            .root_size = stored.root_size,
+            .root_type = stored.root_type,
+            .layout_digest = stored.layout_digest,
+            .digest = stored.digest,
+        };
+    }
+
+    /// The literal form of image `id` (`ImageLiteral`), read through its
+    /// root type, whose names are in `name_store`; null for a value that
+    /// has none. `allocator` is scratch.
+    pub fn imageLiteral(self: *const ConstStore, allocator: Allocator, id: ConstImageId, name_store: *const names.CanonicalNameStore) Allocator.Error!?ImageLiteral {
+        const view = self.image(id);
+        const bytes = view.rootBytes();
+        var ty = view.root_type;
+        while (true) switch (self.type_store.get(ty)) {
+            .named => |named| ty = (named.backing.get() orelse return null).ty,
+            .primitive => |primitive| return switch (primitive) {
+                .str => .{ .str = .{ .bytes = view.strAt(0), .capacity = view.strCapacityAt(0) } },
+                .u8 => .{ .scalar = .{ .u8 = bytes[0] } },
+                .i8 => .{ .scalar = .{ .i8 = @bitCast(bytes[0]) } },
+                .u16 => .{ .scalar = .{ .u16 = std.mem.readInt(u16, bytes[0..2], .little) } },
+                .i16 => .{ .scalar = .{ .i16 = std.mem.readInt(i16, bytes[0..2], .little) } },
+                .u32 => .{ .scalar = .{ .u32 = std.mem.readInt(u32, bytes[0..4], .little) } },
+                .i32 => .{ .scalar = .{ .i32 = std.mem.readInt(i32, bytes[0..4], .little) } },
+                .u64 => .{ .scalar = .{ .u64 = std.mem.readInt(u64, bytes[0..8], .little) } },
+                .i64 => .{ .scalar = .{ .i64 = std.mem.readInt(i64, bytes[0..8], .little) } },
+                .u128 => .{ .scalar = .{ .u128 = std.mem.readInt(u128, bytes[0..16], .little) } },
+                .i128 => .{ .scalar = .{ .i128 = std.mem.readInt(i128, bytes[0..16], .little) } },
+                .f32 => .{ .scalar = .{ .f32_bits = std.mem.readInt(u32, bytes[0..4], .little) } },
+                .f64 => .{ .scalar = .{ .f64_bits = std.mem.readInt(u64, bytes[0..8], .little) } },
+                .dec => .{ .scalar = .{ .dec_bits = std.mem.readInt(i128, bytes[0..16], .little) } },
+                // Bool is a named tag union in a stored type.
+                .bool => constStoreInvariant("a stored type holds a primitive Bool"),
+                // A vector's scalar is its 128 bits.
+                .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => .{ .scalar = .{ .u128 = std.mem.readInt(u128, bytes[0..16], .little) } },
+            },
+            .tag_union => |range| {
+                const tags = self.type_store.tagSpan(range);
+                for (tags) |tag| for (self.type_store.typeSpan(tag.payloads)) |payload| {
+                    if (!try self.type_store.isZeroSized(allocator, payload)) return null;
+                };
+                // The discriminant is the index of the tag among the union's
+                // tags in byte-wise name order, which is the order a stored
+                // tag union lists them in; a union of one tag has none.
+                if (builtin.mode == .debug) for (tags[0..tags.len -| 1], tags[@min(tags.len, 1)..]) |left, right| {
+                    if (!std.mem.lessThan(u8, name_store.tagLabelText(left.name), name_store.tagLabelText(right.name))) constStoreInvariant("a stored tag union's tags are not in name order");
+                };
+                const index: usize = switch (bytes.len) {
+                    0 => 0,
+                    1 => bytes[0],
+                    2 => std.mem.readInt(u16, bytes[0..2], .little),
+                    else => constStoreInvariant("a discriminant-only tag union's image is wider than its discriminant"),
+                };
+                if (index >= tags.len) constStoreInvariant("an image's discriminant names no tag of its type");
+                const tag = tags[index];
+                if (tag.payloads.len != 0) return null;
+                return .{ .tag = tag.name };
+            },
+            .record, .tuple, .list, .box, .func, .erased, .zst => return null,
+        };
+    }
+
+    /// The primitive image `id`'s root type is, through any named types, or
+    /// null when it is not one.
+    pub fn imageRootPrimitive(self: *const ConstStore, id: ConstImageId) ?Primitive {
+        var ty = self.image(id).root_type;
+        while (true) switch (self.type_store.get(ty)) {
+            .named => |named| ty = (named.backing.get() orelse return null).ty,
+            .primitive => |primitive| return primitive,
+            .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
+        };
+    }
+
+    /// `imageLiteral` of the image of the value `node` holds as nodes too.
+    /// The image is the value's source; the nodes must hold the same value.
+    pub fn nodeImageLiteral(self: *const ConstStore, allocator: Allocator, node: ConstNodeId, id: ConstImageId, name_store: *const names.CanonicalNameStore) Allocator.Error!?ImageLiteral {
+        const literal = try self.imageLiteral(allocator, id, name_store);
+        if (builtin.mode == .debug) {
+            var current = node;
+            while (self.get(current) == .nominal) current = self.get(current).nominal.backing;
+            const value = self.get(current);
+            const agrees = if (literal) |decoded| switch (decoded) {
+                .scalar => |scalar| value == .scalar and std.meta.eql(value.scalar, scalar),
+                .tag => |name| value == .tag and value.tag.payloads.len == 0 and std.mem.eql(u8, value.tag.tag_name, name_store.tagLabelText(name)),
+                .str => |str| value == .str and value.str.capacity == str.capacity and std.mem.eql(u8, self.strBytes(value.str.bytes), str.bytes),
+            } else value != .scalar and value != .str;
+            if (!agrees) constStoreInvariant("an image's literal differs from its nodes");
+        }
+        return literal;
     }
 
     fn appendNodes(self: *ConstStore, nodes: []const ConstNodeId) Allocator.Error!ConstRange {
@@ -1406,6 +1728,7 @@ pub const ConstStore = struct {
             // `reserve` writes the `.pending` placeholder directly; `fill` always supplies
             // a concrete value, so filling a node *with* `.pending` is an invariant break.
             .pending => constStoreInvariant("cannot fill a const node with a pending value"),
+            .image => constStoreInvariant("an image is stored by appendImage, which computes its digest"),
             .zst => .zst,
             .scalar => |s| .{ .scalar = s },
             .str => |s| blk: {
@@ -1651,6 +1974,7 @@ pub const ConstStore = struct {
     pub fn get(self: *const ConstStore, id: ConstNodeId) ConstValue {
         return switch (self.values.items()[@backingInt(id)]) {
             .pending => .pending,
+            .image => |image_id| .{ .image = image_id },
             .zst => .zst,
             .scalar => |s| .{ .scalar = s },
             .str => |s| .{ .str = s },
@@ -1720,11 +2044,15 @@ pub const ConstStore = struct {
         blob_backing: artifact_serialize.SerializedSlice(u8) = .{},
         blob_views: artifact_serialize.SerializedSlice(ConstRange) = .{},
         blob_index: collections.HashedProbeTable.Serialized = .{},
+        images: artifact_serialize.SerializedSlice(ConstImage) = .{},
+        image_bytes: artifact_serialize.SerializedSlice(u8) = .{},
+        image_pointers: artifact_serialize.SerializedSlice(u32) = .{},
+        node_images: artifact_serialize.SerializedSlice(NodeImage) = .{},
 
         comptime {
-            // 11 value/function side lists + 7 nested type-store lists + the
-            // blob index's cells.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 19);
+            // 15 value/function/image side lists + 7 nested type-store lists
+            // + the blob index's cells.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 23);
         }
 
         /// Every blob is indexed, so the index holds exactly as many entries
@@ -1764,6 +2092,7 @@ pub const ConstStore = struct {
             if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
             switch (left) {
                 .pending, .fn_value => return false,
+                .image => |id| if (!sameBytes(&self.image(id).digest, &other.image(right.image).digest)) return false,
                 .boxy_fn => |function| {
                     const right_function = right.boxy_fn;
                     if (!sameBytes(self.blobData(function.recipe), other.blobData(right_function.recipe))) return false;
@@ -1865,6 +2194,7 @@ pub const ConstStore = struct {
             hasher.update(&[_]u8{0});
             switch (value) {
                 .pending, .zst => {},
+                .image => |id| hasher.update(&self.image(id).digest),
                 .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
                 .scalar => |scalar| hashScalar(hasher, scalar),
                 .str => |str| {
@@ -1970,6 +2300,10 @@ pub const ConstStore = struct {
         self.blob_backing.deinit(self.allocator);
         self.blob_views.deinit(self.allocator);
         self.blob_index.deinit(self.allocator);
+        self.images.deinit(self.allocator);
+        self.image_bytes.deinit(self.allocator);
+        self.image_pointers.deinit(self.allocator);
+        self.node_images.deinit(self.allocator);
         self.* = ConstStore.init(self.allocator);
     }
 
@@ -2021,7 +2355,7 @@ pub const ConstStore = struct {
                 const mark = pending.items.len;
                 switch (self.get(node.id)) {
                     .pending => constStoreInvariant("completed store contains a pending node"),
-                    .zst, .scalar => {},
+                    .image, .zst, .scalar => {},
                     .str => |str| {
                         _ = self.strBytes(str.bytes);
                     },

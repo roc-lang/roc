@@ -6885,6 +6885,7 @@ pub const Builder = struct {
         if (!store.isClosed(raw_ty)) invariant("a stored value is restored at an open type");
         const ty = try self.structuralType(raw_ty);
         const key: lower.Program.StoredValueKey = .{ .module = source.module, .node = node, .ty = raw_ty };
+        if (const_store.imageOf(node)) |image| return try self.restoreImageStep(source, node, image, raw_ty);
         const data = const_store.get(node);
         // A discriminant-only tag is a scalar value: its read is its
         // construction (design.md "Compile-Time Evaluation").
@@ -6895,28 +6896,13 @@ pub const Builder = struct {
         // A value built from parts is remembered where its parts are
         // restored (`restorePartStep`), and a failed value has no slot.
         const remembered_here = switch (data) {
-            .scalar, .zst, .str, .boxy_fn, .nominal, .fn_value => true,
+            .image, .scalar, .zst, .str, .boxy_fn, .nominal, .fn_value => true,
             .pending, .crash, .checked_error, .box, .tuple, .record, .tag, .list => false,
         };
         if (remembered_here) try self.push(.{ .remember_static_value = key });
         switch (data) {
             .pending => invariant("a stored constant was never filled"),
-            .scalar => |scalar| {
-                const local = try self.localOf(raw_ty, .frame);
-                const value: LIR.LiteralValue = switch (scalar) {
-                    inline .i8, .i16, .i32, .i64, .u8, .u16, .u32 => |v| .{ .i64_literal = .{ .value = v, .layout_idx = self.store.getLocal(local).layout_idx } },
-                    .u64 => |v| .{ .i64_literal = .{ .value = @bitCast(v), .layout_idx = self.store.getLocal(local).layout_idx } },
-                    .i128 => |v| .{ .i128_literal = try self.store.addStmtRow(LIR.I128Literal, .{ .value = v, .layout_idx = self.store.getLocal(local).layout_idx }) },
-                    .u128 => |v| .{ .i128_literal = try self.store.addStmtRow(LIR.I128Literal, .{ .value = @bitCast(v), .layout_idx = self.store.getLocal(local).layout_idx }) },
-                    .f32_bits => |bits| .{ .f32_literal = @bitCast(bits) },
-                    .f64_bits => |bits| .{ .f64_literal = @bitCast(bits) },
-                    .dec_bits => |bits| .{ .dec_literal = bits },
-                };
-                try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = value, .next = undefined } });
-                const slot = try self.storedDataSlot(source, node, raw_ty);
-                try self.constant_slots.put(self.allocator, local, slot);
-                try self.pushValue(local);
-            },
+            .scalar => |scalar| try self.restoreScalar(source, node, raw_ty, scalar),
             .zst, .str => try self.pushValue(try self.storedDataLocal(source, node, raw_ty)),
             .crash => |message| {
                 if (root) |failed| {
@@ -6941,6 +6927,7 @@ pub const Builder = struct {
                 try self.pushValue(try self.localOf(raw_ty, .frame));
             },
             .boxy_fn => |function| try self.restoreStoredFn(source, const_store.strBytes(function.recipe), function.captures),
+            .image => invariant("a stored image reached a node restore"),
             .nominal => |nominal| try self.push(.{ .restore = .{ .source = source, .node = nominal.backing, .ty = ty } }),
             // The body reads the whole value once: its parts are static
             // data, never values of this body.
@@ -6958,6 +6945,51 @@ pub const Builder = struct {
         }
     }
 
+    /// Restore stored number `scalar`, the value of `node` of `source`, at
+    /// `ty` as its literal, whose immutable data is the node's slot.
+    fn restoreScalar(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, ty: TypeId, scalar: check.ConstStore.ConstScalar) Allocator.Error!void {
+        const local = try self.localOf(ty, .frame);
+        const value: LIR.LiteralValue = switch (scalar) {
+            inline .i8, .i16, .i32, .i64, .u8, .u16, .u32 => |v| .{ .i64_literal = .{ .value = v, .layout_idx = self.store.getLocal(local).layout_idx } },
+            .u64 => |v| .{ .i64_literal = .{ .value = @bitCast(v), .layout_idx = self.store.getLocal(local).layout_idx } },
+            .i128 => |v| .{ .i128_literal = try self.store.addStmtRow(LIR.I128Literal, .{ .value = v, .layout_idx = self.store.getLocal(local).layout_idx }) },
+            .u128 => |v| .{ .i128_literal = try self.store.addStmtRow(LIR.I128Literal, .{ .value = @bitCast(v), .layout_idx = self.store.getLocal(local).layout_idx }) },
+            .f32_bits => |bits| .{ .f32_literal = @bitCast(bits) },
+            .f64_bits => |bits| .{ .f64_literal = @bitCast(bits) },
+            .dec_bits => |bits| .{ .dec_literal = bits },
+        };
+        try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = value, .next = undefined } });
+        const slot = try self.storedDataSlot(source, node, ty);
+        try self.constant_slots.put(self.allocator, local, slot);
+        try self.pushValue(local);
+    }
+
+    /// Restore root `node` of `source`, stored as image `image`, at
+    /// `raw_ty` from its image alone (design.md "Stored Images"): a number
+    /// or a discriminant-only tag is its literal, and every other value is
+    /// one static datum.
+    fn restoreImageStep(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, image: check.ConstStore.ConstImageId, raw_ty: TypeId) Allocator.Error!void {
+        const names = self.program.constNames(source);
+        const key: lower.Program.StoredValueKey = .{ .module = source.module, .node = node, .ty = raw_ty };
+        const literal = try self.program.constStore(source).nodeImageLiteral(self.allocator, node, image, names);
+        const enum_tag: ?types.NameId = if (literal) |decoded| switch (decoded) {
+            .tag => |name| try self.enumTagOf(raw_ty, names.tagLabelText(name)),
+            .scalar, .str => null,
+        } else null;
+        if (literal) |decoded| switch (decoded) {
+            .scalar => |scalar| {
+                try self.push(.{ .remember_static_value = key });
+                return try self.restoreScalar(source, node, try self.structuralType(raw_ty), scalar);
+            },
+            .tag, .str => {},
+        };
+        if (self.program.stored_value_slots.get(key)) |slot| {
+            return self.pushValue(if (enum_tag) |name| try self.enumConstant(raw_ty, name, slot) else try self.staticRead(slot));
+        }
+        try self.push(if (enum_tag) |name| .{ .read_static_enum = .{ .ty = raw_ty, .name = name } } else .read_static_part);
+        try self.pushStoredDataPart(source, node, raw_ty);
+    }
+
     /// The tag name of stored constant `node` when it is a payload-free tag,
     /// possibly inside nominal wrappers, of a closed `ty` whose committed
     /// tag union stores its discriminant alone.
@@ -6967,13 +6999,19 @@ pub const Builder = struct {
         const tag = while (true) switch (const_store.get(current)) {
             .nominal => |nominal| current = nominal.backing,
             .tag => |tag| break tag,
-            .pending, .scalar, .zst, .str, .boxy_fn, .fn_value, .crash, .checked_error, .box, .tuple, .record, .list => return null,
+            .image, .pending, .scalar, .zst, .str, .boxy_fn, .fn_value, .crash, .checked_error, .box, .tuple, .record, .list => return null,
         };
         if (tag.payloads.len != 0) return null;
+        return try self.enumTagOf(ty, tag.tag_name);
+    }
+
+    /// The payload-free tag `tag_name` of a closed `ty` when its committed
+    /// tag union stores its discriminant alone.
+    fn enumTagOf(self: *Builder, ty: TypeId, tag_name: []const u8) Allocator.Error!?types.NameId {
         const layouts = &self.program.result.layouts;
         const committed = layouts.getLayout(try self.program.layouts.layoutOf(ty));
         if (committed.tag != .tag_union or layouts.getTagUnionInfo(committed).discriminant_offset != 0) return null;
-        return try self.program.store.internName(tag.tag_name);
+        return try self.program.store.internName(tag_name);
     }
 
     /// The stored discriminant-only tag `name` of `ty` as its construction,
@@ -6997,15 +7035,17 @@ pub const Builder = struct {
         const key: lower.Program.StoredValueKey = .{ .module = source.module, .node = node, .ty = raw_ty };
         if (self.program.stored_value_slots.get(key)) |slot| return try self.static_parts.append(self.allocator, slot);
         const data = const_store.get(node);
-        // A value that is data alone is one slot, frozen from the store
-        // through its type's const plan, however many values it holds.
+        // A value that is data alone is one slot, its image or frozen from
+        // the store through its type's const plan, however many values it
+        // holds.
+        if (const_store.imageOf(node) != null) return try self.pushStoredDataPart(source, node, raw_ty);
         switch (data) {
             .nominal, .box, .tuple, .record, .tag, .list => if (try self.program.storedDataAlone(source, node)) return try self.pushStoredDataPart(source, node, raw_ty),
-            .pending, .scalar, .zst, .str, .crash, .checked_error, .boxy_fn, .fn_value => {},
+            .image, .pending, .scalar, .zst, .str, .crash, .checked_error, .boxy_fn, .fn_value => {},
         }
         switch (data) {
             .pending => invariant("a stored constant was never filled"),
-            .scalar, .zst, .str => try self.pushStoredDataPart(source, node, raw_ty),
+            .image, .scalar, .zst, .str => try self.pushStoredDataPart(source, node, raw_ty),
             // A function value is built by its own restore, and a failed
             // value fails where it is restored: each is restored as a value,
             // whose slot is the part.

@@ -852,21 +852,21 @@ main = |_| {
 									(p-assign (ident "val"))))))))))
 	(d-let
 		(p-assign (ident "container1"))
-		(e-call (constraint-fn-var 560)
+		(e-call (constraint-fn-var 574)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "num")))))
 	(d-let
 		(p-assign (ident "container2"))
-		(e-call (constraint-fn-var 568)
+		(e-call (constraint-fn-var 582)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "str")))))
 	(d-let
 		(p-assign (ident "container3"))
-		(e-call (constraint-fn-var 576)
+		(e-call (constraint-fn-var 590)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
@@ -895,13 +895,13 @@ main = |_| {
 												(elems
 													(e-lookup-local
 														(p-assign (ident "num")))
-													(e-dispatch-call (method "times") (constraint-fn-var 581)
+													(e-dispatch-call (method "times") (constraint-fn-var 597)
 														(receiver
 															(e-lookup-local
 																(p-assign (ident "num"))))
 														(args
 															(e-num (value "2"))))
-													(e-dispatch-call (method "times") (constraint-fn-var 583)
+													(e-dispatch-call (method "times") (constraint-fn-var 599)
 														(receiver
 															(e-lookup-local
 																(p-assign (ident "num"))))
@@ -945,7 +945,7 @@ main = |_| {
 											(e-literal (string "more"))))))))))))
 	(d-let
 		(p-assign (ident "compute1"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 602)
+		(e-dispatch-call (method "plus") (constraint-fn-var 620)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "num"))))
@@ -953,7 +953,7 @@ main = |_| {
 				(e-num (value "10")))))
 	(d-let
 		(p-assign (ident "compute2"))
-		(e-dispatch-call (method "times") (constraint-fn-var 604)
+		(e-dispatch-call (method "times") (constraint-fn-var 622)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "num"))))
@@ -979,13 +979,13 @@ main = |_| {
 						(elems
 							(e-lookup-local
 								(p-assign (ident "num")))
-							(e-dispatch-call (method "plus") (constraint-fn-var 607)
+							(e-dispatch-call (method "plus") (constraint-fn-var 625)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "num"))))
 								(args
 									(e-num (value "1"))))
-							(e-dispatch-call (method "plus") (constraint-fn-var 609)
+							(e-dispatch-call (method "plus") (constraint-fn-var 627)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "num"))))
@@ -1045,14 +1045,14 @@ main = |_| {
 					(e-record
 						(fields
 							(field (name "from_num")
-								(e-dispatch-call (method "times") (constraint-fn-var 629)
+								(e-dispatch-call (method "times") (constraint-fn-var 653)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "num"))))
 									(args
 										(e-num (value "100")))))
 							(field (name "from_frac")
-								(e-dispatch-call (method "times") (constraint-fn-var 632)
+								(e-dispatch-call (method "times") (constraint-fn-var 656)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "frac"))))
@@ -1073,7 +1073,7 @@ main = |_| {
 			(args
 				(p-underscore))
 			(e-block
-				(e-dispatch-call (method "plus") (constraint-fn-var 643)
+				(e-dispatch-call (method "plus") (constraint-fn-var 667)
 					(receiver
 						(e-field-access
 							(receiver
@@ -1092,57 +1092,57 @@ main = |_| {
 		(patt (type "Dec"))
 		(patt (type "Str"))
 		(patt (type "[True]"))
-		(patt (type "List(Dec)"))
+		(patt (type "List(_a)"))
 		(patt (type "{}"))
 		(patt (type "List(Dec)"))
 		(patt (type "List(Str)"))
 		(patt (type "List([False, True])"))
+		(patt (type "List(List(_a))"))
 		(patt (type "List(List(Dec))"))
-		(patt (type "List(List(Dec))"))
-		(patt (type "{ count: Dec, items: List(Dec) }"))
+		(patt (type "{ count: Dec, items: List(_a) }"))
 		(patt (type "{ count: Dec, items: List(Dec) }"))
 		(patt (type "{ count: Dec, items: List(Str) }"))
-		(patt (type "{ data: List(Dec), metadata: { description: Str, ratio: Dec, version: Dec } }"))
+		(patt (type "{ data: List(_a), metadata: { description: Str, ratio: Dec, version: Dec } }"))
 		(patt (type "{ data: List(Dec), metadata: { description: Str, ratio: Dec, version: Dec }, name: Str }"))
 		(patt (type "{ data: List(Str), metadata: { description: Str, ratio: Dec, version: Dec }, name: Str }"))
 		(patt (type "a -> { value: a, wrapper: List(a) }"))
 		(patt (type "{ value: Dec, wrapper: List(Dec) }"))
 		(patt (type "{ value: Str, wrapper: List(Str) }"))
 		(patt (type "{ value: Dec, wrapper: List(Dec) }"))
-		(patt (type "{ level1: { collection: List(Dec), level2: { items: List(Dec), level3: { data: List(Dec), value: Dec } } }, results: List({ data: List(Dec), tag: Str }) }"))
+		(patt (type "{ level1: { collection: List(_a), level2: { items: List(Dec), level3: { data: List(_b), value: Dec } } }, results: List({ data: List(Dec), tag: Str }) }"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "List(Dec)"))
 		(patt (type "{ base: Dec, derived: List(Dec) }"))
-		(patt (type "{ computations: { from_frac: Dec, from_num: Dec, list_from_num: List(Dec) }, empty_lists: { in_list: List(List(Dec)), in_record: { data: List(Dec) }, raw: List(Dec) }, numbers: { float: Dec, list: List(Dec), value: Dec }, strings: { list: List(Str), value: Str } }"))
+		(patt (type "{ computations: { from_frac: Dec, from_num: Dec, list_from_num: List(Dec) }, empty_lists: { in_list: List(List(_a)), in_record: { data: List(_b) }, raw: List(_c) }, numbers: { float: Dec, list: List(Dec), value: Dec }, strings: { list: List(Str), value: Str } }"))
 		(patt (type "_arg -> Dec")))
 	(expressions
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Str"))
 		(expr (type "[True]"))
-		(expr (type "List(Dec)"))
+		(expr (type "List(_a)"))
 		(expr (type "{}"))
 		(expr (type "List(Dec)"))
 		(expr (type "List(Str)"))
 		(expr (type "List([False, True])"))
+		(expr (type "List(List(_a))"))
 		(expr (type "List(List(Dec))"))
-		(expr (type "List(List(Dec))"))
-		(expr (type "{ count: Dec, items: List(Dec) }"))
+		(expr (type "{ count: Dec, items: List(_a) }"))
 		(expr (type "{ count: Dec, items: List(Dec) }"))
 		(expr (type "{ count: Dec, items: List(Str) }"))
-		(expr (type "{ data: List(Dec), metadata: { description: Str, ratio: Dec, version: Dec } }"))
+		(expr (type "{ data: List(_a), metadata: { description: Str, ratio: Dec, version: Dec } }"))
 		(expr (type "{ data: List(Dec), metadata: { description: Str, ratio: Dec, version: Dec }, name: Str }"))
 		(expr (type "{ data: List(Str), metadata: { description: Str, ratio: Dec, version: Dec }, name: Str }"))
 		(expr (type "a -> { value: a, wrapper: List(a) }"))
 		(expr (type "{ value: Dec, wrapper: List(Dec) }"))
 		(expr (type "{ value: Str, wrapper: List(Str) }"))
 		(expr (type "{ value: Dec, wrapper: List(Dec) }"))
-		(expr (type "{ level1: { collection: List(Dec), level2: { items: List(Dec), level3: { data: List(Dec), value: Dec } } }, results: List({ data: List(Dec), tag: Str }) }"))
+		(expr (type "{ level1: { collection: List(_a), level2: { items: List(Dec), level3: { data: List(_b), value: Dec } } }, results: List({ data: List(Dec), tag: Str }) }"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "List(Dec)"))
 		(expr (type "{ base: Dec, derived: List(Dec) }"))
-		(expr (type "{ computations: { from_frac: Dec, from_num: Dec, list_from_num: List(Dec) }, empty_lists: { in_list: List(List(Dec)), in_record: { data: List(Dec) }, raw: List(Dec) }, numbers: { float: Dec, list: List(Dec), value: Dec }, strings: { list: List(Str), value: Str } }"))
+		(expr (type "{ computations: { from_frac: Dec, from_num: Dec, list_from_num: List(Dec) }, empty_lists: { in_list: List(List(_a)), in_record: { data: List(_b) }, raw: List(_c) }, numbers: { float: Dec, list: List(Dec), value: Dec }, strings: { list: List(Str), value: Str } }"))
 		(expr (type "_arg -> Dec"))))
 ~~~

@@ -8121,7 +8121,7 @@ const RootFailure = enum {
         return switch (payload) {
             .const_node => |node| switch (module.const_store.get(node)) {
                 .checked_error => .checked_error,
-                .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .nominal, .fn_value, .boxy_fn => .crash,
+                .image, .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .nominal, .fn_value, .boxy_fn => .crash,
             },
             .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => .crash,
         };
@@ -8361,7 +8361,7 @@ fn completeRoot(
     module.compile_time_roots.roots.items()[@backingInt(root_id)].lss_value_has_functions = function_strategy == .lss and switch (payload) {
         .fn_value => true,
         .const_node => |node| switch (module.const_store.get(node)) {
-            .crash, .checked_error => false,
+            .image, .crash, .checked_error => false,
             .pending => unreachable, // A completed root's stored node is fully published.
             .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value, .boxy_fn => true,
         },
