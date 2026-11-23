@@ -187,10 +187,10 @@ var_map: collections.DenseMap(Var, Var),
 ground_expected_backups: std.AutoHashMapUnmanaged(u64, Var) = .empty,
 /// Ground instances of type declarations referenced from annotations. See
 /// `instantiateVarPolarized`.
-ground_polarized_instances: std.AutoHashMapUnmanaged(PolarizedInstanceKey, Var) = .empty,
+ground_polarized_instances: std.AutoHashMapUnmanaged(SharedInstanceKey, Var) = .empty,
 /// Ground subtrees of the latest instance of a type declaration at each
 /// position whose instance is not ground. See `instantiateVarPolarized`.
-polarized_instance_subtrees: std.AutoHashMapUnmanaged(PolarizedInstanceKey, std.ArrayListUnmanaged(Instantiator.SharedSubtree)) = .empty,
+polarized_instance_subtrees: std.AutoHashMapUnmanaged(SharedInstanceKey, std.ArrayListUnmanaged(Instantiator.SharedSubtree)) = .empty,
 /// The marker pre-walk outcome of a type declaration at each position it was
 /// instantiated at with a behavior that decides markers per occurrence. See
 /// `polarizedMarkerChoices`.
@@ -12441,14 +12441,22 @@ fn instantiateVarPolarized(
     // with every annotation that refers to it, so a mismatch against one of
     // them can merge it into `.err`; it is then no longer ground and the next
     // reference instantiates a fresh copy.
+    //
+    // The annotation node that refers to an instance joins its class, so an
+    // instance is shared only among references whose nodes belong to the same
+    // kind of graph (`SharedInstanceOwner`).
     const instance_key: PolarizedInstanceKey = .{
         .declaration = var_to_instantiate,
         .polarity_behavior = polarity_behavior,
         .polarity = polarity,
         .reach = reach,
     };
+    const shared_key: SharedInstanceKey = .{
+        .position = instance_key,
+        .owner = if (env.rank() == .generalized) .template else .use,
+    };
     if (evidence == .none) {
-        if (self.ground_polarized_instances.get(instance_key)) |cached| {
+        if (self.ground_polarized_instances.get(shared_key)) |cached| {
             if (try self.varIsGround(cached)) return cached;
         }
     }
@@ -12470,7 +12478,7 @@ fn instantiateVarPolarized(
     }
     var reads_every_recorded_subtree = false;
     if (evidence == .none) {
-        if (self.polarized_instance_subtrees.get(instance_key)) |entries| {
+        if (self.polarized_instance_subtrees.get(shared_key)) |entries| {
             try self.groundSubtreeEntries(entries.items, &shared_subtrees);
             reads_every_recorded_subtree = shared_subtrees.items.len == entries.items.len and
                 self.codec_instance_copies.len == 0 and
@@ -12496,12 +12504,12 @@ fn instantiateVarPolarized(
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
     if (evidence == .none) {
         if (opened_marker_exts.items.len == 0 and try self.varIsGround(instantiated)) {
-            try self.ground_polarized_instances.put(self.gpa, instance_key, instantiated);
+            try self.ground_polarized_instances.put(self.gpa, shared_key, instantiated);
             if (self.annotation_generation_is_retainable) {
                 try self.retainable_generation_shared_roots.append(self.gpa, instantiated);
             }
         } else {
-            const slot = try self.polarized_instance_subtrees.getOrPut(self.gpa, instance_key);
+            const slot = try self.polarized_instance_subtrees.getOrPut(self.gpa, shared_key);
             if (!slot.found_existing) slot.value_ptr.* = .empty;
             if (reads_every_recorded_subtree) {
                 try self.debugAssertMaximalGroundSubtreeCopies(instantiated, slot.value_ptr.items);
@@ -12803,6 +12811,26 @@ const PolarizedInstanceKey = struct {
     polarity_behavior: PolarityVarBehavior,
     polarity: Polarity,
     reach: Instantiator.AdapterReach,
+};
+
+/// Which graph the annotation nodes that read a shared instance belong to.
+/// Each such node joins the instance's class, and a merged class holds the
+/// lower of the two ranks.
+const SharedInstanceOwner = enum {
+    /// A reference generated at generalized rank, inside a type declaration:
+    /// the instance is part of that declaration's template, which every use
+    /// of the declaration copies.
+    template,
+    /// A reference generated at a scope's own rank: the instance is a
+    /// monotype, which settles at `outermost` like every ground type and is
+    /// read where it stands.
+    use,
+};
+
+/// The key of an instance that references share (`instantiateVarPolarized`).
+const SharedInstanceKey = struct {
+    position: PolarizedInstanceKey,
+    owner: SharedInstanceOwner,
 };
 
 /// Record alias markers an annotation-position instantiation resolved open,
