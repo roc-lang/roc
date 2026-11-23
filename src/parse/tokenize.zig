@@ -786,6 +786,9 @@ pub const Cursor = struct {
     messages: []Diagnostic,
     message_count: u32,
     has_non_carriage_return_errors: bool = false,
+    /// Where the first diagnostic that did not fit in `messages` points.
+    /// Meaningful only once `message_count` exceeds `messages.len`.
+    first_dropped_region: base.Region = base.Region.zero(),
     tab_width: u8 = 4, // TODO: make this configurable
     /// The value facts of the number token `chompNumber` scanned last.
     number: NumberScanner = .{},
@@ -800,17 +803,17 @@ pub const Cursor = struct {
         };
     }
 
-    fn pushMessageHere(self: *Cursor, tag: Diagnostic.Tag) void {
-        self.pushMessage(tag, self.pos, self.pos);
-    }
-
+    /// Record a diagnostic for the source bytes `begin..end`. Every
+    /// diagnostic covers at least one byte, so a report always has source
+    /// text to point at.
     fn pushMessage(self: *Cursor, tag: Diagnostic.Tag, begin: u32, end: u32) void {
+        std.debug.assert(begin < end and end <= self.buf.len);
         if (tag != .MisplacedCarriageReturn) self.has_non_carriage_return_errors = true;
+        const region = base.Region.from_raw_offsets(begin, end);
         if (self.message_count < self.messages.len) {
-            self.messages[self.message_count] = Diagnostic{
-                .tag = tag,
-                .region = base.Region.from_raw_offsets(begin, end),
-            };
+            self.messages[self.message_count] = Diagnostic{ .tag = tag, .region = region };
+        } else if (self.message_count == self.messages.len) {
+            self.first_dropped_region = region;
         }
         self.message_count += 1;
     }
@@ -855,7 +858,7 @@ pub const Cursor = struct {
                 if (self.pos < self.buf.len and self.buf[self.pos] == '\n') {
                     self.pos += 1;
                 } else {
-                    self.pushMessageHere(.MisplacedCarriageReturn);
+                    self.pushMessage(.MisplacedCarriageReturn, self.pos - 1, self.pos);
                 }
             } else if (b == '#') {
                 self.pos += 1;
@@ -863,7 +866,7 @@ pub const Cursor = struct {
                     self.pos += 1;
                 }
             } else if (b >= 0 and b <= 31) {
-                self.pushMessageHere(.AsciiControl);
+                self.pushMessage(.AsciiControl, self.pos, self.pos + 1);
                 self.pos += 1;
             } else {
                 break;
@@ -874,7 +877,8 @@ pub const Cursor = struct {
     /// Chomp a number token starting at its first digit, recording its value
     /// facts in `self.number`.
     pub fn chompNumber(self: *Cursor) Token.Tag {
-        const initialDigit = self.buf[self.pos];
+        const start = self.pos;
+        const initialDigit = self.buf[start];
         self.pos += 1;
         self.number = .{};
         self.number.decimalDigit(initialDigit - '0');
@@ -894,9 +898,9 @@ pub const Cursor = struct {
                 }
                 switch (c) {
                     '0'...'9' => {
-                        self.pushMessageHere(.LeadingZero);
                         tok = self.chompNumberBase10();
                         tok = self.chompNumberSuffix(tok);
+                        self.pushMessage(.LeadingZero, start, self.pos);
                         break;
                     },
                     NumericLiteral.digit_separator => {
@@ -930,7 +934,7 @@ pub const Cursor = struct {
         inline for (NumericLiteral.base_prefixes) |prefix| {
             if (c == prefix.lower or c == prefix.upper) {
                 if (c == prefix.upper) {
-                    self.pushMessageHere(.UppercaseBase);
+                    self.pushMessage(.UppercaseBase, self.pos, self.pos + 1);
                 }
                 self.pos += 1;
                 var tok = Token.Tag.Int;
@@ -1281,26 +1285,26 @@ pub const Cursor = struct {
             // Single-byte UTF-8 (ASCII)
             // Allow tab (0x09) in addition to standard printable ASCII
             if (!std.ascii.isPrint(c) and c != '\t') {
-                self.pushMessageHere(.NonPrintableUnicodeInStrLiteral);
+                self.pushMessage(.NonPrintableUnicodeInStrLiteral, self.pos, self.pos + 1);
             }
             self.pos += 1;
             return c;
         }
 
         const utf8_len = std.unicode.utf8ByteSequenceLength(c) catch {
-            self.pushMessageHere(.InvalidUtf8InSource);
+            self.pushMessage(.InvalidUtf8InSource, self.pos, self.pos + 1);
             self.pos += 1;
             return null;
         };
         if (self.pos + utf8_len > self.buf.len) {
             // Incomplete UTF-8 sequence at end of input
-            self.pushMessageHere(.InvalidUtf8InSource);
+            self.pushMessage(.InvalidUtf8InSource, self.pos, self.pos + 1);
             self.pos += 1;
             return null;
         }
         const utf8_bytes = self.buf[self.pos .. self.pos + utf8_len];
         const codepoint = std.unicode.utf8Decode(utf8_bytes) catch {
-            self.pushMessageHere(.InvalidUtf8InSource);
+            self.pushMessage(.InvalidUtf8InSource, self.pos, self.pos + 1);
             self.pos += 1;
             return null;
         };
@@ -1312,7 +1316,7 @@ pub const Cursor = struct {
             (codepoint >= 0xD800 and codepoint <= 0xDFFF) or // Surrogate pairs (invalid in UTF-8)
             codepoint == 0xFFFE or codepoint == 0xFFFF) // Non-characters
         {
-            self.pushMessageHere(.NonPrintableUnicodeInStrLiteral);
+            self.pushMessage(.NonPrintableUnicodeInStrLiteral, self.pos, self.pos + utf8_len);
         }
 
         // Valid UTF-8 sequence - advance by the full sequence length
@@ -1326,6 +1330,9 @@ pub const TokenOutput = struct {
     tokens: TokenizedBuffer,
     messages: []Diagnostic,
     extra_messages_dropped: usize,
+    /// Where the first dropped diagnostic points. Meaningful only when
+    /// `extra_messages_dropped` is nonzero.
+    first_dropped_region: base.Region,
     /// Fatal status survives diagnostic buffer exhaustion.
     has_errors: bool,
     /// Formatting eligibility is independent of the diagnostic buffer capacity.
@@ -1379,6 +1386,7 @@ pub const Tokenizer = struct {
             .tokens = self.output,
             .messages = self.cursor.messages[0..actual_message_count],
             .extra_messages_dropped = self.cursor.message_count - actual_message_count,
+            .first_dropped_region = self.cursor.first_dropped_region,
             .has_errors = self.cursor.message_count != 0,
             .has_non_carriage_return_errors = self.cursor.has_non_carriage_return_errors,
             .source_rejected = self.source_rejected,
@@ -3161,6 +3169,55 @@ test "tokenizer with invalid UTF-8" {
         try std.testing.expect(messages.len > 0);
         try std.testing.expectEqual(Diagnostic.Tag.InvalidUtf8InSource, messages[0].tag);
     }
+}
+
+test "issue 13366: every tokenizer diagnostic covers the source it reports" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { source: []const u8, tag: Diagnostic.Tag, start: u32, end: u32 }{
+        .{ .source = "n = 0000", .tag = .LeadingZero, .start = 4, .end = 8 },
+        .{ .source = "n = 007.5e2", .tag = .LeadingZero, .start = 4, .end = 11 },
+        .{ .source = "n = 0_12u8", .tag = .LeadingZero, .start = 4, .end = 10 },
+        .{ .source = "n = 0X1F", .tag = .UppercaseBase, .start = 5, .end = 6 },
+        .{ .source = "n = 0_B11", .tag = .UppercaseBase, .start = 6, .end = 7 },
+        .{ .source = "a\rb", .tag = .MisplacedCarriageReturn, .start = 1, .end = 2 },
+        .{ .source = "a \x01 b", .tag = .AsciiControl, .start = 2, .end = 3 },
+        .{ .source = "s = \"a\x01b\"", .tag = .NonPrintableUnicodeInStrLiteral, .start = 6, .end = 7 },
+        .{ .source = "s = \"a\u{85}b\"", .tag = .NonPrintableUnicodeInStrLiteral, .start = 6, .end = 8 },
+        .{ .source = "s = \"a\xffb\"", .tag = .InvalidUtf8InSource, .start = 6, .end = 7 },
+        .{ .source = "s = \"a\xc3", .tag = .InvalidUtf8InSource, .start = 6, .end = 7 },
+    };
+    for (cases) |case| {
+        var diagnostics: [4]Diagnostic = undefined;
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, case.source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(case.tag, messages[0].tag);
+        try std.testing.expectEqual(case.start, messages[0].region.start.offset);
+        try std.testing.expectEqual(case.end, messages[0].region.end.offset);
+    }
+}
+
+test "the first diagnostic past the buffer's capacity records where it points" {
+    const gpa = std.testing.allocator;
+    var diagnostics: [1]Diagnostic = undefined;
+    var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+    defer env.deinit(gpa);
+
+    var tokenizer = try Tokenizer.init(&env, gpa, "a = 01\nb = 0X2\nc = 03\n", &diagnostics);
+    try tokenizer.tokenize(gpa);
+    var output = tokenizer.finishAndDeinit();
+    defer output.tokens.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 1), output.messages.len);
+    try std.testing.expectEqual(@as(usize, 2), output.extra_messages_dropped);
+    try std.testing.expectEqual(@as(u32, 12), output.first_dropped_region.start.offset);
+    try std.testing.expectEqual(@as(u32, 13), output.first_dropped_region.end.offset);
 }
 
 test "single quote around invalid UTF-8 is malformed" {

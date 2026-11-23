@@ -24,7 +24,8 @@ const issue_12292_tests = @import("issue_12292_test.zig");
 const issue_12407_tests = @import("issue_12407_test.zig");
 const issue_12654_tests = @import("issue_12654_test.zig");
 const issue_12832_tests = @import("issue_12832_test.zig");
+const issue_13366_tests = @import("issue_13366_test.zig");
 
 pub const Spec = integration_spec.Spec;
 pub const SpecError = integration_spec.SpecError;
-pub const specs = parse_error_tests.specs ++ syntax_tests.specs ++ handler_integration_tests.specs ++ issue_10161_tests.specs ++ issue_11302_tests.specs ++ issue_11521_tests.specs ++ issue_11523_tests.specs ++ issue_11974_tests.specs ++ issue_12292_tests.specs ++ issue_12407_tests.specs ++ issue_12654_tests.specs ++ issue_12832_tests.specs;
+pub const specs = parse_error_tests.specs ++ syntax_tests.specs ++ handler_integration_tests.specs ++ issue_10161_tests.specs ++ issue_11302_tests.specs ++ issue_11521_tests.specs ++ issue_11523_tests.specs ++ issue_11974_tests.specs ++ issue_12292_tests.specs ++ issue_12407_tests.specs ++ issue_12654_tests.specs ++ issue_12832_tests.specs ++ issue_13366_tests.specs;
