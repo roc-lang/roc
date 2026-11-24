@@ -3569,16 +3569,26 @@ An entry-block slot is allocated for the whole activation, so LLVM can overlap
 two slots only through `llvm.lifetime.start` and `llvm.lifetime.end`. The LLVM
 backend brackets the slot of every local whose address it passes to an
 out-of-line Roc procedure call (a result returned through memory, or an
-argument passed by pointer) or an explicit RC helper call with markers at that
-storage owner's exact lifetime boundaries, which the shared LIR stack planner
-solves over the procedure's explicit control-flow graph. Other slots carry no
-markers: SROA removes slots whose addresses never escape, and markers on them
-would only add optimizer work. RC argument emission and lifetime planning
-share the same size rule: small values use the shared RC scratch slot; larger
-values pass their own storage. Views extend their owner's lifetime. Procedure
-arguments, which the prologue writes, and locals in deferred string-match
-captures, which the backend materializes outside the statements that access
-them, keep their activation lifetime.
+argument passed by pointer), an explicit RC helper call, or a low-level
+operation's operand that `ValuePlan.lowLevelAccess` declares is accessed by
+address, with markers at that storage owner's exact lifetime boundaries, which
+the shared LIR stack planner solves over the procedure's explicit control-flow
+graph. A builtin reads and writes those operands only during its own
+statement. Other slots carry no markers: SROA removes slots whose addresses
+never escape, and markers on them would only add optimizer work. RC argument
+emission and lifetime planning share the same size rule: small values use the
+shared RC scratch slot; larger values pass their own storage. Views and parts
+extend their owner's lifetime: a view's definition writes none of its owner's
+bytes, the owner's first part's definition starts them, and each later part's
+keeps the bytes before it live. Procedure arguments, which the prologue
+writes, and locals in deferred string-match captures, which the backend
+materializes outside the statements that access them, keep their activation
+lifetime.
+
+The operands of a `str_from_parts` concatenation are copied into one array per
+procedure, sized for the procedure's largest concatenation, which the value
+plan records. The builtin reads the parts before it returns, so every
+concatenation in the procedure reuses the same frame bytes.
 
 A speed build marks two kinds of procedure `alwaysinline`: a wrapper, a
 loop-free body of a few statements of its own, and a leaf, a moderate body
@@ -3667,6 +3677,15 @@ word count and flag-byte encoding, the target pointer width and byte order, and
 zeroed unused bytes. Longer literals use the allocating runtime constructor.
 This is representation lowering of explicit LIR literal bytes; it introduces no
 ownership decisions and leaves all explicit LIR ARC statements intact.
+
+LLVM reads a string's length as a select between the small length in its last
+byte and the length word with the small-string bit cleared. The bit is already
+clear whenever the heap arm is taken, so clearing it changes no value; it
+states in the arm itself that the word's sign bit is zero. LLVM otherwise
+learns that only from the select's condition, and InstCombine then proves the
+loaded word is not undef by walking the dominator chain to the function entry
+for every checked arithmetic operation the length reaches, which is quadratic
+in a function of many such operations.
 
 The runtime encoding of values is defined once, by the structs
 and constants in `src/builtins`: `RocStr` and `RocList` field order and word
@@ -12813,6 +12832,23 @@ is unified with every annotation that refers to it; if a mismatch merges any
 of it into an error it is no longer ground, and the next reference
 instantiates a fresh copy.
 
+An instance is shared only among references of the same kind. The annotation
+node that refers to an instance joins its class, and a merged class holds the
+lower of the two ranks. A reference inside a type declaration is generated at
+generalized rank, so its instance is part of that declaration's template: its
+classes carry generalized rank like the rest of the template, and each use of
+the declaration copies them. A reference generated at a scope's own rank is a
+use: its instance is a monotype that settles at `outermost`, like every ground
+type, and is read where it stands. A use never reads a template's instance,
+nor a template a use's. A class at generalized rank is by definition one a
+quantified variable is reachable from (`Check.typeHasGeneralizedVar` stops at
+the first one it meets), so a use that read a template's instance would make
+the binding it annotates a scheme with nothing to quantify. A host-boundary
+annotation closes the declarations it references just as a nominal
+declaration's body does, so the two name the same positions, and a provided
+function whose annotation read such an instance would be rejected as
+polymorphic.
+
 Before a use that decides markers per occurrence (`.preserve_one_sided`,
 `.resolve_by_polarity`, `.defer_open`) copies anything, a pre-walk
 (`Instantiator.collectMarkerChoices`) joins the sides every marker occurs on
@@ -16260,10 +16296,15 @@ Restrictions:
   lifting paths retain the checked representatives of the record relation,
   alongside its original operands, so a polymorphic call's formal slot cannot
   hide the literal that supplies it. Checking registers fresh record expressions
-  as they are checked. At settlement, before default-cycle validation, it groups
-  accepted omission decisions by solved record equality and distributes each
-  decision to every registered construction in that class that did not supply
-  the field. This consumes the unifier's explicit default identity, including
+  as they are checked. An annotated or expected-typed expression checks its
+  body on a fresh variable and relates its own variable to the annotation, so
+  when the annotation names an alias, the expression's root is that alias
+  node, a class of its own; the literal's record class is reached through the
+  alias's backing, which unification related to the body. At settlement, before default-cycle validation, it groups accepted omission
+  decisions by solved record equality and distributes each decision to every
+  registered construction in that class that did not supply the field, then
+  publishes the omissions sorted by construction so each consumer finds one
+  construction's omissions by binary search. This consumes the unifier's explicit default identity, including
   when later value relations normalized the field to required; it never
   reconstructs an omission from a nominal declaration or a solved field kind.
   Equal decisions are coalesced before visiting constructors, and only classes
@@ -30153,10 +30194,19 @@ all argument registers and introduce no new callee-save or frame requirements.
 
 ## LLVM Value Representation
 
-Aggregate transport preserves storage identity. Records, tuples, and inline tag
-payloads use the same memory-view plan: an immutable alias or field read names
-its ultimate storage owner and a committed byte offset. LLVM does not rebuild
-these aliases or field reads field by field. The existing per-proc
+Aggregate transport preserves storage identity. Records, tuples, inline tag
+payloads, strings, lists, and boxes use the same memory-view plan: an
+immutable alias (an `assign_ref` of kind `local`, `nominal`, or
+`list_reinterpret`) of any of these layouts, or a record or tag payload
+component read of a record or tag union, names its ultimate storage owner and
+a committed byte offset. LLVM does not rebuild these aliases or field reads
+field by field, and does not copy a string, list, or box header into a slot of
+its own. Every emitter of these layouts writes a local's slot only at the
+local's own definition: builtins read headers by value and write only through
+the target's address, and in-place list and string updates change heap memory
+only. Locals in deferred string-match captures are the exception, because
+emission writes them outside their LIR definition, so they are never views or
+view sources. The existing per-proc
 value planner uses the shared LIR access inventory and liveness solution to
 prove these views. A join declaration does not mutate its parameters: an
 `initialize_join_param` write is an ordinary definition. Single-definition join
@@ -30166,6 +30216,19 @@ execute repeatedly: a view may not remain live across its storage owner's next
 definition. View chains are resolved once, and all reads through them extend the
 owner's LLVM slot lifetime. A view's definition does not overwrite its owner's
 bytes.
+
+The inverse also holds: a record field or tag payload operand of a
+construction is a part of the construction's target, defined directly at the
+byte offset where the construction stores it, so the construction leaves it in
+place instead of copying it. The plan admits a part when the operand has
+exactly the stored layout, when the operand and the target each have one
+static definition and are immutable, non-parameter, memory locals outside
+deferred captures, when every definition writing the owner's bytes lies in the
+owner's definition's straight-line block, and when no local that reads the
+bytes a part's definitions write (the owner, a view of it, or an enclosing
+aggregate the target is itself a part of) is live on entry to any of those
+definitions. A box target's bytes live in a fresh heap cell, so its operands
+are never parts.
 
 An ordinary indirect fast-call parameter with no body writes can use the
 caller's storage directly. Tail-group parameters keep their snapshots because
@@ -30252,9 +30315,14 @@ A record or tag literal writes each byte of its storage once: its fields, or
 its payload and discriminant, and then zeroes only the bytes those leave (the
 padding between fields, the bytes between a short payload and the
 discriminant, and the alignment tail). It never zero-fills its storage and
-then overwrites it. LLVM's SROA rewrites an `llvm.memset` that lands on a part
-of a slot it promotes as a vector by first loading that part's old value. The
-load makes the slot live into its block, so mem2reg gives every join inside a
+then overwrites it. A gap shorter than the aggregate's alignment is padding
+and is zeroed by aligned integer stores; only a short variant's unused payload
+bytes take an `llvm.memset`. A constructed aggregate is often copied whole
+right after it is built, into a list item, a box, or a parent, and LLVM's
+memcpy optimization pass rewrites a `memset` followed by such a copy by
+updating its memory SSA at a cost proportional to the block, once per pair.
+LLVM's SROA rewrites an `llvm.memset` that lands on a part of a slot it
+promotes as a vector by first loading that part's old value. The load makes the slot live into its block, so mem2reg gives every join inside a
 loop around the write a phi of the slot's previous-iteration bytes, which
 nothing reads. A zero-fill under every field puts such a memset on every part
 of the slot; zeroing only the gaps puts it only on bytes nothing else writes.
@@ -32555,6 +32623,27 @@ one instantiation can occupy several rows. Generators emit one declaration per
 shape, give shapes that share a name distinct names derived from the shape id,
 and never emit the shared bare name, as a declaration or as an alias.
 
+A tag union with one variant stores no discriminant, so its host type is its
+payload, which is how the C ABI classification of host-boundary values sees it
+too. With one payload, that is the payload's own type. With several payloads
+that occupy storage, it is a struct of the variant's committed payload fields,
+which generators declare under the union's name like any other declared type,
+with the ownership operations of a record. When no payload occupies storage,
+the union has no host value. A generator never lets one payload stand for the
+others.
+
+A value whose committed size is zero has no host representation. It is not
+passed as an argument and not returned, so a hosted or provided signature
+omits it, and a struct that holds one as a field or tag payload has no member
+for it. Generators declare no type for a zero-sized record or union. Glue
+decides this from the committed size, never from the shape of the type: `{}`,
+a union with one payload-free tag, and a record or union of such values are
+all zero-sized. C ABI classification on every target sees the same struct the
+host declares, the one made of an aggregate's sized members. A zero-sized
+field, including the zero-sized `_` field that opts a nominal record into
+declared order, therefore neither breaks a homogeneous float or vector
+aggregate nor stops a struct with one sized field from passing as that field.
+
 Glue's type table describes values. A function value, wherever it appears
 (boxed, in a record or tag payload, or in a stored signature), is one
 erased-callable pointer whose own layout does not depend on its argument or
@@ -33060,8 +33149,11 @@ symbol the link defines (`__stack_pointer`, `__memory_base` and
 to the host's definitions, else to the embedder; a host import resolves only
 to the names the app gives the host (its provides, exported data and the
 WebAssembly 1.0 stack accessors), then to the link's symbols, else to the
-embedder. An atom walk from the platform's exports, the stack exports, the
-host's retained atoms and the provides decides what is placed. Index spaces
+embedder. An atom walk from the platform's exports, the stack exports and
+the host's retained atoms decides what is placed: a provide nothing among
+them reaches is left out with everything only it reaches, the hosted imports
+it calls included, so a module imports from its embedder only what placed
+code names. Index spaces
 follow placement order (host, support, units by content digest; within an
 image, its order), memory follows `linker.wasmStackLayout` with initialized
 segments first and zero-filled ones after (emitted as zeros only when memory

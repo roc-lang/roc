@@ -52539,8 +52539,7 @@ const BodyContext = struct {
         const wanted = self.nameStore().recordFieldLabelText(field_name);
         // A hoisted validation's unit result omits no field.
         const record_expr = exprSourceNode(self.view, checked_expr) orelse return null;
-        for (self.view.bodies.recordOmittedDefaults()) |omitted| {
-            if (omitted.expr != record_expr) continue;
+        for (self.view.bodies.recordOmittedDefaultsOf(record_expr)) |omitted| {
             const entry = self.view.bodies.recordOmittedDefault(omitted);
             if (Ident.textEql(self.view.names.recordFieldLabelText(entry.field_name), wanted)) {
                 return entry.default;

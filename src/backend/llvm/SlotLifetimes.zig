@@ -6,7 +6,8 @@
 //! only through `llvm.lifetime.start` / `llvm.lifetime.end`. SROA already
 //! removes slots whose address never escapes, and a marker on such a slot is
 //! pure optimizer work, so markers go only on the slots of locals whose
-//! addresses the backend passes to out-of-line Roc procedure or RC helper calls.
+//! addresses the backend passes to out-of-line Roc procedure or RC helper
+//! calls, or to low-level operations that take them by address.
 //!
 //! The markers are `lir.StackPlan`'s lifetime boundaries over the explicit LIR
 //! control-flow graph, each emitted at the entry of its statement. An end may
@@ -53,10 +54,6 @@ allocator: Allocator,
 indexes: StackPlan.Indexes,
 /// Locals whose slot addresses reach an out-of-line call.
 candidates: std.AutoHashMapUnmanaged(u32, void) = .empty,
-/// Locals taking part in deferred string-match captures.
-deferred: std.AutoHashMapUnmanaged(u32, void) = .empty,
-/// Copies between locals, as (source, target).
-copies: std.ArrayList([2]u32) = .empty,
 visited: std.AutoHashMapUnmanaged(u32, void) = .empty,
 work: std.ArrayList(CFStmtId) = .empty,
 planned: std.ArrayList(CFStmtId) = .empty,
@@ -76,8 +73,6 @@ pub fn init(allocator: Allocator) Self {
 pub fn deinit(self: *Self) void {
     self.indexes.deinit();
     self.candidates.deinit(self.allocator);
-    self.deferred.deinit(self.allocator);
-    self.copies.deinit(self.allocator);
     self.visited.deinit(self.allocator);
     self.work.deinit(self.allocator);
     self.planned.deinit(self.allocator);
@@ -103,7 +98,10 @@ pub fn at(self: *const Self, stmt: CFStmtId) []const Marker {
 /// Plan the markers of the procedure body rooted at `root` whose parameter
 /// span is `params`. `calls.appendAddressed(stmt, list)` appends the locals
 /// whose slot addresses one statement passes to an out-of-line callee, and
-/// fails only with `calls.AppendError`.
+/// fails only with `calls.AppendError`. `calls.storageRoot(local)` is the
+/// local owning `local`'s bytes, `calls.ownerDefinition(local)` how defining
+/// `local` writes them, and `calls.isDeferredCapture(local)` whether the
+/// backend accesses `local` outside the statements LIR says access it.
 pub fn plan(self: *Self, store: *const LirStore, root: CFStmtId, params: anytype, calls: anytype) (Allocator.Error || @TypeOf(calls).AppendError)!void {
     self.clear();
     try self.collectCandidates(store, root, params, calls);
@@ -114,8 +112,9 @@ pub fn plan(self: *Self, store: *const LirStore, root: CFStmtId, params: anytype
     self.planned.clearRetainingCapacity();
     defer self.indexes.clear();
     try stack_plan.addProcGraph(store, &self.indexes, root, &self.planned, Tracked(@TypeOf(calls)){ .candidates = &self.candidates, .calls = calls });
-    // Views extend their owner's lifetime; their definitions do not write
-    // the owner's bytes. StackPlan merges those accesses before solving.
+    // Views and parts extend their owner's lifetime. A view's definition does
+    // not write the owner's bytes; a part's writes its own range of them.
+    // StackPlan merges those accesses before solving.
     var index: usize = 0;
     while (index < stack_plan.values.items.len) : (index += 1) {
         const local = stack_plan.values.items[index].local;
@@ -123,6 +122,7 @@ pub fn plan(self: *Self, store: *const LirStore, root: CFStmtId, params: anytype
         if (owner != local) {
             const owner_index = try stack_plan.local(owner);
             stack_plan.values.items[index].representative = owner_index;
+            stack_plan.values.items[index].alias_definition = calls.ownerDefinition(local);
         }
     }
     for (stack_plan.values.items) |*value| value.size = 1;
@@ -145,8 +145,6 @@ fn Tracked(comptime Calls: type) type {
 
 fn collectCandidates(self: *Self, store: *const LirStore, root: CFStmtId, params: anytype, calls: anytype) (Allocator.Error || @TypeOf(calls).AppendError)!void {
     self.candidates.clearRetainingCapacity();
-    self.deferred.clearRetainingCapacity();
-    self.copies.clearRetainingCapacity();
     self.visited.clearRetainingCapacity();
     self.work.clearRetainingCapacity();
     var addressed: std.ArrayList(LocalId) = .empty;
@@ -157,71 +155,15 @@ fn collectCandidates(self: *Self, store: *const LirStore, root: CFStmtId, params
         const stmt = store.getCFStmt(id);
         addressed.clearRetainingCapacity();
         try calls.appendAddressed(stmt, &addressed);
-        for (addressed.items) |local| try self.candidates.put(self.allocator, @backingInt(calls.storageRoot(local)), {});
-        switch (stmt) {
-            .assign_ref => |assign| switch (assign.op.kind) {
-                .local, .list_reinterpret, .nominal => try self.copies.append(self.allocator, .{ @backingInt(assign.op.source), @backingInt(assign.target) }),
-                .discriminant, .field, .tag_payload, .tag_payload_struct => {},
-            },
-            .set_local => |assign| try self.copies.append(self.allocator, .{ @backingInt(assign.value), @backingInt(assign.target) }),
-            .str_match => |s| try self.noteDeferredCaptures(store, s.source, store.stmtRow(s.data).steps),
-            .str_match_set => |s| {
-                const arms = store.getStrMatchArms(s.arms);
-                for (0..arms.len) |i| try self.noteDeferredCaptures(store, s.source, GuardedList.at(arms, i).steps);
-            },
-            .init_uninitialized,
-            .dyn,
-            .assign_literal,
-            .assign_call,
-            .assign_call_erased,
-            .assign_packed_erased_fn,
-            .assign_low_level,
-            .assign_list,
-            .assign_struct,
-            .assign_tag,
-            .store_struct,
-            .store_tag,
-            .debug,
-            .expect,
-            .expect_err,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
-            .incref,
-            .decref,
-            .decref_if_initialized,
-            .free,
-            .switch_stmt,
-            .switch_initialized_payload,
-            .join,
-            .jump,
-            .ret,
-            .crash,
-            => {},
+        for (addressed.items) |local| {
+            // A deferred capture never shares storage, so it is its own root.
+            if (calls.isDeferredCapture(local)) continue;
+            try self.candidates.put(self.allocator, @backingInt(calls.storageRoot(local)), {});
         }
         try lir.BodyClone.appendSuccessors(store, &self.work, id, self.allocator);
     }
     if (self.candidates.count() == 0) return;
-
-    // A copy of a deferred capture defers too (`copyLocal`).
-    var changed = self.deferred.count() != 0;
-    while (changed) {
-        changed = false;
-        for (self.copies.items) |copy| {
-            if (self.deferred.contains(copy[0]) and !(try self.deferred.getOrPut(self.allocator, copy[1])).found_existing) changed = true;
-        }
-    }
-    var it = self.deferred.keyIterator();
-    while (it.next()) |local| _ = self.candidates.remove(local.*);
     for (0..params.len) |i| _ = self.candidates.remove(@backingInt(GuardedList.at(params, i)));
-}
-
-fn noteDeferredCaptures(self: *Self, store: *const LirStore, source: LocalId, steps: lir.LIR.StrMatchStepSpan) Allocator.Error!void {
-    try self.deferred.put(self.allocator, @backingInt(source), {});
-    const captures = store.getStrMatchSteps(steps);
-    for (0..captures.len) |i| switch (GuardedList.at(captures, i).capture) {
-        .discard => {},
-        .view => |view| try self.deferred.put(self.allocator, @backingInt(view), {}),
-    };
 }
 
 fn placeMarkers(self: *Self, stack_plan: *const StackPlan, root: CFStmtId) Allocator.Error!void {
@@ -290,6 +232,12 @@ test "issue 12505 projected call arguments extend their storage owner's lifetime
         pub const AppendError = Allocator.Error;
         pub fn storageRoot(self: @This(), local: LocalId) LocalId {
             return if (local == self.view) self.owner else local;
+        }
+        pub fn ownerDefinition(_: @This(), _: LocalId) StackPlan.AliasDefinition {
+            return .reads;
+        }
+        pub fn isDeferredCapture(_: @This(), _: LocalId) bool {
+            return false;
         }
         pub fn appendAddressed(self: @This(), stmt: lir.LIR.CFStmt, out: *std.ArrayList(LocalId)) AppendError!void {
             // Only the consumer passes an address; the producer does not
