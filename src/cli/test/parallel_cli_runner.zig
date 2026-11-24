@@ -831,8 +831,11 @@ const CustomCase = enum {
     glue_zero_sized_values,
     glue_opaque_ownership,
     glue_application_only_requires,
+    glue_rust_include,
+    glue_keyword_names,
     glue_c_tests,
     glue_type_name_plan_tests,
+    glue_rust_tests,
     roc_test_skips_url_dependency_expects,
     issue_12592_inference_reuse_current_tests,
 };
@@ -2872,8 +2875,11 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue regression: a zero-sized value is no parameter, result, or struct member in any generator", .body = .{ .custom = .glue_zero_sized_values } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: a value holding an opaque Roc value has no host release in any generator", .body = .{ .custom = .glue_opaque_ownership } },
     .{ .id = 0, .suite = .glue, .name = "issue 11504: application requirements are not glue roots", .body = .{ .custom = .glue_application_only_requires } },
+    .{ .id = 0, .suite = .glue, .name = "issue 13349: RustGlue output works through include! and is lint-clean in every edition", .body = .{ .custom = .glue_rust_include } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: fields and tags named after host-language keywords compile in every generator", .body = .{ .custom = .glue_keyword_names } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
     .{ .id = 0, .suite = .glue, .name = "TypeNamePlan.roc expect tests pass", .body = .{ .custom = .glue_type_name_plan_tests } },
+    .{ .id = 0, .suite = .glue, .name = "RustGlue.roc expect tests pass", .body = .{ .custom = .glue_rust_tests } },
 };
 
 // Subcommand suite cases
@@ -7564,8 +7570,11 @@ fn runCustomCase(
         .glue_zero_sized_values => customGlueZeroSizedValues(io, allocator, &env, &timer, timeout_ms),
         .glue_opaque_ownership => customGlueOpaqueOwnership(io, allocator, &env, &timer, timeout_ms),
         .glue_application_only_requires => customGlueApplicationOnlyRequires(io, allocator, &env, &timer, timeout_ms),
+        .glue_rust_include => customGlueRustInclude(io, allocator, &env, &timer, timeout_ms),
+        .glue_keyword_names => customGlueKeywordNames(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
         .glue_type_name_plan_tests => customGlueTypeNamePlanTests(io, allocator, &env, &timer, timeout_ms),
+        .glue_rust_tests => customGlueRustTests(io, allocator, &env, &timer, timeout_ms),
         .roc_test_skips_url_dependency_expects => customRocTestSkipsUrlDependencyExpects(io, allocator, &env, &timer, timeout_ms),
         .issue_12592_inference_reuse_current_tests => customIssue12592(io, allocator, &env, &timer, timeout_ms),
     };
@@ -20296,6 +20305,52 @@ fn compileGlueRuntimeRustWasmHost(
     return null;
 }
 
+/// Compile generated Rust glue every way a host consumes it: as a module file
+/// and spliced into a module by `include!`, under each Rust edition, for the
+/// native target with the std helpers and for a 32-bit target without them.
+///
+/// `clippy-driver` runs rustc's own lints together with clippy's default set,
+/// and `--check-cfg` is what cargo passes for every crate, so a passing run
+/// means a cargo-built host with default lints gets no diagnostic from the
+/// generated file. The `include!` crate uses nothing from the file, which is
+/// how every unused generated item shows up.
+fn compileGeneratedRustGlue(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    output_dir: []const u8,
+) ?TestResult {
+    const generated_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rs" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated Rust path: {}", .{err});
+    const include_path = std.fs.path.join(allocator, &.{ output_dir, "include_roc_platform_abi.rs" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Rust include crate path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = include_path, .data = "mod abi {\n    include!(\"roc_platform_abi.rs\");\n}\n" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write Rust include crate: {}", .{err});
+    const metadata_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rmeta" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Rust metadata path: {}", .{err});
+
+    const target_configs = [_][]const []const u8{
+        &.{},
+        &.{ "--target", "wasm32-unknown-unknown", "-C", "target-feature=+simd128", "--cfg", "no_roc_std_helpers" },
+    };
+    for ([_][]const u8{ "--edition=2021", "--edition=2024" }) |edition| {
+        for ([_][]const u8{ generated_path, include_path }) |crate_root| {
+            for (target_configs) |target_config| {
+                const argv = std.mem.concat(allocator, []const u8, &.{
+                    &.{ "clippy-driver", edition, "-D", "warnings", "--check-cfg", "cfg()", "--crate-type", "lib", "--emit=metadata" },
+                    target_config,
+                    &.{ crate_root, "-o", metadata_path },
+                }) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to allocate Rust glue compile arguments: {}", .{err});
+                if (runRawAndCheck(io, allocator, env, timer, timeout_ms, argv, project_root_path, .{ .args = &.{} })) |failure| return failure;
+            }
+        }
+    }
+    return null;
+}
+
 fn customGlueDebug(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
@@ -21694,6 +21749,75 @@ fn customGlueApplicationOnlyRequires(io: std.Io, allocator: Allocator, env: *con
     });
 }
 
+fn customGlueRustInclude(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // Issue 13349: a build script writes the generated file to `OUT_DIR`, and
+    // the host splices it into a module with `include!`, where an inner doc
+    // comment or inner attribute is a syntax error. The file also has to be
+    // free of rustc and default clippy diagnostics under edition 2024.
+    const output_dir = createWorkSubdir(io, allocator, env, "rust-include-glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "--no-cache", "src/glue/src/RustGlue.roc", output_dir, "test/glue/rust-include/main.roc" },
+        .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "unreachable" } },
+    })) |failure| return failure;
+    if (compileGeneratedRustGlue(io, allocator, env, timer, timeout_ms, output_dir)) |failure| return failure;
+
+    // A host that includes the file reaches every public item through the
+    // including module, and its own safe callbacks fit the `RocHost` fields.
+    const host_path = std.fs.path.join(allocator, &.{ output_dir, "include_host.rs" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Rust include host path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = host_path, .data =
+        \\mod abi {
+        \\    include!("roc_platform_abi.rs");
+        \\}
+        \\
+        \\extern "C" fn host_dbg(_host: *mut abi::RocHost, _bytes: *const u8, _len: usize) {}
+        \\
+        \\pub fn run(n: u64) -> (u64, usize) {
+        \\    let mut host = abi::make_roc_host(core::ptr::null_mut());
+        \\    host.roc_dbg = host_dbg;
+        \\    host.roc_expect_failed = abi::DefaultHandlers::roc_expect_failed;
+        \\    let greeting = abi::RocStr::from_str("a string too long to be stored inline", &host);
+        \\    let len = greeting.len();
+        \\    unsafe { greeting.decref(&host) };
+        \\    (unsafe { abi::roc_main(n) }, len)
+        \\}
+        \\
+    }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write Rust include host: {}", .{err});
+    const metadata_path = std.fs.path.join(allocator, &.{ output_dir, "include_host.rmeta" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Rust include host metadata path: {}", .{err});
+    for ([_][]const u8{ "--edition=2021", "--edition=2024" }) |edition| {
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+            "clippy-driver", edition, "-D", "warnings", "--check-cfg", "cfg()", "--crate-type", "lib", "--emit=metadata", host_path, "-o", metadata_path,
+        }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+    }
+    return null;
+}
+
+fn customGlueKeywordNames(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // A Roc field or tag name can be a keyword of the language glue is
+    // generated for, including a keyword only some editions or standards
+    // reserve, one that cannot be escaped as a raw identifier (`crate`,
+    // `self`, `super`, `Self`), and a macro the generated file's own includes
+    // define (`true`, `false`). Each generator spells such a name so that its
+    // output still compiles.
+    return checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/keyword-names/main.roc", .{
+        .zig = &.{"@\"struct\""},
+        .c = &.{ "uint8_t true_field;", "uint8_t false_field;", "uint8_t struct_field;" },
+        .rust = &.{
+            "pub r#gen: u8,",
+            "pub r#try: u8,",
+            "pub r#async: u8,",
+            "pub crate_: u8,",
+            "pub self_: u8,",
+            "pub super_: u8,",
+            "    Self_ = 2,",
+            "pub r#struct: core::mem::ManuallyDrop<",
+        },
+    });
+}
+
 const GlueOutputExpectations = struct {
     zig: []const []const u8,
     c: []const []const u8,
@@ -21793,13 +21917,7 @@ fn compileGlueOutput(
             return null;
         },
         .rust => {
-            const generated_path = std.fs.path.join(allocator, &.{ output_dir, language.generatedFileName() }) catch |err|
-                return customInfraFailure(allocator, timer, "failed to allocate generated glue path: {}", .{err});
-            const test_rlib_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rlib" }) catch |err|
-                return customInfraFailure(allocator, timer, "failed to allocate Rust rlib path: {}", .{err});
-            if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
-                "rustc", "--edition=2021", "-D", "warnings", "--crate-type", "lib", generated_path, "-o", test_rlib_path,
-            }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+            if (compileGeneratedRustGlue(io, allocator, env, timer, timeout_ms, output_dir)) |failure| return failure;
             return null;
         },
     }
@@ -22004,20 +22122,7 @@ fn customGlueRustBoxPayloadAlignment(io: std.Io, allocator: Allocator, env: *con
         return customFailure(allocator, timer, "generated Rust glue decref_box_with does not thread payload_contains_refcounted into free_box_allocation", .{});
     }
 
-    const test_rlib_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rlib" }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate Rust rlib path: {}", .{err});
-    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
-        "rustc",
-        "--edition=2021",
-        "-D",
-        "warnings",
-        "--crate-type",
-        "lib",
-        generated_path,
-        "-o",
-        test_rlib_path,
-    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
-    return null;
+    return compileGeneratedRustGlue(io, allocator, env, timer, timeout_ms, output_dir);
 }
 
 fn customGlueRustProvidedContextCallableOutcome(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
@@ -22074,7 +22179,7 @@ fn customGlueRust(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: 
         "pub unsafe fn decref_box_with",
         "pub unsafe fn allocate_box",
         "pub unsafe fn decref_erased_callable",
-        "pub type RocErasedCallableFn = extern \"C\" fn(*mut RocHost, *mut u8, *const u8, *mut u8, *mut u8, *mut *const c_void);",
+        "pub type RocErasedCallableFn = unsafe extern \"C\" fn(*mut RocHost, *mut u8, *const u8, *mut u8, *mut u8, *mut *const c_void);",
         "pub unsafe fn borrow_payload_",
         "pub unsafe fn take_payload_",
         "core::mem::ManuallyDrop::take",
@@ -22107,22 +22212,7 @@ fn customGlueRust(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: 
         }
     }
 
-    const test_rlib_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rlib" }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate Rust rlib path: {}", .{err});
-    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
-        "rustc",
-        "--edition=2021",
-        "-D",
-        "warnings",
-        "--check-cfg",
-        "cfg()",
-        "--crate-type",
-        "lib",
-        generated_path,
-        "-o",
-        test_rlib_path,
-    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
-    return null;
+    return compileGeneratedRustGlue(io, allocator, env, timer, timeout_ms, output_dir);
 }
 
 fn customGlueZig(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
@@ -22389,22 +22479,7 @@ fn customGlueRustReturnedListElements(io: std.Io, allocator: Allocator, env: *co
         }
     }
 
-    const rlib_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rlib" }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate Rust release rlib path: {}", .{err});
-    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
-        "rustc",
-        "--edition=2021",
-        "-D",
-        "warnings",
-        "--check-cfg",
-        "cfg()",
-        "--crate-type",
-        "lib",
-        generated_path,
-        "-o",
-        rlib_path,
-    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
-    return null;
+    return compileGeneratedRustGlue(io, allocator, env, timer, timeout_ms, output_dir);
 }
 
 fn customGlueZigBoxHelperTest(
@@ -22695,6 +22770,14 @@ fn customGlueCTests(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer
 fn customGlueTypeNamePlanTests(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "test", "--opt=interpreter", "src/glue/platform/TypeNamePlan.roc" },
+        .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "unreachable" } },
+    })) |failure| return failure;
+    return null;
+}
+
+fn customGlueRustTests(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "test", "--opt=interpreter", "src/glue/src/RustGlue.roc" },
         .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "unreachable" } },
     })) |failure| return failure;
     return null;

@@ -22,9 +22,9 @@ type=expr
 )
 ~~~
 # EXPECTED
-UPPERCASE BASE - :0:0:0:0
-UPPERCASE BASE - :0:0:0:0
-UPPERCASE BASE - :0:0:0:0
+UPPERCASE BASE - numbers.md:2:6:2:7
+UPPERCASE BASE - numbers.md:4:6:4:7
+UPPERCASE BASE - numbers.md:6:6:6:7
 INVALID NUMBER - numbers.md:8:5:8:11
 INVALID NUMBER - numbers.md:9:5:9:11
 INVALID NUMBER - numbers.md:10:5:10:10
@@ -35,21 +35,27 @@ INVALID NUMBER - numbers.md:11:5:11:10
 	(report
 		(severity runtime_error)
 		(title "Uppercase Base")
+		(region (start 2 6) (end 2 7))
 		(headline
 			(reflow "Number base prefixes must be lowercase (0x, 0o, 0b)."))
-		(document))
+		(document
+			(source-region (file "numbers.md") (start 2 6) (end 2 7) (annotation error) (line-text "    0X42,"))))
 	(report
 		(severity runtime_error)
 		(title "Uppercase Base")
+		(region (start 4 6) (end 4 7))
 		(headline
 			(reflow "Number base prefixes must be lowercase (0x, 0o, 0b)."))
-		(document))
+		(document
+			(source-region (file "numbers.md") (start 4 6) (end 4 7) (annotation error) (line-text "    0B01,"))))
 	(report
 		(severity runtime_error)
 		(title "Uppercase Base")
+		(region (start 6 6) (end 6 7))
 		(headline
 			(reflow "Number base prefixes must be lowercase (0x, 0o, 0b)."))
-		(document))
+		(document
+			(source-region (file "numbers.md") (start 6 6) (end 6 7) (annotation error) (line-text "    0O42,"))))
 	(report
 		(severity runtime_error)
 		(title "Invalid Number")

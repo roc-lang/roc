@@ -954,11 +954,15 @@ name_to_c_field_ident = |name| {
 	match sanitized {
 		"" => "field"
 		"_" => "field"
+		"alignas" => "alignas_field"
+		"alignof" => "alignof_field"
 		"auto" => "auto_field"
+		"bool" => "bool_field"
 		"break" => "break_field"
 		"case" => "case_field"
 		"char" => "char_field"
 		"const" => "const_field"
+		"constexpr" => "constexpr_field"
 		"continue" => "continue_field"
 		"default" => "default_field"
 		"do" => "do_field"
@@ -966,6 +970,7 @@ name_to_c_field_ident = |name| {
 		"else" => "else_field"
 		"enum" => "enum_field"
 		"extern" => "extern_field"
+		"false" => "false_field"
 		"float" => "float_field"
 		"for" => "for_field"
 		"goto" => "goto_field"
@@ -973,6 +978,7 @@ name_to_c_field_ident = |name| {
 		"inline" => "inline_field"
 		"int" => "int_field"
 		"long" => "long_field"
+		"nullptr" => "nullptr_field"
 		"register" => "register_field"
 		"restrict" => "restrict_field"
 		"return" => "return_field"
@@ -980,9 +986,14 @@ name_to_c_field_ident = |name| {
 		"signed" => "signed_field"
 		"sizeof" => "sizeof_field"
 		"static" => "static_field"
+		"static_assert" => "static_assert_field"
 		"struct" => "struct_field"
 		"switch" => "switch_field"
+		"thread_local" => "thread_local_field"
+		"true" => "true_field"
 		"typedef" => "typedef_field"
+		"typeof" => "typeof_field"
+		"typeof_unqual" => "typeof_unqual_field"
 		"union" => "union_field"
 		"unsigned" => "unsigned_field"
 		"void" => "void_field"
@@ -1000,6 +1011,9 @@ expect name_to_c_field_ident("type") == "type"
 
 ## Checks `name_to_c_field_ident` for this representative case.
 expect name_to_c_field_ident("struct") == "struct_field"
+
+## Checks `name_to_c_field_ident` for this representative case.
+expect name_to_c_field_ident("true") == "true_field"
 
 # =============================================================================
 # Header Generation

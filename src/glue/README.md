@@ -60,6 +60,23 @@ should cover:
 - unsafe or ownership-typed APIs where the host language cannot make invalid
   states impossible
 
+A host uses the generated Rust file either as a module file (`mod abi;`) or by
+splicing it into a module with `include!`, which is how a build script's
+`OUT_DIR` output is consumed. `include!` rejects inner doc comments and inner
+attributes, and a lint level on an item does not cover that item's own `#[cfg]`
+attributes, so the file holds every generated item in one private module that
+carries the lint levels, and re-exports that module's contents. The file
+compiles without any rustc or default clippy diagnostic under editions 2021 and
+2024, including under cargo's `--check-cfg`, whether or not the host uses any
+of it. Callbacks whose callers must hand them valid pointers (the `RocHost`
+fields, erased-callable functions, and box payload teardown) are
+`unsafe extern "C" fn` pointers; a host's safe function coerces to one.
+
+A Roc field or tag whose name is a keyword of the host language, or a macro the
+generated file's own includes define, is spelled so that the generated file
+still compiles: Zig quotes it, Rust uses a raw identifier or a suffixed name
+where raw identifiers are not allowed, and C uses a suffixed name.
+
 Glue generators must consume compiler-emitted metadata such as `RecordRepr`,
 `RecordField`, `TagUnionRepr`, `TagVariant`, `TypeRepr`, and explicit ownership
 plans. They must not reconstruct runtime layout or ownership behavior from
