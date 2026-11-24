@@ -285,9 +285,9 @@ underscore after C constant names), and a ranked name that is still another
 member's own takes the marker again. Every place that names a member asks
 `member_ident` with the declaration's member names, so the declaration, its
 accessors, its constructors, and its refcount helpers agree. A member that is
-a reserved word of the generated language is escaped first (`r#type` and
-`crate_` in Rust, `true_field` in C), and the escaped spelling is what is
-compared.
+a reserved word of the generated language is escaped first (`r#type` in Rust,
+`default_field` in C), and the escaped spelling is what is compared. A Rust
+declaration that holds ranked members carries `#[allow(non_snake_case)]`.
 
 The rule covers the names a generator's own output declares or uses. It does
 not cover the rest of what C's included headers declare (`<arm_neon.h>`
