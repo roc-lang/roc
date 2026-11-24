@@ -468,6 +468,11 @@ pub const MonoLlvmCodeGen = struct {
     local_slots: []LocalSlot = &.{},
     /// The current procedure's local representations (see `ValuePlan`).
     value_plan: ValuePlan,
+    /// The active procedure's one array of `str_from_parts` operands, sized
+    /// for its largest concatenation, once a concatenation needs it. Each
+    /// concatenation's builtin reads its parts before returning, so every
+    /// concatenation in the procedure reuses the same frame bytes.
+    str_parts_slot: ?LlvmBuilder.Value = null,
     /// By local id, the current definition of each SSA local. Rows are set
     /// from the procedure's own plan and cleared from its SSA inventory.
     local_value_storage: std.ArrayList(LocalValue) = .empty,
@@ -3025,11 +3030,13 @@ pub const MonoLlvmCodeGen = struct {
             try self.unpackProcArgs(proc);
         }
         for (self.value_plan.inventory.items) |local| {
-            const place = self.value_plan.place(local);
-            if (place != .view) continue;
+            const view = switch (self.value_plan.place(local)) {
+                .view, .part => |view| view,
+                .slot, .parameter => continue,
+            };
             const sa = self.sizeAlignOf(self.localLayout(local));
             self.local_slots[@backingInt(local)] = .{
-                .ptr = try self.offsetPtr(self.slot(place.view.source).ptr, place.view.offset),
+                .ptr = try self.offsetPtr(self.slot(view.source).ptr, view.offset),
                 .layout_idx = self.localLayout(local),
                 .size = sa.size,
                 .alignment = self.llvmAlignment(sa.alignment),
@@ -3093,6 +3100,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn clearValuePlan(self: *MonoLlvmCodeGen) void {
+        self.str_parts_slot = null;
         for (self.value_plan.ssaLocals()) |local| self.local_values[@backingInt(local)] = .{};
         self.value_plan.clear();
         self.value_journal.clearRetainingCapacity();
@@ -3118,24 +3126,32 @@ pub const MonoLlvmCodeGen = struct {
             return self.proc.tail_group == .none and (sig.tail_args.stored[index] or sig.lowered.args[index] == .indirect);
         }
 
+        /// A whole-value alias of a record, tuple, tag union, string, list, or
+        /// box, or a record or tag payload component of a record or tag union,
+        /// names the bytes of its source. Every emitter of these layouts writes
+        /// a local's slot only at the local's own definition (builtins and
+        /// in-place updates write through the target's address or into heap
+        /// memory), so the planner's single-definition proof covers them all.
         pub fn memoryView(self: PlanOps, assign: @FieldType(lir.LIR.CFStmt, "assign_ref")) ?ValuePlan.View {
             const cg = self.codegen;
             const target_layout = cg.localLayout(assign.target);
             const target = cg.layoutValue(target_layout);
-            if (target.tag != .struct_ and target.tag != .tag_union) return null;
             const source_layout = cg.localLayout(assign.op.source);
             const source = cg.layoutValue(source_layout);
-            if (source.tag != .struct_ and source.tag != .tag_union) return null;
             var field_layout = source_layout;
             var offset: u32 = 0;
             switch (assign.op.kind) {
-                .local, .nominal, .list_reinterpret => {},
+                .local, .nominal, .list_reinterpret => {
+                    if (!wholeValueViewable(target_layout, target) or !wholeValueViewable(source_layout, source)) return null;
+                },
                 .field => {
+                    if (target.tag != .struct_ and target.tag != .tag_union) return null;
                     if (source.tag != .struct_) return null;
                     offset = cg.layouts().getStructFieldOffsetByOriginalIndex(source.getStruct().idx, assign.op.index);
                     field_layout = cg.layouts().getStructFieldLayoutByOriginalIndex(source.getStruct().idx, assign.op.index);
                 },
                 .tag_payload, .tag_payload_struct => {
+                    if (target.tag != .struct_ and target.tag != .tag_union) return null;
                     if (source.tag != .tag_union) return null;
                     field_layout = cg.tagPayloadLayout(source_layout, assign.op.tag_discriminant);
                     const payload = cg.layoutValue(field_layout);
@@ -3151,6 +3167,44 @@ pub const MonoLlvmCodeGen = struct {
             const target_sa = cg.sizeAlignOf(target_layout);
             if (target_sa.size > source_sa.size or target_sa.alignment.toByteUnits() > source_sa.alignment.toByteUnits()) return null;
             return .{ .source = assign.op.source, .offset = offset };
+        }
+
+        fn wholeValueViewable(layout_idx: layout.Idx, value: layout.Layout) bool {
+            if (layout_idx == .str) return true;
+            return switch (value.tag) {
+                .struct_, .tag_union, .list, .list_of_zst, .box, .box_of_zst => true,
+                .scalar, .closure, .erased_callable, .zst, .ptr, .hole, .dynamic => false,
+            };
+        }
+
+        /// Where a record or tag construction stores operand `operand` in its
+        /// target's own slot, when the operand has exactly the stored layout
+        /// and nonzero size: a record field's offset, or a tag payload's 0. A
+        /// box target's bytes live in a fresh heap cell instead.
+        pub fn partOffset(self: PlanOps, target: LocalId, operand: LocalId, construction: ValuePlan.Construction) ?u32 {
+            const cg = self.codegen;
+            if (cg.localDyn(target) != null or cg.localDyn(operand) != null) return null;
+            const target_layout = cg.localLayout(target);
+            const target_value = cg.layoutValue(target_layout);
+            switch (construction) {
+                .field => |index| {
+                    if (target_value.tag != .struct_) return null;
+                    const struct_idx = target_value.getStruct().idx;
+                    const field_layout = cg.layouts().getStructFieldLayoutByOriginalIndex(struct_idx, index);
+                    if (cg.localLayout(operand) != field_layout or cg.layoutDataSize(field_layout) == 0) return null;
+                    return cg.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, index);
+                },
+                .payload => |discriminant| {
+                    if (target_value.tag != .tag_union) return null;
+                    const payload_layout = cg.tagPayloadLayout(target_layout, discriminant);
+                    if (cg.localLayout(operand) != payload_layout or cg.layoutByteSize(payload_layout) == 0) return null;
+                    return 0;
+                },
+            }
+        }
+
+        pub fn slotSize(self: PlanOps, local: LocalId) u32 {
+            return self.codegen.sizeAlignOf(self.codegen.localLayout(local)).size;
         }
 
         /// The prologue reads register pieces and copies packed or erased
@@ -4882,9 +4936,11 @@ pub const MonoLlvmCodeGen = struct {
         return self.inline_everywhere.items.len > @backingInt(proc_id) and self.inline_everywhere.items[@backingInt(proc_id)];
     }
 
-    /// The local addresses passed to out-of-line procedures and explicit RC
-    /// helpers. Procedure calls follow the fast ABI; RC calls follow the same
-    /// scratch-versus-local rule as emission. No ownership is inferred here.
+    /// The local addresses passed to out-of-line procedures, explicit RC
+    /// helpers, and low-level operations. Procedure calls follow the fast
+    /// ABI; RC calls follow the same scratch-versus-local rule as emission;
+    /// low-level operations follow `ValuePlan.lowLevelAccess`. No ownership
+    /// is inferred here.
     const AddressedCallLocals = struct {
         codegen: *MonoLlvmCodeGen,
 
@@ -4892,6 +4948,21 @@ pub const MonoLlvmCodeGen = struct {
 
         pub fn storageRoot(self: AddressedCallLocals, local: LocalId) LocalId {
             return self.codegen.value_plan.storageRoot(local);
+        }
+
+        pub fn ownerDefinition(self: AddressedCallLocals, local: LocalId) lir.StackPlan.AliasDefinition {
+            return self.codegen.value_plan.ownerDefinition(local);
+        }
+
+        pub fn isDeferredCapture(self: AddressedCallLocals, local: LocalId) bool {
+            return self.codegen.value_plan.isDeferredCapture(local);
+        }
+
+        fn appendLowLevelOperand(self: AddressedCallLocals, local: LocalId, access: ValuePlan.Access, out: *std.ArrayList(LocalId)) AppendError!void {
+            const codegen = self.codegen;
+            if (access != .address or codegen.isSsaLocal(local) or codegen.localDyn(local) != null) return;
+            if (codegen.layoutByteSize(codegen.localLayout(local)) == 0) return;
+            try out.append(codegen.allocator, local);
         }
 
         pub fn appendAddressed(self: AddressedCallLocals, stmt: lir.LIR.CFStmt, out: *std.ArrayList(LocalId)) AppendError!void {
@@ -4904,7 +4975,17 @@ pub const MonoLlvmCodeGen = struct {
                     return;
                 },
                 .assign_call => {},
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return,
+                // A builtin reads and writes the operands it takes by address
+                // only during its own statement.
+                .assign_low_level => |assign| {
+                    if (codegen.store.stmtRowOrDefault(assign.extra).dyn_elem_desc) return;
+                    const access = ValuePlan.lowLevelAccess(assign.op);
+                    try self.appendLowLevelOperand(assign.target, access.target(), out);
+                    const args = codegen.store.getLocalSpan(assign.args);
+                    for (0..args.len) |i| try self.appendLowLevelOperand(GuardedList.at(args, i), access.arg(i), out);
+                    return;
+                },
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return,
             }
             const call = stmt.assign_call;
             if (codegen.store.stmtRowOrDefault(call.extra).replaces_frame) return;
@@ -4931,6 +5012,16 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
     };
+
+    /// Whether the storage of `a` and `b` overlaps.
+    fn sharesBytes(self: *MonoLlvmCodeGen, a: LocalId, b: LocalId) bool {
+        const plan = &self.value_plan;
+        if (plan.storageRoot(a) != plan.storageRoot(b)) return false;
+        const a_start = plan.storageOffset(a);
+        const b_start = plan.storageOffset(b);
+        return a_start < b_start + self.sizeAlignOf(self.localLayout(b)).size and
+            b_start < a_start + self.sizeAlignOf(self.localLayout(a)).size;
+    }
 
     fn emitSlotLifetimeMarkers(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) Error!void {
         const markers = self.slot_lifetimes.at(stmt_id);
@@ -5030,10 +5121,10 @@ pub const MonoLlvmCodeGen = struct {
         // A dynamic target receives the callee's result at its own storage.
         const target_storage = if (self.localDyn(target) != null) try self.dynAddress(target) else null;
         if (sig.lowered.ret == .indirect) {
-            // The `sret` pointer is `noalias`: no argument may name its slot.
+            // The `sret` pointer is `noalias`: no argument may name its bytes.
             if (builtin.mode == .debug) {
                 for (0..arg_locals.len) |i| {
-                    if (self.value_plan.storageRoot(GuardedList.at(arg_locals, i)) == self.value_plan.storageRoot(target)) invariant("LLVM codegen invariant violated: call target {d} is also one of its arguments", .{@backingInt(target)});
+                    if (self.sharesBytes(GuardedList.at(arg_locals, i), target)) invariant("LLVM codegen invariant violated: call target {d} is also one of its arguments", .{@backingInt(target)});
                 }
             }
             try param_types.append(self.allocator, ptr_ty);
@@ -5464,8 +5555,10 @@ pub const MonoLlvmCodeGen = struct {
             const field_size = self.layoutDataSize(field_layout);
             if (field_size == 0) continue;
             const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.getStruct().idx, @intCast(i));
-            const dst = try self.offsetPtr(storage.ptr, offset);
-            try self.storeLocalToMemory(dst, field_local, field_size, self.alignmentForLayout(field_layout));
+            if (!self.definedInPlace(field_local, target, offset)) {
+                const dst = try self.offsetPtr(storage.ptr, offset);
+                try self.storeLocalToMemory(dst, field_local, field_size, self.alignmentForLayout(field_layout));
+            }
             written[written_len] = .{ .start = offset, .end = offset + field_size };
             written_len += 1;
         }
@@ -5482,7 +5575,9 @@ pub const MonoLlvmCodeGen = struct {
             const payload_layout = self.tagPayloadLayout(storage.layout_idx, discriminant);
             const payload_size = self.layoutByteSize(payload_layout);
             if (payload_size > 0) {
-                try self.storeLocalToMemory(storage.ptr, payload_local, payload_size, self.alignmentForLayout(payload_layout));
+                if (!self.definedInPlace(payload_local, target, 0)) {
+                    try self.storeLocalToMemory(storage.ptr, payload_local, payload_size, self.alignmentForLayout(payload_layout));
+                }
                 written[written_len] = .{ .start = 0, .end = payload_size };
                 written_len += 1;
             }
@@ -5500,6 +5595,18 @@ pub const MonoLlvmCodeGen = struct {
         try self.zeroUnwritten(storage, written[0..written_len]);
     }
 
+    /// Whether the value plan defined `operand` in place at `offset` in the
+    /// storage of the construction `target` (`ValuePlan.Place.part`), so its
+    /// bytes are already there. The bytes of its layout's padding are not
+    /// part of its value, and the construction zeroes them like any gap.
+    fn definedInPlace(self: *const MonoLlvmCodeGen, operand: LocalId, target: LocalId, offset: u32) bool {
+        const part = switch (self.value_plan.place(operand)) {
+            .part => |part| part,
+            .slot, .parameter, .view => return false,
+        };
+        return part.source == self.value_plan.storageRoot(target) and part.offset == self.value_plan.storageOffset(target) + offset;
+    }
+
     /// A byte range `[start, end)` of an aggregate a constructor writes.
     const ByteRange = struct { start: u32, end: u32 };
 
@@ -5514,6 +5621,7 @@ pub const MonoLlvmCodeGen = struct {
     /// iteration that nothing reads (design.md "LLVM Value Representation").
     fn zeroUnwritten(self: *MonoLlvmCodeGen, storage: AggregateStorage, written: []ByteRange) Error!void {
         const size = storage.size;
+        const storage_alignment: u32 = @intCast(self.alignmentForLayout(storage.layout_idx).toByteUnits() orelse 1);
         std.mem.sortUnstable(ByteRange, written, {}, struct {
             fn lessThan(_: void, a: ByteRange, b: ByteRange) bool {
                 return a.start < b.start;
@@ -5524,10 +5632,32 @@ pub const MonoLlvmCodeGen = struct {
             if (builtin.mode == .debug and (range.start < cursor or range.end > size)) {
                 invariant("LLVM codegen invariant violated: aggregate write [{d}, {d}) overlaps another or leaves its {d}-byte storage", .{ range.start, range.end, size });
             }
-            if (range.start > cursor) try self.zeroBytes(try self.offsetPtr(storage.ptr, cursor), range.start - cursor);
+            if (range.start > cursor) try self.zeroGap(storage.ptr, cursor, range.start - cursor, storage_alignment);
             cursor = range.end;
         }
-        if (size > cursor) try self.zeroBytes(try self.offsetPtr(storage.ptr, cursor), size - cursor);
+        if (size > cursor) try self.zeroGap(storage.ptr, cursor, size - cursor, storage_alignment);
+    }
+
+    /// Zero `len` bytes at `start` in aggregate storage aligned to
+    /// `storage_alignment`. A gap shorter than that alignment is padding
+    /// (between fields, or after a discriminant), and is zeroed by aligned
+    /// integer stores, at most one per power of two below the alignment. A
+    /// constructed aggregate is often copied whole right after (into a list
+    /// element, a box, or a parent), and LLVM's MemCpyOpt rewrites a
+    /// `memset` followed by a copy of the bytes around it by updating its
+    /// memory SSA, which costs time proportional to the block for every such
+    /// pair. A longer gap is a short variant's unused payload bytes, which a
+    /// `memset` zeroes.
+    fn zeroGap(self: *MonoLlvmCodeGen, base: LlvmBuilder.Value, start: u32, len: u32, storage_alignment: u32) Error!void {
+        if (len >= storage_alignment) return self.zeroBytes(try self.offsetPtr(base, start), len);
+        var at = start;
+        const end = start + len;
+        while (at < end) {
+            var width: u32 = 1;
+            while (width * 2 <= end - at and at % (width * 2) == 0) width *= 2;
+            try self.storeRawInt(base, at, intTypeForBytes(@intCast(width)), 0, width);
+            at += width;
+        }
     }
 
     fn emitStoreStruct(self: *MonoLlvmCodeGen, dest: LocalId, struct_layout: layout.Idx, fields: LocalSpan) Error!void {
@@ -8645,11 +8775,27 @@ pub const MonoLlvmCodeGen = struct {
         const small_mask = wip.bin(.@"and", raw_len, builder.intValue(usize_ty, small_bit) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const is_small = wip.icmp(.ne, small_mask, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
 
+        return self.rocStrLenFromWord(str_ptr, raw_len, is_small);
+    }
+
+    /// The length of the RocStr at `str_ptr` whose length word is `raw_len`:
+    /// the small length in its last byte when `is_small`, otherwise the word
+    /// with the small-string bit cleared. That bit is already clear whenever
+    /// the heap arm is taken (it is the word's top bit, so the mask is every
+    /// bit below it), so clearing it changes no value; it states in
+    /// the arm itself that the bit is zero. Otherwise LLVM learns that only
+    /// from the select's condition, and before using it InstCombine proves
+    /// the loaded word is not undef by walking the dominator chain to the
+    /// function entry, once per checked arithmetic operation the length
+    /// reaches, which is quadratic in a long function of such operations.
+    fn rocStrLenFromWord(self: *MonoLlvmCodeGen, str_ptr: LlvmBuilder.Value, raw_len: LlvmBuilder.Value, is_small: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+        const builder, const wip = try self.builderAndWip();
+        const usize_ty = self.ptrSizedIntType();
         const small_len_byte = wip.load(.normal, .i8, try self.offsetPtr(str_ptr, self.rocStrFlagByteOffset()), LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
         const small_len_masked = wip.bin(.@"and", small_len_byte, builder.intValue(.i8, RocStr.small_str_len_mask) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const small_len = try self.coerceScalar(small_len_masked, usize_ty, false);
-
-        return wip.select(.normal, is_small, small_len, raw_len, "") catch return error.OutOfMemory;
+        const heap_len = wip.bin(.@"and", raw_len, builder.intValue(usize_ty, self.rocStrSmallBit() - 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        return wip.select(.normal, is_small, small_len, heap_len, "") catch return error.OutOfMemory;
     }
 
     fn emitStrMatchFailIf(self: *MonoLlvmCodeGen, cond: LlvmBuilder.Value, fail_block: LlvmBuilder.Function.Block.Index) Error!void {
@@ -10273,16 +10419,7 @@ pub const MonoLlvmCodeGen = struct {
 
         const raw_len = try self.loadUsize(try self.offsetPtr(str_ptr, self.rocStrLenOffset()));
         const is_small = try self.emitRocStrLenIsSmall(raw_len);
-        const last_byte = wip.load(
-            .normal,
-            .i8,
-            try self.offsetPtr(str_ptr, self.rocStrFlagByteOffset()),
-            LlvmBuilder.Alignment.fromByteUnits(1),
-            "",
-        ) catch return error.OutOfMemory;
-        const small_len_byte = wip.bin(.@"and", last_byte, builder.intValue(.i8, RocStr.small_str_len_mask) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-        const small_len = try self.coerceScalar(small_len_byte, usize_ty, false);
-        const runtime_len = wip.select(.normal, is_small, small_len, raw_len, "") catch return error.OutOfMemory;
+        const runtime_len = try self.rocStrLenFromWord(str_ptr, raw_len, is_small);
 
         const heap_ptr = try self.loadPointer(str_ptr);
         const data_ptr = wip.select(.normal, is_small, str_ptr, heap_ptr, "") catch return error.OutOfMemory;
@@ -10365,16 +10502,7 @@ pub const MonoLlvmCodeGen = struct {
 
         const raw_len = try self.loadUsize(try self.offsetPtr(str_ptr, self.rocStrLenOffset()));
         const is_small = try self.emitRocStrLenIsSmall(raw_len);
-        const last_byte = wip.load(
-            .normal,
-            .i8,
-            try self.offsetPtr(str_ptr, self.rocStrFlagByteOffset()),
-            LlvmBuilder.Alignment.fromByteUnits(1),
-            "",
-        ) catch return error.OutOfMemory;
-        const small_len_byte = wip.bin(.@"and", last_byte, builder.intValue(.i8, RocStr.small_str_len_mask) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-        const small_len = try self.coerceScalar(small_len_byte, usize_ty, false);
-        const runtime_len = wip.select(.normal, is_small, small_len, raw_len, "") catch return error.OutOfMemory;
+        const runtime_len = try self.rocStrLenFromWord(str_ptr, raw_len, is_small);
 
         const heap_ptr = try self.loadPointer(str_ptr);
         const data_ptr = wip.select(.normal, is_small, str_ptr, heap_ptr, "") catch return error.OutOfMemory;
@@ -10725,7 +10853,14 @@ pub const MonoLlvmCodeGen = struct {
         const count: u32 = @intCast(args.len);
         const str_size: u32 = 3 * self.targetWordSize();
         const alignment = LlvmBuilder.Alignment.fromByteUnits(self.targetWordSize());
-        const array = try self.allocEntryBlockSlot(.i8, count * str_size, alignment, "parts");
+        if (builtin.mode == .debug and count > self.value_plan.max_str_parts) {
+            invariant("LLVM codegen invariant violated: a concatenation of {d} parts exceeds the planned {d}", .{ count, self.value_plan.max_str_parts });
+        }
+        const array = self.str_parts_slot orelse blk: {
+            const slot_ptr = try self.allocEntryBlockSlot(.i8, self.value_plan.max_str_parts * str_size, alignment, "parts");
+            self.str_parts_slot = slot_ptr;
+            break :blk slot_ptr;
+        };
         for (0..count) |i| {
             const arg = GuardedList.at(args, i);
             try self.materializeLocalIfDeferred(arg);
@@ -16345,9 +16480,13 @@ test "aggregate constructors write each byte of their slot once" {
     try builder.print(&ir.writer);
     const function = printedFunction(ir.written(), "roc_proc_0.fast") orelse return error.TestUnexpectedResult;
     // Each constructor zeroes only the 7 bytes its fields, payload, and
-    // discriminant leave unwritten, never its whole slot.
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, function, "call void @llvm.memset"));
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, function, "i8 0, i64 7, i1 false)"));
+    // discriminant leave unwritten, never its whole slot. That padding is
+    // shorter than the aggregate's alignment, so aligned 1-, 2-, and 4-byte
+    // stores zero it.
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, function, "call void @llvm.memset"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, function, "store i8 0, ptr"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, function, "store i16 0, ptr"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, function, "store i32 0, ptr"));
 }
 
 test "issue 12819: large join parameter reads share storage" {
