@@ -13892,7 +13892,7 @@ fn sourceBindingForPattern(env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) 
         const def = env.store.getDef(def_idx);
         if (def.pattern != pattern_idx) continue;
 
-        const expr_tag = std.meta.activeTag(env.store.getExpr(def.expr));
+        const expr_tag = env.store.exprKind(def.expr);
         if (expr_tag == .e_lambda or expr_tag == .e_closure or expr_tag == .e_hosted_lambda) return null;
 
         const pattern_region = env.store.getPatternRegion(def.pattern);

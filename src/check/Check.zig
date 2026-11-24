@@ -2391,7 +2391,7 @@ fn registerTypeDecl(self: *Self, decl_idx: CIR.Statement.Idx) std.mem.Allocator.
     const slot = nodeSlot(decl_idx);
     if (self.type_decl_dense_indices.items[slot].get()) |existing| return existing;
 
-    switch (self.cir.store.getStatement(decl_idx)) {
+    switch (self.cir.store.statementKind(decl_idx)) {
         .s_alias_decl, .s_nominal_decl => {},
         .s_decl,
         .s_var,
@@ -5324,8 +5324,8 @@ fn finalizePromotedLocalProcedures(self: *Self) Allocator.Error!void {
         if (self.erroneous_value_patterns.contains(pattern)) continue;
         if (self.erroneous_value_exprs.contains(candidate.expr)) continue;
         if (self.hoistExprInvalidated(candidate.expr)) continue;
-        const expr = self.cir.store.getExpr(candidate.expr);
-        if (expr != .e_lambda and expr != .e_closure) continue;
+        const expr_kind = self.cir.store.exprKind(candidate.expr);
+        if (expr_kind != .e_lambda and expr_kind != .e_closure) continue;
         try self.promoted_local_procedure_patterns.put(self.gpa, pattern, {});
     }
 
@@ -5402,7 +5402,7 @@ fn finalizeLocalTypeContexts(self: *Self) Allocator.Error!void {
             depth = @min(depth, self.rigidVarCandidateDepth(rigid));
         }
         try self.local_type_contexts.put(gpa, decl, depth);
-        if (self.cir.store.getStatement(decl) != .s_nominal_decl) continue;
+        if (self.cir.store.statementKind(decl) != .s_nominal_decl) continue;
         for (context) |rigid| {
             if (self.isPlatformAbstractTypeBinder(rigid)) continue;
             try self.local_type_context_owners.append(gpa, .{ .decl = decl, .rigid = rigid, .owner = self.rigidVarOwner(rigid) });
@@ -5516,7 +5516,7 @@ fn decideLocalTypeContexts(self: *Self) Allocator.Error!void {
         inputs.deinit(gpa);
     }
     for (self.cir.store.sliceStatements(self.cir.all_statements)) |statement| {
-        switch (self.cir.store.getStatement(statement)) {
+        switch (self.cir.store.statementKind(statement)) {
             .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => {},
             .s_decl,
             .s_var,
@@ -5832,8 +5832,8 @@ fn queueLocalTypeContextBinding(
     if (walked_bindings.contains(pattern)) return;
     const statement = (try self.localDeclForPattern(pattern)) orelse return;
     const local = self.cir.store.getStatement(statement).s_decl;
-    const value = self.cir.store.getExpr(local.expr);
-    if (value != .e_lambda and value != .e_closure and value != .e_lookup_local) return;
+    const value_kind = self.cir.store.exprKind(local.expr);
+    if (value_kind != .e_lambda and value_kind != .e_closure and value_kind != .e_lookup_local) return;
     try walked_bindings.put(self.gpa, pattern, {});
     if (local.anno) |annotation| try work.append(self.gpa, .{ .annotation = annotation });
     try work.append(self.gpa, .{ .expr = local.expr });
@@ -6228,7 +6228,7 @@ fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
         if (!escaped.contains(method_entry.key.owner)) continue;
         if (self.cir.store.nodes.get(method_entry.value.type_node_idx).tag != .statement_decl) continue;
         const method = self.cir.store.getStatement(@fromBackingInt(@intCast(@backingInt(method_entry.value.type_node_idx)))).s_decl;
-        if (self.cir.store.getExpr(method.expr) == .e_runtime_error) continue;
+        if (self.cir.store.exprKind(method.expr) == .e_runtime_error) continue;
         const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
             .region = self.cir.store.getExprRegion(method.expr),
         } });
@@ -6536,7 +6536,7 @@ fn rejectCapturingMethods(self: *Self) Allocator.Error!void {
     var captures = LocalFunctionCaptures{ .checker = self, .methods = &methods };
     defer captures.deinit();
     for (methods.values()) |method| {
-        if (self.cir.store.getExpr(method.expr) == .e_runtime_error) continue;
+        if (self.cir.store.exprKind(method.expr) == .e_runtime_error) continue;
         try captures.collectOuterRefs(method.expr);
     }
     try captures.settle();
@@ -6546,7 +6546,7 @@ fn rejectCapturingMethods(self: *Self) Allocator.Error!void {
     var reported: collections.DenseMapUnmanaged(CIR.Pattern.Idx, void) = .empty;
     defer reported.deinit(self.gpa);
     for (methods.keys(), methods.values()) |pattern, method| {
-        if (self.cir.store.getExpr(method.expr) == .e_runtime_error) {
+        if (self.cir.store.exprKind(method.expr) == .e_runtime_error) {
             try self.markErroneousValuePattern(pattern);
             continue;
         }
@@ -6640,8 +6640,8 @@ const LocalFunctionCaptures = struct {
     /// The right-hand side of a function-like local binding.
     fn functionLikeExpr(self: *LocalFunctionCaptures, pattern: CIR.Pattern.Idx) Allocator.Error!?CIR.Expr.Idx {
         const expr = (try self.checker.localDeclExprForPattern(pattern)) orelse return null;
-        const data = self.checker.cir.store.getExpr(expr);
-        return if (data == .e_lambda or data == .e_closure or data == .e_lookup_local) expr else null;
+        const data_kind = self.checker.cir.store.exprKind(expr);
+        return if (data_kind == .e_lambda or data_kind == .e_closure or data_kind == .e_lookup_local) expr else null;
     }
 
     /// Queue every function-like binding `root`'s subtree refers to from
@@ -7452,7 +7452,7 @@ fn recordHoistPatternProvenance(
     if (!completed.hoist_position.allowsSelection() or !completed.top_level_equivalent) return;
     if (!try self.exprCanBeHoisted(expr, .binding_root)) return;
 
-    switch (self.cir.store.getPattern(pattern)) {
+    switch (self.cir.store.patternKind(pattern)) {
         .assign, .var_assign => {},
         .as,
         .tuple,
@@ -7547,7 +7547,7 @@ fn patternIntroducesValueBinding(self: *const Self, root: CIR.Pattern.Idx) Alloc
 }
 
 fn patternCanOwnHoistedBindingRoot(self: *Self, pattern: CIR.Pattern.Idx) bool {
-    return switch (self.cir.store.getPattern(pattern)) {
+    return switch (self.cir.store.patternKind(pattern)) {
         .assign,
         .var_assign,
         .as,
@@ -7661,7 +7661,7 @@ fn recordHoistPatternExtractionProvenanceHelp(
     defer pending.deinit(self.gpa);
     try pending.append(self.gpa, root);
     while (pending.pop()) |pattern| {
-        switch (self.cir.store.getPattern(pattern)) {
+        switch (self.cir.store.patternKind(pattern)) {
             .assign, .var_assign, .as => {
                 try self.recordHoistPatternExtractionProvenance(pattern, base_expr, scrutinee_pattern, promotion_dependency);
                 if (selection == .immediate) {
@@ -7714,7 +7714,7 @@ fn recordHoistContextualPatternBindings(
     defer pending.deinit(self.gpa);
     try pending.append(self.gpa, root);
     while (pending.pop()) |pattern| {
-        switch (self.cir.store.getPattern(pattern)) {
+        switch (self.cir.store.patternKind(pattern)) {
             .assign, .var_assign, .as => try self.recordHoistContextualBinding(pattern, owner_frame_index),
             .tuple,
             .record_destructure,
@@ -8021,7 +8021,7 @@ fn retirePatternMetadata(self: *Self, root: CIR.Pattern.Idx, diagnostic: ?CIR.Di
         if (self.cir.store.retireLiteralDispatchPlan(ModuleEnv.nodeIdxFrom(pattern_idx))) |plan| {
             try self.retired_literal_dispatch_plans.append(self.gpa, plan);
         }
-        switch (self.cir.store.getPattern(pattern_idx)) {
+        switch (self.cir.store.patternKind(pattern_idx)) {
             .num_literal, .num_from_numeral_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal => {
                 if (diagnostic) |diag| try self.cir.store.replacePatternWithRuntimeError(pattern_idx, diag);
                 continue;
@@ -8357,7 +8357,7 @@ fn firstHoistSelectionTestExpr(checker: *Self) error{ExpectedHoistSelectionTestE
         if (!isExprNodeTag(checker.cir.store.nodes.get(node_idx).tag)) continue;
 
         const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node_idx));
-        switch (checker.cir.store.getExpr(expr_idx)) {
+        switch (checker.cir.store.exprKind(expr_idx)) {
             .e_num,
             .e_num_from_numeral,
             .e_typed_int,
@@ -8825,7 +8825,7 @@ fn exprTypeHoldsFunction(self: *Self, expr: CIR.Expr.Idx) Allocator.Error!bool {
 
 fn stringHasInterpolation(self: *Self, span: CIR.Expr.Span) bool {
     for (self.cir.store.sliceExpr(span)) |segment| {
-        if (self.cir.store.getExpr(segment) != .e_str_segment) return true;
+        if (self.cir.store.exprKind(segment) != .e_str_segment) return true;
     }
     return false;
 }
@@ -11115,7 +11115,7 @@ fn recheckNominalConstructorBackings(self: *Self, env: *Env) std.mem.Allocator.E
         const accepted = self.accepted_nominal_constructor_backings.items[index];
         const lifted = unifier.constructorBackingActualIsNominal(self.types, accepted.actual_backing) orelse continue;
         if (!lifted) continue;
-        if (self.cir.store.getExpr(accepted.expr_idx) == .e_runtime_error) continue;
+        if (self.cir.store.exprKind(accepted.expr_idx) == .e_runtime_error) continue;
         try rejected.append(self.gpa, @intCast(index));
     }
     if (rejected.items.len == 0) return;
@@ -11986,7 +11986,7 @@ fn judgeTupleAccessesAtBoundary(self: *Self, env: *Env) Allocator.Error!void {
         const result = self.types.resolveVar(pending.result_var);
         const owned = result.desc.rank != .generalized and
             @backingInt(result.desc.rank) >= @backingInt(boundary_rank);
-        const resolution: TupleAccessResolution = if (!owned or self.hoistExprInvalidated(pending.expr) or self.cir.store.getExpr(pending.expr) == .e_runtime_error) .pending else resolution: {
+        const resolution: TupleAccessResolution = if (!owned or self.hoistExprInvalidated(pending.expr) or self.cir.store.exprKind(pending.expr) == .e_runtime_error) .pending else resolution: {
             var receiver = self.types.resolveVar(pending.tuple_var);
             while (receiver.desc.content == .alias) {
                 receiver = self.types.resolveVar(self.types.getAliasBackingVar(receiver.desc.content.alias));
@@ -12029,7 +12029,7 @@ fn resolvePendingTupleAccesses(
     while (read_i < self.pending_tuple_accesses.items.len) : (read_i += 1) {
         const pending = self.pending_tuple_accesses.items[read_i];
         // Another error may already have discarded this access's subtree.
-        if (self.hoistExprInvalidated(pending.expr) or self.cir.store.getExpr(pending.expr) == .e_runtime_error) continue;
+        if (self.hoistExprInvalidated(pending.expr) or self.cir.store.exprKind(pending.expr) == .e_runtime_error) continue;
         switch (try self.resolvePendingTupleAccess(pending, env, final)) {
             .resolved => continue,
             .rejected => {
@@ -12048,7 +12048,7 @@ fn resolvePendingTupleAccesses(
     var work: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
     defer work.deinit(self.gpa);
     for (rejected.items) |expr| {
-        if (self.hoistExprInvalidated(expr) or self.cir.store.getExpr(expr) == .e_runtime_error) continue;
+        if (self.hoistExprInvalidated(expr) or self.cir.store.exprKind(expr) == .e_runtime_error) continue;
         const diagnostic = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
             .region = self.cir.store.getExprRegion(expr),
         } });
@@ -13891,7 +13891,7 @@ fn recordSharedSchemeUse(
 /// Add or remove every binder of a local value declaration's pattern in
 /// `local_value_processing_ptrns`.
 fn setLocalValueBindersProcessing(self: *Self, pattern: CIR.Pattern.Idx, processing: bool) std.mem.Allocator.Error!void {
-    if (self.cir.store.getPattern(pattern) == .assign) {
+    if (self.cir.store.patternKind(pattern) == .assign) {
         if (processing) {
             try self.local_value_processing_ptrns.put(self.gpa, pattern, {});
         } else {
@@ -16201,7 +16201,7 @@ fn recordErroneousNodes(self: *Self) Allocator.Error!void {
             try self.exprIsErroneous(&errors, @fromBackingInt(raw_node))
         else if (isPatternNodeTag(tag)) blk: {
             const pattern_idx: CIR.Pattern.Idx = @fromBackingInt(raw_node);
-            if (store.getPattern(pattern_idx) == .runtime_error) break :blk true;
+            if (store.patternKind(pattern_idx) == .runtime_error) break :blk true;
             while (owner_cursor < owners.len and owners[owner_cursor].node < raw_node) owner_cursor += 1;
             // A def's own pattern is checked through the def's variable.
             const def_pattern_owner: ?CIR.Def.Idx = if (owner_cursor < owners.len and owners[owner_cursor].node == raw_node and
@@ -16209,7 +16209,7 @@ fn recordErroneousNodes(self: *Self) Allocator.Error!void {
             const type_var = if (def_pattern_owner) |def_idx| ModuleEnv.varFrom(def_idx) else ModuleEnv.varFrom(pattern_idx);
             break :blk try errors.contains(type_var);
         } else if (isStatementNodeTag(tag))
-            store.getStatement(@fromBackingInt(raw_node)) == .s_runtime_error
+            store.statementKind(@fromBackingInt(raw_node)) == .s_runtime_error
         else
             false;
         if (node_erroneous) try erroneous.append(self.gpa, raw_node);
@@ -16846,7 +16846,7 @@ fn hoistedRootsReachingRejectedCode(self: *Self) Allocator.Error![]bool {
                 }
             }
             if (self.rejected_instantiation_exprs.contains(expr) or self.hoistExprInvalidated(expr) or
-                self.cir.store.getExpr(expr) == .e_runtime_error)
+                self.cir.store.exprKind(expr) == .e_runtime_error)
             {
                 reaches[region] = true;
                 break;
@@ -16943,7 +16943,7 @@ fn hoistedRootIsIntrinsicallyKept(
     }
 
     root.value_kind = .data_constant;
-    if (self.cir.store.getExpr(root.expr) == .e_runtime_error) return true;
+    if (self.cir.store.exprKind(root.expr) == .e_runtime_error) return true;
     if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(root.expr))) return false;
     if (!try self.hoistedRootTypeIsConcrete(concreteness, .data_constant, type_var)) return false;
     root.value_kind = .proven_data_constant;
@@ -16966,7 +16966,7 @@ fn debugVerifyKeptHoistedRootDependencies(self: *Self, concreteness: *HoistedTyp
     for (self.selected_hoisted_roots.items, 0..) |root, i| {
         if (root.body == .pattern_error) {
             std.debug.assert(root.pattern != .none);
-            std.debug.assert(self.cir.store.getExpr(root.expr) == .e_runtime_error);
+            std.debug.assert(self.cir.store.exprKind(root.expr) == .e_runtime_error);
             continue;
         }
         // A valueless binding's root is evaluated like the top-level
@@ -18498,7 +18498,7 @@ fn appendHoistedDependencyPatternBinders(
     defer pending.deinit(self.gpa);
     try pending.append(self.gpa, root);
     while (pending.pop()) |pattern| {
-        switch (self.cir.store.getPattern(pattern)) {
+        switch (self.cir.store.patternKind(pattern)) {
             .assign, .var_assign, .as => try context.append(self.gpa, pattern, kind),
             .tuple,
             .record_destructure,
@@ -18605,7 +18605,7 @@ fn markRetiredPatternBindersErroneous(self: *Self, pattern_idx: CIR.Pattern.Idx)
     }
     try self.pushCirPatternChildren(&pending, source);
     while (pending.pop()) |child| {
-        switch (self.cir.store.getPattern(child)) {
+        switch (self.cir.store.patternKind(child)) {
             .assign, .var_assign, .as => {
                 try self.markErroneousValuePattern(child);
                 try self.markErroneous(ModuleEnv.varFrom(child));
@@ -19248,7 +19248,7 @@ fn replaceExprWithRuntimeErrorAfterOperands(
     const recorded = self.retired_operand_pool.items[sequence.start..][0..sequence.len];
     var kept_len: usize = 0;
     for (recorded) |operand| {
-        const retired = self.cir.store.getExpr(operand) == .e_runtime_error or self.erroneous_value_exprs.contains(operand);
+        const retired = self.cir.store.exprKind(operand) == .e_runtime_error or self.erroneous_value_exprs.contains(operand);
         if (!retired) {
             self.var_set.clearRetainingCapacity();
             if (try self.varContainsError(ModuleEnv.varFrom(operand), &self.var_set)) break;
@@ -19258,7 +19258,7 @@ fn replaceExprWithRuntimeErrorAfterOperands(
     // Evaluating only an erroneous operand that evaluates nothing itself is
     // the crash alone.
     const evaluates_nothing = kept_len == 0 or (kept_len == 1 and
-        (self.cir.store.getExpr(recorded[0]) == .e_runtime_error or self.erroneous_value_exprs.contains(recorded[0])) and
+        (self.cir.store.exprKind(recorded[0]) == .e_runtime_error or self.erroneous_value_exprs.contains(recorded[0])) and
         !self.retired_operand_sequences.contains(recorded[0]));
     if (evaluates_nothing) return try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
     var kept_operands = self.kept_operands_scratch;
@@ -19403,7 +19403,7 @@ fn collectLiteralFailureOccurrences(
 /// (`rejectPatternFailureOwner`).
 fn rejectLiteralFailureOccurrences(self: *Self, occurrences: *const LiteralFailureOccurrences) Allocator.Error!void {
     for (occurrences.exprs.items) |expr_idx| {
-        if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) continue;
+        if (self.cir.store.exprKind(expr_idx) == .e_runtime_error) continue;
         const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
             .region = self.cir.store.getExprRegion(expr_idx),
         } });
@@ -19624,9 +19624,9 @@ fn poisonConstraintFailureSource(
     explicit_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
     const expr_idx = explicit_expr orelse self.constraintSourceExpr(dispatcher_var, constraint) orelse return;
-    const expr = self.cir.store.getExpr(expr_idx);
-    if (expr == .e_runtime_error) return;
-    if (expr == .e_lambda or expr == .e_closure) {
+    const expr_kind = self.cir.store.exprKind(expr_idx);
+    if (expr_kind == .e_runtime_error) return;
+    if (expr_kind == .e_lambda or expr_kind == .e_closure) {
         try self.markErroneousValueExpr(expr_idx);
         return;
     }
@@ -19718,7 +19718,7 @@ fn replaceRejectedOperationWithRuntimeError(
     expr_idx: CIR.Expr.Idx,
     diagnostic_idx: CIR.Diagnostic.Idx,
 ) Allocator.Error!void {
-    const dispatches_on_operands = switch (self.cir.store.getExpr(expr_idx)) {
+    const dispatches_on_operands = switch (self.cir.store.exprKind(expr_idx)) {
         .e_method_call,
         .e_dispatch_call,
         .e_type_method_call,
@@ -20312,7 +20312,7 @@ fn findStaticDispatchUseForConstraint(
 ) Allocator.Error!?StaticDispatchUse {
     const method_name = constraint.fn_name;
     const expr_idx = constraintIntroExpr(constraint) orelse return null;
-    if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) return null;
+    if (self.cir.store.exprKind(expr_idx) == .e_runtime_error) return null;
 
     const expr = self.cir.store.getExpr(expr_idx);
     if (expr != .e_dispatch_call and expr != .e_type_dispatch_call) return null;
@@ -20448,7 +20448,7 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
         if (verdict.instantiation_expr.get()) |inst_expr| {
             primary = self.cir.store.getExprRegion(inst_expr);
             runtime_error_inserted = true;
-            if (self.cir.store.getExpr(inst_expr) != .e_runtime_error) {
+            if (self.cir.store.exprKind(inst_expr) != .e_runtime_error) {
                 const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
                     .region = primary.?,
                 } });
@@ -20468,7 +20468,7 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
             if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
 
             const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node_idx));
-            if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) continue;
+            if (self.cir.store.exprKind(expr_idx) == .e_runtime_error) continue;
             const expr = self.cir.store.getExpr(expr_idx);
             if (expr != .e_call) continue;
             const call = expr.e_call;
@@ -20826,7 +20826,7 @@ fn applyCreationAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
                 }
                 if (self.staticDispatchConstraintIsInactive(constraint)) continue;
                 const site = constraintIntroExpr(constraint) orelse continue;
-                if (self.cir.store.getExpr(site) == .e_runtime_error) continue;
+                if (self.cir.store.exprKind(site) == .e_runtime_error) continue;
                 if (!try self.relationIsVoid(.of(.operands, site, 0), &settled)) continue;
                 // Retire the particular use, not its receiver or every
                 // obligation on the shared type variable. Evaluating the
@@ -20848,7 +20848,7 @@ fn applyCreationAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
         if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
 
         const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node_idx));
-        if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) continue;
+        if (self.cir.store.exprKind(expr_idx) == .e_runtime_error) continue;
 
         const resolved = self.types.resolveVar(ModuleEnv.varFrom(expr_idx));
         if (!self.ambiguity_verdict_vars.contains(resolved.var_)) continue;
@@ -21131,7 +21131,7 @@ fn finalizeExpectEffectSlots(self: *Self) Allocator.Error!void {
         // checked runtime error every checker-owned problem leaves behind.
         // Effects are known only now, after the general erroneous-expression
         // sweep, so the replacement happens here.
-        if (self.cir.store.getExpr(slot.body) == .e_runtime_error) continue;
+        if (self.cir.store.exprKind(slot.body) == .e_runtime_error) continue;
         const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
             .region = self.cir.store.getExprRegion(slot.body),
         } });
@@ -21263,7 +21263,7 @@ fn localProcedureTargetPattern(self: *Self, env: *const ModuleEnv, binding: Modu
     if (env != self.cir) return null;
     if (self.cir.store.nodes.get(binding.type_node_idx).tag != .statement_decl) return null;
     const decl = self.cir.store.getStatement(@fromBackingInt(@intCast(@backingInt(binding.type_node_idx)))).s_decl;
-    if (self.cir.store.getExpr(decl.expr) == .e_runtime_error) return decl.pattern;
+    if (self.cir.store.exprKind(decl.expr) == .e_runtime_error) return decl.pattern;
     var pattern = decl.pattern;
     var expr = decl.expr;
     // Each hop follows one local binding, and a chain can visit each at most
@@ -21620,8 +21620,8 @@ fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
 
         if (target) |resolved| {
             const def = resolved.module.store.getDef(resolved.def);
-            const expr = resolved.module.store.getExpr(def.expr);
-            if (expr != .e_hosted_lambda) {
+            const expr_kind = resolved.module.store.exprKind(def.expr);
+            if (expr_kind != .e_hosted_lambda) {
                 const display_name = try hostedEntryDisplayName(self.gpa, self.cir, entry);
                 defer self.gpa.free(display_name);
                 const name_idx = try self.problems.putExtraString(display_name);
@@ -21893,7 +21893,7 @@ fn bindPlatformAbstractTypes(self: *Self, env: *Env) std.mem.Allocator.Error!voi
         const alias = self.cir.store.getStatement(binder.alias_stmt_idx).s_alias_decl;
         const stmt_var = ModuleEnv.varFrom(binder.alias_stmt_idx);
         const rhs_var = ModuleEnv.varFrom(alias.anno);
-        std.debug.assert(self.cir.store.getTypeAnno(alias.anno) == .rigid_var);
+        std.debug.assert(self.cir.store.typeAnnoKind(alias.anno) == .rigid_var);
         std.debug.assert(self.cir.store.getTypeHeader(alias.header).args.span.len == 0);
         try self.setVarRank(stmt_var, env);
         try self.setVarRank(rhs_var, env);
@@ -22238,7 +22238,7 @@ fn collectHostBoundaryAnnotations(self: *Self) std.mem.Allocator.Error!void {
 fn recordHostBoundaryAnnotationIfHosted(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
     const def = self.cir.store.getDef(def_idx);
     const annotation_idx = def.annotation orelse return;
-    if (self.cir.store.getExpr(def.expr) != .e_hosted_lambda) return;
+    if (self.cir.store.exprKind(def.expr) != .e_hosted_lambda) return;
     try self.host_boundary_annotations.put(self.gpa, annotation_idx, {});
 }
 
@@ -22881,7 +22881,7 @@ fn annotationIsPredeclarableScheme(
     pattern_idx: CIR.Pattern.Idx,
     annotation_idx: CIR.Annotation.Idx,
 ) bool {
-    if (self.cir.store.getPattern(pattern_idx) != .assign) return false;
+    if (self.cir.store.patternKind(pattern_idx) != .assign) return false;
     if (self.rejected_value_annotations.contains(pattern_idx)) return false;
     return !self.cir.store.getAnnotation(annotation_idx).contains_underscore;
 }
@@ -24006,7 +24006,7 @@ fn collectUnderscoreAnnoVars(
     defer nodes.deinit(stack_allocator);
     try self.collectAnnotationTypeAnnos(annotation_idx, &nodes, stack_allocator);
     for (nodes.items) |anno_idx| {
-        if (self.cir.store.getTypeAnno(anno_idx) == .underscore) {
+        if (self.cir.store.typeAnnoKind(anno_idx) == .underscore) {
             try out.append(self.gpa, ModuleEnv.varFrom(anno_idx));
         }
     }
@@ -27927,16 +27927,16 @@ fn rejectWhereAliasInTypePosition(
     _: *Env,
 ) std.mem.Allocator.Error!bool {
     const names_where_alias = switch (base_ref) {
-        .local => |local| self.cir.store.getStatement(local.decl_idx) == .s_where_alias_decl,
+        .local => |local| self.cir.store.statementKind(local.decl_idx) == .s_where_alias_decl,
         .external => |ext| blk: {
             const ext_ref = (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) orelse break :blk false;
             const stmt: CIR.Statement.Idx = @fromBackingInt(@intCast(@backingInt(ext_ref.other_cir_node_idx)));
-            break :blk ext_ref.other_cir.store.getStatement(stmt) == .s_where_alias_decl;
+            break :blk ext_ref.other_cir.store.statementKind(stmt) == .s_where_alias_decl;
         },
         .external_identity => |ext| blk: {
             const ext_ref = (try self.resolveVarFromExternalIdentity(ext.module_identity, ext.target_node_idx)) orelse break :blk false;
             const stmt: CIR.Statement.Idx = @fromBackingInt(@intCast(@backingInt(ext_ref.other_cir_node_idx)));
-            break :blk ext_ref.other_cir.store.getStatement(stmt) == .s_where_alias_decl;
+            break :blk ext_ref.other_cir.store.statementKind(stmt) == .s_where_alias_decl;
         },
         .builtin, .pending => false,
     };
@@ -28574,8 +28574,8 @@ fn finishTypeDeclGeneration(self: *Self, decl_idx: CIR.Statement.Idx) Allocator.
 fn aliasBodyNamesNominalShell(self: *const Self, decl_idx: CIR.Statement.Idx) bool {
     const frames = self.type_decl_generation_frames.items;
     if (frames.len == 0) return false;
-    if (self.cir.store.getStatement(frames[frames.len - 1].decl) != .s_alias_decl) return false;
-    if (self.cir.store.getStatement(decl_idx) != .s_nominal_decl) return false;
+    if (self.cir.store.statementKind(frames[frames.len - 1].decl) != .s_alias_decl) return false;
+    if (self.cir.store.statementKind(decl_idx) != .s_nominal_decl) return false;
     return self.predeclaredNominalArgs(ModuleEnv.varFrom(decl_idx)) != null;
 }
 
@@ -28605,7 +28605,7 @@ fn beginTypeGen(self: *Self, frames: *std.ArrayList(TypeGenFrame), request: Type
             switch (self.typeDeclGenerationState(decl_idx)) {
                 .generated => return .{ .decl = true },
                 .generating => return .{
-                    .decl = switch (self.cir.store.getStatement(decl_idx)) {
+                    .decl = switch (self.cir.store.statementKind(decl_idx)) {
                         // Neither aliases nor where aliases can refer to themselves, so
                         // re-entering one means the declaration is cyclic.
                         .s_alias_decl, .s_where_alias_decl => false,
@@ -28959,7 +28959,7 @@ fn beginAliasDeclBody(
     const predeclared_header_vars = self.predeclaredAliasArgs(decl_var);
     const header_vars = if (predeclared_header_vars) |vars| vars else try self.generateHeaderVars(header_args, env);
     for (header_args) |header_arg_idx| {
-        if (self.cir.store.getTypeAnno(header_arg_idx) == .malformed) {
+        if (self.cir.store.typeAnnoKind(header_arg_idx) == .malformed) {
             self.markTypeDeclInvalid(decl_idx);
         }
     }
@@ -29071,7 +29071,7 @@ fn beginNominalDeclBody(
     const predeclared_header_vars = self.predeclaredNominalArgs(decl_var);
     const header_vars = if (predeclared_header_vars) |vars| vars[0..header_args.len] else try self.generateHeaderVars(header_args, env);
     for (header_args) |header_arg_idx| {
-        if (self.cir.store.getTypeAnno(header_arg_idx) == .malformed) {
+        if (self.cir.store.typeAnnoKind(header_arg_idx) == .malformed) {
             self.markTypeDeclInvalid(decl_idx);
         }
     }
@@ -30250,7 +30250,7 @@ fn whereAliasLocalDecl(self: *Self, alias_anno_idx: CIR.TypeAnno.Idx) ?CIR.State
         .local => |local| local,
         .external, .external_identity, .builtin, .pending => return null,
     };
-    return switch (self.cir.store.getStatement(local.decl_idx)) {
+    return switch (self.cir.store.statementKind(local.decl_idx)) {
         .s_where_alias_decl => local.decl_idx,
         .s_decl,
         .s_var,
@@ -31051,7 +31051,7 @@ fn poisonRejectedPatternBinders(self: *Self, pattern_idx: CIR.Pattern.Idx) Alloc
     defer bindings.deinit(self.gpa);
     try self.collectPatternBindings(pattern_idx, &bindings);
     for (bindings.items) |binding| {
-        if (self.cir.store.getPattern(binding.pattern_idx) == .var_assign) continue;
+        if (self.cir.store.patternKind(binding.pattern_idx) == .var_assign) continue;
         try self.markErroneousValuePattern(binding.pattern_idx);
         try self.markErroneous(ModuleEnv.varFrom(binding.pattern_idx));
     }
@@ -33848,10 +33848,10 @@ fn resumeStrCheck(self: *Self, task: *ExprTask, state: *StrCheck, env: *Env, chi
 
     if (child_done) {
         const seg_expr_idx = segment_expr_idx_slice[state.index];
-        const seg_expr = self.cir.store.getExpr(seg_expr_idx);
+        const seg_expr_kind = self.cir.store.exprKind(seg_expr_idx);
 
         // String literal segments are already Str type
-        if (seg_expr != .e_str_segment) {
+        if (seg_expr_kind != .e_str_segment) {
             state.has_interpolation = true;
             const seg_var = ModuleEnv.varFrom(seg_expr_idx);
 
@@ -34864,9 +34864,9 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
             // its annotation and lambda are checked, so references they
             // make to an enclosing function's type variables or type
             // declarations mark it contextual.
-            const decl_rhs = self.cir.store.getExpr(decl_stmt.expr);
-            const is_local_procedure_candidate = self.cir.store.getPattern(decl_stmt.pattern) == .assign and
-                (decl_rhs == .e_lambda or decl_rhs == .e_closure);
+            const decl_rhs_kind = self.cir.store.exprKind(decl_stmt.expr);
+            const is_local_procedure_candidate = self.cir.store.patternKind(decl_stmt.pattern) == .assign and
+                (decl_rhs_kind == .e_lambda or decl_rhs_kind == .e_closure);
             if (is_local_procedure_candidate) {
                 const candidate = try self.local_procedure_candidates.getOrPut(self.gpa, decl_stmt.pattern);
                 if (!candidate.found_existing) candidate.value_ptr.* = .{ .expr = decl_stmt.expr };
@@ -34881,7 +34881,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
             // looks up from an enclosing annotation stays shared by the
             // scheme (`predeclareAnnotationSchemeHelp`).
             const decl_predeclared = decl_is_fn and decl_stmt.anno != null and
-                self.cir.store.getPattern(decl_stmt.pattern) == .assign and
+                self.cir.store.patternKind(decl_stmt.pattern) == .assign and
                 !self.cir.store.getAnnotation(decl_stmt.anno.?).contains_underscore;
 
             // A local function def is a binding group of one: its pattern
@@ -35183,7 +35183,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 if (applied_annotation == null) try self.markErroneousValuePattern(decl_stmt.pattern);
                 // Destructuring an erroneous value binds nothing, so every
                 // name the pattern introduces is erroneous, annotated or not.
-                if (self.cir.store.getPattern(decl_stmt.pattern) != .assign) try self.markPatternBindingsErroneous(decl_stmt.pattern);
+                if (self.cir.store.patternKind(decl_stmt.pattern) != .assign) try self.markPatternBindingsErroneous(decl_stmt.pattern);
             } else if (!decl.decl_is_fn) {
                 try self.recordBinderSources(decl_stmt.pattern, decl_stmt.expr, applied_annotation != null);
             }
@@ -35194,8 +35194,8 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             // A record-destructure binding gets a dedicated context so the
             // report can suggest `field: _` or `..` when the pattern is too
             // narrow for the value (the pattern is the first/expected arg).
-            const decl_pattern = self.cir.store.getPattern(decl_stmt.pattern);
-            const decl_pattern_result = if (decl_pattern == .record_destructure)
+            const decl_pattern_kind = self.cir.store.patternKind(decl_stmt.pattern);
+            const decl_pattern_result = if (decl_pattern_kind == .record_destructure)
                 try self.unifyInContext(decl_pattern_var, decl_expr_var, env, .record_destructure)
             else
                 try self.unify(decl_pattern_var, decl_expr_var, env);
@@ -35207,7 +35207,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             }
 
             if (decl_pattern_result.isEstablished()) {
-                if (decl_pattern != .assign) {
+                if (decl_pattern_kind != .assign) {
                     try self.bindSchemeAliasDestructs(decl_expr_var, ModuleEnv.nodeIdxFrom(stmt_idx), env);
                 }
                 const needs_comptime_validation = try self.checkDestructureExhaustiveness(decl_stmt.pattern, decl_stmt.expr, decl_expr_var, env, stmt_region);
@@ -35526,7 +35526,7 @@ fn probeCanUseAs(self: *Self, expected_var: Var, actual_var: Var) std.mem.Alloca
 fn assertLoopBodyHasNoFinalExpr(self: *const Self, body: CIR.Expr.Idx) void {
     const body_expr = self.cir.store.getExpr(body);
     const final_is_empty_record = body_expr == .e_block and
-        self.cir.store.getExpr(body_expr.e_block.final_expr) == .e_empty_record;
+        self.cir.store.exprKind(body_expr.e_block.final_expr) == .e_empty_record;
     if (!final_is_empty_record) base.invariant("check invariant violated: loop body has a final expression", .{});
 }
 
@@ -36853,7 +36853,7 @@ fn resumeMethodCallCheck(self: *Self, task: *ExprTask, state: *MethodCallCheck, 
                 );
                 try self.checkStaticDispatchConstraints(env, false);
                 state.eager_constraint_fn_var = constraint_fn_var;
-                if (arg_expr_idxs.len != 0 and self.cir.store.getExpr(expr_idx) != .e_runtime_error) {
+                if (arg_expr_idxs.len != 0 and self.cir.store.exprKind(expr_idx) != .e_runtime_error) {
                     try self.seedCallResultFromContext(frame.nested_expected, state.result_var, env);
                 }
             }
@@ -36895,7 +36895,7 @@ fn resumeMethodCallCheck(self: *Self, task: *ExprTask, state: *MethodCallCheck, 
         did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, arg_expr_idxs) or did_err;
         // A method the drain could not find has already retired this call
         // to a runtime error; that node must stay.
-        if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) did_err = true;
+        if (self.cir.store.exprKind(expr_idx) == .e_runtime_error) did_err = true;
         if (!did_err) {
             for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
                 // As for a direct call's arguments, a rejected argument
@@ -38719,7 +38719,7 @@ fn annotationOnlyValueDef(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) bo
 /// no dependencies, so its annotation type is final wherever it is referenced.
 fn hostedDeclarationIsNotEffectful(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) bool {
     const def = module_env.store.getDef(def_idx);
-    if (module_env.store.getExpr(def.expr) != .e_hosted_lambda) return false;
+    if (module_env.store.exprKind(def.expr) != .e_hosted_lambda) return false;
     const annotation_idx = def.annotation orelse return false;
     return !hostedAnnotationIsEffectful(module_env, annotation_idx);
 }
@@ -38795,7 +38795,7 @@ const AnnoVars = struct {
 /// generalization only applies to function defs).
 fn isFunctionDef(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
     if (expr == .e_closure) {
-        std.debug.assert(store.getExpr(expr.e_closure.lambda_idx) == .e_lambda);
+        std.debug.assert(store.exprKind(expr.e_closure.lambda_idx) == .e_lambda);
         return true;
     }
     return expr == .e_lambda or
@@ -38880,14 +38880,14 @@ fn rejectValueAnnotation(
     const type_region = self.cir.store.getTypeAnnoRegion(annotation.anno);
     const where_region = self.annotationWhereRegion(annotation, type_region);
     _ = try self.problems.appendProblem(.{ .polymorphic_value_annotation = .{
-        .name_region = if (self.cir.store.getPattern(pattern_idx) == .assign) self.cir.store.getPatternRegion(pattern_idx) else null,
+        .name_region = if (self.cir.store.patternKind(pattern_idx) == .assign) self.cir.store.getPatternRegion(pattern_idx) else null,
         .region = .{
             .start = (annotation.name_region orelse type_region).start,
             .end = (where_region orelse type_region).end,
         },
         .thunk_result = try self.thunkResultText(annotation.anno, type_region),
         .where_region = where_region,
-        .type_is_function = self.cir.store.getTypeAnno(annotation.anno) == .@"fn",
+        .type_is_function = self.cir.store.typeAnnoKind(annotation.anno) == .@"fn",
         .rhs_region = self.cir.store.getExprRegion(rhs),
         .stub_arity = self.functionStubArity(annotation.anno, rhs),
         .writes_open_extension = written.open_extension,
@@ -39357,7 +39357,7 @@ fn closeFreePayloadVars(self: *Self, unions: []const Var, excluded: []const exha
     // A platform requirement's value is the application's, so each use's
     // instance of its type is chosen there.
     for (self.nonlocal_value_lookups.items) |lookup| {
-        if (self.cir.store.getExpr(lookup) == .e_lookup_required) try signature_vars.append(self.gpa, ModuleEnv.varFrom(lookup));
+        if (self.cir.store.exprKind(lookup) == .e_lookup_required) try signature_vars.append(self.gpa, ModuleEnv.varFrom(lookup));
     }
     if (self.check_order) |check_order| {
         for (self.group_stack.items) |group| {
@@ -39719,7 +39719,7 @@ fn traceHostedErrorOrigin(self: *Self, condition: CIR.Expr.Idx, called: bool, me
             .e_lookup_local, .e_lookup_external, .e_lookup_associated_resolved => {
                 if (expr == .e_lookup_local) {
                     const pattern = expr.e_lookup_local.pattern_idx;
-                    if (self.cir.store.getPattern(pattern) == .assign) {
+                    if (self.cir.store.patternKind(pattern) == .assign) {
                         if (try self.localDeclExprForPattern(pattern)) |value| {
                             position.expr = value;
                             continue;
@@ -42620,7 +42620,7 @@ fn poisonStrictValueCycleDef(self: *Self, def_idx: CIR.Def.Idx, ident: Ident.Idx
         .ident = ident,
         .region = self.cir.store.getPatternRegion(def.pattern),
     } });
-    if (self.cir.store.getExpr(def.expr) != .e_runtime_error) {
+    if (self.cir.store.exprKind(def.expr) != .e_runtime_error) {
         try self.replaceExprWithRuntimeError(def.expr, diagnostic_idx);
     }
     switch (stage) {
@@ -43265,7 +43265,7 @@ fn markPatternBindingsErroneous(self: *Self, pattern_idx: CIR.Pattern.Idx) Alloc
 /// binds nothing once that source is erroneous (`binder_source_exprs`): an
 /// unannotated assignment's own name, and every name a destructure binds.
 fn recordBinderSources(self: *Self, pattern: CIR.Pattern.Idx, source: CIR.Expr.Idx, annotated: bool) Allocator.Error!void {
-    if (self.cir.store.getPattern(pattern) == .assign) {
+    if (self.cir.store.patternKind(pattern) == .assign) {
         if (!annotated) try self.binder_source_exprs.put(pattern, source);
         return;
     }
@@ -43279,7 +43279,7 @@ fn recordPatternBinderSources(self: *Self, pattern: CIR.Pattern.Idx, source: CIR
     defer bindings.deinit(self.gpa);
     try self.collectPatternBindings(pattern, &bindings);
     for (bindings.items) |binding| {
-        if (self.cir.store.getPattern(binding.pattern_idx) == .var_assign) continue;
+        if (self.cir.store.patternKind(binding.pattern_idx) == .var_assign) continue;
         try self.binder_source_exprs.put(binding.pattern_idx, source);
     }
 }
@@ -43376,7 +43376,7 @@ fn poisonErroneousValueUses(self: *Self) Allocator.Error!void {
     // problems has no occurrence to retire.
     const occurrences_may_be_poisoned = self.problems.problems.items.len != 0;
     for (self.value_lookup_tracking.items) |entry| {
-        if (self.cir.store.getExpr(entry.expr_idx) == .e_runtime_error) continue;
+        if (self.cir.store.exprKind(entry.expr_idx) == .e_runtime_error) continue;
 
         const pattern_var = ModuleEnv.varFrom(entry.pattern_idx);
         if (!self.erroneous_value_patterns.contains(entry.pattern_idx) and
@@ -43422,7 +43422,7 @@ fn retireForLoopsOverLateRejectedIterables(self: *Self) Allocator.Error!void {
                 if (!recorded.found_existing) recorded.value_ptr.* = .some(loop.iterable);
             },
             .expr => |expr_idx| {
-                if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) continue;
+                if (self.cir.store.exprKind(expr_idx) == .e_runtime_error) continue;
                 const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
                     .region = self.cir.store.getExprRegion(expr_idx),
                 } });
@@ -43437,7 +43437,7 @@ fn retireForLoopsOverLateRejectedIterables(self: *Self) Allocator.Error!void {
 /// (`Store.poisonOnMismatch`), so the referenced binding keeps its type and the
 /// use alone becomes the runtime error.
 fn retireErroneousLookupOccurrence(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
-    if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) return;
+    if (self.cir.store.exprKind(expr_idx) == .e_runtime_error) return;
     if (self.types.resolveVar(ModuleEnv.varFrom(expr_idx)).desc.content != .err) return;
     const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
         .region = self.cir.store.getExprRegion(expr_idx),
@@ -43453,7 +43453,7 @@ fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
         const def = self.cir.store.getDef(def_idx.*);
         // A definition whose RHS is already a runtime error was retired
         // when that RHS was rejected.
-        if (self.cir.store.getExpr(def.expr) == .e_runtime_error) continue;
+        if (self.cir.store.exprKind(def.expr) == .e_runtime_error) continue;
         const diagnostic = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
             .region = self.cir.store.getExprRegion(def.expr),
         } });
@@ -44661,7 +44661,7 @@ fn retireRejectedDefault(
     for (omitted_defaults) |omitted| {
         if (omitted.origin_module != self.cir.selfModuleIdentity()) continue;
         if (omitted.default_expr_node != @backingInt(pending.default_expr)) continue;
-        if (self.cir.store.getExpr(omitted.expr) == .e_runtime_error) continue;
+        if (self.cir.store.exprKind(omitted.expr) == .e_runtime_error) continue;
         try self.replaceExprWithRuntimeError(omitted.expr, diagnostic_idx);
         try self.markErroneousValueExpr(omitted.expr);
     }
@@ -44694,8 +44694,8 @@ fn retireOmissionsOfRejectedForeignDefaults(self: *Self) std.mem.Allocator.Error
     for (omitted_defaults) |omitted| {
         if (omitted.origin_module == self_identity) continue;
         const owner = self.moduleEnvForIdentity(self.cir, omitted.origin_module).env;
-        if (owner.store.getExpr(@fromBackingInt(@intCast(omitted.default_expr_node))) != .e_runtime_error) continue;
-        if (self.cir.store.getExpr(omitted.expr) == .e_runtime_error) continue;
+        if (owner.store.exprKind(@fromBackingInt(@intCast(omitted.default_expr_node))) != .e_runtime_error) continue;
+        if (self.cir.store.exprKind(omitted.expr) == .e_runtime_error) continue;
         const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
             .region = self.cir.store.getExprRegion(omitted.expr),
         } });
@@ -47460,7 +47460,7 @@ fn retireMergedMethodDefinitions(self: *Self, merged: MergedMethodObligation) Al
 fn retireBoundaryDefinition(self: *Self, definition: BoundaryDefinition) Allocator.Error!void {
     try self.markErroneousValueExpr(definition.expr);
     const pattern = definition.pattern.get() orelse return;
-    if (self.cir.store.getPattern(pattern) == .assign) {
+    if (self.cir.store.patternKind(pattern) == .assign) {
         try self.markErroneousValuePattern(pattern);
     } else {
         try self.markPatternBindingsErroneous(pattern);
@@ -55663,8 +55663,8 @@ fn localProcedureMethodBinding(self: *const Self, method_lookup: StaticDispatchM
     if (self.cir.store.nodes.get(@fromBackingInt(@intCast(raw_node))).tag != .statement_decl) return false;
     const stmt = self.cir.store.getStatement(@fromBackingInt(@intCast(raw_node)));
     if (stmt != .s_decl) return false;
-    const expr = self.cir.store.getExpr(stmt.s_decl.expr);
-    return expr == .e_lambda or expr == .e_closure;
+    const expr_kind = self.cir.store.exprKind(stmt.s_decl.expr);
+    return expr_kind == .e_lambda or expr_kind == .e_closure;
 }
 
 fn varListContains(vars: []const Var, target: Var) bool {
@@ -56644,7 +56644,7 @@ inline fn processDeferredDispatchEntryRelations(
                 // "Row Joins"), so it satisfies no requirement whose result
                 // reaches a tag row.
                 if (constraint.origin == .where_clause and
-                    method_env.store.getExpr(def.expr) == .e_hosted_lambda and
+                    method_env.store.exprKind(def.expr) == .e_hosted_lambda and
                     try self.varReachesHostFixedRow(method_var))
                 {
                     const use_region = if (failure_expr orelse constraintIntroExpr(constraint)) |use_expr|
@@ -60597,7 +60597,7 @@ test "construction omitting a defaulted field demands the default's references" 
     var base_def: ?CIR.Def.Idx = null;
     for (env.store.sliceDefs(env.all_defs)) |def_idx| {
         const def = env.store.getDef(def_idx);
-        if (env.store.getExpr(def.expr) == .e_anno_only) continue;
+        if (env.store.exprKind(def.expr) == .e_anno_only) continue;
         const pattern = env.store.getPattern(def.pattern);
         if (pattern != .assign) continue;
         if (pattern.assign.ident.eql(cfg_ident)) cfg_def = def_idx;

@@ -2104,7 +2104,7 @@ fn dispatchPlanExpr(plan: static_dispatch.StaticDispatchCallPlan) CIR.Expr.Idx {
 /// Whether a pattern introduces a binder of its own: an assign, var-assign,
 /// or as pattern.
 fn patternIntroducesBinder(view: ModuleView, pattern: CIR.Pattern.Idx) bool {
-    return switch (view.module_env.store.getPattern(pattern)) {
+    return switch (view.module_env.store.patternKind(pattern)) {
         .assign, .var_assign, .as => true,
         .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .num_from_numeral_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .str_interpolation, .underscore, .runtime_error, .deferred_import_ref => false,
     };

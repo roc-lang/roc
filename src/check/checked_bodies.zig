@@ -1182,7 +1182,7 @@ pub const CheckedBodies = struct {
         const module_index = self.index();
         return .{
             .pattern = pattern_id,
-            .reassignable = self.store().getPattern(pattern_id) == .var_assign,
+            .reassignable = self.store().patternKind(pattern_id) == .var_assign,
             .is_scheme_alias = module_index.isSchemeAlias(pattern_id),
             .destructured_alias = module_index.destructuredAliasDecl(pattern_id),
             .is_promoted = module_index.isPromotedPattern(pattern_id),

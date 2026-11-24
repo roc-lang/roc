@@ -1528,13 +1528,13 @@ fn globalDefIntroducesValueBinding(
     def_idx: CIR.Def.Idx,
 ) bool {
     const def = self.env.store.getDef(def_idx);
-    const expr = self.env.store.getExpr(def.expr);
+    const expr_kind = self.env.store.exprKind(def.expr);
     // A generated method marker authorizes a compiler-owned method-registry
     // target; it never denotes a Roc value or procedure body of its own.
-    if (expr == .e_derived_method) return false;
+    if (expr_kind == .e_derived_method) return false;
     // A superseded annotation has no binding, while an orphan annotation
     // remains the selected valueless declaration for diagnostic recovery.
-    return expr != .e_anno_only or self.topLevelDefIsSelected(selected_by_ident, def_idx);
+    return expr_kind != .e_anno_only or self.topLevelDefIsSelected(selected_by_ident, def_idx);
 }
 
 /// Register a method on its owner declaration.
@@ -2090,7 +2090,7 @@ fn debugAssertLocalFunctionDeclRecorded(
 ) void {
     if (!std.debug.runtime_safety) return;
     if (self.parse_ir.decl_index.declForStatement(@backingInt(ast_stmt_idx)) == null) return;
-    switch (self.env.store.getExpr(expr_idx)) {
+    switch (self.env.store.exprKind(expr_idx)) {
         .e_lambda, .e_closure => if (!self.scratch_local_function_patterns.contains(pattern_idx)) {
             base.invariant("canonicalization invariant violated: a block declaration whose expression is a lambda or closure is not recorded as a local function", .{});
         },
@@ -2949,7 +2949,7 @@ fn registerTypeDecl(
     // The parser inventory and every scope insertion already carry the exact
     // declaration kind. Completing a placeholder fills its body without
     // changing the kind observed by any existing scope alias.
-    std.debug.assert(std.meta.activeTag(self.env.store.getStatement(type_decl_stmt_idx)) == std.meta.activeTag(type_decl_stmt));
+    std.debug.assert(self.env.store.statementKind(type_decl_stmt_idx) == std.meta.activeTag(type_decl_stmt));
     try self.env.store.setStatementNode(type_decl_stmt_idx, type_decl_stmt);
     if (ast_stmt_idx) |idx| {
         try self.parser_type_decl_states.put(
@@ -4574,7 +4574,7 @@ fn canonicalizeAssociatedItems(
                     }
                     const parent_text = self.env.getIdent(parent_name);
                     const name_text = self.env.getIdent(name_ident);
-                    const annotation_expr_kind: AnnotationExprKind = if (self.env.store.getTypeAnno(type_anno_idx) == .underscore)
+                    const annotation_expr_kind: AnnotationExprKind = if (self.env.store.typeAnnoKind(type_anno_idx) == .underscore)
                         if (self.derivedMethodKind(name_ident)) |kind|
                             .{ .derived = .{ .kind = kind, .owner = owner_stmt_idx } }
                         else
@@ -5224,7 +5224,7 @@ pub fn canonicalizeFile(
             selected.value_ptr.* = def_idx;
         } else {
             const prior = self.env.store.getDef(selected.value_ptr.*);
-            if (self.env.store.getExpr(prior.expr) == .e_anno_only and self.env.store.getExpr(def.expr) != .e_anno_only) {
+            if (self.env.store.exprKind(prior.expr) == .e_anno_only and self.env.store.exprKind(def.expr) != .e_anno_only) {
                 selected.value_ptr.* = def_idx;
             }
         }
@@ -7178,7 +7178,7 @@ fn collectRenamedNominals(
     defer public_aliases.deinit(gpa);
     var public_iter = public_type_decls.keyIterator();
     while (public_iter.next()) |stmt_idx| {
-        if (self.env.store.getStatement(stmt_idx.*) == .s_alias_decl) try public_aliases.append(gpa, stmt_idx.*);
+        if (self.env.store.statementKind(stmt_idx.*) == .s_alias_decl) try public_aliases.append(gpa, stmt_idx.*);
     }
     if (public_aliases.items.len == 0) return;
     std.mem.sort(Statement.Idx, public_aliases.items, self, statementPrecedesInSource);
@@ -8800,7 +8800,7 @@ fn canonicalizeQualifiedIdentExpr(
             return .{ .expr = try self.canonicalizedAssociatedLookup(path, qualified_ident, pattern_idx, region) };
         }
         if (self.typeStatementForPath(path)) |type_stmt_idx| {
-            if (self.env.store.getStatement(type_stmt_idx) == .s_alias_decl) {
+            if (self.env.store.statementKind(type_stmt_idx) == .s_alias_decl) {
                 const type_ident = try self.joinedQualifierIdent(qualifier_tokens);
                 return .{ .expr = try self.canonicalizedLocalAssociatedLookup(
                     @backingInt(type_stmt_idx),
@@ -8971,7 +8971,7 @@ fn canonicalizeTypeAssociatedLookup(
             if (ext.target_node_idx) |type_node_idx| {
                 const type_stmt: Statement.Idx = @fromBackingInt(@intCast(type_node_idx));
                 if (self.lookupBuiltinAutoImportedType(ext.module_ident)) |builtin_type| {
-                    if (builtin_type.env.store.getStatement(type_stmt) == .s_alias_decl) {
+                    if (builtin_type.env.store.statementKind(type_stmt) == .s_alias_decl) {
                         return try self.canonicalizedExternalAssociatedLookup(
                             import_idx,
                             type_node_idx,
@@ -9190,7 +9190,7 @@ fn builtinAliasStatement(
         const type_ident = info.env.common.findIdent(qualified) orelse return null;
         break :node info.env.getExposedTypeNodeIndexById(type_ident) orelse return null;
     };
-    if (info.env.store.getStatement(@fromBackingInt(@intCast(type_node))) != .s_alias_decl) return null;
+    if (info.env.store.statementKind(@fromBackingInt(@intCast(type_node))) != .s_alias_decl) return null;
     return type_node;
 }
 
@@ -9986,7 +9986,7 @@ fn finishBlockState(
 
 fn blockHasUninitializedVar(self: *Self, stmts: Statement.Span) bool {
     for (self.env.store.sliceStatements(stmts)) |stmt_idx| {
-        if (self.env.store.getStatement(stmt_idx) == .s_var_uninitialized) return true;
+        if (self.env.store.statementKind(stmt_idx) == .s_var_uninitialized) return true;
     }
     return false;
 }
@@ -13156,7 +13156,7 @@ fn runExprKernel(
                         .region = state.region,
                         .context = .return_expr,
                     } });
-                const diverges = self.env.store.getExpr(return_expr_idx) == .e_return;
+                const diverges = self.env.store.exprKind(return_expr_idx) == .e_return;
                 const block_expr = try self.finishBlockState(state.block, CanonicalizedExpr{ .idx = return_expr_idx, .free_vars = expr.free_vars, .diverges = diverges });
                 try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, block_expr);
             } else {
@@ -13175,7 +13175,7 @@ fn runExprKernel(
                         .region = state.region,
                         .context = .return_statement,
                     } });
-                const diverges = self.env.store.getStatement(stmt_idx) == .s_return;
+                const diverges = self.env.store.statementKind(stmt_idx) == .s_return;
                 try self.addOwnBlockStatement(state.block, CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars, .diverges = diverges });
                 try stacks.push(.block_next, frame_allocator, .{ .block = state.block, .next = state.next });
             }
@@ -13296,7 +13296,7 @@ fn runExprKernel(
             // does not mistake a soon-to-be-cleared loop capture for an existing
             // block capture.
             self.scratch_captures.clearFrom(state.captures_top);
-            const diverges = state.cond.diverges or self.env.store.getStatement(stmt_idx) == .s_infinite_loop;
+            const diverges = state.cond.diverges or self.env.store.statementKind(stmt_idx) == .s_infinite_loop;
             try self.addOwnBlockStatement(state.block, CanonicalizedStatement{ .idx = stmt_idx, .free_vars = free_vars, .diverges = diverges });
             child_slots.shrinkRetainingCapacity(state.block.result_start);
             try stacks.push(.block_next, frame_allocator, .{ .block = state.block, .next = state.next });
@@ -13594,7 +13594,7 @@ fn runExprKernel(
                     .context = .return_expr,
                 } });
 
-            const diverges = self.env.store.getExpr(return_expr) == .e_return;
+            const diverges = self.env.store.exprKind(return_expr) == .e_return;
             child_slots.shrinkRetainingCapacity(result_start);
             try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = return_expr, .free_vars = can_inner.free_vars, .diverges = diverges });
 
@@ -15021,7 +15021,7 @@ fn resolveRecordBuilderMap2(
             return try self.externalRecordBuilderMap2(import_idx, builtin_type.env, @backingInt(stmt_idx), resolved.name, map2_name, missing);
         },
         .local => |stmt_idx| {
-            if (self.env.store.getStatement(stmt_idx) == .s_alias_decl) {
+            if (self.env.store.statementKind(stmt_idx) == .s_alias_decl) {
                 return .{ .resolved = .{ .local_associated = .{
                     .type_stmt = stmt_idx,
                     .type_ident = resolved.name,
@@ -15068,7 +15068,7 @@ fn externalRecordBuilderMap2(
     missing: RecordBuilderMap2Resolution,
 ) std.mem.Allocator.Error!RecordBuilderMap2Resolution {
     const type_stmt: Statement.Idx = @fromBackingInt(@intCast(type_node_idx));
-    if (external_env.store.getStatement(type_stmt) == .s_alias_decl) {
+    if (external_env.store.statementKind(type_stmt) == .s_alias_decl) {
         return .{ .resolved = .{ .external_associated = .{
             .module_idx = import_idx,
             .type_node_idx = type_node_idx,
@@ -16306,7 +16306,7 @@ fn desugarInterpolatedString(
     const stmts_top = self.env.store.scratchTop("statements");
     for (items_top..items_end) |item_pos| {
         const interp_idx = self.scratch_expr_ids.items.items[item_pos];
-        if (self.env.store.getExpr(interp_idx) == .e_str_segment) continue;
+        if (self.env.store.exprKind(interp_idx) == .e_str_segment) continue;
         var name_buf: [32]u8 = undefined;
         const name = std.fmt.bufPrint(&name_buf, "#interp_{d}", .{self.interp_tmp_counter}) catch unreachable; // "#interp_" plus at most 10 digits of a u32 fits in 32 bytes
         self.interp_tmp_counter += 1;
@@ -16331,7 +16331,7 @@ fn desugarInterpolatedString(
     var item_pos = items_top;
     while (true) : (item_pos += 1) {
         const gap_ends = item_pos == items_end or
-            self.env.store.getExpr(self.scratch_expr_ids.items.items[item_pos]) != .e_str_segment;
+            self.env.store.exprKind(self.scratch_expr_ids.items.items[item_pos]) != .e_str_segment;
         if (!gap_ends) {
             pending_segment = self.scratch_expr_ids.items.items[item_pos];
             continue;
@@ -18516,7 +18516,7 @@ fn rejectVarBinder(self: *Self, ident: Ident.Idx, region: Region) std.mem.Alloca
 
 /// Check if a pattern is a var
 fn isVarPattern(self: *const Self, pattern_idx: Pattern.Idx) bool {
-    return self.env.store.getPattern(pattern_idx) == .var_assign;
+    return self.env.store.patternKind(pattern_idx) == .var_assign;
 }
 
 /// Report a source-binding naming mismatch without allowing spelling to affect
@@ -20881,8 +20881,8 @@ pub fn introduceType(
     type_decl_stmt: Statement.Idx,
     region: Region,
 ) std.mem.Allocator.Error!void {
-    const stmt = self.env.store.getStatement(type_decl_stmt);
-    const input: Scope.TypeBindingInput = switch (stmt) {
+    const stmt_kind = self.env.store.statementKind(type_decl_stmt);
+    const input: Scope.TypeBindingInput = switch (stmt_kind) {
         .s_alias_decl => .{ .local_alias = type_decl_stmt },
         .s_nominal_decl => .{ .local_nominal = type_decl_stmt },
         .s_where_alias_decl => .{ .local_where_alias = type_decl_stmt },

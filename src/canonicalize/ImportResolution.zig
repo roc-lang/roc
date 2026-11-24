@@ -477,7 +477,7 @@ const Resolver = struct {
             const head = path[0..dot];
             const item_text = path[dot + 1 ..];
             if (try self.exposedTypeNode(other, prefix, head)) |type_node_idx| {
-                if (other.store.getStatement(@fromBackingInt(@intCast(type_node_idx))) == .s_alias_decl) {
+                if (other.store.statementKind(@fromBackingInt(@intCast(type_node_idx))) == .s_alias_decl) {
                     return ValueTarget{ .associated = .{
                         .type_node_idx = type_node_idx,
                         .type_ident = try self.env.insertIdent(Ident.for_text(head)),
@@ -684,7 +684,7 @@ const Resolver = struct {
                 return false;
             break :owner .{ decl.env, decl.node_idx };
         } else .{ available.module_env, (try self.importMainTypeNode(available)) orelse return false };
-        switch (owner_env.store.getStatement(@fromBackingInt(@intCast(owner_node)))) {
+        switch (owner_env.store.statementKind(@fromBackingInt(@intCast(owner_node)))) {
             // An alias names the nominal type checking resolves it to.
             .s_nominal_decl, .s_alias_decl => {},
             .s_decl,
@@ -809,7 +809,7 @@ const Resolver = struct {
                 }
             },
             .expr_nominal, .pattern_nominal => {
-                switch (decl_env.store.getStatement(@fromBackingInt(@intCast(decl_node_idx)))) {
+                switch (decl_env.store.statementKind(@fromBackingInt(@intCast(decl_node_idx)))) {
                     // A construction through an alias names the nominal type
                     // checking resolves the alias to (design.md "Nominal
                     // Construction Through Aliases"). A declaration reached by

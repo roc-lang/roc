@@ -361,7 +361,7 @@ pub const ModuleIndex = struct {
             // reaching them globally would walk into the original children
             // of an expression that checking replaced with `e_runtime_error`.
             for (store.sliceStatements(env.all_statements)) |statement_idx| {
-                const kind: UnitKind = switch (store.getStatement(statement_idx)) {
+                const kind: UnitKind = switch (store.statementKind(statement_idx)) {
                     .s_import,
                     .s_alias_decl,
                     .s_nominal_decl,
@@ -692,7 +692,7 @@ pub const ModuleIndex = struct {
                 if (store.nodes.get(entry.value.type_node_idx).tag != .statement_decl) continue;
                 const statement: StatementId = @fromBackingInt(@intCast(@backingInt(entry.value.type_node_idx)));
                 const decl = store.getStatement(statement).s_decl;
-                if (store.getExpr(decl.expr) != .e_runtime_error) continue;
+                if (store.exprKind(decl.expr) != .e_runtime_error) continue;
                 self.node_flags[@backingInt(statement)].rejected_method_decl = true;
             }
 
@@ -760,10 +760,10 @@ pub fn bindsProcedureAlias(env: *const ModuleEnv, pattern: PatternId, expr: Expr
 /// way a use lowers the lookup at the use's own instantiation; the
 /// declaration computes nothing.
 pub fn bindsLocalSchemeAlias(env: *const ModuleEnv, pattern: PatternId, expr: ExprId) bool {
-    const rhs = env.store.getExpr(expr);
-    const is_lookup = rhs == .e_lookup_local or rhs == .e_lookup_external or
-        rhs == .e_lookup_required or rhs == .e_lookup_associated_resolved;
-    return is_lookup and env.store.getPattern(pattern) == .assign and
+    const rhs_kind = env.store.exprKind(expr);
+    const is_lookup = rhs_kind == .e_lookup_local or rhs_kind == .e_lookup_external or
+        rhs_kind == .e_lookup_required or rhs_kind == .e_lookup_associated_resolved;
+    return is_lookup and env.store.patternKind(pattern) == .assign and
         env.nodeIsBindingScheme(ModuleEnv.nodeIdxFrom(pattern));
 }
 
@@ -779,10 +779,10 @@ pub fn bindsDestructuredSchemeAlias(env: *const ModuleEnv, pattern: PatternId, e
 
 /// Whether `pattern = expr` takes a looked-up value apart.
 fn destructuresLookup(env: *const ModuleEnv, pattern: PatternId, expr: ExprId) bool {
-    const rhs = env.store.getExpr(expr);
-    const is_lookup = rhs == .e_lookup_local or rhs == .e_lookup_external or
-        rhs == .e_lookup_required or rhs == .e_lookup_associated_resolved;
-    return is_lookup and env.store.getPattern(pattern) != .assign;
+    const rhs_kind = env.store.exprKind(expr);
+    const is_lookup = rhs_kind == .e_lookup_local or rhs_kind == .e_lookup_external or
+        rhs_kind == .e_lookup_required or rhs_kind == .e_lookup_associated_resolved;
+    return is_lookup and env.store.patternKind(pattern) != .assign;
 }
 
 fn dedupeSorted(list: *std.ArrayList(u32)) void {

@@ -924,10 +924,10 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
 
     for (def_indices.items) |def_idx| {
         const def = env.store.getDef(def_idx);
-        const expr = env.store.getExpr(def.expr);
+        const expr_kind = env.store.exprKind(def.expr);
 
         // Check if this is an anno-only def (e_anno_only expression)
-        if (expr == .e_anno_only and def.annotation != null) {
+        if (expr_kind == .e_anno_only and def.annotation != null) {
             // Get the identifier from the pattern
             const pattern = env.store.getPattern(def.pattern);
             if (pattern == .assign) {

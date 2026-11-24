@@ -1401,7 +1401,7 @@ pub fn parseProgram(
             const root_name = evalRootName(source_kind, false);
             const root_def_idx = main_checked.can.explicitRootDefByName(root_name) orelse base.invariant("eval helper invariant violated: compile-time REPL root `{s}` was not found", .{root_name});
             const root_def = main_checked.module_env.store.getDef(root_def_idx);
-            if (main_checked.module_env.store.getExpr(root_def.expr) != .e_runtime_error) {
+            if (main_checked.module_env.store.exprKind(root_def.expr) != .e_runtime_error) {
                 const body_expr = main_checked.checker.compileTimeExecutableRootBody(root_def_idx) orelse base.invariant("eval helper invariant violated: compile-time REPL root body was not recorded", .{});
                 explicit_root_storage[0] = .{
                     .kind = .repl_expr,

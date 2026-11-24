@@ -6630,7 +6630,7 @@ fn appendCheckedNominalDeclarationFromStatement(
         const out = try allocator.alloc(DeclarationFormal, header_args.len);
         errdefer allocator.free(out);
         for (header_args, formal_args[0..header_args.len], 0..) |arg_anno, formal_arg, i| {
-            std.debug.assert(module_env.store.getTypeAnno(arg_anno) == .rigid_var);
+            std.debug.assert(module_env.store.typeAnnoKind(arg_anno) == .rigid_var);
             out[i] = .{
                 .source = ModuleEnv.varFrom(arg_anno),
                 .root = formal_arg,
@@ -6841,7 +6841,7 @@ pub fn declarationAnnoNode(
             .rigid_var => return .{ .rigid = .{ .var_ = ModuleEnv.varFrom(current) } },
             .rigid_var_lookup => |lookup| {
                 var binder = lookup.ref;
-                while (module_env.store.getTypeAnno(binder) == .rigid_var_lookup) {
+                while (module_env.store.typeAnnoKind(binder) == .rigid_var_lookup) {
                     binder = module_env.store.getTypeAnno(binder).rigid_var_lookup.ref;
                 }
                 return .{ .rigid = .{ .var_ = ModuleEnv.varFrom(binder) } };
@@ -7292,7 +7292,7 @@ const DeclarationAnnoWalk = struct {
         const declaration_formals: []DeclarationFormal = if (header_args.len == 0) &.{} else blk: {
             const out = try gpa.alloc(DeclarationFormal, header_args.len);
             for (header_args, actual_args, out) |arg_anno, actual_arg, *slot| {
-                std.debug.assert(module_env.store.getTypeAnno(arg_anno) == .rigid_var);
+                std.debug.assert(module_env.store.typeAnnoKind(arg_anno) == .rigid_var);
                 slot.* = .{
                     .source = ModuleEnv.varFrom(arg_anno),
                     .root = actual_arg,
@@ -9514,7 +9514,7 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
     defer publication.deinit(allocator);
 
     const nominal_stmt = for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
-        switch (module_env.store.getStatement(statement_idx)) {
+        switch (module_env.store.statementKind(statement_idx)) {
             .s_nominal_decl => break statement_idx,
             .s_decl,
             .s_var,
@@ -10264,8 +10264,8 @@ test "optional record fields publish through the declaration annotation path" {
         for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
             const statement = module_env.store.getStatement(statement_idx);
             if (statement != .s_alias_decl) continue;
-            const anno = module_env.store.getTypeAnno(statement.s_alias_decl.anno);
-            if (anno != .record) continue;
+            const anno_kind = module_env.store.typeAnnoKind(statement.s_alias_decl.anno);
+            if (anno_kind != .record) continue;
             break :blk statement.s_alias_decl.anno;
         }
         return error.TestUnexpectedResult;
@@ -13287,7 +13287,7 @@ fn patternIsBinder(module: TypedCIR.Module, pattern: CIR.Pattern.Idx) bool {
 
 /// Whether a pattern introduces a name: an assign, var-assign, or as pattern.
 fn patternBindsName(env: *const ModuleEnv, pattern: CIR.Pattern.Idx) bool {
-    return switch (env.store.getPattern(pattern)) {
+    return switch (env.store.patternKind(pattern)) {
         .assign, .var_assign, .as => true,
         .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .num_from_numeral_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .str_interpolation, .underscore, .runtime_error, .deferred_import_ref => false,
     };
@@ -24442,7 +24442,7 @@ pub fn pairCheckedPlatform(
         for (platform.resolved_value_refs.call_direct_targets.items()) |entry| try direct_targets.append(session, entry);
         for (result.resolved_value_refs.records.items()) |record| {
             if (record.ref != .platform_required_checked_error) continue;
-            if (env.store.getExpr(record.expr) != .e_lookup_required) continue;
+            if (env.store.exprKind(record.expr) != .e_lookup_required) continue;
             ResolvedValueRefTable.setRetired(retired, record.expr);
         }
         for ((try platform_analyses.demandIndex()).node_kinds, 0..) |kind, raw| {
@@ -26228,7 +26228,7 @@ pub fn valueFormValueExpr(bodies: *const CheckedBodies, expr: CIR.Expr.Idx) CIR.
 /// lookup or method call not yet resolved) reach the reader only once
 /// publication resolves them.
 fn valueFormCandidate(bodies: *const CheckedBodies, id: CIR.Expr.Idx) ?checked_bodies_mod.ExprData {
-    switch (bodies.env.store.getExpr(id)) {
+    switch (bodies.env.store.exprKind(id)) {
         .e_num, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external, .e_block, .e_lookup_local, .e_lookup_external, .e_lookup_associated_resolved => {},
         .e_frac_f32, .e_frac_f64, .e_bytes_literal, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
     }

@@ -5569,7 +5569,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
         const all_stmts = self.store.sliceStatements(self.all_statements);
         var has_type_decl = false;
         for (all_stmts) |stmt_idx| {
-            const tag = std.meta.activeTag(self.store.getStatement(stmt_idx));
+            const tag = self.store.statementKind(stmt_idx);
             if (tag == .s_alias_decl or tag == .s_nominal_decl or tag == .s_where_alias_decl) {
                 has_type_decl = true;
                 break;

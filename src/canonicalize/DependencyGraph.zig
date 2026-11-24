@@ -651,7 +651,7 @@ const DemandAnalyzer = struct {
     fn computeSummaries(self: *DemandAnalyzer) std.mem.Allocator.Error!void {
         for (self.summary_defs) |def_idx| {
             const lambda_idx = self.lambdaFromDef(def_idx) orelse continue;
-            if (self.cir.store.getExpr(lambda_idx) == .e_lambda) try self.summary_lambdas.put(lambda_idx, {});
+            if (self.cir.store.exprKind(lambda_idx) == .e_lambda) try self.summary_lambdas.put(lambda_idx, {});
         }
         defer self.summary_lambdas.clearRetainingCapacity();
         defer self.reader = null;
@@ -679,7 +679,7 @@ const DemandAnalyzer = struct {
         while (next < queue.items.len) : (next += 1) {
             const lambda_idx = queue.items[next];
             if (!stale.remove(lambda_idx)) continue;
-            if (self.cir.store.getExpr(lambda_idx) != .e_lambda) {
+            if (self.cir.store.exprKind(lambda_idx) != .e_lambda) {
                 const nothing = DemandSummary{};
                 if (try self.mergeSummary(lambda_idx, &nothing)) try self.markReadersStale(lambda_idx, &stale, &queue);
                 continue;
