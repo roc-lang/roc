@@ -453,11 +453,6 @@ static bool emitWithBinStream(LLVMTargetMachineRef targ_machine_ref, LLVMModuleR
 
     pass_builder.registerOptimizerLastEPCallback([&](ModulePassManager &module_pm, OptimizationLevel level, ThinOrFullLTOPhase lto_phase) {
         if (!early_san) {
-            // Code coverage instrumentation.
-            if (options->sancov) {
-                module_pm.addPass(SanitizerCoveragePass(getSanCovOptions(options->coverage)));
-            }
-
             // Thread sanitizer
             if (options->tsan) {
                 module_pm.addPass(ModuleThreadSanitizerPass());
@@ -549,6 +544,20 @@ static bool emitWithBinStream(LLVMTargetMachineRef targ_machine_ref, LLVMModuleR
                 return true;
             }
         }
+    }
+
+    // Code coverage instrumentation for non-debug builds runs after the late
+    // vectorization and unrolling pass so coverage counters and trace calls do
+    // not block vectorization or get duplicated by unrolling. Debug builds
+    // instrument early via OptimizerEarlyEPCallback.
+    if (!early_san && options->sancov) {
+        module_am.invalidate(llvm_module, PreservedAnalyses::none());
+        ModulePassManager sancov_pm;
+        sancov_pm.addPass(SanitizerCoveragePass(getSanCovOptions(options->coverage)));
+        if (assertions_on) {
+            sancov_pm.addPass(VerifierPass());
+        }
+        sancov_pm.run(llvm_module, module_am);
     }
 
     // Code generation phase
