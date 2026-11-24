@@ -101,7 +101,7 @@ pub fn freezeRootIntoSlot(
         const job = builder.jobs.items[next];
         try builder.visit(job);
     }
-    return builder.graph.finish();
+    return try builder.graph.finish();
 }
 
 /// A frozen root as one block (`frozen_graph.ImageGraph`), the stored image
@@ -127,7 +127,19 @@ pub fn imageRoot(
     try builder.enqueue(root.plan, root.ret_layout, value, dest, .value);
     var next: usize = 0;
     while (next < builder.jobs.items.len) : (next += 1) try builder.visit(builder.jobs.items[next]);
-    return builder.graph.finish();
+    return try builder.graph.finish();
+}
+
+/// Write `value`, in memory at the host's width, as part `plan` at
+/// `layout_idx` of an image `graph` is building, at `dest`: the copying pass
+/// `imageRoot` runs over a root's parts.
+pub fn imagePart(graph: *ImageGraph, plan: Program.ConstPlanId, layout_idx: layout.Idx, value: Value, dest: Destination) Error!void {
+    var builder = ImageBuilder{ .graph = graph.*, .callables = .{} };
+    defer graph.* = builder.graph;
+    defer builder.jobs.deinit(builder.graph.allocator);
+    try builder.enqueue(plan, layout_idx, value, dest, .value);
+    var next: usize = 0;
+    while (next < builder.jobs.items.len) : (next += 1) try builder.visit(builder.jobs.items[next]);
 }
 
 /// The graph an image root is written into.

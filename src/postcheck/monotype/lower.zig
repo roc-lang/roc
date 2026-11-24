@@ -30622,7 +30622,7 @@ const BodyContext = struct {
             // constant's value at the root's type (design.md "Polymorphic
             // Constants").
             .literal_argument => if (root.isConstantInstance())
-                try self.lowerConstantInstanceRoot(root.literal_argument.?.site, try ret_cell.toGraphNode(self.graph))
+                try self.lowerConstantInstanceRoot(root.literal_argument.?, try ret_cell.toGraphNode(self.graph))
             else
                 Common.invariant("a literal argument root reached Monotype"),
             .constant,
@@ -48950,7 +48950,17 @@ const BodyContext = struct {
     /// The value of the polymorphic constant `site` names, its compile-time
     /// root's, at the type of `request_node`: the constant's body lowered at
     /// that instance. This is the instance root's own evaluation.
-    fn lowerConstantInstanceRoot(self: *BodyContext, site: checked.LiteralSite, request_node: NodeId) Allocator.Error!DraftExprId {
+    fn lowerConstantInstanceRoot(self: *BodyContext, argument: checked.LiteralArgumentRoot, request_node: NodeId) Allocator.Error!DraftExprId {
+        const site = argument.site;
+        // The constant's body runs with the evidence of the use whose
+        // instance the root is: a function it stores captures the
+        // dictionaries of that instance.
+        const previous_restore_evidence = self.restore_evidence;
+        defer self.restore_evidence = previous_restore_evidence;
+        switch (argument.edge) {
+            .use => |use_expr| self.restore_evidence = rootEvidence(self.owner_template, (try self.evidenceForUseSiteAtNode(use_expr, request_node)).vector),
+            .literal, .node, .requirement, .canonical => {},
+        }
         const view = self.builder.moduleForDigest(site.module);
         const constant = view.compile_time_roots.root(site.constantRoot());
         switch (constant.kind) {
@@ -48979,6 +48989,14 @@ const BodyContext = struct {
     /// "Polymorphic Constants"): every use the checker recorded an edge for
     /// reads it, as a literal's root is read (`restoredLiteralArgument`).
     fn restoredConstantInstance(self: *BodyContext, view: ModuleView, constant: checked.ComptimeRootId, request_node: NodeId, edge: ?checked.LiteralEdge) Allocator.Error!?DraftExprId {
+        // An instance root's own evaluation computes the constant; it reads
+        // no other root of it, which may be computing it too.
+        if (self.current_entry_root) |entry| {
+            const entry_view = self.builder.moduleForId(entry.module);
+            if (entry_view.compile_time_roots.root(entry.root).literal_argument) |argument| {
+                if (argument.site.kind == .constant_instance and argument.site.node == @backingInt(constant) and moduleBytesEqual(argument.site.module.bytes, view.key.bytes)) return null;
+            }
+        }
         // A use checking recorded at a closed type names its instance's
         // root, in this body's module, whatever the request's type is
         // resolved to yet.
@@ -49004,13 +49022,18 @@ const BodyContext = struct {
         const argument = root.literal_argument orelse Common.invariant("a constant instance read named a root that is no instance");
         const restored = switch (root.payload) {
             .fn_value => |fn_id| try self.restoreConstFnAt(root_view, fn_id, .{ .node = request_node }, null),
-            .const_node => |node| if (root_view.const_store.imageOf(node)) |image|
-                try self.restoredRootImage(root_view, node, image, argument.ty, request_node)
-            else
-                try self.restoreConstNodeAtNode(root_view, root_view, node, request_node),
-            // The instance root's own evaluation computes it.
+            // The stored value has the representation of the instance's
+            // closed type, which the read relates to its request as a read
+            // of a monomorphic constant's stored value does.
+            .const_node => |node| blk: {
+                const stored_node = try self.relateCheckedNodeToProducedValue(request_node, try self.graph.importMonoIndependent(try self.closedCheckedMonoOf(root_view, argument.ty)));
+                try relateRequestComponent(self.graph, request_node, stored_node);
+                break :blk if (root_view.const_store.imageOf(node)) |image|
+                    try self.restoredRootImage(root_view, node, image, argument.ty, stored_node)
+                else
+                    try self.restoreConstNodeAtNode(root_view, root_view, node, stored_node);
+            },
             .pending, .unevaluated => {
-                if (self.current_entry_root) |entry| if (entry.root == root_id and moduleBytesEqual(entry.module.bytes, root_view.key.bytes)) return null;
                 if (!self.builder.comptimeValueReadDeclared(root_view, root_id)) return null;
                 return try self.declaredComptimeValueRead(root_view, root_id, DraftTypeCell.fromGraphNode(request_node), null);
             },

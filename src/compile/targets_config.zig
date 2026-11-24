@@ -1004,10 +1004,22 @@ fn topLevelConstNode(
         const template = checked_module.const_templates.get(const_ref);
         return switch (template.state) {
             .stored_const => |stored| stored.node,
-            .reserved, .eval_template => blk: {
-                reason.* = .unevaluated_constant;
-                break :blk null;
+            // A polymorphic constant is read as its canonical instance,
+            // which every compilation evaluates (design.md "Polymorphic
+            // Constants").
+            .eval_template => blk: {
+                const pattern = switch (const_ref.owner) {
+                    .top_level_binding => |binding| binding.pattern,
+                    .hoisted_root => break :blk unevaluated(reason),
+                };
+                const constant = checked_module.compile_time_roots.lookupIdByPattern(pattern) orelse break :blk unevaluated(reason);
+                const canonical = checked_module.compile_time_roots.canonicalInstance(constant) orelse break :blk unevaluated(reason);
+                break :blk switch (checked_module.compile_time_roots.root(canonical).payload) {
+                    .const_node => |node| node,
+                    .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => unevaluated(reason),
+                };
             },
+            .reserved => unevaluated(reason),
             .unimplemented => blk: {
                 reason.* = .unimplemented_declaration;
                 break :blk null;
@@ -1016,6 +1028,11 @@ fn topLevelConstNode(
     }
 
     reason.* = .missing_top_level_value;
+    return null;
+}
+
+fn unevaluated(reason: *TargetConfigResolveReason) ?checked.ConstNodeId {
+    reason.* = .unevaluated_constant;
     return null;
 }
 

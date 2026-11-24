@@ -22120,26 +22120,6 @@ fn sealDecidedVariables(
     store: *CheckedTypeStore,
     ty: CheckedTypeId,
 ) Allocator.Error!CheckedTypeId {
-    return try sealVariables(allocator, store, ty, .decided);
-}
-
-/// Which variables `sealVariables` may meet.
-const SealedVariables = enum {
-    /// Only decided variables (design.md "Decided Variables").
-    decided,
-    /// Any variable: a polymorphic constant's instance at a type whose
-    /// variables no use fixes is that constant's value with each of them at
-    /// its row default or the empty tag union, as its canonical instance is
-    /// (design.md "Polymorphic Constants").
-    any,
-};
-
-fn sealVariables(
-    allocator: Allocator,
-    store: *CheckedTypeStore,
-    ty: CheckedTypeId,
-    sealed_variables: SealedVariables,
-) Allocator.Error!CheckedTypeId {
     if (!try store.rootContainsIdentityVariables(ty)) return ty;
 
     const Instantiation = enum { empty_record, empty_tag_union, required_kind };
@@ -22148,23 +22128,20 @@ fn sealVariables(
         store: *const CheckedTypeStore,
         formals: *std.ArrayListUnmanaged(CheckedTypeId),
         defaults: *std.ArrayListUnmanaged(Instantiation),
-        sealed_variables: SealedVariables,
 
         fn variable(self: @This(), root: CheckedTypeId, payload: CheckedTypePayload) Allocator.Error!void {
-            if (self.sealed_variables == .decided and !payload.variableSealsWithoutSpecialization()) {
+            if (!payload.variableSealsWithoutSpecialization()) {
                 checkedArtifactInvariant("a type sealed at its decided variables reached a variable that is not decided", .{});
             }
             try self.formals.append(self.allocator, root);
-            // `walkCheckedTypeStructure` hands a variable as a flex or a rigid.
-            const row_default = if (payload == .flex) payload.flex.row_default else payload.rigid.row_default;
-            try self.defaults.append(self.allocator, if (row_default) |default| switch (default) {
+            try self.defaults.append(self.allocator, if (payload.flex.row_default) |row_default| switch (row_default) {
                 .empty_record => .empty_record,
                 .empty_tag_union => .empty_tag_union,
             } else .empty_tag_union);
         }
 
         fn kindVariable(self: @This(), root: CheckedTypeId) Allocator.Error!void {
-            if (self.sealed_variables == .decided and !self.store.payload(root).variableSealsWithoutSpecialization()) {
+            if (!self.store.payload(root).variableSealsWithoutSpecialization()) {
                 checkedArtifactInvariant("a type sealed at its decided variables reached a field kind variable that is not decided", .{});
             }
             try self.formals.append(self.allocator, root);
@@ -22175,7 +22152,7 @@ fn sealVariables(
     defer formals.deinit(allocator);
     var defaults: std.ArrayListUnmanaged(Instantiation) = .empty;
     defer defaults.deinit(allocator);
-    try walkCheckedTypeStructure(allocator, store, ty, Visitor{ .allocator = allocator, .store = store, .formals = &formals, .defaults = &defaults, .sealed_variables = sealed_variables });
+    try walkCheckedTypeStructure(allocator, store, ty, Visitor{ .allocator = allocator, .store = store, .formals = &formals, .defaults = &defaults });
 
     // The walk reads payloads that alias the store's pools, so the sealed
     // roots are appended only once it is over.
@@ -23123,12 +23100,9 @@ fn publishLiteralArgumentRoots(
                     try literalRequirementInstance(store, &identity_orderer, templates, edge.scope, instantiated)
                 else
                     null;
-                // A polymorphic constant's instance at a type no use fixes
-                // is its value with those variables sealed, as its
-                // canonical instance's are: the use reads that value.
                 const constant_instance = obligation.site.kind == .constant_instance;
-                const closed = instance == null or instance.? == .decided or (constant_instance and instance.? == .unbound);
-                const ty = if (closed) try sealVariables(allocator, store, instantiated, if (constant_instance) .any else .decided) else instantiated;
+                const closed = instance == null or instance.? == .decided;
+                const ty = if (closed) try sealDecidedVariables(allocator, store, instantiated) else instantiated;
                 const key: ObligationKey = .{ .site = obligation.site, .ty = try literalRequirementTypeIdentity(store, &identity_orderer, ty) };
                 // A variable that no scheme around the edge quantifies and
                 // that is not decided is fixed by no use. When that variable
@@ -23138,7 +23112,13 @@ fn publishLiteralArgumentRoots(
                 // nothing converts the literal. Otherwise the variable seals:
                 // the edge converts the literal at the sealed type.
                 const unfixed = !closed and instance.? == .unbound;
-                if (unfixed and store.payload(instantiated) == .flex) {
+                // A polymorphic constant read at a type whose variables no
+                // scheme around the edge quantifies (a destructuring value
+                // alias's own variables, which no checked scheme records)
+                // has no instance this edge could name: the reader computes
+                // it at the type it reads it at (design.md "Polymorphic
+                // Constants").
+                if (unfixed and (constant_instance or store.payload(instantiated) == .flex)) {
                     try args.append(allocator, .unbound);
                     continue;
                 }
@@ -26865,6 +26845,17 @@ pub const CompileTimeRootTable = struct {
         std.mem.sort(LiteralConversionRoot, combined, {}, LiteralConversionRoot.lessThan);
         self.literal_conversions.deinit(allocator);
         self.literal_conversions = .fromOwnedSlice(combined);
+    }
+
+    /// The canonical instance root of the polymorphic constant whose own
+    /// root is `constant` (design.md "Polymorphic Constants"): what a reader
+    /// with no use type, such as a target configuration, reads.
+    pub fn canonicalInstance(self: *const CompileTimeRootTable, constant: ComptimeRootId) ?ComptimeRootId {
+        for (self.roots.items()) |candidate| {
+            const argument = candidate.literal_argument orelse continue;
+            if (argument.canonical and argument.site.node == @backingInt(constant)) return candidate.id;
+        }
+        return null;
     }
 
     pub fn lookupIdByPattern(self: *const CompileTimeRootTable, pattern: CIR.Pattern.Idx) ?ComptimeRootId {

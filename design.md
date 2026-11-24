@@ -2525,14 +2525,18 @@ expression: a numeral's bytes are the bytes lowering gives the literal
 beyond its items (Static Lists And Strings Keep Their Capacity), each list's
 items are in an allocation of their own, and each tag is written as the
 discriminant of the variant its plan names. A read of a constant is the
-constant's stored value, capacity included: the read root's image is
-embedded in the reading root's block once, its pointer words relocated, and
-the part holds a copy of its root bytes. It reads a root of the module being
-written from the store being written, since every artifact of one checked
-identity owns its own store, and an imported root from the schema's view of
-its module. The writer shares no allocation between two parts, equal or
-not: sharing is an evaluator's record that two parts were one allocation,
-and a checked expression has no allocations to record.
+constant's stored value, capacity included: the read root's image,
+relocated into memory, is copied through the reading part's plan by the
+pass that copies an evaluation's memory (`NativeRootExport.imagePart`), so
+each of its allocations lands where an evaluation reading the constant
+would put it. It reads a root of the module being written from the store
+being written, since every artifact of one checked identity owns its own
+store, and an imported root from the schema's view of its module. An image
+holds each content once: finishing it merges allocations of equal bytes
+whose pointer words name allocations of equal content into the first of
+them (`ImageGraph.mergeEqualAllocations`), as an evaluation reads equal
+literals from one static allocation, so the writer's image and the
+evaluator's agree whatever either shared.
 
 A value-form root reads only roots the writer completes, so finalization
 completes every pending one before any evaluator starts: the evaluators'
@@ -7055,27 +7059,68 @@ instantiation.
 **Evaluation.** Every closed type instance at which a constant is used is
 evaluated at compile time and stored as a constant of its own, one root per
 constant and closed type, as a literal argument root is one per literal and
-closed type (Literal Arguments). Under `.lss` specialization makes every use
-closed, so each requested instance is a compile-time root. Under `.boxy` a use
-at a closed type reads that instance's stored value, and a use at an open type
-inside a generic function is a requirement of that function's scheme: the
-instance is a hidden input of the function, supplied by its caller and
-forwarded up the call chain to the call site where the type is closed, where
-the stored instance is passed. What is passed is the stored value; nothing
-recomputes a constant at run time, and no global mutable state and no
-adapter or re-tagging wrapper exists. Each instance's stored functions are
-built at that closed instance, so their type descriptors are that instance's.
+closed type (Literal Arguments). The constant's own value is a literal
+requirement of its entry wrapper's scheme (`LiteralArgumentKind.constant_instance`,
+whose site names the constant's root), so the machinery that places literal
+conversions places instances: every use of the constant, a call or method
+dispatch of a polymorphic callable binding among them, is an edge
+instantiating that scheme; an edge at a closed type is a `literal_argument`
+root of the edge's module holding the instance, and an edge at an open type
+inside a generic function forwards the instance as a literal requirement of
+that function's scheme, up the call chain to the call site where the type is
+closed. A dispatch to a method bound to a polymorphic callable binding
+(`to_inspect = plain`) is checked at no substitution of the binding's
+scheme; its edge instantiates the binding's own value at the dispatch's
+callable (`EdgeRec.value_ty`), the one requirement such a binding may have.
+A use whose instance no edge names (a frame that derives its literal
+arguments from its types, a dictionary entry) reads the root of some module
+holding that constant at that closed type (`Program.constantInstance`,
+Monotype's instance index): every root of one constant at one type holds
+one value.
+
+An instance root's value is stored whatever it holds: an image for data, and
+nodes for a value holding a function, which under `.lss` the Solved program
+evaluates, as it evaluates every root holding a function value. Its
+evaluation is the only place the constant's body runs: the root enters the
+frames of the schemes its edge instantiates and calls the constant's entry
+wrapper there with that frame's descriptors, dictionaries and literal
+arguments. Under `.boxy` a use reads the stored instance its edge names, and
+a forwarded use reads its own literal argument, a word of its type table
+holding an immortal callable that restores the stored instance (the root's
+entry wrapper); a value of a type the body does not know cannot be one table
+word, so the word is the callable, which never recomputes. Under `.lss` a use
+reads the stored instance its edge names, or the one its closed type names,
+or, in a compile-time program evaluating that instance, the instance's slot.
+No global mutable state and no adapter or re-tagging wrapper exists. Each
+instance's stored functions are built at that closed instance, so their type
+descriptors are that instance's.
 
 One evaluation of each polymorphic constant, the *canonical* one, instantiates
-every generalized variable at the empty tag union `[]` (rows closed empty). It
-runs in every compilation, `roc check` included, whether or not a use
-requests that instance, and it is the one evaluation that reports the
-constant's `dbg`, `expect` and `crash`. Every other instance's evaluation
-suppresses `dbg` and `expect` output; its failure (a crash, an allocation
-failure) is reported as an ordinary compile-time failure. `roc check` and
-`roc build` report the same things. N instances cost N compile-time
-evaluations and N copies in the binary, and an unannotated constant can gain
-instances silently; both are accepted.
+every generalized variable at its row default, or the empty tag union `[]`
+(`LiteralEdge.canonical`, `LiteralArgumentRoot.canonical`). It runs in every
+compilation, `roc check` included, whether or not a use requests that
+instance (a use at that very instance shares its root), and it is the one
+evaluation that reports the constant's `dbg`, `expect` and `crash`. Every
+other instance's evaluation suppresses `dbg` and `expect` output
+(`reportsObservations`); its failure (a crash, an allocation failure) is
+reported as an ordinary compile-time failure. `roc check` and `roc build`
+report the same things. A reader with no use type (the wasm target
+configuration's) reads the canonical instance. N instances cost N
+compile-time evaluations and N copies in the binary, and an unannotated
+constant can gain instances silently; both are accepted.
+
+Three reads still compute a constant where it is read, each because no
+checked data names an instance there. A constant whose type mentions a
+platform's abstract type (`[Model : model] for main`) has the type of the
+app it is paired with, which checking the platform does not know, so no
+instance can be evaluated where the platform is checked; it is its entry
+procedure's value at the app's type. A constant hoisted out of a generic
+body (Compile-Time Constants and Hoisted Roots) has the body's variables,
+and the body computes it in place. A read whose type mentions variables
+that no scheme around it quantifies and that are not decided (the own
+variables of a destructuring value alias, `(f, _) = Hooks.pair`, which no
+checked scheme records) has an `.unbound` instance argument, and the read
+computes the constant at the type it is lowered at.
 
 ## Checked Boundary
 
@@ -31199,13 +31244,21 @@ does. A value-form root (Value-Form Roots) is written as its image straight
 from its checked expression (`ConstStoreWriter.ValueFormImage`), part by
 part at the 64-bit layout exactly as the evaluation of the same expression
 is written: each list's items in an allocation of their own, and a constant
-it reads is that constant's image, embedded once with its pointer words
-relocated. A literal argument root is an evaluated root.
+it reads is that constant's image copied through the part's plan
+(`NativeRootExport.imagePart`). Every image holds each allocation content
+once (`ImageGraph.mergeEqualAllocations`). A literal argument root is an
+evaluated root.
 
 The image's digest is computed once, as the image is stored, over the
-content digest of the root's layout (`layout.Digests`, a function of the
-layout's structure alone, the same in every program and on every target),
-the block, and the pointer offsets. Everything that names the value by
+identity of the type the value was stored at (`ConstTypeStore.identityDigest`:
+its structure, with tag and field names by their text and named types by
+their declaring module, name and arguments), the content digest of the root's
+layout (`layout.Digests`, a function of the layout's structure alone, the
+same in every program and on every target), the block, and the pointer
+offsets. Two values with one layout and one block at different types (`A` of
+`[A, B]` and `C` of `[C, D]`, or a `Celsius` and a `Fahrenheit` of one
+backing) are different values with different digests, so nothing keyed by a
+digest takes a renamed tag for an unchanged value. Everything that names the value by
 content reads that digest: a module's interface and object-input digests
 (`boxy_interface.Digests.hashRootValue`) never walk an imaged value. Object
 keys are needed without a cache manager too: a runtime unit takes the object
@@ -33606,8 +33659,11 @@ data entries it needs into one page-aligned static pool chunk at the end of its
 allocation, and records in that chunk each entry whose relocations reach no
 code and no address cycle: its bytes, alignment, symbol offset, and relocations,
 with a content hash. Recursive type descriptors point at one another, so an
-entry on such a cycle has no content independent of its placement; it and
-every entry reaching it are written locally.
+entry on a cycle through other entries has no content independent of its
+placement; it and every entry reaching it are written locally. A relocation
+into the entry itself, as a stored image's pointer words are, is placement
+independent: it is hashed as such and matches a candidate's relocation into
+that candidate.
 The shim marks a descriptor accepted before any of that image's code runs.
 Once a descriptor is accepted, the compiler parent links its chunk into the
 session's static pool, whose newest chunk the control block names, and never

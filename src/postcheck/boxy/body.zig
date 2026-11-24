@@ -6917,7 +6917,18 @@ pub const Builder = struct {
                 .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => {},
             },
             .forwarded => {},
-            .unbound => invariant("a polymorphic constant's instance is unbound"),
+            // A read at variables no checked scheme records (a destructuring
+            // value alias's own) computes the constant at the read's type.
+            .unbound => {
+                const expr_id: ExprId = switch (edge) {
+                    .use => |use_expr| use_expr,
+                    .literal, .node, .requirement, .canonical => invariant("a polymorphic constant's unbound instance is read through no use"),
+                };
+                const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = ty, .effectful = false } });
+                const instance = try self.callInstanceAt(wrapper, self.siteSubstitution(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{}, fn_ty, edge);
+                defer self.allocator.free(instance.hidden);
+                return try self.finishCall(wrapper, instance.hidden, instance.bound, &.{}, instance.ret, ty);
+            },
         }
         try self.callInstanceThunk(try self.literalArg(args[own]), ty);
     }

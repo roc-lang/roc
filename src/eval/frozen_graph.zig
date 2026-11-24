@@ -223,11 +223,19 @@ pub fn ImageGraph(comptime AllocationKey: type) type {
         pointers: std.ArrayList(u32) = .empty,
         allocations: std.AutoHashMapUnmanaged(AllocationKey, Destination) = .empty,
         alignment_: u32 = 1,
+        /// The allocations after the root, in block order.
+        segments: std.ArrayList(Segment) = .empty,
+
+        /// An allocation of the block, from the first byte of its header at
+        /// `start`, at `alignment`; `payload` is its first payload byte, what
+        /// a pointer word holds.
+        const Segment = struct { start: usize, end: usize, alignment: u32, payload: usize };
 
         pub fn deinit(self: *Self) void {
             self.block.deinit(self.allocator);
             self.pointers.deinit(self.allocator);
             self.allocations.deinit(self.allocator);
+            self.segments.deinit(self.allocator);
         }
 
         /// Images are at the 64-bit layout, whatever the evaluation's
@@ -292,31 +300,200 @@ pub fn ImageGraph(comptime AllocationKey: type) type {
             // marker; `extend` zeroed it.
             if (contains_refcounted) try self.writeWord(.{ .symbol = image_block, .offset = dest.offset - 2 * self.word() }, element_count orelse 0);
             try self.allocations.put(self.allocator, key, dest);
+            try self.segments.append(self.allocator, .{ .start = start, .end = start + payload_offset + byte_count, .alignment = @intCast(@max(alignment_, self.word())), .payload = dest.offset });
             return .{ .dest = dest, .fresh = true };
-        }
-
-        /// Append another image's block, `bytes` with pointer words at
-        /// `pointers`, at `alignment_`; its pointer words are relocated to
-        /// point where their targets now are. Returns where it starts.
-        pub fn embed(self: *Self, bytes_: []const u8, pointers: []const u32, alignment_: u32) Allocator.Error!Destination {
-            const start = try self.extend(bytes_.len, alignment_);
-            @memcpy(self.block.items[start..][0..bytes_.len], bytes_);
-            try self.pointers.ensureUnusedCapacity(self.allocator, pointers.len);
-            for (pointers) |offset| {
-                const pointer_word = self.block.items[start + offset ..][0..8];
-                std.mem.writeInt(u64, pointer_word, std.mem.readInt(u64, pointer_word, .little) + start, .little);
-                self.pointers.appendAssumeCapacity(@intCast(start + offset));
-            }
-            return .{ .symbol = image_block, .offset = start };
         }
 
         /// A finished image: the block, its pointer words in ascending
         /// order, and its alignment, all owned by the graph.
         pub const Result = struct { bytes: []const u8, pointers: []const u32, alignment: u32 };
 
-        pub fn finish(self: *Self) Result {
+        pub fn finish(self: *Self) Allocator.Error!Result {
             std.mem.sortUnstable(u32, self.pointers.items, {}, std.sort.asc(u32));
+            try self.mergeEqualAllocations();
             return .{ .bytes = self.block.items, .pointers = self.pointers.items, .alignment = self.alignment_ };
+        }
+
+        /// Make allocations of equal content one, and put them in one order:
+        /// an evaluation reads equal immutable data (two equal literals) from
+        /// one static allocation, which its image holds once, so an image
+        /// holds each content once, whichever producer wrote it, and in the
+        /// order a breadth-first walk from the root reaches it, whichever
+        /// order its producer visited it in. Two allocations are equal when
+        /// their bytes are, with each pointer word naming an allocation of
+        /// equal content; the first in block order is kept, and every pointer
+        /// to another points to it.
+        fn mergeEqualAllocations(self: *Self) Allocator.Error!void {
+            const segments = self.segments.items;
+            if (segments.len < 2) return;
+            const gpa = self.allocator;
+            var by_payload: std.AutoHashMapUnmanaged(usize, u32) = .empty;
+            defer by_payload.deinit(gpa);
+            for (segments, 0..) |segment, index| try by_payload.put(gpa, segment.payload, @intCast(index));
+
+            // Each segment's class of equal content, its children's first:
+            // a value's allocations reach one another acyclically.
+            const unassigned = std.math.maxInt(u32);
+            const class = try gpa.alloc(u32, segments.len);
+            defer gpa.free(class);
+            @memset(class, unassigned);
+            var class_first: std.ArrayList(u32) = .empty;
+            defer class_first.deinit(gpa);
+            var keys: std.StringHashMapUnmanaged(u32) = .empty;
+            defer {
+                var it = keys.keyIterator();
+                while (it.next()) |key| gpa.free(key.*);
+                keys.deinit(gpa);
+            }
+            var stack: std.ArrayList(u32) = .empty;
+            defer stack.deinit(gpa);
+            for (0..segments.len) |first| {
+                if (class[first] != unassigned) continue;
+                try stack.append(gpa, @intCast(first));
+                while (stack.items.len != 0) {
+                    const index = stack.items[stack.items.len - 1];
+                    if (class[index] != unassigned) {
+                        _ = stack.pop();
+                        continue;
+                    }
+                    const segment = segments[index];
+                    const pointers = self.pointersIn(segment.start, segment.end);
+                    var waiting = false;
+                    for (pointers) |at| if (by_payload.get(self.pointerTarget(at))) |child| if (class[child] == unassigned) {
+                        try stack.append(gpa, child);
+                        waiting = true;
+                    };
+                    if (waiting) continue;
+                    _ = stack.pop();
+                    // The bytes, each pointer word naming its target's class
+                    // (or, for a target in the root, its offset), behind the
+                    // payload's place and the alignment.
+                    const content = self.block.items[segment.start..segment.end];
+                    const key = try gpa.alloc(u8, 16 + content.len);
+                    std.mem.writeInt(u64, key[0..8], segment.payload - segment.start, .little);
+                    std.mem.writeInt(u64, key[8..16], segment.alignment, .little);
+                    @memcpy(key[16..], content);
+                    for (pointers) |at| {
+                        const target = self.pointerTarget(at);
+                        const named: u64 = if (by_payload.get(target)) |child| (@as(u64, 1) << 63) | class[child] else target;
+                        std.mem.writeInt(u64, key[16 + at - segment.start ..][0..8], named, .little);
+                    }
+                    const entry = try keys.getOrPut(gpa, key);
+                    if (entry.found_existing) {
+                        gpa.free(key);
+                        class[index] = entry.value_ptr.*;
+                        class_first.items[class[index]] = @min(class_first.items[class[index]], index);
+                    } else {
+                        entry.value_ptr.* = @intCast(class_first.items.len);
+                        class[index] = entry.value_ptr.*;
+                        try class_first.append(gpa, index);
+                    }
+                }
+            }
+            const kept = try gpa.alloc(bool, segments.len);
+            defer gpa.free(kept);
+            for (kept, 0..) |*keep, index| keep.* = class_first.items[class[index]] == index;
+
+            // The kept allocations in the order a breadth-first walk from the
+            // root reaches them, each one's pointer words in block order: one
+            // order for one value, whichever order its producer visited it in.
+            var order: std.ArrayList(u32) = .empty;
+            defer order.deinit(gpa);
+            const placed = try gpa.alloc(bool, segments.len);
+            defer gpa.free(placed);
+            @memset(placed, false);
+            try self.appendReached(self.pointersIn(0, segments[0].start), &by_payload, class, class_first.items, placed, &order);
+            var next: usize = 0;
+            while (next < order.items.len) : (next += 1) {
+                const segment = segments[order.items[next]];
+                try self.appendReached(self.pointersIn(segment.start, segment.end), &by_payload, class, class_first.items, placed, &order);
+            }
+            var in_place = order.items.len == segments.len;
+            for (order.items, 0..) |index, position| {
+                if (index != position) in_place = false;
+            }
+            if (in_place) return;
+
+            // Lay the kept allocations out again, after the root, in that
+            // order; a merged one moves to its kept equal.
+            const new_start = try gpa.alloc(usize, segments.len);
+            defer gpa.free(new_start);
+            var block: std.ArrayList(u8) = .empty;
+            errdefer block.deinit(gpa);
+            try block.appendSlice(gpa, self.block.items[0..segments[0].start]);
+            for (order.items) |index| {
+                const segment = segments[index];
+                new_start[index] = std.mem.alignForward(usize, block.items.len, segment.alignment);
+                try block.appendNTimes(gpa, 0, new_start[index] - block.items.len);
+                try block.appendSlice(gpa, self.block.items[segment.start..segment.end]);
+            }
+            for (kept, 0..) |keep, index| {
+                if (!keep) new_start[index] = new_start[class_first.items[class[index]]];
+            }
+            var pointers: std.ArrayList(u32) = .empty;
+            errdefer pointers.deinit(gpa);
+            for (self.pointers.items) |at| {
+                const holder = self.segmentOf(at);
+                if (holder) |index| if (!kept[index] or !placed[index]) continue;
+                const moved_at = self.movedOffset(at, new_start);
+                const moved_target = self.movedOffset(self.pointerTarget(at), new_start);
+                std.mem.writeInt(u64, block.items[moved_at..][0..8], moved_target, .little);
+                try pointers.append(gpa, @intCast(moved_at));
+            }
+            std.mem.sortUnstable(u32, pointers.items, {}, std.sort.asc(u32));
+            self.block.deinit(gpa);
+            self.block = block;
+            self.pointers.deinit(gpa);
+            self.pointers = pointers;
+        }
+
+        /// Append to `order` the kept allocation of each allocation the
+        /// pointer words `pointers` point at that `placed` does not hold yet.
+        fn appendReached(self: *const Self, pointers: []const u32, by_payload: *const std.AutoHashMapUnmanaged(usize, u32), class: []const u32, class_first: []const u32, placed: []bool, order: *std.ArrayList(u32)) Allocator.Error!void {
+            for (pointers) |at| {
+                const target = by_payload.get(self.pointerTarget(at)) orelse continue;
+                const kept = class_first[class[target]];
+                if (placed[kept]) continue;
+                placed[kept] = true;
+                try order.append(self.allocator, kept);
+            }
+        }
+
+        /// The sorted pointer words in `[start, end)`.
+        fn pointersIn(self: *const Self, start: usize, end: usize) []const u32 {
+            const all = self.pointers.items;
+            const first = std.sort.lowerBound(u32, all, @as(u32, @intCast(start)), orderU32);
+            const last = std.sort.lowerBound(u32, all, @as(u32, @intCast(end)), orderU32);
+            return all[first..last];
+        }
+
+        fn orderU32(context: u32, item: u32) std.math.Order {
+            return std.math.order(context, item);
+        }
+
+        /// The block offset the pointer word at `at` holds.
+        fn pointerTarget(self: *const Self, at: u32) usize {
+            return @intCast(std.mem.readInt(u64, self.block.items[at..][0..8], .little));
+        }
+
+        /// The segment holding offset `offset`, or null in the root.
+        fn segmentOf(self: *const Self, offset: usize) ?usize {
+            const segments = self.segments.items;
+            if (segments.len == 0 or offset < segments[0].start) return null;
+            var low: usize = 0;
+            var high: usize = segments.len;
+            while (high - low > 1) {
+                const mid = (low + high) / 2;
+                if (segments[mid].start <= offset) low = mid else high = mid;
+            }
+            return low;
+        }
+
+        /// Where `offset` is once the kept segments are laid out again at
+        /// `new_start`, a merged segment's being its kept equal's.
+        fn movedOffset(self: *const Self, offset: usize, new_start: []const usize) usize {
+            const index = self.segmentOf(offset) orelse return offset;
+            return new_start[index] + (offset - self.segments.items[index].start);
         }
     };
 }

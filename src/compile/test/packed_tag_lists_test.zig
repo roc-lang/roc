@@ -65,8 +65,8 @@ fn storedList(source: []const u8) TestError!Stored {
         const word = 8;
         const len = std.mem.readInt(u64, image.bytes[word..][0..word], .little);
         // The items run from the pointer word to the block's end: the list
-        // holds no other allocation.
-        const items: []const u8 = if (len == 0) &.{} else image.bytes[@intCast(std.mem.readInt(u64, image.bytes[0..word], .little))..];
+        // holds no other allocation. A list of zero-sized items has none.
+        const items: []const u8 = if (len == 0 or image.pointers.len == 0) &.{} else image.bytes[@intCast(std.mem.readInt(u64, image.bytes[0..word], .little))..];
         found = .{
             .items = try gpa.dupe(u8, items),
             .len = len,

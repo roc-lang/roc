@@ -122,7 +122,6 @@ const corpus =
     \\    \\the first line of a string on several lines
     \\    \\and the second
     \\
-    \\yes : Bool
     \\yes = True
     \\no : Bool
     \\no = False
@@ -529,12 +528,20 @@ fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) WriterMat
     // One source checked twice: the roots line up by id.
     try std.testing.expectEqual(left_roots.len, right_roots.len);
     var constants: usize = 0;
+    var polymorphic: usize = 0;
     var hoisted: usize = 0;
     var readers: usize = 0;
     for (left_roots, right_roots) |left_root, right_root| {
         try std.testing.expectEqual(left_root.kind, right_root.kind);
         try std.testing.expectEqual(left_root.completion, right_root.completion);
-        // Every top-level constant of the corpus is in value form.
+        // A polymorphic constant's own root is never evaluated: each of its
+        // instances is (design.md "Polymorphic Constants").
+        if (right.compile_time_roots.canonicalInstance(right_root.id) != null) {
+            polymorphic += 1;
+            if (right_root.reads_constants) readers += 1;
+            continue;
+        }
+        // Every other top-level constant of the corpus is in value form.
         if (rootName(right, right_root)) |name| if (right_root.completion != .write_value) {
             std.debug.print("corpus constant {s} is not in value form\n", .{name});
             return error.CorpusConstantNotValueForm;
@@ -569,12 +576,14 @@ fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) WriterMat
             return err;
         };
     }
-    try std.testing.expectEqual(@as(usize, 79), constants);
+    try std.testing.expectEqual(@as(usize, 79), constants + polymorphic);
     // `base` and `read_base` in `measure`, which the root computing `total`
     // reads.
     try std.testing.expectEqual(@as(usize, 2), hoisted);
-    // The 21 top-level constants and `read_base` that read other constants.
-    try std.testing.expectEqual(@as(usize, 22), readers);
+    // The top-level constants and `read_base` that read other constants in
+    // value form: 21 and `read_base`, but for the three that read a
+    // polymorphic constant, whose instance is evaluated.
+    try std.testing.expectEqual(@as(usize, 19), readers);
     if (written.rootsCompletedDirectly() < constants + hoisted) {
         std.debug.print("{d} roots were completed directly, fewer than {d}\n", .{ written.rootsCompletedDirectly(), constants + hoisted });
         return error.TooFewRootsCompletedDirectly;

@@ -1369,7 +1369,9 @@ test "callable binding with alias annotation is const-evaluated" {
             const argument = instance.literal_argument orelse continue;
             if (argument.site.kind != .constant_instance or argument.site.node != @backingInt(root.id)) continue;
             instances += 1;
-            if (instance.payload != .fn_value) return error.CallableBindingConstFnNotStored;
+            // An instance root stores its function value as a node of the
+            // constant store.
+            if (instance.payload != .const_node) return error.CallableBindingConstFnNotStored;
         }
         if (instances == 0) return error.CallableBindingConstFnNotStored;
     }

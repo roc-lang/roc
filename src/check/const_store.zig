@@ -2697,10 +2697,10 @@ test "an image's digest covers its type: equal bytes at unions with other tag na
             });
         }
     }.of;
-    try std.testing.expectEqualSlices(u8, &try digest(&types, &type_names, ab), &try digest(&types, &type_names, ab_again));
-    try std.testing.expect(!std.mem.eql(u8, &try digest(&types, &type_names, ab), &try digest(&types, &type_names, cd)));
-    try std.testing.expect(!std.mem.eql(u8, &try digest(&types, &type_names, nominals[0]), &try digest(&types, &type_names, nominals[1])));
-    try std.testing.expect(!std.mem.eql(u8, &try digest(&types, &type_names, nominals[0]), &try digest(&types, &type_names, u8_ty)));
+    try std.testing.expectEqual(try digest(&types, &type_names, ab), try digest(&types, &type_names, ab_again));
+    try std.testing.expect(!std.meta.eql(try digest(&types, &type_names, ab), try digest(&types, &type_names, cd)));
+    try std.testing.expect(!std.meta.eql(try digest(&types, &type_names, nominals[0]), try digest(&types, &type_names, nominals[1])));
+    try std.testing.expect(!std.meta.eql(try digest(&types, &type_names, nominals[0]), try digest(&types, &type_names, u8_ty)));
 }
 
 test "ConstTypeStore: one translation copies each shared type once and the copies survive serialization" {

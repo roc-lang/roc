@@ -1540,15 +1540,14 @@ fn packMemoryScalars(element: const_store.ConstPackedScalar, out: []u8, source: 
 /// part at the 64-bit layout of its type, as `NativeRootExport.imageRoot`
 /// writes an evaluation of the same expression, each list's items in an
 /// allocation of their own, and a part reading a constant the constant's
-/// stored image, embedded once.
+/// stored image, copied through the part's plan as an evaluation's memory
+/// is.
 const ValueFormImage = struct {
     writer: *Writer,
     graph: NativeRootExport.ImageGraph,
     jobs: std.ArrayList(Job) = .empty,
-    /// Where each stored image a part reads is embedded.
-    embedded: std.AutoHashMapUnmanaged([32]u8, usize) = .empty,
     /// Distinct allocation keys: every allocation of a value-form root is
-    /// its own.
+    /// its own, until the finished image merges those of equal content.
     allocations: usize = 0,
 
     const Job = struct {
@@ -1560,7 +1559,6 @@ const ValueFormImage = struct {
 
     fn deinit(self: *ValueFormImage) void {
         self.jobs.deinit(self.writer.allocator);
-        self.embedded.deinit(self.writer.allocator);
         self.graph.deinit();
     }
 
@@ -1573,7 +1571,7 @@ const ValueFormImage = struct {
         const root = try self.graph.root(self.graph.size(layout_idx), self.graph.alignment(layout_idx));
         try self.jobs.append(self.writer.allocator, .{ .plan = plan, .layout_idx = layout_idx, .part = checkedPart(expr), .dest = root });
         while (self.jobs.pop()) |job| try self.write(job);
-        return self.graph.finish();
+        return try self.graph.finish();
     }
 
     /// A new allocation of `size` bytes at `alignment` the word at `dest`
@@ -1603,7 +1601,7 @@ const ValueFormImage = struct {
         if (size == 0) return;
         const expr = switch (job.part) {
             .checked => |expr| expr,
-            .stored => |stored| return try self.copyStored(stored, job.layout_idx, job.dest, size),
+            .stored => |stored| return try self.copyStored(stored, job.plan, job.layout_idx, job.dest, size),
         };
         const word = self.graph.word();
         switch (plan) {
@@ -1714,7 +1712,7 @@ const ValueFormImage = struct {
     /// Write the value of the constant `stored` holds, an image, at `dest`
     /// at `layout_idx`: its root's bytes, pointing into the image's block,
     /// which is embedded once.
-    fn copyStored(self: *ValueFormImage, stored: StoredPart, layout_idx: layout.Idx, dest: frozen_graph.Destination, size: usize) Error!void {
+    fn copyStored(self: *ValueFormImage, stored: StoredPart, plan: LirProgram.ConstPlanId, layout_idx: layout.Idx, dest: frozen_graph.Destination, size: usize) Error!void {
         const image_id = stored.store.imageOf(stored.node) orelse writerInvariant("a constant a value-form root reads is not stored as an image");
         const image = stored.store.image(image_id);
         if (builtin.mode == .debug) {
@@ -1722,18 +1720,24 @@ const ValueFormImage = struct {
             if (!std.meta.eql(own, image.layout_digest)) writerInvariant("a value-form root reads a constant at another layout than its image's");
         }
         if (image.root_size != size) writerInvariant("a constant's image differs in size from the part reading it");
-        const entry = try self.embedded.getOrPut(self.writer.allocator, image.digest);
-        if (!entry.found_existing) entry.value_ptr.* = (try self.graph.embed(image.bytes, image.pointers, image.alignment)).offset;
-        const base_offset = entry.value_ptr.*;
-        @memcpy(self.graph.bytes(dest, size), self.graph.block.items[base_offset..][0..size]);
-        // The embedded root's own pointer words point into the embedded
-        // block; their copies at `dest` do too.
+        // An image that points nowhere is its root's bytes alone.
+        if (image.pointers.len == 0) return @memcpy(self.graph.bytes(dest, size), image.bytes[0..size]);
+        // Otherwise the image, relocated into memory, is copied part by part
+        // through the reading part's plan, as an evaluation reading the
+        // constant leaves it to be copied: each allocation at its own place.
+        const memory = try self.writer.allocator.alignedAlloc(u8, .fromByteUnits(max_image_alignment), image.bytes.len);
+        defer self.writer.allocator.free(memory);
+        if (image.alignment > max_image_alignment) writerInvariant("a stored image is aligned beyond any layout's alignment");
+        @memcpy(memory, image.bytes);
         for (image.pointers) |offset| {
-            if (offset >= image.root_size) break;
-            const target = std.mem.readInt(u64, self.graph.block.items[base_offset + offset ..][0..8], .little);
-            try self.graph.relocate(dest.offsetBy(offset), .{ .symbol = dest.symbol, .offset = @intCast(target) });
+            const word = memory[offset..][0..8];
+            std.mem.writeInt(u64, word, @intFromPtr(memory.ptr) + std.mem.readInt(u64, word, .little), .little);
         }
+        try NativeRootExport.imagePart(&self.graph, plan, layout_idx, .{ .ptr = memory.ptr }, dest);
     }
+
+    /// The largest alignment of any layout, and so of any image.
+    const max_image_alignment = 16;
 };
 
 fn writePackedScalar(out: []u8, element: const_store.ConstPackedScalar, scalar: checked.ConstScalar) void {
