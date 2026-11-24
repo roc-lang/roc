@@ -32549,6 +32549,20 @@ during the final link. Undefined functions referenced by the linked objects may
 remain host imports, but the linker must not treat a missing declared export as
 such an import or silently discard it.
 
+A wasm target's `minimum_memory`, `maximum_memory` and `initial_stack_size`
+are sizes `roc_target.wasm_memory` accepts: whole pages from one page to 4 GiB
+for the two memory sizes, and a multiple of the stack alignment below 4 GiB
+for the stack. The platform header is held to those rules where it is read
+(`TargetsConfig.fromAST` for a literal, `resolveCheckedConstants` for a named
+constant), and the `--wasm-memory` and `--wasm-stack-size` flags that override
+it take their accepted values from the same rules. Every size a link receives
+is therefore one both the composed link and wasm-ld can express, so neither
+re-validates a size's form: a link reports only what depends on the program,
+which is a configured size the laid-out program does not fit. Both links
+report that as the same `wasm_memory_layout` problem; the wasm-ld link reads
+the needed size from wasm-ld's diagnostic, since only the linker lays the
+program out.
+
 A wasm target's `global_base` is the first address the Roc program may use;
 the host owns every address below it, so it is at least 1. Whether a target
 has one selects the stack layout (`linker.wasmStackLayout`), and nothing else
