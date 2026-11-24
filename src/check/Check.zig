@@ -181,7 +181,7 @@ try_row_fixpoint_scratch: TryRowFixpointScratch = .{},
 /// to the outermost fixpoint it is open in (`collectOpenTryRowTails`).
 try_row_open_tails: collections.DenseMapUnmanaged(Var, u32) = .empty,
 /// A map from one var to another. Used in instantiation and var copying
-var_map: collections.DenseMap(Var, Var),
+var_map: collections.EpochMap(Var, Var),
 /// Pristine copies of ground expected types, by structural hash.
 /// See `expectedTypeBackup`.
 ground_expected_backups: std.AutoHashMapUnmanaged(u64, Var) = .empty,
@@ -1324,7 +1324,7 @@ scratch_deferred_callables: std.ArrayListUnmanaged(types_mod.instantiate.Deferre
 scratch_deferred_placeholders: collections.DenseMap(Var, Var),
 scratch_deferred_slots: std.ArrayListUnmanaged(u32) = .empty,
 scratch_replay_matches: std.ArrayListUnmanaged(u32) = .empty,
-link_var_map: collections.DenseMap(Var, Var),
+link_var_map: collections.EpochMap(Var, Var),
 link_scratch_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
 link_scratch_owned: std.ArrayListUnmanaged(Var) = .empty,
 link_new_copies: std.ArrayListUnmanaged(LinkedCopy) = .empty,
@@ -4986,7 +4986,7 @@ fn initAssumePrepared(
         .seen_annos = try collections.ScopedBitSet.initEmpty(gpa, node_count),
         .env_pool = try EnvPool.init(gpa),
         .generalizer = try Generalizer.init(gpa, types),
-        .var_map = collections.DenseMap(Var, Var).init(gpa),
+        .var_map = collections.EpochMap(Var, Var).init(gpa),
         .method_name_mints = collections.DenseMap(MethodNameId, []const MethodNameId).init(gpa),
         .method_mint_names = canonical_names.CanonicalNameStore.init(gpa),
         .try_return_conditions = collections.DenseMap(Var, CIR.Expr.Idx).init(gpa),
@@ -5028,7 +5028,7 @@ fn initAssumePrepared(
         .callee_use_calls = collections.DenseMap(CIR.Expr.Idx, CIR.Expr.Idx).init(gpa),
         .loop_dispatch_iterables = collections.DenseMap(Var, CIR.Expr.Idx).init(gpa),
         .reach_free_schemes = collections.DenseMap(Var, void).init(gpa),
-        .link_var_map = collections.DenseMap(Var, Var).init(gpa),
+        .link_var_map = collections.EpochMap(Var, Var).init(gpa),
         .scratch_deferred_placeholders = collections.DenseMap(Var, Var).init(gpa),
         .frozen_relation_reachable = collections.DenseMap(Var, void).init(gpa),
         .reported_dispatch_vars = collections.DenseMap(Var, void).init(gpa),
@@ -13319,7 +13319,7 @@ fn instantiateVarWithSubsPolarizedFromScheme(
 fn substitutedStructuralOrigin(
     self: *Self,
     origin: StructuralSchemeRequirementOrigin,
-    var_map: *const collections.DenseMap(Var, Var),
+    var_map: *const collections.EpochMap(Var, Var),
 ) StructuralSchemeRequirementOrigin {
     const receiver_root = self.types.resolveVar(origin.receiver_var).var_;
     const fn_root = self.types.resolveVar(origin.constraint_fn_var).var_;
@@ -13592,7 +13592,7 @@ fn instantiateVarHelpFromScheme(
 /// callable, recorded in `scratch_deferred_callables`.
 fn nameDeferredCallables(
     self: *Self,
-    var_map: *const collections.DenseMap(Var, Var),
+    var_map: *const collections.EpochMap(Var, Var),
     rank: Rank,
     requirements: []InstantiatedSchemeDispatchRequirement,
 ) Allocator.Error!void {
@@ -13609,7 +13609,7 @@ fn nameDeferredCallables(
 
 fn deferredCallableName(
     self: *Self,
-    var_map: *const collections.DenseMap(Var, Var),
+    var_map: *const collections.EpochMap(Var, Var),
     rank: Rank,
     source: Var,
     force_root_copy: bool,
@@ -13674,7 +13674,7 @@ inline fn registerInstantiatedVar(
     self: *Self,
     old: Var,
     fresh_copy: Var,
-    var_map: *const collections.DenseMap(Var, Var),
+    var_map: *const collections.EpochMap(Var, Var),
     ctx: InstantiatedVarContext,
     position: InstantiatedVarPosition,
     env: *Env,
@@ -13913,7 +13913,7 @@ fn setVarRegion(self: *Self, target_var: Var, new_region: Region) Allocator.Erro
 /// Give each of the variables `copies` maps to that has no region yet the
 /// region `region`, oldest first. A variable an instantiation mapped to
 /// without creating it has its region already.
-fn setCopiedVarsRegion(self: *Self, copies: *collections.DenseMap(Var, Var), region: Region) Allocator.Error!void {
+fn setCopiedVarsRegion(self: *Self, copies: *collections.EpochMap(Var, Var), region: Region) Allocator.Error!void {
     const vars = &self.scratch_region_vars;
     vars.clearRetainingCapacity();
     var copied = copies.valueIterator();
@@ -53976,7 +53976,7 @@ fn recordCalleeUseConsumer(self: *Self, uses_start: u32, callee: CIR.Expr.Idx, c
 /// instantiation copied, and the instantiation's state.
 fn saveDeferredCallables(
     self: *Self,
-    var_map: *collections.DenseMap(Var, Var),
+    var_map: *collections.EpochMap(Var, Var),
     link: DeferredLinkContext,
 ) Allocator.Error!void {
     const use_idx: u32 = @intCast(self.use_instances.items.len - 1);
