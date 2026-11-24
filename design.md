@@ -30292,10 +30292,10 @@ then overwrites it. A gap shorter than the aggregate's alignment is padding
 and is zeroed by aligned integer stores; only a short variant's unused payload
 bytes take an `llvm.memset`. A constructed aggregate is often copied whole
 right after it is built, into a list item, a box, or a parent, and LLVM's
-MemCpyOpt rewrites a `memset` followed by such a copy by updating its memory
-SSA at a cost proportional to the block, once per pair. LLVM's SROA rewrites an `llvm.memset` that lands on a part
-of a slot it promotes as a vector by first loading that part's old value. The
-load makes the slot live into its block, so mem2reg gives every join inside a
+memcpy optimization pass rewrites a `memset` followed by such a copy by
+updating its memory SSA at a cost proportional to the block, once per pair.
+LLVM's SROA rewrites an `llvm.memset` that lands on a part of a slot it
+promotes as a vector by first loading that part's old value. The load makes the slot live into its block, so mem2reg gives every join inside a
 loop around the write a phi of the slot's previous-iteration bytes, which
 nothing reads. A zero-fill under every field puts such a memset on every part
 of the slot; zeroing only the gaps puts it only on bytes nothing else writes.
