@@ -985,7 +985,7 @@ fn prepareVariantSources(owners: []EmissionOwner, inline_tasks: *InlineArcTasks,
     defer pending.deinit(inline_tasks.allocator);
     for (owners) |*owner| {
         if (FusedWave.isBaseOwner(owner) or owner.source.prepared != null or owner.source.body == null) continue;
-        if (std.mem.indexOfScalar(*SourceCache, pending.items, owner.source) != null) continue;
+        if (std.mem.findScalar(*SourceCache, pending.items, owner.source) != null) continue;
         try pending.append(inline_tasks.allocator, owner.source);
     }
     if (pending.items.len == 0) return;

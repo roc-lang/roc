@@ -493,11 +493,12 @@ fn OrderedRun(comptime Ctx: type) type {
             if (self.lane_ns.len != 0) allocator.free(self.lane_ns);
         }
 
-        /// The run's lane state for the lane `worker` names.
+        /// The run's lane state for the lane `worker` names, allocating from
+        /// the allocator of the worker's own lane state.
         fn laneOf(self: *Self, worker: Worker) *LaneState {
             std.debug.assert(worker.id < self.lanes.len);
             const slot = &self.lanes[worker.id];
-            if (slot.* == null) slot.* = LaneState.init(worker.allocator);
+            if (slot.* == null) slot.* = LaneState.init(worker.lane_state.allocator);
             return &slot.*.?;
         }
 
