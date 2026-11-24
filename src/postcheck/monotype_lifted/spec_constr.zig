@@ -11884,12 +11884,17 @@ const Cloner = struct {
         expr: Ast.ExprId,
 
         fn oracle(self: *ArgumentSeed) InlineCrossing.Oracle {
-            return .{ .ctx = self, .known = known };
+            return .{ .ctx = self, .known = known, .has_known_descendant = hasKnownDescendant };
         }
 
         fn known(ctx: *anyopaque, path: []const InlineCrossing.Step, kinds: InlineCrossing.Consumers) Allocator.Error!bool {
             const self: *ArgumentSeed = @ptrCast(@alignCast(ctx));
             return self.cloner.crossingKnownAt(self.expr, path, kinds);
+        }
+
+        fn hasKnownDescendant(ctx: *anyopaque, path: []const InlineCrossing.Step, kinds: InlineCrossing.Consumers) Allocator.Error!bool {
+            const self: *ArgumentSeed = @ptrCast(@alignCast(ctx));
+            return self.cloner.crossingHasKnownDescendant(self.expr, path, kinds);
         }
     };
 
@@ -11902,7 +11907,7 @@ const Cloner = struct {
         call: Mono.CallProc,
 
         fn oracle(self: *ResultSeed) InlineCrossing.Oracle {
-            return .{ .ctx = self, .known = known };
+            return .{ .ctx = self, .known = known, .has_known_descendant = hasKnownDescendant };
         }
 
         fn known(ctx: *anyopaque, path: []const InlineCrossing.Step, kinds: InlineCrossing.Consumers) Allocator.Error!bool {
@@ -11912,6 +11917,16 @@ const Cloner = struct {
             const built = try session.builtAt(self.callee, try session.pathOf(path));
             if (built.kinds.intersectWith(kinds).count() != 0) return true;
             return self.cloner.passesKnown(built.passes, self.callee, self.call, kinds, program);
+        }
+
+        fn hasKnownDescendant(ctx: *anyopaque, path: []const InlineCrossing.Step, kinds: InlineCrossing.Consumers) Allocator.Error!bool {
+            if (kinds.count() == InlineCrossing.known_parts.count()) return known(ctx, path, kinds);
+            const self: *ResultSeed = @ptrCast(@alignCast(ctx));
+            const session = self.cloner.crossingSession();
+            const program = self.cloner.pass.program;
+            const desc = try session.builtDescendant(self.callee, try session.pathOf(path));
+            if (desc.top or desc.kinds.intersectWith(kinds).count() != 0) return true;
+            return self.cloner.passesHasKnownDescendant(desc.passes, self.callee, self.call, kinds, program);
         }
     };
 
@@ -11932,6 +11947,25 @@ const Cloner = struct {
                 } else Common.invariant("direct call supplied no operand for a capture its callee passes through"),
             };
             if (try self.crossingKnownAt(source, through.items, kinds)) return true;
+        }
+        return false;
+    }
+
+    fn passesHasKnownDescendant(self: *Cloner, passes: []const InlineCrossing.Built.Pass, callee: Ast.FnId, call: Mono.CallProc, kinds: InlineCrossing.Consumers, program: *const Ast.Program) Allocator.Error!bool {
+        const session = self.crossingSession();
+        const args = program.exprSpan(call.args);
+        const operands = program.captureOperandSpan(call.captures);
+        for (passes) |pass| {
+            var through: std.ArrayList(InlineCrossing.Step) = .empty;
+            try session.stepsOf(self.arena.allocator(), pass.path, &through);
+            const source = switch (pass.slot.kind) {
+                .arg => GuardedList.at(args, pass.slot.index),
+                .capture => for (0..operands.len) |index| {
+                    const operand = GuardedList.at(operands, index);
+                    if (InlineCrossing.captureSlot(program, callee, operand.id) == pass.slot.index) break operand.value;
+                } else Common.invariant("direct call supplied no operand for a capture its callee passes through"),
+            };
+            if (try self.crossingHasKnownDescendant(source, through.items, kinds)) return true;
         }
         return false;
     }
@@ -12102,6 +12136,258 @@ const Cloner = struct {
                                 } else Common.invariant("direct call supplied no operand for a capture its callee passes through"),
                             };
                             try work.append(self.pass.allocator, .{ .expr = .{ .id = source, .steps = through.items } });
+                        }
+                    },
+                    .comptime_value,
+                    .unit,
+                    .@"unreachable",
+                    .int_lit,
+                    .frac_f32_lit,
+                    .frac_f64_lit,
+                    .dec_lit,
+                    .str_lit,
+                    .bytes_lit,
+                    .list,
+                    .let_,
+                    .lambda,
+                    .def_ref,
+                    .fn_def,
+                    .call_value,
+                    .low_level,
+                    .structural_eq,
+                    .structural_hash,
+                    .match_,
+                    .if_,
+                    .uninitialized,
+                    .uninitialized_payload,
+                    .if_initialized_payload,
+                    .try_sequence,
+                    .try_record_sequence,
+                    .block,
+                    .loop_,
+                    .break_,
+                    .continue_,
+                    .join_point,
+                    .jump,
+                    .return_,
+                    .crash,
+                    .checked_error,
+                    .comptime_exhaustiveness_failed,
+                    .dbg,
+                    .expect_err,
+                    .literal_rejected,
+                    .expect,
+                    => {},
+                }
+            },
+        };
+        return false;
+    }
+
+    /// Whether `source_expr` at `source_steps` or any descendant of that part
+    /// is known for at least one consumer in `consumers`.
+    ///
+    /// A `Walk` only extends paths monotonically and only triggers a hit on a
+    /// consumer in `counted`, so returning `false` soundly proves that no walk
+    /// starting at `source_steps` can reach a hit.
+    fn crossingHasKnownDescendant(
+        self: *Cloner,
+        source_expr: Ast.ExprId,
+        source_steps: []const InlineCrossing.Step,
+        consumers: InlineCrossing.Consumers,
+    ) Allocator.Error!bool {
+        if (consumers.count() == InlineCrossing.known_parts.count()) {
+            return self.crossingKnownAt(source_expr, source_steps, consumers);
+        }
+        const Step = InlineCrossing.Step;
+        const FieldName = names.RecordFieldNameId;
+        const Item = union(enum) {
+            expr: struct { id: Ast.ExprId, steps: []const Step, shadowed: []const FieldName },
+            value: struct { value: Value, steps: []const Step, shadowed: []const FieldName },
+        };
+        const isShadowed = struct {
+            fn check(shadowed: []const FieldName, field: FieldName) bool {
+                for (shadowed) |s| if (s == field) return true;
+                return false;
+            }
+        }.check;
+        const program = self.pass.program;
+        const session = self.crossingSession();
+        const arena = self.arena.allocator();
+        const known_tag = consumers.contains(.match) or consumers.contains(.loop);
+        const known_callable = consumers.contains(.call) or consumers.contains(.loop);
+        const known_constructor = consumers.contains(.project);
+        var work: std.ArrayList(Item) = .empty;
+        defer work.deinit(self.pass.allocator);
+        var seen_root_exprs: collections.DenseMapUnmanaged(Ast.ExprId, void) = .empty;
+        defer seen_root_exprs.deinit(self.pass.allocator);
+        try work.append(self.pass.allocator, .{ .expr = .{ .id = source_expr, .steps = source_steps, .shadowed = &.{} } });
+        while (work.pop()) |item| switch (item) {
+            .value => |known| {
+                const steps = known.steps;
+                switch (structuralValue(known.value)) {
+                    .nominal => |nominal| try work.append(self.pass.allocator, .{ .value = .{ .value = nominal.backing.*, .steps = steps, .shadowed = known.shadowed } }),
+                    .tag => |tag| {
+                        if (steps.len == 0) {
+                            if (known_tag) return true;
+                            for (tag.payloads) |payload| {
+                                try work.append(self.pass.allocator, .{ .value = .{ .value = payload, .steps = &.{}, .shadowed = &.{} } });
+                            }
+                            continue;
+                        }
+                        for (tag.payloads, 0..) |payload, index| {
+                            if (!steps[0].isPayload(tag.name, @intCast(index))) continue;
+                            try work.append(self.pass.allocator, .{ .value = .{ .value = payload, .steps = steps[1..], .shadowed = &.{} } });
+                        }
+                    },
+                    .record => |record| {
+                        if (steps.len == 0) {
+                            if (known_constructor) return true;
+                            for (record.fields) |field| {
+                                if (isShadowed(known.shadowed, field.name)) continue;
+                                try work.append(self.pass.allocator, .{ .value = .{ .value = field.value, .steps = &.{}, .shadowed = &.{} } });
+                            }
+                            continue;
+                        }
+                        for (record.fields) |field| {
+                            if (!steps[0].isField(field.name)) continue;
+                            try work.append(self.pass.allocator, .{ .value = .{ .value = field.value, .steps = steps[1..], .shadowed = &.{} } });
+                        }
+                    },
+                    .tuple => |tuple| {
+                        if (steps.len == 0) {
+                            if (known_constructor) return true;
+                            for (tuple.items) |tuple_item| {
+                                try work.append(self.pass.allocator, .{ .value = .{ .value = tuple_item, .steps = &.{}, .shadowed = &.{} } });
+                            }
+                            continue;
+                        }
+                        for (tuple.items, 0..) |tuple_item, index| {
+                            if (!steps[0].isItem(@intCast(index))) continue;
+                            try work.append(self.pass.allocator, .{ .value = .{ .value = tuple_item, .steps = steps[1..], .shadowed = &.{} } });
+                        }
+                    },
+                    .callable => if (steps.len == 0 and known_callable) return true,
+                    .expr => {},
+                    .runtime_anchor, .static_data_candidate => Common.invariant("structuralValue returned a value wrapper"),
+                }
+            },
+            .expr => |known| {
+                const steps = known.steps;
+                if (steps.len == 0 and known.shadowed.len == 0) {
+                    if ((try seen_root_exprs.getOrPut(self.pass.allocator, known.id)).found_existing) continue;
+                }
+                switch (program.getExpr(known.id).data) {
+                    .typed_boundary => |boundary| try work.append(self.pass.allocator, .{ .expr = .{ .id = boundary.value, .steps = steps, .shadowed = known.shadowed } }),
+                    .row_widen => |widen| try work.append(self.pass.allocator, .{ .expr = .{ .id = widen.value, .steps = steps, .shadowed = known.shadowed } }),
+                    .nominal => |backing| try work.append(self.pass.allocator, .{ .expr = .{ .id = backing, .steps = steps, .shadowed = known.shadowed } }),
+                    .static_data_candidate => |candidate| switch (candidate.value) {
+                        .runtime => |runtime| try work.append(self.pass.allocator, .{ .expr = .{ .id = runtime, .steps = steps, .shadowed = known.shadowed } }),
+                        .stored => {},
+                    },
+                    .local => |local| if (self.subst.getExact(local)) |value| {
+                        try work.append(self.pass.allocator, .{ .value = .{ .value = value, .steps = steps, .shadowed = known.shadowed } });
+                    },
+                    .field_access => |field| {
+                        const receiver_local = localExpr(program, field.receiver) orelse continue;
+                        const receiver = self.subst.getExact(receiver_local) orelse continue;
+                        const value = fieldPathFromValue(program, receiver, program.fieldAccessSegmentSpan(field.segments)) orelse continue;
+                        try work.append(self.pass.allocator, .{ .value = .{ .value = value, .steps = steps, .shadowed = known.shadowed } });
+                    },
+                    .tuple_access => |access| {
+                        const tuple_local = localExpr(program, access.tuple) orelse continue;
+                        const tuple = self.subst.getExact(tuple_local) orelse continue;
+                        const value = itemFromValue(tuple, access.elem_index) orelse continue;
+                        try work.append(self.pass.allocator, .{ .value = .{ .value = value, .steps = steps, .shadowed = known.shadowed } });
+                    },
+                    .fn_ref => if (steps.len == 0 and known_callable) return true,
+                    .tag => |tag| {
+                        const payloads = program.exprSpan(tag.payloads);
+                        if (steps.len == 0) {
+                            if (known_tag) return true;
+                            for (0..payloads.len) |index| {
+                                try work.append(self.pass.allocator, .{ .expr = .{ .id = GuardedList.at(payloads, index), .steps = &.{}, .shadowed = &.{} } });
+                            }
+                            continue;
+                        }
+                        for (0..payloads.len) |index| {
+                            if (!steps[0].isPayload(tag.name, @intCast(index))) continue;
+                            try work.append(self.pass.allocator, .{ .expr = .{ .id = GuardedList.at(payloads, index), .steps = steps[1..], .shadowed = &.{} } });
+                        }
+                    },
+                    .record => |span| {
+                        const fields = program.fieldExprSpan(span);
+                        if (steps.len == 0) {
+                            if (known_constructor) return true;
+                            for (0..fields.len) |index| {
+                                const field = GuardedList.at(fields, index);
+                                if (isShadowed(known.shadowed, field.name)) continue;
+                                try work.append(self.pass.allocator, .{ .expr = .{ .id = field.value, .steps = &.{}, .shadowed = &.{} } });
+                            }
+                            continue;
+                        }
+                        for (0..fields.len) |index| {
+                            const field = GuardedList.at(fields, index);
+                            if (!steps[0].isField(field.name)) continue;
+                            try work.append(self.pass.allocator, .{ .expr = .{ .id = field.value, .steps = steps[1..], .shadowed = &.{} } });
+                        }
+                    },
+                    .record_update => |update| {
+                        const fields = program.fieldExprSpan(update.fields);
+                        if (steps.len == 0) {
+                            if (known_constructor) return true;
+                            const next_shadowed = try arena.alloc(FieldName, known.shadowed.len + fields.len);
+                            @memcpy(next_shadowed[0..known.shadowed.len], known.shadowed);
+                            for (0..fields.len) |index| {
+                                const field = GuardedList.at(fields, index);
+                                next_shadowed[known.shadowed.len + index] = field.name;
+                                if (isShadowed(known.shadowed, field.name)) continue;
+                                try work.append(self.pass.allocator, .{ .expr = .{ .id = field.value, .steps = &.{}, .shadowed = &.{} } });
+                            }
+                            try work.append(self.pass.allocator, .{ .expr = .{ .id = update.base, .steps = &.{}, .shadowed = next_shadowed } });
+                            continue;
+                        }
+                        const updated = for (0..fields.len) |index| {
+                            const field = GuardedList.at(fields, index);
+                            if (steps[0].isField(field.name)) break field.value;
+                        } else null;
+                        if (updated) |value| {
+                            try work.append(self.pass.allocator, .{ .expr = .{ .id = value, .steps = steps[1..], .shadowed = &.{} } });
+                        } else {
+                            try work.append(self.pass.allocator, .{ .expr = .{ .id = update.base, .steps = steps, .shadowed = &.{} } });
+                        }
+                    },
+                    .tuple => |span| {
+                        const items = program.exprSpan(span);
+                        if (steps.len == 0) {
+                            if (known_constructor) return true;
+                            for (0..items.len) |index| {
+                                try work.append(self.pass.allocator, .{ .expr = .{ .id = GuardedList.at(items, index), .steps = &.{}, .shadowed = &.{} } });
+                            }
+                            continue;
+                        }
+                        for (0..items.len) |index| {
+                            if (!steps[0].isItem(@intCast(index))) continue;
+                            try work.append(self.pass.allocator, .{ .expr = .{ .id = GuardedList.at(items, index), .steps = steps[1..], .shadowed = &.{} } });
+                        }
+                    },
+                    .call_proc => |call| {
+                        const callee = Ast.localDirectCallee(call) orelse continue;
+                        const desc = try session.builtDescendant(callee, try session.pathOf(steps));
+                        if (desc.top or desc.kinds.intersectWith(consumers).count() != 0) return true;
+                        const args = program.exprSpan(call.args);
+                        const operands = program.captureOperandSpan(call.captures);
+                        for (desc.passes) |pass| {
+                            var through: std.ArrayList(Step) = .empty;
+                            try session.stepsOf(arena, pass.path, &through);
+                            const source = switch (pass.slot.kind) {
+                                .arg => GuardedList.at(args, pass.slot.index),
+                                .capture => for (0..operands.len) |index| {
+                                    const operand = GuardedList.at(operands, index);
+                                    if (InlineCrossing.captureSlot(program, callee, operand.id) == pass.slot.index) break operand.value;
+                                } else Common.invariant("direct call supplied no operand for a capture its callee passes through"),
+                            };
+                            try work.append(self.pass.allocator, .{ .expr = .{ .id = source, .steps = through.items, .shadowed = &.{} } });
                         }
                     },
                     .comptime_value,

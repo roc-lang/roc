@@ -768,11 +768,27 @@ pub const Built = struct {
     pub const Pass = struct { slot: Slot, path: PathId };
 };
 
+/// Conservative summary of what a function or expression builds across a path
+/// and all of its descendant paths on every path that returns normally. Used
+/// to prune crossing walks that can never reach any counted consumer.
+pub const BuiltDescendant = struct {
+    diverges: bool = false,
+    /// True when a recursive cycle was encountered; acts as the top element of
+    /// both `meet` and `union`, preserving soundness.
+    top: bool = false,
+    kinds: Consumers = .{},
+    passes: []const Built.Pass = &.{},
+};
+
 /// Whether a query's seed is known at a path well enough for one of a set of
 /// consumers.
 pub const Oracle = struct {
     ctx: *anyopaque,
     known: *const fn (ctx: *anyopaque, path: []const Step, kinds: Consumers) Allocator.Error!bool,
+    /// Whether `path` or any descendant of `path` is known for at least one
+    /// consumer in `kinds`. Returning `true` conservatively is sound; returning
+    /// `false` asserts no descendant of `path` is known for `kinds`.
+    has_known_descendant: *const fn (ctx: *anyopaque, path: []const Step, kinds: Consumers) Allocator.Error!bool,
 };
 
 /// A seed that knows exactly the parts an expression of `body` builds on
@@ -784,13 +800,19 @@ const BuiltOracle = struct {
     expr: Ast.ExprId,
 
     fn oracle(self: *BuiltOracle) Oracle {
-        return .{ .ctx = self, .known = known };
+        return .{ .ctx = self, .known = known, .has_known_descendant = hasKnownDescendant };
     }
 
     fn known(ctx: *anyopaque, path: []const Step, kinds: Consumers) Allocator.Error!bool {
         const self: *BuiltOracle = @ptrCast(@alignCast(ctx));
         const built = try self.session.builtExprAt(self.body, self.expr, try self.session.pathOf(path));
         return built.kinds.intersectWith(kinds).count() != 0;
+    }
+
+    fn hasKnownDescendant(ctx: *anyopaque, path: []const Step, kinds: Consumers) Allocator.Error!bool {
+        const self: *BuiltOracle = @ptrCast(@alignCast(ctx));
+        const desc = try self.session.builtExprDescendant(self.body, self.expr, try self.session.pathOf(path));
+        return desc.top or desc.kinds.intersectWith(kinds).count() != 0;
     }
 };
 
@@ -809,6 +831,7 @@ pub const Session = struct {
     paths: SeqTable(Step),
     suffix_memo: collections.DenseMapUnmanaged(PathId, PathId) = .empty,
     built_memo: std.AutoHashMapUnmanaged(BuiltKey, BuiltEntry) = .empty,
+    built_desc_memo: std.AutoHashMapUnmanaged(BuiltKey, BuiltDescEntry) = .empty,
     /// Built passes, kept for the session's life.
     built_arena: collections.SingleThreadArena,
     walk: Walk,
@@ -830,8 +853,9 @@ pub const Session = struct {
         self.paths.deinit(self.gpa);
         self.suffix_memo.deinit(self.gpa);
         self.built_memo.deinit(self.gpa);
+        self.built_desc_memo.deinit(self.gpa);
         self.built_arena.deinit();
-        self.walk.arena.deinit();
+        self.walk.deinit(self.gpa);
     }
 
     /// The path of `steps`.
@@ -863,10 +887,33 @@ pub const Session = struct {
         return result;
     }
 
+    fn commonPrefix(self: *const Session, a_in: PathId, b_in: PathId) PathId {
+        var a = a_in;
+        var b = b_in;
+        var len_a = self.paths.len(a);
+        var len_b = self.paths.len(b);
+        while (len_a > len_b) : (len_a -= 1) a = self.paths.parent(a);
+        while (len_b > len_a) : (len_b -= 1) b = self.paths.parent(b);
+        while (a != b) {
+            a = self.paths.parent(a);
+            b = self.paths.parent(b);
+        }
+        return a;
+    }
+
+    fn deeperIfComparable(self: *const Session, a: PathId, b: PathId) ?PathId {
+        if (a == b) return a;
+        const cp = self.commonPrefix(a, b);
+        if (cp == a) return b;
+        if (cp == b) return a;
+        return null;
+    }
+
     /// An expression's key names the body it is read in: a local reads as
     /// a slot only of its own body.
     const BuiltKey = struct { kind: enum(u8) { expr, result }, id: u32, body: u32, path: PathId };
     const BuiltEntry = union(enum) { in_progress, done: Built };
+    const BuiltDescEntry = union(enum) { in_progress, done: BuiltDescendant };
 
     /// What `fn_id` builds at `path` of its result on every path that
     /// returns normally. A function whose result reaches itself at the same
@@ -880,6 +927,19 @@ pub const Session = struct {
     /// on every path that produces it.
     pub fn builtExprAt(self: *Session, body: Ast.FnId, expr: Ast.ExprId, path: PathId) Allocator.Error!Built {
         return self.evalBuilt(exprKey(@backingInt(body), expr, path));
+    }
+
+    /// Conservative summary of what `fn_id` builds at `path` or any descendant
+    /// of `path` on every path that returns normally.
+    pub fn builtDescendant(self: *Session, fn_id: Ast.FnId, path: PathId) Allocator.Error!BuiltDescendant {
+        if (!self.index.isOriginal(fn_id)) return .{};
+        return self.evalBuiltDescendant(resultKey(fn_id, path));
+    }
+
+    /// Conservative summary of what `expr` of `body` builds at `path` or any
+    /// descendant of `path`.
+    pub fn builtExprDescendant(self: *Session, body: Ast.FnId, expr: Ast.ExprId, path: PathId) Allocator.Error!BuiltDescendant {
+        return self.evalBuiltDescendant(exprKey(@backingInt(body), expr, path));
     }
 
     /// Evaluate `root` and everything it needs on an explicit stack, so
@@ -1069,10 +1129,236 @@ pub const Session = struct {
         }
     }
 
+    const desc_top: BuiltDescendant = .{ .top = true, .kinds = .full };
+
+    fn evalBuiltDescendant(self: *Session, root: BuiltKey) Allocator.Error!BuiltDescendant {
+        if (self.built_desc_memo.get(root)) |entry| return switch (entry) {
+            .done => |desc| desc,
+            .in_progress => desc_top,
+        };
+        var stack: std.ArrayList(BuiltKey) = .empty;
+        defer stack.deinit(self.gpa);
+        try stack.append(self.gpa, root);
+        try self.built_desc_memo.put(self.gpa, root, .in_progress);
+        while (stack.getLastOrNull()) |key| {
+            var missing: ?BuiltKey = null;
+            const result = try self.computeBuiltDescendant(key, &missing);
+            if (missing) |needed| {
+                try self.built_desc_memo.put(self.gpa, needed, .in_progress);
+                try stack.append(self.gpa, needed);
+                continue;
+            }
+            try self.built_desc_memo.put(self.gpa, key, .{ .done = result });
+            _ = stack.pop();
+        }
+        return self.built_desc_memo.get(root).?.done;
+    }
+
+    fn descChild(self: *Session, key: BuiltKey, missing: *?BuiltKey) ?BuiltDescendant {
+        if (self.built_desc_memo.get(key)) |entry| return switch (entry) {
+            .done => |desc| desc,
+            .in_progress => desc_top,
+        };
+        if (missing.* == null) missing.* = key;
+        return null;
+    }
+
+    fn descMeet(self: *Session, a: BuiltDescendant, b: BuiltDescendant) Allocator.Error!BuiltDescendant {
+        if (a.diverges) return b;
+        if (b.diverges) return a;
+        if (a.top) return b;
+        if (b.top) return a;
+        var passes: std.ArrayList(Built.Pass) = .empty;
+        for (a.passes) |x| for (b.passes) |y| {
+            if (x.slot.kind != y.slot.kind or x.slot.index != y.slot.index) continue;
+            const deeper = self.deeperIfComparable(x.path, y.path) orelse continue;
+            const dup = for (passes.items) |existing| {
+                if (existing.slot.kind == x.slot.kind and existing.slot.index == x.slot.index and existing.path == deeper) break true;
+            } else false;
+            if (!dup) try passes.append(self.built_arena.allocator(), .{ .slot = x.slot, .path = deeper });
+        };
+        return .{ .kinds = a.kinds.intersectWith(b.kinds), .passes = passes.items };
+    }
+
+    fn descUnion(self: *Session, a: BuiltDescendant, b: BuiltDescendant) Allocator.Error!BuiltDescendant {
+        if (a.top or b.top) return desc_top;
+        const kinds = a.kinds.unionWith(b.kinds);
+        if (a.passes.len == 0) return .{ .kinds = kinds, .passes = b.passes };
+        if (b.passes.len == 0) return .{ .kinds = kinds, .passes = a.passes };
+        var passes: std.ArrayList(Built.Pass) = .empty;
+        try passes.appendSlice(self.built_arena.allocator(), a.passes);
+        for (b.passes) |y| {
+            const dup = for (passes.items) |existing| {
+                if (existing.slot.kind == y.slot.kind and existing.slot.index == y.slot.index and existing.path == y.path) break true;
+            } else false;
+            if (!dup) try passes.append(self.built_arena.allocator(), y);
+        }
+        return .{ .kinds = kinds, .passes = passes.items };
+    }
+
+    fn computeBuiltDescendant(self: *Session, key: BuiltKey, missing: *?BuiltKey) Allocator.Error!BuiltDescendant {
+        const p = self.program;
+        const path = key.path;
+        const body_fn = key.body;
+        switch (key.kind) {
+            .result => {
+                const body = self.index.bodies[key.id] orelse return .{};
+                var result = self.descChild(exprKey(body_fn, body, path), missing) orelse return .{};
+                for (self.index.returns[key.id].items) |ret| {
+                    const value = self.descChild(exprKey(body_fn, ret, path), missing) orelse return .{};
+                    result = try self.descMeet(result, value);
+                }
+                return if (result.diverges) .{} else result;
+            },
+            .expr => {},
+        }
+        const e: Ast.ExprId = @fromBackingInt(key.id);
+        const first = self.firstStep(path);
+        switch (p.getExpr(e).data) {
+            .typed_boundary => |b| return self.descChild(exprKey(body_fn, b.value, path), missing) orelse .{},
+            .row_widen => |w| return self.descChild(exprKey(body_fn, w.value, path), missing) orelse .{},
+            .nominal => |b| return self.descChild(exprKey(body_fn, b, path), missing) orelse .{},
+            .static_data_candidate => |c| switch (c.value) {
+                .runtime => |r| return self.descChild(exprKey(body_fn, r, path), missing) orelse .{},
+                .stored => return .{},
+            },
+            .local => |local| {
+                if (self.index.slots.get(.{ .body = body_fn, .local = local })) |slot| {
+                    const passes = try self.built_arena.allocator().alloc(Built.Pass, 1);
+                    passes[0] = .{ .slot = slot, .path = path };
+                    return .{ .passes = passes };
+                }
+                const maybe_def = self.index.defs.get(local) orelse return .{};
+                const def = maybe_def.get() orelse return .{};
+                return self.descChild(exprKey(body_fn, def, path), missing) orelse .{};
+            },
+            .let_ => |let_| return self.descChild(exprKey(body_fn, let_.rest, path), missing) orelse .{},
+            .block => |block| return self.descChild(exprKey(body_fn, block.final_expr, path), missing) orelse .{},
+            .if_ => |if_| {
+                var result = self.descChild(exprKey(body_fn, if_.final_else, path), missing) orelse return .{};
+                const bs = p.ifBranchSpan(if_.branches);
+                for (0..bs.len) |i| {
+                    const value = self.descChild(exprKey(body_fn, GuardedList.at(bs, i).body, path), missing) orelse return .{};
+                    result = try self.descMeet(result, value);
+                }
+                return result;
+            },
+            .match_ => |m| {
+                var result: BuiltDescendant = .{ .diverges = true };
+                const bs = p.branchSpan(m.branches);
+                for (0..bs.len) |i| {
+                    const value = self.descChild(exprKey(body_fn, GuardedList.at(bs, i).body, path), missing) orelse return .{};
+                    result = try self.descMeet(result, value);
+                }
+                return result;
+            },
+            .join_point => |j| {
+                const body = self.descChild(exprKey(body_fn, j.body, path), missing) orelse return .{};
+                const remainder = self.descChild(exprKey(body_fn, j.remainder, path), missing) orelse return .{};
+                return self.descMeet(body, remainder);
+            },
+            .tag => |tag| {
+                const ps = p.exprSpan(tag.payloads);
+                if (first) |step| {
+                    for (0..ps.len) |i| {
+                        if (step.isPayload(tag.name, @intCast(i))) return self.descChild(exprKey(body_fn, GuardedList.at(ps, i), try self.suffix(path)), missing) orelse .{};
+                    }
+                    return .{};
+                }
+                var result: BuiltDescendant = .{ .kinds = .initMany(&.{ .match, .loop }) };
+                for (0..ps.len) |i| {
+                    const val = self.descChild(exprKey(body_fn, GuardedList.at(ps, i), .root), missing) orelse return .{};
+                    result = try self.descUnion(result, val);
+                    if (result.top) return desc_top;
+                }
+                return result;
+            },
+            .record => |span| {
+                const fs = p.fieldExprSpan(span);
+                if (first) |step| {
+                    for (0..fs.len) |i| {
+                        const fe = GuardedList.at(fs, i);
+                        if (step.isField(fe.name)) return self.descChild(exprKey(body_fn, fe.value, try self.suffix(path)), missing) orelse .{};
+                    }
+                    return .{};
+                }
+                var result: BuiltDescendant = .{ .kinds = .initOne(.project) };
+                for (0..fs.len) |i| {
+                    const fe = GuardedList.at(fs, i);
+                    const val = self.descChild(exprKey(body_fn, fe.value, .root), missing) orelse return .{};
+                    result = try self.descUnion(result, val);
+                    if (result.top) return desc_top;
+                }
+                return result;
+            },
+            .record_update => |u| {
+                const fs = p.fieldExprSpan(u.fields);
+                if (first) |step| {
+                    for (0..fs.len) |i| {
+                        const fe = GuardedList.at(fs, i);
+                        if (step.isField(fe.name)) return self.descChild(exprKey(body_fn, fe.value, try self.suffix(path)), missing) orelse .{};
+                    }
+                    return .{};
+                }
+                var result: BuiltDescendant = .{ .kinds = .initOne(.project) };
+                for (0..fs.len) |i| {
+                    const fe = GuardedList.at(fs, i);
+                    const val = self.descChild(exprKey(body_fn, fe.value, .root), missing) orelse return .{};
+                    result = try self.descUnion(result, val);
+                    if (result.top) return desc_top;
+                }
+                return result;
+            },
+            .tuple => |span| {
+                const is = p.exprSpan(span);
+                if (first) |step| {
+                    for (0..is.len) |i| {
+                        if (step.isItem(@intCast(i))) return self.descChild(exprKey(body_fn, GuardedList.at(is, i), try self.suffix(path)), missing) orelse .{};
+                    }
+                    return .{};
+                }
+                var result: BuiltDescendant = .{ .kinds = .initOne(.project) };
+                for (0..is.len) |i| {
+                    const val = self.descChild(exprKey(body_fn, GuardedList.at(is, i), .root), missing) orelse return .{};
+                    result = try self.descUnion(result, val);
+                    if (result.top) return desc_top;
+                }
+                return result;
+            },
+            .fn_ref => return if (first == null) .{ .kinds = .initMany(&.{ .call, .loop }) } else .{},
+            .call_proc => |call| {
+                const callee = Ast.localDirectCallee(call) orelse return .{};
+                if (!self.index.isOriginal(callee)) return .{};
+                const inner = self.descChild(resultKey(callee, path), missing) orelse return .{};
+                if (inner.top) return desc_top;
+                var result: BuiltDescendant = .{ .kinds = inner.kinds };
+                const as = p.exprSpan(call.args);
+                const ops = p.captureOperandSpan(call.captures);
+                for (inner.passes) |pass| {
+                    const source = switch (pass.slot.kind) {
+                        .arg => GuardedList.at(as, pass.slot.index),
+                        .capture => for (0..ops.len) |i| {
+                            const op = GuardedList.at(ops, i);
+                            if (captureSlot(p, callee, op.id) == pass.slot.index) break op.value;
+                        } else Common.invariant("direct call supplied no operand for a capture its callee passes through"),
+                    };
+                    const value = self.descChild(exprKey(body_fn, source, pass.path), missing) orelse return .{};
+                    result = try self.descUnion(result, value);
+                    if (result.top) return desc_top;
+                }
+                return result;
+            },
+            .@"unreachable", .return_, .jump, .break_, .continue_, .crash, .checked_error, .comptime_exhaustiveness_failed, .literal_rejected, .expect_err => return .{ .diverges = true },
+            .field_access, .tuple_access, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .comptime_value, .list, .call_value, .low_level, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .dbg, .expect => return .{},
+            .lambda, .def_ref, .fn_def => Common.invariant("pre-lift function expression reached inline crossing"),
+        }
+    }
+
     /// Whether a known part of the value passed at `slot` meets an argument
     /// consumer inside `callee`'s extent.
     pub fn calleeConsumes(self: *Session, oracle: Oracle, callee: Ast.FnId, slot: Slot) Allocator.Error!bool {
         if (!try oracle.known(oracle.ctx, &.{}, known_parts)) return false;
+        if (!try oracle.has_known_descendant(oracle.ctx, &.{}, argument_consumers)) return false;
         try self.walk.begin(self, oracle, argument_consumers, callee, &.{});
         defer self.walk.end();
         try self.walk.enterCall(null, callee, slot, .root, 0);
@@ -1086,13 +1372,14 @@ pub const Session = struct {
     /// innermost last, above the body of `root_fn`.
     pub fn argumentCrosses(self: *Session, oracle: Oracle, root_fn: ?Ast.FnId, frames: []const RootFrame, call_expr: Ast.ExprId, callee: Ast.FnId, slot: Slot) Allocator.Error!bool {
         if (!try oracle.known(oracle.ctx, &.{}, known_parts)) return false;
+        if (!try oracle.has_known_descendant(oracle.ctx, &.{}, argument_consumers)) return false;
         try self.walk.begin(self, oracle, argument_consumers, root_fn, frames);
         defer self.walk.end();
         const root = try self.walk.rootEntry(frames.len);
         if (std.debug.runtime_safety and !self.index.bodyHolds(self.walk.entries.items[root].fn_id, call_expr)) {
             Common.invariant("a crossing query's call lies outside the body its inline frames name");
         }
-        try self.walk.enterCall(.{ .entry = root, .call = call_expr }, callee, slot, .root, 0);
+        try self.walk.enterCall(.{ .root = .{ .entry = root, .call = call_expr } }, callee, slot, .root, 0);
         return self.walk.run();
     }
 
@@ -1104,10 +1391,11 @@ pub const Session = struct {
         try self.walk.begin(self, oracle, result_consumers, root_fn, frames);
         defer self.walk.end();
         const root = try self.walk.rootEntry(frames.len);
-        if (std.debug.runtime_safety and !self.index.bodyHolds(self.walk.entries.items[root].fn_id, call_expr)) {
+        const root_e = self.walk.entries.items[root];
+        if (std.debug.runtime_safety and !self.index.bodyHolds(root_e.fn_id, call_expr)) {
             Common.invariant("a crossing query's call lies outside the body its inline frames name");
         }
-        try self.walk.addConfig(root, .{ .kind = .expr, .id = @backingInt(call_expr), .aux = 0 }, .root, 0);
+        try self.walk.seedEntryState(root, Item.expr(call_expr), .root, 0);
         return self.walk.run();
     }
 };
@@ -1148,6 +1436,10 @@ fn SeqTable(comptime T: type) type {
 
         fn parent(self: *const Self, id: PathId) PathId {
             return self.nodes.items[@backingInt(id)].parent;
+        }
+
+        fn len(self: *const Self, id: PathId) u32 {
+            return self.nodes.items[@backingInt(id)].len;
         }
 
         fn items(self: *const Self, allocator: Allocator, id: PathId, out: *std.ArrayList(T)) Allocator.Error!void {
@@ -1193,17 +1485,55 @@ const Item = struct {
     }
 };
 
+/// Fast 64-bit integer mixer (SplitMix64 finalizer).
+inline fn mix64(x: u64) u64 {
+    var z = x +% 0x9e3779b97f4a7c15;
+    z = (z ^ (z >> 30)) *% 0xbf58476d1ce4e5b9;
+    z = (z ^ (z >> 27)) *% 0x94d049bb133111eb;
+    return z ^ (z >> 31);
+}
+
+inline fn combineHash(h: u64, v: u64) u64 {
+    return mix64(h ^ (v +% 0x9e3779b97f4a7c15));
+}
+
+inline fn packU32Pair(a: u32, b: u32) u64 {
+    return (@as(u64, a) << 32) | @as(u64, b);
+}
+
+const U64Context = struct {
+    pub fn hash(_: U64Context, key: u64) u64 {
+        return mix64(key);
+    }
+    pub fn eql(_: U64Context, a: u64, b: u64) bool {
+        return a == b;
+    }
+};
+
+const U32Context = struct {
+    pub fn hash(_: U32Context, key: u32) u64 {
+        return mix64(key);
+    }
+    pub fn eql(_: U32Context, a: u32, b: u32) bool {
+        return a == b;
+    }
+};
+
 /// The forward walk of one query: a pushdown reachability problem whose
 /// stack is the wrap frames around the known part, solved by saturation.
 ///
 /// A stack is never stored. A frame pushed at a constructor is a node keyed
 /// by the push site, the frame, and the seed path; node 0 is the empty
 /// stack. Each node keeps the set of nodes that can lie beneath it, so a
-/// configuration (body position, seed path, top node) stands for every stack
-/// whose top is that node. A pop resumes every node beneath, now and as
-/// beneath-sets grow. Calls are summarized per entry (callee, slot, seed
-/// path, top node): every caller of an entry receives each of its exits at
-/// its own call site, so a walk returns where it was called from.
+/// state `(fn_id, item, path, node)` stands for every stack whose top is that
+/// node. A pop resumes every node beneath, now and as beneath-sets grow.
+///
+/// Intra-procedural states are factored by function body (independent of which
+/// call entry of that function reached them), so a function entered with many
+/// distinct wrap nodes walks each shared `(item, path, node)` state, watcher,
+/// and outgoing call edge once. Per-entry reachability is propagated exactly
+/// across state edges as a word-parallel bitset so matched call/return exits
+/// route to the exact same callers as an unfactored walk.
 const Walk = struct {
     arena: collections.SingleThreadArena,
     session: *Session = undefined,
@@ -1214,17 +1544,101 @@ const Walk = struct {
     root_fn: ?Ast.FnId = null,
     hit: bool = false,
 
+    states: std.ArrayList(State) = .empty,
+    state_map: std.HashMapUnmanaged(StateKey, u32, StateKeyContext, 80) = .empty,
+    edge_set: std.HashMapUnmanaged(u64, void, U64Context, 80) = .empty,
     nodes: std.ArrayList(Node) = .empty,
-    node_map: std.AutoHashMapUnmanaged(NodeKey, u32) = .empty,
-    below_set: std.AutoHashMapUnmanaged([2]u32, void) = .empty,
-    escaped: std.AutoHashMapUnmanaged(u32, void) = .empty,
-    watched: std.AutoHashMapUnmanaged(WatchKey, void) = .empty,
+    node_map: std.HashMapUnmanaged(NodeKey, u32, NodeKeyContext, 80) = .empty,
+    below_set: std.HashMapUnmanaged(u64, void, U64Context, 80) = .empty,
+    escaped: std.HashMapUnmanaged(u32, void, U32Context, 80) = .empty,
     entries: std.ArrayList(Entry) = .empty,
-    entry_map: std.AutoHashMapUnmanaged(EntryKey, u32) = .empty,
-    exit_set: std.AutoHashMapUnmanaged(ExitKey, void) = .empty,
-    seen: std.AutoHashMapUnmanaged(Config, void) = .empty,
-    work: std.ArrayList(Config) = .empty,
+    entry_map: std.HashMapUnmanaged(EntryKey, u32, EntryKeyContext, 80) = .empty,
+    exit_set: std.HashMapUnmanaged(ExitKey, void, ExitKeyContext, 80) = .empty,
+    fns: std.ArrayList(FnInfo) = .empty,
+    fn_map: collections.DenseMapUnmanaged(Ast.FnId, u32) = .empty,
+    work_unwrapped: std.ArrayList(u32) = .empty,
+    work_unwrapped_head: usize = 0,
+    work_wrapped: std.ArrayList(u32) = .empty,
+    work_wrapped_head: usize = 0,
     applies: std.ArrayList(Apply) = .empty,
+    applies_head: usize = 0,
+    bit_work: std.ArrayList(BitProp) = .empty,
+    bit_work_head: usize = 0,
+    step_buf: std.ArrayList(Step) = .empty,
+
+    const StateKey = union(enum) {
+        item: ItemState,
+        descend: DescendState,
+
+        const ItemState = struct { fn_id: Ast.FnId, item: Item, path: PathId, node: u32 };
+        const DescendState = struct { fn_id: Ast.FnId, target: Item, path: PathId, node: u32, step: Step };
+
+        inline fn fnId(self: StateKey) Ast.FnId {
+            return switch (self) {
+                .item => |k| k.fn_id,
+                .descend => |k| k.fn_id,
+            };
+        }
+
+        inline fn topNode(self: StateKey) u32 {
+            return switch (self) {
+                .item => |k| k.node,
+                .descend => |k| k.node,
+            };
+        }
+    };
+
+    const StateKeyContext = struct {
+        pub fn hash(_: StateKeyContext, key: StateKey) u64 {
+            return switch (key) {
+                .item => |k| blk: {
+                    var h = mix64(packU32Pair(@backingInt(k.fn_id), k.node));
+                    h = combineHash(h, packU32Pair(@backingInt(k.path), k.item.id));
+                    h = combineHash(h, packU32Pair(@backingInt(k.item.kind), k.item.aux));
+                    break :blk h;
+                },
+                .descend => |k| blk: {
+                    var h = mix64(packU32Pair(@backingInt(k.fn_id), k.node) ^ 0x5555_5555_5555_5555);
+                    h = combineHash(h, packU32Pair(@backingInt(k.path), k.target.id));
+                    h = combineHash(h, packU32Pair((@as(u32, @backingInt(k.target.kind)) << 8) | @backingInt(k.step.kind), k.target.aux));
+                    h = combineHash(h, packU32Pair(k.step.label, k.step.index));
+                    break :blk h;
+                },
+            };
+        }
+
+        pub fn eql(_: StateKeyContext, a: StateKey, b: StateKey) bool {
+            if (@backingInt(a) != @backingInt(b)) return false;
+            return switch (a) {
+                .item => |x| blk: {
+                    const y = b.item;
+                    break :blk x.fn_id == y.fn_id and x.node == y.node and x.path == y.path and
+                        x.item.id == y.item.id and x.item.kind == y.item.kind and x.item.aux == y.item.aux;
+                },
+                .descend => |x| blk: {
+                    const y = b.descend;
+                    break :blk x.fn_id == y.fn_id and x.node == y.node and x.path == y.path and
+                        x.target.id == y.target.id and x.target.kind == y.target.kind and x.target.aux == y.target.aux and
+                        x.step.eql(y.step);
+                },
+            };
+        }
+    };
+
+    const State = struct {
+        key: StateKey,
+        fn_slot: u32,
+        is_result: bool = false,
+        bits0: u64 = 0,
+        extra_bits: std.ArrayList(u64) = .empty,
+        edges: std.ArrayList(u32) = .empty,
+    };
+
+    const FnInfo = struct {
+        entry_ids: std.ArrayList(u32) = .empty,
+    };
+
+    const BitProp = struct { state: u32, word: u32, bits: u64 };
 
     const Node = struct {
         frame: Frame,
@@ -1240,10 +1654,43 @@ const Walk = struct {
 
     const NodeKey = struct { body: Ast.FnId, site: Ast.ExprId, frame: Frame, path: PathId };
 
-    const Caller = struct { entry: u32, call: Ast.ExprId };
+    const NodeKeyContext = struct {
+        pub fn hash(_: NodeKeyContext, key: NodeKey) u64 {
+            var h = mix64(packU32Pair(@backingInt(key.body), @backingInt(key.site)));
+            h = combineHash(h, @backingInt(key.path));
+            return switch (key.frame) {
+                .step => |s| combineHash(combineHash(h, packU32Pair(@backingInt(s.kind), s.label)), s.index),
+                .update => |u| combineHash(h, (@as(u64, 1) << 32) | @backingInt(u)),
+            };
+        }
+
+        pub fn eql(_: NodeKeyContext, a: NodeKey, b: NodeKey) bool {
+            if (a.body != b.body or a.site != b.site or a.path != b.path) return false;
+            if (@backingInt(a.frame) != @backingInt(b.frame)) return false;
+            return switch (a.frame) {
+                .step => |s| s.eql(b.frame.step),
+                .update => |u| u == b.frame.update,
+            };
+        }
+    };
+
+    const Caller = union(enum) {
+        state: struct { src_state: u32, call: Ast.ExprId },
+        root: struct { entry: u32, call: Ast.ExprId },
+
+        fn eql(a: Caller, b: Caller) bool {
+            if (@backingInt(a) != @backingInt(b)) return false;
+            return switch (a) {
+                .state => |x| x.src_state == b.state.src_state and x.call == b.state.call,
+                .root => |x| x.entry == b.root.entry and x.call == b.root.call,
+            };
+        }
+    };
 
     const Entry = struct {
         fn_id: Ast.FnId,
+        fn_slot: u32,
+        local_idx: u32,
         /// For a root entry, the number of inline frames beneath its body;
         /// absent for an entry a call made.
         root_depth: collections.OptionalU32,
@@ -1255,21 +1702,45 @@ const Walk = struct {
     /// `slot` and no `root_depth`.
     const EntryKey = struct { fn_id: Ast.FnId, slot_kind: Slot.Kind, slot: collections.OptionalU32, path: PathId, node: u32, root_depth: collections.OptionalU32 };
 
+    const EntryKeyContext = struct {
+        pub fn hash(_: EntryKeyContext, key: EntryKey) u64 {
+            var h = mix64(packU32Pair(@backingInt(key.fn_id), key.node));
+            h = combineHash(h, packU32Pair(@backingInt(key.path), @backingInt(key.slot)));
+            h = combineHash(h, packU32Pair(@backingInt(key.slot_kind), @backingInt(key.root_depth)));
+            return h;
+        }
+
+        pub fn eql(_: EntryKeyContext, a: EntryKey, b: EntryKey) bool {
+            return a.fn_id == b.fn_id and a.node == b.node and a.path == b.path and
+                a.slot == b.slot and a.slot_kind == b.slot_kind and a.root_depth == b.root_depth;
+        }
+    };
+
     const Exit = struct { path: PathId, node: u32 };
 
     const ExitKey = struct { entry: u32, path: PathId, node: u32 };
 
-    const Config = struct { entry: u32, item: Item, path: PathId, node: u32 };
+    const ExitKeyContext = struct {
+        pub fn hash(_: ExitKeyContext, key: ExitKey) u64 {
+            return combineHash(mix64(packU32Pair(key.entry, key.node)), @backingInt(key.path));
+        }
+
+        pub fn eql(_: ExitKeyContext, a: ExitKey, b: ExitKey) bool {
+            return a.entry == b.entry and a.node == b.node and a.path == b.path;
+        }
+    };
 
     const Watcher = union(enum) {
         /// The node's frame was popped: resume beneath it at `target`.
-        pop: struct { entry: u32, target: Item },
+        pop: struct { src: u32, target: Item },
         /// A field read passes through the node's record update frame: read
-        /// the field of what lies beneath.
-        descend: struct { entry: u32, target: Item, step: Step },
+        /// the field of what lies beneath for descend state `src`.
+        descend: u32,
         /// The node's capture frame is called: enter the capture slot with
-        /// what lies beneath, returning to `caller`.
-        call_capture: struct { caller: ?Caller, target: Ast.FnId, slot: u32 },
+        /// what lies beneath, returning to `src` at `call`.
+        call_capture: struct { src: u32, call: Ast.ExprId, target: Ast.FnId, slot: u32 },
+        /// A capture frame escaped through a function's result.
+        escape_capture: struct { target: Ast.FnId, slot: u32 },
         /// The node reached a function's result: any caller may call a
         /// function value wrapped around the known part.
         escape,
@@ -1277,10 +1748,33 @@ const Walk = struct {
 
     const Apply = struct { watcher: Watcher, node: u32, beneath: u32 };
 
-    const WatchKey = struct { node: u32, watcher: Watcher };
+    fn deinit(self: *Walk, allocator: Allocator) void {
+        self.states.deinit(allocator);
+        self.state_map.deinit(allocator);
+        self.edge_set.deinit(allocator);
+        self.nodes.deinit(allocator);
+        self.node_map.deinit(allocator);
+        self.below_set.deinit(allocator);
+        self.escaped.deinit(allocator);
+        self.entries.deinit(allocator);
+        self.entry_map.deinit(allocator);
+        self.exit_set.deinit(allocator);
+        self.fns.deinit(allocator);
+        self.fn_map.deinit(allocator);
+        self.work_unwrapped.deinit(allocator);
+        self.work_wrapped.deinit(allocator);
+        self.applies.deinit(allocator);
+        self.bit_work.deinit(allocator);
+        self.step_buf.deinit(allocator);
+        self.arena.deinit();
+    }
 
     fn alloc(self: *Walk) Allocator {
         return self.arena.allocator();
+    }
+
+    fn gpa(self: *Walk) Allocator {
+        return self.session.gpa;
     }
 
     fn begin(self: *Walk, session: *Session, oracle: Oracle, counted: Consumers, root_fn: ?Ast.FnId, frames: []const RootFrame) Allocator.Error!void {
@@ -1290,19 +1784,28 @@ const Walk = struct {
         self.counted = counted;
         self.frames = frames;
         self.hit = false;
-        self.nodes = .empty;
-        self.node_map = .empty;
-        self.below_set = .empty;
-        self.escaped = .empty;
-        self.watched = .empty;
-        self.entries = .empty;
-        self.entry_map = .empty;
-        self.exit_set = .empty;
-        self.seen = .empty;
-        self.work = .empty;
-        self.applies = .empty;
+        self.states.clearRetainingCapacity();
+        self.state_map.clearRetainingCapacity();
+        self.edge_set.clearRetainingCapacity();
+        self.nodes.clearRetainingCapacity();
+        self.node_map.clearRetainingCapacity();
+        self.below_set.clearRetainingCapacity();
+        self.escaped.clearRetainingCapacity();
+        self.entries.clearRetainingCapacity();
+        self.entry_map.clearRetainingCapacity();
+        self.exit_set.clearRetainingCapacity();
+        self.fns.clearRetainingCapacity();
+        self.fn_map.clearRetainingCapacity();
+        self.work_unwrapped.clearRetainingCapacity();
+        self.work_unwrapped_head = 0;
+        self.work_wrapped.clearRetainingCapacity();
+        self.work_wrapped_head = 0;
+        self.applies.clearRetainingCapacity();
+        self.applies_head = 0;
+        self.bit_work.clearRetainingCapacity();
+        self.bit_work_head = 0;
         // Node 0, the empty stack, has no frame; its fields are never read.
-        try self.nodes.append(self.alloc(), .{ .frame = undefined, .site = undefined, .path = .root, .body = undefined, .loop = .none });
+        try self.nodes.append(self.gpa(), .{ .frame = undefined, .site = undefined, .path = .root, .body = undefined, .loop = .none });
     }
 
     fn end(self: *Walk) void {
@@ -1310,21 +1813,125 @@ const Walk = struct {
     }
 
     fn known(self: *Walk, path: PathId, kinds: Consumers) Allocator.Error!bool {
-        var steps: std.ArrayList(Step) = .empty;
-        try self.session.stepsOf(self.alloc(), path, &steps);
-        return self.oracle.known(self.oracle.ctx, steps.items, kinds);
+        try self.session.stepsOf(self.gpa(), path, &self.step_buf);
+        return self.oracle.known(self.oracle.ctx, self.step_buf.items, kinds);
     }
 
-    fn consume(self: *Walk, config: Config, kind: Consumer) Allocator.Error!void {
-        if (config.node != 0) return;
+    fn hasKnownDescendant(self: *Walk, path: PathId, kinds: Consumers) Allocator.Error!bool {
+        try self.session.stepsOf(self.gpa(), path, &self.step_buf);
+        return self.oracle.has_known_descendant(self.oracle.ctx, self.step_buf.items, kinds);
+    }
+
+    fn shouldDescend(self: *Walk, next: PathId) Allocator.Error!bool {
+        if (self.counted.count() == known_parts.count()) return self.known(next, known_parts);
+        if (!try self.hasKnownDescendant(next, self.counted)) return false;
+        return self.known(next, known_parts);
+    }
+
+    fn consume(self: *Walk, path: PathId, node: u32, kind: Consumer) Allocator.Error!void {
+        if (node != 0) return;
         if (!self.counted.contains(kind)) return;
-        if (try self.known(config.path, .initOne(kind))) self.hit = true;
+        if (try self.known(path, .initOne(kind))) self.hit = true;
     }
 
-    fn addConfig(self: *Walk, entry: u32, item: Item, path: PathId, node: u32) Allocator.Error!void {
-        const config: Config = .{ .entry = entry, .item = item, .path = path, .node = node };
-        if ((try self.seen.getOrPut(self.alloc(), config)).found_existing) return;
-        try self.work.append(self.alloc(), config);
+    fn fnSlot(self: *Walk, fn_id: Ast.FnId) Allocator.Error!u32 {
+        const gop = try self.fn_map.getOrPut(self.gpa(), fn_id);
+        if (!gop.found_existing) {
+            const slot: u32 = @intCast(self.fns.items.len);
+            gop.value_ptr.* = slot;
+            try self.fns.append(self.gpa(), .{});
+        }
+        return gop.value_ptr.*;
+    }
+
+    fn getOrCreateState(self: *Walk, key: StateKey) Allocator.Error!u32 {
+        const gop = try self.state_map.getOrPut(self.gpa(), key);
+        if (gop.found_existing) return gop.value_ptr.*;
+        const id: u32 = @intCast(self.states.items.len);
+        gop.value_ptr.* = id;
+        const fn_slot = try self.fnSlot(key.fnId());
+        try self.states.append(self.gpa(), .{ .key = key, .fn_slot = fn_slot });
+        if (key.topNode() == 0) {
+            try self.work_unwrapped.append(self.gpa(), id);
+        } else {
+            try self.work_wrapped.append(self.gpa(), id);
+        }
+        return id;
+    }
+
+    fn addStateWord(self: *Walk, state_id: u32, word: u32, bits: u64) Allocator.Error!void {
+        if (bits == 0) return;
+        const st = &self.states.items[state_id];
+        const delta = if (word == 0) blk: {
+            const d = bits & ~st.bits0;
+            if (d == 0) return;
+            st.bits0 |= d;
+            break :blk d;
+        } else blk: {
+            const extra_idx = word - 1;
+            if (st.extra_bits.items.len <= extra_idx) {
+                const old_len = st.extra_bits.items.len;
+                try st.extra_bits.resize(self.alloc(), extra_idx + 1);
+                @memset(st.extra_bits.items[old_len..], 0);
+            }
+            const ptr = &st.extra_bits.items[extra_idx];
+            const d = bits & ~ptr.*;
+            if (d == 0) return;
+            ptr.* |= d;
+            break :blk d;
+        };
+        try self.bit_work.append(self.gpa(), .{ .state = state_id, .word = word, .bits = delta });
+    }
+
+    fn addStateBit(self: *Walk, state_id: u32, local_idx: u32) Allocator.Error!void {
+        const word = local_idx / 64;
+        const bit: u6 = @intCast(local_idx % 64);
+        try self.addStateWord(state_id, word, @as(u64, 1) << bit);
+    }
+
+    fn addEdge(self: *Walk, src: u32, dst: u32) Allocator.Error!void {
+        if (src == dst) return;
+        const edge_key = packU32Pair(src, dst);
+        if ((try self.edge_set.getOrPut(self.gpa(), edge_key)).found_existing) return;
+        try self.states.items[src].edges.append(self.alloc(), dst);
+        const bits0 = self.states.items[src].bits0;
+        if (bits0 != 0) try self.addStateWord(dst, 0, bits0);
+        const extra_len = self.states.items[src].extra_bits.items.len;
+        for (0..extra_len) |i| {
+            const w = self.states.items[src].extra_bits.items[i];
+            if (w != 0) try self.addStateWord(dst, @intCast(i + 1), w);
+        }
+    }
+
+    fn transitionToItem(self: *Walk, src: u32, fn_id: Ast.FnId, item: Item, path: PathId, node: u32) Allocator.Error!void {
+        const dst = try self.getOrCreateState(.{ .item = .{ .fn_id = fn_id, .item = item, .path = path, .node = node } });
+        try self.addEdge(src, dst);
+    }
+
+    fn seedEntryState(self: *Walk, entry: u32, item: Item, path: PathId, node: u32) Allocator.Error!void {
+        const e = self.entries.items[entry];
+        const st = try self.getOrCreateState(.{ .item = .{ .fn_id = e.fn_id, .item = item, .path = path, .node = node } });
+        try self.addStateBit(st, e.local_idx);
+    }
+
+    fn processBitProp(self: *Walk, bp: BitProp) Allocator.Error!void {
+        const is_result = self.states.items[bp.state].is_result;
+        if (is_result) {
+            const key = self.states.items[bp.state].key.item;
+            const fn_slot = self.states.items[bp.state].fn_slot;
+            const base = bp.word * 64;
+            var rem = bp.bits;
+            while (rem != 0) {
+                const bit: u32 = @ctz(rem);
+                rem &= rem - 1;
+                const entry_id = self.fns.items[fn_slot].entry_ids.items[base + bit];
+                try self.addExit(entry_id, key.path, key.node);
+            }
+        }
+        const edges = self.states.items[bp.state].edges.items;
+        for (edges) |dst| {
+            try self.addStateWord(dst, bp.word, bp.bits);
+        }
     }
 
     /// The root entry for the body `depth` inline frames deep: the body
@@ -1335,36 +1942,39 @@ const Walk = struct {
         else
             self.frames[depth - 1].fn_id;
         const key: EntryKey = .{ .fn_id = fn_id, .slot_kind = .arg, .slot = .none, .path = .root, .node = 0, .root_depth = .some(@intCast(depth)) };
-        const gop = try self.entry_map.getOrPut(self.alloc(), key);
+        const gop = try self.entry_map.getOrPut(self.gpa(), key);
         if (!gop.found_existing) {
-            gop.value_ptr.* = @intCast(self.entries.items.len);
-            try self.entries.append(self.alloc(), .{ .fn_id = fn_id, .root_depth = .some(@intCast(depth)) });
+            const id: u32 = @intCast(self.entries.items.len);
+            gop.value_ptr.* = id;
+            const fn_slot = try self.fnSlot(fn_id);
+            const local_idx: u32 = @intCast(self.fns.items[fn_slot].entry_ids.items.len);
+            try self.fns.items[fn_slot].entry_ids.append(self.alloc(), id);
+            try self.entries.append(self.gpa(), .{ .fn_id = fn_id, .fn_slot = fn_slot, .local_idx = local_idx, .root_depth = .some(@intCast(depth)) });
         }
         return gop.value_ptr.*;
     }
 
     fn pushNode(self: *Walk, body: Ast.FnId, loop: collections.OptionalU32, site: Ast.ExprId, frame: Frame, path: PathId, beneath: u32) Allocator.Error!u32 {
         const key: NodeKey = .{ .body = body, .site = site, .frame = frame, .path = path };
-        const gop = try self.node_map.getOrPut(self.alloc(), key);
+        const gop = try self.node_map.getOrPut(self.gpa(), key);
         if (!gop.found_existing) {
             gop.value_ptr.* = @intCast(self.nodes.items.len);
-            try self.nodes.append(self.alloc(), .{ .frame = frame, .site = site, .path = path, .body = body, .loop = loop });
+            try self.nodes.append(self.gpa(), .{ .frame = frame, .site = site, .path = path, .body = body, .loop = loop });
         }
         const node = gop.value_ptr.*;
-        if (!(try self.below_set.getOrPut(self.alloc(), .{ node, beneath })).found_existing) {
+        if (!(try self.below_set.getOrPut(self.gpa(), packU32Pair(node, beneath))).found_existing) {
             try self.nodes.items[node].below.append(self.alloc(), beneath);
             for (self.nodes.items[node].watchers.items) |watcher| {
-                try self.applies.append(self.alloc(), .{ .watcher = watcher, .node = node, .beneath = beneath });
+                try self.applies.append(self.gpa(), .{ .watcher = watcher, .node = node, .beneath = beneath });
             }
         }
         return node;
     }
 
     fn watch(self: *Walk, node: u32, watcher: Watcher) Allocator.Error!void {
-        if ((try self.watched.getOrPut(self.alloc(), .{ .node = node, .watcher = watcher })).found_existing) return;
         try self.nodes.items[node].watchers.append(self.alloc(), watcher);
         for (self.nodes.items[node].below.items) |beneath| {
-            try self.applies.append(self.alloc(), .{ .watcher = watcher, .node = node, .beneath = beneath });
+            try self.applies.append(self.gpa(), .{ .watcher = watcher, .node = node, .beneath = beneath });
         }
     }
 
@@ -1375,82 +1985,117 @@ const Walk = struct {
         if (!index.isOriginal(callee)) return;
         if (index.bodies[@backingInt(callee)] == null) return;
         if (caller) |c| {
+            const caller_fn = switch (c) {
+                .state => |s| self.states.items[s.src_state].key.fnId(),
+                .root => |r| self.entries.items[r.entry].fn_id,
+            };
             // Within a call cycle, a part wrapped in a frame the cycle
             // itself pushed grows on every round, and the clone never
             // inlines a recursive call whose argument grows.
-            if (node != 0 and index.sameScc(self.entries.items[c.entry].fn_id, callee) and
+            if (node != 0 and index.sameScc(caller_fn, callee) and
                 index.sameScc(self.nodes.items[node].body, callee)) return;
         }
         const key: EntryKey = .{ .fn_id = callee, .slot_kind = slot.kind, .slot = .some(slot.index), .path = path, .node = node, .root_depth = .none };
-        const gop = try self.entry_map.getOrPut(self.alloc(), key);
+        const gop = try self.entry_map.getOrPut(self.gpa(), key);
         const entry: u32 = if (gop.found_existing) gop.value_ptr.* else blk: {
             const id: u32 = @intCast(self.entries.items.len);
             gop.value_ptr.* = id;
-            try self.entries.append(self.alloc(), .{ .fn_id = callee, .root_depth = .none });
+            const fn_slot = try self.fnSlot(callee);
+            const local_idx: u32 = @intCast(self.fns.items[fn_slot].entry_ids.items.len);
+            try self.fns.items[fn_slot].entry_ids.append(self.alloc(), id);
+            try self.entries.append(self.gpa(), .{ .fn_id = callee, .fn_slot = fn_slot, .local_idx = local_idx, .root_depth = .none });
             const f = self.session.program.getFn(callee);
             const local = switch (slot.kind) {
                 .arg => GuardedList.at(self.session.program.typedLocalSpan(f.args), slot.index).local,
                 .capture => GuardedList.at(self.session.program.typedLocalSpan(f.captures), slot.index).local,
             };
-            try self.addConfig(id, Item.local(local), path, node);
+            try self.seedEntryState(id, Item.local(local), path, node);
             break :blk id;
         };
         const c = caller orelse return;
         for (self.entries.items[entry].callers.items) |existing| {
-            if (existing.entry == c.entry and existing.call == c.call) return;
+            if (existing.eql(c)) return;
         }
         try self.entries.items[entry].callers.append(self.alloc(), c);
-        for (self.entries.items[entry].exits.items) |exit| {
-            try self.addConfig(c.entry, Item.expr(c.call), exit.path, exit.node);
+        const exit_len = self.entries.items[entry].exits.items.len;
+        for (0..exit_len) |i| {
+            const exit = self.entries.items[entry].exits.items[i];
+            try self.deliverExitToCaller(c, exit.path, exit.node);
+        }
+    }
+
+    fn deliverExitToCaller(self: *Walk, caller: Caller, path: PathId, node: u32) Allocator.Error!void {
+        switch (caller) {
+            .state => |s| {
+                const caller_fn = self.states.items[s.src_state].key.fnId();
+                try self.transitionToItem(s.src_state, caller_fn, Item.expr(s.call), path, node);
+            },
+            .root => |r| {
+                try self.seedEntryState(r.entry, Item.expr(r.call), path, node);
+            },
         }
     }
 
     fn addExit(self: *Walk, entry: u32, path: PathId, node: u32) Allocator.Error!void {
-        if ((try self.exit_set.getOrPut(self.alloc(), .{ .entry = entry, .path = path, .node = node })).found_existing) return;
-        const e = &self.entries.items[entry];
-        try e.exits.append(self.alloc(), .{ .path = path, .node = node });
-        if (e.root_depth.get()) |depth| {
+        if ((try self.exit_set.getOrPut(self.gpa(), .{ .entry = entry, .path = path, .node = node })).found_existing) return;
+        try self.entries.items[entry].exits.append(self.alloc(), .{ .path = path, .node = node });
+        if (self.entries.items[entry].root_depth.get()) |depth| {
             // The result of a root body is the result of the innermost
             // inline frame beneath it, read at that frame's call.
             if (depth == 0) return;
             const call = self.frames[depth - 1].call_expr orelse return;
             const next = try self.rootEntry(depth - 1);
-            try self.addConfig(next, Item.expr(call), path, node);
+            try self.seedEntryState(next, Item.expr(call), path, node);
             return;
         }
-        for (e.callers.items) |caller| try self.addConfig(caller.entry, Item.expr(caller.call), path, node);
+        const caller_len = self.entries.items[entry].callers.items.len;
+        for (0..caller_len) |i| {
+            const caller = self.entries.items[entry].callers.items[i];
+            try self.deliverExitToCaller(caller, path, node);
+        }
+    }
+
+    fn fieldOverwritten(self: *const Walk, update: Ast.ExprId, part: Step) bool {
+        if (part.kind != .field) return false;
+        const fs = self.session.program.fieldExprSpan(self.session.program.getExpr(update).data.record_update.fields);
+        for (0..fs.len) |i| {
+            if (part.label == @backingInt(GuardedList.at(fs, i).name)) return true;
+        }
+        return false;
     }
 
     /// Read the part at `step` of the value at hand.
-    fn descend(self: *Walk, entry: u32, target: Item, path: PathId, node: u32, part: Step) Allocator.Error!void {
+    fn descend(self: *Walk, src_state: u32, fn_id: Ast.FnId, target: Item, path: PathId, node: u32, part: Step) Allocator.Error!void {
         if (node == 0) {
             const next = try self.session.paths.push(self.session.gpa, path, part);
             // A known part has known ancestors, so a walk never follows a
             // part the seed does not know.
-            if (!try self.known(next, known_parts)) return;
-            try self.addConfig(entry, target, next, 0);
+            if (!try self.shouldDescend(next)) return;
+            try self.transitionToItem(src_state, fn_id, target, next, 0);
             return;
         }
         switch (self.nodes.items[node].frame) {
-            .step => |top| if (top.eql(part)) try self.watch(node, .{ .pop = .{ .entry = entry, .target = target } }),
+            .step => |top| if (top.eql(part)) try self.watch(node, .{ .pop = .{ .src = src_state, .target = target } }),
             .update => |update| {
-                if (part.kind == .field) {
-                    const fs = self.session.program.fieldExprSpan(self.session.program.getExpr(update).data.record_update.fields);
-                    for (0..fs.len) |i| {
-                        if (part.label == @backingInt(GuardedList.at(fs, i).name)) return;
-                    }
-                }
-                try self.watch(node, .{ .descend = .{ .entry = entry, .target = target, .step = part } });
+                if (self.fieldOverwritten(update, part)) return;
+                const dst = try self.getOrCreateState(.{ .descend = .{
+                    .fn_id = fn_id,
+                    .target = target,
+                    .path = path,
+                    .node = node,
+                    .step = part,
+                } });
+                try self.addEdge(src_state, dst);
             },
         }
     }
 
     fn escape(self: *Walk, node: u32) Allocator.Error!void {
         if (node == 0) return;
-        if ((try self.escaped.getOrPut(self.alloc(), node)).found_existing) return;
+        if ((try self.escaped.getOrPut(self.gpa(), node)).found_existing) return;
         switch (self.nodes.items[node].frame) {
             .step => |top| if (top.kind == .capture) {
-                return self.watch(node, .{ .call_capture = .{ .caller = null, .target = @fromBackingInt(top.label), .slot = top.index } });
+                return self.watch(node, .{ .escape_capture = .{ .target = @fromBackingInt(top.label), .slot = top.index } });
             },
             .update => {},
         }
@@ -1460,107 +2105,215 @@ const Walk = struct {
     fn apply(self: *Walk, a: Apply) Allocator.Error!void {
         const path = self.nodes.items[a.node].path;
         switch (a.watcher) {
-            .pop => |w| try self.addConfig(w.entry, w.target, path, a.beneath),
-            .descend => |w| try self.descend(w.entry, w.target, path, a.beneath, w.step),
-            .call_capture => |w| try self.enterCall(w.caller, w.target, .{ .kind = .capture, .index = w.slot }, path, a.beneath),
+            .pop => |w| {
+                const fn_id = self.states.items[w.src].key.fnId();
+                try self.transitionToItem(w.src, fn_id, w.target, path, a.beneath);
+            },
+            .descend => |src_descend| {
+                const d = self.states.items[src_descend].key.descend;
+                if (a.beneath == 0) {
+                    const next = try self.session.paths.push(self.session.gpa, path, d.step);
+                    if (!try self.shouldDescend(next)) return;
+                    try self.transitionToItem(src_descend, d.fn_id, d.target, next, 0);
+                    return;
+                }
+                switch (self.nodes.items[a.beneath].frame) {
+                    .step => |top| if (top.eql(d.step)) {
+                        const dst = try self.getOrCreateState(.{ .descend = .{
+                            .fn_id = d.fn_id,
+                            .target = d.target,
+                            .path = path,
+                            .node = a.beneath,
+                            .step = d.step,
+                        } });
+                        try self.addEdge(src_descend, dst);
+                    },
+                    .update => |update| {
+                        if (self.fieldOverwritten(update, d.step)) return;
+                        const dst = try self.getOrCreateState(.{ .descend = .{
+                            .fn_id = d.fn_id,
+                            .target = d.target,
+                            .path = path,
+                            .node = a.beneath,
+                            .step = d.step,
+                        } });
+                        try self.addEdge(src_descend, dst);
+                    },
+                }
+            },
+            .call_capture => |w| try self.enterCall(.{ .state = .{ .src_state = w.src, .call = w.call } }, w.target, .{ .kind = .capture, .index = w.slot }, path, a.beneath),
+            .escape_capture => |w| try self.enterCall(null, w.target, .{ .kind = .capture, .index = w.slot }, path, a.beneath),
             .escape => try self.escape(a.beneath),
         }
     }
 
     fn run(self: *Walk) Allocator.Error!bool {
         while (!self.hit) {
-            if (self.applies.pop()) |a| {
+            if (self.work_unwrapped_head < self.work_unwrapped.items.len) {
+                const state_id = self.work_unwrapped.items[self.work_unwrapped_head];
+                self.work_unwrapped_head += 1;
+                try self.step(state_id);
+                continue;
+            }
+            if (self.applies_head < self.applies.items.len) {
+                const a = self.applies.items[self.applies_head];
+                self.applies_head += 1;
                 try self.apply(a);
                 continue;
             }
-            const config = self.work.pop() orelse break;
-            try self.step(config);
+            if (self.bit_work_head < self.bit_work.items.len) {
+                const bp = self.bit_work.items[self.bit_work_head];
+                self.bit_work_head += 1;
+                try self.processBitProp(bp);
+                continue;
+            }
+            if (self.work_wrapped_head < self.work_wrapped.items.len) {
+                const state_id = self.work_wrapped.items[self.work_wrapped_head];
+                self.work_wrapped_head += 1;
+                try self.step(state_id);
+                continue;
+            }
+            break;
         }
         return self.hit;
     }
 
-    fn step(self: *Walk, c: Config) Allocator.Error!void {
-        const p = self.session.program;
-        const index = self.session.index;
-        switch (c.item.kind) {
-            .local => {
-                const body = @backingInt(self.entries.items[c.entry].fn_id);
-                var link: collections.OptionalU32 = .some(index.local_use_head.get(@fromBackingInt(c.item.id)) orelse return);
-                while (link.get()) |row| : (link = index.local_use_rows.items[row].next) {
-                    const use = index.local_use_rows.items[row];
-                    if (use.body == body) try self.addConfig(c.entry, Item.expr(use.expr), c.path, c.node);
+    fn markResult(self: *Walk, state_id: u32, path: PathId, node: u32) Allocator.Error!void {
+        if (self.states.items[state_id].is_result) return;
+        self.states.items[state_id].is_result = true;
+        const fn_slot = self.states.items[state_id].fn_slot;
+        var rem0 = self.states.items[state_id].bits0;
+        while (rem0 != 0) {
+            const bit: u32 = @ctz(rem0);
+            rem0 &= rem0 - 1;
+            const entry_id = self.fns.items[fn_slot].entry_ids.items[bit];
+            try self.addExit(entry_id, path, node);
+        }
+        var w_idx: usize = 0;
+        while (w_idx < self.states.items[state_id].extra_bits.items.len) : (w_idx += 1) {
+            var rem = self.states.items[state_id].extra_bits.items[w_idx];
+            const base: u32 = @intCast((w_idx + 1) * 64);
+            while (rem != 0) {
+                const bit: u32 = @ctz(rem);
+                rem &= rem - 1;
+                const entry_id = self.fns.items[fn_slot].entry_ids.items[base + bit];
+                try self.addExit(entry_id, path, node);
+            }
+        }
+    }
+
+    fn step(self: *Walk, state_id: u32) Allocator.Error!void {
+        const key = self.states.items[state_id].key;
+        switch (key) {
+            .descend => |d| {
+                if (d.node == 0) {
+                    const next = try self.session.paths.push(self.session.gpa, d.path, d.step);
+                    if (!try self.shouldDescend(next)) return;
+                    try self.transitionToItem(state_id, d.fn_id, d.target, next, 0);
+                    return;
                 }
+                switch (self.nodes.items[d.node].frame) {
+                    .step => |top| if (top.eql(d.step)) try self.watch(d.node, .{ .pop = .{ .src = state_id, .target = d.target } }),
+                    .update => |update| {
+                        if (self.fieldOverwritten(update, d.step)) return;
+                        try self.watch(d.node, .{ .descend = state_id });
+                    },
+                }
+                return;
             },
-            .pat => try self.stepPattern(c),
-            .access => {
-                const e: Ast.ExprId = @fromBackingInt(c.item.id);
-                const access = p.getExpr(e).data.field_access;
-                const segs = p.fieldAccessSegmentSpan(access.segments);
-                if (c.item.aux == segs.len) return self.addConfig(c.entry, Item.expr(e), c.path, c.node);
-                try self.consume(c, .project);
-                const next: Item = .{ .kind = .access, .id = c.item.id, .aux = c.item.aux + 1 };
-                try self.descend(c.entry, next, c.path, c.node, Step.field(GuardedList.at(segs, c.item.aux).field));
-            },
-            .expr => {
-                const raw = c.item.id;
-                if (raw >= index.use_head.len) Common.invariant("inline crossing walked an expression created after indexing");
-                const body = @backingInt(self.entries.items[c.entry].fn_id);
-                var cursor = index.use_head[raw];
-                while (cursor.get()) |row| : (cursor = index.uses.items[row].next) {
-                    const use = index.uses.items[row];
-                    if (use.body == body) try self.stepUse(c, use.use);
+            .item => |c| {
+                const p = self.session.program;
+                const index = self.session.index;
+                switch (c.item.kind) {
+                    .local => {
+                        const body = @backingInt(c.fn_id);
+                        var link: collections.OptionalU32 = .some(index.local_use_head.get(@fromBackingInt(c.item.id)) orelse return);
+                        while (link.get()) |row| : (link = index.local_use_rows.items[row].next) {
+                            const use = index.local_use_rows.items[row];
+                            if (use.body == body) try self.transitionToItem(state_id, c.fn_id, Item.expr(use.expr), c.path, c.node);
+                        }
+                    },
+                    .pat => try self.stepPattern(state_id, c),
+                    .access => {
+                        const e: Ast.ExprId = @fromBackingInt(c.item.id);
+                        const access = p.getExpr(e).data.field_access;
+                        const segs = p.fieldAccessSegmentSpan(access.segments);
+                        if (c.item.aux == segs.len) return self.transitionToItem(state_id, c.fn_id, Item.expr(e), c.path, c.node);
+                        try self.consume(c.path, c.node, .project);
+                        if (self.hit) return;
+                        const next: Item = .{ .kind = .access, .id = c.item.id, .aux = c.item.aux + 1 };
+                        try self.descend(state_id, c.fn_id, next, c.path, c.node, Step.field(GuardedList.at(segs, c.item.aux).field));
+                    },
+                    .expr => {
+                        const raw = c.item.id;
+                        if (raw >= index.use_head.len) Common.invariant("inline crossing walked an expression created after indexing");
+                        const body = @backingInt(c.fn_id);
+                        var cursor = index.use_head[raw];
+                        while (cursor.get()) |row| : (cursor = index.uses.items[row].next) {
+                            const use = index.uses.items[row];
+                            if (use.body == body) {
+                                try self.stepUse(state_id, c, use.use);
+                                if (self.hit) return;
+                            }
+                        }
+                    },
                 }
             },
         }
     }
 
-    fn stepUse(self: *Walk, c: Config, use: Use) Allocator.Error!void {
+    fn stepUse(self: *Walk, state_id: u32, c: StateKey.ItemState, use: Use) Allocator.Error!void {
         const p = self.session.program;
         switch (use) {
             .stop => {},
-            .same => |parent| try self.addConfig(c.entry, Item.expr(parent), c.path, c.node),
+            .same => |parent| try self.transitionToItem(state_id, c.fn_id, Item.expr(parent), c.path, c.node),
             .receiver => |parent| switch (p.getExpr(parent).data) {
-                .field_access => try self.addConfig(c.entry, .{ .kind = .access, .id = @backingInt(parent), .aux = 0 }, c.path, c.node),
+                .field_access => try self.transitionToItem(state_id, c.fn_id, .{ .kind = .access, .id = @backingInt(parent), .aux = 0 }, c.path, c.node),
                 .tuple_access => |a| {
-                    try self.consume(c, .project);
-                    try self.descend(c.entry, Item.expr(parent), c.path, c.node, Step.item(a.elem_index));
+                    try self.consume(c.path, c.node, .project);
+                    if (self.hit) return;
+                    try self.descend(state_id, c.fn_id, Item.expr(parent), c.path, c.node, Step.item(a.elem_index));
                 },
                 .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected, .comptime_value => Common.invariant("a receiver use named a parent that reads no part"),
             },
             .operand => |o| {
-                const node = try self.pushNode(self.entries.items[c.entry].fn_id, o.loop, o.parent, .{ .step = o.step }, c.path, c.node);
-                try self.addConfig(c.entry, Item.expr(o.parent), c.path, node);
+                const node = try self.pushNode(c.fn_id, o.loop, o.parent, .{ .step = o.step }, c.path, c.node);
+                try self.transitionToItem(state_id, c.fn_id, Item.expr(o.parent), c.path, node);
             },
             .update_base => |u| {
-                const node = try self.pushNode(self.entries.items[c.entry].fn_id, u.loop, u.parent, .{ .update = u.parent }, c.path, c.node);
-                try self.addConfig(c.entry, Item.expr(u.parent), c.path, node);
+                const node = try self.pushNode(c.fn_id, u.loop, u.parent, .{ .update = u.parent }, c.path, c.node);
+                try self.transitionToItem(state_id, c.fn_id, Item.expr(u.parent), c.path, node);
             },
-            .pattern => |pat_id| try self.addConfig(c.entry, Item.pat(pat_id), c.path, c.node),
+            .pattern => |pat_id| try self.transitionToItem(state_id, c.fn_id, Item.pat(pat_id), c.path, c.node),
             // A recursive binding re-enters its own value: only an
             // unwrapped part can do so without growing.
-            .rec_pattern => |pat_id| if (c.node == 0) try self.addConfig(c.entry, Item.pat(pat_id), c.path, c.node),
+            .rec_pattern => |pat_id| if (c.node == 0) try self.transitionToItem(state_id, c.fn_id, Item.pat(pat_id), c.path, c.node),
             .scrutinee => |m| {
-                try self.consume(c, .match);
+                try self.consume(c.path, c.node, .match);
+                if (self.hit) return;
                 const bs = p.branchSpan(p.getExpr(m).data.match_.branches);
-                for (0..bs.len) |i| try self.addConfig(c.entry, Item.pat(GuardedList.at(bs, i).pat), c.path, c.node);
+                for (0..bs.len) |i| try self.transitionToItem(state_id, c.fn_id, Item.pat(GuardedList.at(bs, i).pat), c.path, c.node);
             },
             .callee => |call| {
-                try self.consume(c, .call);
+                try self.consume(c.path, c.node, .call);
+                if (self.hit) return;
                 // Calling a function value built around the known part
                 // enters its body at the capture.
                 if (c.node != 0) switch (self.nodes.items[c.node].frame) {
                     .step => |top| if (top.kind == .capture) try self.watch(c.node, .{ .call_capture = .{
-                        .caller = .{ .entry = c.entry, .call = call },
+                        .src = state_id,
+                        .call = call,
                         .target = @fromBackingInt(top.label),
                         .slot = top.index,
                     } }),
                     .update => {},
                 };
             },
-            .proc_arg => |pa| try self.enterCall(.{ .entry = c.entry, .call = pa.call }, pa.callee, pa.slot, c.path, c.node),
+            .proc_arg => |pa| try self.enterCall(.{ .state = .{ .src_state = state_id, .call = pa.call } }, pa.callee, pa.slot, c.path, c.node),
             .loop_init => |li| {
-                try self.consume(c, .loop);
-                try self.addConfig(c.entry, Item.local(li.local), c.path, c.node);
+                try self.consume(c.path, c.node, .loop);
+                if (self.hit) return;
+                try self.transitionToItem(state_id, c.fn_id, Item.local(li.local), c.path, c.node);
             },
             .into_local => |il| {
                 // A back edge stops a part wrapped in a frame pushed inside
@@ -1568,44 +2321,46 @@ const Walk = struct {
                 // pass and is no loop fixed point.
                 if (il.loop) |loop| if (c.node != 0) {
                     const node = self.nodes.items[c.node];
-                    const body = self.entries.items[c.entry].fn_id;
-                    if (node.body == body and self.session.index.loopWithin(body, node.loop, loop)) return;
+                    if (node.body == c.fn_id and self.session.index.loopWithin(c.fn_id, node.loop, loop)) return;
                 };
-                try self.addConfig(c.entry, Item.local(il.local), c.path, c.node);
+                try self.transitionToItem(state_id, c.fn_id, Item.local(il.local), c.path, c.node);
             },
             .result => {
-                try self.addExit(c.entry, c.path, c.node);
+                try self.markResult(state_id, c.path, c.node);
                 try self.escape(c.node);
             },
         }
     }
 
-    fn stepPattern(self: *Walk, c: Config) Allocator.Error!void {
+    fn stepPattern(self: *Walk, state_id: u32, c: StateKey.ItemState) Allocator.Error!void {
         const p = self.session.program;
         switch (p.getPat(@fromBackingInt(c.item.id)).data) {
-            .bind => |local| try self.addConfig(c.entry, Item.local(local), c.path, c.node),
+            .bind => |local| try self.transitionToItem(state_id, c.fn_id, Item.local(local), c.path, c.node),
             .as => |as_| {
-                try self.addConfig(c.entry, Item.local(as_.local), c.path, c.node);
-                try self.addConfig(c.entry, Item.pat(as_.pattern), c.path, c.node);
+                try self.transitionToItem(state_id, c.fn_id, Item.local(as_.local), c.path, c.node);
+                try self.transitionToItem(state_id, c.fn_id, Item.pat(as_.pattern), c.path, c.node);
             },
-            .nominal => |inner| try self.addConfig(c.entry, Item.pat(inner), c.path, c.node),
+            .nominal => |inner| try self.transitionToItem(state_id, c.fn_id, Item.pat(inner), c.path, c.node),
             .tag => |tag| {
-                try self.consume(c, .match);
+                try self.consume(c.path, c.node, .match);
+                if (self.hit) return;
                 const ps = p.patSpan(tag.payloads);
-                for (0..ps.len) |i| try self.descend(c.entry, Item.pat(GuardedList.at(ps, i)), c.path, c.node, Step.payload(tag.name, @intCast(i)));
+                for (0..ps.len) |i| try self.descend(state_id, c.fn_id, Item.pat(GuardedList.at(ps, i)), c.path, c.node, Step.payload(tag.name, @intCast(i)));
             },
             .record => |span| {
-                try self.consume(c, .project);
+                try self.consume(c.path, c.node, .project);
+                if (self.hit) return;
                 const ds = p.recordDestructSpan(span);
                 for (0..ds.len) |i| {
                     const d = GuardedList.at(ds, i);
-                    try self.descend(c.entry, Item.pat(d.pattern), c.path, c.node, Step.field(d.name));
+                    try self.descend(state_id, c.fn_id, Item.pat(d.pattern), c.path, c.node, Step.field(d.name));
                 }
             },
             .tuple => |span| {
-                try self.consume(c, .project);
+                try self.consume(c.path, c.node, .project);
+                if (self.hit) return;
                 const ps = p.patSpan(span);
-                for (0..ps.len) |i| try self.descend(c.entry, Item.pat(GuardedList.at(ps, i)), c.path, c.node, Step.item(@intCast(i)));
+                for (0..ps.len) |i| try self.descend(state_id, c.fn_id, Item.pat(GuardedList.at(ps, i)), c.path, c.node, Step.item(@intCast(i)));
             },
             // A list, literal, or string pattern reads no part a walk can
             // know.
@@ -1804,7 +2559,7 @@ const TestSeed = struct {
     const KnownPath = struct { steps: []const Step, kinds: Consumers };
 
     fn oracle(self: *TestSeed) Oracle {
-        return .{ .ctx = self, .known = known };
+        return .{ .ctx = self, .known = known, .has_known_descendant = hasKnownDescendant };
     }
 
     fn known(ctx: *anyopaque, path: []const Step, kinds: Consumers) Allocator.Error!bool {
@@ -1812,6 +2567,16 @@ const TestSeed = struct {
         outer: for (self.known_paths) |entry| {
             if (entry.steps.len != path.len) continue;
             for (entry.steps, path) |a, b| if (!a.eql(b)) continue :outer;
+            if (entry.kinds.intersectWith(kinds).count() != 0) return true;
+        }
+        return false;
+    }
+
+    fn hasKnownDescendant(ctx: *anyopaque, path: []const Step, kinds: Consumers) Allocator.Error!bool {
+        const self: *TestSeed = @ptrCast(@alignCast(ctx));
+        outer: for (self.known_paths) |entry| {
+            if (entry.steps.len < path.len) continue;
+            for (entry.steps[0..path.len], path) |a, b| if (!a.eql(b)) continue :outer;
             if (entry.kinds.intersectWith(kinds).count() != 0) return true;
         }
         return false;
@@ -2042,4 +2807,92 @@ test "a deep recursive walk over a wide recursive type follows only known struct
         .{ .steps = &.{ left, v7 }, .kinds = record_kinds },
     } };
     try std.testing.expect(try testConsumes(&t, &read, entry));
+}
+
+test "factored call entries preserve exact matched call/return across >64 wrap nodes" {
+    // Exercises overflow bitset words (`extra_bits`) and verifies that exits of
+    // a shared helper route only to the matching caller site.
+    const gpa = std.testing.allocator;
+    var t = try TestProgram.init(gpa);
+    defer t.deinit();
+
+    // id(x) = x
+    const x_id = try t.local();
+    const id_fn = try t.function(&.{x_id}, &.{}, try t.ref(x_id));
+
+    // Build 70 distinct wrap-and-call sites so `id_fn` gets > 64 entries.
+    // The 69th call wraps in `Wrap69` and unwraps `Other` (must NOT hit);
+    // in a second function, the 69th call unwraps `Wrap69` and matches (MUST hit).
+    const p1 = try t.local();
+    var body1 = try t.unit();
+    var name_buf: [32]u8 = undefined;
+    for (0..70) |i| {
+        const tag_name = try std.fmt.bufPrint(&name_buf, "W{d}", .{i});
+        const call = try t.call(id_fn, &.{try t.tag(tag_name, &.{try t.ref(p1)})});
+        if (i == 69) {
+            const payload = try t.local();
+            body1 = try t.matchOne(call, try t.tagPat("W0", &.{try t.bind(payload)}), try t.matchOne(try t.ref(payload), try t.tagPat("A", &.{}), body1));
+        } else {
+            const tmp = try t.local();
+            body1 = try t.let(tmp, call, body1);
+        }
+    }
+    const no_hit_fn = try t.function(&.{p1}, &.{}, body1);
+
+    const p2 = try t.local();
+    var body2 = try t.unit();
+    for (0..70) |i| {
+        const tag_name = try std.fmt.bufPrint(&name_buf, "W{d}", .{i});
+        const call = try t.call(id_fn, &.{try t.tag(tag_name, &.{try t.ref(p2)})});
+        if (i == 69) {
+            const payload = try t.local();
+            body2 = try t.matchOne(call, try t.tagPat("W69", &.{try t.bind(payload)}), try t.matchOne(try t.ref(payload), try t.tagPat("A", &.{}), body2));
+        } else {
+            const tmp = try t.local();
+            body2 = try t.let(tmp, call, body2);
+        }
+    }
+    const hit_fn = try t.function(&.{p2}, &.{}, body2);
+
+    var seed: TestSeed = .{ .known_paths = &.{.{ .steps = &.{}, .kinds = tag_kinds }} };
+    try std.testing.expect(!try testConsumes(&t, &seed, no_hit_fn));
+    try std.testing.expect(try testConsumes(&t, &seed, hit_fn));
+}
+
+test "chained record updates over a constructor step descend and pop accurately" {
+    var t = try TestProgram.init(std.testing.allocator);
+    defer t.deinit();
+
+    // f(x) = match ({ ..{ ..{ keep: x }, b: {} }, c: {} }).keep { A => {} }
+    const x1 = try t.local();
+    const rec1 = try t.record("keep", try t.ref(x1));
+    const upd1a = try t.update(rec1, "b", try t.unit());
+    const upd1b = try t.update(upd1a, "c", try t.unit());
+    const f_keep = try t.function(&.{x1}, &.{}, try t.matchOne(try t.access(upd1b, "keep"), try t.tagPat("A", &.{}), try t.unit()));
+
+    // g(x) = match ({ ..{ ..{ keep: x }, keep: {} }, c: {} }).keep { A => {} }
+    const x2 = try t.local();
+    const rec2 = try t.record("keep", try t.ref(x2));
+    const upd2a = try t.update(rec2, "keep", try t.unit());
+    const upd2b = try t.update(upd2a, "c", try t.unit());
+    const f_shadowed = try t.function(&.{x2}, &.{}, try t.matchOne(try t.access(upd2b, "keep"), try t.tagPat("A", &.{}), try t.unit()));
+
+    var seed: TestSeed = .{ .known_paths = &.{.{ .steps = &.{}, .kinds = tag_kinds }} };
+    try std.testing.expect(try testConsumes(&t, &seed, f_keep));
+    try std.testing.expect(!try testConsumes(&t, &seed, f_shadowed));
+}
+
+test "a record seed with no tag or callable descendants skips walking and returns false" {
+    var t = try TestProgram.init(std.testing.allocator);
+    defer t.deinit();
+
+    const r = try t.local();
+    const callee = try t.function(&.{r}, &.{}, try t.matchOne(try t.access(try t.ref(r), "mode"), try t.tagPat("A", &.{}), try t.unit()));
+    // Only `.project` is known at root and nested field; no `.match`/`.call`/`.loop`.
+    const mode = Step.field(try t.fieldName("mode"));
+    var dead_seed: TestSeed = .{ .known_paths = &.{
+        .{ .steps = &.{}, .kinds = record_kinds },
+        .{ .steps = &.{mode}, .kinds = record_kinds },
+    } };
+    try std.testing.expect(!try testConsumes(&t, &dead_seed, callee));
 }
