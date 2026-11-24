@@ -248,6 +248,12 @@ const max_wrapper_inline_stmts: usize = 32;
 /// loops exceeds the work it does.
 const max_leaf_inline_stmts: usize = 400;
 
+/// The longest literal a string equality compares inline against constants,
+/// which reads every byte of a string of the literal's length. A longer
+/// literal is compared by the general loop, which stops at the first
+/// difference.
+const max_inline_literal_eq_bytes: usize = 64;
+
 /// One crash block a function shares among the checked operations that fail
 /// with one message. A framed block reads each site's source frames from
 /// phis whose operands accumulate as sites branch to it.
@@ -10393,6 +10399,14 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitStrIsEq(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
+        inline for (.{ 1, 0 }) |literal_arg| {
+            if (self.value_plan.strLiteral(GuardedList.at(args, literal_arg))) |literal| {
+                const bytes = self.store.getStringLiteral(literal);
+                if (bytes.len <= max_inline_literal_eq_bytes) {
+                    return self.emitStrIsEqLiteral(target, GuardedList.at(args, 1 - literal_arg), bytes);
+                }
+            }
+        }
         const lhs = try self.emitStrByteSliceForLocal(GuardedList.at(args, 0));
         const rhs = try self.emitStrByteSliceForLocal(GuardedList.at(args, 1));
         const true_block = wip.block(0, "str_eq_true") catch return error.OutOfMemory;
@@ -10410,6 +10424,43 @@ pub const MonoLlvmCodeGen = struct {
 
         wip.cursor = .{ .block = compare_block };
         try self.emitByteSlicesEqualBranch(lhs.bytes, rhs.bytes, lhs.len, true_block, false_block);
+        try self.emitStrBoolJoin(target, true_block, false_block, after_block);
+    }
+
+    /// Whether the string in `local` equals `literal`: its length is the
+    /// literal's and its bytes are the literal's, compared a chunk at a time
+    /// against constants.
+    fn emitStrIsEqLiteral(self: *MonoLlvmCodeGen, target: LocalId, local: LocalId, literal: []const u8) Error!void {
+        const builder, const wip = try self.builderAndWip();
+        const source: StrByteSlice = if (self.deferredStrCapture(local) != null)
+            try self.emitStrByteSliceForLocal(local)
+        else selected: {
+            // Both representations' fields are readable whichever one the
+            // string has, so the bytes and length are selected, not branched to.
+            const str_ptr = self.slot(local).ptr;
+            const raw_len = try self.loadUsize(try self.offsetPtr(str_ptr, self.rocStrLenOffset()));
+            const is_small = try self.emitRocStrLenIsSmall(raw_len);
+            const heap_bytes = try self.loadPointer(str_ptr);
+            break :selected .{
+                .bytes = wip.select(.normal, is_small, str_ptr, heap_bytes, "") catch return error.OutOfMemory,
+                .len = try self.rocStrLenFromWord(str_ptr, raw_len, is_small),
+            };
+        };
+        const true_block = wip.block(0, "str_eq_true") catch return error.OutOfMemory;
+        const false_block = wip.block(0, "str_eq_false") catch return error.OutOfMemory;
+        const after_block = wip.block(0, "str_eq_after") catch return error.OutOfMemory;
+        const literal_len = builder.intValue(self.ptrSizedIntType(), literal.len) catch return error.OutOfMemory;
+        const same_len = wip.icmp(.eq, source.len, literal_len, "") catch return error.OutOfMemory;
+        if (literal.len == 0) {
+            _ = wip.brCond(same_len, true_block, false_block, .none) catch return error.OutOfMemory;
+        } else {
+            const compare_block = wip.block(0, "str_eq_compare") catch return error.OutOfMemory;
+            _ = wip.brCond(same_len, compare_block, false_block, .none) catch return error.OutOfMemory;
+            wip.cursor = .{ .block = compare_block };
+            const mismatch = (try self.emitStrMatchLiteralMismatch(source.bytes, literal)) orelse
+                unreachable; // the literal has at least one byte in this branch
+            _ = wip.brCond(mismatch, false_block, true_block, .none) catch return error.OutOfMemory;
+        }
         try self.emitStrBoolJoin(target, true_block, false_block, after_block);
     }
 

@@ -25504,6 +25504,15 @@ edge after reading each byte a bounded number of times, however many arms the
 run has. Arms with captures keep their own tests, in arm order relative to the
 runs around them.
 
+A backend may likewise read a `str_is_eq` operand as a literal when the LIR
+says it is one: the operand's local has exactly one definition, and that
+definition assigns a string literal or copies a local that holds one, so
+every read of it reads those bytes. The LLVM backend records those locals in
+its per-procedure value plan and compares the other operand's length and
+bytes against constants, for literals of at most 64 bytes; a longer literal,
+and every comparison of two computed strings, uses the general comparison,
+which stops at the first differing chunk.
+
 Named record-rest binders are derived values, not durable pattern decisions.
 Monotype pattern lowering removes the rest binder from the record pattern,
 captures that exact record occurrence in a compiler-generated local, and
