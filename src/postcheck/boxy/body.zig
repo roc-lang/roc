@@ -32,6 +32,7 @@ const Match = @import("match.zig");
 const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
 const checked = check.CheckedModule;
+const checked_names = check.CheckedNames;
 const static_dispatch = check.StaticDispatchRegistry;
 const NumeralLiteral = can.ModuleEnv.NumeralLiteral;
 const LIR = lir_core.LIR;
@@ -7277,7 +7278,7 @@ pub const Builder = struct {
 
     /// The worker of the template `ref` names, with its body queued for
     /// lowering when `reach` is its body.
-    fn templateRefReached(self: *Builder, ref: check.CheckedNames.ProcedureTemplateRef, reach: Reach) Allocator.Error!WorkerId {
+    fn templateRefReached(self: *Builder, ref: checked_names.ProcedureTemplateRef, reach: Reach) Allocator.Error!WorkerId {
         return switch (reach) {
             .body => try self.program.templateRefWorker(ref),
             .scope => try self.program.templateRefScope(ref),
