@@ -22650,7 +22650,7 @@ fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error
     // an implicitly opened union is an error (design.md "Polarity").
     state.saved.?.bounding_annotation = try self.beginBoundedAnnotationRows(self.appliedAnnotation(def.pattern, def.annotation));
     state.stage = .body;
-    return .{ .push = .{ .expr = try self.newExprKernelActivity(.{ .expr = def.expr, .expected = def_expectation, .function_owner = def.expr }) } };
+    return .{ .push = .{ .expr = try self.newExprKernelActivity(&.{ .expr = def.expr, .expected = def_expectation, .function_owner = def.expr }) } };
 }
 
 fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std.mem.Allocator.Error!void {
@@ -24166,9 +24166,10 @@ fn abortCheckActivity(self: *Self, activity: *CheckActivity, env: *Env) void {
         .def => |*state| state.restore(self),
         .expr => |state| {
             if (state.finishing) |*finishing| finishing.frame.deinit(self, env);
-            while (state.tasks.pop()) |task| {
-                var owned_task = task;
-                self.abortExprTask(&owned_task, env);
+            while (state.tasks.items.len > 0) {
+                const top = state.tasks.items.len - 1;
+                self.abortExprTask(&state.tasks.items[top], env);
+                state.tasks.shrinkRetainingCapacity(top);
             }
             self.releaseExprKernelActivity(state);
         },
@@ -32555,13 +32556,16 @@ const ExprCheckFrame = struct {
     }
 };
 
+/// Begin the frame for `expr_idx`, whose decoded node is `expr`, in `frame`.
+/// `expected` must not point into `frame`.
 fn beginExprCheckFrame(
     self: *Self,
+    frame: *ExprCheckFrame,
     expr_idx: CIR.Expr.Idx,
+    expr: CIR.Expr,
     env: *Env,
-    expected: Expected,
-) std.mem.Allocator.Error!ExprCheckFrame {
-    const expr = self.cir.store.getExpr(expr_idx);
+    expected: *const Expected,
+) std.mem.Allocator.Error!void {
     const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
     const expr_var_raw = ModuleEnv.varFrom(expr_idx);
     const previous_instantiation_source = self.instantiation_source_expr;
@@ -32569,14 +32573,14 @@ fn beginExprCheckFrame(
     const previous_discarded_binding_rhs_expr = self.discarded_binding_rhs_expr;
     const previous_active_scheme_root = self.active_scheme_root;
 
-    var frame = ExprCheckFrame{
+    frame.* = ExprCheckFrame{
         .expr_idx = expr_idx,
         .expr = expr,
         .expr_region = expr_region,
         .expr_var_raw = expr_var_raw,
         .expr_var = undefined,
         .mb_anno_vars = null,
-        .nested_expected = expected,
+        .nested_expected = expected.*,
         .is_call_arg = false,
         .is_immediate_callee = false,
         .is_forwarded_result = false,
@@ -32645,61 +32649,53 @@ fn beginExprCheckFrame(
     try self.setVarRank(expr_var_raw, env);
 
     // Materialize an annotation once at the expression frame that owns it.
-    frame.expr_var, frame.mb_anno_vars, frame.nested_expected = blk: {
-        if (expr == .e_closure) {
-            break :blk .{ expr_var_raw, null, expected };
+    // `mb_anno_vars` and `nested_expected` already hold the values for an
+    // expression with neither an annotation nor an expected type.
+    if (expr == .e_closure) {
+        frame.expr_var = expr_var_raw;
+    } else if (expected.annotation) |annotation_idx| {
+        const took_over = try self.takeOverRetainedAnnotation(annotation_idx, env);
+        if (!took_over) try self.generateAnnotationType(annotation_idx, env);
+        if (self.bounding_annotation == annotation_idx) {
+            self.bounding_annotation = null;
+            try self.boundAnnotationRows(annotation_idx);
         }
-
-        if (expected.annotation) |annotation_idx| {
-            const took_over = try self.takeOverRetainedAnnotation(annotation_idx, env);
-            if (!took_over) try self.generateAnnotationType(annotation_idx, env);
-            if (self.bounding_annotation == annotation_idx) {
-                self.bounding_annotation = null;
-                try self.boundAnnotationRows(annotation_idx);
-            }
-            try self.recordPredeclaredBodySlots(annotation_idx);
-            frame.annotation = annotation_idx;
-            const anno_var = ModuleEnv.varFrom(annotation_idx);
-            const anno_backup = if (took_over)
-                self.retainedAnnotationBackup(annotation_idx) orelse try self.expectedTypeBackup(anno_var, env)
-            else
-                try self.expectedTypeBackup(anno_var, env);
-            break :blk .{
-                try self.fresh(env, expr_region),
-                AnnoVars{
-                    .anno_var = anno_var,
-                    .anno_var_backup = anno_backup.var_,
-                    .backup_shared = anno_backup.shared,
-                    .context = .type_annotation,
-                },
-                expected.withMaterializedAnnotation(.{
-                    .var_ = anno_var,
-                    .context = .type_annotation,
-                }).withBranchResult(anno_var, .annotated),
-            };
-        } else if (expected.expected_type) |expected_type| {
-            const expected_backup = try self.expectedTypeBackup(expected_type.var_, env);
-            break :blk .{
-                try self.fresh(env, expr_region),
-                AnnoVars{
-                    .anno_var = expected_type.var_,
-                    .anno_var_backup = expected_backup.var_,
-                    .backup_shared = expected_backup.shared,
-                    .context = expected_type.context,
-                },
-                expected.withBranchResult(expected_type.var_, .inferred),
-            };
-        } else {
-            break :blk .{ expr_var_raw, null, expected };
-        }
-    };
+        try self.recordPredeclaredBodySlots(annotation_idx);
+        frame.annotation = annotation_idx;
+        const anno_var = ModuleEnv.varFrom(annotation_idx);
+        const anno_backup = if (took_over)
+            self.retainedAnnotationBackup(annotation_idx) orelse try self.expectedTypeBackup(anno_var, env)
+        else
+            try self.expectedTypeBackup(anno_var, env);
+        frame.expr_var = try self.fresh(env, expr_region);
+        frame.mb_anno_vars = AnnoVars{
+            .anno_var = anno_var,
+            .anno_var_backup = anno_backup.var_,
+            .backup_shared = anno_backup.shared,
+            .context = .type_annotation,
+        };
+        frame.nested_expected = expected.withMaterializedAnnotation(.{
+            .var_ = anno_var,
+            .context = .type_annotation,
+        }).withBranchResult(anno_var, .annotated);
+    } else if (expected.expected_type) |expected_type| {
+        const expected_backup = try self.expectedTypeBackup(expected_type.var_, env);
+        frame.expr_var = try self.fresh(env, expr_region);
+        frame.mb_anno_vars = AnnoVars{
+            .anno_var = expected_type.var_,
+            .anno_var_backup = expected_backup.var_,
+            .backup_shared = expected_backup.shared,
+            .context = expected_type.context,
+        };
+        frame.nested_expected = expected.withBranchResult(expected_type.var_, .inferred);
+    } else {
+        frame.expr_var = expr_var_raw;
+    }
 
     self.checking_binding_rhs_pattern = binding_rhs_pattern;
     try self.openHoistFrame(expr_idx, frame.is_binding_rhs, frame.nested_expected.hoist_position);
     frame.hoist_frame_open = true;
     self.checking_binding_rhs_pattern = null;
-
-    return frame;
 }
 
 fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
@@ -32718,10 +32714,10 @@ const ExprChildRequest = struct {
     function_owner: ?CIR.Expr.Idx = null,
 };
 
-const ExprStep = union(enum) {
-    child: ExprChildRequest,
-    done,
-};
+/// What a resumed expression does next. `.child` means it wrote the child to
+/// check next to the `child_request` it was given; `.done` means its own
+/// checking and cleanup are complete and it wrote no request.
+const ExprStep = enum { child, done };
 
 /// A suspended expression: its checker frame plus the resumable state of the
 /// expression-specific checking that remains after its current child.
@@ -32795,22 +32791,22 @@ const ExprKernelActivity = struct {
 fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected, function_owner: CIR.Expr.Idx) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
-    return (try self.runCheckActivities(.{ .expr = try self.newExprKernelActivity(.{
+    return (try self.runCheckActivities(.{ .expr = try self.newExprKernelActivity(&.{
         .expr = expr_idx,
         .expected = expected,
         .function_owner = function_owner,
     }) }, env)).doesFx();
 }
 
-fn newExprKernelActivity(self: *Self, next: ExprChildRequest) Allocator.Error!*ExprKernelActivity {
+fn newExprKernelActivity(self: *Self, next: *const ExprChildRequest) Allocator.Error!*ExprKernelActivity {
     if (self.expr_kernel_pool.pop()) |state| {
         var tasks = state.tasks;
         tasks.clearRetainingCapacity();
-        state.* = .{ .next = next, .tasks = tasks };
+        state.* = .{ .next = next.*, .tasks = tasks };
         return state;
     }
     const state = try self.gpa.create(ExprKernelActivity);
-    state.* = .{ .next = next };
+    state.* = .{ .next = next.* };
     return state;
 }
 
@@ -32833,48 +32829,73 @@ fn stepExprKernel(self: *Self, state: *ExprKernelActivity, env: *Env) std.mem.Al
         state.finishing = null;
     }
     while (true) {
-        if (state.next) |request| {
-            state.next = null;
-            const frame_relation = try self.enterRelation(.of(.value, request.expr, 0));
-            var frame = try self.beginExprCheckFrame(request.expr, env, request.expected);
-            try self.leaveRelation(frame_relation);
-            const owner = request.function_owner orelse request.expr;
-            if (exprTaskState(frame.expr)) |task_state| {
-                self.recordRelationOperands(frame.expr_idx, frame.expr) catch |err| {
-                    frame.deinit(self, env);
+        if (state.next) |*request| {
+            const expr_idx = request.expr;
+            const expr = self.cir.store.getExpr(expr_idx);
+            const owner = request.function_owner orelse expr_idx;
+            const frame_relation = try self.enterRelation(.of(.value, expr_idx, 0));
+            if (exprTaskState(expr)) |task_state| {
+                // The frame is begun in its task's slot. Only this kernel
+                // pushes onto its task stack, and it pushes nothing until the
+                // task is complete, so `task` stays valid throughout.
+                const task_index = state.tasks.items.len;
+                const task = try state.tasks.addOne(self.gpa);
+                task.function_owner = owner;
+                task.does_fx = false;
+                task.state = task_state;
+                self.beginExprCheckFrame(&task.frame, expr_idx, expr, env, &request.expected) catch |err| {
+                    std.debug.assert(state.tasks.items.len == task_index + 1);
+                    state.tasks.shrinkRetainingCapacity(task_index);
                     return err;
                 };
-                state.tasks.append(self.gpa, .{
-                    .frame = frame,
-                    .function_owner = owner,
-                    .state = task_state,
-                }) catch |err| {
-                    frame.deinit(self, env);
-                    return err;
-                };
+                errdefer {
+                    std.debug.assert(state.tasks.items.len == task_index + 1);
+                    task.frame.deinit(self, env);
+                    state.tasks.shrinkRetainingCapacity(task_index);
+                }
+                state.next = null;
+                try self.leaveRelation(frame_relation);
+                try self.recordRelationOperands(expr_idx, expr);
+                std.debug.assert(state.tasks.items.len == task_index + 1);
                 state.child_does_fx = null;
             } else {
+                var frame: ExprCheckFrame = undefined;
+                try self.beginExprCheckFrame(&frame, expr_idx, expr, env, &request.expected);
+                try self.leaveRelation(frame_relation);
                 errdefer frame.deinit(self, env);
                 const leaf_relation = try self.enterRelation(exprStepRelation(frame.expr_idx, frame.expr));
-                const does_fx = try self.checkLeafExpr(&frame, request.expected, env);
+                const does_fx = try self.checkLeafExpr(&frame, &request.expected, env);
+                state.next = null;
                 try self.leaveRelation(leaf_relation);
                 if (try self.finishExprFrame(state, &frame, env, does_fx)) |step| return step;
             }
         }
 
-        if (state.tasks.items.len == 0) {
+        const task_count = state.tasks.items.len;
+        if (task_count == 0) {
             return checkActivityDone(.{ .does_fx = state.child_does_fx.? });
         }
-        const task = &state.tasks.items[state.tasks.items.len - 1];
+        // The top task is resumed and finished in place: nothing pushes onto
+        // this kernel's task stack until the task's step returns, so `task`
+        // stays valid throughout.
+        const task = &state.tasks.items[task_count - 1];
         const task_relation = try self.enterRelation(exprStepRelation(task.frame.expr_idx, task.frame.expr));
-        const task_step = try self.resumeExprTask(task, env, state.child_does_fx);
+        const task_step = try self.resumeExprTask(task, env, state.child_does_fx, &state.next);
+        std.debug.assert(state.tasks.items.len == task_count);
         try self.leaveRelation(task_relation);
         switch (task_step) {
-            .child => |request| state.next = request,
+            .child => std.debug.assert(state.next != null),
             .done => {
-                var finished = state.tasks.pop().?;
-                errdefer finished.frame.deinit(self, env);
-                if (try self.finishExprFrame(state, &finished.frame, env, finished.does_fx)) |step| return step;
+                std.debug.assert(state.next == null);
+                errdefer {
+                    std.debug.assert(state.tasks.items.len == task_count);
+                    task.frame.deinit(self, env);
+                    state.tasks.shrinkRetainingCapacity(task_count - 1);
+                }
+                const step = try self.finishExprFrame(state, &task.frame, env, task.does_fx);
+                std.debug.assert(state.tasks.items.len == task_count);
+                state.tasks.shrinkRetainingCapacity(task_count - 1);
+                if (step) |activity_step| return activity_step;
             },
         }
     }
@@ -32974,10 +32995,11 @@ fn exprTaskState(expr: CIR.Expr) ?ExprTaskState {
 }
 
 /// Resume a suspended expression with its most recent child's effect result
-/// (null when the task has just begun). Returns the next child to check, or
-/// `.done` once the expression's own checking and cleanup are complete; the
-/// kernel then finishes its frame.
-fn resumeExprTask(self: *Self, task: *ExprTask, env: *Env, child_does_fx: ?bool) std.mem.Allocator.Error!ExprStep {
+/// (null when the task has just begun). Writes the next child to check to
+/// `child_request` and returns `.child`, or returns `.done` once the
+/// expression's own checking and cleanup are complete; the kernel then
+/// finishes its frame.
+fn resumeExprTask(self: *Self, task: *ExprTask, env: *Env, child_does_fx: ?bool, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     if (child_does_fx) |does_fx| {
         switch (task.state) {
             // These kinds consume their children's effects themselves.
@@ -33008,37 +33030,37 @@ fn resumeExprTask(self: *Self, task: *ExprTask, env: *Env, child_does_fx: ?bool)
         }
     }
     return switch (task.state) {
-        .str => |*state| self.resumeStrCheck(task, state, env, child_does_fx != null),
-        .list => |*state| self.resumeListCheck(task, state, env, child_does_fx != null),
-        .tuple => |*state| self.resumeTupleCheck(task, state, env, child_does_fx != null),
-        .tuple_access => |*state| self.resumeTupleAccessCheck(task, state, env),
-        .record_update => |*state| self.resumeRecordUpdateCheck(task, state, env, child_does_fx != null),
-        .record => |*state| self.resumeRecordCheck(task, state, env, child_does_fx != null),
-        .tag => |*state| self.resumeTagCheck(task, state, env, child_does_fx != null),
-        .nominal => |*state| self.resumeNominalCheck(task, state, env),
-        .block => |*state| self.resumeBlockCheck(task, state, env, child_does_fx),
-        .lambda => |*state| self.resumeLambdaCheck(task, state, env, child_does_fx),
-        .closure => |*state| self.resumeClosureCheck(task, state, env, child_does_fx),
-        .call => |*state| self.resumeCallCheck(task, state, env, child_does_fx != null),
-        .if_ => |*state| self.resumeIfCheck(task, state, env, child_does_fx),
-        .match => |*state| self.resumeMatchCheck(task, state, env, child_does_fx),
-        .binop => |*state| self.resumeBinopCheck(task, state, env),
-        .unary_minus => |*state| self.resumeUnaryMinusCheck(task, state, env),
-        .field_access => |*state| self.resumeFieldAccessCheck(task, state, env),
-        .interpolation => |*state| self.resumeInterpolationCheck(task, state, env),
-        .method_call => |*state| self.resumeMethodCallCheck(task, state, env, child_does_fx != null),
-        .dispatch_call => |*state| self.resumeDispatchCallCheck(task, state),
-        .structural_eq => |*state| self.resumeStructuralEqCheck(task, state, env),
-        .structural_hash => |*state| self.resumeStructuralHashCheck(task, state, env),
-        .method_eq => |*state| self.resumeMethodEqCheck(task, state, env),
-        .type_method_call => |*state| self.resumeTypeMethodCallCheck(task, state, env),
-        .type_dispatch_call => |*state| self.resumeTypeDispatchCallCheck(task, state),
-        .expect_err => |*state| self.resumeExpectErrCheck(task, state, env),
-        .dbg => |*state| self.resumeDbgCheck(task, state, env),
-        .expect => |*state| self.resumeExpectCheck(task, state, env, child_does_fx),
-        .for_ => |*state| self.resumeForExprCheck(task, state, env, child_does_fx),
-        .return_ => |*state| self.resumeReturnCheck(task, state, env),
-        .run_low_level => |*state| self.resumeRunLowLevelCheck(task, state, env),
+        .str => |*state| self.resumeStrCheck(task, state, env, child_does_fx != null, child_request),
+        .list => |*state| self.resumeListCheck(task, state, env, child_does_fx != null, child_request),
+        .tuple => |*state| self.resumeTupleCheck(task, state, env, child_does_fx != null, child_request),
+        .tuple_access => |*state| self.resumeTupleAccessCheck(task, state, env, child_request),
+        .record_update => |*state| self.resumeRecordUpdateCheck(task, state, env, child_does_fx != null, child_request),
+        .record => |*state| self.resumeRecordCheck(task, state, env, child_does_fx != null, child_request),
+        .tag => |*state| self.resumeTagCheck(task, state, env, child_does_fx != null, child_request),
+        .nominal => |*state| self.resumeNominalCheck(task, state, env, child_request),
+        .block => |*state| self.resumeBlockCheck(task, state, env, child_does_fx, child_request),
+        .lambda => |*state| self.resumeLambdaCheck(task, state, env, child_does_fx, child_request),
+        .closure => |*state| self.resumeClosureCheck(task, state, env, child_does_fx, child_request),
+        .call => |*state| self.resumeCallCheck(task, state, env, child_does_fx != null, child_request),
+        .if_ => |*state| self.resumeIfCheck(task, state, env, child_does_fx, child_request),
+        .match => |*state| self.resumeMatchCheck(task, state, env, child_does_fx, child_request),
+        .binop => |*state| self.resumeBinopCheck(task, state, env, child_request),
+        .unary_minus => |*state| self.resumeUnaryMinusCheck(task, state, env, child_request),
+        .field_access => |*state| self.resumeFieldAccessCheck(task, state, env, child_request),
+        .interpolation => |*state| self.resumeInterpolationCheck(task, state, env, child_request),
+        .method_call => |*state| self.resumeMethodCallCheck(task, state, env, child_does_fx != null, child_request),
+        .dispatch_call => |*state| self.resumeDispatchCallCheck(task, state, child_request),
+        .structural_eq => |*state| self.resumeStructuralEqCheck(task, state, env, child_request),
+        .structural_hash => |*state| self.resumeStructuralHashCheck(task, state, env, child_request),
+        .method_eq => |*state| self.resumeMethodEqCheck(task, state, env, child_request),
+        .type_method_call => |*state| self.resumeTypeMethodCallCheck(task, state, env, child_request),
+        .type_dispatch_call => |*state| self.resumeTypeDispatchCallCheck(task, state, child_request),
+        .expect_err => |*state| self.resumeExpectErrCheck(task, state, env, child_request),
+        .dbg => |*state| self.resumeDbgCheck(task, state, env, child_request),
+        .expect => |*state| self.resumeExpectCheck(task, state, env, child_does_fx, child_request),
+        .for_ => |*state| self.resumeForExprCheck(task, state, env, child_does_fx, child_request),
+        .return_ => |*state| self.resumeReturnCheck(task, state, env, child_request),
+        .run_low_level => |*state| self.resumeRunLowLevelCheck(task, state, env, child_request),
     };
 }
 
@@ -33142,7 +33164,7 @@ const SingleChildCheck = struct {
 
 /// Check an expression that has no child expressions. Its frame has begun;
 /// the kernel finishes it.
-fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *Env) std.mem.Allocator.Error!bool {
+fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: *const Expected, env: *Env) std.mem.Allocator.Error!bool {
     const expr_idx = frame.expr_idx;
     const expr = frame.expr;
     const expr_region = frame.expr_region;
@@ -33843,7 +33865,7 @@ const StrCheck = struct {
     has_interpolation: bool = false,
 };
 
-fn resumeStrCheck(self: *Self, task: *ExprTask, state: *StrCheck, env: *Env, child_done: bool) std.mem.Allocator.Error!ExprStep {
+fn resumeStrCheck(self: *Self, task: *ExprTask, state: *StrCheck, env: *Env, child_done: bool, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
     const expr_var = frame.expr_var;
@@ -33882,10 +33904,11 @@ fn resumeStrCheck(self: *Self, task: *ExprTask, state: *StrCheck, env: *Env, chi
 
     // Iterate over the string segments, checking each one
     if (state.index < segment_expr_idx_slice.len) {
-        return .{ .child = .{
+        child_request.* = .{
             .expr = segment_expr_idx_slice[state.index],
             .expected = frame.nested_expected.forStatement(),
-        } };
+        };
+        return .child;
     }
 
     if (state.did_err) {
@@ -33934,7 +33957,7 @@ fn listElemExpected(frame: *const ExprCheckFrame, seed_elem_var: ?Var) Expected 
         child_expected;
 }
 
-fn resumeListCheck(self: *Self, task: *ExprTask, state: *ListCheck, env: *Env, child_done: bool) std.mem.Allocator.Error!ExprStep {
+fn resumeListCheck(self: *Self, task: *ExprTask, state: *ListCheck, env: *Env, child_done: bool, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_var = frame.expr_var;
     const expr_region = frame.expr_region;
@@ -33979,7 +34002,8 @@ fn resumeListCheck(self: *Self, task: *ExprTask, state: *ListCheck, env: *Env, c
             // Here, we use the list's 1st element as the element var to
             // constrain the rest of the list. Check the first elem.
             state.phase = .first;
-            return .{ .child = .{ .expr = elems[0], .expected = listElemExpected(frame, state.seed_elem_var) } };
+            child_request.* = .{ .expr = elems[0], .expected = listElemExpected(frame, state.seed_elem_var) };
+            return .child;
         },
         .first => {
             const first_elem_var = try self.storedValueVar(elems[0], env);
@@ -34031,7 +34055,8 @@ fn resumeListCheck(self: *Self, task: *ExprTask, state: *ListCheck, env: *Env, c
 
     if (state.index < elems.len) {
         const elem_expected = if (state.phase == .fold) listElemExpected(frame, state.seed_elem_var) else child_expected;
-        return .{ .child = .{ .expr = elems[state.index], .expected = elem_expected } };
+        child_request.* = .{ .expr = elems[state.index], .expected = elem_expected };
+        return .child;
     }
 
     // Create a nominal List type with the inferred element type
@@ -34077,7 +34102,7 @@ fn aggregateChildExpected(frame: *const ExprCheckFrame, projected: ?Var.SafeList
         child_expected;
 }
 
-fn resumeTupleCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: *Env, child_done: bool) std.mem.Allocator.Error!ExprStep {
+fn resumeTupleCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: *Env, child_done: bool, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_var = frame.expr_var;
     const expr_region = frame.expr_region;
@@ -34122,10 +34147,11 @@ fn resumeTupleCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: *
     }
 
     if (state.index < elems_slice.len) {
-        return .{ .child = .{
+        child_request.* = .{
             .expr = elems_slice[state.index],
             .expected = aggregateChildExpected(frame, state.projected, self.types, state.index),
-        } };
+        };
+        return .child;
     }
 
     defer self.scratch_vars.clearFrom(state.scratch_top);
@@ -34138,7 +34164,7 @@ fn resumeTupleCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: *
     return .done;
 }
 
-fn resumeTupleAccessCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
+fn resumeTupleAccessCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
     const expr_var = frame.expr_var;
@@ -34146,7 +34172,8 @@ fn resumeTupleAccessCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck
     if (!state.started) {
         state.started = true;
         // Check the tuple expression
-        return .{ .child = .{ .expr = tuple_access.tuple, .expected = frame.nested_expected.forStatement() } };
+        child_request.* = .{ .expr = tuple_access.tuple, .expected = frame.nested_expected.forStatement() };
+        return .child;
     }
 
     // An erroneous tuple crashes before any item is read, so the access
@@ -34191,7 +34218,7 @@ fn recordUpdateFieldContext(
     } };
 }
 
-fn resumeRecordUpdateCheck(self: *Self, task: *ExprTask, state: *RecordUpdateCheck, env: *Env, child_done: bool) std.mem.Allocator.Error!ExprStep {
+fn resumeRecordUpdateCheck(self: *Self, task: *ExprTask, state: *RecordUpdateCheck, env: *Env, child_done: bool, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_var = frame.expr_var;
     const expr_region = frame.expr_region;
@@ -34206,7 +34233,8 @@ fn resumeRecordUpdateCheck(self: *Self, task: *ExprTask, state: *RecordUpdateChe
             // Create a record type in the type system and assign it the
             // expr_var. Check the record being updated first.
             state.phase = .base;
-            return .{ .child = .{ .expr = record_being_updated_expr, .expected = child_expected } };
+            child_request.* = .{ .expr = record_being_updated_expr, .expected = child_expected };
+            return .child;
         },
         .base => {
             std.debug.assert(child_done);
@@ -34276,7 +34304,8 @@ fn resumeRecordUpdateCheck(self: *Self, task: *ExprTask, state: *RecordUpdateChe
             .record_field = field.name,
             .context = update_context,
         });
-        return .{ .child = .{ .expr = field.value, .expected = field_expected } };
+        child_request.* = .{ .expr = field.value, .expected = field_expected };
+        return .child;
     }
 
     // Process each unset field. The probe mirrors `.?`-access EXACTLY
@@ -34338,7 +34367,7 @@ fn resumeRecordUpdateCheck(self: *Self, task: *ExprTask, state: *RecordUpdateChe
     return .done;
 }
 
-fn resumeRecordCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: *Env, child_done: bool) std.mem.Allocator.Error!ExprStep {
+fn resumeRecordCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: *Env, child_done: bool, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
     const expr_var = frame.expr_var;
@@ -34433,10 +34462,11 @@ fn resumeRecordCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: 
     // Process each field: check the field value expression
     if (state.index < source_fields.len) {
         const field = self.cir.store.getRecordField(source_fields[state.index]);
-        return .{ .child = .{
+        child_request.* = .{
             .expr = field.value,
             .expected = aggregateChildExpected(frame, state.projected, self.types, state.index),
-        } };
+        };
+        return .child;
     }
 
     defer self.scratch_record_fields.clearFrom(state.scratch_top);
@@ -34489,7 +34519,7 @@ fn resumeRecordCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: 
     return .done;
 }
 
-fn resumeTagCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: *Env, child_done: bool) std.mem.Allocator.Error!ExprStep {
+fn resumeTagCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: *Env, child_done: bool, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_var = frame.expr_var;
     const expr_region = frame.expr_region;
@@ -34527,10 +34557,11 @@ fn resumeTagCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: *En
     }
 
     if (state.index < arg_expr_idx_slice.len) {
-        return .{ .child = .{
+        child_request.* = .{
             .expr = arg_expr_idx_slice[state.index],
             .expected = aggregateChildExpected(frame, state.projected, self.types, state.index),
-        } };
+        };
+        return .child;
     }
 
     defer self.scratch_vars.clearFrom(state.scratch_top);
@@ -34559,7 +34590,7 @@ const NominalCheck = struct {
     prepared: ?PreparedNominalTypeUsage = null,
 };
 
-fn resumeNominalCheck(self: *Self, task: *ExprTask, state: *NominalCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
+fn resumeNominalCheck(self: *Self, task: *ExprTask, state: *NominalCheck, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
     const expr_var = frame.expr_var;
@@ -34609,7 +34640,8 @@ fn resumeNominalCheck(self: *Self, task: *ExprTask, state: *NominalCheck, env: *
             })
         else
             child_expected;
-        return .{ .child = .{ .expr = backing_expr, .expected = backing_expected } };
+        child_request.* = .{ .expr = backing_expr, .expected = backing_expected };
+        return .child;
     }
 
     const actual_backing_var = try self.storedValueVar(backing_expr, env);
@@ -34636,7 +34668,7 @@ const BlockCheck = struct {
     saved_call_position: CallPositionFlags = undefined,
 };
 
-fn resumeBlockCheck(self: *Self, task: *ExprTask, slot: *?*BlockCheck, env: *Env, child_does_fx: ?bool) std.mem.Allocator.Error!ExprStep {
+fn resumeBlockCheck(self: *Self, task: *ExprTask, slot: *?*BlockCheck, env: *Env, child_does_fx: ?bool, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_var = frame.expr_var;
     const nested_expected = frame.nested_expected;
@@ -34681,24 +34713,25 @@ fn resumeBlockCheck(self: *Self, task: *ExprTask, slot: *?*BlockCheck, env: *Env
     }
 
     // Check all statements in the block
-    const statement_child = if (state.phase == .statements and child_does_fx != null)
-        try self.resumeBlockStatements(&state.statements, block.stmts, env, child_does_fx.?)
+    const statement_step = if (state.phase == .statements and child_does_fx != null)
+        try self.resumeBlockStatements(&state.statements, block.stmts, env, child_does_fx.?, child_request)
     else
-        try self.stepBlockStatements(&state.statements, block.stmts, env);
-    if (statement_child) |request| return .{ .child = request };
+        try self.stepBlockStatements(&state.statements, block.stmts, env, child_request);
+    if (statement_step == .child) return .child;
 
     task.does_fx = state.statements.does_fx or task.does_fx;
 
     // Check the final expression
     state.phase = .final_expr;
     state.saved_call_position = self.scopeChildCallPosition(frame.is_call_arg, frame.is_immediate_callee, true);
-    return .{ .child = .{
+    child_request.* = .{
         .expr = block.final_expr,
         .expected = if (state.statements.diverges)
             nested_expected.suppressHoistSelection()
         else
             nested_expected,
-    } };
+    };
+    return .child;
 }
 
 fn abortBlockCheck(self: *Self, state: *BlockCheck, env: *Env) void {
@@ -34767,9 +34800,9 @@ const DeclStatementCheck = struct {
     saved_bounding_annotation: ?CIR.Annotation.Idx = null,
 };
 
-/// Begin statements until one suspends on a child expression. Returns that
-/// child, or null once every statement is checked.
-fn stepBlockStatements(self: *Self, state: *BlockStatementsCheck, statements: CIR.Statement.Span, env: *Env) std.mem.Allocator.Error!?ExprChildRequest {
+/// Begin statements until one suspends on a child expression, which is
+/// written to `child_request`; `.done` once every statement is checked.
+fn stepBlockStatements(self: *Self, state: *BlockStatementsCheck, statements: CIR.Statement.Span, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     std.debug.assert(state.current == null);
     const base_statement_expected = state.expected.forStatement();
     while (state.offset < statements.span.len) {
@@ -34810,19 +34843,19 @@ fn stepBlockStatements(self: *Self, state: *BlockStatementsCheck, statements: CI
             else
                 base_statement_expected,
         };
-        if (try self.startStatement(state, &state.current.?, env)) |request| return request;
+        if (try self.startStatement(state, &state.current.?, env, child_request) == .child) return .child;
         self.completeStatement(state);
     }
-    return null;
+    return .done;
 }
 
 /// Resume the suspended statement with its child's effect result, then keep
 /// stepping through the block's statements.
-fn resumeBlockStatements(self: *Self, state: *BlockStatementsCheck, statements: CIR.Statement.Span, env: *Env, child_does_fx: bool) std.mem.Allocator.Error!?ExprChildRequest {
+fn resumeBlockStatements(self: *Self, state: *BlockStatementsCheck, statements: CIR.Statement.Span, env: *Env, child_does_fx: bool, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     state.does_fx = child_does_fx or state.does_fx;
-    if (try self.resumeStatement(state, &state.current.?, env, child_does_fx)) |request| return request;
+    if (try self.resumeStatement(state, &state.current.?, env, child_does_fx, child_request) == .child) return .child;
     self.completeStatement(state);
-    return try self.stepBlockStatements(state, statements, env);
+    return try self.stepBlockStatements(state, statements, env, child_request);
 }
 
 fn completeStatement(_: *Self, state: *BlockStatementsCheck) void {
@@ -34853,9 +34886,9 @@ fn releaseDeclStatement(self: *Self, decl: DeclStatementCheck) void {
     }
 }
 
-/// Check a statement until it needs a child expression. Returns that child,
-/// or null when the statement is fully checked.
-fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *StatementCheck, env: *Env) std.mem.Allocator.Error!?ExprChildRequest {
+/// Check a statement until it needs a child expression, which is written to
+/// `child_request`; `.done` when the statement is fully checked.
+fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *StatementCheck, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const stmt_idx = statement.stmt_idx;
     const stmt = statement.stmt;
     const stmt_var = ModuleEnv.varFrom(stmt_idx);
@@ -34995,7 +35028,8 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                 try self.activateSchemeOwner(decl_pattern_var);
             }
             decl.saved_bounding_annotation = try self.beginBoundedAnnotationRows(self.appliedAnnotation(decl_stmt.pattern, decl_stmt.anno));
-            return .{ .expr = decl_stmt.expr, .expected = decl.expectation };
+            child_request.* = .{ .expr = decl_stmt.expr, .expected = decl.expectation };
+            return .child;
         },
         .s_var => |var_stmt| {
             self.markCurrentHoistRuntimeDependency();
@@ -35021,7 +35055,8 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                     break :blk statement_expected;
                 }
             };
-            return .{ .expr = var_stmt.expr, .expected = expectation };
+            child_request.* = .{ .expr = var_stmt.expr, .expected = expectation };
+            return .child;
         },
         .s_var_uninitialized => |var_stmt| {
             self.markCurrentHoistRuntimeDependency();
@@ -35065,7 +35100,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
             // type is determined by later reassignments rather than an
             // initializer, but it can still become cyclic.
             try self.local_binding_roots.append(self.gpa, .{ .pattern = var_stmt.pattern_idx, .initialized = null });
-            return null;
+            return .done;
         },
         .s_reassign => |reassign| {
             self.markCurrentHoistRuntimeDependency();
@@ -35079,7 +35114,8 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                 try self.markErroneousValueExpr(reassign.expr);
             }
             self.discardHoistBindingCandidate(reassign.pattern_idx);
-            return .{ .expr = reassign.expr, .expected = statement_expected };
+            child_request.* = .{ .expr = reassign.expr, .expected = statement_expected };
+            return .child;
         },
         .s_for => |for_stmt| {
             self.markCurrentHoistObservableEffect();
@@ -35093,69 +35129,74 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                 .body = for_stmt.body,
                 .loop_region = for_region,
             } };
-            return try self.startForLoop(&statement.kind.for_, statement_expected, env);
+            return try self.startForLoop(&statement.kind.for_, statement_expected, env, child_request);
         },
         inline .s_while, .s_breakable_loop, .s_infinite_loop => |while_stmt| {
             self.markCurrentHoistObservableEffect();
             // Check the condition
             // while $count < 10 {
             //       ^^^^^^^^^^^
-            return .{ .expr = while_stmt.cond, .expected = statement_expected };
+            child_request.* = .{ .expr = while_stmt.cond, .expected = statement_expected };
+            return .child;
         },
         .s_expr => |expr| {
-            return .{ .expr = expr.expr, .expected = statement_expected };
+            child_request.* = .{ .expr = expr.expr, .expected = statement_expected };
+            return .child;
         },
         .s_dbg => |expr| {
             self.markCurrentHoistObservableEffect();
-            return .{ .expr = expr.expr, .expected = statement_expected };
+            child_request.* = .{ .expr = expr.expr, .expected = statement_expected };
+            return .child;
         },
         .s_expect => |expr_stmt| {
             self.markCurrentHoistObservableEffect();
             statement.kind = .{ .expect = try self.beginExpectBody(stmt_region, expr_stmt.body) };
-            return .{ .expr = expr_stmt.body, .expected = expectBodyExpected(statement_expected) };
+            child_request.* = .{ .expr = expr_stmt.body, .expected = expectBodyExpected(statement_expected) };
+            return .child;
         },
         .s_crash => {
             try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
             block_state.diverges = true;
-            return null;
+            return .done;
         },
         .s_return => |ret| {
             self.markCurrentHoistObservableEffect();
             // Type check the return expression
-            return .{ .expr = ret.expr, .expected = self.returnValueExpected(block_state.expected, ret.lambda) };
+            child_request.* = .{ .expr = ret.expr, .expected = self.returnValueExpected(block_state.expected, ret.lambda) };
+            return .child;
         },
         .s_nominal_decl, .s_alias_decl, .s_where_alias_decl, .s_type_anno => {
             // Local type declarations are preprocessed before type checking.
             // Avoid re-processing them inside block statements to prevent
             // duplicate unifications and spurious type mismatches.
-            return null;
+            return .done;
         },
         .s_import => {
             // Imports are only valid at the top level; canonicalization reports the error.
             try self.markErroneous(stmt_var);
-            return null;
+            return .done;
         },
         .s_type_var_alias => {
             // Type var alias introduces no new constraints during type checking
             // The alias is already registered in scope by canonicalization
             // The type var it references is a rigid var from the enclosing function
             try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
-            return null;
+            return .done;
         },
         .s_runtime_error => {
             try self.markErroneous(stmt_var);
-            return null;
+            return .done;
         },
         .s_break => {
             block_state.diverges = true;
-            return null;
+            return .done;
         },
     }
 }
 
-/// Continue a statement after its child expression. Returns the next child,
-/// or null when the statement is fully checked.
-fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *StatementCheck, env: *Env, child_does_fx: bool) std.mem.Allocator.Error!?ExprChildRequest {
+/// Continue a statement after its child expression. Writes the next child to
+/// `child_request`; `.done` when the statement is fully checked.
+fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *StatementCheck, env: *Env, child_does_fx: bool, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const stmt_idx = statement.stmt_idx;
     const stmt = statement.stmt;
     const stmt_var = ModuleEnv.varFrom(stmt_idx);
@@ -35291,7 +35332,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             try self.local_binding_roots.append(self.gpa, .{ .pattern = decl_stmt.pattern, .initialized = .{ .statement = stmt_idx, .expr = decl_stmt.expr } });
             self.releaseDeclStatement(decl.*);
             statement.kind = .single;
-            return null;
+            return .done;
         },
         .s_var => |var_stmt| {
             const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
@@ -35311,7 +35352,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             // `var` statements are binding roots too (they never
             // generalize, but their type can still be made cyclic).
             try self.local_binding_roots.append(self.gpa, .{ .pattern = var_stmt.pattern_idx, .initialized = .{ .statement = stmt_idx, .expr = var_stmt.expr } });
-            return null;
+            return .done;
         },
         .s_reassign => |reassign| {
             const reassign_pattern_var: Var = ModuleEnv.varFrom(reassign.pattern_idx);
@@ -35341,17 +35382,17 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             if (reassign_pattern_result.isEstablished()) {
                 _ = try self.checkDestructureExhaustiveness(reassign.pattern_idx, reassign.expr, reassign_expr_var, env, stmt_region);
             }
-            return null;
+            return .done;
         },
         .s_for => {
-            if (try self.resumeForLoop(&statement.kind.for_, statement.statement_expected, env)) |request| return request;
+            if (try self.resumeForLoop(&statement.kind.for_, statement.statement_expected, env, child_request) == .child) return .child;
             self.assertLoopBodyHasNoFinalExpr(statement.kind.for_.body);
             // Every `for!` pulls its items with the effectful `next!`.
             if (statement.kind.for_.kind == .stream) block_state.does_fx = true;
             const for_region = self.cir.store.getStatementRegion(stmt_idx);
             const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, for_region);
             _ = try self.unify(stmt_var, empty_rec, env);
-            return null;
+            return .done;
         },
         inline .s_while, .s_breakable_loop, .s_infinite_loop => |while_stmt| {
             const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
@@ -35365,7 +35406,8 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 //     print!($count.toStr())  <<<<
                 //     $count = $count + 1
                 // }
-                return .{ .expr = while_stmt.body, .expected = statement_expected.guardHoistSelection() };
+                child_request.* = .{ .expr = while_stmt.body, .expected = statement_expected.guardHoistSelection() };
+                return .child;
             }
             self.assertLoopBodyHasNoFinalExpr(while_stmt.body);
             if (stmt == .s_infinite_loop) {
@@ -35375,7 +35417,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, cond_region);
                 _ = try self.unify(stmt_var, empty_rec, env);
             }
-            return null;
+            return .done;
         },
         .s_expr => |expr| {
             const expr_var: Var = ModuleEnv.varFrom(expr.expr);
@@ -35389,7 +35431,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 try self.markErroneousValueExpr(expr.expr);
                 try self.erroneous_statements.put(self.gpa, stmt_idx, .some(expr.expr));
                 try self.markErroneous(stmt_var);
-                return null;
+                return .done;
             }
 
             // Statements must evaluate to {}. The statement only consults its
@@ -35404,7 +35446,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                     .var_ident = var_ident,
                 } });
                 _ = try self.unify(stmt_var, empty_rec, env);
-                return null;
+                return .done;
             }
             const statement_result = try self.unifyOwnedRelation(empty_rec, expr_var, env, .statement_value, .construction);
             if (statement_result.isProblem()) {
@@ -35416,12 +35458,12 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             if (try self.exprIsAllCrashConditional(expr.expr)) {
                 block_state.diverges = true;
             }
-            return null;
+            return .done;
         },
         .s_dbg => |expr| {
             const expr_var: Var = ModuleEnv.varFrom(expr.expr);
             _ = try self.unify(stmt_var, expr_var, env);
-            return null;
+            return .done;
         },
         .s_expect => |expr_stmt| {
             self.finishExpectBody(statement.kind.expect, child_does_fx);
@@ -35429,7 +35471,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             _ = try self.checkBoolOperand(expr_stmt.body, stmt_region, .expect, env);
 
             try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
-            return null;
+            return .done;
         },
         .s_return => |ret| {
             const expected_return = self.expectedReturnResultFor(ret.lambda);
@@ -35446,7 +35488,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             // This allows branches containing early returns to match any other branch type.
             try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
             block_state.diverges = true;
-            return null;
+            return .done;
         },
         .s_var_uninitialized,
         .s_crash,
@@ -35537,20 +35579,21 @@ fn assertLoopBodyHasNoFinalExpr(self: *const Self, body: CIR.Expr.Idx) void {
 
 /// `expected` is the expectation the loop was requested with: its statement's,
 /// or a `for` expression's statement expectation.
-fn startForLoop(self: *Self, state: *ForLoopCheck, expected: Expected, env: *Env) std.mem.Allocator.Error!ExprChildRequest {
+fn startForLoop(self: *Self, state: *ForLoopCheck, expected: Expected, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     std.debug.assert(state.phase == .start);
     const pattern_ctx: PatternCtx = .{ .row_openness = if (try self.patternNeedsExhaustiveness(state.pattern)) .open else .closed, .failure_owner = state.loop_node };
     state.valid_pattern = try self.checkPattern(state.pattern, pattern_ctx, env);
     state.phase = .iterable;
-    return .{ .expr = state.iterable, .expected = expected.forStatement() };
+    child_request.* = .{ .expr = state.iterable, .expected = expected.forStatement() };
+    return .child;
 }
 
-/// Continue a `for` loop after its iterable or body. Returns the body, or
-/// null once the loop is fully checked.
-fn resumeForLoop(self: *Self, state: *ForLoopCheck, expected: Expected, env: *Env) std.mem.Allocator.Error!?ExprChildRequest {
+/// Continue a `for` loop after its iterable or body. Writes the body to
+/// `child_request`; `.done` once the loop is fully checked.
+fn resumeForLoop(self: *Self, state: *ForLoopCheck, expected: Expected, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     switch (state.phase) {
         .start => unreachable, // startForLoop advances the phase past .start before any child is checked
-        .body => return null,
+        .body => return .done,
         .iterable => {},
     }
     const pattern = state.pattern;
@@ -35639,14 +35682,15 @@ fn resumeForLoop(self: *Self, state: *ForLoopCheck, expected: Expected, env: *En
     );
 
     state.phase = .body;
-    return .{ .expr = state.body, .expected = expected.forStatement().guardHoistSelection() };
+    child_request.* = .{ .expr = state.body, .expected = expected.forStatement().guardHoistSelection() };
+    return .child;
 }
 
-fn resumeForExprCheck(self: *Self, task: *ExprTask, state: *ForLoopCheck, env: *Env, child_does_fx: ?bool) std.mem.Allocator.Error!ExprStep {
+fn resumeForExprCheck(self: *Self, task: *ExprTask, state: *ForLoopCheck, env: *Env, child_does_fx: ?bool, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     if (child_does_fx) |does_fx| {
         task.does_fx = does_fx or task.does_fx;
-        if (try self.resumeForLoop(state, frame.nested_expected.forStatement(), env)) |request| return .{ .child = request };
+        if (try self.resumeForLoop(state, frame.nested_expected.forStatement(), env, child_request) == .child) return .child;
         // Every `for!` pulls its items with the effectful `next!`.
         if (state.kind == .stream) task.does_fx = true;
 
@@ -35668,7 +35712,7 @@ fn resumeForExprCheck(self: *Self, task: *ExprTask, state: *ForLoopCheck, env: *
         .body = for_expr.body,
         .loop_region = frame.expr_region,
     };
-    return .{ .child = try self.startForLoop(state, frame.nested_expected.forStatement(), env) };
+    return try self.startForLoop(state, frame.nested_expected.forStatement(), env, child_request);
 }
 
 // expect //
@@ -35725,7 +35769,7 @@ fn abortExpectCheck(self: *Self, state: ExpectCheck) void {
     if (state.scope) |scope| self.abortExpectBody(scope);
 }
 
-fn resumeExpectCheck(self: *Self, task: *ExprTask, state: *ExpectCheck, env: *Env, child_does_fx: ?bool) std.mem.Allocator.Error!ExprStep {
+fn resumeExpectCheck(self: *Self, task: *ExprTask, state: *ExpectCheck, env: *Env, child_does_fx: ?bool, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expect = frame.expr.e_expect;
     if (child_does_fx) |expect_does_fx| {
@@ -35741,7 +35785,8 @@ fn resumeExpectCheck(self: *Self, task: *ExprTask, state: *ExpectCheck, env: *En
 
     self.markCurrentHoistObservableEffect();
     state.scope = try self.beginExpectBody(frame.expr_region, expect.body);
-    return .{ .child = .{ .expr = expect.body, .expected = expectBodyExpected(frame.nested_expected.forStatement()) } };
+    child_request.* = .{ .expr = expect.body, .expected = expectBodyExpected(frame.nested_expected.forStatement()) };
+    return .child;
 }
 
 // function //
@@ -35758,7 +35803,7 @@ const LambdaCheck = struct {
     match_tag_patterns_start: usize = 0,
 };
 
-fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *Env, child_does_fx: ?bool) std.mem.Allocator.Error!ExprStep {
+fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *Env, child_does_fx: ?bool, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
     const expr_var = frame.expr_var;
@@ -36027,13 +36072,14 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
     // The body's value is this function's result, so a lambda there is
     // consumed by this function and takes no scheme of its own.
     state.saved_call_position = self.scopeChildCallPosition(false, false, true);
-    return .{ .child = .{
+    child_request.* = .{
         .expr = lambda.body,
         .expected = if (state.mb_anno_func) |expected_func|
             lambda_body_expected.withBranchResult(expected_func.ret, .annotated)
         else
             lambda_body_expected,
-    } };
+    };
+    return .child;
 }
 
 /// Release everything a lambda holds while its body is checked, in the
@@ -36096,7 +36142,7 @@ fn abortClosureCheck(self: *Self, state: ClosureCheck) void {
     if (state.saved_call_position) |saved| self.restoreCallPosition(saved);
 }
 
-fn resumeClosureCheck(self: *Self, task: *ExprTask, state: *ClosureCheck, env: *Env, child_does_fx: ?bool) std.mem.Allocator.Error!ExprStep {
+fn resumeClosureCheck(self: *Self, task: *ExprTask, state: *ClosureCheck, env: *Env, child_does_fx: ?bool, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
     const closure = frame.expr.e_closure;
@@ -36137,11 +36183,12 @@ fn resumeClosureCheck(self: *Self, task: *ExprTask, state: *ClosureCheck, env: *
         self.suppress_generalize_expr = closure.lambda_idx;
     }
     state.saved_call_position = self.scopeChildCallPosition(frame.is_call_arg, frame.is_immediate_callee, frame.is_forwarded_result);
-    return .{ .child = .{
+    child_request.* = .{
         .expr = closure.lambda_idx,
         .expected = frame.nested_expected,
         .function_owner = expr_idx,
-    } };
+    };
+    return .child;
 }
 
 // function calling //
@@ -36180,7 +36227,7 @@ fn callArgContext(
     } };
 }
 
-fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, child_done: bool) std.mem.Allocator.Error!ExprStep {
+fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, child_done: bool, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
     const expr_var = frame.expr_var;
@@ -36213,7 +36260,8 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
             self.direct_callee_scheme = null;
             state.uses_start = @intCast(self.use_instances.items.len);
             state.phase = .func;
-            return .{ .child = .{ .expr = call.func, .expected = child_expected } };
+            child_request.* = .{ .expr = call.func, .expected = child_expected };
+            return .child;
         },
         .func => {
             std.debug.assert(child_done);
@@ -36225,7 +36273,7 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
                 self.derived_method_callee = null;
                 state.derived = callee;
                 state.phase = .derived_args;
-                return try self.stepDerivedMethodCall(task, state, env);
+                return try self.stepDerivedMethodCall(task, state, env, child_request);
             }
             const call_func_expr_var = ModuleEnv.varFrom(call.func);
 
@@ -36355,7 +36403,7 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
         .derived_args => {
             std.debug.assert(child_done);
             state.arg_index += 1;
-            return try self.stepDerivedMethodCall(task, state, env);
+            return try self.stepDerivedMethodCall(task, state, env, child_request);
         },
     }
 
@@ -36375,7 +36423,8 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
 
         self.checking_call_arg = true;
         self.checking_immediate_callee = false;
-        return .{ .child = .{ .expr = call_arg_idx, .expected = arg_expected } };
+        child_request.* = .{ .expr = call_arg_idx, .expected = arg_expected };
+        return .child;
     }
 
     const func_var = state.func_var;
@@ -36462,13 +36511,14 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
 
 // operators //
 
-fn resumeBinopCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
+fn resumeBinopCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const binop = frame.expr.e_binop;
     // Check operands first
     if (state.index == 0) {
         state.index = 1;
-        return .{ .child = .{ .expr = binop.lhs, .expected = frame.nested_expected.forStatement() } };
+        child_request.* = .{ .expr = binop.lhs, .expected = frame.nested_expected.forStatement() };
+        return .child;
     }
     if (state.index == 1) {
         state.index = 2;
@@ -36482,7 +36532,8 @@ fn resumeBinopCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, env: *E
                 expected = expected.withContextualType(.{ .var_ = lhs_var, .context = .none });
             }
         }
-        return .{ .child = .{ .expr = binop.rhs, .expected = expected } };
+        child_request.* = .{ .expr = binop.rhs, .expected = expected };
+        return .child;
     }
     try self.finishBinopExpr(frame.expr_idx, frame.expr_var, frame.expr_region, env, binop);
     return .done;
@@ -36495,19 +36546,20 @@ fn binopOperandsAreOneType(op: CIR.Expr.Binop.Op) bool {
     };
 }
 
-fn resumeUnaryMinusCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
+fn resumeUnaryMinusCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const unary = frame.expr.e_unary_minus;
     if (!state.started) {
         state.started = true;
         // Check the operand expression
-        return .{ .child = .{ .expr = unary.expr, .expected = frame.nested_expected.forStatement() } };
+        child_request.* = .{ .expr = unary.expr, .expected = frame.nested_expected.forStatement() };
+        return .child;
     }
     try self.finishUnaryMinusExpr(frame.expr_idx, frame.expr_var, frame.expr_region, env, unary);
     return .done;
 }
 
-fn resumeFieldAccessCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
+fn resumeFieldAccessCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
     const expr_var = frame.expr_var;
@@ -36517,7 +36569,8 @@ fn resumeFieldAccessCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck
         std.debug.assert(field_access.segments.len > 0);
         state.started = true;
         // Check the receiver (LHS)
-        return .{ .child = .{ .expr = field_access.receiver, .expected = frame.nested_expected.forStatement() } };
+        child_request.* = .{ .expr = field_access.receiver, .expected = frame.nested_expected.forStatement() };
+        return .child;
     }
 
     // An erroneous receiver crashes before any field is read, so the access
@@ -36639,7 +36692,7 @@ const InterpolationCheck = struct {
     part_index: u32 = 0,
 };
 
-fn resumeInterpolationCheck(self: *Self, task: *ExprTask, state: *InterpolationCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
+fn resumeInterpolationCheck(self: *Self, task: *ExprTask, state: *InterpolationCheck, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
     const expr_var = frame.expr_var;
@@ -36653,7 +36706,8 @@ fn resumeInterpolationCheck(self: *Self, task: *ExprTask, state: *InterpolationC
         .start => {
             self.checking_call_arg = true;
             state.phase = .first;
-            return .{ .child = .{ .expr = interpolation.first, .expected = child_expected } };
+            child_request.* = .{ .expr = interpolation.first, .expected = child_expected };
+            return .child;
         },
         .first => {
             state.str_var = try self.freshStr(env, expr_region);
@@ -36669,7 +36723,8 @@ fn resumeInterpolationCheck(self: *Self, task: *ExprTask, state: *InterpolationC
             // Part Compatibility").
             self.checking_call_arg = true;
             state.phase = .part_segment;
-            return .{ .child = .{ .expr = parts[state.part_index + 1], .expected = child_expected } };
+            child_request.* = .{ .expr = parts[state.part_index + 1], .expected = child_expected };
+            return .child;
         },
         .part_segment => {
             const following_segment_var = ModuleEnv.varFrom(parts[state.part_index + 1]);
@@ -36681,7 +36736,8 @@ fn resumeInterpolationCheck(self: *Self, task: *ExprTask, state: *InterpolationC
     if (state.part_index < parts.len) {
         self.checking_call_arg = true;
         state.phase = .part_value;
-        return .{ .child = .{ .expr = parts[state.part_index], .expected = child_expected } };
+        child_request.* = .{ .expr = parts[state.part_index], .expected = child_expected };
+        return .child;
     }
 
     const did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, parts) or state.did_err;
@@ -36763,7 +36819,7 @@ const MethodCallCheck = struct {
     index: u32 = 0,
 };
 
-fn resumeMethodCallCheck(self: *Self, task: *ExprTask, state: *MethodCallCheck, env: *Env, child_done: bool) std.mem.Allocator.Error!ExprStep {
+fn resumeMethodCallCheck(self: *Self, task: *ExprTask, state: *MethodCallCheck, env: *Env, child_done: bool, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
     const expr_var = frame.expr_var;
@@ -36775,7 +36831,8 @@ fn resumeMethodCallCheck(self: *Self, task: *ExprTask, state: *MethodCallCheck, 
     switch (state.phase) {
         .start => {
             state.phase = .receiver;
-            return .{ .child = .{ .expr = method_call.receiver, .expected = child_expected } };
+            child_request.* = .{ .expr = method_call.receiver, .expected = child_expected };
+            return .child;
         },
         .receiver => {
             std.debug.assert(child_done);
@@ -36873,7 +36930,7 @@ fn resumeMethodCallCheck(self: *Self, task: *ExprTask, state: *MethodCallCheck, 
     if (state.index < arg_expr_idxs.len) {
         const i = state.index;
         self.checking_call_arg = true;
-        return .{ .child = .{
+        child_request.* = .{
             .expr = arg_expr_idxs[i],
             .expected = if (state.resolve_method_first)
                 child_expected.withContextualType(.{
@@ -36882,7 +36939,8 @@ fn resumeMethodCallCheck(self: *Self, task: *ExprTask, state: *MethodCallCheck, 
                 })
             else
                 child_expected,
-        } };
+        };
+        return .child;
     }
 
     const arg_vars_top = state.arg_vars_top orelse blk: {
@@ -36977,7 +37035,7 @@ fn abortMethodCallCheck(self: *Self, state: MethodCallCheck) void {
     if (state.arg_vars_top) |top| self.scratch_vars.clearFrom(top);
 }
 
-fn resumeDispatchCallCheck(self: *Self, task: *ExprTask, state: *OperandsCheck) std.mem.Allocator.Error!ExprStep {
+fn resumeDispatchCallCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
     const expr_var = frame.expr_var;
@@ -36988,7 +37046,8 @@ fn resumeDispatchCallCheck(self: *Self, task: *ExprTask, state: *OperandsCheck) 
     // Index 0 is the receiver; index `1 + i` is argument `i`.
     if (state.index == 0) {
         state.index = 1;
-        return .{ .child = .{ .expr = method_call.receiver, .expected = child_expected } };
+        child_request.* = .{ .expr = method_call.receiver, .expected = child_expected };
+        return .child;
     }
     if (state.index == 1) {
         _ = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, &.{method_call.receiver});
@@ -36996,7 +37055,8 @@ fn resumeDispatchCallCheck(self: *Self, task: *ExprTask, state: *OperandsCheck) 
     if (state.index - 1 < arg_expr_idxs.len) {
         state.index += 1;
         self.checking_call_arg = true;
-        return .{ .child = .{ .expr = arg_expr_idxs[state.index - 2], .expected = child_expected } };
+        child_request.* = .{ .expr = arg_expr_idxs[state.index - 2], .expected = child_expected };
+        return .child;
     }
     _ = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, arg_expr_idxs);
 
@@ -37004,13 +37064,14 @@ fn resumeDispatchCallCheck(self: *Self, task: *ExprTask, state: *OperandsCheck) 
     return .done;
 }
 
-fn resumeStructuralEqCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
+fn resumeStructuralEqCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const eq = frame.expr.e_structural_eq;
     const operands = [_]CIR.Expr.Idx{ eq.lhs, eq.rhs };
     if (state.index < operands.len) {
         state.index += 1;
-        return .{ .child = .{ .expr = operands[state.index - 1], .expected = frame.nested_expected.forStatement() } };
+        child_request.* = .{ .expr = operands[state.index - 1], .expected = frame.nested_expected.forStatement() };
+        return .child;
     }
 
     const lhs_var = ModuleEnv.varFrom(eq.lhs);
@@ -37020,13 +37081,14 @@ fn resumeStructuralEqCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, 
     return .done;
 }
 
-fn resumeStructuralHashCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
+fn resumeStructuralHashCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const h = frame.expr.e_structural_hash;
     const operands = [_]CIR.Expr.Idx{ h.value, h.hasher };
     if (state.index < operands.len) {
         state.index += 1;
-        return .{ .child = .{ .expr = operands[state.index - 1], .expected = frame.nested_expected.forStatement() } };
+        child_request.* = .{ .expr = operands[state.index - 1], .expected = frame.nested_expected.forStatement() };
+        return .child;
     }
 
     // `to_hash : self, Hasher -> Hasher` threads the Hasher through, so the
@@ -37036,7 +37098,7 @@ fn resumeStructuralHashCheck(self: *Self, task: *ExprTask, state: *OperandsCheck
     return .done;
 }
 
-fn resumeMethodEqCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
+fn resumeMethodEqCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
     const expr_var = frame.expr_var;
@@ -37045,7 +37107,8 @@ fn resumeMethodEqCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, env:
     if (state.index < operands.len) {
         state.index += 1;
         self.checking_call_arg = true;
-        return .{ .child = .{ .expr = operands[state.index - 1], .expected = frame.nested_expected.forStatement() } };
+        child_request.* = .{ .expr = operands[state.index - 1], .expected = frame.nested_expected.forStatement() };
+        return .child;
     }
 
     const lhs_var = ModuleEnv.varFrom(eq.lhs);
@@ -37071,7 +37134,7 @@ fn resumeMethodEqCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, env:
     return .done;
 }
 
-fn resumeTypeMethodCallCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
+fn resumeTypeMethodCallCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
     const expr_var = frame.expr_var;
@@ -37080,7 +37143,8 @@ fn resumeTypeMethodCallCheck(self: *Self, task: *ExprTask, state: *OperandsCheck
     if (state.index < arg_expr_idxs.len) {
         state.index += 1;
         self.checking_call_arg = true;
-        return .{ .child = .{ .expr = arg_expr_idxs[state.index - 1], .expected = frame.nested_expected.forStatement() } };
+        child_request.* = .{ .expr = arg_expr_idxs[state.index - 1], .expected = frame.nested_expected.forStatement() };
+        return .child;
     }
 
     var arg_vars_sfa_buffer: [16 * @sizeOf(Var)]u8 align(@alignOf(usize)) = undefined;
@@ -37118,7 +37182,7 @@ fn resumeTypeMethodCallCheck(self: *Self, task: *ExprTask, state: *OperandsCheck
     return .done;
 }
 
-fn resumeTypeDispatchCallCheck(self: *Self, task: *ExprTask, state: *OperandsCheck) std.mem.Allocator.Error!ExprStep {
+fn resumeTypeDispatchCallCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const method_call = frame.expr.e_type_dispatch_call;
     const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
@@ -37131,7 +37195,8 @@ fn resumeTypeDispatchCallCheck(self: *Self, task: *ExprTask, state: *OperandsChe
     if (state.index < arg_expr_idxs.len) {
         state.index += 1;
         self.checking_call_arg = true;
-        return .{ .child = .{ .expr = arg_expr_idxs[state.index - 1], .expected = frame.nested_expected.forStatement() } };
+        child_request.* = .{ .expr = arg_expr_idxs[state.index - 1], .expected = frame.nested_expected.forStatement() };
+        return .child;
     }
     _ = try self.retireCallLikeExprWithErroneousOperands(frame.expr_idx, frame.expr_var, arg_expr_idxs);
 
@@ -37141,40 +37206,43 @@ fn resumeTypeDispatchCallCheck(self: *Self, task: *ExprTask, state: *OperandsChe
 
 // effects and control flow //
 
-fn resumeExpectErrCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
+fn resumeExpectErrCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     if (!state.started) {
         state.started = true;
         self.markCurrentHoistObservableEffect();
         // The Err payload is consumed at runtime when the enclosing expect
         // fails; this expression itself never returns, so its type is free.
-        return .{ .child = .{ .expr = frame.expr.e_expect_err.expr, .expected = frame.nested_expected.forStatement() } };
+        child_request.* = .{ .expr = frame.expr.e_expect_err.expr, .expected = frame.nested_expected.forStatement() };
+        return .child;
     }
     try self.unifyWith(frame.expr_var, .{ .flex = Flex.init() }, env);
     return .done;
 }
 
-fn resumeDbgCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
+fn resumeDbgCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     if (!state.started) {
         state.started = true;
         self.markCurrentHoistObservableEffect();
         // dbg evaluates its inner expression but returns {} (like expect)
-        return .{ .child = .{ .expr = frame.expr.e_dbg.expr, .expected = frame.nested_expected.forStatement() } };
+        child_request.* = .{ .expr = frame.expr.e_dbg.expr, .expected = frame.nested_expected.forStatement() };
+        return .child;
     }
     task.does_fx = false;
     try self.unifyWith(frame.expr_var, .{ .structure = .empty_record }, env);
     return .done;
 }
 
-fn resumeReturnCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
+fn resumeReturnCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const ret = frame.expr.e_return;
     const expected_return = self.expectedReturnResultFor(ret.lambda);
     if (!state.started) {
         state.started = true;
         self.markCurrentHoistObservableEffect();
-        return .{ .child = .{ .expr = ret.expr, .expected = self.returnValueExpected(frame.nested_expected, ret.lambda) } };
+        child_request.* = .{ .expr = ret.expr, .expected = self.returnValueExpected(frame.nested_expected, ret.lambda) };
+        return .child;
     }
 
     const return_kind: ReturnConstraintKind = switch (ret.context) {
@@ -37205,7 +37273,7 @@ fn resumeReturnCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env
     return .done;
 }
 
-fn resumeRunLowLevelCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
+fn resumeRunLowLevelCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
     const expr_var = frame.expr_var;
@@ -37218,7 +37286,8 @@ fn resumeRunLowLevelCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, e
     if (state.index < args.len) {
         state.index += 1;
         self.checking_call_arg = true;
-        return .{ .child = .{ .expr = args[state.index - 1], .expected = frame.nested_expected.forStatement() } };
+        child_request.* = .{ .expr = args[state.index - 1], .expected = frame.nested_expected.forStatement() };
+        return .child;
     }
     if (run_ll.op == .crash) {
         std.debug.assert(args.len == 1);
@@ -37276,12 +37345,13 @@ fn abortIfCheck(self: *Self, state: IfCheck) void {
 /// Request one branch condition or body. Conditions are never in call
 /// position; a branch body supplies the conditional's value and so inherits
 /// its call position.
-fn requestIfChild(self: *Self, state: *IfCheck, expr_idx: CIR.Expr.Idx, expected: Expected, is_call_arg: bool, is_immediate_callee: bool, is_forwarded_result: bool) ExprStep {
+fn requestIfChild(self: *Self, child_request: *?ExprChildRequest, state: *IfCheck, expr_idx: CIR.Expr.Idx, expected: Expected, is_call_arg: bool, is_immediate_callee: bool, is_forwarded_result: bool) ExprStep {
     state.saved_call_position = self.scopeChildCallPosition(is_call_arg, is_immediate_callee, is_forwarded_result);
-    return .{ .child = .{ .expr = expr_idx, .expected = expected } };
+    child_request.* = .{ .expr = expr_idx, .expected = expected };
+    return .child;
 }
 
-fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child_does_fx: ?bool) std.mem.Allocator.Error!ExprStep {
+fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child_does_fx: ?bool, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const if_ = frame.expr.e_if;
     const if_expr_idx = frame.expr_idx;
@@ -37311,7 +37381,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_first_cond => {
                 state.phase = .after_first_cond;
                 const first_branch = self.cir.store.getIfBranch(branches[0]);
-                return self.requestIfChild(state, first_branch.cond, expected.forStatement(), false, false, false);
+                return self.requestIfChild(child_request, state, first_branch.cond, expected.forStatement(), false, false, false);
             },
             .after_first_cond => {
                 const first_branch = self.cir.store.getIfBranch(branches[0]);
@@ -37332,7 +37402,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_first_body => {
                 state.phase = .after_first_body;
                 const first_branch = self.cir.store.getIfBranch(branches[0]);
-                return self.requestIfChild(state, first_branch.body, expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
+                return self.requestIfChild(child_request, state, first_branch.body, expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
             },
             .after_first_body => {
                 const first_branch_idx = branches[0];
@@ -37366,7 +37436,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_branch_cond => {
                 state.phase = .after_branch_cond;
                 const branch = self.cir.store.getIfBranch(branches[state.branch_index]);
-                return self.requestIfChild(state, branch.cond, expected.forStatement().guardHoistSelection(), false, false, false);
+                return self.requestIfChild(child_request, state, branch.cond, expected.forStatement().guardHoistSelection(), false, false, false);
             },
             .after_branch_cond => {
                 const branch = self.cir.store.getIfBranch(branches[state.branch_index]);
@@ -37381,7 +37451,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_branch_body => {
                 state.phase = .after_branch_body;
                 const branch = self.cir.store.getIfBranch(branches[state.branch_index]);
-                return self.requestIfChild(state, branch.body, expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
+                return self.requestIfChild(child_request, state, branch.body, expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
             },
             .after_branch_body => {
                 const branch_idx = branches[state.branch_index];
@@ -37422,7 +37492,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_remaining_cond => {
                 state.phase = .after_remaining_cond;
                 const branch = self.cir.store.getIfBranch(branches[state.remaining_index]);
-                return self.requestIfChild(state, branch.cond, expected.forStatement().guardHoistSelection(), false, false, false);
+                return self.requestIfChild(child_request, state, branch.cond, expected.forStatement().guardHoistSelection(), false, false, false);
             },
             .after_remaining_cond => {
                 const branch = self.cir.store.getIfBranch(branches[state.remaining_index]);
@@ -37437,7 +37507,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_remaining_body => {
                 state.phase = .after_remaining_body;
                 const branch = self.cir.store.getIfBranch(branches[state.remaining_index]);
-                return self.requestIfChild(state, branch.body, expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
+                return self.requestIfChild(child_request, state, branch.body, expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
             },
             .after_remaining_body => {
                 const branch = self.cir.store.getIfBranch(branches[state.remaining_index]);
@@ -37450,7 +37520,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             },
             .schedule_final_else => {
                 state.phase = .after_final_else;
-                return self.requestIfChild(state, if_.final_else, expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
+                return self.requestIfChild(child_request, state, if_.final_else, expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
             },
             .after_final_else => {
                 if (shortCircuitOperator(if_.origin)) |operator| {
@@ -37546,7 +37616,7 @@ fn abortMatchCheck(self: *Self, state: *MatchCheck) void {
     if (state.mismatch_scope) |scope| self.endHoistLexicalScope(scope);
 }
 
-fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env, child_does_fx: ?bool) std.mem.Allocator.Error!ExprStep {
+fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env, child_does_fx: ?bool, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
     const expr_region = frame.expr_region;
@@ -37580,7 +37650,8 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
 
             // Check the match's condition
             state.phase = .cond;
-            return .{ .child = .{ .expr = match.cond, .expected = child_expected } };
+            child_request.* = .{ .expr = match.cond, .expected = child_expected };
+            return .child;
         },
         .cond => {
             state.cond_always_crashes = try self.exprAlwaysCrashes(match.cond, .only_explicit_crashes);
@@ -37652,7 +37723,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             // The first branch's body type becomes the var other branch
             // bodies must unify against.
             state.branch_index = 0;
-            return try self.beginMatchBranch(task, state, env);
+            return try self.beginMatchBranch(task, state, env, child_request);
         },
         .guard => {
             const branch = self.cir.store.getMatchBranch(branch_idxs[state.branch_index]);
@@ -37670,7 +37741,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             if (!match.skip_exhaustiveness and guard_result.isEstablished()) {
                 try self.warnIfComptimeConditionalExpr(guard_idx, .if_guard, expected);
             }
-            return self.requestMatchBranchValue(task, state, branch);
+            return self.requestMatchBranchValue(task, state, branch, child_request);
         },
         .value => {
             self.restoreCallPosition(state.saved_call_position.?);
@@ -37741,7 +37812,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             }
             state.branch_index += 1;
             if (state.branch_index < branch_idxs.len) {
-                return try self.beginMatchBranch(task, state, env);
+                return try self.beginMatchBranch(task, state, env, child_request);
             }
             if (state.mismatch_scope) |scope| {
                 self.endHoistLexicalScope(scope);
@@ -38029,7 +38100,7 @@ fn matchAlternative(match: CIR.Expr.Match, state: *const MatchCheck, expr_idx: C
 
 /// Check branch `state.branch_index`'s patterns inside a fresh hoist scope,
 /// then request its guard (if checked) or its value.
-fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
+fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
     const child_expected = frame.nested_expected.forStatement();
@@ -38071,7 +38142,7 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
         try self.recordHoistMatchBranchContextualBindings(branch_ptrn_idxs, state.match_hoist_owner);
 
         // Then check the other branch's exprs
-        return self.requestMatchBranchValue(task, state, branch);
+        return self.requestMatchBranchValue(task, state, branch, child_request);
     }
 
     // Check each of the branch's patterns and relate it to the condition
@@ -38115,9 +38186,10 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
     // Check guard if present
     if (branch.guard) |guard_idx| {
         state.phase = .guard;
-        return .{ .child = .{ .expr = guard_idx, .expected = child_expected.guardHoistSelection() } };
+        child_request.* = .{ .expr = guard_idx, .expected = child_expected.guardHoistSelection() };
+        return .child;
     }
-    return self.requestMatchBranchValue(task, state, branch);
+    return self.requestMatchBranchValue(task, state, branch, child_request);
 }
 
 /// Relate a branch pattern to the scrutinee. The match only consults the
@@ -38147,11 +38219,12 @@ fn relateBranchPatternToScrutinee(
 
 /// Request a branch's value, which supplies the match's result and so
 /// inherits its call position.
-fn requestMatchBranchValue(self: *Self, task: *ExprTask, state: *MatchCheck, branch: CIR.Expr.Match.Branch) ExprStep {
+fn requestMatchBranchValue(self: *Self, task: *ExprTask, state: *MatchCheck, branch: CIR.Expr.Match.Branch, child_request: *?ExprChildRequest) ExprStep {
     const frame = &task.frame;
     state.phase = .value;
     state.saved_call_position = self.scopeChildCallPosition(frame.is_call_arg, frame.is_immediate_callee, true);
-    return .{ .child = .{ .expr = branch.value, .expected = frame.nested_expected.forBranchBody() } };
+    child_request.* = .{ .expr = branch.value, .expected = frame.nested_expected.forBranchBody() };
+    return .child;
 }
 
 /// Retire a call-like expression before it introduces dispatch or call
@@ -62772,7 +62845,7 @@ fn checkDerivedMethodReference(
 /// Check a call whose callee names a compiler-derived associated method as a
 /// type-rooted dispatch of that method on its owner type: each argument
 /// checks as a child, then the dispatch is recorded.
-fn stepDerivedMethodCall(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
+fn stepDerivedMethodCall(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
     const expr_var = frame.expr_var;
@@ -62780,7 +62853,8 @@ fn stepDerivedMethodCall(self: *Self, task: *ExprTask, state: *CallCheck, env: *
     const arg_expr_idxs = self.cir.store.sliceExpr(call.args);
     if (state.arg_index < arg_expr_idxs.len) {
         self.checking_call_arg = true;
-        return .{ .child = .{ .expr = arg_expr_idxs[state.arg_index], .expected = frame.nested_expected.forStatement() } };
+        child_request.* = .{ .expr = arg_expr_idxs[state.arg_index], .expected = frame.nested_expected.forStatement() };
+        return .child;
     }
     if (try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, arg_expr_idxs)) return .done;
 
