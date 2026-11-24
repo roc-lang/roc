@@ -7344,6 +7344,9 @@ type is created the first time something asks for it, through the module's
 slot for that request ("On-Demand Analyses And Write-Once Slots"), and lives
 as long as the module. A type id names either a solver variable of a module or
 an entry of its synthesized-type store; readers never need to know which.
+Publication ends by moving the store's columns, and those of the module's
+published tables, into allocations that hold exactly their entries; a column
+that a later request grows regrows from its length.
 
 Ids are not interned across solver classes: two solver variables whose types
 are equal keep two ids, and creating a synthesized type computes no key, so
@@ -7439,7 +7442,10 @@ its variables, equal across modules for equal types, and stable across
 compilations. Keys exist because procedure identities, evidence digests,
 generated-codec content digests and the constant store need an identity with
 exactly those properties. A key is computed on first demand for one root,
-through that root's key slot, and never eagerly for a whole module.
+through that root's key slot, and never eagerly for a whole module. A
+synthesized-type store keeps its key slots in pages of 64 behind a
+write-once page directory, so a page is allocated only when a key of one of
+its roots is first requested.
 In-workspace memos that only need "the same type within this program" use
 in-workspace structural identity, not keys.
 
@@ -7594,6 +7600,13 @@ after the key writer succeeds. Key hits do no extra work, and tracing does not
 scan the native mapping. A concurrent snapshot can count a successful result
 before its slot reaches `done`; quiescent counts equal completed keys. No key
 storage, diagnostic counter or derived result is serialized.
+
+A module's key writers (the source-key writer and the synthesized-key writer)
+keep the descriptions, classes and keys of every type they have digested, so
+later requests share that work. Publication ends by freeing both writers
+(`releaseWriter`): the slots keep every key it computed, and a request made
+after publication starts a fresh writer under the same lock. The writers'
+descriptions therefore never outlive publication alongside the module.
 
 There is no scheduling edge between modules. A module's analyses are never
 ordered after its importers, nothing waits for demand to flow top-down, and

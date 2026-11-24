@@ -5345,11 +5345,24 @@ pub const CheckedTypeStore = struct {
         self.attachSynthesizedKeys(synthesized);
     }
 
+    /// Move every owned column, and the synthesized key slots' columns, into
+    /// allocations that hold exactly their entries. Publication calls this
+    /// when it hands the store to the artifact; a column that grows again
+    /// afterwards regrows from its length, as any growth would.
+    pub fn releaseUnusedCapacity(self: *CheckedTypeStore, allocator: Allocator) Allocator.Error!void {
+        inline for (@typeInfo(CheckedTypeStore).@"struct".field_names, @typeInfo(CheckedTypeStore).@"struct".field_types) |name, Field| {
+            if (comptime @typeInfo(Field) == .@"struct" and @hasDecl(Field, "Range") and @hasDecl(Field, "releaseUnusedCapacity")) {
+                try @field(self, name).releaseUnusedCapacity(allocator);
+            }
+        }
+        if (self.synthesized_keys) |keys| try keys.releaseUnusedCapacity();
+    }
+
     /// Give the store key slots for its synthesized types, covering every
     /// root it holds. The store owns them from here on.
     pub fn attachSynthesizedKeys(self: *CheckedTypeStore, synthesized: *SynthesizedTypeKeys) void {
         std.debug.assert(self.synthesized_keys == null);
-        std.debug.assert(synthesized.slots.items.len >= self.roots.items().len);
+        std.debug.assert(synthesized.count >= self.roots.items().len);
         self.synthesized_keys = synthesized;
     }
 
@@ -8190,7 +8203,12 @@ pub const CheckedTypeKeys = struct {
 pub const SynthesizedTypeKeys = struct {
     allocator: Allocator,
     io: std.Io,
-    slots: std.ArrayList(KeySlot) = .empty,
+    /// The key slots, in pages of `slots_per_page` roots. A page is allocated
+    /// when a key of one of its roots is first requested, so roots whose key
+    /// no consumer asks for cost only their share of the directory.
+    pages: std.ArrayList(PageSlot) = .empty,
+    /// How many roots have a slot.
+    count: usize = 0,
     /// Per root: 0 while unknown, else 1 + whether a walk found the root
     /// reaches an identity variable.
     identity: std.ArrayList(std.atomic.Value(u8)) = .empty,
@@ -8201,6 +8219,9 @@ pub const SynthesizedTypeKeys = struct {
     writer: ?CheckedTypeKeyDigester = null,
 
     const KeySlot = collections.OnceSlot(canonical_type_keys.TypeKeyInfo, .synthesized_type_key);
+    const slots_per_page = 64;
+    const KeyPage = [slots_per_page]KeySlot;
+    const PageSlot = collections.OnceSlot(*KeyPage, .synthesized_type_key_page);
     const KeyIndex = std.AutoHashMapUnmanaged([32]u8, CheckedTypeId);
 
     /// Key slots for a store holding `count` synthesized roots. `allocator`
@@ -8217,25 +8238,47 @@ pub const SynthesizedTypeKeys = struct {
         const allocator = self.allocator;
         self.dropIndex();
         if (self.writer) |*writer| writer.deinit();
-        self.slots.deinit(allocator);
+        for (self.pages.items) |*entry| if (entry.peek()) |page| allocator.destroy(page);
+        self.pages.deinit(allocator);
         self.identity.deinit(allocator);
         self.canonical.deinit(allocator);
         allocator.destroy(self);
+    }
+
+    /// Move the slot directory and per-root columns into allocations that
+    /// hold exactly their entries. Runs while the store is built, before any
+    /// other thread reads it, like `cover`.
+    fn releaseUnusedCapacity(self: *SynthesizedTypeKeys) Allocator.Error!void {
+        try self.pages.shrinkAndFreePrecise(self.allocator, self.pages.items.len);
+        try self.identity.shrinkAndFreePrecise(self.allocator, self.identity.items.len);
+        try self.canonical.shrinkAndFreePrecise(self.allocator, self.canonical.items.len);
+    }
+
+    /// Free the key writer and the descriptions it kept between requests.
+    /// Computed keys stay in their slots; a later request starts a fresh
+    /// writer.
+    pub fn releaseWriter(self: *SynthesizedTypeKeys) void {
+        self.writer_mutex.lockUncancelable(self.io);
+        defer self.writer_mutex.unlock(self.io);
+        if (self.writer) |*writer| writer.deinit();
+        self.writer = null;
     }
 
     /// Give every one of the store's `count` roots a slot. The store calls
     /// this as it appends roots, before any other thread reads it, so a key
     /// index built over fewer roots is dropped.
     fn cover(self: *SynthesizedTypeKeys, count: usize) Allocator.Error!void {
-        if (self.slots.items.len >= count) return;
-        try self.slots.ensureTotalCapacity(self.allocator, count);
+        if (self.count >= count) return;
+        const page_count = count / slots_per_page + @intFromBool(count % slots_per_page != 0);
+        try self.pages.ensureTotalCapacity(self.allocator, page_count);
         try self.identity.ensureTotalCapacity(self.allocator, count);
         try self.canonical.ensureTotalCapacity(self.allocator, count);
-        while (self.slots.items.len < count) {
-            self.slots.appendAssumeCapacity(.empty);
+        while (self.pages.items.len < page_count) self.pages.appendAssumeCapacity(.empty);
+        while (self.identity.items.len < count) {
             self.identity.appendAssumeCapacity(.init(0));
             self.canonical.appendAssumeCapacity(.{});
         }
+        self.count = count;
         self.dropIndex();
     }
 
@@ -8265,8 +8308,21 @@ pub const SynthesizedTypeKeys = struct {
     /// encoding found.
     fn info(self: *SynthesizedTypeKeys, view: CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
         const index = type_ids.synthesizedIndex(root);
-        if (index >= self.slots.items.len) checkedArtifactInvariant("a synthesized checked type has no key slot", .{});
-        return try self.slots.items[index].getOrCompute(self.io, Allocator.Error, KeyRequest{ .keys = self, .view = view, .root = root }, KeyRequest.compute);
+        if (index >= self.count) checkedArtifactInvariant("a synthesized checked type has no key slot", .{});
+        const page = try self.pages.items[index / slots_per_page].getOrCompute(self.io, Allocator.Error, self.allocator, allocatePage);
+        return try page[index % slots_per_page].getOrCompute(self.io, Allocator.Error, KeyRequest{ .keys = self, .view = view, .root = root }, KeyRequest.compute);
+    }
+
+    fn allocatePage(allocator: Allocator) Allocator.Error!*KeyPage {
+        const page = try allocator.create(KeyPage);
+        @memset(page, .empty);
+        return page;
+    }
+
+    /// The key of root `index`, when its slot holds one.
+    fn knownKey(self: *const SynthesizedTypeKeys, index: usize) ?canonical_type_keys.TypeKeyInfo {
+        const page = self.pages.items[index / slots_per_page].peek() orelse return null;
+        return page[index % slots_per_page].peek();
     }
 
     const KeyRequest = struct {
@@ -8301,7 +8357,7 @@ pub const SynthesizedTypeKeys = struct {
     /// synthesized children are computed here too, never waited on.
     fn computeLocked(self: *SynthesizedTypeKeys, view: CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
         const index = type_ids.synthesizedIndex(root);
-        if (self.slots.items[index].peek()) |known| return known;
+        if (self.knownKey(index)) |known| return known;
         return switch (view.roots[index].recipe) {
             .payload => try self.writer.?.keyInfo(root),
             .synthetic_function => try self.syntheticFunctionInfo(view, root),
@@ -37487,6 +37543,17 @@ const MethodBindingTargets = struct {
     }
 };
 
+/// Move every `SafeList` column of a published table into an allocation
+/// that holds exactly its entries.
+fn releaseTableCapacity(allocator: Allocator, table: anytype) Allocator.Error!void {
+    const Table = @typeInfo(@TypeOf(table)).pointer.child;
+    inline for (@typeInfo(Table).@"struct".field_names, @typeInfo(Table).@"struct".field_types) |name, Field| {
+        if (comptime @typeInfo(Field) == .@"struct" and @hasDecl(Field, "Range") and @hasDecl(Field, "releaseUnusedCapacity")) {
+            try @field(table, name).releaseUnusedCapacity(allocator);
+        }
+    }
+}
+
 /// Public `publishFromTypedModule` function.
 pub fn publishFromTypedModule(
     allocator: Allocator,
@@ -38230,6 +38297,21 @@ pub fn publishFromTypedModule(
     errdefer lowering_visibility.deinit(allocator);
     clock.lap(.lowering_visibility);
 
+    // Publication has built every type and table it needs; none keeps growth
+    // room for the rest of the build.
+    try checked_types.releaseUnusedCapacity(allocator);
+    inline for (.{
+        &compile_time_roots,
+        &checked_procedure_templates,
+        &static_dispatch_plans,
+        &entry_wrappers,
+        &root_requests,
+        &top_level_values,
+        &nested_proc_sites,
+        &method_registry,
+        &exhaustiveness_sites,
+    }) |table| try releaseTableCapacity(allocator, table);
+
     var artifact = CheckedModuleArtifact{
         .key = artifact_key,
         .source_hash = source_hash,
@@ -38301,6 +38383,12 @@ pub fn publishFromTypedModule(
         artifact.evaluation_state = .finalized;
         try artifact.verifyComplete();
     }
+    // The key slots keep every key publication computed. The writers'
+    // descriptions only share work between computations, so they are not
+    // kept alive for the rest of the build; a later request starts a fresh
+    // writer.
+    sealed_keys.releaseWriter();
+    if (artifact.checked_types.synthesized_keys) |keys| keys.releaseWriter();
     analyses_owned = false;
     clock.lap(.finish);
     return artifact;
