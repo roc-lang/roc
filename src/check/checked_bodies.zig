@@ -1042,35 +1042,6 @@ pub const CheckedBodies = struct {
         return self.analyses.exprEvaluationMayBeElidedForInspect(self, id);
     }
 
-    /// Whether an expression or one of the nodes it evaluates or binds
-    /// contains a checker-authored diagnostic error.
-    pub fn exprContainsDiagnosticError(self: CheckedBodies, id: ExprId) Allocator.Error!bool {
-        return self.analyses.exprContainsDiagnosticError(self, id);
-    }
-
-    /// Whether a pattern or one of the nodes it binds contains a
-    /// checker-authored diagnostic error.
-    pub fn patternContainsDiagnosticError(self: CheckedBodies, id: PatternId) Allocator.Error!bool {
-        return self.analyses.patternContainsDiagnosticError(self, id);
-    }
-
-    /// Whether the body a compile-time root evaluates contains a
-    /// checker-authored diagnostic error: its expression, the pattern a
-    /// hoisted pattern root matches it against, or the literal a literal
-    /// conversion root converts. A root that crashes for a
-    /// rejected destructure binder always does.
-    pub fn rootContainsDiagnosticError(self: CheckedBodies, root: checked_artifact.CompileTimeRoot) Allocator.Error!bool {
-        if (root.hoisted_body) |body| if (body == .pattern_error) return true;
-        const parts = root.bodyParts();
-        if (parts.expr) |body_expr| if (try self.exprContainsDiagnosticError(body_expr)) return true;
-        if (parts.pattern) |body_pattern| if (try self.patternContainsDiagnosticError(body_pattern)) return true;
-        if (parts.literal) |literal| switch (literal) {
-            .expr => |literal_expr| if (try self.exprContainsDiagnosticError(literal_expr)) return true,
-            .pattern => |literal_pattern| if (try self.patternContainsDiagnosticError(literal_pattern)) return true,
-        };
-        return false;
-    }
-
     /// The binders an `if`, `match`, or `for` expression reassigns anywhere
     /// inside it, in source order with each binder's first occurrence kept.
     /// An `expect` body can reassign only vars declared inside it, so the

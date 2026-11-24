@@ -94,6 +94,10 @@ const DestructuredAlias = struct { binder: u32, statement: StatementId };
 /// The CIR-only index of a checked module's bodies.
 pub const ModuleIndex = struct {
     has_expects: bool = false,
+    /// Whether the bodies reach a runtime error node (an `e_runtime_error`
+    /// expression, a `runtime_error` pattern, or an `s_runtime_error`
+    /// statement).
+    has_runtime_errors: bool = false,
     /// Per node: the kind of node the bodies reach it as.
     node_kinds: []NodeKind = &.{},
     /// Per node: its declaration facts.
@@ -253,6 +257,7 @@ pub const ModuleIndex = struct {
 
     const Builder = struct {
         has_expects: bool = false,
+        has_runtime_errors: bool = false,
         allocator: Allocator,
         env: *const ModuleEnv,
         node_kinds: []NodeKind,
@@ -328,6 +333,7 @@ pub const ModuleIndex = struct {
             const destructured_aliases = try self.destructured_aliases.toOwnedSlice(allocator);
             return .{
                 .has_expects = self.has_expects,
+                .has_runtime_errors = self.has_runtime_errors,
                 .node_kinds = self.node_kinds,
                 .node_flags = self.node_flags,
                 .unit_of = self.unit_of,
@@ -568,7 +574,10 @@ pub const ModuleIndex = struct {
                 },
                 .e_hosted_lambda => |hosted| try self.markPatterns(store.slicePatterns(hosted.args), id),
                 .e_run_low_level => |run| try self.markExprs(store.sliceExpr(run.args), id),
-                .e_runtime_error => |runtime_error| try self.markExprs(store.sliceExpr(runtime_error.evaluated), id),
+                .e_runtime_error => |runtime_error| {
+                    self.has_runtime_errors = true;
+                    try self.markExprs(store.sliceExpr(runtime_error.evaluated), id);
+                },
                 .e_num,
                 .e_frac_f32,
                 .e_frac_f64,
@@ -629,8 +638,8 @@ pub const ModuleIndex = struct {
                 .frac_f64_literal,
                 .str_literal,
                 .underscore,
-                .runtime_error,
                 => {},
+                .runtime_error => self.has_runtime_errors = true,
                 .deferred_import_ref => invariant("a deferred import reference pattern reached a checked body"),
             }
         }
@@ -670,7 +679,10 @@ pub const ModuleIndex = struct {
                     try self.mark(.{ .expr = ret.expr }, id);
                     try self.mark(.{ .expr = ret.lambda }, id);
                 },
-                .s_runtime_error => |runtime_error| try self.markExprs(store.sliceExpr(runtime_error.evaluated), id),
+                .s_runtime_error => |runtime_error| {
+                    self.has_runtime_errors = true;
+                    try self.markExprs(store.sliceExpr(runtime_error.evaluated), id);
+                },
                 .s_crash,
                 .s_break,
                 .s_import,
@@ -906,7 +918,6 @@ pub const BodyAnalyses = struct {
     promoted_patterns: []PatternId,
     indexed: collections.OnceSlot(*Indexed, .body_module_index) = .empty,
     dispatch_crashes: collections.OnceSlot(*NodeBits, .body_dispatch_crashes) = .empty,
-    diagnostic_errors: collections.OnceSlot(*NodeBits, .body_diagnostic_errors) = .empty,
     single_source: collections.OnceSlot(*SingleSourceFacts, .body_single_source_calls) = .empty,
 
     /// The analyses of `env`'s bodies. `promoted` lists the module's
@@ -938,11 +949,9 @@ pub const BodyAnalyses = struct {
             indexed.index.deinit(allocator);
             allocator.destroy(indexed);
         }
-        inline for (.{ "dispatch_crashes", "diagnostic_errors" }) |name| {
-            if (@field(self, name).peek()) |bits| {
-                bits.deinit(allocator);
-                allocator.destroy(bits);
-            }
+        if (self.dispatch_crashes.peek()) |bits| {
+            bits.deinit(allocator);
+            allocator.destroy(bits);
         }
         if (self.single_source.peek()) |facts| facts.destroy(allocator);
         allocator.free(self.promoted_patterns);
@@ -1045,29 +1054,6 @@ pub const BodyAnalyses = struct {
         const span = facts.loop_mutations[position].get() orelse invariant("loop mutations were requested for a node that is not a loop");
         return facts.binders[span.start..][0..span.len];
     }
-
-    pub fn exprContainsDiagnosticError(self: *BodyAnalyses, bodies: CheckedBodies, expr: ExprId) Allocator.Error!bool {
-        const bits = try self.diagnostic_errors.getOrCompute(self.io, Allocator.Error, DiagnosticRequest{ .analyses = self, .bodies = bodies }, DiagnosticRequest.compute);
-        return bits.isSet(@backingInt(expr));
-    }
-
-    pub fn patternContainsDiagnosticError(self: *BodyAnalyses, bodies: CheckedBodies, pattern: PatternId) Allocator.Error!bool {
-        const bits = try self.diagnostic_errors.getOrCompute(self.io, Allocator.Error, DiagnosticRequest{ .analyses = self, .bodies = bodies }, DiagnosticRequest.compute);
-        return bits.isSet(@backingInt(pattern));
-    }
-
-    const DiagnosticRequest = struct {
-        analyses: *BodyAnalyses,
-        bodies: CheckedBodies,
-
-        fn compute(request: DiagnosticRequest) Allocator.Error!*NodeBits {
-            const allocator = request.analyses.allocator;
-            const bits = try allocator.create(NodeBits);
-            errdefer allocator.destroy(bits);
-            bits.* = try diagnosticErrors(allocator, request.bodies, .final);
-            return bits;
-        }
-    };
 
     pub fn templateHasSingleSourceCall(self: *BodyAnalyses, bodies: CheckedBodies, template: canonical.CheckedProcedureTemplateId) Allocator.Error!bool {
         const facts = try self.singleSourceFacts(bodies);
@@ -1184,10 +1170,6 @@ fn dispatchResolutionCrashes(resolution: static_dispatch.CheckedCallResolution) 
         .checked_error, .@"unreachable" => true,
         .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .structural => false,
     };
-}
-
-fn dispatchResolutionIsCheckedError(resolution: static_dispatch.CheckedCallResolution) bool {
-    return resolution == .checked_error;
 }
 
 /// The kind of a normalized expression.
@@ -2156,26 +2138,23 @@ const ReassignmentPublisher = struct {
     }
 };
 
-/// Which diagnostic-error facts to compute.
-pub const DiagnosticMode = enum {
-    /// Errors checking recorded in the bodies, propagated through their
-    /// children: the facts publication reads before total dispatch
-    /// resolution.
-    ordinary,
-    /// The ordinary facts plus every rejected total dispatch resolution, and,
-    /// when there is one, propagation through resolved local constant
-    /// references.
-    final,
-};
-
 /// Whether each reached expression contains a diagnostic error: its own
 /// (`ModuleEnv.nodeIsErroneous`, or an expression lowering evaluates as a
 /// runtime error), or one of a node it evaluates or binds.
-pub fn diagnosticErrors(allocator: Allocator, bodies: CheckedBodies, mode: DiagnosticMode) Allocator.Error!NodeBits {
+///
+/// Every diagnostic error starts at a node checking recorded as erroneous
+/// (`ModuleEnv.erroneous_nodes`), at a runtime error node, or at an
+/// expression reference resolution retired. When the module has none of
+/// them, no node contains one, and the bodies are not walked.
+pub fn diagnosticErrors(allocator: Allocator, bodies: CheckedBodies) Allocator.Error!NodeBits {
     const index = bodies.index();
     const node_count = index.node_kinds.len;
     var errors = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
     errdefer errors.deinit(allocator);
+    const refs = bodies.tables.refs orelse invariant("diagnostic errors were computed without the module's value references");
+    if (bodies.env.erroneous_nodes.items().len == 0 and !index.has_runtime_errors and !refs.retiresAny()) {
+        return .{ .bits = errors };
+    }
     const states = try allocator.alloc(DiagnosticState, node_count);
     defer allocator.free(states);
     var erroneous = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
@@ -2192,134 +2171,15 @@ pub fn diagnosticErrors(allocator: Allocator, bodies: CheckedBodies, mode: Diagn
     defer scan.items.deinit(allocator);
     @memset(scan.states, .fresh);
 
-    var rejected_dispatch: NodeBits = .{};
-    defer rejected_dispatch.deinit(allocator);
-    switch (mode) {
-        .ordinary => {},
-        .final => {
-            const plans = bodies.tables.plans orelse invariant("diagnostic errors were computed without the module's dispatch plans");
-            for (plans.plans.items()) |plan| {
-                if (plan.resolution == .checked_error) {
-                    rejected_dispatch = try dispatchNodes(allocator, bodies, dispatchResolutionIsCheckedError);
-                    scan.rejected_dispatch = &rejected_dispatch;
-                    break;
-                }
-            }
-        },
-    }
-    var graph: ?ConstantGraph = if (scan.rejected_dispatch != null) try ConstantGraph.init(allocator, bodies) else null;
-    defer if (graph) |*value| value.deinit();
-    scan.graph = if (graph) |*value| value else null;
-
     for (index.node_kinds, 0..) |kind, raw| {
         if (kind == .unreached) continue;
         if (try scan.node(@intCast(raw))) scan.errors.set(raw);
     }
-    if (scan.graph) |value| try value.propagate(&scan.errors);
     errors = scan.errors;
     return .{ .bits = errors };
 }
 
 const DiagnosticState = enum(u8) { fresh, active, done };
-
-/// Recovery-only edges recorded by the scan: each entered node's enclosing
-/// node, and each constant lookup's initializer. Constant references can
-/// close cycles through delayed function bodies; a monotone worklist
-/// propagates errors across those cycles.
-const ConstantGraph = struct {
-    const Edge = struct { parent: u32, next: collections.OptionalU32 };
-    allocator: Allocator,
-    heads: collections.DenseMap(u32, u32),
-    edges: std.ArrayList(Edge) = .empty,
-    /// The initializer expression a local constant lookup reads.
-    lookup_values: collections.DenseMap(u32, ExprId),
-    current: ?u32 = null,
-
-    fn init(allocator: Allocator, bodies: CheckedBodies) Allocator.Error!ConstantGraph {
-        var graph = ConstantGraph{
-            .allocator = allocator,
-            .heads = collections.DenseMap(u32, u32).init(allocator),
-            .lookup_values = collections.DenseMap(u32, ExprId).init(allocator),
-        };
-        errdefer graph.deinit();
-        const refs = bodies.tables.refs orelse invariant("diagnostic errors were computed without the module's value references");
-        const roots = bodies.tables.roots orelse invariant("diagnostic errors were computed without the module's compile-time roots");
-        const const_templates = bodies.tables.const_templates orelse invariant("diagnostic errors were computed without the module's constant templates");
-        const module = bodies.tables.module orelse invariant("diagnostic errors were computed without the module's identity");
-        var by_pattern = collections.DenseMap(u32, ExprId).init(allocator);
-        defer by_pattern.deinit();
-        for (roots.roots.items()) |root| {
-            if (root.pattern.get()) |pattern| try by_pattern.put(@backingInt(pattern), root.rootExpr());
-        }
-        for (refs.records.items()) |record| {
-            const ref = switch (record.ref) {
-                .top_level_const => |use| use.const_ref,
-                .selected_hoisted_const => |use| use.const_use.const_ref,
-                .local_param,
-                .local_value,
-                .local_mutable_version,
-                .pattern_binder,
-                .local_proc,
-                .imported_const,
-                .top_level_proc,
-                .imported_proc,
-                .hosted_proc,
-                .platform_required_declaration,
-                .platform_required_checked_error,
-                .platform_required_const,
-                .platform_required_proc,
-                .promoted_top_level_proc,
-                => continue,
-            };
-            if (!ref.artifact.eql(module)) continue;
-            if (const_templates.get(ref).state == .unimplemented) continue;
-            try graph.lookup_values.put(@backingInt(record.expr), switch (ref.owner) {
-                .top_level_binding => |owner| by_pattern.get(@backingInt(owner.pattern)) orelse
-                    invariant("a constant dependency had no initializer root"),
-                .hoisted_root => |owner| roots.root(owner.root).bodyParts().expr orelse continue,
-            });
-        }
-        return graph;
-    }
-
-    fn deinit(self: *ConstantGraph) void {
-        self.heads.deinit();
-        self.edges.deinit(self.allocator);
-        self.lookup_values.deinit();
-    }
-
-    fn enter(self: *ConstantGraph, raw: u32) Allocator.Error!?u32 {
-        const previous = self.current;
-        if (previous) |parent| {
-            const index = try collections.nextBiasedId(self.edges.items.len);
-            const head = try self.heads.getOrPut(raw);
-            const next: collections.OptionalU32 = if (head.found_existing) .some(head.value_ptr.*) else .none;
-            try self.edges.append(self.allocator, .{ .parent = parent, .next = next });
-            head.value_ptr.* = index;
-        }
-        self.current = raw;
-        return previous;
-    }
-
-    fn propagate(self: *ConstantGraph, errors: *std.DynamicBitSetUnmanaged) Allocator.Error!void {
-        var work = std.ArrayList(u32).empty;
-        defer work.deinit(self.allocator);
-        var heads = self.heads.constIterator();
-        while (heads.next()) |entry| {
-            if (errors.isSet(entry.key_ptr.*)) try work.append(self.allocator, entry.key_ptr.*);
-        }
-        while (work.pop()) |raw| {
-            var next_edge: collections.OptionalU32 = .some(self.heads.get(raw) orelse continue);
-            while (next_edge.get()) |edge_index| {
-                const edge = self.edges.items[edge_index];
-                next_edge = edge.next;
-                if (errors.isSet(edge.parent)) continue;
-                errors.set(edge.parent);
-                try work.append(self.allocator, edge.parent);
-            }
-        }
-    }
-};
 
 /// A memoized depth-first search over expressions, patterns, and statements
 /// on explicit frame and item stacks, so body nesting depth never becomes
@@ -2331,11 +2191,6 @@ const DiagnosticScan = struct {
     /// The nodes checking recorded as erroneous in their own right.
     erroneous: *const std.DynamicBitSetUnmanaged,
     states: []DiagnosticState,
-    /// The nodes whose dispatch plan's total resolution rejected, when
-    /// rejected total dispatch resolutions seed errors, which also makes
-    /// errors follow constant references (`graph`).
-    rejected_dispatch: ?*const NodeBits = null,
-    graph: ?*ConstantGraph = null,
     frames: std.ArrayList(Frame) = .empty,
     items: std.ArrayList(Item) = .empty,
 
@@ -2348,7 +2203,6 @@ const DiagnosticScan = struct {
         node: u32,
         items_start: usize,
         next: usize,
-        previous: ?u32,
     };
 
     fn node(self: *DiagnosticScan, raw: u32) Allocator.Error!bool {
@@ -2381,25 +2235,15 @@ const DiagnosticScan = struct {
     /// Enter a node. Returns its known result when it needs no frame, or null
     /// after pushing a frame for it.
     fn begin(self: *DiagnosticScan, raw: u32) Allocator.Error!?bool {
-        const previous = if (self.graph) |graph| try graph.enter(raw) else null;
         switch (self.states[raw]) {
-            .done => {
-                if (self.graph) |graph| graph.current = previous;
-                return self.errors.isSet(raw);
-            },
-            .active => {
-                if (self.graph) |graph| {
-                    graph.current = previous;
-                    return false;
-                }
-                invariant("the diagnostic-error relation of a body contains a cycle");
-            },
+            .done => return self.errors.isSet(raw),
+            .active => invariant("the diagnostic-error relation of a body contains a cycle"),
             .fresh => {},
         }
         self.states[raw] = .active;
         const items_start = self.items.items.len;
         try self.pushItems(raw);
-        try self.frames.append(self.allocator, .{ .node = raw, .items_start = items_start, .next = items_start, .previous = previous });
+        try self.frames.append(self.allocator, .{ .node = raw, .items_start = items_start, .next = items_start });
         return null;
     }
 
@@ -2407,7 +2251,6 @@ const DiagnosticScan = struct {
         if (result) self.errors.set(frame.node);
         self.states[frame.node] = .done;
         self.items.shrinkRetainingCapacity(frame.items_start);
-        if (self.graph) |graph| graph.current = frame.previous;
     }
 
     fn pushItem(self: *DiagnosticScan, item: Item) Allocator.Error!void {
@@ -2441,7 +2284,6 @@ const DiagnosticScan = struct {
     fn pushItems(self: *DiagnosticScan, raw: u32) Allocator.Error!void {
         const bodies = self.bodies;
         if (self.erroneous.isSet(raw)) return self.pushItem(.diagnostic_error);
-        if (self.rejected_dispatch) |rejected| if (rejected.isSet(raw)) return self.pushItem(.diagnostic_error);
         switch (bodies.index().nodeKind(raw)) {
             .expr => try self.pushExprItems(@fromBackingInt(@intCast(raw))),
             .pattern => try self.pushPatternItems(@fromBackingInt(@intCast(raw))),
@@ -2537,9 +2379,6 @@ const DiagnosticScan = struct {
             .anno_only,
             .break_,
             => {},
-        }
-        if (self.graph) |graph| {
-            if (graph.lookup_values.get(@backingInt(id))) |value| try self.pushExpr(value);
         }
     }
 

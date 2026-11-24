@@ -12355,6 +12355,14 @@ pub const ResolvedValueRefTable = struct {
         return self.retired_exprs.items()[raw >> 6] & (@as(u64, 1) << @intCast(raw & 63)) != 0;
     }
 
+    /// Whether reference resolution retired any expression.
+    pub fn retiresAny(self: *const ResolvedValueRefTable) bool {
+        for (self.retired_exprs.items()) |word| {
+            if (word != 0) return true;
+        }
+        return false;
+    }
+
     /// The bit-packed node words of a module with `node_count` nodes.
     pub fn retiredWords(allocator: Allocator, node_count: usize) Allocator.Error![]u64 {
         const words = try allocator.alloc(u64, (node_count + 63) / 64);
@@ -37681,7 +37689,6 @@ pub fn publishFromTypedModule(
     var ordinary_diagnostics = try body_analyses.diagnosticErrors(
         allocator,
         publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
-        .ordinary,
     );
     defer ordinary_diagnostics.deinit(allocator);
     clock.lap(.ordinary_diagnostics);
