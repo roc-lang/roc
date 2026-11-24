@@ -88,6 +88,17 @@ struct ZigLLVMEmitOptions {
     ZigLLVMCoverageOptions coverage;
     bool no_target_libcalls;
     bool lower_memory_intrinsics_to_loops;
+    // When `codegen_threads` is above 1, `ZigLLVMTargetMachineEmitToFile` may
+    // split code generation of a large module into as many as
+    // `extra_bin_filename_count + 1` objects, compiled on up to
+    // `codegen_threads` threads. The first object goes to `bin_filename` and
+    // the rest to `extra_bin_filenames` in order; `*bin_files_written`, when
+    // not null, receives how many objects were written. Splitting never
+    // happens with LTO, debug info, a time report or any other output.
+    const char *const *extra_bin_filenames;
+    unsigned extra_bin_filename_count;
+    unsigned codegen_threads;
+    unsigned *bin_files_written;
 };
 
 // synchronize with llvm/include/Object/Archive.h::Object::Archive::Kind

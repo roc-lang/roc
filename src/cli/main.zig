@@ -9469,6 +9469,9 @@ const LlvmObjectPaths = struct {
     artifact_dir: []const u8,
     bitcode_path: []const u8,
     object_path: []const u8,
+    /// Objects that hold the rest of the app's code when LLVM split code
+    /// generation across threads; they link alongside `object_path`.
+    extra_object_paths: []const []const u8 = &.{},
 };
 
 fn staticDataLinkRootSymbols(
@@ -9962,11 +9965,32 @@ fn compileLlvmAppObject(
         r.begin("LLVM Optimize + Emit");
     }
 
+    // LLVM's code generation runs on one thread per module, so a large app
+    // module is split and compiled on as many threads as the rest of the build
+    // uses. It splits into more pieces than threads, so a thread that finishes
+    // early picks up another piece rather than idling. A wasm object feeds a
+    // further link step that expects exactly one object, debug info is spliced
+    // from a single object, and a fuzz build's coverage tables are registered
+    // by one module constructor per object, so those builds stay whole.
+    const codegen_threads: u32 = if (std_target.cpu.arch.isWasm() or args.debug or args.fuzz)
+        1
+    else
+        @intCast(@max(1, @min(args.max_threads orelse base.cpu_count.workerCount(), max_codegen_threads)));
+    const extra_object_paths = try ctx.arena.alloc([:0]const u8, if (codegen_threads > 1) codegen_threads * codegen_partitions_per_thread - 1 else 0);
+    for (extra_object_paths, 1..) |*path, index| {
+        const name = try std.fmt.allocPrint(ctx.arena, "{s}_part{d}.o", .{ object_filename[0 .. object_filename.len - ".o".len], index });
+        path.* = try std.fs.path.joinZ(ctx.arena, &.{ artifact_dir, name });
+    }
+    var objects_written: usize = 0;
+
     // The reporter prints the report when the build finishes.
     var time_report: builder.TimeReport = .{ .allocator = ctx.arena };
     const compile_config = builder.CompileConfig{
         .input_path = bitcode_path,
         .output_path = object_path,
+        .codegen_threads = codegen_threads,
+        .extra_output_paths = extra_object_paths,
+        .objects_written = &objects_written,
         .optimization = llvmOptimizationLevel(args.opt),
         .target = target,
         .report_config = ctx.reportConfig(.stderr),
@@ -9996,12 +10020,22 @@ fn compileLlvmAppObject(
     }
     if (compile_config.time_report) |report| reporter.?.attachDetail(report.text);
 
+    const written_extra_paths = try ctx.arena.alloc([]const u8, objects_written -| 1);
+    for (written_extra_paths, extra_object_paths[0..written_extra_paths.len]) |*path, extra| path.* = extra;
+
     return .{
         .artifact_dir = artifact_dir,
         .bitcode_path = bitcode_path,
         .object_path = object_path,
+        .extra_object_paths = written_extra_paths,
     };
 }
+
+/// The most threads LLVM code generation of one module uses. Past this the
+/// pieces are small enough that splitting them costs more than it saves.
+const max_codegen_threads = 16;
+/// How many pieces LLVM code generation splits a module into per thread.
+const codegen_partitions_per_thread = 2;
 
 fn validateWasmStaticFunctionRelocations(
     module: *const backend.wasm.WasmModule,
@@ -11352,6 +11386,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
 
         var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
         try object_files.append(app_object.object_path);
+        try object_files.appendSlice(app_object.extra_object_paths);
         if (static_data_obj_path) |path| {
             try object_files.append(path);
         }
