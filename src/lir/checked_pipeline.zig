@@ -1937,7 +1937,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
     var lifted_owned = true;
     errdefer if (lifted_owned) lifted.deinit();
     lift_timing_scope.end();
-    try postcheck.MonotypeLifted.IrExport.exportLifted(allocator, &lifted, .after_lift);
+    const lifted_export_number = try postcheck.MonotypeLifted.IrExport.exportLifted(allocator, &lifted, .after_lift, null);
 
     var local_spec_constr_metrics: SpecConstrParallelMetrics = .{};
     const spec_constr_metrics = specConstrMetricsOutput(target, &local_spec_constr_metrics);
@@ -1954,7 +1954,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
     } else postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
     defer procedure_usage.deinit();
     if (target.timing) |timing| timing.addSpecConstrParallel(spec_constr_metrics.?.*);
-    try postcheck.MonotypeLifted.IrExport.exportLifted(allocator, &lifted, .after_spec_constr);
+    _ = try postcheck.MonotypeLifted.IrExport.exportLifted(allocator, &lifted, .after_spec_constr, lifted_export_number);
 
     const lifted_expr_count = lifted.exprCount();
     if (target.lifted_expr_count_out) |slot| slot.* = lifted_expr_count;

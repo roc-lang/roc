@@ -1,14 +1,16 @@
 //! Debug-only exporter of Monotype Lifted IR in a line-oriented text format,
-//! for the rows-evidence model in `models/rows-evidence`, which checks the
-//! typing of every exported program.
+//! for the models that read Lifted programs: `models/rows-evidence` checks
+//! their typing, and another model runs them before and after SpecConstr.
 //!
 //! It runs only when `ROC_LIFTED_IR_EXPORT` names a directory
 //! (`base.dev_diagnostics.Var.lifted_ir_export`), after lifting and after
 //! SpecConstr, and writes one file per program and stage there:
-//! `<n>-<stage>.lifted`, with `<n>` the lowest number not yet taken.
+//! `<n>-<stage>.lifted`. The after-lift export takes `<n>`, the lowest number
+//! not yet taken, and the after-SpecConstr export of the same program reuses
+//! it, so the two files of one program share their number.
 //!
-//! The format, and exactly what it leaves out, is specified in
-//! `models/rows-evidence/FORMAT.md`. In brief: one record per line,
+//! The format, and exactly what it leaves out, is specified in the `FORMAT.md`
+//! of the model that runs them. In brief: one record per line,
 //! fields separated by single spaces, every reference an integer id into the
 //! program's own tables, `-` for an absent optional, names percent-escaped.
 //! Only the expressions, patterns and statements reachable from a function
@@ -24,16 +26,20 @@ const base = @import("base");
 const Mono = @import("../monotype/ast.zig");
 const Type = @import("../monotype/type.zig");
 const Lifted = @import("ast.zig");
+const can = @import("can");
 
 const Allocator = std.mem.Allocator;
 
 /// Version of the line format; bumped whenever a record changes shape.
-pub const format_version = 2;
+pub const format_version = 3;
 
 /// The pipeline boundary an export was written at.
 pub const Stage = enum {
     after_lift,
     after_spec_constr,
+    /// The program Lambda Solved consumed, with the callable variants direct
+    /// LIR lowering gave each value call (`LambdaSetExport`).
+    lambda_solved,
 };
 
 /// The export number to try first; a file another process already wrote
@@ -44,16 +50,25 @@ var next_number: std.atomic.Value(u32) = .init(0);
 const supported = builtin.os.tag != .windows;
 
 /// Write `program` to the export directory when exporting is switched on.
-pub fn exportLifted(allocator: Allocator, program: *const Lifted.Program, stage: Stage) Allocator.Error!void {
-    if (comptime !supported) return;
-    const dir = base.dev_diagnostics.get(.lifted_ir_export) orelse return;
+/// `number` is the number an earlier export of the same program returned, or
+/// null to take a fresh one. Returns the number written under, or null when
+/// nothing was written.
+pub fn exportLifted(allocator: Allocator, program: *const Lifted.Program, stage: Stage, number: ?u32) Allocator.Error!?u32 {
+    if (comptime !supported) return null;
+    const dir = base.dev_diagnostics.get(.lifted_ir_export) orelse return null;
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
-    try write(allocator, program.view(), stage, &out);
+    try write(allocator, program.view(), stage, "", &out);
+    return writeFile(allocator, dir, stage, number, out.items);
+}
+
+/// Write `bytes` to `<dir>/<n>-<stage>.lifted`, with `n` as for `exportLifted`.
+fn writeFile(allocator: Allocator, dir: []const u8, stage: Stage, number: ?u32, bytes: []const u8) Allocator.Error!?u32 {
     while (true) {
+        const claimed = number orelse next_number.fetchAdd(1, .monotonic);
         const path = try std.fmt.allocPrintSentinel(allocator, "{s}/{d}-{s}.lifted", .{
             dir,
-            next_number.fetchAdd(1, .monotonic),
+            claimed,
             @tagName(stage),
         }, 0);
         defer allocator.free(path);
@@ -61,27 +76,28 @@ pub fn exportLifted(allocator: Allocator, program: *const Lifted.Program, stage:
         // process writing to the same directory.
         const fd = std.c.open(path, .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true, .CLOEXEC = true }, @as(std.c.mode_t, 0o644));
         if (fd < 0) {
-            if (std.c.errno(fd) == .EXIST) continue;
+            if (number == null and std.c.errno(fd) == .EXIST) continue;
             std.debug.print("lifted-ir-export: cannot create {s}\n", .{path});
-            return;
+            return null;
         }
         defer _ = std.c.close(fd);
         var written: usize = 0;
-        while (written < out.items.len) {
-            const result = std.c.write(fd, out.items[written..].ptr, out.items.len - written);
+        while (written < bytes.len) {
+            const result = std.c.write(fd, bytes[written..].ptr, bytes.len - written);
             if (result <= 0) {
                 std.debug.print("lifted-ir-export: short write to {s}\n", .{path});
-                return;
+                return null;
             }
             written += @intCast(result);
         }
-        return;
+        return claimed;
     }
 }
 
-/// Write the program in the export format.
-pub fn write(allocator: Allocator, program: Lifted.ProgramView, stage: Stage, out: *std.ArrayList(u8)) Allocator.Error!void {
-    var writer: Writer = .{ .allocator = allocator, .source = program, .stage = stage, .out = out };
+/// Write the program in the export format. `extra` is a run of complete
+/// records written just before the closing `end`.
+pub fn write(allocator: Allocator, program: Lifted.ProgramView, stage: Stage, extra: []const u8, out: *std.ArrayList(u8)) Allocator.Error!void {
+    var writer: Writer = .{ .allocator = allocator, .source = program, .stage = stage, .extra = extra, .out = out };
     defer writer.deinit();
     try writer.run();
 }
@@ -96,6 +112,7 @@ const Writer = struct {
     allocator: Allocator,
     source: Lifted.ProgramView,
     stage: Stage,
+    extra: []const u8,
     out: *std.ArrayList(u8),
     stack: std.ArrayList(Item) = .empty,
     expr_seen: std.DynamicBitSetUnmanaged = .{},
@@ -219,6 +236,11 @@ const Writer = struct {
                 .stmt => |stmt| try self.writeStmt(stmt),
             };
         }
+        try self.print("roots {d}\n", .{source.roots.len});
+        for (source.roots) |root| {
+            try self.print("r {d} {s} {d}\n", .{ @backingInt(root.fn_id), @tagName(root.request.kind), root.request.order });
+        }
+        try self.out.appendSlice(self.allocator, self.extra);
         try self.out.appendSlice(self.allocator, "end\n");
     }
 
@@ -282,10 +304,25 @@ const Writer = struct {
         const expr = source.exprs[index];
         try self.print("e {d} {d} {s}", .{ index, @backingInt(expr.ty), @tagName(expr.data) });
         switch (expr.data) {
-            .unit, .@"unreachable", .uninitialized, .crash, .checked_error, .comptime_exhaustiveness_failed => {},
-            .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit => {},
+            .unit, .@"unreachable", .uninitialized, .comptime_exhaustiveness_failed => {},
+            .crash, .checked_error, .str_lit => |literal| try self.stringLiteral(literal),
+            .int_lit => |value| try self.intValue(value),
+            .frac_f32_lit => |value| try self.print(" {x}", .{@as(u32, @bitCast(value))}),
+            .frac_f64_lit => |value| try self.print(" {x}", .{@as(u64, @bitCast(value))}),
+            .dec_lit => |value| try self.print(" {d}", .{value.num}),
+            .bytes_lit => |packed_list| {
+                try self.stringLiteral(packed_list.literal);
+                try self.print(" {d} {s} {d}", .{
+                    packed_list.len,
+                    if (packed_list.element) |element| @tagName(element) else "-",
+                    packed_list.product_width,
+                });
+            },
             .local => |local| try self.id(local),
-            .uninitialized_payload => |payload| try self.id(payload.condition),
+            .uninitialized_payload => |payload| {
+                try self.id(payload.condition);
+                try self.print(" {d}", .{payload.mask});
+            },
             .static_data_candidate => |candidate| if (candidate.value.subexpression()) |value| try self.child(value) else try self.out.appendSlice(self.allocator, " -"),
             .comptime_value => |value| try self.child(value.initializer),
             .typed_boundary => |boundary| try self.child(boundary.value),
@@ -372,6 +409,7 @@ const Writer = struct {
             },
             .if_initialized_payload => |payload| {
                 try self.child(payload.cond);
+                try self.print(" {d}", .{payload.cond_mask});
                 try self.id(payload.payload);
                 try self.child(payload.initialized);
                 try self.child(payload.uninitialized);
@@ -432,7 +470,12 @@ const Writer = struct {
         const pat = source.pats[index];
         try self.print("p {d} {d} {s}", .{ index, @backingInt(pat.ty), @tagName(pat.data) });
         switch (pat.data) {
-            .wildcard, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => {},
+            .wildcard => {},
+            .int_lit => |value| try self.intValue(value),
+            .dec_lit => |value| try self.print(" {d}", .{value.num}),
+            .frac_f32_lit => |value| try self.print(" {x}", .{@as(u32, @bitCast(value))}),
+            .frac_f64_lit => |value| try self.print(" {x}", .{@as(u64, @bitCast(value))}),
+            .str_lit => |literal| try self.stringLiteral(literal),
             .bind => |local| try self.id(local),
             .as => |as| {
                 try self.childPat(as.pattern);
@@ -468,9 +511,14 @@ const Writer = struct {
             },
             .nominal => |inner| try self.childPat(inner),
             .str_pattern => |str| {
+                try self.stringLiteral(str.prefix);
                 const steps = source.strPatternStepSpan(str.steps);
                 try self.print(" {d}", .{steps.len});
-                for (steps) |step| if (step.capture.get()) |capture| try self.childPat(capture) else try self.out.appendSlice(self.allocator, " -");
+                for (steps) |step| {
+                    if (step.capture.get()) |capture| try self.childPat(capture) else try self.out.appendSlice(self.allocator, " -");
+                    try self.stringLiteral(step.delimiter);
+                }
+                try self.print(" {s}", .{@tagName(str.end)});
             },
         }
         try self.out.append(self.allocator, '\n');
@@ -494,8 +542,69 @@ const Writer = struct {
                 try self.child(ret.value);
                 try self.id(ret.target);
             },
-            .crash, .checked_error => {},
+            .crash, .checked_error => |literal| try self.stringLiteral(literal),
         }
         try self.out.append(self.allocator, '\n');
+    }
+
+    /// A string literal's bytes, as one name token.
+    fn stringLiteral(self: *Writer, literal: Mono.StringLiteralId) Allocator.Error!void {
+        try self.name(self.source.string_literals[@backingInt(literal)].text());
+    }
+
+    /// An integer literal: `i` or `u` for its kind, then its decimal value.
+    fn intValue(self: *Writer, value: can.CIR.IntValue) Allocator.Error!void {
+        switch (value.kind) {
+            .i128 => try self.print(" i{d}", .{@as(i128, @bitCast(value.bytes))}),
+            .u128 => try self.print(" u{d}", .{@as(u128, @bitCast(value.bytes))}),
+        }
+    }
+};
+
+/// The callable variants direct LIR lowering gives each value call, for
+/// `ROC_LAMBDA_SET_EXPORT`. Lowering workers share one export, so recording
+/// takes a lock and allocates from the page allocator.
+pub const LambdaSetExport = struct {
+    mutex: std.atomic.Mutex = .unlocked,
+    records: std.ArrayList(u8) = .empty,
+
+    /// Whether this compiler writes the export.
+    pub fn enabled() bool {
+        return supported and base.dev_diagnostics.get(.lambda_set_export) != null;
+    }
+
+    /// Release the recorded call sites.
+    pub fn deinit(self: *LambdaSetExport) void {
+        self.records.deinit(std.heap.page_allocator);
+    }
+
+    /// Record that the value call whose callee is `callee` dispatches over
+    /// `members`, the lifted functions of its callable variants, in variant
+    /// order: `c <callee> finite <n> <fn>...`.
+    pub fn recordFinite(self: *LambdaSetExport, callee: Mono.ExprId, members: []const Lifted.FnId) Allocator.Error!void {
+        while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
+        defer self.mutex.unlock();
+        const gpa = std.heap.page_allocator;
+        try self.records.print(gpa, "c {d} finite {d}", .{ @backingInt(callee), members.len });
+        for (members) |member| try self.records.print(gpa, " {d}", .{@backingInt(member)});
+        try self.records.append(gpa, '\n');
+    }
+
+    /// Record that the value call whose callee is `callee` is an erased call:
+    /// `c <callee> erased`.
+    pub fn recordErased(self: *LambdaSetExport, callee: Mono.ExprId) Allocator.Error!void {
+        while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
+        defer self.mutex.unlock();
+        try self.records.print(std.heap.page_allocator, "c {d} erased\n", .{@backingInt(callee)});
+    }
+
+    /// Write `program` with the recorded call sites to the export directory.
+    pub fn flush(self: *LambdaSetExport, allocator: Allocator, program: *const Lifted.Program) Allocator.Error!void {
+        if (comptime !supported) return;
+        const dir = base.dev_diagnostics.get(.lambda_set_export) orelse return;
+        var out: std.ArrayList(u8) = .empty;
+        defer out.deinit(allocator);
+        try write(allocator, program.view(), .lambda_solved, self.records.items, &out);
+        _ = try writeFile(allocator, dir, .lambda_solved, null, out.items);
     }
 };

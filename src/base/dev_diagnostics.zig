@@ -96,6 +96,12 @@ pub const Var = enum {
     /// Print, for every module the type checker checks, how many of each
     /// probe site's probes were kept and how many were discarded.
     checker_speculation_stats,
+    /// Write every program Lambda Solved lowered to LIR, into the named
+    /// directory: the Monotype Lifted program Lambda Solved consumed, in the
+    /// format of `postcheck/monotype_lifted/ir_export.zig`, plus the callable
+    /// variants each value call's callee was lowered with. Not written on
+    /// Windows.
+    lambda_set_export,
 
     /// The variable's name in the environment.
     pub fn envName(comptime self: Var) [:0]const u8 {
@@ -126,6 +132,7 @@ pub const Var = enum {
             .hoist_root_stats => "ROC_HOIST_ROOT_STATS",
             .lifted_ir_export => "ROC_LIFTED_IR_EXPORT",
             .checker_speculation_stats => "ROC_CHECKER_SPECULATION_STATS",
+            .lambda_set_export => "ROC_LAMBDA_SET_EXPORT",
         };
     }
 };
