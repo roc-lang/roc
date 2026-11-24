@@ -347,8 +347,8 @@ pub const CheckedMethodLookup = union(enum) {
     /// accepted at that use. A lookup that can land on a rejected declaration
     /// (a compiler-generated edge) matches on `rejected` instead, so a rejected
     /// declaration reaching this is a compiler bug, not a shape to route around.
-    pub fn requireTarget(self: CheckedMethodLookup, comptime context: []const u8) MethodTarget {
-        return switch (self) {
+    pub fn requireTarget(self: *const CheckedMethodLookup, comptime context: []const u8) MethodTarget {
+        return switch (self.*) {
             .target => |target| target,
             .rejected => base.invariant(
                 "checked method lookup invariant violated: rejected declaration reached " ++ context,
@@ -1451,7 +1451,7 @@ pub const StaticDispatchCallPlan = struct {
     resolution: CheckedCallResolution = .checked_error,
 
     /// The plan's operands within its table's pool.
-    pub fn argsSlice(self: StaticDispatchCallPlan, table: *const StaticDispatchPlanTable) []const StaticDispatchOperand {
+    pub fn argsSlice(self: *const StaticDispatchCallPlan, table: *const StaticDispatchPlanTable) []const StaticDispatchOperand {
         return table.operand_pool.items()[self.args.start .. self.args.start + self.args.len];
     }
 };
@@ -1548,7 +1548,7 @@ pub const GeneratedCodecDerivation = struct {
     error_ty: CheckedTypeId,
     calls: artifact_serialize.Span = .{},
 
-    pub fn callsSlice(self: GeneratedCodecDerivation, table: *const StaticDispatchPlanTable) []const GeneratedCodecCall {
+    pub fn callsSlice(self: *const GeneratedCodecDerivation, table: *const StaticDispatchPlanTable) []const GeneratedCodecCall {
         return table.generated_codec_calls.items()[self.calls.start .. self.calls.start + self.calls.len];
     }
 };
@@ -1649,13 +1649,13 @@ pub const IteratorForPlan = struct {
     };
 
     /// The plan's `for` loop site; the plan is a loop's.
-    pub fn forLoopSite(self: IteratorForPlan) ForLoop {
+    pub fn forLoopSite(self: *const IteratorForPlan) ForLoop {
         std.debug.assert(self.site == .for_loop);
         return self.site.for_loop;
     }
 
     /// The plan's interpolation site; the plan is an interpolation's.
-    pub fn interpolationSite(self: IteratorForPlan) Interpolation {
+    pub fn interpolationSite(self: *const IteratorForPlan) Interpolation {
         std.debug.assert(self.site == .interpolation);
         return self.site.interpolation;
     }

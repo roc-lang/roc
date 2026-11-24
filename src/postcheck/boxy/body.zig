@@ -868,7 +868,7 @@ pub const Builder = struct {
         return self.program.worker(self.worker_id);
     }
 
-    pub fn bodies(self: *const Builder) checked.CheckedBodies {
+    pub fn bodies(self: *const Builder) *const checked.CheckedBodies {
         return self.view.bodies();
     }
 

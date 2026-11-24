@@ -1149,7 +1149,7 @@ test "a cyclic group has the same words whichever member its evaluation enters b
     const ret = try store.addCFStmt(.{ .ret = .{ .value = target } }, .test_fixture);
     const proc = try store.addProcSpec(.{ .name = .fromRaw(0), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try store.addLocalSpan(&.{target}), .body = .some(ret), .ret_layout = .u8 }, .none);
     // The evaluation reads a callable's worker for its procedure alone.
-    const module = try program.modules.add(test_program.view(1));
+    const module = try program.modules.add(&test_program.view(1));
     const entry_id: WorkerId = @fromBackingInt(@intCast(program.workers.items.len));
     try program.workers.append(allocator, .{
         .key = .{ .structural = .is_eq },

@@ -300,7 +300,7 @@ const Extractor = struct {
             const payload = view.payload(root);
             if (payload != .alias) continue;
             const alias = payload.alias;
-            const nominal = self.unnamedNominalBehind(view, names, alias.backing) orelse continue;
+            const nominal = self.unnamedNominalBehind(&view, names, alias.backing) orelse continue;
             if (!std.mem.eql(CheckedTypeId, nominal.args, alias.args)) continue;
 
             const gop = try renames.getOrPut(self.gpa, .{
@@ -322,7 +322,7 @@ const Extractor = struct {
     /// private aliases are seen through, if no public namespace names it.
     fn unnamedNominalBehind(
         self: *Extractor,
-        view: CheckedTypeStoreView,
+        view: *const CheckedTypeStoreView,
         names: *const check.CanonicalNames.CanonicalNameStore,
         id: CheckedTypeId,
     ) ?CheckedArtifact.CheckedNominalType {
@@ -422,7 +422,7 @@ const Extractor = struct {
             const root = (try view.rootForKey(key)) orelse
                 return self.fail(.unpublished_public_type, "exposed type declaration has no published checked root");
 
-            const kind = try self.itemKindForTypeDecl(view, names, root);
+            const kind = try self.itemKindForTypeDecl(&view, names, root);
             try self.api.addItem(module_index, .{ .path = path, .kind = kind });
         }
 
@@ -449,7 +449,7 @@ const Extractor = struct {
 
             var memo = ConvertMemo.empty;
             defer memo.deinit(self.gpa);
-            const ty = try self.convertType(view, names, root, &memo);
+            const ty = try self.convertType(&view, names, root, &memo);
             try self.api.addItem(module_index, .{ .path = path, .kind = .{ .value = ty } });
         }
     }
@@ -458,7 +458,7 @@ const Extractor = struct {
     /// checked root, which must be an alias or nominal payload.
     fn itemKindForTypeDecl(
         self: *Extractor,
-        view: CheckedTypeStoreView,
+        view: *const CheckedTypeStoreView,
         names: *const check.CanonicalNames.CanonicalNameStore,
         root: CheckedTypeId,
     ) ExtractError!PackageApi.Item.Kind {
@@ -499,7 +499,7 @@ const Extractor = struct {
     /// normalization assigns per-item binding positions.
     fn convertType(
         self: *Extractor,
-        view: CheckedTypeStoreView,
+        view: *const CheckedTypeStoreView,
         names: *const check.CanonicalNames.CanonicalNameStore,
         id: CheckedTypeId,
         memo: *ConvertMemo,
@@ -632,7 +632,7 @@ const Extractor = struct {
 
     fn convertFieldKind(
         self: *Extractor,
-        view: CheckedTypeStoreView,
+        view: *const CheckedTypeStoreView,
         names: *const check.CanonicalNames.CanonicalNameStore,
         kind: CheckedArtifact.CheckedFieldKind,
         memo: *ConvertMemo,
@@ -695,7 +695,7 @@ const Extractor = struct {
     /// modeled as null; anything else (a variable, a chained row) is kept.
     fn convertExt(
         self: *Extractor,
-        view: CheckedTypeStoreView,
+        view: *const CheckedTypeStoreView,
         names: *const check.CanonicalNames.CanonicalNameStore,
         ext: CheckedTypeId,
         closed_tag: std.meta.Tag(CheckedArtifact.CheckedTypePayload),
@@ -710,7 +710,7 @@ const Extractor = struct {
     /// Nominals and dependency identities retain the named-reference contract.
     fn convertNamedType(
         self: *Extractor,
-        view: CheckedTypeStoreView,
+        view: *const CheckedTypeStoreView,
         names: *const check.CanonicalNames.CanonicalNameStore,
         origin_module: check.CanonicalNames.ModuleIdentityId,
         owner_module: CheckedArtifact.ModuleId,

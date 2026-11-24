@@ -7651,13 +7651,13 @@ const Builder = struct {
     /// The module identity of the app module among `modules`, whose
     /// declarations are named by site.
     fn appModuleIdentity(modules: Common.CheckedModules) ?[32]u8 {
-        const root = moduleViewData(checked.importedView(modules.root.module));
+        const root = moduleViewData(&checked.importedView(modules.root.module));
         if (root.module_env.module_kind == .app) return root.module_identity.stable_hash;
-        for (modules.imports) |imported| {
+        for (modules.imports) |*imported| {
             const view = moduleViewData(imported);
             if (view.module_env.module_kind == .app) return view.module_identity.stable_hash;
         }
-        for (modules.root.relation_modules) |relation| {
+        for (modules.root.relation_modules) |*relation| {
             const view = moduleViewData(relation);
             if (view.module_env.module_kind == .app) return view.module_identity.stable_hash;
         }
@@ -12668,9 +12668,9 @@ const Builder = struct {
         const view_count = 1 + self.modules.imports.len + self.modules.root.relation_modules.len;
         const views = self.allocator.alloc(ModuleViewData, view_count) catch
             Common.compilerBug("module view allocation failed");
-        views[0] = moduleViewData(self.root_view);
-        for (self.modules.imports, views[1..][0..self.modules.imports.len]) |imported, *view| view.* = moduleViewData(imported);
-        for (self.modules.root.relation_modules, views[1 + self.modules.imports.len ..]) |relation, *view| view.* = moduleViewData(relation);
+        views[0] = moduleViewData(&self.root_view);
+        for (self.modules.imports, views[1..][0..self.modules.imports.len]) |*imported, *view| view.* = moduleViewData(imported);
+        for (self.modules.root.relation_modules, views[1 + self.modules.imports.len ..]) |*relation, *view| view.* = moduleViewData(relation);
         self.module_views = views;
         return views;
     }
@@ -21667,7 +21667,7 @@ const FinalIdOffsets = struct {
     shared_literal_root_defs: ?*const collections.DenseMap(DraftDefId, Ast.DefId) = null,
     core_id_mode: CoreIdMode,
 
-    fn core(self: FinalIdOffsets, kind: DraftCoreKind, raw: u32, identity_start: u32) u32 {
+    fn core(self: *const FinalIdOffsets, kind: DraftCoreKind, raw: u32, identity_start: u32) u32 {
         return switch (self.core_id_mode) {
             .identity => identity_start + raw,
             .remapped => |maps| blk: {
@@ -21678,14 +21678,14 @@ const FinalIdOffsets = struct {
         };
     }
 
-    fn retained(self: FinalIdOffsets, kind: DraftCoreKind, index: usize) bool {
+    fn retained(self: *const FinalIdOffsets, kind: DraftCoreKind, index: usize) bool {
         return switch (self.core_id_mode) {
             .identity => true,
             .remapped => |maps| maps.retained(kind, index),
         };
     }
 
-    fn coreSpanStart(self: FinalIdOffsets, kind: DraftCoreKind, start: u32, len: u32, identity_start: u32) u32 {
+    fn coreSpanStart(self: *const FinalIdOffsets, kind: DraftCoreKind, start: u32, len: u32, identity_start: u32) u32 {
         if (len == 0) return 0;
         const mapped_start = self.core(kind, start, identity_start);
         if (std.debug.runtime_safety) {
@@ -21699,7 +21699,7 @@ const FinalIdOffsets = struct {
         return mapped_start;
     }
 
-    fn fn_(self: FinalIdOffsets, id: DraftFnId) Ast.FnId {
+    fn fn_(self: *const FinalIdOffsets, id: DraftFnId) Ast.FnId {
         if (self.fn_slots.len != 0) return switch (self.fn_slots[@backingInt(id)] orelse
             Common.invariant("unreachable draft function required a final function id")) {
             .local => |fn_id| fn_id,
@@ -21707,116 +21707,116 @@ const FinalIdOffsets = struct {
         return @fromBackingInt(@intCast(self.fn_start + @backingInt(id)));
     }
 
-    fn fnSlot(self: FinalIdOffsets, id: DraftFnId) Ast.FnSlot {
+    fn fnSlot(self: *const FinalIdOffsets, id: DraftFnId) Ast.FnSlot {
         if (self.fn_slots.len != 0) return self.fn_slots[@backingInt(id)] orelse
             Common.invariant("unreachable draft function required a final function slot");
         return .{ .local = @fromBackingInt(@intCast(self.fn_start + @backingInt(id))) };
     }
 
-    fn hasFnSlot(self: FinalIdOffsets, id: DraftFnId) bool {
+    fn hasFnSlot(self: *const FinalIdOffsets, id: DraftFnId) bool {
         return self.fn_slots.len == 0 or self.fn_slots[@backingInt(id)] != null;
     }
 
-    fn fnTarget(self: FinalIdOffsets, id: DraftFnTarget) Ast.FnId {
+    fn fnTarget(self: *const FinalIdOffsets, id: DraftFnTarget) Ast.FnId {
         return switch (id) {
             .draft => |draft| self.fn_(draft),
             .final => |final| final,
         };
     }
 
-    fn def(self: FinalIdOffsets, id: DraftDefId) Ast.DefId {
+    fn def(self: *const FinalIdOffsets, id: DraftDefId) Ast.DefId {
         if (self.shared_literal_root_defs) |shared| if (shared.get(id)) |root_def| return root_def;
         if (self.def_ids.len != 0) return self.def_ids[@backingInt(id)].get() orelse
             Common.invariant("draft definition required a local id after its function converged to an imported specialization");
         return @fromBackingInt(@intCast(self.def_start + @backingInt(id)));
     }
 
-    fn defTarget(self: FinalIdOffsets, id: DraftDefTarget) Ast.DefId {
+    fn defTarget(self: *const FinalIdOffsets, id: DraftDefTarget) Ast.DefId {
         return switch (id) {
             .draft => |draft| self.def(draft),
             .final => |final| final,
         };
     }
 
-    fn expr(self: FinalIdOffsets, id: DraftExprId) Ast.ExprId {
+    fn expr(self: *const FinalIdOffsets, id: DraftExprId) Ast.ExprId {
         return @fromBackingInt(@intCast(self.core(.exprs, @backingInt(id), self.expr_start)));
     }
 
-    fn pat(self: FinalIdOffsets, id: DraftPatId) Ast.PatId {
+    fn pat(self: *const FinalIdOffsets, id: DraftPatId) Ast.PatId {
         return @fromBackingInt(@intCast(self.core(.pats, @backingInt(id), self.pat_start)));
     }
 
-    fn stmt(self: FinalIdOffsets, id: DraftStmtId) Ast.StmtId {
+    fn stmt(self: *const FinalIdOffsets, id: DraftStmtId) Ast.StmtId {
         return @fromBackingInt(@intCast(self.core(.stmts, @backingInt(id), self.stmt_start)));
     }
 
-    fn local(self: FinalIdOffsets, id: DraftLocalId) Ast.LocalId {
+    fn local(self: *const FinalIdOffsets, id: DraftLocalId) Ast.LocalId {
         return @fromBackingInt(@intCast(self.core(.locals, @backingInt(id), self.local_start)));
     }
 
-    fn stringLiteral(self: FinalIdOffsets, id: DraftStringLiteralId) Ast.StringLiteralId {
+    fn stringLiteral(self: *const FinalIdOffsets, id: DraftStringLiteralId) Ast.StringLiteralId {
         return @fromBackingInt(@intCast(self.core(.string_literals, @backingInt(id), self.string_literal_start)));
     }
 
-    fn comptimeSite(self: FinalIdOffsets, id: DraftComptimeSiteId) Ast.ComptimeSiteId {
+    fn comptimeSite(self: *const FinalIdOffsets, id: DraftComptimeSiteId) Ast.ComptimeSiteId {
         return @fromBackingInt(@intCast(self.core(.comptime_sites, @backingInt(id), self.comptime_site_start)));
     }
 
-    fn exprSpan(self: FinalIdOffsets, span: DraftSpan(DraftExprId)) Ast.Span(Ast.ExprId) {
+    fn exprSpan(self: *const FinalIdOffsets, span: DraftSpan(DraftExprId)) Ast.Span(Ast.ExprId) {
         return .{ .start = self.coreSpanStart(.expr_ids, span.start, span.len, self.expr_ids_start), .len = span.len };
     }
 
-    fn patSpan(self: FinalIdOffsets, span: DraftSpan(DraftPatId)) Ast.Span(Ast.PatId) {
+    fn patSpan(self: *const FinalIdOffsets, span: DraftSpan(DraftPatId)) Ast.Span(Ast.PatId) {
         return .{ .start = self.coreSpanStart(.pat_ids, span.start, span.len, self.pat_ids_start), .len = span.len };
     }
 
-    fn typedLocalSpan(self: FinalIdOffsets, span: DraftSpan(DraftTypedLocal)) Ast.Span(Ast.TypedLocal) {
+    fn typedLocalSpan(self: *const FinalIdOffsets, span: DraftSpan(DraftTypedLocal)) Ast.Span(Ast.TypedLocal) {
         return .{ .start = self.coreSpanStart(.typed_locals, span.start, span.len, self.typed_locals_start), .len = span.len };
     }
 
-    fn stmtSpan(self: FinalIdOffsets, span: DraftSpan(DraftStmtId)) Ast.Span(Ast.StmtId) {
+    fn stmtSpan(self: *const FinalIdOffsets, span: DraftSpan(DraftStmtId)) Ast.Span(Ast.StmtId) {
         return .{ .start = self.coreSpanStart(.stmt_ids, span.start, span.len, self.stmt_ids_start), .len = span.len };
     }
 
-    fn fieldExprSpan(self: FinalIdOffsets, span: DraftSpan(DraftFieldExpr)) Ast.Span(Ast.FieldExpr) {
+    fn fieldExprSpan(self: *const FinalIdOffsets, span: DraftSpan(DraftFieldExpr)) Ast.Span(Ast.FieldExpr) {
         return .{ .start = self.coreSpanStart(.field_exprs, span.start, span.len, self.field_expr_start), .len = span.len };
     }
 
     fn fieldAccessSegmentSpan(
-        self: FinalIdOffsets,
+        self: *const FinalIdOffsets,
         span: DraftSpan(DraftFieldAccessSegment),
     ) Ast.Span(Ast.FieldAccessSegment) {
         return .{ .start = self.field_access_segment_start + span.start, .len = span.len };
     }
 
-    fn fnDefCaptureSpan(self: FinalIdOffsets, span: DraftSpan(DraftFnDefCapture)) Ast.Span(Ast.FnDefCapture) {
+    fn fnDefCaptureSpan(self: *const FinalIdOffsets, span: DraftSpan(DraftFnDefCapture)) Ast.Span(Ast.FnDefCapture) {
         return .{ .start = self.coreSpanStart(.fn_def_captures, span.start, span.len, self.fn_def_capture_start), .len = span.len };
     }
 
-    fn recordDestructSpan(self: FinalIdOffsets, span: DraftSpan(DraftRecordDestruct)) Ast.Span(Ast.RecordDestruct) {
+    fn recordDestructSpan(self: *const FinalIdOffsets, span: DraftSpan(DraftRecordDestruct)) Ast.Span(Ast.RecordDestruct) {
         return .{ .start = self.coreSpanStart(.record_destructs, span.start, span.len, self.record_destruct_start), .len = span.len };
     }
 
-    fn strPatternStepSpan(self: FinalIdOffsets, span: DraftSpan(DraftStrPatternStep)) Ast.Span(Ast.StrPatternStep) {
+    fn strPatternStepSpan(self: *const FinalIdOffsets, span: DraftSpan(DraftStrPatternStep)) Ast.Span(Ast.StrPatternStep) {
         return .{ .start = self.coreSpanStart(.str_pattern_steps, span.start, span.len, self.str_pattern_step_start), .len = span.len };
     }
 
-    fn branchSpan(self: FinalIdOffsets, span: DraftSpan(DraftBranch)) Ast.Span(Ast.Branch) {
+    fn branchSpan(self: *const FinalIdOffsets, span: DraftSpan(DraftBranch)) Ast.Span(Ast.Branch) {
         return .{ .start = self.coreSpanStart(.branches, span.start, span.len, self.branch_start), .len = span.len };
     }
 
-    fn ifBranchSpan(self: FinalIdOffsets, span: DraftSpan(DraftIfBranch)) Ast.Span(Ast.IfBranch) {
+    fn ifBranchSpan(self: *const FinalIdOffsets, span: DraftSpan(DraftIfBranch)) Ast.Span(Ast.IfBranch) {
         return .{ .start = self.coreSpanStart(.if_branches, span.start, span.len, self.if_branch_start), .len = span.len };
     }
 
-    fn fnBody(self: FinalIdOffsets, body: DraftFnBody) Ast.FnBody {
+    fn fnBody(self: *const FinalIdOffsets, body: DraftFnBody) Ast.FnBody {
         return switch (body) {
             .roc => |body_expr| .{ .roc = self.expr(body_expr) },
         };
     }
 
     /// Whether a call to `callee` is demand-shaped.
-    fn callDemandShaped(self: FinalIdOffsets, callee: DraftProcCallee) bool {
+    fn callDemandShaped(self: *const FinalIdOffsets, callee: DraftProcCallee) bool {
         if (self.fn_demand_shaped.len == 0) return false;
         return switch (callee) {
             .func => |slot| switch (slot) {
@@ -21830,7 +21830,7 @@ const FinalIdOffsets = struct {
         };
     }
 
-    fn procCallee(self: FinalIdOffsets, callee: DraftProcCallee) Ast.ProcCallee {
+    fn procCallee(self: *const FinalIdOffsets, callee: DraftProcCallee) Ast.ProcCallee {
         return switch (callee) {
             .func => |slot| .{ .func = switch (slot) {
                 .local => |fn_id| switch (fn_id) {
@@ -30710,7 +30710,7 @@ const BodyContext = struct {
         if (self.specialization_dispatch_divergence) |*divergence| divergence.deinit(self.allocator);
         self.specialization_dispatch_divergence = try checked.dispatchDivergenceForEvidence(
             self.allocator,
-            self.view.bodies,
+            &self.view.bodies,
             self.specialization_dispatch_crashes.?,
         );
         self.borrowed_specialization_dispatch_divergence = null;
@@ -34049,57 +34049,57 @@ const BodyContext = struct {
         /// A hosted evidence computation's result.
         evidence: EvidenceResult,
 
-        fn exprValue(self: LowerResult) DraftExprId {
-            return switch (self) {
+        fn exprValue(self: *const LowerResult) DraftExprId {
+            return switch (self.*) {
                 .expr => |expr| expr,
                 .maybe_expr, .call, .maybe_call, .span, .closed_operands, .statement, .data, .evidence => Common.invariant("lowering frame expected an expression result"),
             };
         }
 
-        fn maybeExprValue(self: LowerResult) ?DraftExprId {
-            return switch (self) {
+        fn maybeExprValue(self: *const LowerResult) ?DraftExprId {
+            return switch (self.*) {
                 .maybe_expr => |expr| expr,
                 .expr, .call, .maybe_call, .span, .closed_operands, .statement, .data, .evidence => Common.invariant("lowering frame expected an optional expression result"),
             };
         }
 
-        fn callValue(self: LowerResult) LoweredCall {
-            return switch (self) {
+        fn callValue(self: *const LowerResult) LoweredCall {
+            return switch (self.*) {
                 .call => |call| call,
                 .expr, .maybe_expr, .maybe_call, .span, .closed_operands, .statement, .data, .evidence => Common.invariant("lowering frame expected a call result"),
             };
         }
 
-        fn maybeCallValue(self: LowerResult) ?LoweredCall {
-            return switch (self) {
+        fn maybeCallValue(self: *const LowerResult) ?LoweredCall {
+            return switch (self.*) {
                 .maybe_call => |call| call,
                 .expr, .maybe_expr, .call, .span, .closed_operands, .statement, .data, .evidence => Common.invariant("lowering frame expected an optional call result"),
             };
         }
 
-        fn spanValue(self: LowerResult) DraftSpan(DraftExprId) {
-            return switch (self) {
+        fn spanValue(self: *const LowerResult) DraftSpan(DraftExprId) {
+            return switch (self.*) {
                 .span => |span| span,
                 .expr, .maybe_expr, .call, .maybe_call, .closed_operands, .statement, .data, .evidence => Common.invariant("lowering frame expected a span result"),
             };
         }
 
-        fn closedOperandsValue(self: LowerResult) ClosedDispatchOperands {
-            return switch (self) {
+        fn closedOperandsValue(self: *const LowerResult) ClosedDispatchOperands {
+            return switch (self.*) {
                 .closed_operands => |operands| operands,
                 .expr, .maybe_expr, .call, .maybe_call, .span, .statement, .data, .evidence => Common.invariant("lowering frame expected closed dispatch operands"),
             };
         }
 
-        fn statementValue(self: LowerResult) LoweredStatement {
-            return switch (self) {
+        fn statementValue(self: *const LowerResult) LoweredStatement {
+            return switch (self.*) {
                 .statement => |statement| statement,
                 .expr, .maybe_expr, .call, .maybe_call, .span, .closed_operands, .data, .evidence => Common.invariant("lowering frame expected a statement result"),
             };
         }
 
-        fn dataValue(self: LowerResult) BodyExprData {
-            return switch (self) {
+        fn dataValue(self: *const LowerResult) BodyExprData {
+            return switch (self.*) {
                 .data => |data| data,
                 .expr, .maybe_expr, .call, .maybe_call, .span, .closed_operands, .statement, .evidence => Common.invariant("lowering frame expected expression data"),
             };
@@ -69906,7 +69906,7 @@ const TestLowering = struct {
     fn init(self: *TestLowering, allocator: Allocator, program: *Ast.Program, options: Options) Allocator.Error!void {
         try self.empty_modules.init(std.testing.allocator);
         self.builder = Builder.init(allocator, self.empty_modules.modules(), program, options);
-        self.view_data = moduleViewData(self.empty_modules.view());
+        self.view_data = moduleViewData(&self.empty_modules.view());
         self.draft = BodyDraftStore.init(allocator);
     }
 
@@ -69918,10 +69918,10 @@ const TestLowering = struct {
 
     /// Point the view at `types` under the all-zero module key, seeded as a
     /// lowering input of the program as the coordinator does.
-    fn seedView(self: *TestLowering, types: checked.CheckedTypeStoreView) Allocator.Error!void {
+    fn seedView(self: *TestLowering, types: *const checked.CheckedTypeStoreView) Allocator.Error!void {
         self.view_data.key = .{ .bytes = @splat(0) };
         self.view_data.lowering_module = try self.builder.program.addLoweringModule(self.view_data.key);
-        self.view_data.types = types;
+        self.view_data.types = types.*;
     }
 
     /// A body context over `graph` for the view, made by the coordinator's
@@ -70771,7 +70771,7 @@ test "frozen codec format index resolves equivalent TypeIds only for agreeing ro
     var empty_modules: Common.EmptyCheckedModulesForTest = undefined;
     try empty_modules.init(gpa);
     defer empty_modules.deinit(gpa);
-    var view_data = moduleViewData(empty_modules.view());
+    var view_data = moduleViewData(&empty_modules.view());
     const view = &view_data;
     view.key = .{};
     // These opaque ids are deliberate synthetic identities: this unit only
@@ -70988,7 +70988,7 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
     var empty_modules: Common.EmptyCheckedModulesForTest = undefined;
     try empty_modules.init(gpa);
     defer empty_modules.deinit(gpa);
-    var frame_view_data = moduleViewData(empty_modules.view());
+    var frame_view_data = moduleViewData(&empty_modules.view());
     const frame_view = &frame_view_data;
     frame_view.names = &frame_names;
     frame_view.types = checked_types.view();
@@ -71032,7 +71032,7 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
     defer inner_names.deinit();
     const inner_method = try inner_names.internMethodName(Ident.IS_EQ_METHOD_NAME);
     try std.testing.expectEqual(caller_decode, inner_method);
-    var inner_view_data = moduleViewData(empty_modules.view());
+    var inner_view_data = moduleViewData(&empty_modules.view());
     const inner_view = &inner_view_data;
     inner_view.names = &inner_names;
     inner_view.types = checked_types.view();
@@ -71079,22 +71079,22 @@ test "specialization evidence equality includes exact target instantiation" {
     var empty_modules: Common.EmptyCheckedModulesForTest = undefined;
     try empty_modules.init(gpa);
     defer empty_modules.deinit(gpa);
-    var target_view_data = moduleViewData(empty_modules.view());
+    var target_view_data = moduleViewData(&empty_modules.view());
     const target_view = &target_view_data;
     target_view.key = .{};
     target_view.key.bytes[0] = 1;
     target_view.types = checked_types.view();
-    var other_target_view_data = moduleViewData(empty_modules.view());
+    var other_target_view_data = moduleViewData(&empty_modules.view());
     const other_target_view = &other_target_view_data;
     other_target_view.key = .{};
     other_target_view.key.bytes[0] = 2;
     other_target_view.types = checked_types.view();
-    var instantiation_view_data = moduleViewData(empty_modules.view());
+    var instantiation_view_data = moduleViewData(&empty_modules.view());
     const instantiation_view = &instantiation_view_data;
     instantiation_view.key = .{};
     instantiation_view.key.bytes[0] = 3;
     instantiation_view.types = checked_types.view();
-    var other_instantiation_view_data = moduleViewData(empty_modules.view());
+    var other_instantiation_view_data = moduleViewData(&empty_modules.view());
     const other_instantiation_view = &other_instantiation_view_data;
     other_instantiation_view.key = .{};
     other_instantiation_view.key.bytes[0] = 4;
@@ -71623,7 +71623,7 @@ const HashDeriver = struct {
     }
 };
 
-fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
+fn moduleViewData(view: *const checked.ImportedModuleView) ModuleViewData {
     return .{
         .code_generation_key = if (view.code_generation_key) |key| key.digest() else null,
         .key = view.key.digest(),
@@ -74471,7 +74471,7 @@ test "issue 11362: checked instantiation reserves only recursive node identities
     try lowering.init(gpa, &program, .{ .diagnostics = &diagnostics });
     defer lowering.deinit();
     // The program seeds this module as its lowering input, as the coordinator does.
-    try lowering.seedView(checked_types.view());
+    try lowering.seedView(&checked_types.view());
     var ctx = try lowering.bodyContext(graph);
     defer ctx.deinit();
 
@@ -74534,7 +74534,7 @@ test "issue 11362: allocation failure removes active checked instantiation marke
             try lowering.init(allocator, &program, .{});
             defer lowering.deinit();
             // The program seeds this module as its lowering input, as the coordinator does.
-            try lowering.seedView(checked_types.view());
+            try lowering.seedView(&checked_types.view());
             var ctx = try lowering.bodyContext(graph);
             defer ctx.deinit();
             _ = ctx.instNode(recursive) catch |err| {
@@ -74672,7 +74672,7 @@ fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error
     try lowering.init(gpa, &program, .{ .diagnostics = &diagnostics });
     defer lowering.deinit();
     // The program seeds this module as its lowering input, as the coordinator does.
-    try lowering.seedView(checked_types.view());
+    try lowering.seedView(&checked_types.view());
     var ctx = try lowering.bodyContext(graph);
     defer ctx.deinit();
     errdefer {
@@ -74749,7 +74749,7 @@ test "issue 11362: checked instantiation allocates placeholders only for recursi
     try lowering.init(gpa, &program, .{});
     defer lowering.deinit();
     // The program seeds this module as its lowering input, as the coordinator does.
-    try lowering.seedView(checked_types.view());
+    try lowering.seedView(&checked_types.view());
     var ctx = try lowering.bodyContext(graph);
     defer ctx.deinit();
 
@@ -74786,7 +74786,7 @@ test "issue 11362: allocation failure removes checked instantiation markers" {
     const recursive = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ recursive, recursive }) });
     const Helper = struct {
-        fn run(allocator: Allocator, view: checked.CheckedTypeStoreView, root: checked.CheckedTypeId) Allocator.Error!void {
+        fn run(allocator: Allocator, view: *const checked.CheckedTypeStoreView, root: checked.CheckedTypeId) Allocator.Error!void {
             var name_store = names.NameStore.init(allocator);
             defer name_store.deinit();
             var type_store = Type.Store.init(allocator);
@@ -74809,7 +74809,7 @@ test "issue 11362: allocation failure removes checked instantiation markers" {
             std.debug.assert(ctx.instantiation.node_map.get(root).? == .node);
         }
     };
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, Helper.run, .{ checked_types.view(), recursive });
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Helper.run, .{ &checked_types.view(), recursive });
 }
 
 /// `std.testing.allocator` with every in-place resize refused, for
@@ -74864,7 +74864,7 @@ fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocato
     try lowering.init(allocator, &program, .{ .diagnostics = &diagnostics });
     defer lowering.deinit();
     // The program seeds this module as its lowering input, as the coordinator does.
-    try lowering.seedView(checked_types.view());
+    try lowering.seedView(&checked_types.view());
     var ctx = try lowering.bodyContext(graph);
     defer ctx.deinit();
     errdefer {
@@ -74967,7 +74967,7 @@ test "lazy checked instantiation allocates only recursive placeholders and clear
             try lowering.init(gpa, &program, .{});
             defer lowering.deinit();
             // The program seeds this module as its lowering input, as the coordinator does.
-            try lowering.seedView(checked_types.view());
+            try lowering.seedView(&checked_types.view());
             var ctx = try lowering.bodyContext(graph);
             defer ctx.deinit();
             errdefer {
@@ -75020,7 +75020,7 @@ test "lazy checked placeholders obey closed and innermost declaration scopes" {
     try lowering.init(gpa, &program, .{});
     defer lowering.deinit();
     // The program seeds this module as its lowering input, as the coordinator does.
-    try lowering.seedView(checked_types.view());
+    try lowering.seedView(&checked_types.view());
     var ctx = try lowering.bodyContext(graph);
     defer ctx.deinit();
     var outer = InstantiatingNodeMap.init(gpa);

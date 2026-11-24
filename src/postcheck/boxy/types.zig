@@ -38,12 +38,12 @@ pub const ModuleView = struct {
     /// What `Modules.linkName` returns.
     link_name: [32]u8,
 
-    pub fn types(self: *const ModuleView) checked.CheckedTypeStoreView {
-        return self.view.checked_types;
+    pub fn types(self: *const ModuleView) *const checked.CheckedTypeStoreView {
+        return &self.view.checked_types;
     }
 
-    pub fn bodies(self: *const ModuleView) checked.CheckedBodies {
-        return self.view.checked_bodies;
+    pub fn bodies(self: *const ModuleView) *const checked.CheckedBodies {
+        return &self.view.checked_bodies;
     }
 
     pub fn nameStore(self: *const ModuleView) *const names.CanonicalNameStore {
@@ -149,7 +149,7 @@ pub const ModuleNames = struct {
         self.content_named.deinit(allocator);
     }
 
-    pub fn of(self: *const ModuleNames, view: checked.ImportedModuleView) [32]u8 {
+    pub fn of(self: *const ModuleNames, view: *const checked.ImportedModuleView) [32]u8 {
         if (self.content_named.contains(view.key.bytes)) return view.module_identity.stable_hash;
         return stableName(view);
     }
@@ -158,7 +158,7 @@ pub const ModuleNames = struct {
     pub fn fromViews(allocator: Allocator, views: []const checked.ImportedModuleView) Allocator.Error!ModuleNames {
         var owners: std.AutoHashMapUnmanaged([32]u8, ?[32]u8) = .empty;
         defer owners.deinit(allocator);
-        for (views) |view| {
+        for (views) |*view| {
             const entry = try owners.getOrPut(allocator, stableName(view));
             if (!entry.found_existing) {
                 entry.value_ptr.* = view.module_identity.stable_hash;
@@ -168,14 +168,14 @@ pub const ModuleNames = struct {
         }
         var result: ModuleNames = .{};
         errdefer result.deinit(allocator);
-        for (views) |view| {
+        for (views) |*view| {
             if (owners.get(stableName(view)).? == null) try result.content_named.put(allocator, view.key.bytes, {});
         }
         return result;
     }
 
     /// The name a body edit leaves alone (`fromViews`).
-    pub fn stableName(view: checked.ImportedModuleView) [32]u8 {
+    pub fn stableName(view: *const checked.ImportedModuleView) [32]u8 {
         var hasher = base.Sha256.init(.{});
         hasher.update("roc.boxy.module_name.v1");
         hasher.update(view.module_env.module_name);
@@ -212,13 +212,13 @@ pub const Modules = struct {
     }
 
     /// Add a module unless one with the same key is present.
-    pub fn add(self: *Modules, view: checked.ImportedModuleView) Allocator.Error!ModuleIndex {
+    pub fn add(self: *Modules, view: *const checked.ImportedModuleView) Allocator.Error!ModuleIndex {
         const entry = try self.by_key.getOrPut(self.allocator, view.key.bytes);
         if (entry.found_existing) return entry.value_ptr.*;
         const index: ModuleIndex = @fromBackingInt(@intCast(self.views.items.len));
         entry.value_ptr.* = index;
         const link_name = if (self.link_names) |link_names| link_names.of(view) else view.module_identity.stable_hash;
-        try self.views.append(self.allocator, .{ .index = index, .key = view.key.digest(), .view = view, .link_name = link_name });
+        try self.views.append(self.allocator, .{ .index = index, .key = view.key.digest(), .view = view.*, .link_name = link_name });
         try self.by_identity.put(self.allocator, view.module_identity.stable_hash, index);
         const named = try self.by_link_name.getOrPut(self.allocator, link_name);
         if (!named.found_existing) named.value_ptr.* = index;
@@ -2362,10 +2362,10 @@ test "record interning preserves immutable field default identities" {
     var view = empty_modules.view();
     view.key = .{ .bytes = @splat(1) };
     view.module_identity.stable_hash = view.key.bytes;
-    const first_module = try modules.add(view);
+    const first_module = try modules.add(&view);
     view.key.bytes = @splat(2);
     view.module_identity.stable_hash = view.key.bytes;
-    const second_module = try modules.add(view);
+    const second_module = try modules.add(&view);
     const count = try store.internName("count");
     const u8_ty = try store.primitive(.u8);
     var fields = [_]Field{.{ .name = count, .ty = u8_ty, .kind = .inline_slot }};
@@ -2597,7 +2597,7 @@ fn addErrorTestModule(empty: *const Common.EmptyCheckedModulesForTest, modules: 
     view.key = .{ .bytes = identity };
     view.module_identity.stable_hash = identity;
     view.checked_types = store.view();
-    return try modules.add(view);
+    return try modules.add(&view);
 }
 
 fn errorTestStore(allocator: Allocator) Allocator.Error!checked.CheckedTypeStore {

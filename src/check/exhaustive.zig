@@ -373,21 +373,21 @@ pub const Pattern = union(enum) {
     /// Check if this pattern can ever match a value (is inhabited).
     /// A pattern is uninhabited if it matches a type with no possible values,
     /// such as an empty tag union or a constructor with uninhabited arguments.
-    pub fn isInhabited(self: Pattern, type_store: *TypeStore, builtin_idents: BuiltinIdents) error{OutOfMemory}!bool {
+    pub fn isInhabited(self: *const Pattern, type_store: *TypeStore, builtin_idents: BuiltinIdents) error{OutOfMemory}!bool {
         return self.isInhabitedWithKnownEmpty(type_store, builtin_idents, &.{});
     }
 
     /// Every node of the pattern must be inhabited; nodes are checked in
     /// source order from an explicit work list.
     pub fn isInhabitedWithKnownEmpty(
-        self: Pattern,
+        self: *const Pattern,
         type_store: *TypeStore,
         builtin_idents: BuiltinIdents,
         known_empty_vars: []const Var,
     ) error{OutOfMemory}!bool {
         var pending: std.ArrayList(Pattern) = .empty;
         defer pending.deinit(type_store.gpa);
-        try pending.append(type_store.gpa, self);
+        try pending.append(type_store.gpa, self.*);
         while (pending.pop()) |pattern| {
             const children: []const Pattern = switch (pattern) {
                 .anything => |maybe_type| {

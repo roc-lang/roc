@@ -2442,7 +2442,7 @@ test "override scopes are interned by content and restricted to a type's reach" 
     }
     var module_view = empty.view();
     module_view.checked_types = declarations.view();
-    const module = try fixture.modules.add(module_view);
+    const module = try fixture.modules.add(&module_view);
     const name = try store.internName("Local");
     const local = try store.intern(.{ .nominal = .{
         .decl = .{ .module = module, .decl = .some(declaration_ids[0]) },

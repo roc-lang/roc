@@ -151,8 +151,8 @@ const CaptureWorker = union(enum) {
         return .{ .program = program, .bytes = encoded.bytes, .modules = encoded.modules, .table = @constCast(encoded.types), .templates = encoded.templates, .link_names = encoded.link_names };
     }
 
-    fn resolve(self: CaptureWorker, program: *Program) Allocator.Error!WorkerId {
-        return switch (self) {
+    fn resolve(self: *const CaptureWorker, program: *Program) Allocator.Error!WorkerId {
+        return switch (self.*) {
             .local => |id| id,
             .encoded => |encoded| blk: {
                 var input = reader(encoded, program);
@@ -1964,8 +1964,8 @@ test "stored type metadata preserves field defaults across module reindexing" {
     var source_modules: [2]types.ModuleIndex = undefined;
     var destination_modules: [2]types.ModuleIndex = undefined;
     for (0..2) |index| {
-        source_modules[index] = try source.modules.add(source_program.view(@intCast(index + 1)));
-        destination_modules[index] = try destination.modules.add(destination_program.view(@intCast(2 - index)));
+        source_modules[index] = try source.modules.add(&source_program.view(@intCast(index + 1)));
+        destination_modules[index] = try destination.modules.add(&destination_program.view(@intCast(2 - index)));
     }
     const name = try source.store.internName("count");
     const number = try source.store.primitive(.u8);
@@ -2430,7 +2430,7 @@ fn captureSerializationScratchCase(allocator: Allocator) (Allocator.Error || err
     try test_program.init(setup, .program);
     defer test_program.deinit();
     const program = test_program.program;
-    const module = try program.modules.add(test_program.view(9));
+    const module = try program.modules.add(&test_program.view(9));
     const worker_id = try program.crashDictionaryWorker(module, .checked_error);
     const identity = program.result.store.getProcSpec(program.worker(worker_id).proc).identity;
     var retained = Retained{ .allocator = allocator, .program = program };

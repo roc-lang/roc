@@ -627,9 +627,8 @@ pub const CheckedImportViews = struct {
     /// even though they are neither imported nor in `available`.
     relations: []const ImportedModuleView = &.{},
 
-    fn viewForKey(self: CheckedImportViews, key: ModuleId) ?ImportedModuleView {
-        const view = dependencyViewByKey(key, self.direct, self.available, self.relations) orelse return null;
-        return view.*;
+    fn viewForKey(self: *const CheckedImportViews, key: ModuleId) ?*const ImportedModuleView {
+        return dependencyViewByKey(key, self.direct, self.available, self.relations);
     }
 };
 
@@ -2362,7 +2361,7 @@ fn compileTimeRootHasRootRequest(
 /// binding is known. Root scheduling consumes the proved forwarding recipe,
 /// not this candidate classification.
 fn compileTimeCallableRootIsProcedureReference(
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     resolved_value_refs: *const ResolvedValueRefTable,
     root: CompileTimeRoot,
 ) bool {
@@ -4051,7 +4050,7 @@ pub const CheckedTypeStoreView = struct {
             if (try self.sealedKeys().varForKey(sealed, key)) |var_| return type_ids.fromVar(var_);
         }
         if (self.roots.len == 0) return null;
-        return try self.synthesizedKeys().rootForKey(self.*, key);
+        return try self.synthesizedKeys().rootForKey(self, key);
     }
 
     pub fn rootRows(self: *const CheckedTypeStoreView) []const CheckedTypeRoot {
@@ -4062,7 +4061,7 @@ pub const CheckedTypeStoreView = struct {
     /// first demand through the root's key slot.
     pub fn rootInfo(self: *const CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
         if (!type_ids.isSynthesized(root)) return try self.sealedKeys().info(type_ids.asVar(root));
-        return try self.synthesizedKeys().info(self.*, root);
+        return try self.synthesizedKeys().info(self, root);
     }
 
     /// Whether `root` reaches a flex or rigid variable, found by walking the
@@ -4071,16 +4070,16 @@ pub const CheckedTypeStoreView = struct {
     /// about each level of a deep type in turn walks each level once.
     pub fn rootHasIdentityVariables(self: *const CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!bool {
         if (self.knownIdentity(root)) |known| return known;
-        var scan = CheckedTypeViewIdentityScan{ .view = self.* };
+        var scan = CheckedTypeViewIdentityScan{ .view = self };
         var traversal = checked_traverse.BoolPredicateTraversal(CheckedTypeId, CheckedTypeViewIdentityScan).init(self.scanAllocator(), &scan);
         defer traversal.deinit();
         const result = try traversal.visit(root);
-        if (!scan.saw_pending) traversal.reportDecided(result, IdentityRecorder{ .view = self.* });
+        if (!scan.saw_pending) traversal.reportDecided(result, IdentityRecorder{ .view = self });
         return result;
     }
 
     const IdentityRecorder = struct {
-        view: CheckedTypeStoreView,
+        view: *const CheckedTypeStoreView,
 
         pub fn decided(self: IdentityRecorder, ty: CheckedTypeId, value: bool) void {
             self.view.recordIdentity(ty, value);
@@ -4218,7 +4217,7 @@ pub const CheckedTypeStoreView = struct {
         right: CheckedTypeId,
     ) Allocator.Error!bool {
         scratch.clear();
-        return try checkedTypeRootSliceEql(.exact, .named, self.*, &.{left}, &.{right}, scratch);
+        return try checkedTypeRootSliceEql(.exact, .named, self, &.{left}, &.{right}, scratch);
     }
 
     /// Same-store equality of the types two roots denote: transparent aliases
@@ -4231,7 +4230,7 @@ pub const CheckedTypeStoreView = struct {
         right: CheckedTypeId,
     ) Allocator.Error!bool {
         scratch.clear();
-        return try checkedTypeRootSliceEql(.exact, .transparent, self.*, &.{left}, &.{right}, scratch);
+        return try checkedTypeRootSliceEql(.exact, .transparent, self, &.{left}, &.{right}, scratch);
     }
 
     /// Exact same-store equality modulo a bijective renaming of flex/rigid
@@ -4262,7 +4261,7 @@ pub const CheckedTypeStoreView = struct {
             if (!std.meta.eql(try self.rootKey(left_root), try self.rootKey(right_root))) return false;
         }
         scratch.clear();
-        return try checkedTypeRootSliceEql(.alpha, .named, self.*, left, right, scratch);
+        return try checkedTypeRootSliceEql(.alpha, .named, self, left, right, scratch);
     }
 
     /// Bucket key for `rootAliasTransparentEql`: a hash of the alias-resolved
@@ -4270,7 +4269,7 @@ pub const CheckedTypeStoreView = struct {
     /// type shares. Canonical keys retain alias identity, so callers bucket
     /// alias-transparent comparisons by this key instead.
     pub fn aliasTransparentBucketKey(self: *const CheckedTypeStoreView, raw_root: CheckedTypeId) u64 {
-        const root = checkedTypeEqualityRoot(.transparent, self.*, raw_root);
+        const root = checkedTypeEqualityRoot(.transparent, self, raw_root);
         const root_payload = self.payload(root);
         var hasher = std.hash.Wyhash.init(0);
         std.hash.autoHash(&hasher, std.meta.activeTag(root_payload));
@@ -4320,7 +4319,7 @@ pub const CheckedTypeStoreView = struct {
     ) Allocator.Error!bool {
         if (left.len != right.len) return false;
         scratch.clear();
-        return try checkedTypeRootSliceEql(.alpha, .transparent, self.*, left, right, scratch);
+        return try checkedTypeRootSliceEql(.alpha, .transparent, self, left, right, scratch);
     }
 
     pub fn nominalDeclaration(
@@ -4445,7 +4444,7 @@ const CheckedAliasEquality = enum { named, transparent };
 
 fn checkedTypeEqualityRoot(
     comptime aliases: CheckedAliasEquality,
-    view: CheckedTypeStoreView,
+    view: *const CheckedTypeStoreView,
     root: CheckedTypeId,
 ) CheckedTypeId {
     if (aliases == .named) return root;
@@ -4475,7 +4474,7 @@ fn checkedTypeEqualityRoot(
 fn checkedTypeRootSliceEql(
     comptime mode: CheckedTypeEqlMode,
     comptime aliases: CheckedAliasEquality,
-    view: CheckedTypeStoreView,
+    view: *const CheckedTypeStoreView,
     left: []const CheckedTypeId,
     right: []const CheckedTypeId,
     scratch: *CheckedTypeStoreView.EqualityScratch,
@@ -4524,7 +4523,7 @@ const CheckedTypeEqlMode = enum { exact, alpha };
 fn checkedTypePairEqlStep(
     comptime mode: CheckedTypeEqlMode,
     comptime aliases: CheckedAliasEquality,
-    view: CheckedTypeStoreView,
+    view: *const CheckedTypeStoreView,
     pair: CheckedTypeExactPair,
     scratch: *CheckedTypeStoreView.EqualityScratch,
 ) Allocator.Error!bool {
@@ -5555,7 +5554,7 @@ pub const CheckedTypeStore = struct {
         recipe: CheckedTypeKeyRecipe,
         payload: CheckedTypePayloadBuild,
 
-        pub fn eql(self: StructuralRootContext, entry: u32) bool {
+        pub fn eql(self: *const StructuralRootContext, entry: u32) bool {
             return self.store.roots.items()[entry].recipe == self.recipe and
                 checkedTypePayloadBuildEqlStored(self.payload, self.store.payload(type_ids.fromSynthesized(entry)));
         }
@@ -5568,8 +5567,8 @@ pub const CheckedTypeStore = struct {
         build_payload: CheckedTypePayloadBuild,
     ) ?CheckedTypeId {
         const context = StructuralRootContext{ .store = self, .recipe = domain.recipe(), .payload = build_payload };
-        const entry = self.inherited_tables.structural_roots.find(hash, context) orelse
-            self.structural_roots.find(hash, context) orelse return null;
+        const entry = self.inherited_tables.structural_roots.find(hash, &context) orelse
+            self.structural_roots.find(hash, &context) orelse return null;
         return type_ids.fromSynthesized(entry);
     }
 
@@ -7988,18 +7987,18 @@ fn ownerViewAndDeclForImportedNominal(
         .builtin => |builtin_nominal| blk: {
             const view = imports.viewForKey(owner_module) orelse return null;
             const declaration = view.checked_types.builtinNominalDeclaration(builtin_nominal) orelse return null;
-            break :blk .{ .view = view, .decl = declaration };
+            break :blk .{ .view = view.*, .decl = declaration };
         },
         .imported_declaration => |imported| blk: {
             const view = imports.viewForKey(imported.artifact) orelse return null;
-            break :blk .{ .view = view, .decl = view.checked_types.nominalDeclarationById(imported.declaration) };
+            break :blk .{ .view = view.*, .decl = view.checked_types.nominalDeclarationById(imported.declaration) };
         },
         .imported_box_payload_capability => |capability_ref| blk: {
             const view = imports.viewForKey(capability_ref.artifact) orelse return null;
             const capability = view.interface_capabilities.boxPayloadCapability(capability_ref.capability);
             const decl = view.checked_types.nominalDeclaration(capability.nominal) orelse
                 checkedArtifactInvariant("imported box payload capability referenced missing nominal declaration", .{});
-            break :blk .{ .view = view, .decl = decl };
+            break :blk .{ .view = view.*, .decl = decl };
         },
         .local_declaration,
         .local_box_payload_capability,
@@ -8017,7 +8016,7 @@ fn embedOneImportedNominalDecl(
     allocator: Allocator,
     store: *CheckedTypeStore,
     names: *canonical.CanonicalNameStore,
-    owner_view: ImportedModuleView,
+    owner_view: *const ImportedModuleView,
     owner_decl: CheckedNominalDeclaration,
 ) Allocator.Error!void {
     var projector = CheckedTypeStoreImportProjector.init(allocator, store, names, owner_view);
@@ -8114,7 +8113,7 @@ fn embedImportedNominalDeclFor(
                 => checkedArtifactInvariant("checked type publication could not embed reachable imported nominal declaration", .{}),
             };
 
-        try embedOneImportedNominalDecl(allocator, store, names, owner.view, owner.decl);
+        try embedOneImportedNominalDecl(allocator, store, names, &owner.view, owner.decl);
     }
 }
 
@@ -8131,7 +8130,7 @@ const CheckedTypeKeyDigester = struct {
     fn init(
         allocator: Allocator,
         names: *const canonical.CanonicalNameStore,
-        view: CheckedTypeStoreView,
+        view: *const CheckedTypeStoreView,
     ) CheckedTypeKeyDigester {
         return .{
             .adapter = CheckedTypeKeyAdapter.init(allocator, names, view),
@@ -8167,7 +8166,7 @@ pub const CheckedTypeKeys = struct {
     digester: CheckedTypeKeyDigester,
 
     pub fn init(allocator: Allocator, names: *const canonical.CanonicalNameStore, store: *const CheckedTypeStore) CheckedTypeKeys {
-        return .{ .store = store, .digester = CheckedTypeKeyDigester.init(allocator, names, store.view()) };
+        return .{ .store = store, .digester = CheckedTypeKeyDigester.init(allocator, names, &store.view()) };
     }
 
     pub fn deinit(self: *CheckedTypeKeys) void {
@@ -8263,7 +8262,7 @@ pub const SynthesizedTypeKeys = struct {
 
     /// The key of the synthesized root `root` of `view` and the facts its
     /// encoding found.
-    fn info(self: *SynthesizedTypeKeys, view: CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
+    fn info(self: *SynthesizedTypeKeys, view: *const CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
         const index = type_ids.synthesizedIndex(root);
         if (index >= self.slots.items.len) checkedArtifactInvariant("a synthesized checked type has no key slot", .{});
         return try self.slots.items[index].getOrCompute(self.io, Allocator.Error, KeyRequest{ .keys = self, .view = view, .root = root }, KeyRequest.compute);
@@ -8271,7 +8270,7 @@ pub const SynthesizedTypeKeys = struct {
 
     const KeyRequest = struct {
         keys: *SynthesizedTypeKeys,
-        view: CheckedTypeStoreView,
+        view: *const CheckedTypeStoreView,
         root: CheckedTypeId,
 
         fn compute(request: KeyRequest) Allocator.Error!canonical_type_keys.TypeKeyInfo {
@@ -8291,7 +8290,7 @@ pub const SynthesizedTypeKeys = struct {
             keys.writer_mutex.lockUncancelable(keys.io);
             defer keys.writer_mutex.unlock(keys.io);
             if (keys.writer == null) keys.writer = CheckedTypeKeyDigester.init(keys.allocator, names, view);
-            keys.writer.?.adapter.view = view;
+            keys.writer.?.adapter.view = view.*;
             keys.writer.?.adapter.names = names;
             return try keys.computeLocked(view, request.root);
         }
@@ -8299,7 +8298,7 @@ pub const SynthesizedTypeKeys = struct {
 
     /// `root`'s key, computed by the held writer. A synthesized function's
     /// synthesized children are computed here too, never waited on.
-    fn computeLocked(self: *SynthesizedTypeKeys, view: CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
+    fn computeLocked(self: *SynthesizedTypeKeys, view: *const CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
         const index = type_ids.synthesizedIndex(root);
         if (self.slots.items[index].peek()) |known| return known;
         return switch (view.roots[index].recipe) {
@@ -8308,12 +8307,12 @@ pub const SynthesizedTypeKeys = struct {
         };
     }
 
-    fn childInfoLocked(self: *SynthesizedTypeKeys, view: CheckedTypeStoreView, child: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
+    fn childInfoLocked(self: *SynthesizedTypeKeys, view: *const CheckedTypeStoreView, child: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
         if (!type_ids.isSynthesized(child)) return try view.rootInfo(child);
         return try self.computeLocked(view, child);
     }
 
-    fn syntheticFunctionInfo(self: *SynthesizedTypeKeys, view: CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
+    fn syntheticFunctionInfo(self: *SynthesizedTypeKeys, view: *const CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
         const function = syntheticFunctionPayload(view, root);
         const allocator = self.allocator;
         const arg_infos = try allocator.alloc(canonical_type_keys.TypeKeyInfo, function.args.len);
@@ -8355,7 +8354,7 @@ pub const SynthesizedTypeKeys = struct {
         };
     }
 
-    fn syntheticFunctionPayload(view: CheckedTypeStoreView, root: CheckedTypeId) CheckedFunctionType {
+    fn syntheticFunctionPayload(view: *const CheckedTypeStoreView, root: CheckedTypeId) CheckedFunctionType {
         return switch (view.payload(root)) {
             .function => |function| function,
             .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => checkedArtifactInvariant("a synthesized function root's payload was not a function", .{}),
@@ -8364,14 +8363,14 @@ pub const SynthesizedTypeKeys = struct {
 
     /// The lowest synthesized root of `view` whose key is `key`, if any. The
     /// index is built on its first demand.
-    fn rootForKey(self: *SynthesizedTypeKeys, view: CheckedTypeStoreView, key: canonical.CanonicalTypeKey) Allocator.Error!?CheckedTypeId {
+    fn rootForKey(self: *SynthesizedTypeKeys, view: *const CheckedTypeStoreView, key: canonical.CanonicalTypeKey) Allocator.Error!?CheckedTypeId {
         const index = try self.index.getOrCompute(self.io, Allocator.Error, IndexRequest{ .keys = self, .view = view }, IndexRequest.build);
         return index.get(key.bytes);
     }
 
     const IndexRequest = struct {
         keys: *SynthesizedTypeKeys,
-        view: CheckedTypeStoreView,
+        view: *const CheckedTypeStoreView,
 
         fn build(request: IndexRequest) Allocator.Error!*KeyIndex {
             const keys = request.keys;
@@ -8395,7 +8394,7 @@ pub const SynthesizedTypeKeys = struct {
 /// walk over a view. A pending payload counts as reaching one, and the walk
 /// records that it saw one so its result is not remembered.
 const CheckedTypeViewIdentityScan = struct {
-    view: CheckedTypeStoreView,
+    view: *const CheckedTypeStoreView,
     saw_pending: bool = false,
 
     pub fn visit(self: *@This(), children: anytype, root: CheckedTypeId) Allocator.Error!?bool {
@@ -8544,12 +8543,12 @@ const CheckedTypeKeyAdapter = struct {
     fn init(
         allocator: Allocator,
         names: *const canonical.CanonicalNameStore,
-        view: CheckedTypeStoreView,
+        view: *const CheckedTypeStoreView,
     ) CheckedTypeKeyAdapter {
         return .{
             .allocator = allocator,
             .names = names,
-            .view = view,
+            .view = view.*,
             .field_rank_scratch = base.TextRankCache.init(allocator),
             .tag_rank_scratch = base.TextRankCache.init(allocator),
             .row_seen = collections.DenseMap(CheckedTypeId, void).init(allocator),
@@ -8888,7 +8887,7 @@ pub const CheckedIdentityOrderer = struct {
         return .{
             .allocator = allocator,
             .store = store,
-            .adapter = CheckedTypeKeyAdapter.init(allocator, names, store.view()),
+            .adapter = CheckedTypeKeyAdapter.init(allocator, names, &store.view()),
         };
     }
 
@@ -10506,7 +10505,7 @@ fn attachTestSynthesizedKeys(allocator: Allocator, store: *CheckedTypeStore, nam
 /// store's key slots.
 fn testFreshCheckedKeyInfo(allocator: Allocator, names: *const canonical.CanonicalNameStore, store: *const CheckedTypeStore, root: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
     if (!builtin.is_test) unreachable; // test scaffolding: only test blocks call this
-    var digester = CheckedTypeKeyDigester.init(allocator, names, store.view());
+    var digester = CheckedTypeKeyDigester.init(allocator, names, &store.view());
     defer digester.deinit();
     return try digester.keyInfo(root);
 }
@@ -11564,7 +11563,7 @@ fn importedProcedureKind(
 /// The alias-chased builtin nominal of a literal's target type, treating a
 /// still-open flex/rigid variable as not builtin: an open variable's
 /// instantiations are not known yet.
-pub fn checkedConcreteBuiltinForLiteralTarget(view: CheckedTypeStoreView, root: CheckedTypeId) ?CheckedBuiltinNominal {
+pub fn checkedConcreteBuiltinForLiteralTarget(view: *const CheckedTypeStoreView, root: CheckedTypeId) ?CheckedBuiltinNominal {
     var current = root;
     while (true) {
         switch (view.payload(current)) {
@@ -11966,7 +11965,7 @@ pub const CallableEvalTemplateTable = struct {
 /// alias does, so this runs to a fixed point over alias chains.
 fn publishCallableEvalForwarding(
     templates: *CallableEvalTemplateTable,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     resolved_value_refs: *const ResolvedValueRefTable,
     roots: *const CompileTimeRootTable,
     local_module: CheckedModuleArtifactKey,
@@ -12881,7 +12880,7 @@ fn categorizeImportedValueRef(
     };
 
     const target_def: CIR.Def.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(target_node_idx))));
-    if (importedProcedureBindingForDef(import_artifact.view, target_def)) |binding| {
+    if (importedProcedureBindingForDef(&import_artifact.view, target_def)) |binding| {
         return .{ .imported_proc = .{
             .binding = .{ .imported = binding.binding },
             .intrinsic = binding.intrinsic,
@@ -12889,7 +12888,7 @@ fn categorizeImportedValueRef(
         } };
     }
 
-    if (importedConstTemplateForDef(import_artifact.view, target_def)) |const_template| {
+    if (importedConstTemplateForDef(&import_artifact.view, target_def)) |const_template| {
         return .{ .imported_const = .{
             .const_ref = const_template.const_ref,
         } };
@@ -12942,20 +12941,20 @@ fn importedViewForOriginHash(
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
     origin_hash: *const base.ModuleIdentity.Hash,
-) ?ImportedModuleView {
-    var found: ?ImportedModuleView = null;
+) ?*const ImportedModuleView {
+    var found: ?*const ImportedModuleView = null;
     for (imports) |*import| {
         if (!importedViewIdentityMatches(&import.view, origin_hash)) continue;
-        found = uniqueImportedView(found, import.view);
+        found = uniqueImportedView(found, &import.view);
     }
     for (available_artifacts) |*view| {
         if (!importedViewIdentityMatches(view, origin_hash)) continue;
-        found = uniqueImportedView(found, view.*);
+        found = uniqueImportedView(found, view);
     }
     return found;
 }
 
-fn uniqueImportedView(existing: ?ImportedModuleView, next: ImportedModuleView) ImportedModuleView {
+fn uniqueImportedView(existing: ?*const ImportedModuleView, next: *const ImportedModuleView) *const ImportedModuleView {
     if (existing) |found| {
         if (!CheckedModuleArtifactKey.eql(found.key, next.key)) {
             checkedArtifactInvariant("module identity resolved to multiple checked artifacts", .{});
@@ -12965,11 +12964,11 @@ fn uniqueImportedView(existing: ?ImportedModuleView, next: ImportedModuleView) I
     return next;
 }
 
-fn importedProcedureBindingForDef(view: ImportedModuleView, def: CIR.Def.Idx) ?ImportedProcedureBindingView {
+fn importedProcedureBindingForDef(view: *const ImportedModuleView, def: CIR.Def.Idx) ?ImportedProcedureBindingView {
     return view.exported_procedure_bindings.lookupByDef(def);
 }
 
-fn importedConstTemplateForDef(view: ImportedModuleView, def: CIR.Def.Idx) ?ImportedConstTemplateView {
+fn importedConstTemplateForDef(view: *const ImportedModuleView, def: CIR.Def.Idx) ?ImportedConstTemplateView {
     for (view.exported_const_templates.templates) |template| {
         if (template.def == def) return template;
     }
@@ -13528,7 +13527,7 @@ fn sealCheckedProcedureTemplateRefs(
     allocator: Allocator,
     module: TypedCIR.Module,
     checked_types: *const CheckedTypePublication,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     diagnostics: *const body_analyses.NodeBits,
     default_exprs: []const CIR.Expr.Idx,
     compile_time_roots: *const CompileTimeRootTable,
@@ -14482,7 +14481,7 @@ const EvidencePass = struct {
         self.plan_table.site_evidence = .fromOwnedSlice(try self.site_evidence.toOwnedSlice(self.allocator));
         self.plan_table.site_substitutions = .fromOwnedSlice(try self.site_substitutions.toOwnedSlice(self.allocator));
         self.plan_table.template_root_evidence = .fromOwnedSlice(try self.allocator.dupe(?artifact_serialize.Span, self.template_root_evidence));
-        try @import("codec_identity.zig").intern(self.allocator, self.checked_types.store.view(), self.plan_table);
+        try @import("codec_identity.zig").intern(self.allocator, &self.checked_types.store.view(), self.plan_table);
         try @import("codec_identity.zig").digestContents(self.allocator, self.import_views.current_owner, &self.checked_types.store, self.names, self.plan_table);
         if (builtin.mode == .debug) try self.debugVerifyGeneratedCodecRoleAgreement();
     }
@@ -14539,7 +14538,7 @@ const EvidencePass = struct {
             for (calls, 0..) |call, index| {
                 for (calls[0..index]) |previous| {
                     if (previous.method != call.method or previous.method_role != call.method_role) continue;
-                    if (!try @import("codec_identity.zig").callsEquivalent(self.allocator, type_view, self.plan_table, previous, call)) {
+                    if (!try @import("codec_identity.zig").callsEquivalent(self.allocator, &type_view, self.plan_table, previous, call)) {
                         checkedArtifactInvariant(
                             "checked generated codec method role contained ambiguous calls",
                             .{},
@@ -17691,7 +17690,7 @@ const CheckedTemplateRefCollector = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         checked_types: *const CheckedTypePublication,
-        bodies: CheckedBodies,
+        bodies: *const CheckedBodies,
         diagnostics: *const body_analyses.NodeBits,
         static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
         local_schemes: *const collections.DenseMap(u32, Var),
@@ -17702,7 +17701,7 @@ const CheckedTemplateRefCollector = struct {
             .allocator = allocator,
             .module = module,
             .checked_types = checked_types,
-            .bodies = bodies,
+            .bodies = bodies.*,
             .diagnostics = diagnostics,
             .static_dispatch_plans = static_dispatch_plans,
             .local_schemes = local_schemes,
@@ -17940,7 +17939,7 @@ const CheckedTemplateRefCollector = struct {
         // The scope stays pushed until every child has been collected.
         if (local_scheme != null) try self.work.append(self.allocator, .pop_scope);
 
-        const bodies = self.bodies;
+        const bodies = &self.bodies;
         const data = bodies.exprData(expr_id);
         const expr_ty = bodies.exprType(expr_id);
         // An erroneous callable publishes no procedure relation, and its type
@@ -18228,7 +18227,7 @@ const CheckedTemplateRefCollector = struct {
         const entry = try self.visited_patterns.getOrPut(pattern_id);
         if (entry.found_existing) return;
 
-        const bodies = self.bodies;
+        const bodies = &self.bodies;
         const children = self.beginChildren();
         switch (bodies.patternData(pattern_id)) {
             .as => |as| try self.pushChild(.{ .pattern = as.pattern }),
@@ -18413,7 +18412,7 @@ pub const NestedProcSiteTable = struct {
     pub fn fromTemplates(
         allocator: Allocator,
         owner_artifact: canonical.ArtifactRef,
-        bodies: CheckedBodies,
+        bodies: *const CheckedBodies,
         default_exprs: []const CIR.Expr.Idx,
         compile_time_roots: *const CompileTimeRootTable,
         checked_types: *const CheckedTypeStore,
@@ -19276,7 +19275,7 @@ const NestedProcSiteBuilder = struct {
 
     fn init(
         allocator: Allocator,
-        bodies: CheckedBodies,
+        bodies: *const CheckedBodies,
         checked_types: *const CheckedTypeStore,
         templates: *const CheckedProcedureTemplateTable,
         static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
@@ -19285,7 +19284,7 @@ const NestedProcSiteBuilder = struct {
     ) NestedProcSiteBuilder {
         return .{
             .allocator = allocator,
-            .bodies = bodies,
+            .bodies = bodies.*,
             .checked_types = checked_types,
             .templates = templates,
             .static_dispatch_plans = static_dispatch_plans,
@@ -19468,7 +19467,7 @@ const NestedProcSiteBuilder = struct {
             self.scope_by_checked_expr,
             self.dispatch_scopes,
         );
-        const bodies = self.bodies;
+        const bodies = &self.bodies;
         const data = bodies.exprData(expr_id);
         try self.pushWork(.{ .exit_expr = .{ .previous_scope = previous_scope, .open_site_mark = self.open_sites.items.len } });
         const children = self.beginChildren();
@@ -19645,7 +19644,7 @@ const NestedProcSiteBuilder = struct {
         pattern_id: CIR.Pattern.Idx,
         owner: NestedProcSiteOwner,
     ) Allocator.Error!void {
-        const bodies = self.bodies;
+        const bodies = &self.bodies;
         const data = bodies.patternData(pattern_id);
         switch (data) {
             .assign, .as => try self.recordBinderSite(pattern_id),
@@ -19979,7 +19978,7 @@ pub const HostedProc = struct {
     template: canonical.ProcedureTemplateRef,
 
     /// The proc's deterministic ordering key bytes within its table's pool.
-    pub fn orderKey(self: HostedProc, table: *const HostedProcTable) []const u8 {
+    pub fn orderKey(self: *const HostedProc, table: *const HostedProcTable) []const u8 {
         return table.order_key_bytes.items()[self.order_key_start .. self.order_key_start + self.order_key_len];
     }
 };
@@ -20308,7 +20307,7 @@ pub const PlatformRequiredDeclarationTable = struct {
     pub fn identityHash(
         self: *const PlatformRequiredDeclarationTable,
         names: *const canonical.CanonicalNameStore,
-        type_view: CheckedTypeStoreView,
+        type_view: *const CheckedTypeStoreView,
     ) Allocator.Error![32]u8 {
         var hasher = base.Sha256.init(.{});
         hashByteSlice(&hasher, "platform_required_declarations");
@@ -20360,8 +20359,8 @@ pub const PlatformRequiredValueUse = union(enum) {
     const_value: PlatformRequiredConstUse,
     procedure_value: PlatformRequiredProcedureUse,
 
-    pub fn tag(self: PlatformRequiredValueUse) PlatformRequiredValueUseKind {
-        return switch (self) {
+    pub fn tag(self: *const PlatformRequiredValueUse) PlatformRequiredValueUseKind {
+        return switch (self.*) {
             .const_value => .const_value,
             .procedure_value => .procedure_value,
         };
@@ -20554,7 +20553,7 @@ const PlatformRelationTypeSubstitutions = struct {
         try validatePlatformAppRelationForModule(
             module_identity,
             names,
-            checked_types.view(),
+            &checked_types.view(),
             declarations,
             active_relation,
         );
@@ -20578,7 +20577,7 @@ const PlatformRelationTypeSubstitutions = struct {
 
             const app_identity_roots = active_relation.identity_solutions_app[input.identity_start .. input.identity_start + input.identity_len];
 
-            var projector = CheckedTypeStoreImportProjector.initPreservingSourceInstance(allocator, checked_types, names, app_view.*);
+            var projector = CheckedTypeStoreImportProjector.initPreservingSourceInstance(allocator, checked_types, names, app_view);
             defer projector.deinit();
 
             for (identity_formals, app_identity_roots) |formal, app_identity_root| {
@@ -20734,7 +20733,7 @@ pub const PlatformRequirementRelationTable = struct {
         try validatePlatformAppRelationForModule(
             module_identity,
             names,
-            checked_types.view(),
+            &checked_types.view(),
             declarations,
             active_relation,
         );
@@ -20792,7 +20791,7 @@ pub const PlatformRequirementRelationTable = struct {
             }
             // The requirement type as the checker solved it, recorded on the
             // app's artifact and projected into this publication's store.
-            var projector = CheckedTypeStoreImportProjector.initPreservingSourceInstance(allocator, checked_types, names, app_view.*);
+            var projector = CheckedTypeStoreImportProjector.initPreservingSourceInstance(allocator, checked_types, names, app_view);
             defer projector.deinit();
             const payload = try projector.project(input.solved_root_app);
 
@@ -21000,7 +20999,7 @@ pub const PlatformRequiredBindingTable = struct {
         allocator: Allocator,
         module_identity: ModuleIdentity,
         names: *const canonical.CanonicalNameStore,
-        type_view: CheckedTypeStoreView,
+        type_view: *const CheckedTypeStoreView,
         declarations: *const PlatformRequiredDeclarationTable,
         relations: *const PlatformRequirementRelationTable,
         relation: ?PlatformAppRelation,
@@ -21166,7 +21165,7 @@ pub const PlatformRequiredBindingTable = struct {
 fn validatePlatformAppRelationForModule(
     module_identity: ModuleIdentity,
     names: *const canonical.CanonicalNameStore,
-    type_view: CheckedTypeStoreView,
+    type_view: *const CheckedTypeStoreView,
     declarations: *const PlatformRequiredDeclarationTable,
     active_relation: PlatformAppRelation,
 ) Allocator.Error!void {
@@ -21513,9 +21512,9 @@ const ResolvedDispatchCallableSpecializer = struct {
         const imported = dependencyViewByKey(target_key, self.direct_imports, self.available_artifacts, &.{}) orelse
             checkedArtifactInvariant("resolved dispatch target artifact was not available during checked publication", .{});
         if (self.projector) |*projector| {
-            projector.reset(imported.*);
+            projector.reset(imported);
         } else {
-            self.projector = CheckedTypeStoreImportProjector.init(self.allocator, self.store, self.names, imported.*);
+            self.projector = CheckedTypeStoreImportProjector.init(self.allocator, self.store, self.names, imported);
         }
         return try self.projector.?.project(target.callable_ty);
     }
@@ -21799,7 +21798,7 @@ fn publishLiteralConversionRoots(
     names: *canonical.CanonicalNameStore,
     owner_artifact: canonical.ArtifactRef,
     checked_types: *CheckedTypePublication,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     plans: *static_dispatch.StaticDispatchPlanTable,
     roots: *CompileTimeRootTable,
     wrappers: *EntryWrapperTable,
@@ -22176,7 +22175,7 @@ fn publishLiteralArgumentRoots(
     names: *canonical.CanonicalNameStore,
     owner_artifact: canonical.ArtifactRef,
     checked_types: *CheckedTypePublication,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     plans: *static_dispatch.StaticDispatchPlanTable,
     roots: *CompileTimeRootTable,
     wrappers: *EntryWrapperTable,
@@ -22418,7 +22417,7 @@ fn publishLiteralArgumentRoots(
         /// in, the lookup, and the scheme's quantified variables, which the
         /// lookup's site substitution is over.
         const AliasStep = struct {
-            module: ?ImportedModuleView,
+            module: ?*const ImportedModuleView,
             lookup: CIR.Expr.Idx,
             vars: []const CheckedTypeId,
         };
@@ -22533,7 +22532,7 @@ fn publishLiteralArgumentRoots(
 
         /// The scheme of a top-level alias: its callable-eval template's root
         /// wrapper template, whose body is the alias's forwarded lookup.
-        fn callableEvalAliasStep(self: *@This(), alias_view: ?ImportedModuleView, pattern: CIR.Pattern.Idx) Allocator.Error!AliasStep {
+        fn callableEvalAliasStep(self: *@This(), alias_view: ?*const ImportedModuleView, pattern: CIR.Pattern.Idx) Allocator.Error!AliasStep {
             const eval_templates: CallableEvalTemplateTableView = if (alias_view) |view| view.callable_eval_templates else self.callable_eval_templates.view();
             const template = for (eval_templates.templates) |candidate| {
                 if (candidate.pattern == pattern) break candidate;
@@ -22550,14 +22549,14 @@ fn publishLiteralArgumentRoots(
         }
 
         /// A generalized-local scope's quantified variables.
-        fn localScopeVars(self: *@This(), alias_view: ?ImportedModuleView, scope_id: DispatchScopeId) []const CheckedTypeId {
+        fn localScopeVars(self: *@This(), alias_view: ?*const ImportedModuleView, scope_id: DispatchScopeId) []const CheckedTypeId {
             const procedure_templates: *const CheckedProcedureTemplateTable = if (alias_view) |view| view.checked_procedure_templates else self.templates;
             const scope = procedure_templates.dispatch_scopes.items()[@backingInt(scope_id)];
             return procedure_templates.scheme_vars_pool.items()[scope.scheme_vars.start .. scope.scheme_vars.start + scope.scheme_vars.len];
         }
 
         /// Another module's scheme variables as roots of this store.
-        fn projectedVars(self: *@This(), view: ImportedModuleView, vars: []const CheckedTypeId) Allocator.Error![]const CheckedTypeId {
+        fn projectedVars(self: *@This(), view: *const ImportedModuleView, vars: []const CheckedTypeId) Allocator.Error![]const CheckedTypeId {
             const projected = try self.allocator.alloc(CheckedTypeId, vars.len);
             var projector = CheckedTypeStoreImportProjector.init(self.allocator, self.store, self.names, view);
             defer projector.deinit();
@@ -22620,7 +22619,7 @@ fn publishLiteralArgumentRoots(
                 .selected_hoisted_const => |selected| return self.templateOfConstUse(selected.const_use),
                 .hosted_proc, .platform_required_const, .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .platform_required_declaration, .platform_required_checked_error => return null,
             };
-            var alias_view: ?ImportedModuleView = null;
+            var alias_view: ?*const ImportedModuleView = null;
             const body: ProcedureBindingBody = switch (use.binding) {
                 .top_level => |top_level| blk: {
                     if (!top_level.artifact.eql(self.owner)) return null;
@@ -22983,7 +22982,7 @@ fn publishLiteralArgumentRoots(
                             .ty = ty,
                             .edge = edge.key,
                             .callee_requirement = j,
-                            .validate_only = sealed or !obligation.site.carriesValue() or try checkedTypeHoldsFunction(allocator, store.view(), owner_artifact, import_views, ty),
+                            .validate_only = sealed or !obligation.site.carriesValue() or try checkedTypeHoldsFunction(allocator, &store.view(), owner_artifact, import_views, ty),
                             .sealed = sealed,
                             .owner_expr = edge.owner_expr,
                         });
@@ -23219,7 +23218,7 @@ fn literalEdgeEntryOrder(entry: LiteralEdgeEntry, key: u32) std.math.Order {
 /// encodings that hold callables.
 fn checkedTypeHoldsFunction(
     allocator: Allocator,
-    own_types: CheckedTypeStoreView,
+    own_types: *const CheckedTypeStoreView,
     own_key: CheckedModuleDigest,
     import_views: CheckedImportViews,
     ty: CheckedTypeId,
@@ -23230,7 +23229,7 @@ fn checkedTypeHoldsFunction(
     defer seen.deinit(allocator);
     var pending = std.ArrayListUnmanaged(Pending).empty;
     defer pending.deinit(allocator);
-    try pending.append(allocator, .{ .key = own_key.bytes, .types = own_types, .ty = ty });
+    try pending.append(allocator, .{ .key = own_key.bytes, .types = own_types.*, .ty = ty });
     while (pending.pop()) |item| {
         const seen_entry = try seen.getOrPut(allocator, .{ .key = item.key, .ty = item.ty });
         if (seen_entry.found_existing) continue;
@@ -23270,11 +23269,11 @@ fn checkedTypeHoldsFunction(
                     },
                     .local_declaration => |declaration_id| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = item.types.nominalDeclarationById(declaration_id).backing }),
                     .imported_declaration => |imported| {
-                        const declaring: CheckedTypeStoreView = if (imported.artifact.eql(own_key))
+                        const declaring: *const CheckedTypeStoreView = if (imported.artifact.eql(own_key))
                             own_types
                         else
-                            (import_views.viewForKey(imported.artifact) orelse checkedArtifactInvariant("a nominal type's declaring module is not available", .{})).checked_types;
-                        try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring, .ty = declaring.nominalDeclarationById(imported.declaration).backing });
+                            &(import_views.viewForKey(imported.artifact) orelse checkedArtifactInvariant("a nominal type's declaring module is not available", .{})).checked_types;
+                        try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring.*, .ty = declaring.nominalDeclarationById(imported.declaration).backing });
                     },
                     // A nominal published as a box payload capability is
                     // declared in its module like any other.
@@ -23289,7 +23288,7 @@ fn checkedTypeHoldsFunction(
                         if (imported.artifact.eql(own_key)) {
                             const declaration = own_types.nominalDeclarationForPayload(nominal) orelse
                                 checkedArtifactInvariant("a box payload capability names a nominal its module does not declare", .{});
-                            try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = own_types, .ty = declaration.backing });
+                            try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = own_types.*, .ty = declaration.backing });
                         } else {
                             const declaring = import_views.viewForKey(imported.artifact) orelse checkedArtifactInvariant("a nominal type's declaring module is not available", .{});
                             const capability = declaring.interface_capabilities.boxPayloadCapability(imported.capability);
@@ -23935,7 +23934,7 @@ fn copyPlatformRequiredValueUse(
 pub fn platformRequirementContextKey(artifact: *const CheckedModuleArtifact) Allocator.Error!PlatformRequirementContextKey {
     return PlatformRequirementContextKey.compute(
         artifact.module_identity,
-        try artifact.platform_required_declarations.identityHash(&artifact.canonical_names, artifact.typesView()),
+        try artifact.platform_required_declarations.identityHash(&artifact.canonical_names, &artifact.typesView()),
     );
 }
 
@@ -24358,7 +24357,7 @@ pub fn pairCheckedPlatform(
     const relations = [_]ImportedModuleView{importedView(app)};
     var substitutions = try PlatformRelationTypeSubstitutions.fromRelation(session, result.module_identity, &result.canonical_names, &result.checked_types, &result.platform_required_declarations, &result.platform_type_inputs, &relations, relation);
     result.platform_requirement_relations = try PlatformRequirementRelationTable.fromRelation(session, result.module_identity, &result.canonical_names, &result.checked_types, &result.platform_required_declarations, &relations, relation);
-    result.platform_required_bindings = try PlatformRequiredBindingTable.fromRelation(session, result.module_identity, &result.canonical_names, result.checked_types.view(), &result.platform_required_declarations, &result.platform_requirement_relations, relation);
+    result.platform_required_bindings = try PlatformRequiredBindingTable.fromRelation(session, result.module_identity, &result.canonical_names, &result.checked_types.view(), &result.platform_required_declarations, &result.platform_requirement_relations, relation);
     result.resolved_value_refs.records = .fromOwnedSlice(try session.dupe(ResolvedValueRefRecord, platform.resolved_value_refs.records.items()));
     for (result.resolved_value_refs.records.items()) |*record| {
         if (record.ref == .platform_required_declaration) {
@@ -24418,7 +24417,7 @@ pub fn pairCheckedPlatform(
     result.callable_eval_templates = try copyPairingColumns(CallableEvalTemplateTable, platform.callable_eval_templates, session);
     publishCallableEvalForwarding(
         &result.callable_eval_templates,
-        result.bodies(),
+        &result.bodies(),
         &result.resolved_value_refs,
         &result.compile_time_roots,
         result.key,
@@ -25723,7 +25722,7 @@ pub const CompileTimeRoot = struct {
 
     /// The payload available to this strategy. A completed function in the
     /// other strategy's representation is still pending for this producer.
-    pub fn payloadFor(self: CompileTimeRoot, strategy: base.SpecializationStrategy) CompileTimeRootPayload {
+    pub fn payloadFor(self: *const CompileTimeRoot, strategy: base.SpecializationStrategy) CompileTimeRootPayload {
         if (strategy == .boxy) {
             if (self.boxy_value) |stored| return .{ .const_node = stored.node };
             if (self.payload == .fn_value or self.lss_value_has_functions) return .pending;
@@ -25732,7 +25731,7 @@ pub const CompileTimeRoot = struct {
     }
 
     /// Whether this strategy still needs the root's producer to run.
-    pub fn needsEvaluation(self: CompileTimeRoot, strategy: base.SpecializationStrategy) bool {
+    pub fn needsEvaluation(self: *const CompileTimeRoot, strategy: base.SpecializationStrategy) bool {
         if (strategy == .lss and self.isBoxyEvaluated()) return false;
         return switch (self.payloadFor(strategy)) {
             .pending, .unevaluated => true,
@@ -25747,7 +25746,7 @@ pub const CompileTimeRoot = struct {
     /// its pattern), or a literal conversion root's conversion of its literal
     /// (`literalNode`), or a literal argument root's conversion of its literal
     /// at its edge.
-    pub fn evaluatedExpr(self: CompileTimeRoot) ?CIR.Expr.Idx {
+    pub fn evaluatedExpr(self: *const CompileTimeRoot) ?CIR.Expr.Idx {
         switch (self.source) {
             .literal, .literal_argument => return null,
             .def, .expr, .statement, .required_binding, .hoisted => {},
@@ -25764,7 +25763,7 @@ pub const CompileTimeRoot = struct {
     /// a literal conversion root, the literal it converts. A literal argument
     /// root's body is its conversion at its edge, which contains no node of
     /// its module's bodies.
-    pub fn bodyParts(self: CompileTimeRoot) RootBodyParts {
+    pub fn bodyParts(self: *const CompileTimeRoot) RootBodyParts {
         switch (self.source) {
             .literal => |literal| return .{ .literal = literal },
             .literal_argument => return .{},
@@ -25781,7 +25780,7 @@ pub const CompileTimeRoot = struct {
 
     /// The literal a literal conversion root converts, or null for every
     /// other root.
-    pub fn literalNode(self: CompileTimeRoot) ?LiteralNode {
+    pub fn literalNode(self: *const CompileTimeRoot) ?LiteralNode {
         return switch (self.source) {
             .literal => |literal| literal,
             .def, .expr, .statement, .required_binding, .hoisted, .literal_argument => null,
@@ -25790,11 +25789,11 @@ pub const CompileTimeRoot = struct {
 
     /// The expression a root other than a literal conversion or literal
     /// argument root evaluates or selects.
-    pub fn rootExpr(self: CompileTimeRoot) CIR.Expr.Idx {
+    pub fn rootExpr(self: *const CompileTimeRoot) CIR.Expr.Idx {
         return self.expr.get() orelse checkedArtifactInvariant("a literal conversion or literal argument root was read as an expression root", .{});
     }
 
-    pub fn literalConversionKind(self: CompileTimeRoot) ?CompileTimeLiteralConversionKind {
+    pub fn literalConversionKind(self: *const CompileTimeRoot) ?CompileTimeLiteralConversionKind {
         return switch (self.kind) {
             .numeral_conversion => .numeral,
             .quote_conversion => .quote,
@@ -25808,7 +25807,7 @@ pub const CompileTimeRoot = struct {
     /// whose value holds a function (design.md "Literal Arguments"). Its
     /// value is never read from its slot, so its request needs no fixed
     /// callable representation, and a success completes it as `discarded`.
-    pub fn validateOnly(self: CompileTimeRoot) bool {
+    pub fn validateOnly(self: *const CompileTimeRoot) bool {
         if (self.literal_argument) |argument| return argument.validate_only;
         return self.kind == .interpolation_conversion;
     }
@@ -25817,7 +25816,7 @@ pub const CompileTimeRoot = struct {
     /// literal argument root, and an interpolation conversion root, which
     /// stores nothing a Solved program could read (design.md "Literal
     /// Arguments").
-    pub fn isBoxyEvaluated(self: CompileTimeRoot) bool {
+    pub fn isBoxyEvaluated(self: *const CompileTimeRoot) bool {
         return switch (self.kind) {
             .literal_argument, .interpolation_conversion => true,
             .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .repl_expr => false,
@@ -25885,7 +25884,7 @@ fn rootBodyContainsDiagnosticError(diagnostics: *const body_analyses.NodeBits, r
 /// expression is in value form, with no part read at a row other than its
 /// own. Nothing in it calls, dispatches, reads a definition, or can crash.
 /// `stack` is scratch.
-pub fn exprIsValueForm(allocator: Allocator, bodies: CheckedBodies, root: CIR.Expr.Idx, stack: *std.ArrayList(CIR.Expr.Idx)) Allocator.Error!bool {
+pub fn exprIsValueForm(allocator: Allocator, bodies: *const CheckedBodies, root: CIR.Expr.Idx, stack: *std.ArrayList(CIR.Expr.Idx)) Allocator.Error!bool {
     return try valueFormWalk(allocator, bodies, root, stack, null) == .value_form;
 }
 
@@ -25915,7 +25914,7 @@ const ConstReads = struct {
 /// lookups as `reads_constants`; with `reads`, a lookup is a part in value
 /// form when `reads` accepts the constant it reads, and the walk reports
 /// `value_form` or `other`.
-fn valueFormWalk(allocator: Allocator, bodies: CheckedBodies, root: CIR.Expr.Idx, stack: *std.ArrayList(CIR.Expr.Idx), reads: ?ConstReads) Allocator.Error!ValueFormShape {
+fn valueFormWalk(allocator: Allocator, bodies: *const CheckedBodies, root: CIR.Expr.Idx, stack: *std.ArrayList(CIR.Expr.Idx), reads: ?ConstReads) Allocator.Error!ValueFormShape {
     stack.clearRetainingCapacity();
     try stack.append(allocator, root);
     var reads_constants = false;
@@ -25943,7 +25942,7 @@ fn valueFormWalk(allocator: Allocator, bodies: CheckedBodies, root: CIR.Expr.Idx
                 // (`publishLiteralConversionRoots`).
                 if (bodies.numeralPlan(raw) != null) return .other;
                 if (builtin.mode == .debug) std.debug.assert(bodies.literalConversionRoot(raw) == null);
-                const builtin_type = checkedConcreteBuiltinForLiteralTarget(bodies.types, bodies.exprType(id)) orelse return .other;
+                const builtin_type = checkedConcreteBuiltinForLiteralTarget(&bodies.types, bodies.exprType(id)) orelse return .other;
                 const target = valueFormNumeralTarget(builtin_type) orelse return .other;
                 switch (target) {
                     // A float literal rounds to its nearest value; it never fails.
@@ -25956,7 +25955,7 @@ fn valueFormWalk(allocator: Allocator, bodies: CheckedBodies, root: CIR.Expr.Idx
             },
             .str => |segments| {
                 if (bodies.quoteIsCustom(raw)) return .other;
-                if (checkedConcreteBuiltinForLiteralTarget(bodies.types, bodies.exprType(id)) != .str) return .other;
+                if (checkedConcreteBuiltinForLiteralTarget(&bodies.types, bodies.exprType(id)) != .str) return .other;
                 for (segments) |segment| {
                     const segment_data = valueFormCandidate(bodies, segment) orelse return .other;
                     if (segment_data != .str_segment) return .other;
@@ -25965,19 +25964,19 @@ fn valueFormWalk(allocator: Allocator, bodies: CheckedBodies, root: CIR.Expr.Idx
             .empty_list, .zero_argument_tag => {},
             // An empty literal at a record type of optional fields builds
             // each field's slot as missing.
-            .empty_record => if (!recordTypeIsClosedAndRequired(bodies.types, bodies.exprType(id), 0)) return .other,
+            .empty_record => if (!recordTypeIsClosedAndRequired(&bodies.types, bodies.exprType(id), 0)) return .other,
             .list => |items| try stack.appendSlice(allocator, items),
             .tuple => |items| try stack.appendSlice(allocator, items),
             .tag => |tag| try stack.appendSlice(allocator, tag.args),
             .record => |record| {
                 if (record.ext != null or record.unsets.len != 0) return .other;
-                if (!recordTypeIsClosedAndRequired(bodies.types, bodies.exprType(id), record.fields.len)) return .other;
+                if (!recordTypeIsClosedAndRequired(&bodies.types, bodies.exprType(id), record.fields.len)) return .other;
                 for (record.fields) |field| try stack.append(allocator, bodies.recordFieldValue(field));
             },
             .nominal => |nominal| {
                 // A builtin nominal other than `Bool` and `Try` has no
                 // backing a construction could build.
-                if (checkedConcreteBuiltinForLiteralTarget(bodies.types, bodies.exprType(id))) |builtin_type| switch (builtin_type) {
+                if (checkedConcreteBuiltinForLiteralTarget(&bodies.types, bodies.exprType(id))) |builtin_type| switch (builtin_type) {
                     .bool, .try_ => {},
                     .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .list, .box, .dict, .set, .iter, .stream, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => return .other,
                 };
@@ -26074,7 +26073,7 @@ const ConstLookupScope = struct {
             .e_lookup_external => |external| {
                 const module_idx = self.module.resolvedImportModule(external.module_idx) orelse return null;
                 const import_artifact = publishImportForModule(self.imports, module_idx) orelse return null;
-                return importedConstRoot(import_artifact.view, @fromBackingInt(@intCast(external.target_node_idx)));
+                return importedConstRoot(&import_artifact.view, @fromBackingInt(@intCast(external.target_node_idx)));
             },
             .e_lookup_associated_resolved => |resolved| {
                 if (resolved.module_identity == env.selfModuleIdentity()) {
@@ -26090,7 +26089,7 @@ const ConstLookupScope = struct {
 
     /// The root of the constant `def` of the imported module `view`, when
     /// the module exports it as a constant.
-    fn importedConstRoot(view: ImportedModuleView, def: CIR.Def.Idx) ?Target {
+    fn importedConstRoot(view: *const ImportedModuleView, def: CIR.Def.Idx) ?Target {
         const template = importedConstTemplateForDef(view, def) orelse return null;
         const root_id = switch (template.const_ref.owner) {
             .top_level_binding => |top_level| view.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse return null,
@@ -26110,7 +26109,7 @@ const ConstLookupScope = struct {
 /// Request eligibility is published already.
 fn completeConstantReadersWithWriter(
     allocator: Allocator,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     roots: []CompileTimeRoot,
     /// The roots, by index, in value form apart from their lookups.
     candidates: []const u32,
@@ -26185,7 +26184,7 @@ fn completeConstantReadersWithWriter(
 
 /// The lookups of value-form expression `expr` that read a constant, in no
 /// particular order (design.md "Value-Form Roots"). `stack` is scratch.
-pub fn appendValueFormConstReads(allocator: Allocator, bodies: CheckedBodies, expr: CIR.Expr.Idx, stack: *std.ArrayList(CIR.Expr.Idx), out: *std.ArrayList(CIR.Expr.Idx)) Allocator.Error!void {
+pub fn appendValueFormConstReads(allocator: Allocator, bodies: *const CheckedBodies, expr: CIR.Expr.Idx, stack: *std.ArrayList(CIR.Expr.Idx), out: *std.ArrayList(CIR.Expr.Idx)) Allocator.Error!void {
     stack.clearRetainingCapacity();
     try stack.append(allocator, expr);
     while (stack.pop()) |id| {
@@ -26206,7 +26205,7 @@ pub fn appendValueFormConstReads(allocator: Allocator, bodies: CheckedBodies, ex
 /// The expression whose parts a value-form expression's value is built
 /// from: the expression itself, or, for a block with no statements, its
 /// final expression, through any number of such blocks.
-pub fn valueFormValueExpr(bodies: CheckedBodies, expr: CIR.Expr.Idx) CIR.Expr.Idx {
+pub fn valueFormValueExpr(bodies: *const CheckedBodies, expr: CIR.Expr.Idx) CIR.Expr.Idx {
     var current = expr;
     while (true) {
         const data = bodies.exprData(current);
@@ -26223,7 +26222,7 @@ pub fn valueFormValueExpr(bodies: CheckedBodies, expr: CIR.Expr.Idx) CIR.Expr.Id
 /// expression of any kind can sit in a root, and some kinds (an associated
 /// lookup or method call not yet resolved) reach the reader only once
 /// publication resolves them.
-fn valueFormCandidate(bodies: CheckedBodies, id: CIR.Expr.Idx) ?checked_bodies_mod.ExprData {
+fn valueFormCandidate(bodies: *const CheckedBodies, id: CIR.Expr.Idx) ?checked_bodies_mod.ExprData {
     switch (bodies.env.store.getExpr(id)) {
         .e_num, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external, .e_block, .e_lookup_local, .e_lookup_external, .e_lookup_associated_resolved => {},
         .e_frac_f32, .e_frac_f64, .e_bytes_literal, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
@@ -26245,7 +26244,7 @@ fn valueFormNumeralTarget(builtin_type: CheckedBuiltinNominal) ?exact_numeral.Ta
 /// every one required: a construction listing `field_count` fields then
 /// gives every field its value, and no field is stored by its presence or
 /// filled from a default.
-fn recordTypeIsClosedAndRequired(view: CheckedTypeStoreView, ty: CheckedTypeId, field_count: usize) bool {
+fn recordTypeIsClosedAndRequired(view: *const CheckedTypeStoreView, ty: CheckedTypeId, field_count: usize) bool {
     var current = ty;
     var count: usize = 0;
     while (true) switch (view.payload(current)) {
@@ -26307,7 +26306,7 @@ pub const CompileTimeRootTable = struct {
         checked_types: *CheckedTypePublication,
         module_index: *const ModuleIndex,
         procedure_templates: *const CheckedProcedureTemplateTable,
-        bodies: CheckedBodies,
+        bodies: *const CheckedBodies,
         imports: []const PublishImportArtifact,
         available_artifacts: []const ImportedModuleView,
     ) Allocator.Error!CompileTimeRootTable {
@@ -27247,7 +27246,7 @@ const NominalFormalReach = struct {
 
 /// Give every procedure template its sealed scheme-variable slots
 /// (`CheckedProcedureTemplate.sealed_slots`).
-fn publishSealedSlots(allocator: Allocator, checked_types: CheckedTypeStoreView, templates: *CheckedProcedureTemplateTable) Allocator.Error!void {
+fn publishSealedSlots(allocator: Allocator, checked_types: *const CheckedTypeStoreView, templates: *CheckedProcedureTemplateTable) Allocator.Error!void {
     var walk = SealedSchemeSlots.init(allocator, checked_types);
     defer walk.deinit();
     var slots: std.ArrayList(u32) = .empty;
@@ -27268,8 +27267,8 @@ fn publishSealedSlots(allocator: Allocator, checked_types: CheckedTypeStoreView,
 /// tail (`sealed_slots`), or that has no scheme of its own
 /// (`TemplateTagTail.no_scheme`) can have one, so only those signatures are
 /// walked.
-fn publishClosedRowNodes(allocator: Allocator, checked_types: CheckedTypeStoreView, templates: *CheckedProcedureTemplateTable) Allocator.Error!void {
-    var walk = ClosedRowNodeWalk{ .allocator = allocator, .types = checked_types };
+fn publishClosedRowNodes(allocator: Allocator, checked_types: *const CheckedTypeStoreView, templates: *CheckedProcedureTemplateTable) Allocator.Error!void {
+    var walk = ClosedRowNodeWalk{ .allocator = allocator, .types = checked_types.* };
     defer walk.deinit();
     var nodes: std.ArrayList(CheckedTypeId) = .empty;
     errdefer nodes.deinit(allocator);
@@ -27696,8 +27695,8 @@ const SealedSchemeSlots = struct {
     const Mode = enum(u3) { argument, ordinary, result };
     const Step = struct { ty: CheckedTypeId, mode: Mode };
 
-    fn init(allocator: Allocator, checked_types: CheckedTypeStoreView) SealedSchemeSlots {
-        return .{ .allocator = allocator, .types = checked_types, .reach = .{ .allocator = allocator, .types = checked_types } };
+    fn init(allocator: Allocator, checked_types: *const CheckedTypeStoreView) SealedSchemeSlots {
+        return .{ .allocator = allocator, .types = checked_types.*, .reach = .{ .allocator = allocator, .types = checked_types.* } };
     }
 
     fn deinit(self: *SealedSchemeSlots) void {
@@ -27868,8 +27867,8 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
     reached: std.ArrayList(CheckedTypeId) = .empty,
     reached_seen: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty,
 
-    pub fn init(allocator: Allocator, checked_types: CheckedTypeStoreView) SealedSchemeVarWalk {
-        return .{ .allocator = allocator, .types = checked_types };
+    pub fn init(allocator: Allocator, checked_types: *const CheckedTypeStoreView) SealedSchemeVarWalk {
+        return .{ .allocator = allocator, .types = checked_types.* };
     }
 
     pub fn deinit(self: *SealedSchemeVarWalk) void {
@@ -28403,7 +28402,7 @@ const TemplateDemandPass = struct {
     }
 
     fn visitExpr(self: *TemplateDemandPass, id: CIR.Expr.Idx, role: ExprRole) Allocator.Error!void {
-        const bodies = self.bodies;
+        const bodies = &self.bodies;
         const data = bodies.exprData(id);
         const ty = bodies.exprType(id);
         // A row-coerced value reaches its parent through its coercion: the
@@ -28612,7 +28611,7 @@ const TemplateDemandPass = struct {
     }
 
     fn visitPattern(self: *TemplateDemandPass, id: CIR.Pattern.Idx, role: PatternRole) Allocator.Error!void {
-        const bodies = self.bodies;
+        const bodies = &self.bodies;
         const pattern_ty = bodies.patternType(id);
         switch (bodies.patternData(id)) {
             .assign, .underscore => switch (role) {
@@ -29270,7 +29269,7 @@ const ExhaustivenessTemplateReachability = struct {
 
 fn publishCheckedExhaustivenessSites(
     allocator: Allocator,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     owner_artifact: canonical.ArtifactRef,
     templates: *const CheckedProcedureTemplateTable,
     compile_time_roots: *const CompileTimeRootTable,
@@ -29456,7 +29455,7 @@ const CheckedTreeOwners = struct {
     /// walked again: that claim walked everything below it.
     /// Nodes wait on an explicit stack, so body nesting never becomes native
     /// call depth.
-    fn claim(self: *CheckedTreeOwners, allocator: Allocator, bodies: CheckedBodies, root: CIR.Expr.Idx, claimant: u32, function_bodies: FunctionBodySearch) Allocator.Error!void {
+    fn claim(self: *CheckedTreeOwners, allocator: Allocator, bodies: *const CheckedBodies, root: CIR.Expr.Idx, claimant: u32, function_bodies: FunctionBodySearch) Allocator.Error!void {
         if (function_bodies == .skip and self.walked_outside_functions.bit_length == 0) {
             try self.walked_outside_functions.resize(allocator, self.node_owners.len, false);
         }
@@ -29633,7 +29632,7 @@ const CheckedTreeOwners = struct {
 /// index in `templates`, in table order.
 fn claimTemplateTrees(
     allocator: Allocator,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     templates: *const CheckedProcedureTemplateTable,
     owners: *CheckedTreeOwners,
 ) Allocator.Error!void {
@@ -29651,7 +29650,7 @@ fn claimTemplateTrees(
 /// checked trees its evaluation contains (`compileTimeRootSourceReplacement`).
 fn claimReplacingRootTrees(
     allocator: Allocator,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     compile_time_roots: *const CompileTimeRootTable,
     root_requests: *const RootRequestTable,
     owners: *CheckedTreeOwners,
@@ -30722,7 +30721,7 @@ pub fn appendImportedTemplateClosureArtifactKeys(
 pub fn appendPlatformRelationDependencyArtifactKeysFromView(
     allocator: Allocator,
     keys: *std.ArrayList(ModuleId),
-    relation_artifact: ImportedModuleView,
+    relation_artifact: *const ImportedModuleView,
     binding: PlatformRequiredBinding,
     binding_relation_closure: ImportedTemplateClosureView,
 ) Allocator.Error!void {
@@ -30737,7 +30736,7 @@ pub fn appendPlatformRelationDependencyArtifactKeysFromView(
 fn appendRelationArtifactExportedValueClosureKeysFromView(
     allocator: Allocator,
     keys: *std.ArrayList(ModuleId),
-    relation_artifact: ImportedModuleView,
+    relation_artifact: *const ImportedModuleView,
     binding: PlatformRequiredBinding,
 ) Allocator.Error!void {
     switch (binding.value_use) {
@@ -31805,7 +31804,7 @@ fn collectLoweringVisibility(
         try appendPlatformRelationDependencyArtifactKeysFromView(
             allocator,
             &relation_keys,
-            relation_view.*,
+            relation_view,
             binding,
             platform_required_bindings.relationClosure(binding),
         );
@@ -33439,7 +33438,7 @@ pub const CheckedModuleArtifact = struct {
     pub fn platformRequirementContextKey(self: *const CheckedModuleArtifact) Allocator.Error!PlatformRequirementContextKey {
         return PlatformRequirementContextKey.compute(
             self.module_identity,
-            try self.platform_required_declarations.identityHash(&self.canonical_names, self.typesView()),
+            try self.platform_required_declarations.identityHash(&self.canonical_names, &self.typesView()),
         );
     }
 
@@ -34103,7 +34102,7 @@ pub const CheckedModuleArtifact = struct {
         return null;
     }
 
-    fn checkedPayloadOrNull(view: CheckedTypeStoreView, ty: CheckedTypeId) ?CheckedTypePayload {
+    fn checkedPayloadOrNull(view: *const CheckedTypeStoreView, ty: CheckedTypeId) ?CheckedTypePayload {
         if (!view.containsId(ty)) return null;
         return view.payload(ty);
     }
@@ -34112,7 +34111,7 @@ pub const CheckedModuleArtifact = struct {
     /// row. Aliases and row extensions are transparent producer topology; a
     /// nominal is not, matching the durable path and Monotype consumer.
     fn checkedEvidenceRecordFieldChild(
-        view: CheckedTypeStoreView,
+        view: *const CheckedTypeStoreView,
         names: *const canonical.CanonicalNameStore,
         root: CheckedTypeId,
         label: canonical.RecordFieldLabelId,
@@ -34149,7 +34148,7 @@ pub const CheckedModuleArtifact = struct {
     /// Resolve one logical tag-payload selection over the published checked
     /// row, with the same alias/extension normalization as record fields.
     fn checkedEvidenceTagPayloadChild(
-        view: CheckedTypeStoreView,
+        view: *const CheckedTypeStoreView,
         names: *const canonical.CanonicalNameStore,
         root: CheckedTypeId,
         label: canonical.TagLabelId,
@@ -34214,51 +34213,51 @@ pub const CheckedModuleArtifact = struct {
         const kind = path_step.kindOrNull() orelse return null;
         switch (kind) {
             .fn_arg => {
-                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                const payload = checkedPayloadOrNull(&view, ty) orelse return null;
                 if (payload != .function) return null;
                 if (path_step.data >= payload.function.args.len) return null;
                 return payload.function.args[path_step.data];
             },
             .fn_ret => {
-                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                const payload = checkedPayloadOrNull(&view, ty) orelse return null;
                 if (payload != .function) return null;
                 return payload.function.ret;
             },
             .alias_arg => {
-                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                const payload = checkedPayloadOrNull(&view, ty) orelse return null;
                 if (payload != .alias) return null;
                 if (path_step.data >= payload.alias.args.len) return null;
                 return payload.alias.args[path_step.data];
             },
             .alias_backing => {
-                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                const payload = checkedPayloadOrNull(&view, ty) orelse return null;
                 if (payload != .alias) return null;
                 return payload.alias.backing;
             },
             .nominal_arg => {
-                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                const payload = checkedPayloadOrNull(&view, ty) orelse return null;
                 if (payload != .nominal) return null;
                 if (path_step.data >= payload.nominal.args.len) return null;
                 return payload.nominal.args[path_step.data];
             },
             .nominal_backing => {
-                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                const payload = checkedPayloadOrNull(&view, ty) orelse return null;
                 if (payload != .nominal) return null;
                 return view.nominalBackingTemplateForPayload(payload.nominal);
             },
             .tuple_elem => {
-                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                const payload = checkedPayloadOrNull(&view, ty) orelse return null;
                 if (payload != .tuple) return null;
                 if (path_step.data >= payload.tuple.len) return null;
                 return payload.tuple[path_step.data];
             },
             .record_field => {
                 if (path_step.data >= self.canonical_names.recordFieldLabelCount()) return null;
-                return checkedEvidenceRecordFieldChild(view, &self.canonical_names, ty, @fromBackingInt(@intCast(path_step.data)));
+                return checkedEvidenceRecordFieldChild(&view, &self.canonical_names, ty, @fromBackingInt(@intCast(path_step.data)));
             },
             // The tag label selects nothing until its payload index does.
             .tag_payload_tag => {
-                _ = checkedPayloadOrNull(view, ty) orelse return null;
+                _ = checkedPayloadOrNull(&view, ty) orelse return null;
                 return ty;
             },
             .tag_payload_index => {
@@ -34266,7 +34265,7 @@ pub const CheckedModuleArtifact = struct {
                 const tag_step = nodes[parent].step;
                 if (tag_step.kindOrNull() != .tag_payload_tag) return null;
                 if (tag_step.data >= self.canonical_names.tagLabelCount()) return null;
-                return checkedEvidenceTagPayloadChild(view, &self.canonical_names, ty, @fromBackingInt(@intCast(tag_step.data)), path_step.data);
+                return checkedEvidenceTagPayloadChild(&view, &self.canonical_names, ty, @fromBackingInt(@intCast(tag_step.data)), path_step.data);
             },
         }
     }
@@ -34286,7 +34285,7 @@ pub const CheckedModuleArtifact = struct {
     /// holds, the record or tag union whose row ends in it, or the variable
     /// itself when a row's composition left the value as that variable
     /// (design.md "Methods On Open Rows").
-    fn evidenceParamDispatchesSlot(types_view: CheckedTypeStoreView, param: static_dispatch.EvidenceParamRecord, slot_ty: CheckedTypeId) bool {
+    fn evidenceParamDispatchesSlot(types_view: *const CheckedTypeStoreView, param: static_dispatch.EvidenceParamRecord, slot_ty: CheckedTypeId) bool {
         if (param.dispatcher_ty == slot_ty) return true;
         if (param.source != .open_row_value) return false;
         var current = param.dispatcher_ty;
@@ -34698,7 +34697,7 @@ pub const CheckedModuleArtifact = struct {
                 if (param.source == .scheme_requirement or slot >= template.scheme_vars.len) {
                     return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(i), .method = param.method };
                 }
-                if (!evidenceParamDispatchesSlot(self.typesView(), param, templates.scheme_vars_pool.items()[template.scheme_vars.start + slot])) {
+                if (!evidenceParamDispatchesSlot(&self.typesView(), param, templates.scheme_vars_pool.items()[template.scheme_vars.start + slot])) {
                     return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(i), .method = param.method };
                 }
             }
@@ -34940,7 +34939,7 @@ pub const CheckedModuleArtifact = struct {
                     return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(scope_index), .method = param.method };
                 };
                 if (param.source == .scheme_requirement or slot >= scope.scheme_vars.len or
-                    !evidenceParamDispatchesSlot(self.typesView(), param, templates.scheme_vars_pool.items()[scope.scheme_vars.start + slot]))
+                    !evidenceParamDispatchesSlot(&self.typesView(), param, templates.scheme_vars_pool.items()[scope.scheme_vars.start + slot]))
                 {
                     return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(scope_index), .method = param.method };
                 }
@@ -35658,7 +35657,7 @@ pub const ImportedModuleView = struct {
     compile_time_root_reads: *const CompileTimeRootReadTable = &no_compile_time_root_reads,
 
     /// The keys of the modules this module imports directly.
-    pub fn directImportKeys(self: ImportedModuleView) []const CheckedModuleArtifactKey {
+    pub fn directImportKeys(self: *const ImportedModuleView) []const CheckedModuleArtifactKey {
         return self.direct_import_module_keys;
     }
 
@@ -35666,7 +35665,7 @@ pub const ImportedModuleView = struct {
     /// link (design.md "Caching Under `.boxy`"): a definition's template and
     /// a top-level constant's entry wrapper by the definition's name, any
     /// other template by its position in the module's table.
-    pub fn templateName(self: ImportedModuleView, id: canonical.CheckedProcedureTemplateId) TemplateName {
+    pub fn templateName(self: *const ImportedModuleView, id: canonical.CheckedProcedureTemplateId) TemplateName {
         const template = self.checked_procedure_templates.get(id);
         const position: TemplateName = .{ .position = @backingInt(id) };
         switch (template.body) {
@@ -35795,7 +35794,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
 }
 
 /// Return checked boundary names for an imported module view.
-pub fn importedNames(view: ImportedModuleView) *const canonical.NameStore {
+pub fn importedNames(view: *const ImportedModuleView) *const canonical.NameStore {
     return view.canonical_names;
 }
 
@@ -35860,13 +35859,13 @@ const CheckedTypeStoreImportProjector = struct {
         allocator: Allocator,
         target_store: *CheckedTypeStore,
         target_names: *canonical.CanonicalNameStore,
-        imported: ImportedModuleView,
+        imported: *const ImportedModuleView,
     ) CheckedTypeStoreImportProjector {
         return .{
             .allocator = allocator,
             .target_store = target_store,
             .target_names = target_names,
-            .imported = imported,
+            .imported = imported.*,
             .preserve_source_instance = false,
             .active = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator),
             .projected = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator),
@@ -35881,7 +35880,7 @@ const CheckedTypeStoreImportProjector = struct {
         allocator: Allocator,
         target_store: *CheckedTypeStore,
         target_names: *canonical.CanonicalNameStore,
-        imported: ImportedModuleView,
+        imported: *const ImportedModuleView,
     ) CheckedTypeStoreImportProjector {
         var projector = init(allocator, target_store, target_names, imported);
         projector.preserve_source_instance = true;
@@ -35894,9 +35893,9 @@ const CheckedTypeStoreImportProjector = struct {
 
     /// Start projecting from `imported` as a fresh projector would, keeping
     /// this one's map storage.
-    fn reset(self: *CheckedTypeStoreImportProjector, imported: ImportedModuleView) void {
+    fn reset(self: *CheckedTypeStoreImportProjector, imported: *const ImportedModuleView) void {
         std.debug.assert(!self.preserve_source_instance);
-        self.imported = imported;
+        self.imported = imported.*;
         self.projected.clearRetainingCapacity();
         self.active.clearRetainingCapacity();
     }
@@ -37481,7 +37480,7 @@ pub fn publishFromTypedModule(
         module,
         &canonical_names,
         &checked_type_publication,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, body_tables),
+        &publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, body_tables),
         &plan_build_data,
     );
     errdefer static_dispatch_plans.deinit(allocator);
@@ -37503,7 +37502,7 @@ pub fn publishFromTypedModule(
         allocator,
         module_identity,
         &canonical_names,
-        checked_types.view(),
+        &checked_types.view(),
         &platform_required_declarations,
         &platform_requirement_relations,
         inputs.platform_app_relation,
@@ -37525,7 +37524,7 @@ pub fn publishFromTypedModule(
         &checked_type_publication,
         module_index,
         &checked_procedure_templates,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, value_form_tables),
+        &publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, value_form_tables),
         inputs.imports,
         inputs.available_artifacts,
     );
@@ -37623,7 +37622,7 @@ pub fn publishFromTypedModule(
     resolved_tables.refs = &resolved_value_refs;
     publishCallableEvalForwarding(
         &callable_eval_templates,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
+        &publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
         &resolved_value_refs,
         &compile_time_roots,
         artifact_key,
@@ -37680,7 +37679,7 @@ pub fn publishFromTypedModule(
     resolved_tables.plans = &static_dispatch_plans;
     var ordinary_diagnostics = try body_analyses.diagnosticErrors(
         allocator,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
+        &publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
         .ordinary,
     );
     defer ordinary_diagnostics.deinit(allocator);
@@ -37692,7 +37691,7 @@ pub fn publishFromTypedModule(
         allocator,
         module,
         &checked_type_publication,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
+        &publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
         &ordinary_diagnostics,
         default_exprs,
         &compile_time_roots,
@@ -37767,7 +37766,7 @@ pub fn publishFromTypedModule(
         &canonical_names,
         owner_artifact,
         &checked_type_publication,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
+        &publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
         &static_dispatch_plans,
         &compile_time_roots,
         &entry_wrappers,
@@ -37779,7 +37778,7 @@ pub fn publishFromTypedModule(
         &canonical_names,
         owner_artifact,
         &checked_type_publication,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
+        &publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
         &static_dispatch_plans,
         &compile_time_roots,
         &entry_wrappers,
@@ -37823,8 +37822,8 @@ pub fn publishFromTypedModule(
         try demand_pass.publish();
     }
     clock.lap(.template_demand);
-    try publishSealedSlots(allocator, checked_types.view(), &checked_procedure_templates);
-    try publishClosedRowNodes(allocator, checked_types.view(), &checked_procedure_templates);
+    try publishSealedSlots(allocator, &checked_types.view(), &checked_procedure_templates);
+    try publishClosedRowNodes(allocator, &checked_types.view(), &checked_procedure_templates);
     template_iterator_refs.deinit(allocator);
     plan_build_data.deinit(allocator);
     clock.lap(.sealed_slots);
@@ -37869,7 +37868,7 @@ pub fn publishFromTypedModule(
     var nested_proc_sites = try NestedProcSiteTable.fromTemplates(
         allocator,
         owner_artifact,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
+        &publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
         default_exprs,
         &compile_time_roots,
         checked_types,
@@ -37907,7 +37906,7 @@ pub fn publishFromTypedModule(
 
     var exhaustiveness_sites = try publishCheckedExhaustivenessSites(
         allocator,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
+        &publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
         owner_artifact,
         &checked_procedure_templates,
         &compile_time_roots,
@@ -38774,7 +38773,7 @@ test "relation projection preserves anonymous row identity and provenance" {
         allocator,
         &target_store,
         &target_names,
-        importedView(&source_artifact),
+        &importedView(&source_artifact),
     );
     defer projector.deinit();
 
@@ -38816,7 +38815,7 @@ test "source-instance projection does not coalesce a solved payload with an equa
         allocator,
         &target,
         &target_names,
-        imported,
+        &imported,
     );
     defer projector.deinit();
 
@@ -41318,7 +41317,7 @@ const SealedSlotsFixture = struct {
     }
 
     fn expectSlots(self: *SealedSlotsFixture, variables: []const CheckedTypeId, root: CheckedTypeId, evidence_params: []const static_dispatch.EvidenceParamRecord, expected: []const u32) (Allocator.Error || error{TestExpectedEqual})!void {
-        var scalar = SealedSchemeVarWalk.init(allocator, self.store.view());
+        var scalar = SealedSchemeVarWalk.init(allocator, &self.store.view());
         defer scalar.deinit();
         var scalar_slots: std.ArrayList(u32) = .empty;
         defer scalar_slots.deinit(allocator);
@@ -41326,7 +41325,7 @@ const SealedSlotsFixture = struct {
             if (try scalar.sealed(variable_id, root, evidence_params)) try scalar_slots.append(allocator, @intCast(slot));
         }
         try std.testing.expectEqualSlices(u32, expected, scalar_slots.items);
-        var batch = SealedSchemeSlots.init(allocator, self.store.view());
+        var batch = SealedSchemeSlots.init(allocator, &self.store.view());
         defer batch.deinit();
         var actual: std.ArrayList(u32) = .empty;
         defer actual.deinit(allocator);
@@ -41550,7 +41549,7 @@ test "sealed slots never step through a named type's recursion" {
         try f.define(right, &.{e}, try f.unionOf(&.{ &.{e}, &.{try f.apply(left, &.{unit})} }, empty));
         const left_root = try f.function(&.{unit}, try f.apply(left, &.{try f.tag(&.{}, a)}));
         const right_root = try f.function(&.{unit}, try f.apply(right, &.{try f.tag(&.{}, a)}));
-        var batch = SealedSchemeSlots.init(SealedSlotsFixture.allocator, f.store.view());
+        var batch = SealedSchemeSlots.init(SealedSlotsFixture.allocator, &f.store.view());
         defer batch.deinit();
         var slots: std.ArrayList(u32) = .empty;
         defer slots.deinit(SealedSlotsFixture.allocator);
@@ -41602,7 +41601,7 @@ test "sealed slot batching restricts hidden callable veto to arguments" {
         try f.expectSlots(&.{ a, b }, try f.function(&.{unit}, mentions_a), &.{}, &.{1});
         const vetoed = try f.function(&.{ a, hidden }, b);
         const eligible = try f.function(&.{unit}, b);
-        var batch = SealedSchemeSlots.init(SealedSlotsFixture.allocator, f.store.view());
+        var batch = SealedSchemeSlots.init(SealedSlotsFixture.allocator, &f.store.view());
         defer batch.deinit();
         var slots: std.ArrayList(u32) = .empty;
         defer slots.deinit(SealedSlotsFixture.allocator);
@@ -41644,7 +41643,7 @@ test "sealed slot batching visits shared type graphs independently of candidate 
     const result = try f.tag(&variables, empty);
     const root = try f.function(&.{ graph, graph }, result);
     const blocked = try f.function(&variables, result);
-    var batch = SealedSchemeSlots.init(allocator, f.store.view());
+    var batch = SealedSchemeSlots.init(allocator, &f.store.view());
     defer batch.deinit();
     var slots: std.ArrayList(u32) = .empty;
     defer slots.deinit(allocator);
@@ -41681,7 +41680,7 @@ test "sealed slot batching stops at disqualifying arguments before unrelated res
         var result = unit;
         for (0..depth) |_| result = try f.tuple(&.{ result, result });
         const root = try f.function(&.{callback}, result);
-        var batch = SealedSchemeSlots.init(allocator, f.store.view());
+        var batch = SealedSchemeSlots.init(allocator, &f.store.view());
         defer batch.deinit();
         var slots: std.ArrayList(u32) = .empty;
         defer slots.deinit(allocator);
@@ -41712,7 +41711,7 @@ test "sealed slot batching releases scratch and partial output under allocation 
     const hidden = try f.nominal(.{ .local_box_payload_capability = .{ .capability = undefined } }, &.{});
     const vetoed = try f.function(&.{ variables[0], hidden }, result);
     const Attempt = struct {
-        fn run(failing: Allocator, view: CheckedTypeStoreView, vars: []const CheckedTypeId, eligible_root: CheckedTypeId, blocked_root: CheckedTypeId, vetoed_root: CheckedTypeId) (Allocator.Error || error{TestExpectedEqual})!void {
+        fn run(failing: Allocator, view: *const CheckedTypeStoreView, vars: []const CheckedTypeId, eligible_root: CheckedTypeId, blocked_root: CheckedTypeId, vetoed_root: CheckedTypeId) (Allocator.Error || error{TestExpectedEqual})!void {
             var batch = SealedSchemeSlots.init(failing, view);
             defer batch.deinit();
             var slots: std.ArrayList(u32) = .empty;
@@ -41731,5 +41730,5 @@ test "sealed slot batching releases scratch and partial output under allocation 
     // As in the publication OOM regression, disallow allocator-dependent
     // in-place growth so the sweep has deterministic allocation points.
     var no_resize = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
-    try std.testing.checkAllAllocationFailures(no_resize.allocator(), Attempt.run, .{ f.store.view(), variables[0..], root, blocked, vetoed });
+    try std.testing.checkAllAllocationFailures(no_resize.allocator(), Attempt.run, .{ &f.store.view(), variables[0..], root, blocked, vetoed });
 }

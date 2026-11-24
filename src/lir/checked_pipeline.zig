@@ -985,7 +985,7 @@ pub const UnitRecord = struct {
     }
 
     /// The unit's own work, excluding the time it waited for its imports.
-    pub fn workNs(self: UnitRecord) u64 {
+    pub fn workNs(self: *const UnitRecord) u64 {
         var total: u64 = 0;
         for (self.steps_ns, 0..) |value, index| {
             if (index == @backingInt(UnitStep.import_wait) or index == @backingInt(UnitStep.queue_wait)) continue;
@@ -1450,7 +1450,7 @@ pub const Observers = struct {
         return observers;
     }
 
-    fn applyTo(self: Observers, target: *TargetConfig) void {
+    fn applyTo(self: *const Observers, target: *TargetConfig) void {
         inline for (@typeInfo(Observers).@"struct".field_names) |field_name| {
             @field(target, field_name) = @field(self, field_name);
         }
@@ -2622,13 +2622,13 @@ pub fn requireHostedProceduresBound(
     }
 
     const root_view = checked.importedView(modules.root.module);
-    const bindings = platformHostedBindings(root_view, modules) orelse return;
+    const bindings = platformHostedBindings(&root_view, modules) orelse return;
 
-    if (!hostedProceduresBound(root_view, bindings)) return error.HostedFunctionNotBound;
-    for (modules.imports) |imported| {
+    if (!hostedProceduresBound(&root_view, bindings)) return error.HostedFunctionNotBound;
+    for (modules.imports) |*imported| {
         if (!hostedProceduresBound(imported, bindings)) return error.HostedFunctionNotBound;
     }
-    for (modules.root.relation_modules) |relation| {
+    for (modules.root.relation_modules) |*relation| {
         if (!hostedProceduresBound(relation, bindings)) return error.HostedFunctionNotBound;
     }
 }
@@ -2636,7 +2636,7 @@ pub fn requireHostedProceduresBound(
 /// The hosted bindings of the one platform module visible to this lowering, or
 /// null when no platform module is in scope and so no section binds anything.
 fn platformHostedBindings(
-    root_view: checked.ImportedModuleView,
+    root_view: *const checked.ImportedModuleView,
     modules: CheckedModuleSet,
 ) ?[]const checked.HostedBinding {
     if (root_view.module_identity.kind == .platform) return root_view.hosted_bindings.bindings.items();
@@ -2650,7 +2650,7 @@ fn platformHostedBindings(
 }
 
 fn hostedProceduresBound(
-    view: checked.ImportedModuleView,
+    view: *const checked.ImportedModuleView,
     bindings: []const checked.HostedBinding,
 ) bool {
     for (view.hosted_procs.procs.items()) |proc| {
@@ -3070,7 +3070,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
         return null;
     }
 
-    fn checkedTypeHasVariable(allocator: Allocator, types: checked.CheckedTypeStoreView, root: checked.CheckedTypeId) Allocator.Error!bool {
+    fn checkedTypeHasVariable(allocator: Allocator, types: *const checked.CheckedTypeStoreView, root: checked.CheckedTypeId) Allocator.Error!bool {
         var visited = collections.DenseMap(checked.CheckedTypeId, void).init(allocator);
         defer visited.deinit();
         var stack = std.ArrayList(checked.CheckedTypeId).empty;
@@ -3361,7 +3361,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                     if (callable_kind_is_template and sub < info.templates.templates.items().len) {
                         const source_fn_ty = info.templates.templates.items()[sub].checked_fn_root;
                         if (info.types.containsId(source_fn_ty)) {
-                            poly = if (try checkedTypeHasVariable(allocator, info.types, source_fn_ty)) 1 else 0;
+                            poly = if (try checkedTypeHasVariable(allocator, &info.types, source_fn_ty)) 1 else 0;
                         }
                     }
                 }

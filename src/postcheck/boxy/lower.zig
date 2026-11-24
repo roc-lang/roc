@@ -684,12 +684,12 @@ pub const Worker = struct {
     needs: ?Tables.Needs = null,
 
     /// The bytes of the worker's procedure identity.
-    pub fn identityBytes(self: Worker, program: *const Program) [32]u8 {
+    pub fn identityBytes(self: *const Worker, program: *const Program) [32]u8 {
         return program.result.store.getProcSpec(self.proc).identity.bytes;
     }
 
     /// The dictionaries a lambda worker captures: every scope's but its own.
-    pub fn capturedDictionaryCount(self: Worker) u32 {
+    pub fn capturedDictionaryCount(self: *const Worker) u32 {
         var count: u32 = 0;
         for (self.dict_scopes) |scope| count += @intCast(scope.len);
         return count - self.own_dicts;
@@ -697,7 +697,7 @@ pub const Worker = struct {
 
     /// The literal arguments a lambda worker captures: every scope's but
     /// its own.
-    pub fn capturedLiteralCount(self: Worker) u32 {
+    pub fn capturedLiteralCount(self: *const Worker) u32 {
         var count: u32 = 0;
         for (self.literal_scopes) |scope| count += @intCast(scope.len);
         return count - self.own_literals;
@@ -821,7 +821,7 @@ pub const LocalScheme = struct {
     /// variable, dictionary, or literal argument. Its procedure is called
     /// and stored like a monomorphic one, though it stays a link of the
     /// evidence chain (`Program.lambdaWorker`).
-    pub fn isEmpty(self: LocalScheme) bool {
+    pub fn isEmpty(self: *const LocalScheme) bool {
         return self.scheme_vars.len == 0 and self.dictionaries.len == 0 and self.literal_requirements.len == 0;
     }
 };
@@ -2106,12 +2106,12 @@ pub const Program = struct {
         };
         const template_key: TemplateKey = .{ .module = key.module, .template = key.template };
         if (self.list_item_slots.get(template_key)) |known| return known;
-        const slot = try self.computeListItemSlot(template_key, target);
+        const slot = try self.computeListItemSlot(template_key, &target);
         try self.list_item_slots.put(self.allocator, template_key, slot);
         return slot;
     }
 
-    fn computeListItemSlot(self: *Program, key: TemplateKey, target: Worker) Allocator.Error!?u32 {
+    fn computeListItemSlot(self: *Program, key: TemplateKey, target: *const Worker) Allocator.Error!?u32 {
         const view = self.module(key.module);
         if (view.view.module_env.module_role != .builtin) return null;
         const template = view.view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
@@ -2252,7 +2252,7 @@ pub const Program = struct {
         sealed_slots: []const u32,
         published: []const checked.CheckedTypeId,
     ) Allocator.Error!void {
-        var walk: checked.ClosedRowNodeWalk = .{ .allocator = self.allocator, .types = self.module(module_index).types() };
+        var walk: checked.ClosedRowNodeWalk = .{ .allocator = self.allocator, .types = self.module(module_index).types().* };
         defer walk.deinit();
         var found: std.ArrayList(checked.CheckedTypeId) = .empty;
         defer found.deinit(self.allocator);
@@ -4792,9 +4792,9 @@ fn createProgram(allocator: Allocator, input: Input) Allocator.Error!*Program {
 fn registerModules(program: *Program) Allocator.Error!void {
     const allocator = program.allocator;
     const input = program.input;
-    _ = try program.modules.add(checked.importedView(input.modules.root.module));
-    for (input.modules.imports) |view| _ = try program.modules.add(view);
-    for (input.modules.root.relation_modules) |view| {
+    _ = try program.modules.add(&checked.importedView(input.modules.root.module));
+    for (input.modules.imports) |*view| _ = try program.modules.add(view);
+    for (input.modules.root.relation_modules) |*view| {
         try program.modules.relations.append(allocator, try program.modules.add(view));
     }
     program.body_indexed = try allocator.alloc(bool, program.modules.views.items.len);
@@ -4808,7 +4808,7 @@ fn registerModules(program: *Program) Allocator.Error!void {
 /// holding fewer.
 pub fn addSchemaModules(program: *Program, views: []const checked.ImportedModuleView) Allocator.Error!void {
     const first = program.modules.views.items.len;
-    for (views) |view| _ = try program.modules.add(view);
+    for (views) |*view| _ = try program.modules.add(view);
     const count = program.modules.views.items.len;
     if (count == first) return;
     program.body_indexed = try program.allocator.realloc(program.body_indexed, count);
@@ -5603,7 +5603,7 @@ test "a generated worker's identity is its content, whatever lowering reaches it
         try test_program.init(allocator, unit);
         defer test_program.deinit();
         const program = test_program.program;
-        const module_index = try program.modules.add(test_program.view(7));
+        const module_index = try program.modules.add(&test_program.view(7));
         const store = &program.store;
         const number = try store.primitive(.u64);
         // The second lowering interns another type first, so the same
@@ -5644,7 +5644,7 @@ test "Boxy field default identity survives substitution and stable type digests"
         defer test_program.deinit();
         const program = test_program.program;
         for (0..2) |index| {
-            _ = try program.modules.add(test_program.view(@intCast(if (round == 0) index + 1 else 2 - index)));
+            _ = try program.modules.add(&test_program.view(@intCast(if (round == 0) index + 1 else 2 - index)));
         }
         const store = &program.store;
         const name = try store.internName("count");
@@ -5681,7 +5681,7 @@ test "Boxy error reachability Program owns one lazy memo and releases it before 
     const program = test_program.program;
     var view = test_program.view(1);
     view.checked_types = checked_types.view();
-    const module = try program.modules.add(view);
+    const module = try program.modules.add(&view);
     defer program.releaseErrorTypes();
     try std.testing.expect(program.error_types == null);
     // Even a lowering that never queried errors can finish without a memo.

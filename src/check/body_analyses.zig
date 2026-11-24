@@ -977,7 +977,7 @@ pub const BodyAnalyses = struct {
         return indexed;
     }
 
-    fn unitFacts(self: *BodyAnalyses, bodies: CheckedBodies, raw_node: u32) Allocator.Error!struct { *const UnitFacts, u32 } {
+    fn unitFacts(self: *BodyAnalyses, bodies: *const CheckedBodies, raw_node: u32) Allocator.Error!struct { *const UnitFacts, u32 } {
         const indexed = self.demanded();
         const unit_id = indexed.index.unitOf(raw_node);
         const facts = try indexed.unit_slots[@backingInt(unit_id)].getOrCompute(
@@ -991,7 +991,7 @@ pub const BodyAnalyses = struct {
 
     const UnitRequest = struct {
         analyses: *BodyAnalyses,
-        bodies: CheckedBodies,
+        bodies: *const CheckedBodies,
         unit: UnitId,
 
         fn compute(request: UnitRequest) Allocator.Error!*UnitFacts {
@@ -1002,13 +1002,13 @@ pub const BodyAnalyses = struct {
     /// The nodes whose own static dispatch cannot run: a dispatch,
     /// `from_numeral` or `from_quote` plan keyed by the node resolves to a
     /// checked error or unreachable.
-    pub fn dispatchCrashes(self: *BodyAnalyses, bodies: CheckedBodies) Allocator.Error!*const NodeBits {
+    pub fn dispatchCrashes(self: *BodyAnalyses, bodies: *const CheckedBodies) Allocator.Error!*const NodeBits {
         return self.dispatch_crashes.getOrCompute(self.io, Allocator.Error, DispatchCrashRequest{ .analyses = self, .bodies = bodies }, DispatchCrashRequest.compute);
     }
 
     const DispatchCrashRequest = struct {
         analyses: *BodyAnalyses,
-        bodies: CheckedBodies,
+        bodies: *const CheckedBodies,
 
         fn compute(request: DispatchCrashRequest) Allocator.Error!*NodeBits {
             const allocator = request.analyses.allocator;
@@ -1019,46 +1019,46 @@ pub const BodyAnalyses = struct {
         }
     };
 
-    pub fn exprDiverges(self: *BodyAnalyses, bodies: CheckedBodies, expr: ExprId, mode: InlineExpectMode) Allocator.Error!bool {
+    pub fn exprDiverges(self: *BodyAnalyses, bodies: *const CheckedBodies, expr: ExprId, mode: InlineExpectMode) Allocator.Error!bool {
         const facts, const position = try self.unitFacts(bodies, @backingInt(expr));
         return facts.flags[position] & divergenceFlag(mode) != 0;
     }
 
-    pub fn statementDiverges(self: *BodyAnalyses, bodies: CheckedBodies, statement: StatementId, mode: InlineExpectMode) Allocator.Error!bool {
+    pub fn statementDiverges(self: *BodyAnalyses, bodies: *const CheckedBodies, statement: StatementId, mode: InlineExpectMode) Allocator.Error!bool {
         const facts, const position = try self.unitFacts(bodies, @backingInt(statement));
         return facts.flags[position] & divergenceFlag(mode) != 0;
     }
 
-    pub fn exprEvaluationMayBeElidedForInspect(self: *BodyAnalyses, bodies: CheckedBodies, expr: ExprId) Allocator.Error!bool {
+    pub fn exprEvaluationMayBeElidedForInspect(self: *BodyAnalyses, bodies: *const CheckedBodies, expr: ExprId) Allocator.Error!bool {
         const facts, const position = try self.unitFacts(bodies, @backingInt(expr));
         return facts.flags[position] & UnitFacts.inspect_elidable != 0;
     }
 
-    pub fn stateMergeBinders(self: *BodyAnalyses, bodies: CheckedBodies, raw_node: u32) Allocator.Error![]const BinderId {
+    pub fn stateMergeBinders(self: *BodyAnalyses, bodies: *const CheckedBodies, raw_node: u32) Allocator.Error![]const BinderId {
         const facts, const position = try self.unitFacts(bodies, raw_node);
         const span = facts.state_merges[position].get() orelse invariant("a state merge was requested for a node that owns none");
         return facts.binders[span.start..][0..span.len];
     }
 
-    pub fn loopMutationBinders(self: *BodyAnalyses, bodies: CheckedBodies, raw_node: u32) Allocator.Error![]const BinderId {
+    pub fn loopMutationBinders(self: *BodyAnalyses, bodies: *const CheckedBodies, raw_node: u32) Allocator.Error![]const BinderId {
         const facts, const position = try self.unitFacts(bodies, raw_node);
         const span = facts.loop_mutations[position].get() orelse invariant("loop mutations were requested for a node that is not a loop");
         return facts.binders[span.start..][0..span.len];
     }
 
-    pub fn exprContainsDiagnosticError(self: *BodyAnalyses, bodies: CheckedBodies, expr: ExprId) Allocator.Error!bool {
+    pub fn exprContainsDiagnosticError(self: *BodyAnalyses, bodies: *const CheckedBodies, expr: ExprId) Allocator.Error!bool {
         const bits = try self.diagnostic_errors.getOrCompute(self.io, Allocator.Error, DiagnosticRequest{ .analyses = self, .bodies = bodies }, DiagnosticRequest.compute);
         return bits.isSet(@backingInt(expr));
     }
 
-    pub fn patternContainsDiagnosticError(self: *BodyAnalyses, bodies: CheckedBodies, pattern: PatternId) Allocator.Error!bool {
+    pub fn patternContainsDiagnosticError(self: *BodyAnalyses, bodies: *const CheckedBodies, pattern: PatternId) Allocator.Error!bool {
         const bits = try self.diagnostic_errors.getOrCompute(self.io, Allocator.Error, DiagnosticRequest{ .analyses = self, .bodies = bodies }, DiagnosticRequest.compute);
         return bits.isSet(@backingInt(pattern));
     }
 
     const DiagnosticRequest = struct {
         analyses: *BodyAnalyses,
-        bodies: CheckedBodies,
+        bodies: *const CheckedBodies,
 
         fn compute(request: DiagnosticRequest) Allocator.Error!*NodeBits {
             const allocator = request.analyses.allocator;
@@ -1069,7 +1069,7 @@ pub const BodyAnalyses = struct {
         }
     };
 
-    pub fn templateHasSingleSourceCall(self: *BodyAnalyses, bodies: CheckedBodies, template: canonical.CheckedProcedureTemplateId) Allocator.Error!bool {
+    pub fn templateHasSingleSourceCall(self: *BodyAnalyses, bodies: *const CheckedBodies, template: canonical.CheckedProcedureTemplateId) Allocator.Error!bool {
         const facts = try self.singleSourceFacts(bodies);
         return std.sort.binarySearch(canonical.CheckedProcedureTemplateId, facts.templates, template, struct {
             fn order(key: canonical.CheckedProcedureTemplateId, item: canonical.CheckedProcedureTemplateId) std.math.Order {
@@ -1078,18 +1078,18 @@ pub const BodyAnalyses = struct {
         }.order) != null;
     }
 
-    pub fn nestedProcSiteIsSingleSourceCall(self: *BodyAnalyses, bodies: CheckedBodies, site: canonical.NestedProcSiteId) Allocator.Error!bool {
+    pub fn nestedProcSiteIsSingleSourceCall(self: *BodyAnalyses, bodies: *const CheckedBodies, site: canonical.NestedProcSiteId) Allocator.Error!bool {
         const facts = try self.singleSourceFacts(bodies);
         return facts.sites[@backingInt(site)];
     }
 
-    fn singleSourceFacts(self: *BodyAnalyses, bodies: CheckedBodies) Allocator.Error!*SingleSourceFacts {
+    fn singleSourceFacts(self: *BodyAnalyses, bodies: *const CheckedBodies) Allocator.Error!*SingleSourceFacts {
         return self.single_source.getOrCompute(self.io, Allocator.Error, SingleSourceRequest{ .analyses = self, .bodies = bodies }, SingleSourceRequest.compute);
     }
 
     const SingleSourceRequest = struct {
         analyses: *BodyAnalyses,
-        bodies: CheckedBodies,
+        bodies: *const CheckedBodies,
 
         fn compute(request: SingleSourceRequest) Allocator.Error!*SingleSourceFacts {
             return computeSingleSourceCalls(request.analyses.allocator, request.bodies);
@@ -1108,7 +1108,7 @@ fn divergenceFlag(mode: InlineExpectMode) u8 {
 /// resolution `selected` accepts.
 fn dispatchNodes(
     allocator: Allocator,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     comptime selected: fn (static_dispatch.CheckedCallResolution) bool,
 ) Allocator.Error!NodeBits {
     const plans = bodies.tables.plans orelse invariant("a body analysis ran without the module's dispatch plans");
@@ -1121,7 +1121,7 @@ fn dispatchNodes(
     return .{ .bits = bits };
 }
 
-fn computeUnitFacts(allocator: Allocator, bodies: CheckedBodies, unit_id: UnitId) Allocator.Error!*UnitFacts {
+fn computeUnitFacts(allocator: Allocator, bodies: *const CheckedBodies, unit_id: UnitId) Allocator.Error!*UnitFacts {
     const index = bodies.index();
     const nodes = index.unitNodeSlice(unit_id);
     const crashes = try bodies.analyses.dispatchCrashes(bodies);
@@ -1169,7 +1169,7 @@ fn computeUnitFacts(allocator: Allocator, bodies: CheckedBodies, unit_id: UnitId
 }
 
 /// The checked expression operands of the dispatch plan at `node`.
-fn appendDispatchOperands(bodies: CheckedBodies, raw_node: u32, out: anytype) Allocator.Error!void {
+fn appendDispatchOperands(bodies: *const CheckedBodies, raw_node: u32, out: anytype) Allocator.Error!void {
     const plans = bodies.tables.plans orelse invariant("a body analysis ran without the module's dispatch plans");
     const plan_id = plans.lookupByNode(raw_node) orelse return;
     const plan = plans.plans.items()[@backingInt(plan_id)];
@@ -1357,7 +1357,7 @@ const DivergenceScan = struct {
     const done: u8 = 8;
 
     allocator: Allocator,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     /// The unit whose nodes `states` covers; null when it covers every node.
     unit: ?UnitId,
     /// The nodes whose own dispatch plan cannot run.
@@ -1646,7 +1646,7 @@ pub const DispatchDivergence = struct {
 /// Each result column has one entry per node of the module.
 pub fn dispatchDivergenceForEvidence(
     allocator: Allocator,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     evidence_crashes: []const bool,
 ) Allocator.Error!DispatchDivergence {
     const index = bodies.index();
@@ -1699,7 +1699,7 @@ const InspectElision = struct {
     const Memo = enum(u8) { unknown, kept, elided };
 
     allocator: Allocator,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     /// Per node of the unit, by position: its answer once known.
     memo: []Memo,
     chain: std.ArrayList(u32) = .empty,
@@ -1767,7 +1767,7 @@ const InspectElision = struct {
 /// so each node is walked only by its nearest enclosing plan owner.
 const ReassignmentPublisher = struct {
     allocator: Allocator,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     unit: UnitId,
     nodes: []const u32,
     state_merges: []OptionalBinderSpan = &.{},
@@ -1815,7 +1815,7 @@ const ReassignmentPublisher = struct {
         append_binders: BinderSpan,
     };
 
-    fn init(allocator: Allocator, bodies: CheckedBodies, unit: UnitId, nodes: []const u32) ReassignmentPublisher {
+    fn init(allocator: Allocator, bodies: *const CheckedBodies, unit: UnitId, nodes: []const u32) ReassignmentPublisher {
         return .{
             .allocator = allocator,
             .bodies = bodies,
@@ -2171,7 +2171,7 @@ pub const DiagnosticMode = enum {
 /// Whether each reached expression contains a diagnostic error: its own
 /// (`ModuleEnv.nodeIsErroneous`, or an expression lowering evaluates as a
 /// runtime error), or one of a node it evaluates or binds.
-pub fn diagnosticErrors(allocator: Allocator, bodies: CheckedBodies, mode: DiagnosticMode) Allocator.Error!NodeBits {
+pub fn diagnosticErrors(allocator: Allocator, bodies: *const CheckedBodies, mode: DiagnosticMode) Allocator.Error!NodeBits {
     const index = bodies.index();
     const node_count = index.node_kinds.len;
     var errors = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
@@ -2235,7 +2235,7 @@ const ConstantGraph = struct {
     lookup_values: collections.DenseMap(u32, ExprId),
     current: ?u32 = null,
 
-    fn init(allocator: Allocator, bodies: CheckedBodies) Allocator.Error!ConstantGraph {
+    fn init(allocator: Allocator, bodies: *const CheckedBodies) Allocator.Error!ConstantGraph {
         var graph = ConstantGraph{
             .allocator = allocator,
             .heads = collections.DenseMap(u32, u32).init(allocator),
@@ -2326,7 +2326,7 @@ const ConstantGraph = struct {
 /// native call depth. A node stops at its first item that contains an error.
 const DiagnosticScan = struct {
     allocator: Allocator,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     errors: std.DynamicBitSetUnmanaged,
     /// The nodes checking recorded as erroneous in their own right.
     erroneous: *const std.DynamicBitSetUnmanaged,
@@ -2618,7 +2618,7 @@ const DiagnosticScan = struct {
 /// once, as the function of a call. Dev builds inline by these facts rather
 /// than by how many callers one program has, so the decision is the same in
 /// every program that links the code (design.md "Object cache").
-fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocator.Error!*SingleSourceFacts {
+fn computeSingleSourceCalls(allocator: Allocator, bodies: *const CheckedBodies) Allocator.Error!*SingleSourceFacts {
     const tables = bodies.tables;
     const templates = tables.templates orelse invariant("single-source calls were computed without the module's templates");
     const refs = tables.refs orelse invariant("single-source calls were computed without the module's value references");
@@ -2750,7 +2750,7 @@ const SourceCallShapes = struct {
 
     const LocalLookup = struct { expr: u32, pattern: u32 };
 
-    fn collect(allocator: Allocator, bodies: CheckedBodies) Allocator.Error!SourceCallShapes {
+    fn collect(allocator: Allocator, bodies: *const CheckedBodies) Allocator.Error!SourceCallShapes {
         const index = bodies.index();
         var shapes = SourceCallShapes{
             .callees = try std.DynamicBitSetUnmanaged.initEmpty(allocator, index.node_kinds.len),
