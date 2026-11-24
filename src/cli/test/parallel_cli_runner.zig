@@ -723,6 +723,7 @@ const CustomCase = enum {
     boxy_padded_records_wasm_dev,
     boxy_padded_records_wasm_size,
     issue_10827_private_compiler_support,
+    issue_13195_wasm_unreached_provide,
     issue_11134_wasm_post_llvm_pipeline,
     macos_output_basename_reproducible,
     default_platform_crash_x64musl,
@@ -5702,6 +5703,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: LLVM size wasm32 links the Boxy runtime", .backend = .size, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=size", "--no-cache", "--output=boxed_closure_size.wasm" }, .roc_file = "test/wasm/boxed_closure_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "UnresolvedBuiltinImport" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: LLVM speed wasm32 links the Boxy runtime", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=speed", "--no-cache", "--output=boxed_closure_speed.wasm" }, .roc_file = "test/wasm/boxed_closure_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "UnresolvedBuiltinImport" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10827: Roc compiler support is private from a strong-intrinsic wasm host", .backend = .dev, .body = .{ .custom = .issue_10827_private_compiler_support } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13195: a wasm32 module leaves out a provide its exports do not reach and the hosted import it calls", .backend = .dev, .body = .{ .custom = .issue_13195_wasm_unreached_provide } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11134: wasm speed uses explicit post-LLVM passes", .backend = .speed, .body = .{ .custom = .issue_11134_wasm_post_llvm_pipeline } },
     // issue 10951: https://github.com/roc-lang/roc/issues/10951
     // The wasm32 linker exports exactly what the platform header's `exports:`
@@ -7430,6 +7432,7 @@ fn runCustomCase(
         .boxy_padded_records_wasm_dev => customBoxyPaddedRecordsWasm(io, allocator, &env, &timer, timeout_ms, "--opt=dev"),
         .boxy_padded_records_wasm_size => customBoxyPaddedRecordsWasm(io, allocator, &env, &timer, timeout_ms, "--opt=size"),
         .issue_10827_private_compiler_support => customIssue10827PrivateCompilerSupport(io, allocator, &env, &timer, timeout_ms),
+        .issue_13195_wasm_unreached_provide => customIssue13195WasmUnreachedProvide(io, allocator, &env, &timer, timeout_ms),
         .issue_11134_wasm_post_llvm_pipeline => customWasmPostLlvmPipeline(io, allocator, &env, &timer, timeout_ms),
         .macos_output_basename_reproducible => customMacosOutputBasenameReproducible(io, allocator, &env, &timer, timeout_ms),
         .default_platform_crash_x64musl => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .x64musl, .crash),
@@ -15894,6 +15897,67 @@ fn customIssue10827PrivateCompilerSupport(
         return customFailure(allocator, timer, "final wasm exposed the compiler-rt __multi3 name", .{});
     }
 
+    return null;
+}
+
+/// A platform provides `roc_used` and `roc_unused`, its host's one export
+/// calls only the first, and the second calls a hosted function the host
+/// leaves to the embedder. The module must instantiate with no imports,
+/// under each way a dev build links (LLD without a cache, composed images
+/// with one), and `run` must return the app's 42.
+fn customIssue13195WasmUnreachedProvide(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "issue-13195.wasm" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate issue 13195 output path: {}", .{err});
+    defer allocator.free(output_path);
+    const output_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate issue 13195 output argument: {}", .{err});
+    defer allocator.free(output_arg);
+
+    const links = [_][]const []const u8{
+        &.{ "build", "--target=wasm32", "--opt=dev", "--no-cache", output_arg },
+        &.{ "build", "--target=wasm32", "--opt=dev", "--specialize=no", output_arg },
+    };
+    for (links) |args| {
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = args,
+            .roc_file = "test/wasm/issue_13195_unreached_provide/app.roc",
+            .exit = .success,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+            .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+        })) |failure| return failure;
+
+        const wasm_bytes = std.Io.Dir.cwd().readFileAlloc(io, output_path, allocator, .unlimited) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read issue 13195 wasm output: {}", .{err});
+        defer allocator.free(wasm_bytes);
+        var module_def = bytebox.createModuleDefinition(allocator, .{ .debug_name = "issue_13195" }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to create wasm decoder: {}", .{err});
+        defer module_def.destroy();
+        module_def.decode(wasm_bytes) catch |err|
+            return customFailure(allocator, timer, "generated invalid wasm {s}: {}", .{ output_path, err });
+        if (module_def.imports.functions.items.len != 0) {
+            return customFailure(allocator, timer, "the module imports the function {s}, which only an unreached provide calls", .{module_def.imports.functions.items[0].names.import_name});
+        }
+        var module_instance = bytebox.createModuleInstance(.Stack, module_def, allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to create wasm instance: {}", .{err});
+        defer module_instance.destroy();
+        module_instance.instantiate(.{ .stack_size = 1024 * 256 }) catch |err|
+            return customFailure(allocator, timer, "the module does not instantiate without imports: {}", .{err});
+        const run = module_instance.getFunctionHandle("run") catch |err|
+            return customFailure(allocator, timer, "the module lost its declared run export: {}", .{err});
+        var params: [0]bytebox.Val = undefined;
+        var returns: [1]bytebox.Val = undefined;
+        _ = module_instance.invoke(run, &params, &returns, .{}) catch |err|
+            return customFailure(allocator, timer, "run failed: {}", .{err});
+        if (returns[0].I64 != 42) {
+            return customFailure(allocator, timer, "run returned {d}, expected 42", .{returns[0].I64});
+        }
+    }
     return null;
 }
 
