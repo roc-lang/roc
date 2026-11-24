@@ -91,6 +91,7 @@ pub const epochs = @import("epochs.zig");
 pub const EpochSet = epochs.EpochSet;
 pub const EpochColumn = epochs.EpochColumn;
 pub const EpochMap = epochs.EpochMap;
+pub const EpochMapPool = epochs.EpochMapPool;
 /// Append-only columns that grow on virtual reservations without copying.
 pub const ReservedList = @import("ReservedList.zig").ReservedList;
 pub const ReservedColumns = @import("ReservedList.zig").ReservedColumns;

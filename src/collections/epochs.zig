@@ -618,6 +618,23 @@ pub fn EpochMap(comptime Key: type, comptime V: type) type {
             return .{ .map = self };
         }
 
+        pub fn constKeyIterator(self: *const Self) ConstKeyIterator {
+            return .{ .map = self };
+        }
+
+        /// Iterates the keys of a map it cannot change.
+        pub const ConstKeyIterator = struct {
+            map: *const Self,
+            position: usize = 0,
+
+            pub fn next(self: *ConstKeyIterator) ?Key {
+                if (self.position >= self.map.keys.items.len) return null;
+                const key = self.map.keys.items[self.position];
+                self.position += 1;
+                return key;
+            }
+        };
+
         /// Like `DenseMap`'s iterators, these copy each key, so a key pointer
         /// stays valid while the map grows, and entries inserted during
         /// iteration are visited too.
@@ -671,6 +688,57 @@ pub fn EpochMap(comptime Key: type, comptime V: type) type {
             self.slots = try self.allocator.realloc(self.slots, new_len);
             for (self.slots[old_len..]) |*slot| slot.* = .{ .stamp = 0, .value = undefined };
             storage_work.add(.bytes_filled, (new_len - old_len) * @sizeOf(u32));
+        }
+    };
+}
+
+/// A pool of reusable `EpochMap`s for passes that repeatedly need short-lived
+/// maps over one domain that outlives them. A fresh map would allocate and
+/// clear a column spanning the domain on first use; a pooled map keeps its
+/// column, so acquiring one costs an epoch advance. The pool hands out maps by
+/// value, so nested scopes may acquire further maps while an outer one is
+/// still in use, and each nesting depth keeps a column of its own.
+pub fn EpochMapPool(comptime Key: type, comptime V: type) type {
+    return struct {
+        const Self = @This();
+
+        pub const Map = EpochMap(Key, V);
+
+        /// Maps kept beyond this many are freed on release instead of pooled.
+        const max_pooled = 8;
+
+        allocator: Allocator,
+        maps: [max_pooled]Map = undefined,
+        len: usize = 0,
+
+        pub fn init(allocator: Allocator) Self {
+            return .{ .allocator = allocator };
+        }
+
+        pub fn deinit(self: *Self) void {
+            for (self.maps[0..self.len]) |*map| map.deinit();
+            self.* = undefined;
+        }
+
+        /// An empty map, reusing a pooled map's storage when one is available.
+        pub fn acquire(self: *Self) Map {
+            if (self.len > 0) {
+                self.len -= 1;
+                return self.maps[self.len];
+            }
+            return Map.init(self.allocator);
+        }
+
+        /// Return an acquired map to the pool. The caller's map is consumed.
+        pub fn release(self: *Self, map: *Map) void {
+            if (self.len == max_pooled) {
+                map.deinit();
+                return;
+            }
+            map.clearRetainingCapacity();
+            self.maps[self.len] = map.*;
+            self.len += 1;
+            map.* = undefined;
         }
     };
 }
@@ -1004,4 +1072,23 @@ test "an epoch map key beyond its column after a clear is absent" {
     try testing.expect(!result.found_existing);
     result.value_ptr.* = 4;
     try testing.expectEqual(@as(?u32, 4), map.get(9));
+}
+
+test "an epoch map pool hands out empty maps that keep their columns, nested or not" {
+    var pool = EpochMapPool(u32, void).init(testing.allocator);
+    defer pool.deinit();
+    var outer = pool.acquire();
+    try outer.put(40, {});
+    var inner = pool.acquire();
+    try testing.expect(!inner.contains(40));
+    try inner.put(7, {});
+    pool.release(&inner);
+    try testing.expect(outer.contains(40));
+    pool.release(&outer);
+    var again = pool.acquire();
+    defer pool.release(&again);
+    try testing.expect(again.slots.len > 40);
+    try testing.expect(!again.contains(40));
+    try testing.expect(!again.contains(7));
+    try testing.expectEqual(@as(usize, 0), again.count());
 }

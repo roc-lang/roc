@@ -1609,10 +1609,14 @@ plain_wait_pending: std.ArrayListUnmanaged(Var) = .empty,
 plain_wait_seen: collections.DenseMapUnmanaged(Var, void) = .empty,
 /// The variables `collectReachableVarsExcluding` has yet to visit.
 reachable_pending: std.ArrayListUnmanaged(Var) = .empty,
+/// Reachable-variable sets lent to one query at a time
+/// (`collectReachableVars` and its callers); a query nested in another
+/// acquires a set of its own.
+reach_sets: collections.EpochMapPool(Var, void),
 /// The variables a frozen scheme's relation reaches
 /// (`collectFrozenRelationEnclosingVars`), and those an enclosing variable
 /// reaches once its rank is given back (`restoreEnclosingVarRanks`).
-frozen_relation_reachable: collections.DenseMap(Var, void),
+frozen_relation_reachable: collections.EpochMap(Var, void),
 /// The expression that fails when a requirement a row variable holds fails,
 /// keyed by the requirement's callable var: the first one it was held with,
 /// which for a requirement copied from a scheme is the use that instantiated
@@ -1667,7 +1671,7 @@ rejected_tuple_accesses: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
 /// Scratch for the ambiguity judgment: the pinnable set (every resolved var
 /// some caller can still pin) of one judgment event. Init-allocated; cleared
 /// and rebuilt per event.
-pinnable_vars: collections.DenseMap(Var, void),
+pinnable_vars: collections.EpochMap(Var, void),
 /// Scratch for the ambiguity verdict apply: dispatcher vars already reported,
 /// shared by the instantiation and creation applies to avoid double-reporting.
 reported_dispatch_vars: collections.DenseMap(Var, void),
@@ -1677,7 +1681,7 @@ ambiguity_verdict_vars: collections.DenseMap(Var, void),
 /// Scratch for the ambiguity judgment: vars an outside caller can pin through
 /// the judged scheme's complete interface, including expected result types
 /// (rebuilt per judgment event).
-external_pinnable: collections.DenseMap(Var, void),
+external_pinnable: collections.EpochMap(Var, void),
 /// Per-event traversal memo keyed by both reachable var and opaque receiver.
 /// Different receiver exclusions cannot share visitation state, while repeated
 /// requirements with the same receiver can reuse the completed walk.
@@ -1689,15 +1693,15 @@ scheme_relation_reachability: std.AutoHashMap(SchemeReachabilityVisit, void),
 /// of their closure, while the plain walks' membership early-return is only
 /// sound over sets whose every member carries its full closure. Consumers merge
 /// this overlay into their set once all plain walks into it have run.
-scheme_relation_reachable_vars: collections.DenseMap(Var, void),
+scheme_relation_reachable_vars: collections.EpochMap(Var, void),
 /// Scratch for `defaultLiteralsAtGeneralizationBoundary`: reachable-var
 /// closure of the def root(s) being generalized (constraint-signature edges
 /// included).
-boundary_reachable_vars: collections.DenseMap(Var, void),
+boundary_reachable_vars: collections.EpochMap(Var, void),
 /// Scratch for `boundaryDefaultLeaksIntoSignature`: closure of one boundary
 /// literal's constraint signatures, intersected with
 /// `boundary_reachable_vars` to detect interface leaks.
-boundary_leak_vars: collections.DenseMap(Var, void),
+boundary_leak_vars: collections.EpochMap(Var, void),
 // Literal-defaulting scratch (front-loaded; cleared per round/use). Reused across
 // the per-def/finalize defaulting passes—see runLiteralDefaultingRounds. Safe as
 // shared fields despite that function's cascade reentrancy: every buffer is cleared
@@ -1709,7 +1713,7 @@ literal_defaulting_seen_roots: collections.DenseMap(Var, void),
 literal_defaulting_reaches: std.AutoHashMapUnmanaged(LiteralReach, void) = .empty,
 /// The gathered literals that wait this round.
 literal_defaulting_waiting: collections.DenseMap(Var, void),
-literal_defaulting_footprint: collections.DenseMap(Var, void),
+literal_defaulting_footprint: collections.EpochMap(Var, void),
 /// The round's pending use copies of scheme requirements, chained per
 /// still-flex receiver root (`indexPendingRequirementCopies`). A copy is
 /// detached from its receiver's descriptor, so this index is how defaulting
@@ -2231,6 +2235,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .plain_wait_pending = .scratch,
     .plain_wait_seen = .scratch,
     .reachable_pending = .scratch,
+    .reach_sets = .scratch,
     .frozen_relation_reachable = .scratch,
     .open_row_failure_exprs = .keyed,
     .interpolation_dispatchers = .keyed,
@@ -5024,7 +5029,7 @@ fn initAssumePrepared(
         .retired_operand_sequences = collections.DenseMap(CIR.Expr.Idx, RetiredOperandSequence).init(gpa),
         .binder_source_exprs = collections.DenseMap(CIR.Pattern.Idx, CIR.Expr.Idx).init(gpa),
         .has_can_diagnostics = if (cir.store.scratch) |scratch| scratch.diagnostics.top() > 0 else false,
-        .pinnable_vars = collections.DenseMap(Var, void).init(gpa),
+        .pinnable_vars = collections.EpochMap(Var, void).init(gpa),
         .use_instance_by_fn_var = collections.DenseMap(Var, u32).init(gpa),
         .own_dispatch_exprs = collections.DenseMap(Var, CIR.Expr.Idx).init(gpa),
         .callee_use_calls = collections.DenseMap(CIR.Expr.Idx, CIR.Expr.Idx).init(gpa),
@@ -5032,17 +5037,18 @@ fn initAssumePrepared(
         .reach_free_schemes = collections.DenseMap(Var, void).init(gpa),
         .link_var_map = collections.EpochMap(Var, Var).init(gpa),
         .scratch_deferred_placeholders = collections.DenseMap(Var, Var).init(gpa),
-        .frozen_relation_reachable = collections.DenseMap(Var, void).init(gpa),
+        .frozen_relation_reachable = collections.EpochMap(Var, void).init(gpa),
+        .reach_sets = collections.EpochMapPool(Var, void).init(gpa),
         .reported_dispatch_vars = collections.DenseMap(Var, void).init(gpa),
         .ambiguity_verdict_vars = collections.DenseMap(Var, void).init(gpa),
-        .external_pinnable = collections.DenseMap(Var, void).init(gpa),
+        .external_pinnable = collections.EpochMap(Var, void).init(gpa),
         .scheme_relation_reachability = std.AutoHashMap(SchemeReachabilityVisit, void).init(gpa),
-        .scheme_relation_reachable_vars = collections.DenseMap(Var, void).init(gpa),
-        .boundary_reachable_vars = collections.DenseMap(Var, void).init(gpa),
-        .boundary_leak_vars = collections.DenseMap(Var, void).init(gpa),
+        .scheme_relation_reachable_vars = collections.EpochMap(Var, void).init(gpa),
+        .boundary_reachable_vars = collections.EpochMap(Var, void).init(gpa),
+        .boundary_leak_vars = collections.EpochMap(Var, void).init(gpa),
         .literal_defaulting_seen_roots = collections.DenseMap(Var, void).init(gpa),
         .literal_defaulting_waiting = collections.DenseMap(Var, void).init(gpa),
-        .literal_defaulting_footprint = collections.DenseMap(Var, void).init(gpa),
+        .literal_defaulting_footprint = collections.EpochMap(Var, void).init(gpa),
         .literal_defaulting_receiver_copy_heads = collections.DenseMap(Var, u32).init(gpa),
         .literal_defaulting_joined_receivers = collections.DenseMap(Var, void).init(gpa),
         .alt_pattern_baseline = std.AutoHashMap(u32, MatchAltBaselineEntry).init(gpa),
@@ -18941,8 +18947,8 @@ fn copiedRequirementFailure(
     } };
     const scheme_requirement = source orelse return failure;
 
-    var scheme_vars = collections.DenseMap(Var, void).init(self.gpa);
-    defer scheme_vars.deinit();
+    var scheme_vars = self.reach_sets.acquire();
+    defer self.reach_sets.release(&scheme_vars);
     try self.collectReachableVars(scheme_requirement.scheme_root, &scheme_vars);
     var requirement_vars = collections.DenseMap(Var, void).init(self.gpa);
     defer requirement_vars.deinit();
@@ -20181,11 +20187,12 @@ fn instantiationArgumentsCanPin(
     const expr_idx = instantiation_expr orelse return false;
     const func = self.functionTypeFromVar(ModuleEnv.varFrom(expr_idx)) orelse return false;
 
-    self.var_set.clearRetainingCapacity();
+    var reached = self.reach_sets.acquire();
+    defer self.reach_sets.release(&reached);
     for (self.types.sliceVars(func.args)) |arg| {
-        try self.collectReachableVars(arg, &self.var_set);
+        try self.collectReachableVars(arg, &reached);
     }
-    return self.var_set.contains(resolved_var);
+    return reached.contains(resolved_var);
 }
 
 /// The generalization-time ambiguity rule. Runs immediately after a
@@ -20462,9 +20469,10 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
 
             var arg_region: ?Region = null;
             for (self.cir.store.sliceExpr(call.args)) |arg_idx| {
-                self.var_set.clearRetainingCapacity();
-                try self.collectDataReachableVars(ModuleEnv.varFrom(arg_idx), &self.var_set);
-                if (self.var_set.contains(resolved.var_)) {
+                var reached = self.reach_sets.acquire();
+                defer self.reach_sets.release(&reached);
+                try self.collectDataReachableVars(ModuleEnv.varFrom(arg_idx), &reached);
+                if (reached.contains(resolved.var_)) {
                     arg_region = self.cir.store.getExprRegion(arg_idx);
                     break;
                 }
@@ -20545,8 +20553,8 @@ fn checkInstantiatedStaticDispatchConstraints(
     defer instantiated_fns.deinit();
     var pending_creation_materializations: std.ArrayListUnmanaged(DefaultMaterialization) = .empty;
     defer pending_creation_materializations.deinit(self.gpa);
-    var materialization_footprint = collections.DenseMap(Var, void).init(self.gpa);
-    defer materialization_footprint.deinit();
+    var materialization_footprint = self.reach_sets.acquire();
+    defer self.reach_sets.release(&materialization_footprint);
     const materialization_records_start = self.default_decided_records.items.len;
     var dispatchers_indexed: usize = 0;
     var materializations_checked: usize = 0;
@@ -20890,7 +20898,7 @@ fn applyCreationAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
 /// Collect, into `out`, `var_`'s resolved id and every resolved var id
 /// structurally reachable from it (tuples, records, tag payloads, function args
 /// and rets). Used to mark complete scheme interfaces and local pinning sources.
-fn collectReachableVars(self: *Self, var_: Var, out: *collections.DenseMap(Var, void)) std.mem.Allocator.Error!void {
+fn collectReachableVars(self: *Self, var_: Var, out: *collections.EpochMap(Var, void)) std.mem.Allocator.Error!void {
     return self.collectReachableVarsExcluding(var_, null, out);
 }
 
@@ -20898,7 +20906,7 @@ fn collectReachableVarsExcluding(
     self: *Self,
     root: Var,
     excluded_root: ?Var,
-    out: *collections.DenseMap(Var, void),
+    out: *collections.EpochMap(Var, void),
 ) std.mem.Allocator.Error!void {
     const pending = &self.reachable_pending;
     pending.clearRetainingCapacity();
@@ -20958,7 +20966,7 @@ fn collectReachableVarsExcluding(
     }
 }
 
-fn collectDataReachableVars(self: *Self, root: Var, out: *collections.DenseMap(Var, void)) std.mem.Allocator.Error!void {
+fn collectDataReachableVars(self: *Self, root: Var, out: *collections.EpochMap(Var, void)) std.mem.Allocator.Error!void {
     var pending: std.ArrayList(Var) = .empty;
     defer pending.deinit(self.gpa);
     try pending.append(self.gpa, root);
@@ -27204,8 +27212,8 @@ fn closeTopLevelValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     defer tails.deinit(self.gpa);
     var unions: std.ArrayListUnmanaged(Var) = .empty;
     defer unions.deinit(self.gpa);
-    var data_vars = collections.DenseMap(Var, void).init(self.gpa);
-    defer data_vars.deinit();
+    var data_vars = self.reach_sets.acquire();
+    defer self.reach_sets.release(&data_vars);
     for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
         const def = self.cir.store.getDef(def_idx);
         if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) continue;
@@ -27273,7 +27281,7 @@ fn closeTopLevelValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 fn closeTopLevelValuePayloads(
     self: *Self,
     value_var: Var,
-    data_vars: *collections.DenseMap(Var, void),
+    data_vars: *collections.EpochMap(Var, void),
     unions: *std.ArrayListUnmanaged(Var),
     env: *Env,
 ) std.mem.Allocator.Error!void {
@@ -46176,7 +46184,7 @@ fn isReceiverCopyCallable(self: *Self, receiver: Var, fn_var: Var) bool {
 fn collectConstraintSignatureReachable(
     self: *Self,
     constraint_range: StaticDispatchConstraint.SafeList.Range,
-    out: *collections.DenseMap(Var, void),
+    out: *collections.EpochMap(Var, void),
 ) std.mem.Allocator.Error!void {
     out.clearRetainingCapacity();
     for (self.types.sliceStaticDispatchConstraints(constraint_range)) |constraint| {
@@ -47049,8 +47057,8 @@ fn replaceNestedTemplatesAtBoundary(
     const rank = env.rank();
     try self.collectSameMethodCopies(roots, rank, copies);
     if (copies.items.len == 0) return;
-    var interface_vars = collections.DenseMap(Var, void).init(self.gpa);
-    defer interface_vars.deinit();
+    var interface_vars = self.reach_sets.acquire();
+    defer self.reach_sets.release(&interface_vars);
     var interface_collected = false;
     var rewritten: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
     defer rewritten.deinit(self.gpa);
@@ -47154,7 +47162,7 @@ fn appendTemplatesBetween(
 fn nestedTemplateEscapes(
     self: *Self,
     template_root: Var,
-    interface_vars: *const collections.DenseMap(Var, void),
+    interface_vars: *const collections.EpochMap(Var, void),
 ) bool {
     for (self.type_schemes.items) |scheme| {
         if (!interface_vars.contains(self.types.resolveVar(scheme.root_var).var_)) continue;
@@ -47579,7 +47587,7 @@ fn retireResolvedTypeSchemeRequirements(self: *Self) Allocator.Error!void {
 fn requirementCallableIsAttached(
     self: *Self,
     requirement: SchemeDispatchRequirement,
-    published_vars: *const collections.DenseMap(Var, void),
+    published_vars: *const collections.EpochMap(Var, void),
 ) bool {
     const receiver = self.types.resolveVar(requirement.receiver_var);
     if (receiver.desc.rank != .generalized) return false;
@@ -47595,7 +47603,7 @@ fn requirementCallableIsAttached(
 fn requirementHasPublishedStructuralOrigin(
     self: *Self,
     requirement: SchemeDispatchRequirement,
-    published_vars: *const collections.DenseMap(Var, void),
+    published_vars: *const collections.EpochMap(Var, void),
 ) bool {
     const receiver = self.types.resolveVar(requirement.receiver_var);
     const origin_receiver = self.types.resolveVar(requirement.structural_origin.receiver_var);
@@ -47635,8 +47643,8 @@ fn retireStructurallyPublishedTypeSchemeRequirements(
     const boundary_rank = env.rank();
     if (self.type_schemes.items.len == 0) return;
 
-    var published_vars = collections.DenseMap(Var, void).init(self.gpa);
-    defer published_vars.deinit();
+    var published_vars = self.reach_sets.acquire();
+    defer self.reach_sets.release(&published_vars);
     for (roots) |root| {
         try self.collectReachableVars(root.interface, &published_vars);
     }
@@ -47724,11 +47732,11 @@ fn retireStructurallyPublishedTypeSchemeRequirements(
 /// scheme rooted at `scheme_root` does not reach through its type and the
 /// constraints on it.
 fn requirementReachesUnrootedSchemeVar(self: *Self, scheme_root: Var, requirement: SchemeDispatchRequirement) Allocator.Error!bool {
-    var rooted = collections.DenseMap(Var, void).init(self.gpa);
-    defer rooted.deinit();
+    var rooted = self.reach_sets.acquire();
+    defer self.reach_sets.release(&rooted);
     try self.collectReachableVars(scheme_root, &rooted);
-    var reached = collections.DenseMap(Var, void).init(self.gpa);
-    defer reached.deinit();
+    var reached = self.reach_sets.acquire();
+    defer self.reach_sets.release(&reached);
     try self.collectReachableVars(requirement.constraint.fn_var, &reached);
     var iter = reached.iterator();
     while (iter.next()) |entry| {
@@ -47927,8 +47935,8 @@ fn copyRelationToEnclosingScope(
     env: *Env,
 ) Allocator.Error!void {
     const rank = env.rank();
-    var relation_vars = collections.DenseMap(Var, void).init(self.gpa);
-    defer relation_vars.deinit();
+    var relation_vars = self.reach_sets.acquire();
+    defer self.reach_sets.release(&relation_vars);
     try self.collectReachableVars(requirement.receiver_var, &relation_vars);
     try self.collectReachableVars(requirement.constraint.fn_var, &relation_vars);
     if (!self.refinableVarsEscapeRank(&relation_vars, rank)) return;
@@ -48075,12 +48083,12 @@ fn laterUseCanRefine(self: *Self, var_: Var) bool {
 /// instantiates and checks against the where clause.
 fn codecRelationVarsIntersect(
     self: *Self,
-    relation: *const collections.DenseMap(Var, void),
-    interface: *const collections.DenseMap(Var, void),
+    relation: *const collections.EpochMap(Var, void),
+    interface: *const collections.EpochMap(Var, void),
     method: Ident.Idx,
 ) Allocator.Error!bool {
-    var declared = collections.DenseMap(Var, void).init(self.gpa);
-    defer declared.deinit();
+    var declared = self.reach_sets.acquire();
+    defer self.reach_sets.release(&declared);
     var keys = relation.constKeyIterator();
     while (keys.next()) |var_| {
         switch (self.types.resolveVar(var_).desc.content) {
@@ -48106,7 +48114,7 @@ fn codecRelationVarsIntersect(
 /// Whether any refinable var in `vars` belongs to a definition enclosing the
 /// boundary at `rank`. The outermost rank is the module's own scope, which no
 /// definition's scheme encloses.
-fn refinableVarsEscapeRank(self: *Self, vars: *const collections.DenseMap(Var, void), rank: Rank) bool {
+fn refinableVarsEscapeRank(self: *Self, vars: *const collections.EpochMap(Var, void), rank: Rank) bool {
     var iter = vars.constKeyIterator();
     while (iter.next()) |var_| {
         if (!self.laterUseCanRefine(var_)) continue;
@@ -48123,7 +48131,7 @@ fn refinableVarsEscapeRank(self: *Self, vars: *const collections.DenseMap(Var, v
 fn codecInputsAreSettledAtBoundary(
     self: *Self,
     constraint: StaticDispatchConstraint,
-    inputs: *collections.DenseMap(Var, void),
+    inputs: *collections.EpochMap(Var, void),
     rank: Rank,
 ) Allocator.Error!bool {
     const factory = self.types.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse return false;
@@ -48172,10 +48180,10 @@ fn captureSchemeDispatchRequirements(
     if (self.probe_depth != 0) {
         base.invariant("{s}", .{"scheme requirements cannot be captured inside a solver probe"});
     }
-    var codec_relation_vars = collections.DenseMap(Var, void).init(self.gpa);
-    defer codec_relation_vars.deinit();
-    var interface_vars = collections.DenseMap(Var, void).init(self.gpa);
-    defer interface_vars.deinit();
+    var codec_relation_vars = self.reach_sets.acquire();
+    defer self.reach_sets.release(&codec_relation_vars);
+    var interface_vars = self.reach_sets.acquire();
+    defer self.reach_sets.release(&interface_vars);
     var interface_collected = false;
 
     const rank = env.rank();
@@ -48391,8 +48399,8 @@ fn settleBoundaryLocalDerivedCodecRecords(
     defer exts.deinit(self.gpa);
     var kinds = std.ArrayList(Var).empty;
     defer kinds.deinit(self.gpa);
-    var interface_vars = collections.DenseMap(Var, void).init(self.gpa);
-    defer interface_vars.deinit();
+    var interface_vars = self.reach_sets.acquire();
+    defer self.reach_sets.release(&interface_vars);
     var interface_collected = false;
 
     var shape_exts = std.ArrayList(Var).empty;
@@ -48490,7 +48498,7 @@ fn settleBoundaryLocalDerivedCodecRecords(
 fn appendBoundaryLocalKinds(
     self: *Self,
     candidates: []const Var,
-    interface_vars: *const collections.DenseMap(Var, void),
+    interface_vars: *const collections.EpochMap(Var, void),
     rank: Rank,
     out: *std.ArrayList(Var),
 ) Allocator.Error!void {
@@ -58619,8 +58627,8 @@ fn decideUnreachedOpenRowsAtBoundary(self: *Self, roots: []const BoundaryRoot, e
     if (self.open_row_holders.items.len == 0 or !env.var_pool.generalizesInnermostScope()) return;
     std.debug.assert(self.probe_depth == 0 and !self.commit_probe_active);
     const rank = env.rank();
-    var reached = collections.DenseMap(Var, void).init(self.gpa);
-    defer reached.deinit();
+    var reached = self.reach_sets.acquire();
+    defer self.reach_sets.release(&reached);
     var candidates = collections.DenseMap(Var, void).init(self.gpa);
     defer candidates.deinit();
     var write: usize = 0;
@@ -59046,8 +59054,8 @@ fn collectDerivedCodecOpenRecordParts(
     exts: ?*std.ArrayList(Var),
     kinds: ?*std.ArrayList(Var),
 ) Allocator.Error!void {
-    var reachable = collections.DenseMap(Var, void).init(self.gpa);
-    defer reachable.deinit();
+    var reachable = self.reach_sets.acquire();
+    defer self.reach_sets.release(&reachable);
     try self.collectDataReachableVars(root, &reachable);
 
     const exts_start = if (exts) |out| out.items.len else 0;
