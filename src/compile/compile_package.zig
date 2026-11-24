@@ -607,7 +607,7 @@ pub fn typeCheckModule(
     var work: CheckingWork = .{};
     if (restored) |metadata| {
         try metadata.install(&checker, &typing_context.?.scope);
-        env.types.seal();
+        try env.types.seal();
         work.typing_hits += 1;
     } else {
         const timer = CheckingTimer.start(io);

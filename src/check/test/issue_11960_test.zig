@@ -11,7 +11,9 @@ test "issue 11960: concrete builtin list literals allocate only their source typ
         try source.appendSlice(gpa, "values : List(U8)\nvalues = [");
         for (0..count) |_| try source.appendSlice(gpa, "7,");
         try source.appendSlice(gpa, "]\n");
-        var env = try TestEnv.init("Test", source.items);
+        // The store stays open: sealing drops the descriptors class merges
+        // orphaned, and this counts every descriptor checking created.
+        var env = try TestEnv.initOpen("Test", source.items);
         defer env.deinit();
         try env.assertNoErrors();
         for (env.module_env.store.literalDispatchPlans()) |plan| {

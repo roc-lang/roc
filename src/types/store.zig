@@ -531,7 +531,7 @@ pub const Store = struct {
 
             // slots & descriptors
             .descs = .{ .backing = .{} },
-            .slots = .{ .payloads = .{}, .kinds = .{} },
+            .slots = .{ .words = .{} },
             .root_metas = .{},
             .union_ranks = .{},
 
@@ -569,37 +569,239 @@ pub const Store = struct {
     /// stage only reads it. Sealing happens at a quiescent point, with no
     /// probe open and no class frozen. All checked outputs have been
     /// published; only checker-owned buffers are released at this boundary.
-    pub fn seal(self: *Self) void {
+    pub fn seal(self: *Self) Allocator.Error!void {
         if (std.debug.runtime_safety) {
             if (self.sealed) base.invariant("a type store was sealed twice", .{});
             if (self.probe_open) base.invariant("a type store was sealed with a probe open", .{});
             if (self.frozen_anchors.count() != 0) base.invariant("a type store was sealed with a frozen class", .{});
         }
-        self.sealGrowingColumns();
         self.releaseCheckerBuffers();
+        try self.sealGrowingColumns();
         self.sealed = true;
     }
 
-    /// Forbid growth of every growing column.
-    fn sealGrowingColumns(self: *Self) void {
-        self.slots.payloads.seal();
-        self.slots.kinds.seal();
-        self.descs.backing.seal();
-        self.root_metas.seal();
-        self.union_ranks.seal();
-        self.vars.seal();
-        self.record_fields.seal();
-        self.tags.seal();
+    /// Forbid growth of every growing column and release every column's
+    /// unused capacity.
+    fn sealGrowingColumns(self: *Self) Allocator.Error!void {
+        try self.slots.words.seal(self.gpa);
+        try self.descs.backing.seal(self.gpa);
+        try self.root_metas.seal(self.gpa);
+        try self.union_ranks.seal(self.gpa);
+        try self.vars.seal(self.gpa);
+        try self.record_fields.seal(self.gpa);
+        try self.tags.seal(self.gpa);
+        inline for (.{
+            &self.interpolation_parts,
+            &self.numeral_infos,
+            &self.interpolation_metadata,
+            &self.static_dispatch_constraints,
+            &self.nominal_decls,
+            &self.nominal_decl_index,
+            &self.derived_map_plans,
+            &self.nominal_identities,
+            &self.alias_identities,
+        }) |list| try list.releaseUnusedCapacity(self.gpa);
     }
 
-    /// Canonicalize the solved store (`canonicalizeForSeal`), then seal it.
-    /// Checking calls this once, when it finishes a module.
+    /// Forbid growth of the columns of a store loaded over serialized bytes.
+    fn sealLoadedColumns(self: *Self) void {
+        self.slots.words.sealView();
+        self.descs.backing.sealView();
+        self.root_metas.sealView();
+        self.union_ranks.sealView();
+        self.vars.sealView();
+        self.record_fields.sealView();
+        self.tags.sealView();
+    }
+
+    /// Canonicalize the solved store (`canonicalizeForSeal`), drop what no
+    /// class reaches any more (`compactForSeal`), then seal it. Checking
+    /// calls this once, when it finishes a module.
     pub fn canonicalizeAndSeal(self: *Self, idents: *const base.Ident.Store) Allocator.Error!void {
         // Canonicalization renumbers classes, and no report reads a closing
         // once checking has finished.
         self.tag_tail_closings.clearRetainingCapacity();
         try self.canonicalizeForSeal(idents);
-        self.seal();
+        try self.compactForSeal();
+        try self.seal();
+    }
+
+    /// Drop every descriptor no slot names and every pool entry no live
+    /// descriptor reaches, keeping the survivors in their order. Solving
+    /// leaves both behind: a class merge orphans one side's descriptor, and
+    /// unification, instantiation and row flattening append the rows that
+    /// replace the ones a class held before. A pool entry is reached when a
+    /// live descriptor's range, a reached tag's payload range or a nominal
+    /// declaration's formals cover it, together with the length slot before a
+    /// vars range. Every surviving range stays contiguous, so each stored
+    /// start moves to the number of surviving entries before it and every
+    /// count stays the same; ranges that shared entries still share them.
+    /// Descriptors are renumbered the same way, with the slots and the
+    /// derived-map selections that name them. Static-dispatch constraints and
+    /// their interpolation and numeral metadata stay as they are: checked
+    /// outputs (`ModuleEnv.binding_scheme_codec_requirements`) and constraints
+    /// name them by index.
+    fn compactForSeal(self: *Self) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        const gpa = self.gpa;
+        const desc_count: usize = @intCast(self.descs.backing.len());
+
+        var live = try std.DynamicBitSetUnmanaged.initEmpty(gpa, desc_count);
+        defer live.deinit(gpa);
+        for (self.slots.words.items) |word| switch (SlotStore.decode(word)) {
+            .root => |desc_idx| live.set(@backingInt(desc_idx)),
+            .redirect => {},
+        };
+
+        var vars_reached = try std.DynamicBitSetUnmanaged.initEmpty(gpa, self.vars.items.len);
+        defer vars_reached.deinit(gpa);
+        var fields_reached = try std.DynamicBitSetUnmanaged.initEmpty(gpa, self.record_fields.len());
+        defer fields_reached.deinit(gpa);
+        var tags_reached = try std.DynamicBitSetUnmanaged.initEmpty(gpa, self.tags.len());
+        defer tags_reached.deinit(gpa);
+
+        const words = self.descs.backing.items(.word);
+        const payloads = self.descs.backing.items(.payload);
+        var live_descs = live.iterator(.{});
+        while (live_descs.next()) |index| {
+            const payload = payloads[index];
+            switch (words[index].kind) {
+                .flex, .rigid, .field_presence, .err, .empty_record, .empty_tag_union => {},
+                .alias, .nominal_type => self.markStoredVarRange(&vars_reached, payload[1]),
+                .tuple => self.markStoredVarRange(&vars_reached, payload[0]),
+                .fn_pure, .fn_effectful, .fn_unbound => {
+                    self.markStoredVarRange(&vars_reached, payload[0]);
+                    self.markStoredVarRange(&vars_reached, payload[2]);
+                },
+                .record => markPoolRange(&fields_reached, payload[0], payload[1]),
+                .tag_union => {
+                    markPoolRange(&tags_reached, payload[0], payload[1]);
+                    if (payload[1] != 0) {
+                        for (self.tags.items(.args)[payload[0]..][0..payload[1]]) |args| markVarRange(&vars_reached, args);
+                    }
+                },
+            }
+        }
+        for (self.nominal_decls.items()) |decl| markVarRange(&vars_reached, decl.formals);
+
+        const desc_starts = try survivorStarts(gpa, &live);
+        defer gpa.free(desc_starts);
+        const var_starts = try survivorStarts(gpa, &vars_reached);
+        defer gpa.free(var_starts);
+        const field_starts = try survivorStarts(gpa, &fields_reached);
+        defer gpa.free(field_starts);
+        const tag_starts = try survivorStarts(gpa, &tags_reached);
+        defer gpa.free(tag_starts);
+
+        // Descriptors: rewrite each survivor's ranges, then move it down.
+        live_descs = live.iterator(.{});
+        while (live_descs.next()) |index| {
+            var payload = payloads[index];
+            switch (words[index].kind) {
+                .flex, .rigid, .field_presence, .err, .empty_record, .empty_tag_union => {},
+                .alias, .nominal_type => payload[1] = var_starts[payload[1]],
+                .tuple => payload[0] = var_starts[payload[0]],
+                .fn_pure, .fn_effectful, .fn_unbound => {
+                    payload[0] = var_starts[payload[0]];
+                    payload[2] = var_starts[payload[2]];
+                },
+                .record => payload[0] = movedStart(field_starts, payload[0], payload[1]),
+                .tag_union => payload[0] = movedStart(tag_starts, payload[0], payload[1]),
+            }
+            const to = desc_starts[index];
+            words[to] = words[index];
+            payloads[to] = payload;
+            self.root_metas.set(@fromBackingInt(to), self.root_metas.get(@fromBackingInt(@intCast(index))));
+        }
+        const live_count = desc_starts[desc_count];
+        self.descs.backing.shrinkRetainingCapacity(live_count);
+        self.root_metas.shrinkRetainingCapacity(live_count);
+        for (self.slots.words.items) |*word| switch (SlotStore.decode(word.*)) {
+            .root => |desc_idx| word.* = SlotStore.encode(.{ .root = @fromBackingInt(desc_starts[@backingInt(desc_idx)]) }),
+            .redirect => {},
+        };
+
+        // Derived-map selections are sorted by class; renumbering keeps the
+        // order, and a dead class's selection has no class left to select.
+        var plans_kept: usize = 0;
+        for (self.derived_map_plans.items()) |entry| {
+            const index: usize = @backingInt(entry.class);
+            if (!live.isSet(index)) continue;
+            self.derived_map_plans.items()[plans_kept] = .{ .class = @fromBackingInt(desc_starts[index]), .plan = entry.plan };
+            plans_kept += 1;
+        }
+        self.derived_map_plans.shrinkRetainingCapacity(plans_kept);
+
+        // Pools: move each reached entry down, rewriting the vars ranges that
+        // tags and nominal declarations hold.
+        var kept: usize = 0;
+        for (self.vars.items, 0..) |entry, index| {
+            if (!vars_reached.isSet(index)) continue;
+            self.vars.items[kept] = entry;
+            kept += 1;
+        }
+        self.vars.shrinkRetainingCapacity(kept);
+
+        kept = 0;
+        for (0..self.record_fields.len()) |index| {
+            if (!fields_reached.isSet(index)) continue;
+            self.record_fields.set(@fromBackingInt(@intCast(kept)), self.record_fields.get(@fromBackingInt(@intCast(index))));
+            kept += 1;
+        }
+        self.record_fields.shrinkRetainingCapacity(kept);
+
+        kept = 0;
+        for (0..self.tags.len()) |index| {
+            if (!tags_reached.isSet(index)) continue;
+            var tag = self.tags.get(@fromBackingInt(@intCast(index)));
+            tag.args.start = @fromBackingInt(movedStart(var_starts, @backingInt(tag.args.start), tag.args.count));
+            self.tags.set(@fromBackingInt(@intCast(kept)), tag);
+            kept += 1;
+        }
+        self.tags.shrinkRetainingCapacity(kept);
+
+        for (self.nominal_decls.items()) |*decl| decl.formals.start = @fromBackingInt(movedStart(var_starts, @backingInt(decl.formals.start), decl.formals.count));
+    }
+
+    /// Where a range of `count` entries starting at `start` moves to. An
+    /// empty range addresses no entry, so only its count is kept: its start
+    /// need not lie inside the pool.
+    fn movedStart(starts: []const u32, start: u32, count: u32) u32 {
+        if (count == 0 and start >= starts.len) return 0;
+        return starts[start];
+    }
+
+    /// Mark `count` pool entries from `start`.
+    fn markPoolRange(reached: *std.DynamicBitSetUnmanaged, start: u32, count: u32) void {
+        if (count != 0) reached.setRangeValue(.{ .start = start, .end = start + count }, true);
+    }
+
+    /// Mark the vars range a stored descriptor keeps as `stored`
+    /// (`storedVarRange`) and the length slot before it.
+    fn markStoredVarRange(self: *const Self, reached: *std.DynamicBitSetUnmanaged, stored: u32) void {
+        if (stored == stored_empty_var_range) return;
+        markPoolRange(reached, stored - 1, self.varRange(stored).count + 1);
+    }
+
+    /// Mark a vars range held whole (a tag's payload, a declaration's
+    /// formals) and the length slot `appendVars` wrote before it.
+    fn markVarRange(reached: *std.DynamicBitSetUnmanaged, range: VarSafeList.Range) void {
+        if (range.count == 0) return;
+        markPoolRange(reached, @backingInt(range.start) - 1, range.count + 1);
+    }
+
+    /// For every position of a pool, and one past its end, how many reached
+    /// entries come before it: where an entry, or a range starting there,
+    /// moves to when the unreached entries are dropped.
+    fn survivorStarts(gpa: Allocator, reached: *const std.DynamicBitSetUnmanaged) Allocator.Error![]u32 {
+        const starts = try gpa.alloc(u32, reached.bit_length + 1);
+        var count: u32 = 0;
+        for (0..reached.bit_length) |index| {
+            starts[index] = count;
+            if (reached.isSet(index)) count += 1;
+        }
+        starts[reached.bit_length] = count;
+        return starts;
     }
 
     /// The last write to a solved store. Every slot comes to name its
@@ -892,10 +1094,10 @@ pub const Store = struct {
     /// error state. Descriptors not referenced by a current slot are rollback
     /// history and do not affect checked output.
     pub fn containsErrContent(self: *const Self) bool {
-        for (self.slots.kinds.items, self.slots.payloads.items) |kind, payload| {
-            switch (kind) {
-                .root => {
-                    if (self.descs.getWord(@fromBackingInt(payload)).kind == .err) return true;
+        for (self.slots.words.items) |word| {
+            switch (SlotStore.decode(word)) {
+                .root => |desc_idx| {
+                    if (self.descs.getWord(desc_idx).kind == .err) return true;
                 },
                 .redirect => {},
             }
@@ -4142,7 +4344,7 @@ pub const Store = struct {
                 .alias_identities = self.alias_identities.deserializeInto(base_addr),
                 .invalid_nominal_decl_written = self.invalid_nominal_decl_written != 0,
             };
-            if (access == .sealed) store.sealGrowingColumns();
+            if (access == .sealed) store.sealLoadedColumns();
             return store;
         }
     };
@@ -4151,59 +4353,50 @@ pub const Store = struct {
 /// Which `Slot` variant a slot holds.
 const SlotKind = enum(u8) { root, redirect };
 
-/// Represents a store of slots. A slot's variant and its payload (a
-/// `DescStore.Idx` or a redirect `Var`) are parallel columns, so the payload
-/// column holds no tag padding.
+/// Represents a store of slots. Each slot is one word: its payload (a
+/// `DescStore.Idx` or a redirect `Var`) with the top bit set for a redirect.
+/// Every variable and descriptor index is below that bit (the checked
+/// synthesized-type bit, see `representativeVar`).
 const SlotStore = struct {
     const Self = @This();
 
-    payloads: collections.ReservedList(u32, .dense),
-    kinds: collections.ReservedList(SlotKind, .dense),
+    words: collections.ReservedList(u32, .dense),
+
+    /// The bit marking a redirect.
+    const redirect_bit: u32 = @as(u32, 1) << 31;
 
     fn init(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
-        var payloads = try collections.ReservedList(u32, .dense).initCapacity(gpa, capacity);
-        errdefer payloads.deinit(gpa);
-        return .{
-            .payloads = payloads,
-            .kinds = try collections.ReservedList(SlotKind, .dense).initCapacity(gpa, capacity),
-        };
+        return .{ .words = try collections.ReservedList(u32, .dense).initCapacity(gpa, capacity) };
     }
 
     fn deinit(self: *Self, gpa: Allocator) void {
-        self.payloads.deinit(gpa);
-        self.kinds.deinit(gpa);
+        self.words.deinit(gpa);
     }
 
     fn clone(self: *const Self, gpa: Allocator) Allocator.Error!Self {
-        var payloads = try self.payloads.clone(gpa);
-        errdefer payloads.deinit(gpa);
-        return .{ .payloads = payloads, .kinds = try self.kinds.clone(gpa) };
+        return .{ .words = try self.words.clone(gpa) };
     }
 
     fn len(self: *const Self) u64 {
-        return self.payloads.len();
+        return self.words.len();
     }
 
     fn ensureTotalCapacity(self: *Self, gpa: Allocator, capacity: usize) Allocator.Error!void {
-        try self.payloads.ensureTotalCapacity(gpa, capacity);
-        try self.kinds.ensureTotalCapacity(gpa, capacity);
+        try self.words.ensureTotalCapacity(gpa, capacity);
     }
 
     fn ensureUnusedCapacity(self: *Self, gpa: Allocator, additional: usize) Allocator.Error!void {
-        try self.payloads.ensureUnusedCapacity(gpa, additional);
-        try self.kinds.ensureUnusedCapacity(gpa, additional);
+        try self.words.ensureUnusedCapacity(gpa, additional);
     }
 
     fn shrinkRetainingCapacity(self: *Self, new_len: usize) void {
-        self.payloads.shrinkRetainingCapacity(new_len);
-        self.kinds.shrinkRetainingCapacity(new_len);
+        self.words.shrinkRetainingCapacity(new_len);
     }
 
     /// Serialized representation of SlotStore
     /// Uses extern struct to guarantee consistent field layout across optimization levels.
     pub const Serialized = extern struct {
-        payloads: collections.ReservedList(u32, .dense).Serialized,
-        kinds: collections.ReservedList(SlotKind, .dense).Serialized,
+        words: collections.ReservedList(u32, .dense).Serialized,
 
         /// Serialize a SlotStore into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -4212,17 +4405,13 @@ const SlotStore = struct {
             allocator: Allocator,
             writer: *collections.CompactWriter,
         ) Allocator.Error!void {
-            try self.payloads.serialize(&slot_store.payloads, allocator, writer);
-            try self.kinds.serialize(&slot_store.kinds, allocator, writer);
+            try self.words.serialize(&slot_store.words, allocator, writer);
         }
 
         /// Deserialize into a SlotStore value (no in-place modification of cache buffer).
         /// The base parameter is the base address of the serialized buffer in memory.
         pub fn deserializeInto(self: *const Serialized, base_addr: usize) SlotStore {
-            return SlotStore{
-                .payloads = self.payloads.deserializeInto(base_addr),
-                .kinds = self.kinds.deserializeInto(base_addr),
-            };
+            return SlotStore{ .words = self.words.deserializeInto(base_addr) };
         }
     };
 
@@ -4234,40 +4423,43 @@ const SlotStore = struct {
 
     /// Insert a value into the store assuming there is capacity
     fn appendAssumeCapacity(self: *Self, typ: Slot) Idx {
-        const safe_idx = self.payloads.appendAssumeCapacity(payloadOf(typ));
-        _ = self.kinds.appendAssumeCapacity(typ);
+        const safe_idx = self.words.appendAssumeCapacity(encode(typ));
         return @fromBackingInt(@intCast(@backingInt(safe_idx)));
     }
 
     /// Set a value in the store
     pub fn set(self: *Self, idx: Idx, val: Slot) void {
-        const i: usize = @backingInt(idx);
-        self.payloads.items[i] = payloadOf(val);
-        self.kinds.items[i] = val;
+        self.words.items[@backingInt(idx)] = encode(val);
     }
 
     /// Get a value from the store
     fn get(self: *const Self, idx: Idx) Slot {
-        const i: usize = @backingInt(idx);
-        const payload = self.payloads.items[i];
-        return switch (self.kinds.items[i]) {
-            .root => .{ .root = @fromBackingInt(payload) },
-            .redirect => .{ .redirect = @fromBackingInt(payload) },
-        };
+        return decode(self.words.items[@backingInt(idx)]);
     }
 
     /// Every slot, in order, as an owned slice.
     fn toOwnedSlots(self: *const Self, gpa: Allocator) Allocator.Error![]Slot {
-        const slots = try gpa.alloc(Slot, self.payloads.items.len);
-        for (slots, 0..) |*slot, i| slot.* = self.get(@fromBackingInt(@intCast(i)));
+        const slots = try gpa.alloc(Slot, self.words.items.len);
+        for (slots, self.words.items) |*slot, word| slot.* = decode(word);
         return slots;
     }
 
-    fn payloadOf(slot: Slot) u32 {
+    fn encode(slot: Slot) u32 {
         return switch (slot) {
-            .root => |desc_idx| @backingInt(desc_idx),
-            .redirect => |var_| @backingInt(var_),
+            .root => |desc_idx| root: {
+                std.debug.assert(@backingInt(desc_idx) & redirect_bit == 0);
+                break :root @backingInt(desc_idx);
+            },
+            .redirect => |var_| redirect: {
+                std.debug.assert(@backingInt(var_) & redirect_bit == 0);
+                break :redirect @backingInt(var_) | redirect_bit;
+            },
         };
+    }
+
+    fn decode(word: u32) Slot {
+        if (word & redirect_bit != 0) return .{ .redirect = @fromBackingInt(word & ~redirect_bit) };
+        return .{ .root = @fromBackingInt(word) };
     }
 
     /// A type-safe index into the store
@@ -4483,7 +4675,7 @@ test "canonicalizing for seal gives children representatives and flattens rows" 
     try std.testing.expectEqualSlices(Var, &.{elem}, store.sliceVars(tags.items(.args)[1]));
 }
 
-test "sealing releases checker-only buffers without allocating" {
+test "sealing releases checker-only buffers and unused column capacity" {
     const Snapshot = struct {
         fn bytes(store: *Store) Allocator.Error![]u8 {
             const allocator = std.testing.allocator;
@@ -4539,12 +4731,9 @@ test "sealing releases checker-only buffers without allocating" {
         try store.static_dispatch_constraint_room.ensureTotalCapacity(gpa, 8);
         try store.static_dispatch_relation_merges.append(gpa, .{ .dropped_fn_var = alias, .retained_fn_var = value });
         try std.testing.expect(counter.allocated_bytes - counter.freed_bytes > solved_bytes);
-        const allocations_before_seal = counter.allocated_bytes;
+        try store.seal();
 
-        store.seal();
-
-        try std.testing.expectEqual(allocations_before_seal, counter.allocated_bytes);
-        try std.testing.expectEqual(solved_bytes, counter.allocated_bytes - counter.freed_bytes);
+        try std.testing.expect(counter.allocated_bytes - counter.freed_bytes < solved_bytes);
         try std.testing.expectEqual(value, store.resolveVar(alias).var_);
         // Storage ownership changes at seal; persisted contents do not.
         const after = try Snapshot.bytes(&store);
@@ -4561,7 +4750,7 @@ fn sealedTestStore(a: *Var, b: *Var) Allocator.Error!Store {
     errdefer store.deinit();
     b.* = try store.fresh();
     a.* = try store.freshRedirect(b.*);
-    store.seal();
+    try store.seal();
     return store;
 }
 
@@ -4658,7 +4847,7 @@ fn sealTwice() Allocator.Error!void {
     var b: Var = undefined;
     var store = try sealedTestStore(&a, &b);
     defer store.deinit();
-    store.seal();
+    try store.seal();
 }
 
 test "sealing a sealed store is a violated invariant" {
@@ -4869,9 +5058,9 @@ fn storageDescIdx(store: *const Store, var_: Var) DescStore.Idx {
 
 /// Whether some slot names `desc_idx`.
 fn descIsNamed(store: *const Store, desc_idx: DescStore.Idx) bool {
-    for (store.slots.kinds.items, store.slots.payloads.items) |kind, payload| {
-        switch (kind) {
-            .root => if (payload == @backingInt(desc_idx)) return true,
+    for (store.slots.words.items) |word| {
+        switch (SlotStore.decode(word)) {
+            .root => |named| if (named == desc_idx) return true,
             .redirect => {},
         }
     }
@@ -5312,10 +5501,10 @@ test "Store empty CompactWriter roundtrip" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(file, io);
+    try sealed_writer.writeGather(file, io);
 
     // Read back
-    const file_size = writer.total_bytes;
+    const file_size = sealed_writer.total_bytes;
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
@@ -5371,10 +5560,10 @@ test "Store basic CompactWriter roundtrip" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(file, io);
+    try sealed_writer.writeGather(file, io);
 
     // Read back
-    const file_size = writer.total_bytes;
+    const file_size = sealed_writer.total_bytes;
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
@@ -5708,15 +5897,18 @@ test "Store comprehensive CompactWriter roundtrip" {
     const serialized = try writer.appendAlloc(gpa, Store.Serialized);
     try serialized.serialize(&original, gpa, &writer);
 
-    // Sealing releases checker state without changing any serialized solved
-    // data. Compare fresh serialization plans on each side of the boundary.
+    // Sealing releases checker state and moves columns into storage that
+    // holds exactly their entries, without changing any serialized solved
+    // data. A serialization plan borrows the columns it was made from, so each
+    // side of the boundary is serialized afresh and only the sealed plan is
+    // written out below.
     const before_seal = try gpa.alloc(u8, writer.total_bytes);
     defer gpa.free(before_seal);
     _ = try writer.writeToBuffer(before_seal);
     try original.freezeClass(flex);
     try original.thawFrozenClasses();
     try original.markSettled(&.{flex});
-    original.seal();
+    try original.seal();
     var sealed_writer = CompactWriter.init();
     defer sealed_writer.deinit(gpa);
     try (try sealed_writer.appendAlloc(gpa, Store.Serialized)).serialize(&original, gpa, &sealed_writer);
@@ -5726,10 +5918,10 @@ test "Store comprehensive CompactWriter roundtrip" {
     try std.testing.expectEqualSlices(u8, before_seal, after_seal);
 
     // Write to file
-    try writer.writeGather(file, io);
+    try sealed_writer.writeGather(file, io);
 
     // Read back
-    const file_size = writer.total_bytes;
+    const file_size = sealed_writer.total_bytes;
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
@@ -5844,10 +6036,10 @@ test "SlotStore.Serialized roundtrip" {
     try serialized_ptr.serialize(&slot_store, arena_allocator, &writer);
 
     // Write to file
-    try writer.writeGather(file, io);
+    try sealed_writer.writeGather(file, io);
 
     // Read back
-    const file_size = writer.total_bytes;
+    const file_size = sealed_writer.total_bytes;
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
     _ = try file.readPositionalAll(io, buffer, 0);
@@ -5911,10 +6103,10 @@ test "DescStore.Serialized roundtrip" {
     try serialized_ptr.serialize(&desc_store, arena_allocator, &writer);
 
     // Write to file
-    try writer.writeGather(file, io);
+    try sealed_writer.writeGather(file, io);
 
     // Read back
-    const file_size = writer.total_bytes;
+    const file_size = sealed_writer.total_bytes;
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
     _ = try file.readPositionalAll(io, buffer, 0);
@@ -5976,10 +6168,10 @@ test "Store.Serialized roundtrip" {
     try serialized_ptr.serialize(&store, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(file, io);
+    try sealed_writer.writeGather(file, io);
 
     // Read back
-    const file_size = writer.total_bytes;
+    const file_size = sealed_writer.total_bytes;
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
     _ = try file.readPositionalAll(io, buffer, 0);
@@ -6164,10 +6356,10 @@ test "Store multiple instances CompactWriter roundtrip" {
     try serialized3.serialize(&store3, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(file, io);
+    try sealed_writer.writeGather(file, io);
 
     // Read back
-    const file_size = writer.total_bytes;
+    const file_size = sealed_writer.total_bytes;
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 

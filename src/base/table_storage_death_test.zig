@@ -32,7 +32,7 @@ fn storeReservedIndex() error{OutOfMemory}!void {
 fn growSealedList() error{OutOfMemory}!void {
     var list = try collections.ReservedList(u32, .dense).init(std.heap.page_allocator, 8);
     _ = try list.append(std.heap.page_allocator, 1);
-    list.seal();
+    try list.seal(std.heap.page_allocator);
     _ = try list.append(std.heap.page_allocator, 2);
 }
 
@@ -42,7 +42,7 @@ fn growSealedBorrowedList() error{OutOfMemory}!void {
     @memset(backing, 7);
     const header: List.Serialized = .{ .offset = 0, .len = backing.len, .capacity = backing.len };
     var view = header.deserializeInto(@intFromPtr(backing.ptr));
-    view.seal();
+    view.sealView();
     _ = try view.append(std.heap.page_allocator, 2);
 }
 
