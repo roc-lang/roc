@@ -1811,6 +1811,7 @@ pub const Builder = struct {
         if (callee == self.worker_id and self.table_local != null and self.isOwnInputs(inputs)) {
             return .{ .recipe = try self.recipes.intern(.{ .scope_table = 0 }) };
         }
+        try self.program.demandBody(callee);
         return .{ .recipe = try self.recipes.intern(.{ .table = .{ .worker = callee, .inputs = inputs } }) };
     }
 
@@ -2923,7 +2924,7 @@ pub const Builder = struct {
             .direct_template => |direct| .{ .worker = try self.program.templateRefWorker(Program.directTemplate(direct.template)) },
             // An exact procedure alias calls what it names.
             .callable_eval_template => |template| if (self.view.view.callable_eval_templates.templates[@backingInt(template)].forwarded_lookup != .none)
-                .{ .alias = try self.aliasCallee(self.module, template) }
+                .{ .alias = try self.aliasCallee(self.module, template, .body) }
             else
                 .{ .callable_eval = .{ .module = self.module, .template = template } },
             .checked_error => null,
@@ -5062,7 +5063,7 @@ pub const Builder = struct {
                     .procedure => |procedure| procedure,
                     .local_proc, .structural, .callable_binding => invariant("a literal argument's edge instantiates no procedure template"),
                 };
-                const callee = try self.program.templateRefWorker(procedure.template);
+                const callee = try self.program.templateRefScope(procedure.template);
                 const subst = table.site_substitutions.items()[node.subst.start..][0..node.subst.len];
                 return switch (node.instantiation) {
                     .alias => try self.enterLiteralAliasTarget(node, callee),
@@ -5083,7 +5084,7 @@ pub const Builder = struct {
             .requirement => |requirement| {
                 const solution = self.view.view.platform_requirement_solutions.lookupByRequiredIndex(requirement.requires_idx) orelse
                     invariant("a requirement edge names no solution of its module");
-                const callee = try self.program.templateRefWorker(self.view.view.checked_procedure_templates.templateRef(self.view.key, requirement.template));
+                const callee = try self.program.templateRefScope(self.view.view.checked_procedure_templates.templateRef(self.view.key, requirement.template));
                 const subst = self.view.view.static_dispatch_plans.site_substitutions.items()[solution.root_subst.start..][0..solution.root_subst.len];
                 const invoked = try self.convert(solution.solved_root);
                 const call_fn = switch (requirement.invokes) {
@@ -5107,7 +5108,7 @@ pub const Builder = struct {
                         },
                         inline .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc, .platform_required_proc => |ref, tag| {
                             const use = if (tag == .platform_required_proc) ref.procedure else ref;
-                            const callee = switch (try self.procedureUseCallee(use)) {
+                            const callee = switch (try self.bindingCallee(use.binding, .scope)) {
                                 .worker => |worker_id| worker_id,
                                 .alias => |alias| {
                                     if (tag == .platform_required_proc) invariant("a platform requirement's use is no literal argument edge");
@@ -5127,7 +5128,7 @@ pub const Builder = struct {
                                 .eval_template => |eval| eval,
                                 .reserved, .stored_const, .unimplemented => invariant("a literal argument's edge uses a constant with no entry procedure"),
                             };
-                            const callee = try self.program.templateRefWorker(eval.entry_template);
+                            const callee = try self.program.templateRefScope(eval.entry_template);
                             return try self.enterSubstitutedWorkerFrame(callee, self.siteSubstitution(expr), self.view.view.static_dispatch_plans.siteEvidence(expr) orelse &.{}, edge, .{ .value = self.bodies().exprType(expr) });
                         },
                         .local_param, .local_value, .local_mutable_version, .pattern_binder, .platform_required_const, .platform_required_declaration, .platform_required_checked_error => invariant("a literal argument's edge uses no procedure"),
@@ -5207,7 +5208,7 @@ pub const Builder = struct {
                     if (!local.is_alias) invariant("an alias chain reaches a non-alias local procedure");
                     alias_step = self.localAliasStep(self.module, local.expr, local.dispatch_scope);
                 },
-                .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |use| switch (try self.procedureUseCallee(use)) {
+                .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |use| switch (try self.bindingCallee(use.binding, .scope)) {
                     .alias => |alias| alias_step = self.callableEvalAliasStep(alias.module, alias.template),
                     .worker => |target| {
                         if (target != callee) invariant("an alias's forwarded lookup reaches another target");
@@ -7250,34 +7251,48 @@ pub const Builder = struct {
     };
 
     pub fn procedureUseCallee(self: *Builder, use: checked.ProcedureUseTemplate) Allocator.Error!Callee {
-        return try self.bindingCallee(use.binding);
+        return try self.bindingCallee(use.binding, .body);
     }
+
+    /// How much of a procedure a reference to it reaches: its body, which a
+    /// call or a function value runs, or only its scope, which a literal
+    /// chain frame enters to convert a literal there.
+    pub const Reach = enum { body, scope };
 
     /// What a procedure binding calls: for an exact procedure alias, the
     /// alias and the worker its chain reaches.
-    pub fn bindingCallee(self: *Builder, binding: @FieldType(checked.ProcedureUseTemplate, "binding")) Allocator.Error!Callee {
+    pub fn bindingCallee(self: *Builder, binding: @FieldType(checked.ProcedureUseTemplate, "binding"), reach: Reach) Allocator.Error!Callee {
         const resolved = self.program.procedureBinding(binding);
         switch (resolved.body) {
-            .direct_template => |direct| return .{ .worker = try self.program.templateRefWorker(Program.directTemplate(direct.template)) },
+            .direct_template => |direct| return .{ .worker = try self.templateRefReached(Program.directTemplate(direct.template), reach) },
             .checked_error => invariant("a call reached a rejected procedure binding"),
             .callable_eval_template => |template_id| {
                 const owner = self.program.module(resolved.module);
                 const template = owner.view.callable_eval_templates.templates[@backingInt(template_id)];
                 if (template.forwarded_lookup == .none) return .{ .callable_eval = .{ .module = resolved.module, .template = template_id } };
-                return .{ .alias = try self.aliasCallee(resolved.module, template_id) };
+                return .{ .alias = try self.aliasCallee(resolved.module, template_id, reach) };
             },
         }
+    }
+
+    /// The worker of the template `ref` names, with its body queued for
+    /// lowering when `reach` is its body.
+    fn templateRefReached(self: *Builder, ref: check.CheckedNames.ProcedureTemplateRef, reach: Reach) Allocator.Error!WorkerId {
+        return switch (reach) {
+            .body => try self.program.templateRefWorker(ref),
+            .scope => try self.program.templateRefScope(ref),
+        };
     }
 
     /// The exact procedure alias `template_id` of `module`, with the worker
     /// its chain reaches. Checking forwards only to a procedure or another
     /// forwarding alias, so a chain ends in no computed callable.
-    pub fn aliasCallee(self: *Builder, module: ModuleIndex, template_id: checked.CallableEvalTemplateId) Allocator.Error!AliasCallee {
+    pub fn aliasCallee(self: *Builder, module: ModuleIndex, template_id: checked.CallableEvalTemplateId, reach: Reach) Allocator.Error!AliasCallee {
         var binding = self.forwardedBinding(module, template_id);
         while (true) {
             const resolved = self.program.procedureBinding(binding);
             switch (resolved.body) {
-                .direct_template => |direct| return .{ .target = try self.program.templateRefWorker(Program.directTemplate(direct.template)), .module = module, .template = template_id },
+                .direct_template => |direct| return .{ .target = try self.templateRefReached(Program.directTemplate(direct.template), reach), .module = module, .template = template_id },
                 .checked_error => invariant("a procedure alias forwards to a rejected binding"),
                 .callable_eval_template => |next| binding = self.forwardedBinding(resolved.module, next),
             }

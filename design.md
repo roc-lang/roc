@@ -18973,6 +18973,17 @@ the edge's literal arguments), follows a forwarded literal requirement into the 
 scheme the same way, and lowers the literal's own conversion plan where it
 ends, unwrapping its `Try` as an in-place conversion does.
 
+Entering a scheme reaches its scope and not its body. A frame reads the
+scheme's variables, dictionary parameters and literal requirements, which
+its worker's record holds before any lowering (`Program.templateScope`), so
+a chain queues no worker it enters: a compile-time program evaluating a
+literal argument root holds the conversion and what the conversion calls,
+never the procedure whose literal it converts or anything only that
+procedure reaches. A body is queued where something needs it: a call, a
+function value, or a type table naming the worker (`Program.demandBody`),
+which is filled from the needs the worker's lowering declares, as the
+declaration table of a local procedure a frame's dictionary calls is.
+
 A root exists once the literal's own type is closed, which says nothing about
 the other types at its edge: `inner({ w: y }, 0)` with `0 : U64` has a root
 while `y` is a variable of the enclosing scheme. The wrapper has no enclosing
@@ -32210,8 +32221,8 @@ staged platform (as `roc test` compiles it) has no platform header in scope,
 and each of its declarations takes its own dispatch slot in a stable order.
 Lowering reaches a hosted procedure wherever code that calls it is lowered,
 whether or not anything runs the call: a compile-time program lowers a
-function value a constant holds, and the scheme a literal argument root
-converts in, without ever calling the hosted procedure.
+function value a constant holds without ever calling the hosted procedure
+the function calls.
 
 ## Root Application Preparation
 
