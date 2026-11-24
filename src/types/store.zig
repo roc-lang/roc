@@ -5501,10 +5501,10 @@ test "Store empty CompactWriter roundtrip" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try sealed_writer.writeGather(file, io);
+    try writer.writeGather(file, io);
 
     // Read back
-    const file_size = sealed_writer.total_bytes;
+    const file_size = writer.total_bytes;
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
@@ -5560,10 +5560,10 @@ test "Store basic CompactWriter roundtrip" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try sealed_writer.writeGather(file, io);
+    try writer.writeGather(file, io);
 
     // Read back
-    const file_size = sealed_writer.total_bytes;
+    const file_size = writer.total_bytes;
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
@@ -6036,10 +6036,10 @@ test "SlotStore.Serialized roundtrip" {
     try serialized_ptr.serialize(&slot_store, arena_allocator, &writer);
 
     // Write to file
-    try sealed_writer.writeGather(file, io);
+    try writer.writeGather(file, io);
 
     // Read back
-    const file_size = sealed_writer.total_bytes;
+    const file_size = writer.total_bytes;
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
     _ = try file.readPositionalAll(io, buffer, 0);
@@ -6103,10 +6103,10 @@ test "DescStore.Serialized roundtrip" {
     try serialized_ptr.serialize(&desc_store, arena_allocator, &writer);
 
     // Write to file
-    try sealed_writer.writeGather(file, io);
+    try writer.writeGather(file, io);
 
     // Read back
-    const file_size = sealed_writer.total_bytes;
+    const file_size = writer.total_bytes;
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
     _ = try file.readPositionalAll(io, buffer, 0);
@@ -6168,10 +6168,10 @@ test "Store.Serialized roundtrip" {
     try serialized_ptr.serialize(&store, gpa, &writer);
 
     // Write to file
-    try sealed_writer.writeGather(file, io);
+    try writer.writeGather(file, io);
 
     // Read back
-    const file_size = sealed_writer.total_bytes;
+    const file_size = writer.total_bytes;
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
     _ = try file.readPositionalAll(io, buffer, 0);
@@ -6356,10 +6356,10 @@ test "Store multiple instances CompactWriter roundtrip" {
     try serialized3.serialize(&store3, gpa, &writer);
 
     // Write to file
-    try sealed_writer.writeGather(file, io);
+    try writer.writeGather(file, io);
 
     // Read back
-    const file_size = sealed_writer.total_bytes;
+    const file_size = writer.total_bytes;
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
