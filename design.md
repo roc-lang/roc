@@ -32810,6 +32810,45 @@ Application `requires` declarations are Roc-internal bindings that never cross
 the host boundary, so they are neither glue layout roots nor part of the glue
 input.
 
+A generated file has one namespace for its top-level names. A generator builds
+most of them by joining other names (a module and a type, a type and a helper
+suffix, a union, a tag and a suffix, a hosted function and a suffix), and it
+declares each of the platform's linker symbols under the symbol's own name.
+Joined names can be equal to each other, to a symbol, and to the names of the
+generator's own runtime support, so each generator states every name it
+declares, and `TypeNamePlan` gives each name to one declaration. A name the
+generator owns yields to a name it does not:
+
+- A linker symbol and a name of the runtime support are both fixed: the
+  platform header chose the first, and host code is written against the
+  second. A symbol that the generated file cannot declare (a keyword of the
+  file's language, a name of its runtime support, or a helper name the
+  generator derives from a type id, a list item type or another symbol) stops
+  the glue run with an error naming the symbol. Which names those are depends
+  on the language the file is written in, so the generator decides, not the
+  platform header check: that check rejects only what no host in any language
+  could define, the runtime symbols and the `roc__` prefix.
+- The names derived from a hosted function or a provided entry yield to the
+  fixed names and to each other: every function or entry involved takes names
+  derived from its hosted index or its place in the provides list.
+- A host type's names yield to all of those and to other host types': a name
+  declared for two host types denotes neither, and both take the names derived
+  from their shape ids, exactly like shapes that share a Roc name.
+- A preferred name is granted only when every name its type would declare
+  under it is free, and an alias is emitted only under a name nothing else
+  declares.
+
+If two declarations still collide under their id-derived names, the glue run
+fails with an error naming both. A generator never emits two declarations
+under one name, and never lets one declaration stand for another.
+
+The members of one record or tag union have a namespace of their own, and a
+generator can spell two of them alike after converting case or escaping a
+reserved word. A spelling two members share denotes neither: each takes it
+followed by a marker and its rank among the members that share it, ordered by
+Roc name, so every place that names a member derives the same name from the
+member names alone.
+
 The platform header maps linker symbols explicitly, symbol-string first, in
 both directions:
 
