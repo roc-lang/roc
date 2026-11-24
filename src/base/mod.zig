@@ -89,7 +89,7 @@ pub const byte_encoding = @import("byte_encoding.zig");
 pub const line_record = @import("line_record.zig");
 
 /// Allocator wrapper that recycles freed large blocks instead of unmapping them.
-pub const LargeBlockAllocator = @import("LargeBlockAllocator.zig");
+pub const LargeBlockAllocator = @import("LargeBlockAllocator.zig").LargeBlockAllocator;
 /// Logical CPU counts used to size worker pools.
 pub const cpu_count = @import("cpu_count.zig");
 /// Developer-only environment variables, read only by compilers built with developer diagnostics.
@@ -97,7 +97,7 @@ pub const dev_diagnostics = @import("dev_diagnostics.zig");
 /// Settings only tests may change; production builds fix them at compile time.
 pub const TestSwitch = @import("test_switch.zig").TestSwitch;
 
-var default_large_blocks: LargeBlockAllocator = LargeBlockAllocator.init(defaultBackingGpa());
+var default_large_blocks: LargeBlockAllocator(defaultBackingGpa()) = .{};
 
 fn defaultBackingGpa() std.mem.Allocator {
     if (builtin.link_libc and !builtin.target.abi.isMusl()) return std.heap.c_allocator;
@@ -119,7 +119,7 @@ test {
     const module_path_mod = @import("module_path.zig");
     std.testing.refAllDecls(ident);
     std.testing.refAllDecls(TextRankCache);
-    std.testing.refAllDecls(LargeBlockAllocator);
+    std.testing.refAllDecls(@import("LargeBlockAllocator.zig"));
     std.testing.refAllDecls(cpu_count);
     std.testing.refAllDecls(dev_diagnostics);
     std.testing.refAllDecls(TypeDigestHasher);

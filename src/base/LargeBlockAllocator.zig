@@ -14,14 +14,14 @@
 //! kernel honors the advice.
 //!
 //! Requests below the threshold, and requests with an alignment above the page
-//! size, go to the backing allocator unchanged.
+//! size, go to the backing allocator unchanged. The backing allocator is a
+//! compile-time parameter, so those requests call it directly rather than
+//! through an `Allocator` interface.
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Alignment = std.mem.Alignment;
 const PageAllocator = std.heap.PageAllocator;
-
-const Self = @This();
 
 /// Requests of at least this many bytes are owned by this allocator.
 /// `SmpAllocator` serves requests of up to half its 64 KiB slab from its size
@@ -65,29 +65,115 @@ const ClassCache = struct {
     }
 };
 
-backing: Allocator,
-classes: [class_count]ClassCache = @splat(.{}),
-/// Bound on `cached_bytes`.
-max_cached_bytes: usize = default_max_cached_bytes,
-/// Bytes of freed blocks currently kept in `classes`.
-cached_bytes: std.atomic.Value(usize) = .init(0),
-
 /// A wrapper that sends small and over-aligned requests to `backing`.
-pub fn init(backing: Allocator) Self {
-    return .{ .backing = backing };
-}
+pub fn LargeBlockAllocator(comptime backing: Allocator) type {
+    return struct {
+        const Self = @This();
 
-/// The `Allocator` interface backed by this wrapper.
-pub fn allocator(self: *Self) Allocator {
-    return .{ .ptr = self, .vtable = &vtable };
-}
+        classes: [class_count]ClassCache = @splat(.{}),
+        /// Bound on `cached_bytes`.
+        max_cached_bytes: usize = default_max_cached_bytes,
+        /// Bytes of freed blocks currently kept in `classes`.
+        cached_bytes: std.atomic.Value(usize) = .init(0),
 
-const vtable: Allocator.VTable = .{
-    .alloc = alloc,
-    .resize = resize,
-    .remap = remap,
-    .free = free,
-};
+        /// The `Allocator` interface backed by this wrapper.
+        pub fn allocator(self: *Self) Allocator {
+            return .{ .ptr = self, .vtable = &vtable };
+        }
+
+        const vtable: Allocator.VTable = .{
+            .alloc = alloc,
+            .resize = resize,
+            .remap = remap,
+            .free = free,
+        };
+
+        fn alloc(ctx: *anyopaque, len: usize, alignment: Alignment, ret_addr: usize) ?[*]u8 {
+            const self: *Self = @ptrCast(@alignCast(ctx));
+            if (!isLarge(len, alignment)) return backing.rawAlloc(len, alignment, ret_addr);
+            const class = classOf(len);
+            if (class > max_class_log2) return mapBlock(len);
+            const cache = &self.classes[class - min_class_log2];
+            cache.lock();
+            if (cache.head) |block| {
+                cache.head = block.next;
+                cache.unlock();
+                _ = self.cached_bytes.fetchSub(classCapacity(class), .monotonic);
+                return @ptrCast(block);
+            }
+            cache.unlock();
+            return mapBlock(classCapacity(class));
+        }
+
+        /// Growth and shrinkage stay in place while the class, and therefore the
+        /// mapped capacity that `free` will derive from the length, is unchanged.
+        fn resize(_: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, ret_addr: usize) bool {
+            const old_large = isLarge(memory.len, alignment);
+            const new_large = isLarge(new_len, alignment);
+            if (!old_large and !new_large) return backing.rawResize(memory, alignment, new_len, ret_addr);
+            if (!old_large or !new_large) return false;
+            const old_class = classOf(memory.len);
+            if (old_class > max_class_log2) {
+                return new_len <= memory.len and classOf(new_len) > max_class_log2;
+            }
+            return classOf(new_len) == old_class;
+        }
+
+        fn remap(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+            const self: *Self = @ptrCast(@alignCast(ctx));
+            const old_large = isLarge(memory.len, alignment);
+            const new_large = isLarge(new_len, alignment);
+            if (!old_large and !new_large) return backing.rawRemap(memory, alignment, new_len, ret_addr);
+            if (!old_large or !new_large) return null;
+            if (resize(ctx, memory, alignment, new_len, ret_addr)) return memory.ptr;
+            const old_class = classOf(memory.len);
+            const new_class = classOf(new_len);
+            if (new_class > max_class_log2 or old_class > max_class_log2) return null;
+            // Growing into a class with a cached block copies into already-faulted
+            // pages; otherwise the kernel moves the mapping without copying.
+            const cache = &self.classes[new_class - min_class_log2];
+            cache.lock();
+            const cached = cache.head;
+            if (cached) |block| {
+                cache.head = block.next;
+            }
+            cache.unlock();
+            if (cached != null) _ = self.cached_bytes.fetchSub(classCapacity(new_class), .monotonic);
+            if (cached) |block| {
+                const dst: [*]u8 = @ptrCast(block);
+                @memcpy(dst[0..@min(memory.len, new_len)], memory.ptr[0..@min(memory.len, new_len)]);
+                free(ctx, memory, alignment, ret_addr);
+                return dst;
+            }
+            const old_aligned: []align(std.heap.page_size_min) u8 = @alignCast(memory.ptr[0..classCapacity(old_class)]);
+            const moved = PageAllocator.realloc(old_aligned, alignment, classCapacity(new_class), true) orelse return null;
+            if (builtin.os.tag == .linux and classCapacity(new_class) >= huge_page_threshold) {
+                std.posix.madvise(@alignCast(moved), classCapacity(new_class), std.os.linux.MADV.HUGEPAGE) catch {};
+            }
+            return moved;
+        }
+
+        fn free(ctx: *anyopaque, memory: []u8, alignment: Alignment, ret_addr: usize) void {
+            const self: *Self = @ptrCast(@alignCast(ctx));
+            if (!isLarge(memory.len, alignment)) return backing.rawFree(memory, alignment, ret_addr);
+            const class = classOf(memory.len);
+            if (class > max_class_log2) return unmapBlock(memory.ptr, memory.len);
+            const cache = &self.classes[class - min_class_log2];
+            // Count the block before keeping it, so concurrent frees never keep
+            // more than the bound between them.
+            const capacity = classCapacity(class);
+            if (self.cached_bytes.fetchAdd(capacity, .monotonic) + capacity > self.max_cached_bytes) {
+                _ = self.cached_bytes.fetchSub(capacity, .monotonic);
+                return unmapBlock(memory.ptr, capacity);
+            }
+            cache.lock();
+            const block: *FreeBlock = @ptrCast(@alignCast(memory.ptr));
+            block.* = .{ .next = cache.head };
+            cache.head = block;
+            cache.unlock();
+        }
+    };
+}
 
 fn classOf(len: usize) Class {
     std.debug.assert(len >= large_threshold);
@@ -119,94 +205,8 @@ fn unmapBlock(ptr: [*]u8, capacity: usize) void {
     PageAllocator.unmap(aligned[0..capacity]);
 }
 
-fn alloc(ctx: *anyopaque, len: usize, alignment: Alignment, ret_addr: usize) ?[*]u8 {
-    const self: *Self = @ptrCast(@alignCast(ctx));
-    if (!isLarge(len, alignment)) return self.backing.rawAlloc(len, alignment, ret_addr);
-    const class = classOf(len);
-    if (class > max_class_log2) return mapBlock(len);
-    const cache = &self.classes[class - min_class_log2];
-    cache.lock();
-    if (cache.head) |block| {
-        cache.head = block.next;
-        cache.unlock();
-        _ = self.cached_bytes.fetchSub(classCapacity(class), .monotonic);
-        return @ptrCast(block);
-    }
-    cache.unlock();
-    return mapBlock(classCapacity(class));
-}
-
-/// Growth and shrinkage stay in place while the class, and therefore the
-/// mapped capacity that `free` will derive from the length, is unchanged.
-fn resize(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, ret_addr: usize) bool {
-    const self: *Self = @ptrCast(@alignCast(ctx));
-    const old_large = isLarge(memory.len, alignment);
-    const new_large = isLarge(new_len, alignment);
-    if (!old_large and !new_large) return self.backing.rawResize(memory, alignment, new_len, ret_addr);
-    if (!old_large or !new_large) return false;
-    const old_class = classOf(memory.len);
-    if (old_class > max_class_log2) {
-        return new_len <= memory.len and classOf(new_len) > max_class_log2;
-    }
-    return classOf(new_len) == old_class;
-}
-
-fn remap(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
-    const self: *Self = @ptrCast(@alignCast(ctx));
-    const old_large = isLarge(memory.len, alignment);
-    const new_large = isLarge(new_len, alignment);
-    if (!old_large and !new_large) return self.backing.rawRemap(memory, alignment, new_len, ret_addr);
-    if (!old_large or !new_large) return null;
-    if (resize(ctx, memory, alignment, new_len, ret_addr)) return memory.ptr;
-    const old_class = classOf(memory.len);
-    const new_class = classOf(new_len);
-    if (new_class > max_class_log2 or old_class > max_class_log2) return null;
-    // Growing into a class with a cached block copies into already-faulted
-    // pages; otherwise the kernel moves the mapping without copying.
-    const cache = &self.classes[new_class - min_class_log2];
-    cache.lock();
-    const cached = cache.head;
-    if (cached) |block| {
-        cache.head = block.next;
-    }
-    cache.unlock();
-    if (cached != null) _ = self.cached_bytes.fetchSub(classCapacity(new_class), .monotonic);
-    if (cached) |block| {
-        const dst: [*]u8 = @ptrCast(block);
-        @memcpy(dst[0..@min(memory.len, new_len)], memory.ptr[0..@min(memory.len, new_len)]);
-        free(ctx, memory, alignment, ret_addr);
-        return dst;
-    }
-    const old_aligned: []align(std.heap.page_size_min) u8 = @alignCast(memory.ptr[0..classCapacity(old_class)]);
-    const moved = PageAllocator.realloc(old_aligned, alignment, classCapacity(new_class), true) orelse return null;
-    if (builtin.os.tag == .linux and classCapacity(new_class) >= huge_page_threshold) {
-        std.posix.madvise(@alignCast(moved), classCapacity(new_class), std.os.linux.MADV.HUGEPAGE) catch {};
-    }
-    return moved;
-}
-
-fn free(ctx: *anyopaque, memory: []u8, alignment: Alignment, ret_addr: usize) void {
-    const self: *Self = @ptrCast(@alignCast(ctx));
-    if (!isLarge(memory.len, alignment)) return self.backing.rawFree(memory, alignment, ret_addr);
-    const class = classOf(memory.len);
-    if (class > max_class_log2) return unmapBlock(memory.ptr, memory.len);
-    const cache = &self.classes[class - min_class_log2];
-    // Count the block before keeping it, so concurrent frees never keep
-    // more than the bound between them.
-    const capacity = classCapacity(class);
-    if (self.cached_bytes.fetchAdd(capacity, .monotonic) + capacity > self.max_cached_bytes) {
-        _ = self.cached_bytes.fetchSub(capacity, .monotonic);
-        return unmapBlock(memory.ptr, capacity);
-    }
-    cache.lock();
-    const block: *FreeBlock = @ptrCast(@alignCast(memory.ptr));
-    block.* = .{ .next = cache.head };
-    cache.head = block;
-    cache.unlock();
-}
-
 test "large blocks are recycled through their size class" {
-    var wrapper = Self.init(std.testing.allocator);
+    var wrapper: LargeBlockAllocator(std.testing.allocator) = .{};
     const a = wrapper.allocator();
     const first = try a.alloc(u8, large_threshold + 1);
     first[0] = 7;
@@ -221,7 +221,7 @@ test "large blocks are recycled through their size class" {
 }
 
 test "resize stays in place within a class and refuses class changes" {
-    var wrapper = Self.init(std.testing.allocator);
+    var wrapper: LargeBlockAllocator(std.testing.allocator) = .{};
     const a = wrapper.allocator();
     const class_capacity = classCapacity(min_class_log2);
     var block = try a.alloc(u8, large_threshold);
@@ -233,7 +233,7 @@ test "resize stays in place within a class and refuses class changes" {
 }
 
 test "remap grows across classes and preserves contents" {
-    var wrapper = Self.init(std.testing.allocator);
+    var wrapper: LargeBlockAllocator(std.testing.allocator) = .{};
     const a = wrapper.allocator();
     var list = std.ArrayList(u64).empty;
     defer list.deinit(a);
@@ -246,7 +246,7 @@ test "remap grows across classes and preserves contents" {
 }
 
 test "small requests pass through to the backing allocator" {
-    var wrapper = Self.init(std.testing.allocator);
+    var wrapper: LargeBlockAllocator(std.testing.allocator) = .{};
     const a = wrapper.allocator();
     const small = try a.alloc(u8, 100);
     const grown = try a.realloc(small, 200);
@@ -256,7 +256,7 @@ test "small requests pass through to the backing allocator" {
 }
 
 test "freed blocks are kept only up to the total bound" {
-    var wrapper = Self.init(std.testing.allocator);
+    var wrapper: LargeBlockAllocator(std.testing.allocator) = .{};
     const one_block = classCapacity(min_class_log2);
     wrapper.max_cached_bytes = one_block;
     const a = wrapper.allocator();
