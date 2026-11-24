@@ -117,6 +117,19 @@ pub const ModuleIndex = struct {
     /// The binders of destructuring scheme alias declarations with their
     /// declarations, by binder node, ascending.
     destructured_aliases: []DestructuredAlias = &.{},
+    /// The reached call expressions (`e_call`), ascending.
+    call_exprs: []u32 = &.{},
+    /// The reached statically dispatched expressions (`e_dispatch_call`,
+    /// `e_interpolation`, `e_type_dispatch_call`, `e_method_eq`), ascending.
+    dispatch_exprs: []u32 = &.{},
+    /// The reached value lookups (`e_lookup_local`, `e_lookup_external`,
+    /// `e_lookup_associated_resolved`, `e_lookup_required`), ascending.
+    lookup_exprs: []u32 = &.{},
+    /// The reached `s_decl`, `s_var`, and `s_var_uninitialized` statements,
+    /// in no particular order.
+    binding_statements: []StatementId = &.{},
+    /// The reached lambdas (`e_lambda`), in no particular order.
+    lambda_exprs: []ExprId = &.{},
 
     /// The index of `env`'s bodies. `promoted_patterns` are the binding
     /// patterns of the module's promoted local procedures.
@@ -139,6 +152,11 @@ pub const ModuleIndex = struct {
         allocator.free(self.top_level_defs);
         allocator.free(self.defaults);
         allocator.free(self.destructured_aliases);
+        allocator.free(self.call_exprs);
+        allocator.free(self.dispatch_exprs);
+        allocator.free(self.lookup_exprs);
+        allocator.free(self.binding_statements);
+        allocator.free(self.lambda_exprs);
         self.* = .{};
     }
 
@@ -170,6 +188,34 @@ pub const ModuleIndex = struct {
             .expr, .statement => true,
             .unreached, .pattern => false,
         };
+    }
+
+    /// The reached call expressions (`e_call`), ascending.
+    pub fn callExprs(self: *const ModuleIndex) []const u32 {
+        return self.call_exprs;
+    }
+
+    /// The reached statically dispatched expressions (`e_dispatch_call`,
+    /// `e_interpolation`, `e_type_dispatch_call`, `e_method_eq`), ascending.
+    pub fn dispatchExprs(self: *const ModuleIndex) []const u32 {
+        return self.dispatch_exprs;
+    }
+
+    /// The reached value lookups (`e_lookup_local`, `e_lookup_external`,
+    /// `e_lookup_associated_resolved`, `e_lookup_required`), ascending.
+    pub fn lookupExprs(self: *const ModuleIndex) []const u32 {
+        return self.lookup_exprs;
+    }
+
+    /// The reached `s_decl`, `s_var`, and `s_var_uninitialized` statements,
+    /// in no particular order.
+    pub fn bindingStatements(self: *const ModuleIndex) []const StatementId {
+        return self.binding_statements;
+    }
+
+    /// The reached lambdas (`e_lambda`), in no particular order.
+    pub fn lambdaExprs(self: *const ModuleIndex) []const ExprId {
+        return self.lambda_exprs;
     }
 
     /// The unit that owns a reached node.
@@ -270,6 +316,11 @@ pub const ModuleIndex = struct {
         top_level_defs: std.ArrayList(TopLevelDef) = .empty,
         defaults: std.ArrayList(u32) = .empty,
         destructured_aliases: std.ArrayList(DestructuredAlias) = .empty,
+        call_exprs: std.ArrayList(u32) = .empty,
+        dispatch_exprs: std.ArrayList(u32) = .empty,
+        lookup_exprs: std.ArrayList(u32) = .empty,
+        binding_statements: std.ArrayList(StatementId) = .empty,
+        lambda_exprs: std.ArrayList(ExprId) = .empty,
 
         fn init(allocator: Allocator, env: *const ModuleEnv) Allocator.Error!Builder {
             const node_count = env.store.nodes.len();
@@ -306,6 +357,11 @@ pub const ModuleIndex = struct {
             self.top_level_defs.deinit(self.allocator);
             self.defaults.deinit(self.allocator);
             self.destructured_aliases.deinit(self.allocator);
+            self.call_exprs.deinit(self.allocator);
+            self.dispatch_exprs.deinit(self.allocator);
+            self.lookup_exprs.deinit(self.allocator);
+            self.binding_statements.deinit(self.allocator);
+            self.lambda_exprs.deinit(self.allocator);
         }
 
         fn finish(self: *Builder) Allocator.Error!ModuleIndex {
@@ -331,6 +387,19 @@ pub const ModuleIndex = struct {
             const defaults = try self.defaults.toOwnedSlice(allocator);
             errdefer allocator.free(defaults);
             const destructured_aliases = try self.destructured_aliases.toOwnedSlice(allocator);
+            errdefer allocator.free(destructured_aliases);
+            std.mem.sort(u32, self.call_exprs.items, {}, std.sort.asc(u32));
+            const call_exprs = try self.call_exprs.toOwnedSlice(allocator);
+            errdefer allocator.free(call_exprs);
+            std.mem.sort(u32, self.dispatch_exprs.items, {}, std.sort.asc(u32));
+            const dispatch_exprs = try self.dispatch_exprs.toOwnedSlice(allocator);
+            errdefer allocator.free(dispatch_exprs);
+            std.mem.sort(u32, self.lookup_exprs.items, {}, std.sort.asc(u32));
+            const lookup_exprs = try self.lookup_exprs.toOwnedSlice(allocator);
+            errdefer allocator.free(lookup_exprs);
+            const binding_statements = try self.binding_statements.toOwnedSlice(allocator);
+            errdefer allocator.free(binding_statements);
+            const lambda_exprs = try self.lambda_exprs.toOwnedSlice(allocator);
             return .{
                 .has_expects = self.has_expects,
                 .has_runtime_errors = self.has_runtime_errors,
@@ -343,6 +412,11 @@ pub const ModuleIndex = struct {
                 .top_level_defs = top_level_defs,
                 .defaults = defaults,
                 .destructured_aliases = destructured_aliases,
+                .call_exprs = call_exprs,
+                .dispatch_exprs = dispatch_exprs,
+                .lookup_exprs = lookup_exprs,
+                .binding_statements = binding_statements,
+                .lambda_exprs = lambda_exprs,
             };
         }
 
@@ -493,6 +567,7 @@ pub const ModuleIndex = struct {
                     try self.mark(.{ .expr = if_.final_else }, id);
                 },
                 .e_call => |call| {
+                    try self.call_exprs.append(self.allocator, @backingInt(expr_idx));
                     try self.mark(.{ .expr = call.func }, id);
                     try self.markExprs(store.sliceExpr(call.args), id);
                 },
@@ -516,6 +591,7 @@ pub const ModuleIndex = struct {
                     }
                 },
                 .e_lambda => |lambda| {
+                    try self.lambda_exprs.append(self.allocator, expr_idx);
                     try self.markPatterns(store.slicePatterns(lambda.args), id);
                     try self.mark(.{ .expr = lambda.body }, id);
                 },
@@ -525,11 +601,17 @@ pub const ModuleIndex = struct {
                 },
                 .e_unary_minus => |unary| try self.mark(.{ .expr = unary.expr }, id),
                 .e_field_access => |field| try self.mark(.{ .expr = field.receiver }, id),
-                inline .e_method_call, .e_dispatch_call => |call| {
+                .e_method_call => |call| {
+                    try self.mark(.{ .expr = call.receiver }, id);
+                    try self.markExprs(store.sliceExpr(call.args), id);
+                },
+                .e_dispatch_call => |call| {
+                    try self.dispatch_exprs.append(self.allocator, @backingInt(expr_idx));
                     try self.mark(.{ .expr = call.receiver }, id);
                     try self.markExprs(store.sliceExpr(call.args), id);
                 },
                 .e_interpolation => |interpolation| {
+                    try self.dispatch_exprs.append(self.allocator, @backingInt(expr_idx));
                     try self.mark(.{ .expr = interpolation.first }, id);
                     try self.markExprs(store.sliceExpr(interpolation.parts), id);
                 },
@@ -542,6 +624,7 @@ pub const ModuleIndex = struct {
                     try self.mark(.{ .expr = hash.hasher }, id);
                 },
                 .e_method_eq => |eq| {
+                    try self.dispatch_exprs.append(self.allocator, @backingInt(expr_idx));
                     try self.mark(.{ .expr = eq.lhs }, id);
                     try self.mark(.{ .expr = eq.rhs }, id);
                 },
@@ -550,6 +633,7 @@ pub const ModuleIndex = struct {
                     try self.markExprs(store.sliceExpr(call.args), id);
                 },
                 .e_type_dispatch_call => |call| {
+                    try self.dispatch_exprs.append(self.allocator, @backingInt(expr_idx));
                     switch (call.owner) {
                         .statement => |statement| try self.mark(.{ .statement = statement }, id),
                         .dispatcher => {},
@@ -578,6 +662,11 @@ pub const ModuleIndex = struct {
                     self.has_runtime_errors = true;
                     try self.markExprs(store.sliceExpr(runtime_error.evaluated), id);
                 },
+                .e_lookup_local,
+                .e_lookup_external,
+                .e_lookup_associated_resolved,
+                .e_lookup_required,
+                => try self.lookup_exprs.append(self.allocator, @backingInt(expr_idx)),
                 .e_num,
                 .e_frac_f32,
                 .e_frac_f64,
@@ -589,10 +678,6 @@ pub const ModuleIndex = struct {
                 .e_typed_num_from_numeral,
                 .e_str_segment,
                 .e_bytes_literal,
-                .e_lookup_local,
-                .e_lookup_external,
-                .e_lookup_associated_resolved,
-                .e_lookup_required,
                 .e_empty_list,
                 .e_empty_record,
                 .e_zero_argument_tag,
@@ -648,14 +733,19 @@ pub const ModuleIndex = struct {
             const store = &self.env.store;
             switch (store.getStatement(statement_idx)) {
                 .s_decl => |decl| {
+                    try self.binding_statements.append(self.allocator, statement_idx);
                     try self.mark(.{ .pattern = decl.pattern }, id);
                     try self.mark(.{ .expr = decl.expr }, id);
                 },
                 .s_var => |var_| {
+                    try self.binding_statements.append(self.allocator, statement_idx);
                     try self.mark(.{ .pattern = var_.pattern_idx }, id);
                     try self.mark(.{ .expr = var_.expr }, id);
                 },
-                .s_var_uninitialized => |var_| try self.mark(.{ .pattern = var_.pattern_idx }, id),
+                .s_var_uninitialized => |var_| {
+                    try self.binding_statements.append(self.allocator, statement_idx);
+                    try self.mark(.{ .pattern = var_.pattern_idx }, id);
+                },
                 .s_reassign => |reassign| {
                     try self.mark(.{ .pattern = reassign.pattern_idx }, id);
                     try self.mark(.{ .expr = reassign.expr }, id);

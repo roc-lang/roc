@@ -7612,6 +7612,13 @@ of a node's shape costs what reading the node costs:
   declaration bits (a top-level definition's pattern, a rejected method
   declaration, a promoted procedure's pattern, a recursive value
   declaration and its binders, a scheme-alias binder, a field default).
+  While it visits each reached node it also lists, by kind, the nodes
+  publication looks for: calls, statically dispatched expressions, value
+  lookups, binding statements and lambdas, and whether a runtime error
+  node is reached. Publication's retired-call, dispatch-plan,
+  dispatch-constraint, dispatch-type-root, resolved-reference and
+  local-pattern-role passes read those lists instead of scanning every node
+  of the module.
   The analyses themselves are computed on first demand. A unit's analyses
   keep their memos in dense arrays indexed by position in the unit and
   touch each node of the unit once per analysis; divergence is decided for

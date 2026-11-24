@@ -1849,22 +1849,13 @@ pub const StaticDispatchPlanTable = struct {
         var constraint_index = try StaticDispatchConstraintIndex.fromModule(allocator, module, bodies);
         defer constraint_index.deinit(allocator);
 
-        var node_idx: u32 = CIR.Node.first_idx;
-        while (node_idx < module.nodeCount()) : (node_idx += 1) {
-            const tag = module.nodeTag(@fromBackingInt(@intCast(node_idx)));
-            if (tag != .expr_dispatch_call and
-                tag != .expr_interpolation and
-                tag != .expr_type_dispatch_call and
-                tag != .expr_type_dispatch_call_dispatcher and
-                tag != .expr_method_eq) continue;
-
-            const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-            if (!bodies.index().reachesExpr(expr_idx)) continue;
+        for (bodies.index().dispatchExprs()) |node_idx| {
+            const expr_idx: CIR.Expr.Idx = @fromBackingInt(node_idx);
             const expr = module.expr(expr_idx);
             const checked_expr_data = bodies.exprData(expr_idx);
             const idents = module.identStoreConst();
             const plan_id: StaticDispatchPlanId = @fromBackingInt(@intCast(@as(u32, @intCast(plans.items.len))));
-            const dispatch_expr_tag = std.meta.stringToEnum(DispatchExprTag, @tagName(std.meta.activeTag(expr.data))) orelse unreachable; // the node-tag filter above admits only nodes that decode to these expression tags
+            const dispatch_expr_tag = std.meta.stringToEnum(DispatchExprTag, @tagName(std.meta.activeTag(expr.data))) orelse unreachable; // the module index lists only expressions that decode to these tags
             switch (dispatch_expr_tag) {
                 .e_dispatch_call => {
                     const dispatch_call = expr.data.e_dispatch_call;
@@ -2526,24 +2517,21 @@ const StaticDispatchConstraintIndex = struct {
         var live_fn_vars: collections.DenseMapUnmanaged(Var, void) = .empty;
         defer live_fn_vars.deinit(allocator);
 
-        var node_idx: u32 = CIR.Node.first_idx;
-        while (node_idx < module.nodeCount()) : (node_idx += 1) {
-            const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-            const node_tag = module.nodeTag(@fromBackingInt(@intCast(node_idx)));
-            const constraint_fn_var: ?Var = if (node_tag == .expr_dispatch_call)
-                module.expr(expr_idx).data.e_dispatch_call.constraint_fn_var
-            else if (node_tag == .expr_interpolation)
-                module.expr(expr_idx).data.e_interpolation.constraint_fn_var
-            else if (node_tag == .expr_type_dispatch_call or node_tag == .expr_type_dispatch_call_dispatcher)
-                module.expr(expr_idx).data.e_type_dispatch_call.constraint_fn_var
-            else if (node_tag == .expr_method_eq)
-                module.expr(expr_idx).data.e_method_eq.constraint_fn_var
+        for (bodies.index().dispatchExprs()) |node_idx| {
+            const expr_idx: CIR.Expr.Idx = @fromBackingInt(node_idx);
+            const data = module.expr(expr_idx).data;
+            const constraint_fn_var: ?Var = if (data == .e_dispatch_call)
+                data.e_dispatch_call.constraint_fn_var
+            else if (data == .e_interpolation)
+                data.e_interpolation.constraint_fn_var
+            else if (data == .e_type_dispatch_call)
+                data.e_type_dispatch_call.constraint_fn_var
+            else if (data == .e_method_eq)
+                data.e_method_eq.constraint_fn_var
             else
-                null;
+                unreachable; // the module index lists only expressions that decode to these tags
             if (constraint_fn_var) |fn_var| {
-                if (!bodies.index().reachesExpr(expr_idx)) continue;
-                if (module.nodeTag(@fromBackingInt(@intCast(node_idx))) == .expr_interpolation and
-                    std.meta.activeTag(bodies.exprData(expr_idx)) != .interpolation) continue;
+                if (data == .e_interpolation and std.meta.activeTag(bodies.exprData(expr_idx)) != .interpolation) continue;
                 try live_fn_vars.put(allocator, fn_var, {});
             }
         }
