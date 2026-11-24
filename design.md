@@ -1600,6 +1600,10 @@ many roots hoisting selected, how many of those an evaluator
 completes and the checked-value writer completes, and how many value-form
 expressions their bodies keep.
 
+`ROC_CHECKER_SPECULATION_STATS` prints, for each module the type checker
+checks, how many of each probe site's probes (Probes) were kept and how many
+were discarded.
+
 ### Every Rejection Is Explicit Recovery
 
 `roc check`, `roc build`, and `roc run` all lower every checked program, so
@@ -4638,7 +4642,7 @@ rank is not `Descriptor.rank`: descriptor rank is the Hindley-Milner scope level
 used to decide generalization, while union-find rank is private data-structure
 metadata. On a union, the lower structural rank redirects to the higher one; a
 tie keeps the second storage root and increments its structural rank. Path
-compression may change storage parents at any time outside a solver savepoint.
+compression may change storage parents at any time outside a probe (Probes).
 Neither operation may change the class descriptor or checked representative.
 
 Each live storage root names one descriptor whose root metadata contains the
@@ -4666,13 +4670,11 @@ last-in-first-out, so the indices a module's check produces, and the bytes
 written to its cache, stay deterministic. The free list is runtime-only: a
 loaded store starts with none, and nothing outside the store may hold a
 descriptor index across a merge, since the index may name another class once
-reused. While a savepoint is open a merge does not free its orphan, because
-rollback restores the slot that named it; the orphan waits on a pending list
-that commit frees and rollback discards. A probe may still reissue descriptors
-from the free list: those predate the probe, so the writes that reissue them
-journal like any other pre-probe write, and the probe only counts them as
-taken rather than removing them, so commit removes them and rollback forgets
-the count.
+reused. While a probe is open a merge does not free its orphan, because
+discarding the probe restores the slot that named it; the orphan waits on a
+pending list that keeping the probe frees and discarding it drops. An open probe
+sets the free list aside, so it reissues no descriptor and every class it
+creates is appended.
 
 `resolveVar` returns the checked representative and class descriptor;
 storage-root traversal is a private store operation. Consequently a checked
@@ -4680,8 +4682,8 @@ representative is not required to be a storage root slot. `is_root` on a
 resolved variable means that the queried variable is the checked
 representative, which is the only root notion checker consumers may use.
 
-Solver savepoints journal storage-parent, structural-rank, and root-metadata
-mutations and restore all three byte-for-byte. Serializing the sealed store
+The unifier's writes inside a probe journal storage-parent, structural-rank,
+and root-metadata mutations, and discarding it restores all three byte-for-byte. Serializing the sealed store
 includes both metadata stores, so loading a cached store preserves its checked
 representatives and balanced structure. A declared solver-mutating redirect
 joins whole classes through the same balanced mechanism while explicitly
@@ -4689,15 +4691,14 @@ adopting the redirect destination's descriptor and checked representative; it
 must not directly graft one storage root beneath another and recreate an
 unbounded chain.
 
-A solver savepoint runs only non-poisoning unification. Successful speculative
-relations may be committed in place, but a mismatch returns without poisoning
-either top-level operand so the savepoint owner can roll the relation back.
+A probe runs only non-poisoning unification. Successful speculative
+relations may be kept in place, but a mismatch returns without poisoning
+either top-level operand so the probe's owner can discard the relation.
 Occurrence-directed mismatch poisoning is permanent recovery against the live
-equivalence classes; running it inside a savepoint would both do work whose
+equivalence classes; running it inside a probe would both do work whose
 result must be discarded and make correctness depend on the queried
-occurrence's current representative. The commit-probe API fixes the
-non-poisoning behavior for every relation it runs, and ordinary poisoning
-unification asserts that no savepoint is active.
+occurrence's current representative. Poisoning unification asserts that no
+probe is open.
 
 A failed unification is different from a successful class union. Either
 operand can be one checked occurrence already connected to a shared binding: a
@@ -6126,7 +6127,7 @@ The fold relates arguments in order, so the parameter type a rejected argument
 met already carries what earlier operands gave the function's shared
 variables. Only once a relation has been rejected, and only when the callee's
 type is an instance of a scheme, the checker asks whether the argument is
-wrong by itself: in a commit-probe it relates the argument to its parameter in
+wrong by itself: in a probe it relates the argument to its parameter in
 a fresh copy of that scheme, then relates one earlier operand (an earlier
 argument, or a method call's receiver) to the same copy. The first earlier
 operand whose relation fails there is reported with the argument as a
@@ -12262,6 +12263,99 @@ adding or citing a member, which is greppable and reviewable. A new
 probe-then-mutate rewrite requires a declared rule in this document first;
 "it makes a test pass" is not a rule.
 
+### Probes
+
+A site that must relate two types to learn whether they relate, and keep
+the relation only when they do, probes the unifier (`Check.beginProbe`,
+`probeRelate`, `probeKeep`, `probeYes`/`probeNo`, and `unifyIfRelates` for
+a site that keeps or drops one relation as it stands). Probes never nest: a
+probe begins only when none is open, which debug builds assert.
+
+Only the unifier runs inside a probe. A site prepares what it relates by
+appending only (fresh variables, a copy of an expected shape, a function
+over a lambda's parameters) after the probe begins and before the unifier
+runs, so discarding the probe drops it with everything else appended. What
+a relation leaves for the checker (fresh variables to rank and give
+regions, deferred dispatch constraints, literals it determined, defaults it
+absorbed) stays in the unifier's scratch until the site keeps the relation
+(`probeKeep`), and the literals and defaults are settled only once the
+probe is kept (`probeYes`), exactly as after a direct relation
+(`finishUnify`). A site that reads the tentative result before deciding
+reads it through non-compressing resolves. A relation inside a probe
+records no problem and poisons nothing.
+
+There is one unifier, and the type store has two families of in-place
+writes. The unifier's writes (`Store.unifierUnion` and the other `unifier*`
+functions, and the store internals they reach) compare the entry's index
+with the open probe's baseline, and when the entry predates the probe
+journal its old value before writing it. The baselines are the slot and
+descriptor counts when the probe began, and 0 while no probe is open, so
+outside a probe the one comparison never holds. Every other write is plain:
+it compares and journals nothing. That only the unifier overwrites an entry
+that predates an open probe is a compiler invariant: debug builds assert
+that a plain write reaches only entries the probe appended, and that a
+unifier write while a probe is open comes from the running unifier
+(`Store.enterUnifier`). The unifier compresses a storage path only when the
+slot baseline is 0, so no compression happens inside a probe.
+
+The journal is one undo log of tagged entries: a slot, descriptor, root or
+union rank, and the insertion, removal or replacement of a derived map plan
+row or tag tail closing row. Discarding the probe first drops the plan and
+closing rows of classes the probe created, which sort after every older
+class, and then replays the log strictly backwards. What a probe remembers
+when it begins (`ProbeMark`) is the lengths of the lists the unifier can
+grow: variables, record fields, tags, interpolation parts and metadata
+(which a nominal backing the unifier opens, or a deferred requirement
+callable it links, can copy), numeral facts, static dispatch constraints,
+folded dispatch relations and pattern-only tag copies. The baselines are
+the slot and descriptor counts, and the log needs no length, since it is
+empty whenever a probe begins. While the probe is open the type store's
+free list is set aside, so every class created is appended, and the
+descriptors the relation's merges orphan wait until the probe ends.
+
+Kept, the probe's writes stand and the orphaned descriptors are freed;
+discarded, every journaled entry is restored, everything appended is
+dropped, and the free list is put back, so the store is as it was; what
+the unifier's scratch holds about the relation's mismatch stays for the
+site's report. The one piece of checker code the unifier runs is the
+deferred requirement callable link (Deferred requirement callables): its
+redirect is one of the unifier's writes, the use it links is recorded, and
+a discarded probe unlinks it and drops the regions of the copies it made; a
+kept probe registers the copies.
+
+A relation inside a probe that meets a row repeating a label stops there.
+When that row predates the probe, the probe is discarded and the row is
+normalized (Row Union Normalization), which reports the row's conflict when
+it has one. A site whose probe holds one relation, or that relates first
+and then reads, probes again; a site whose probe holds several relations
+treats the probe as failed.
+
+Five sites instantiate schemes inside their probe (an inspect override's
+instance, a flexible constraint's default method, a rejected call's fresh
+function type, an interpolation part's method, the constructor an owned tag
+lifts into). Such a probe (`InstantiatingProbe`) also holds the lengths of
+the checker lists instantiation grows (`InstantiationMark`: scheme uses,
+dispatchers, open literals and the like) and truncates them when
+discarded, and sets the probe flags (`probe_depth`, `commit_probe_active`)
+while it is open, because what instantiation and the dispatch passes do
+depends on running inside a probe: an instantiation inside one journals
+the ambiguity candidates it flips so a discarded probe resets them
+(`recordAmbiguityCandidate`), registers no use for whole-use replay and
+defers no requirement callable (`instantiateVarHelpFromScheme`), and the
+literals its kept relations determine wait for the next dispatch pass
+(`settlePendingLiteralsAt`). Moving that instantiation out of the probe
+would change those decisions, so these sites keep the wide probe.
+
+The invariants that make a probe safe are compiler invariants, asserted in
+debug builds: probes never nest; while one is open, no plain write and no
+compressing resolve reaches an entry that predates it, and every unifier
+write comes from the unifier; and a discarded probe leaves every other
+checker list as long as it was when the probe began. The module test "a
+probe relates random small type pairs as a direct relation does, and a
+discarded probe changes nothing" pins that a kept probe solves the same
+types as a direct relation and a discarded one restores the store byte for
+byte.
+
 ### Concrete Builtin Numeral Introduction
 
 A numeric expression may omit constructing its `from_numeral` signature graph
@@ -12437,7 +12531,7 @@ constraints and off-root scheme requirements. Every omitted requirement remains
 on its source type and is enforced by the ordinary enclosing relation and the
 actual stored-value instantiation. Shape copies never enter literal, dispatch,
 ambiguity, or evidence worklists. The copy and its projected relation belong to
-one commit-probe, so a rejected aggregate relation retains neither the copy nor any
+one probe, so a rejected aggregate relation retains neither the copy nor any
 partial unification. Rejection is diagnosed by the owning full-shape relation.
 
 Record constructions retain the complete accepted projected row, not just
@@ -12475,7 +12569,7 @@ slots are copied together with one substitution map, preserving repeated-variabl
 equalities. Omitted variants remain authoritative in the enclosing full
 relation, and no declaration-template cell is exposed to mutation. Missing
 tags, arity disagreement, or erroneous context establish no slot copy. The
-selected copy and projected relations share one commit-probe; rejection leaves
+selected copy and projected relations share one probe; rejection leaves
 diagnostic ownership with the full enclosing relation. This is expected-shape
 guidance, not permission to discard a structural row's complement or the
 dispatch requirements it came with.
@@ -12519,9 +12613,9 @@ polymorphism a program could use. The rule reads only explicit context:
   aliases) seeds anything; an unknown slot leaves the lambda as it was.
 - A projected cell is already the construction's own fresh shape copy and is
   related directly. A record update's borrowed field is copied
-  (`copyExpectedShape`) inside the seed's commit-probe, so the base's own
+  (`copyExpectedShape`) inside the seed's probe, so the base's own
   type is never constrained by the seed.
-- The relation runs in one commit-probe. An expectation the lambda does not
+- The relation runs in one probe. An expectation the lambda does not
   fit (a different arity, or erroneous context) is rolled back with its copy,
   and the owning relation reports the mismatch exactly as without the seed.
 - An annotated lambda is checked against its annotation and is not seeded.
@@ -13688,7 +13782,7 @@ one tag (`Store.pattern_only_tag_copies`: the part that keeps its entry, the
 merged row, and the tag's name), at the merge that makes the copy. A relation
 that copies no marked tag journals nothing, which is every relation of a
 single-part pattern row with the row it matches. The journal is diagnostic
-metadata like the mark, and a savepoint's rollback truncates it with the rest
+metadata like the mark, and a discarded probe truncates it with the rest
 of the store.
 
 The judgment reads a tag as pattern-only when the entry its row lists is
@@ -14027,7 +14121,7 @@ value to the return as it relates any return, and `.boxy` joins the two
 checked types' rows (Row Joins). No lowering stage reconstructs the relation
 from the two types on its own.
 
-If the inferred body has not yet lifted to `Try`, the checker commit-probes a
+If the inferred body has not yet lifted to `Try`, the checker probes a
 fresh `Try` seed using the first concrete `?` success parameter and a fresh
 error row. An established relation is already the ordinary unifier's exact
 commit and becomes the composition target. A rejected relation rolls back all
@@ -14326,10 +14420,16 @@ Five consumers keep the rule exact:
   must lose its pattern-only mark (Pattern-Only Tags); that changes no type.
   A part left with no labels redirects to its extension
   (`RedirectRule.row_union_normalization`), taking the lower of the two ranks
-  as unification would. A row's repeated pairs relate together or not at
-  all: they are first probed as one set against throwaway problem stores,
-  with an occurs check of the row after each, and rolled back, so a rejected
-  row records nothing and leaves no relation on the types it shares. Relations can bind further tails and expose further repeats; the
+  as unification would. A row's repeated pairs relate in order; the first
+  pair whose relation fails, or makes an acyclic row anonymously recursive,
+  is the row's conflict, and a row the relation meets that repeats a label
+  of its own is a mismatch of that relation, so the conflict stays the
+  outer row's. The pairs relate together or not at all: they are first
+  probed as one set (Probes), with an occurs check of the row after each, and
+  the probe is discarded, so a rejected row records nothing and leaves no
+  relation on the types it shares. Normalization never runs inside a probe:
+  a probe's relation that meets a repeating row stops there, and the row is
+  normalized once the probe is discarded. Relations can bind further tails and expose further repeats; the
   chain is rescanned until none remain, and each pass removes a label.
 - The type-key writer reports a repeated label to the checker
   instead of keying it, in the requests the checker makes while inference is
@@ -14963,7 +15063,7 @@ through a method named `foo` (`test/cli/MethodsOnOpenRows*.roc`).
 Builtin `Str` interpolation accepts a part only when ordinary unification can
 make the part `Str` and every static-dispatch constraint already carried by the
 part is satisfiable by builtin `Str`. The checker decides both conditions in one
-commit-probe: success commits the unification and any method evidence; failure
+probe: success commits the unification and any method evidence; failure
 rolls the whole attempt back and reports the interpolation-part type mismatch.
 
 Builtin quote and interpolation literal constraints are discharged directly by
@@ -15086,14 +15186,14 @@ descriptor slots, none of which hold that context, so such a method is not an
 inspect override. A top-level method bound to a computed callable (see
 "Procedure Aliases") has no such context: its stored value is restored
 wherever inspection calls it, so it is an override when its instance
-qualifies. `Wrap(a) -> Str` qualifies, and so do an unannotated method
+qualifies. `Wrap(a) -> Str` qualifies, and so do an unconstrained `a -> Str`, whose
+instance at `T -> Str` takes the owner, an unannotated method
 whose argument is a record its owner's backing matches (`|c| "N(${c.count.to_str()})"`
 for an owner backed by `{ count : U64 }`) and an unannotated method whose
 result is a string literal: its declared result is a variable constrained by
 `from_quote` or `from_interpolation`, which `Str` satisfies. `Wrap(I64) -> Str`,
 `Pair(a, a) -> Str`,
-`Wrap(a) -> Str where [a.to_inspect : a -> Str]`, an unconstrained `a -> Str`,
-extra arguments, effectful functions, results `Str` cannot be (a numeral, `I64`,
+`Wrap(a) -> Str where [a.to_inspect : a -> Str]`, extra arguments, effectful functions, results `Str` cannot be (a numeral, `I64`,
 a rigid variable), and results that are `Str` only when one of `T`'s variables
 is (interpolating a payload of type `a`) do not. Inspection ignores an
 ineligible method and renders the value's default form; per the method-naming
@@ -15106,8 +15206,11 @@ type variables and its result with `Str`, and satisfies every requirement the
 copy carries exactly as the dispatch pass does, repeating as satisfying one
 binds further variables—a numeral by a builtin number type that fits it, a
 quote or interpolation conversion by `Str` (an interpolation's parts by
-becoming `Str`), any other requirement by its receiver's method. The method's
-own type is never changed. When the instance exists, is pure, and still takes
+becoming `Str`), any other requirement by its receiver's method. A method
+whose scheme is generalized keeps its own type; a method whose type is not
+generalized (a value computed by a call) is its own instance, so when it
+qualifies its argument and result become the owner and `Str`, and when it
+does not its type is left as it was. When the instance exists, is pure, and still takes
 the owner over distinct type variables that carry no requirements, checking
 records it as inspection's use of the method
 (`ModuleEnv.inspect_override_instances`) with its scheme-use record,
@@ -15471,7 +15574,7 @@ poisons that use's own occurrences and never the instance other uses share.
 Checking a module ends by thawing every frozen class, so no later stage,
 serialized store, or import sees the mark. Builds with runtime safety check
 the mechanism against what it replaces: every replay first relates a fresh
-copy of the method's scheme to the edge's callable on a savepoint and requires
+copy of the method's scheme to the edge's callable in a discarded probe and requires
 the result to equal the frozen instance exactly, expanding transparent aliases
 at every depth (including row extensions) and comparing each record or tag
 union row as its fields or tags sorted by name, however many extensions store
@@ -15560,10 +15663,11 @@ instantiation would have, and extending its substitution and relations with
 them. A use is linked when a drain is about to process one of its relations,
 when a unification is about to relate one of its placeholders, before an
 error report snapshots any type, before the rank it was instantiated at is
-generalized, and when module finalization begins. A link inside a speculative
-probe is part of the speculation: its copies and redirects are in the
-probe's savepoint, a rollback undoes them and leaves the use unlinked, and
-the outermost commit registers them. Builds with runtime safety check that
+generalized, and when module finalization begins. A link inside a probe is
+part of the speculation: its redirect is one of the unifier's writes, which
+the probe journals; discarding the
+probe undoes it and its copies and leaves the use unlinked, and keeping the probe
+registers them. Builds with runtime safety check that
 no instantiation copies a placeholder, and that by the end of checking every
 use not replayed is linked.
 
@@ -17082,6 +17186,13 @@ Other solved-graph mutations:
   Introduction (above). Uses the existing `unifyWith` descriptor-introduction
   mechanism for a proved concrete builtin conversion; does not mutate the
   context's type or introduce a redirect rule.
+- `projectExpectedTagPayload` without a borrowed record field—mechanism:
+  Expected Shape Context (above). Every refusal is read before the copy
+  writes anything, and the copy cannot fail, so it opens no probe.
+- `relateSameMethodRequirements`—mechanism: a relation whose probe
+  succeeded and was discarded, to read the conflict's description or the
+  method type's finiteness from the types as they were, is related again
+  directly, where it succeeds as it did in the probe.
 - `bindSchemeAliasDestructs` / `optionalDestructBinderType`—policy: Field
   Kinds, scheme alias destructure binding (above). A probe of whether a
   declaration's value is a binding scheme, and of whether each field kind of
@@ -17114,12 +17225,6 @@ Other solved-graph mutations:
   before the default commits and withdrawn when the decision left the class
   flex. The write never changes content or links classes; only diagnostics
   consult it, under Diagnostics About Defaulted Types (below).
-- `snapshotPreDefaultType` (`setClassContentInSavepoint`)—mechanism: restores
-  each default-decided class's recorded pre-default flex content solely to
-  render a diagnostic, under a store savepoint that is always rolled back
-  before returning. The write is to the class itself, a frozen class included,
-  since the view is of the whole class and the rollback restores it. No solved
-  type, dispatch decision, or plan metadata observes it.
 - `stateRowVariableRequirementsOnTheirValues`—policy: Methods On Open Rows
   (above). After an annotation's type is generated and before anything is
   related to it, each `where` requirement on a row variable the annotation
@@ -17330,7 +17435,7 @@ Other solved-graph mutations:
   then its whole error type is unified with the parent parser's error type.
 - `processReturnConstraints` / `collectTryReturnRowUses` /
   `projectTryReturnRow`—policy: Try Return-Row Composition (above).
-  A commit-probe seeds an unsettled inferred body only when ordinary
+  A probe seeds an unsettled inferred body only when ordinary
   unification establishes a `Try`. A lambda with a `?` return owns a composed `Try`: the annotated result,
   or a fresh `Try` sharing the body's success type. The body participates in
   the same batch, with a tagless body row always included in the residual
@@ -17356,7 +17461,7 @@ Other solved-graph mutations:
   (above). Rewrites the row part holding an outer copy of a repeated label to
   omit it, after relating the occurrences through ordinary unification.
 - `recordInspectOverrideInstances`—policy: Inspect Overrides (above). One
-  commit-probe per `to_inspect` declaration instantiates the method's scheme as
+  probe per `to_inspect` declaration instantiates the method's scheme as
   a dispatch target, unifies the copy's argument with its owner over fresh
   type variables and its result with `Str`, and accepts every requirement the
   copy carries (and an interpolated result's parts) against the types those
@@ -17367,7 +17472,7 @@ Other solved-graph mutations:
   are pinned by test/cli/InspectUnannotatedOverride.roc and
   test/cli/InspectIneligibleOverride.roc.
 - `constrainInterpolationPartToStr`—policy: Builtin Str Interpolation Part
-  Compatibility (above). One commit-probe unifies the part with `Str` and
+  Compatibility (above). One probe unifies the part with `Str` and
   validates every attached dispatch constraint; only full success is committed.
 - Literal defaulting (`commitLiteralDefault`)—policy: literal defaulting as
   declared in Static Dispatch At The Checked Boundary (the `LITERAL DEFAULTED`
@@ -17382,7 +17487,7 @@ Other solved-graph mutations:
   literal is open. The dispatch pass then checks each method
   requirement of a default-decided receiver against the default. The default
   is a type the program never chose, so that unification runs in a
-  commit-probe: a requirement the default satisfies is kept, and one it
+  probe: a requirement the default satisfies is kept, and one it
   rejects is rewound, reported as an undetermined type, and rejected without
   retyping anything reachable through the relation's argument graph.
   A pending use copy of a scheme requirement counts among its receiver's
@@ -17477,7 +17582,7 @@ Other solved-graph mutations:
   value against the complete expected type.
 - `seedCallResultFromContext`—policy: Expected Shape Context (above). Projects
   result context onto an instantiated call's return slot before argument
-  construction, using the same commit-probe and copy policy as aggregates.
+  construction, using the same probe and copy policy as aggregates.
   The ordinary owning result relation remains authoritative.
 - `relateSameMethodRequirementsAtBoundary` (`relateSameMethodRequirements`
   committed probe)—policy: one requirement per method on a type about to be
@@ -23850,14 +23955,14 @@ replay"), which carries no flag, and the entry's remaining requirements are
 still requirements of the default. A default-decided receiver's dispatch
 replays like any other. A replay shares an instance whose relation to an equal
 callable already succeeded, so it cannot reject the default and runs outside
-the commit-probe that brackets the receiver's other requirements.
+the probe that brackets the receiver's other requirements.
 
 The report's type is the class as the program wrote it: every default-decided
 class reachable from the receiver is shown with the union of its recorded
 pre-default requirements, and literal-conversion requirements are omitted,
 since a literal's own conversion is the literal rather than a requirement on
-its type. That restoration is written under a store savepoint that is always
-rolled back, so no solved type changes. The report is about the recorded
+its type. The snapshot only shows those classes that way
+(`snapshotVarForErrorWithFlexViews`); no solved type is written. The report is about the recorded
 variable that stated the failed requirement (`defaultDecidedRecordStating`):
 a default can merge two recorded variables' classes, as when a selected
 method makes two literals one type, and whether it has yet depends on the
