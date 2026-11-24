@@ -12813,6 +12813,23 @@ is unified with every annotation that refers to it; if a mismatch merges any
 of it into an error it is no longer ground, and the next reference
 instantiates a fresh copy.
 
+An instance is shared only among references of the same kind. The annotation
+node that refers to an instance joins its class, and a merged class holds the
+lower of the two ranks. A reference inside a type declaration is generated at
+generalized rank, so its instance is part of that declaration's template: its
+classes carry generalized rank like the rest of the template, and each use of
+the declaration copies them. A reference generated at a scope's own rank is a
+use: its instance is a monotype that settles at `outermost`, like every ground
+type, and is read where it stands. A use never reads a template's instance,
+nor a template a use's. A class at generalized rank is by definition one a
+quantified variable is reachable from (`Check.typeHasGeneralizedVar` stops at
+the first one it meets), so a use that read a template's instance would make
+the binding it annotates a scheme with nothing to quantify. A host-boundary
+annotation closes the declarations it references just as a nominal
+declaration's body does, so the two name the same positions, and a provided
+function whose annotation read such an instance would be rejected as
+polymorphic.
+
 Before a use that decides markers per occurrence (`.preserve_one_sided`,
 `.resolve_by_polarity`, `.defer_open`) copies anything, a pre-walk
 (`Instantiator.collectMarkerChoices`) joins the sides every marker occurs on
