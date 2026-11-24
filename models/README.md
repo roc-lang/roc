@@ -14,6 +14,7 @@ None of this runs in CI or `minici`. Each model is run by hand, from its own dir
 | [exhaustive](exhaustive/) | match exhaustiveness and redundancy in the checker | generator, differential against `roc check` | Python | none |
 | [infer](infer/) | type inference and the type printer | generator, differential against `roc check` | Python | none |
 | [specconstr](specconstr/) | SpecConstr termination and growth | Maude model, generator | Maude, Python | none |
+| [lifted-semantics](lifted-semantics/) | SpecConstr and lambda sets | interpreter for Lifted IR exports, generator | Python | `ROC_LIFTED_IR_EXPORT`, `ROC_LAMBDA_SET_EXPORT` ([#13550](https://github.com/roc-lang/roc/pull/13550)) |
 
 Every hook is a developer diagnostic (`base.dev_diagnostics`), so the models need a Debug `roc` (`zig build roc`) or one built
 with `-Ddev-diagnostics`.
