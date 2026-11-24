@@ -4206,8 +4206,9 @@ const HoistSelectionTransaction = struct {
     /// they are staged in source order after it.
     fn stageExprItem(self: *HoistSelectionTransaction, run: *StageRun, expr: CIR.Expr.Idx) Allocator.Error!void {
         const store = &self.checker.cir.store;
-        switch (store.getExpr(expr)) {
-            .e_lookup_local => |lookup| {
+        switch (store.exprKind(expr)) {
+            .e_lookup_local => {
+                const lookup = store.exprView(expr).e_lookup_local.decode();
                 const context = run.context();
                 if (self.checker.patternIsTopLevel(lookup.pattern_idx)) return;
                 if (self.checker.hoist_selected_bindings.contains(lookup.pattern_idx)) return;
@@ -4250,10 +4251,11 @@ const HoistSelectionTransaction = struct {
             .e_break,
             .e_run_low_level,
             => {},
-            .e_str => |str| try self.pushStageExprs(run, store.sliceExpr(str.span)),
-            .e_list => |list| try self.pushStageExprs(run, store.sliceExpr(list.elems)),
-            .e_tuple => |tuple| try self.pushStageExprs(run, store.sliceExpr(tuple.elems)),
-            .e_block => |block| {
+            .e_str => try self.pushStageExprs(run, store.sliceExpr(store.exprView(expr).e_str.get(.span))),
+            .e_list => try self.pushStageExprs(run, store.sliceExpr(store.exprView(expr).e_list.get(.elems))),
+            .e_tuple => try self.pushStageExprs(run, store.sliceExpr(store.exprView(expr).e_tuple.get(.elems))),
+            .e_block => {
+                const block = store.exprView(expr).e_block.decode();
                 const gpa = self.checker.gpa;
                 try run.items.append(gpa, .{ .pop_mark = run.context().mark() });
                 try self.pushStageExpr(run, block.final_expr);
@@ -4290,7 +4292,8 @@ const HoistSelectionTransaction = struct {
                     }
                 }
             },
-            .e_match => |match| {
+            .e_match => {
+                const match = store.exprView(expr).e_match.decode();
                 // Every branch starts from the bindings in scope at the match.
                 const gpa = self.checker.gpa;
                 const mark = run.context().mark();
@@ -4312,7 +4315,8 @@ const HoistSelectionTransaction = struct {
                 }
                 try self.pushStageExpr(run, match.cond);
             },
-            .e_if => |if_expr| {
+            .e_if => {
+                const if_expr = store.exprView(expr).e_if.decode();
                 try self.pushStageExpr(run, if_expr.final_else);
                 const branches = store.sliceIfBranches(if_expr.branches);
                 var index = branches.len;
@@ -4323,15 +4327,18 @@ const HoistSelectionTransaction = struct {
                     try self.pushStageExpr(run, branch.cond);
                 }
             },
-            .e_call => |call| {
+            .e_call => {
+                const call = store.exprView(expr).e_call.decode();
                 try self.pushStageExprs(run, store.sliceExpr(call.args));
                 try self.pushStageExpr(run, call.func);
             },
-            inline .e_method_call, .e_dispatch_call => |call| {
+            inline .e_method_call, .e_dispatch_call => |kind| {
+                const call = @field(store.exprView(expr), @tagName(kind)).decode();
                 try self.pushStageExprs(run, store.sliceExpr(call.args));
                 try self.pushStageExpr(run, call.receiver);
             },
-            .e_record => |record| {
+            .e_record => {
+                const record = store.exprView(expr).e_record.decode();
                 const fields = store.sliceRecordFields(record.fields);
                 var index = fields.len;
                 while (index > 0) {
@@ -4340,22 +4347,35 @@ const HoistSelectionTransaction = struct {
                 }
                 if (record.ext) |ext_expr| try self.pushStageExpr(run, ext_expr);
             },
-            .e_tag => |tag| try self.pushStageExprs(run, store.sliceExpr(tag.args)),
-            .e_nominal => |nominal| try self.pushStageExpr(run, nominal.backing_expr),
-            .e_nominal_external => |nominal| try self.pushStageExpr(run, nominal.backing_expr),
-            .e_binop => |binop| try self.pushStageExprs(run, &.{ binop.lhs, binop.rhs }),
-            .e_unary_minus => |unary| try self.pushStageExpr(run, unary.expr),
-            .e_field_access => |field| try self.pushStageExpr(run, field.receiver),
-            .e_interpolation => |interpolation| {
+            .e_tag => try self.pushStageExprs(run, store.sliceExpr(store.exprView(expr).e_tag.get(.args))),
+            .e_nominal => try self.pushStageExpr(run, store.exprView(expr).e_nominal.get(.backing_expr)),
+            .e_nominal_external => try self.pushStageExpr(run, store.exprView(expr).e_nominal_external.get(.backing_expr)),
+            .e_binop => binop_blk: {
+                const binop = store.exprView(expr).e_binop.decode();
+                break :binop_blk try self.pushStageExprs(run, &.{ binop.lhs, binop.rhs });
+            },
+            .e_unary_minus => try self.pushStageExpr(run, store.exprView(expr).e_unary_minus.get(.expr)),
+            .e_field_access => try self.pushStageExpr(run, store.exprView(expr).e_field_access.get(.receiver)),
+            .e_interpolation => {
+                const interpolation = store.exprView(expr).e_interpolation.decode();
                 try self.pushStageExprs(run, store.sliceExpr(interpolation.parts));
                 try self.pushStageExpr(run, interpolation.first);
             },
-            .e_structural_eq => |eq| try self.pushStageExprs(run, &.{ eq.lhs, eq.rhs }),
-            .e_structural_hash => |h| try self.pushStageExprs(run, &.{ h.value, h.hasher }),
-            .e_method_eq => |eq| try self.pushStageExprs(run, &.{ eq.lhs, eq.rhs }),
-            .e_type_method_call => |call| try self.pushStageExprs(run, store.sliceExpr(call.args)),
-            .e_type_dispatch_call => |call| try self.pushStageExprs(run, store.sliceExpr(call.args)),
-            .e_tuple_access => |access| try self.pushStageExpr(run, access.tuple),
+            .e_structural_eq => eq_blk: {
+                const eq = store.exprView(expr).e_structural_eq.decode();
+                break :eq_blk try self.pushStageExprs(run, &.{ eq.lhs, eq.rhs });
+            },
+            .e_structural_hash => h_blk: {
+                const h = store.exprView(expr).e_structural_hash.decode();
+                break :h_blk try self.pushStageExprs(run, &.{ h.value, h.hasher });
+            },
+            .e_method_eq => eq_blk: {
+                const eq = store.exprView(expr).e_method_eq.decode();
+                break :eq_blk try self.pushStageExprs(run, &.{ eq.lhs, eq.rhs });
+            },
+            .e_type_method_call => try self.pushStageExprs(run, store.sliceExpr(store.exprView(expr).e_type_method_call.get(.args))),
+            .e_type_dispatch_call => try self.pushStageExprs(run, store.sliceExpr(store.exprView(expr).e_type_dispatch_call.get(.args))),
+            .e_tuple_access => try self.pushStageExpr(run, store.exprView(expr).e_tuple_access.get(.tuple)),
             .e_deferred_import_ref => base.invariant("check invariant violated: deferred import reference reached checking", .{}),
         }
     }
@@ -5239,9 +5259,9 @@ fn noteRigidVarLookupForLocalProcedures(self: *Self, rigid_var: CIR.TypeAnno.Idx
 /// through an alias of an enclosing function's variable depends on that
 /// function, wherever the alias is declared.
 fn noteTypeVarAliasForLocalProcedures(self: *Self, type_var_anno: CIR.TypeAnno.Idx) Allocator.Error!void {
-    switch (self.cir.store.getTypeAnno(type_var_anno)) {
+    switch (self.cir.store.typeAnnoKind(type_var_anno)) {
         .rigid_var => try self.noteRigidVarLookupForLocalProcedures(type_var_anno),
-        .rigid_var_lookup => |lookup| try self.noteRigidVarLookupForLocalProcedures(lookup.ref),
+        .rigid_var_lookup => try self.noteRigidVarLookupForLocalProcedures(self.cir.store.typeAnnoView(type_var_anno).rigid_var_lookup.get(.ref)),
         .underscore, .malformed => {},
         .lookup, .apply, .tag_union, .tag, .tuple, .record, .@"fn", .parens => unreachable, // a type variable alias names a type variable
     }
@@ -5257,8 +5277,8 @@ fn noteTypeVarAliasForLocalProcedures(self: *Self, type_var_anno: CIR.TypeAnno.I
 /// local bindings like any other, and a candidate depends on them only
 /// through the references and dispatches recorded for it.
 fn noteTypeDeclReferenceForLocalProcedures(self: *Self, decl_idx: CIR.Statement.Idx) Allocator.Error!void {
-    switch (self.cir.store.getStatement(decl_idx)) {
-        .s_type_var_alias => |alias| return try self.noteTypeVarAliasForLocalProcedures(alias.type_var_anno),
+    switch (self.cir.store.statementKind(decl_idx)) {
+        .s_type_var_alias => return try self.noteTypeVarAliasForLocalProcedures(self.cir.store.statementView(decl_idx).s_type_var_alias.get(.type_var_anno)),
         .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_decl, .s_var, .s_var_uninitialized, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_type_anno, .s_runtime_error => {},
     }
     if (try self.isModuleTypeDecl(decl_idx)) return;
@@ -5276,8 +5296,8 @@ fn noteTypeDeclReferenceForLocalProcedures(self: *Self, decl_idx: CIR.Statement.
 }
 
 fn typeDeclHeaderArgs(self: *const Self, decl_idx: CIR.Statement.Idx) []const CIR.TypeAnno.Idx {
-    const header = switch (self.cir.store.getStatement(decl_idx)) {
-        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |alias| alias.header,
+    const header = switch (self.cir.store.statementKind(decl_idx)) {
+        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |kind| @field(self.cir.store.statementView(decl_idx), @tagName(kind)).get(.header),
         .s_decl,
         .s_var,
         .s_var_uninitialized,
@@ -5552,16 +5572,19 @@ fn decideLocalTypeContexts(self: *Self) Allocator.Error!void {
     for (inputs.keys(), inputs.values()) |decl, *input| {
         work.clearRetainingCapacity();
         walked_bindings.clearRetainingCapacity();
-        switch (self.cir.store.getStatement(decl)) {
-            .s_alias_decl => |alias| {
+        switch (self.cir.store.statementKind(decl)) {
+            .s_alias_decl => {
+                const alias = self.cir.store.statementView(decl).s_alias_decl.decode();
                 for (self.typeDeclHeaderArgs(decl)) |parameter| try work.append(gpa, .{ .anno = parameter });
                 if (alias.anno != .placeholder) try work.append(gpa, .{ .anno = alias.anno });
             },
-            .s_nominal_decl => |nominal| {
+            .s_nominal_decl => {
+                const nominal = self.cir.store.statementView(decl).s_nominal_decl.decode();
                 for (self.typeDeclHeaderArgs(decl)) |parameter| try work.append(gpa, .{ .anno = parameter });
                 if (nominal.anno != .placeholder) try work.append(gpa, .{ .anno = nominal.anno });
             },
-            .s_where_alias_decl => |where_alias| {
+            .s_where_alias_decl => {
+                const where_alias = self.cir.store.statementView(decl).s_where_alias_decl.decode();
                 for (self.typeDeclHeaderArgs(decl)) |parameter| try work.append(gpa, .{ .anno = parameter });
                 if (where_alias.receiver != .placeholder) {
                     try work.append(gpa, .{ .anno = where_alias.receiver });
@@ -5669,32 +5692,36 @@ fn walkLocalTypeContextItem(
                 .w_malformed => {},
             };
         },
-        .anno => |anno_idx| switch (store.getTypeAnno(anno_idx)) {
+        .anno => |anno_idx| switch (store.typeAnnoKind(anno_idx)) {
             .rigid_var => try input.intros.put(gpa, anno_idx, {}),
-            .rigid_var_lookup => |lookup| try input.lookups.append(gpa, lookup.ref),
+            .rigid_var_lookup => try input.lookups.append(gpa, store.typeAnnoView(anno_idx).rigid_var_lookup.get(.ref)),
             .underscore, .malformed => {},
-            .lookup => |lookup| try self.noteLocalTypeContextNamed(lookup.base, decl, input),
-            .apply => |apply| {
+            .lookup => try self.noteLocalTypeContextNamed(store.typeAnnoView(anno_idx).lookup.get(.base), decl, input),
+            .apply => {
+                const apply = store.typeAnnoView(anno_idx).apply.decode();
                 try self.noteLocalTypeContextNamed(apply.base, decl, input);
                 for (store.sliceTypeAnnos(apply.args)) |arg| try work.append(gpa, .{ .anno = arg });
             },
-            .tag_union => |tag_union| {
+            .tag_union => {
+                const tag_union = store.typeAnnoView(anno_idx).tag_union.decode();
                 for (store.sliceTypeAnnos(tag_union.tags)) |tag| try work.append(gpa, .{ .anno = tag });
                 if (tag_union.ext) |ext| try work.append(gpa, .{ .anno = ext });
             },
-            .tag => |tag| for (store.sliceTypeAnnos(tag.args)) |arg| try work.append(gpa, .{ .anno = arg }),
-            .tuple => |tuple| for (store.sliceTypeAnnos(tuple.elems)) |elem| try work.append(gpa, .{ .anno = elem }),
-            .record => |record| {
+            .tag => for (store.sliceTypeAnnos(store.typeAnnoView(anno_idx).tag.get(.args))) |arg| try work.append(gpa, .{ .anno = arg }),
+            .tuple => for (store.sliceTypeAnnos(store.typeAnnoView(anno_idx).tuple.get(.elems))) |elem| try work.append(gpa, .{ .anno = elem }),
+            .record => {
+                const record = store.typeAnnoView(anno_idx).record.decode();
                 for (store.sliceAnnoRecordFields(record.fields)) |field_idx| {
                     try work.append(gpa, .{ .anno = store.getAnnoRecordField(field_idx).ty });
                 }
                 if (record.ext) |ext| try work.append(gpa, .{ .anno = ext });
             },
-            .@"fn" => |func| {
+            .@"fn" => {
+                const func = store.typeAnnoView(anno_idx).@"fn".decode();
                 for (store.sliceTypeAnnos(func.args)) |arg| try work.append(gpa, .{ .anno = arg });
                 try work.append(gpa, .{ .anno = func.ret });
             },
-            .parens => |parens| try work.append(gpa, .{ .anno = parens.anno }),
+            .parens => try work.append(gpa, .{ .anno = store.typeAnnoView(anno_idx).parens.get(.anno) }),
         },
         .pattern => |pattern| {
             const data = store.patternAs(pattern, .nominal);
@@ -5704,27 +5731,29 @@ fn walkLocalTypeContextItem(
             for (scratch_patterns.items) |subpattern| try work.append(gpa, .{ .pattern = subpattern });
         },
         .expr => |expr| {
-            switch (store.getExpr(expr)) {
-                .e_lookup_local => |lookup| try self.queueLocalTypeContextBinding(lookup.pattern_idx, work, walked_bindings),
-                .e_nominal => |nominal| try self.noteLocalTypeContextDecl(nominal.nominal_type_decl, decl, input),
-                .e_lookup_associated_local => |lookup| {
+            switch (store.exprKind(expr)) {
+                .e_lookup_local => try self.queueLocalTypeContextBinding(store.exprView(expr).e_lookup_local.get(.pattern_idx), work, walked_bindings),
+                .e_nominal => try self.noteLocalTypeContextDecl(store.exprView(expr).e_nominal.get(.nominal_type_decl), decl, input),
+                .e_lookup_associated_local => {
+                    const lookup = store.exprView(expr).e_lookup_associated_local.decode();
                     try self.noteLocalTypeContextStatement(@fromBackingInt(@intCast(lookup.type_node_idx)), decl, input);
                 },
-                .e_type_method_call => |call| try self.noteLocalTypeContextStatement(call.type_dispatch_stmt, decl, input),
-                .e_type_dispatch_call => |call| switch (call.owner) {
+                .e_type_method_call => try self.noteLocalTypeContextStatement(store.exprView(expr).e_type_method_call.get(.type_dispatch_stmt), decl, input),
+                .e_type_dispatch_call => switch (store.exprView(expr).e_type_dispatch_call.get(.owner)) {
                     .statement => |statement| try self.noteLocalTypeContextStatement(statement, decl, input),
                     .dispatcher => {},
                 },
-                .e_block => |block| for (store.sliceStatements(block.stmts)) |statement| {
-                    switch (store.getStatement(statement)) {
-                        .s_decl => |local| if (local.anno) |annotation| try work.append(gpa, .{ .annotation = annotation }),
-                        .s_var => |local| if (local.anno) |annotation| try work.append(gpa, .{ .annotation = annotation }),
-                        .s_var_uninitialized => |local| if (local.anno) |annotation| try work.append(gpa, .{ .annotation = annotation }),
-                        .s_type_anno => |type_anno| {
+                .e_block => for (store.sliceStatements(store.exprView(expr).e_block.get(.stmts))) |statement| {
+                    switch (store.statementKind(statement)) {
+                        .s_decl => if (store.statementView(statement).s_decl.get(.anno)) |annotation| try work.append(gpa, .{ .annotation = annotation }),
+                        .s_var => if (store.statementView(statement).s_var.get(.anno)) |annotation| try work.append(gpa, .{ .annotation = annotation }),
+                        .s_var_uninitialized => if (store.statementView(statement).s_var_uninitialized.get(.anno)) |annotation| try work.append(gpa, .{ .annotation = annotation }),
+                        .s_type_anno => {
+                            const type_anno = store.statementView(statement).s_type_anno.decode();
                             try work.append(gpa, .{ .anno = type_anno.anno });
                             if (type_anno.where) |where_span| try work.append(gpa, .{ .where = where_span });
                         },
-                        .s_type_var_alias => |alias| try self.noteLocalTypeContextAliasedVar(alias.type_var_anno, input),
+                        .s_type_var_alias => try self.noteLocalTypeContextAliasedVar(store.statementView(statement).s_type_var_alias.get(.type_var_anno), input),
                         .s_reassign,
                         .s_crash,
                         .s_dbg,
@@ -5876,9 +5905,9 @@ fn noteLocalTypeContextAliasedVar(
     type_var_anno: CIR.TypeAnno.Idx,
     input: *LocalTypeContextInputs,
 ) Allocator.Error!void {
-    switch (self.cir.store.getTypeAnno(type_var_anno)) {
+    switch (self.cir.store.typeAnnoKind(type_var_anno)) {
         .rigid_var => try input.lookups.append(self.gpa, type_var_anno),
-        .rigid_var_lookup => |lookup| try input.lookups.append(self.gpa, lookup.ref),
+        .rigid_var_lookup => try input.lookups.append(self.gpa, self.cir.store.typeAnnoView(type_var_anno).rigid_var_lookup.get(.ref)),
         .underscore, .malformed => {},
         .lookup, .apply, .tag_union, .tag, .tuple, .record, .@"fn", .parens => unreachable, // a type variable alias names a type variable
     }
@@ -5893,9 +5922,9 @@ fn noteLocalTypeContextStatement(
     decl: CIR.Statement.Idx,
     input: *LocalTypeContextInputs,
 ) Allocator.Error!void {
-    switch (self.cir.store.getStatement(statement)) {
+    switch (self.cir.store.statementKind(statement)) {
         .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => try self.noteLocalTypeContextDecl(statement, decl, input),
-        .s_type_var_alias => |alias| try self.noteLocalTypeContextAliasedVar(alias.type_var_anno, input),
+        .s_type_var_alias => try self.noteLocalTypeContextAliasedVar(self.cir.store.statementView(statement).s_type_var_alias.get(.type_var_anno), input),
         .s_decl,
         .s_var,
         .s_var_uninitialized,
@@ -7507,24 +7536,27 @@ fn patternIntroducesValueBinding(self: *const Self, root: CIR.Pattern.Idx) Alloc
     defer pending.deinit(self.gpa);
     try pending.append(self.gpa, root);
     while (pending.pop()) |pattern| {
-        switch (self.cir.store.getPattern(pattern)) {
+        switch (self.cir.store.patternKind(pattern)) {
             .assign, .var_assign, .as => return true,
-            .tuple => |tuple| try pending.appendSlice(self.gpa, self.cir.store.slicePatterns(tuple.patterns)),
-            .record_destructure => |destructure| {
+            .tuple => try pending.appendSlice(self.gpa, self.cir.store.slicePatterns(self.cir.store.patternView(pattern).tuple.get(.patterns))),
+            .record_destructure => {
+                const destructure = self.cir.store.patternView(pattern).record_destructure.decode();
                 for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
                     try pending.append(self.gpa, self.cir.store.getRecordDestruct(destruct_idx).kind.toPatternIdx());
                 }
             },
-            .applied_tag => |tag| try pending.appendSlice(self.gpa, self.cir.store.slicePatterns(tag.args)),
-            .nominal => |nominal| try pending.append(self.gpa, nominal.backing_pattern),
-            .nominal_external => |nominal| try pending.append(self.gpa, nominal.backing_pattern),
-            .list => |list| {
+            .applied_tag => try pending.appendSlice(self.gpa, self.cir.store.slicePatterns(self.cir.store.patternView(pattern).applied_tag.get(.args))),
+            .nominal => try pending.append(self.gpa, self.cir.store.patternView(pattern).nominal.get(.backing_pattern)),
+            .nominal_external => try pending.append(self.gpa, self.cir.store.patternView(pattern).nominal_external.get(.backing_pattern)),
+            .list => {
+                const list = self.cir.store.patternView(pattern).list.decode();
                 try pending.appendSlice(self.gpa, self.cir.store.slicePatterns(list.patterns));
                 if (list.rest_info) |rest| {
                     if (rest.pattern) |child| try pending.append(self.gpa, child);
                 }
             },
-            .str_interpolation => |str| {
+            .str_interpolation => {
+                const str = self.cir.store.patternView(pattern).str_interpolation.decode();
                 var offset: u32 = 0;
                 while (offset < str.steps.span.len) : (offset += 1) {
                     if (self.cir.store.getStrPatternStep(str.steps, offset).capture != null) return true;
@@ -7597,25 +7629,27 @@ fn patternIsIrrefutableForHoistExtraction(self: *Self, root: CIR.Pattern.Idx) Al
     defer pending.deinit(self.gpa);
     try pending.append(self.gpa, root);
     while (pending.pop()) |pattern| {
-        switch (self.cir.store.getPattern(pattern)) {
+        switch (self.cir.store.patternKind(pattern)) {
             .assign,
             .var_assign,
             .underscore,
             => {},
-            .as => |as_pattern| try pending.append(self.gpa, as_pattern.pattern),
-            .tuple => |tuple| try pending.appendSlice(self.gpa, self.cir.store.slicePatterns(tuple.patterns)),
-            .record_destructure => |destructure| {
+            .as => try pending.append(self.gpa, self.cir.store.patternView(pattern).as.get(.pattern)),
+            .tuple => try pending.appendSlice(self.gpa, self.cir.store.slicePatterns(self.cir.store.patternView(pattern).tuple.get(.patterns))),
+            .record_destructure => {
+                const destructure = self.cir.store.patternView(pattern).record_destructure.decode();
                 for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
                     try pending.append(self.gpa, self.cir.store.getRecordDestruct(destruct_idx).kind.toPatternIdx());
                 }
             },
-            .list => |list| {
+            .list => {
+                const list = self.cir.store.patternView(pattern).list.decode();
                 if (list.patterns.span.len != 0) return false;
                 const rest_info = list.rest_info orelse return false;
                 if (rest_info.pattern) |rest_pattern| try pending.append(self.gpa, rest_pattern);
             },
-            .nominal => |nominal| try pending.append(self.gpa, nominal.backing_pattern),
-            .nominal_external => |nominal| try pending.append(self.gpa, nominal.backing_pattern),
+            .nominal => try pending.append(self.gpa, self.cir.store.patternView(pattern).nominal.get(.backing_pattern)),
+            .nominal_external => try pending.append(self.gpa, self.cir.store.patternView(pattern).nominal_external.get(.backing_pattern)),
             .applied_tag,
             .str_interpolation,
             .runtime_error,
@@ -8063,33 +8097,38 @@ fn markHoistInvalidatedExprChildren(
 /// expression, each pattern it binds, and the pattern a reassignment writes.
 /// A `return`'s lambda encloses the statement, so it is not a child.
 fn visitStatementChildren(self: *const Self, statement: CIR.Statement.Idx, visitor: anytype) Allocator.Error!void {
-    switch (self.cir.store.getStatement(statement)) {
-        .s_decl => |decl| {
+    switch (self.cir.store.statementKind(statement)) {
+        .s_decl => {
+            const decl = self.cir.store.statementView(statement).s_decl.decode();
             try visitor.boundPattern(decl.pattern);
             try visitor.expr(decl.expr);
         },
-        .s_var => |var_| {
+        .s_var => {
+            const var_ = self.cir.store.statementView(statement).s_var.decode();
             try visitor.boundPattern(var_.pattern_idx);
             try visitor.expr(var_.expr);
         },
-        .s_reassign => |reassign| {
+        .s_reassign => {
+            const reassign = self.cir.store.statementView(statement).s_reassign.decode();
             try visitor.reassignTarget(reassign.pattern_idx);
             try visitor.expr(reassign.expr);
         },
-        .s_var_uninitialized => |var_| try visitor.boundPattern(var_.pattern_idx),
-        .s_dbg => |dbg| try visitor.expr(dbg.expr),
-        .s_expr => |expr| try visitor.expr(expr.expr),
-        .s_expect => |expect| try visitor.expr(expect.body),
-        .s_for => |for_| {
+        .s_var_uninitialized => try visitor.boundPattern(self.cir.store.statementView(statement).s_var_uninitialized.get(.pattern_idx)),
+        .s_dbg => try visitor.expr(self.cir.store.statementView(statement).s_dbg.get(.expr)),
+        .s_expr => try visitor.expr(self.cir.store.statementView(statement).s_expr.get(.expr)),
+        .s_expect => try visitor.expr(self.cir.store.statementView(statement).s_expect.get(.body)),
+        .s_for => {
+            const for_ = self.cir.store.statementView(statement).s_for.decode();
             try visitor.boundPattern(for_.patt);
             try visitor.expr(for_.expr);
             try visitor.expr(for_.body);
         },
-        inline .s_while, .s_infinite_loop, .s_breakable_loop => |while_| {
+        inline .s_while, .s_infinite_loop, .s_breakable_loop => |kind| {
+            const while_ = @field(self.cir.store.statementView(statement), @tagName(kind)).decode();
             try visitor.expr(while_.cond);
             try visitor.expr(while_.body);
         },
-        .s_return => |ret| try visitor.expr(ret.expr),
+        .s_return => try visitor.expr(self.cir.store.statementView(statement).s_return.get(.expr)),
         .s_crash,
         .s_break,
         .s_import,
@@ -8099,7 +8138,7 @@ fn visitStatementChildren(self: *const Self, statement: CIR.Statement.Idx, visit
         .s_type_anno,
         .s_type_var_alias,
         => {},
-        .s_runtime_error => |runtime_error| for (self.cir.store.sliceExpr(runtime_error.evaluated)) |child| try visitor.expr(child),
+        .s_runtime_error => for (self.cir.store.sliceExpr(self.cir.store.statementView(statement).s_runtime_error.get(.evaluated))) |child| try visitor.expr(child),
     }
 }
 
@@ -8107,11 +8146,12 @@ fn visitStatementChildren(self: *const Self, statement: CIR.Statement.Idx, visit
 /// expression and each pattern it binds. A `return`'s lambda encloses the
 /// expression, so it is not a child.
 fn visitExprChildren(self: *const Self, expr: CIR.Expr.Idx, visitor: anytype) Allocator.Error!void {
-    switch (self.cir.store.getExpr(expr)) {
-        .e_str => |str| for (self.cir.store.sliceExpr(str.span)) |child| try visitor.expr(child),
-        .e_list => |list| for (self.cir.store.sliceExpr(list.elems)) |child| try visitor.expr(child),
-        .e_tuple => |tuple| for (self.cir.store.sliceExpr(tuple.elems)) |child| try visitor.expr(child),
-        .e_match => |match| {
+    switch (self.cir.store.exprKind(expr)) {
+        .e_str => for (self.cir.store.sliceExpr(self.cir.store.exprView(expr).e_str.get(.span))) |child| try visitor.expr(child),
+        .e_list => for (self.cir.store.sliceExpr(self.cir.store.exprView(expr).e_list.get(.elems))) |child| try visitor.expr(child),
+        .e_tuple => for (self.cir.store.sliceExpr(self.cir.store.exprView(expr).e_tuple.get(.elems))) |child| try visitor.expr(child),
+        .e_match => {
+            const match = self.cir.store.exprView(expr).e_match.decode();
             try visitor.expr(match.cond);
             for (self.cir.store.sliceMatchBranches(match.branches)) |branch_idx| {
                 const branch = self.cir.store.getMatchBranch(branch_idx);
@@ -8122,7 +8162,8 @@ fn visitExprChildren(self: *const Self, expr: CIR.Expr.Idx, visitor: anytype) Al
                 try visitor.expr(branch.value);
             }
         },
-        .e_if => |if_| {
+        .e_if => {
+            const if_ = self.cir.store.exprView(expr).e_if.decode();
             for (self.cir.store.sliceIfBranches(if_.branches)) |branch_idx| {
                 const branch = self.cir.store.getIfBranch(branch_idx);
                 try visitor.expr(branch.cond);
@@ -8130,68 +8171,79 @@ fn visitExprChildren(self: *const Self, expr: CIR.Expr.Idx, visitor: anytype) Al
             }
             try visitor.expr(if_.final_else);
         },
-        .e_call => |call| {
+        .e_call => {
+            const call = self.cir.store.exprView(expr).e_call.decode();
             try visitor.expr(call.func);
             for (self.cir.store.sliceExpr(call.args)) |child| try visitor.expr(child);
         },
-        .e_record => |record| {
+        .e_record => {
+            const record = self.cir.store.exprView(expr).e_record.decode();
             for (self.cir.store.sliceRecordFields(record.fields)) |field_idx| {
                 try visitor.expr(self.cir.store.getRecordField(field_idx).value);
             }
             if (record.ext) |ext| try visitor.expr(ext);
         },
-        .e_block => |block| {
+        .e_block => {
+            const block = self.cir.store.exprView(expr).e_block.decode();
             for (self.cir.store.sliceStatements(block.stmts)) |statement| try self.visitStatementChildren(statement, visitor);
             try visitor.expr(block.final_expr);
         },
-        .e_tag => |tag| for (self.cir.store.sliceExpr(tag.args)) |child| try visitor.expr(child),
-        .e_nominal => |nominal| try visitor.expr(nominal.backing_expr),
-        .e_nominal_external => |nominal| try visitor.expr(nominal.backing_expr),
-        .e_closure => |closure| try visitor.expr(closure.lambda_idx),
-        .e_lambda => |lambda| {
+        .e_tag => for (self.cir.store.sliceExpr(self.cir.store.exprView(expr).e_tag.get(.args))) |child| try visitor.expr(child),
+        .e_nominal => try visitor.expr(self.cir.store.exprView(expr).e_nominal.get(.backing_expr)),
+        .e_nominal_external => try visitor.expr(self.cir.store.exprView(expr).e_nominal_external.get(.backing_expr)),
+        .e_closure => try visitor.expr(self.cir.store.exprView(expr).e_closure.get(.lambda_idx)),
+        .e_lambda => {
+            const lambda = self.cir.store.exprView(expr).e_lambda.decode();
             for (self.cir.store.slicePatterns(lambda.args)) |arg| try visitor.boundPattern(arg);
             try visitor.expr(lambda.body);
         },
-        .e_binop => |binop| {
+        .e_binop => {
+            const binop = self.cir.store.exprView(expr).e_binop.decode();
             try visitor.expr(binop.lhs);
             try visitor.expr(binop.rhs);
         },
-        .e_unary_minus => |unary| try visitor.expr(unary.expr),
-        .e_field_access => |field| try visitor.expr(field.receiver),
-        inline .e_method_call, .e_dispatch_call => |call| {
+        .e_unary_minus => try visitor.expr(self.cir.store.exprView(expr).e_unary_minus.get(.expr)),
+        .e_field_access => try visitor.expr(self.cir.store.exprView(expr).e_field_access.get(.receiver)),
+        inline .e_method_call, .e_dispatch_call => |kind| {
+            const call = @field(self.cir.store.exprView(expr), @tagName(kind)).decode();
             try visitor.expr(call.receiver);
             for (self.cir.store.sliceExpr(call.args)) |child| try visitor.expr(child);
         },
-        .e_interpolation => |interpolation| {
+        .e_interpolation => {
+            const interpolation = self.cir.store.exprView(expr).e_interpolation.decode();
             try visitor.expr(interpolation.first);
             for (self.cir.store.sliceExpr(interpolation.parts)) |child| try visitor.expr(child);
         },
-        .e_structural_eq => |eq| {
+        .e_structural_eq => {
+            const eq = self.cir.store.exprView(expr).e_structural_eq.decode();
             try visitor.expr(eq.lhs);
             try visitor.expr(eq.rhs);
         },
-        .e_structural_hash => |hash| {
+        .e_structural_hash => {
+            const hash = self.cir.store.exprView(expr).e_structural_hash.decode();
             try visitor.expr(hash.value);
             try visitor.expr(hash.hasher);
         },
-        .e_method_eq => |eq| {
+        .e_method_eq => {
+            const eq = self.cir.store.exprView(expr).e_method_eq.decode();
             try visitor.expr(eq.lhs);
             try visitor.expr(eq.rhs);
         },
-        .e_type_method_call => |call| for (self.cir.store.sliceExpr(call.args)) |child| try visitor.expr(child),
-        .e_type_dispatch_call => |call| for (self.cir.store.sliceExpr(call.args)) |child| try visitor.expr(child),
-        .e_tuple_access => |access| try visitor.expr(access.tuple),
-        .e_dbg => |dbg| try visitor.expr(dbg.expr),
-        .e_expect_err => |expect_err| try visitor.expr(expect_err.expr),
-        .e_expect => |expect| try visitor.expr(expect.body),
-        .e_return => |ret| try visitor.expr(ret.expr),
-        .e_for => |for_| {
+        .e_type_method_call => for (self.cir.store.sliceExpr(self.cir.store.exprView(expr).e_type_method_call.get(.args))) |child| try visitor.expr(child),
+        .e_type_dispatch_call => for (self.cir.store.sliceExpr(self.cir.store.exprView(expr).e_type_dispatch_call.get(.args))) |child| try visitor.expr(child),
+        .e_tuple_access => try visitor.expr(self.cir.store.exprView(expr).e_tuple_access.get(.tuple)),
+        .e_dbg => try visitor.expr(self.cir.store.exprView(expr).e_dbg.get(.expr)),
+        .e_expect_err => try visitor.expr(self.cir.store.exprView(expr).e_expect_err.get(.expr)),
+        .e_expect => try visitor.expr(self.cir.store.exprView(expr).e_expect.get(.body)),
+        .e_return => try visitor.expr(self.cir.store.exprView(expr).e_return.get(.expr)),
+        .e_for => {
+            const for_ = self.cir.store.exprView(expr).e_for.decode();
             try visitor.boundPattern(for_.patt);
             try visitor.expr(for_.expr);
             try visitor.expr(for_.body);
         },
-        .e_run_low_level => |run| for (self.cir.store.sliceExpr(run.args)) |child| try visitor.expr(child),
-        .e_runtime_error => |runtime_error| for (self.cir.store.sliceExpr(runtime_error.evaluated)) |child| try visitor.expr(child),
+        .e_run_low_level => for (self.cir.store.sliceExpr(self.cir.store.exprView(expr).e_run_low_level.get(.args))) |child| try visitor.expr(child),
+        .e_runtime_error => for (self.cir.store.sliceExpr(self.cir.store.exprView(expr).e_runtime_error.get(.evaluated))) |child| try visitor.expr(child),
         .e_num,
         .e_frac_f32,
         .e_frac_f64,
@@ -8725,7 +8777,7 @@ const HoistRoles = struct {
 fn exprHoistRoles(self: *Self, expr: CIR.Expr.Idx, want_binding_root: bool) Allocator.Error!HoistRoles {
     if (self.hoistExprInvalidated(expr)) return .none;
     if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return .none;
-    const roles: HoistRoles = switch (self.cir.store.getExpr(expr)) {
+    const roles: HoistRoles = switch (self.cir.store.exprKind(expr)) {
         .e_lookup_local,
         .e_lookup_external,
         .e_lookup_associated_local,
@@ -8760,14 +8812,15 @@ fn exprHoistRoles(self: *Self, expr: CIR.Expr.Idx, want_binding_root: bool) Allo
             const binding_root = want_binding_root and !self.exprHasDedicatedLiteralConversionRoot(expr);
             break :blk .{ .root = false, .cover = false, .binding_root = binding_root, .binding_value = binding_root };
         },
-        .e_str => |str| blk: {
+        .e_str => blk: {
+            const str = self.cir.store.exprView(expr).e_str.decode();
             const interpolated = self.stringHasInterpolation(str.span);
             const binding_root = want_binding_root and !self.exprHasDedicatedLiteralConversionRoot(expr);
             break :blk .{ .root = interpolated, .cover = interpolated, .binding_root = binding_root, .binding_value = binding_root };
         },
         // A tag with no payload is the same value as a zero-argument tag,
         // which computes nothing and is no root of its own.
-        .e_tag => |tag| if (tag.args.span.len == 0) .binding_root_only else .all,
+        .e_tag => if (self.cir.store.exprView(expr).e_tag.get(.args).span.len == 0) .binding_root_only else .all,
         .e_list,
         .e_method_call,
         .e_dispatch_call,
@@ -11228,8 +11281,11 @@ fn poisonInvalidTypeDeclarations(self: *Self, poisoned: []bool) std.mem.Allocato
         if (!invalid or was_poisoned.*) continue;
         was_poisoned.* = true;
 
-        const backing_var: ?Var = switch (self.cir.store.getStatement(decl_idx)) {
-            .s_alias_decl => |alias| if (alias.anno == .placeholder) null else ModuleEnv.varFrom(alias.anno),
+        const backing_var: ?Var = switch (self.cir.store.statementKind(decl_idx)) {
+            .s_alias_decl => alias_blk: {
+                const alias = self.cir.store.statementView(decl_idx).s_alias_decl.decode();
+                break :alias_blk if (alias.anno == .placeholder) null else ModuleEnv.varFrom(alias.anno);
+            },
             .s_nominal_decl => blk: {
                 const nominal_idx = self.types.lookupNominalDeclByKey(
                     self_origin,
@@ -11715,9 +11771,9 @@ fn appendUnnamedFieldVars(self: *Self, stack: *std.ArrayListUnmanaged(Var), decl
     const statement_idx: CIR.Statement.Idx = @fromBackingInt(decl.statement());
     var anno_idx = self.cir.store.statementView(statement_idx).s_nominal_decl.get(.anno);
     const record = while (true) {
-        switch (self.cir.store.getTypeAnno(anno_idx)) {
-            .parens => |parens| anno_idx = parens.anno,
-            .record => |record| break record,
+        switch (self.cir.store.typeAnnoKind(anno_idx)) {
+            .parens => anno_idx = self.cir.store.typeAnnoView(anno_idx).parens.get(.anno),
+            .record => break self.cir.store.typeAnnoView(anno_idx).record.decode(),
             .apply, .rigid_var, .rigid_var_lookup, .underscore, .lookup, .tag_union, .tag, .tuple, .@"fn", .malformed => return,
         }
     };
@@ -14457,9 +14513,9 @@ fn builtinNominalDeclForSourceDecl(source_env: *const ModuleEnv, source_decl: ?u
     const node_tag = source_env.store.nodes.get(node).tag;
     if (node_tag != .statement_alias_decl and node_tag != .statement_nominal_decl) return null;
     const statement_idx: CIR.Statement.Idx = @fromBackingInt(@intCast(raw_decl));
-    const header_idx = switch (source_env.store.getStatement(statement_idx)) {
-        .s_alias_decl => |alias| alias.header,
-        .s_nominal_decl => |nominal| nominal.header,
+    const header_idx = switch (source_env.store.statementKind(statement_idx)) {
+        .s_alias_decl => source_env.store.statementView(statement_idx).s_alias_decl.get(.header),
+        .s_nominal_decl => source_env.store.statementView(statement_idx).s_nominal_decl.get(.header),
         .s_decl,
         .s_var,
         .s_var_uninitialized,
@@ -14575,10 +14631,9 @@ fn findLocalTypeDeclByNameInSpan(
 ) ?CIR.Statement.Idx {
     const stmts = self.cir.store.sliceStatements(span);
     for (stmts) |stmt_idx| {
-        const stmt = self.cir.store.getStatement(stmt_idx);
-        const header_idx = switch (stmt) {
-            .s_alias_decl => |alias| alias.header,
-            .s_nominal_decl => |nominal| nominal.header,
+        const header_idx = switch (self.cir.store.statementKind(stmt_idx)) {
+            .s_alias_decl => self.cir.store.statementView(stmt_idx).s_alias_decl.get(.header),
+            .s_nominal_decl => self.cir.store.statementView(stmt_idx).s_nominal_decl.get(.header),
             .s_decl,
             .s_var,
             .s_var_uninitialized,
@@ -15904,11 +15959,12 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // a declaration the checked module omits.
     for (0..self.cir.all_statements.span.len) |stmt_offset| {
         const stmt_idx = self.cir.store.statementAt(self.cir.all_statements, stmt_offset);
-        switch (self.cir.store.getStatement(stmt_idx)) {
+        switch (self.cir.store.statementKind(stmt_idx)) {
             .s_where_alias_decl => {
                 _ = try self.ensureTypeDeclGenerated(stmt_idx, &env);
             },
-            .s_type_anno => |type_anno| {
+            .s_type_anno => {
+                const type_anno = self.cir.store.statementView(stmt_idx).s_type_anno.decode();
                 const stmt_var = ModuleEnv.varFrom(stmt_idx);
                 try self.setVarRank(stmt_var, &env);
                 try self.generateStandaloneTypeAnno(stmt_var, type_anno, &env);
@@ -16218,13 +16274,13 @@ fn recordErroneousNodes(self: *Self) Allocator.Error!void {
 }
 
 fn exprIsErroneous(self: *Self, errors: *ErroneousTypeMemo, expr_idx: CIR.Expr.Idx) Allocator.Error!bool {
-    const expr = self.cir.store.getExpr(expr_idx);
-    switch (expr) {
+    switch (self.cir.store.exprKind(expr_idx)) {
         .e_runtime_error => return true,
-        .e_call => |call| if (call.constraint_fn_var) |fn_var| {
+        .e_call => if (self.cir.store.exprView(expr_idx).e_call.get(.constraint_fn_var)) |fn_var| {
             if (try errors.contains(fn_var)) return true;
         },
-        .e_interpolation => |interpolation| {
+        .e_interpolation => {
+            const interpolation = self.cir.store.exprView(expr_idx).e_interpolation.decode();
             if (interpolation.assembler_fn_var) |assembler| {
                 if (try errors.contains(assembler)) return true;
             }
@@ -16232,7 +16288,8 @@ fn exprIsErroneous(self: *Self, errors: *ErroneousTypeMemo, expr_idx: CIR.Expr.I
                 if (self.types.varStaticDispatchRejected(fn_var)) return true;
             }
         },
-        inline .e_dispatch_call, .e_method_eq, .e_type_dispatch_call => |dispatch| {
+        inline .e_dispatch_call, .e_method_eq, .e_type_dispatch_call => |kind| {
+            const dispatch = @field(self.cir.store.exprView(expr_idx), @tagName(kind)).decode();
             if (self.types.varStaticDispatchRejected(dispatch.constraint_fn_var)) return true;
         },
         .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_structural_eq, .e_structural_hash, .e_type_method_call, .e_tuple_access, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => {},
@@ -17540,12 +17597,14 @@ fn hoistSelectionInvariant(comptime message: []const u8) noreturn {
 fn selectedRootBindingRead(self: *const Self, root: hoist_roots.SelectedHoistedRoot, oracle: *const HoistedRootKeepOracle) ?u32 {
     if (root.body != .expr or (root.value_kind != .data_constant and root.value_kind != .proven_data_constant)) return null;
     var expr = root.expr;
-    while (true) switch (self.cir.store.getExpr(expr)) {
-        .e_block => |block| {
+    while (true) switch (self.cir.store.exprKind(expr)) {
+        .e_block => {
+            const block = self.cir.store.exprView(expr).e_block.decode();
             if (self.cir.store.sliceStatements(block.stmts).len != 0) return null;
             expr = block.final_expr;
         },
-        .e_lookup_local => |local| {
+        .e_lookup_local => {
+            const local = self.cir.store.exprView(expr).e_lookup_local.decode();
             const read = oracle.pattern_roots.get(local.pattern_idx) orelse return null;
             return if (oracle.keep_roots[read]) read else null;
         },
@@ -17701,8 +17760,8 @@ fn hoistedRootExprStep(
     if (self.contextual_local_dispatch_exprs.contains(expr)) return false;
 
     const gpa = self.gpa;
-    return switch (self.cir.store.getExpr(expr)) {
-        .e_lookup_local => |lookup| try self.hoistedRootBindingIsKept(lookup.pattern_idx, context, keep_oracle),
+    return switch (self.cir.store.exprKind(expr)) {
+        .e_lookup_local => try self.hoistedRootBindingIsKept(self.cir.store.exprView(expr).e_lookup_local.get(.pattern_idx), context, keep_oracle),
         .e_lookup_external,
         .e_lookup_associated_local,
         .e_lookup_associated,
@@ -17724,7 +17783,7 @@ fn hoistedRootExprStep(
         => true,
         // A retired expression still evaluates its recorded operands before
         // it crashes, so the root depends on everything they read.
-        .e_runtime_error => |runtime_error| try self.pushHoistedKeptExprs(pending, runtime_error.evaluated),
+        .e_runtime_error => try self.pushHoistedKeptExprs(pending, self.cir.store.exprView(expr).e_runtime_error.get(.evaluated)),
         .e_lookup_required,
         .e_lambda,
         .e_closure,
@@ -17741,17 +17800,19 @@ fn hoistedRootExprStep(
         .e_break,
         .e_run_low_level,
         => false,
-        .e_str => |str| try self.pushHoistedKeptExprs(pending, str.span),
-        .e_list => |list| try self.pushHoistedKeptExprs(pending, list.elems),
-        .e_tuple => |tuple| try self.pushHoistedKeptExprs(pending, tuple.elems),
-        .e_block => |block| blk: {
+        .e_str => try self.pushHoistedKeptExprs(pending, self.cir.store.exprView(expr).e_str.get(.span)),
+        .e_list => try self.pushHoistedKeptExprs(pending, self.cir.store.exprView(expr).e_list.get(.elems)),
+        .e_tuple => try self.pushHoistedKeptExprs(pending, self.cir.store.exprView(expr).e_tuple.get(.elems)),
+        .e_block => blk: {
+            const block = self.cir.store.exprView(expr).e_block.decode();
             const mark = context.mark();
             for (self.cir.store.sliceStatements(block.stmts)) |statement| try pending.append(gpa, .{ .statement = statement });
             try pending.append(gpa, .{ .expr = block.final_expr });
             try pending.append(gpa, .{ .pop = mark });
             break :blk true;
         },
-        .e_match => |match| blk: {
+        .e_match => blk: {
+            const match = self.cir.store.exprView(expr).e_match.decode();
             try pending.append(gpa, .{ .expr = match.cond });
             const mark = context.mark();
             for (self.cir.store.sliceMatchBranches(match.branches)) |branch_idx| {
@@ -17763,7 +17824,8 @@ fn hoistedRootExprStep(
             }
             break :blk true;
         },
-        .e_if => |if_expr| blk: {
+        .e_if => blk: {
+            const if_expr = self.cir.store.exprView(expr).e_if.decode();
             for (self.cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                 const branch = self.cir.store.getIfBranch(branch_idx);
                 try pending.append(gpa, .{ .expr = branch.cond });
@@ -17772,7 +17834,8 @@ fn hoistedRootExprStep(
             try pending.append(gpa, .{ .expr = if_expr.final_else });
             break :blk true;
         },
-        .e_call => |call| blk: {
+        .e_call => blk: {
+            const call = self.cir.store.exprView(expr).e_call.decode();
             // A call whose callee was still unresolved when the call was
             // checked settles with the rest of the module; the root waits on
             // that answer (design.md "Effect Slots").
@@ -17786,25 +17849,31 @@ fn hoistedRootExprStep(
         // Surface method calls must have been rewritten to checked dispatch
         // calls before the settled hoistability walk can classify them.
         .e_method_call => false,
-        .e_dispatch_call => |call| blk: {
+        .e_dispatch_call => blk: {
+            const call = self.cir.store.exprView(expr).e_dispatch_call.decode();
             if (!try self.staticDispatchAllowsHoistedRoot(concreteness, ModuleEnv.varFrom(call.receiver), call.constraint_fn_var)) break :blk false;
             try pending.append(gpa, .{ .expr = call.receiver });
             break :blk try self.pushHoistedKeptExprs(pending, call.args);
         },
-        .e_record => |record| blk: {
+        .e_record => blk: {
+            const record = self.cir.store.exprView(expr).e_record.decode();
             if (record.ext) |ext_expr| try pending.append(gpa, .{ .expr = ext_expr });
             for (self.cir.store.sliceRecordFields(record.fields)) |field_idx| {
                 try pending.append(gpa, .{ .expr = self.cir.store.getRecordField(field_idx).value });
             }
             break :blk true;
         },
-        .e_tag => |tag| try self.pushHoistedKeptExprs(pending, tag.args),
-        .e_nominal => |nominal| try pushHoistedKeptExpr(gpa, pending, nominal.backing_expr),
-        .e_nominal_external => |nominal| try pushHoistedKeptExpr(gpa, pending, nominal.backing_expr),
-        .e_binop => |binop| try pushHoistedKeptExprPair(gpa, pending, binop.lhs, binop.rhs),
-        .e_unary_minus => |unary| try pushHoistedKeptExpr(gpa, pending, unary.expr),
-        .e_field_access => |field| try pushHoistedKeptExpr(gpa, pending, field.receiver),
-        .e_interpolation => |interpolation| blk: {
+        .e_tag => try self.pushHoistedKeptExprs(pending, self.cir.store.exprView(expr).e_tag.get(.args)),
+        .e_nominal => try pushHoistedKeptExpr(gpa, pending, self.cir.store.exprView(expr).e_nominal.get(.backing_expr)),
+        .e_nominal_external => try pushHoistedKeptExpr(gpa, pending, self.cir.store.exprView(expr).e_nominal_external.get(.backing_expr)),
+        .e_binop => binop_blk: {
+            const binop = self.cir.store.exprView(expr).e_binop.decode();
+            break :binop_blk try pushHoistedKeptExprPair(gpa, pending, binop.lhs, binop.rhs);
+        },
+        .e_unary_minus => try pushHoistedKeptExpr(gpa, pending, self.cir.store.exprView(expr).e_unary_minus.get(.expr)),
+        .e_field_access => try pushHoistedKeptExpr(gpa, pending, self.cir.store.exprView(expr).e_field_access.get(.receiver)),
+        .e_interpolation => blk: {
+            const interpolation = self.cir.store.exprView(expr).e_interpolation.decode();
             if (interpolation.constraint_fn_var) |fn_var| {
                 const dispatcher_var = interpolation.dispatcher_var orelse break :blk false;
                 if (!try self.staticDispatchAllowsHoistedRoot(
@@ -17823,24 +17892,36 @@ fn hoistedRootExprStep(
             try pending.append(gpa, .{ .expr = interpolation.first });
             break :blk try self.pushHoistedKeptExprs(pending, interpolation.parts);
         },
-        .e_structural_eq => |eq| try pushHoistedKeptExprPair(gpa, pending, eq.lhs, eq.rhs),
-        .e_structural_hash => |h| try pushHoistedKeptExprPair(gpa, pending, h.value, h.hasher),
-        .e_method_eq => |eq| (try self.staticDispatchAllowsHoistedRoot(
-            concreteness,
-            ModuleEnv.varFrom(eq.lhs),
-            eq.constraint_fn_var,
-        )) and
-            try pushHoistedKeptExprPair(gpa, pending, eq.lhs, eq.rhs),
+        .e_structural_eq => eq_blk: {
+            const eq = self.cir.store.exprView(expr).e_structural_eq.decode();
+            break :eq_blk try pushHoistedKeptExprPair(gpa, pending, eq.lhs, eq.rhs);
+        },
+        .e_structural_hash => h_blk: {
+            const h = self.cir.store.exprView(expr).e_structural_hash.decode();
+            break :h_blk try pushHoistedKeptExprPair(gpa, pending, h.value, h.hasher);
+        },
+        .e_method_eq => eq_blk: {
+            const eq = self.cir.store.exprView(expr).e_method_eq.decode();
+            break :eq_blk (try self.staticDispatchAllowsHoistedRoot(
+                concreteness,
+                ModuleEnv.varFrom(eq.lhs),
+                eq.constraint_fn_var,
+            )) and
+                try pushHoistedKeptExprPair(gpa, pending, eq.lhs, eq.rhs);
+        },
         // Like value method calls, surface type-method calls are not checked
         // dispatch plans and therefore cannot establish compile-time safety.
         .e_type_method_call => false,
-        .e_type_dispatch_call => |call| (try self.staticDispatchAllowsHoistedRoot(
-            concreteness,
-            static_dispatch.typeDispatchCallDispatcherVar(self.cir, call.owner),
-            call.constraint_fn_var,
-        )) and
-            try self.pushHoistedKeptExprs(pending, call.args),
-        .e_tuple_access => |access| try pushHoistedKeptExpr(gpa, pending, access.tuple),
+        .e_type_dispatch_call => call_blk: {
+            const call = self.cir.store.exprView(expr).e_type_dispatch_call.decode();
+            break :call_blk (try self.staticDispatchAllowsHoistedRoot(
+                concreteness,
+                static_dispatch.typeDispatchCallDispatcherVar(self.cir, call.owner),
+                call.constraint_fn_var,
+            )) and
+                try self.pushHoistedKeptExprs(pending, call.args);
+        },
+        .e_tuple_access => try pushHoistedKeptExpr(gpa, pending, self.cir.store.exprView(expr).e_tuple_access.get(.tuple)),
         .e_deferred_import_ref => base.invariant("check invariant violated: deferred import reference reached checking", .{}),
     };
 }
@@ -18088,34 +18169,41 @@ const StoredConstScan = struct {
             },
             .statement => |statement| {
                 const module = statement.module;
-                switch (module.store.getStatement(statement.statement)) {
+                switch (module.store.statementKind(statement.statement)) {
                     // A promoted local procedure's body is walked once, as
                     // the procedure, however many places reach it.
-                    .s_decl => |decl| if (self.promotedLocalProcedureDeclaredBy(module, decl.pattern, decl.expr)) |lambda|
-                        try items.add(.{ .local_procedure = lambda })
-                    else
-                        try addExpr(items, module, decl.expr),
-                    inline .s_var, .s_reassign, .s_expr => |decl| try addExpr(items, module, decl.expr),
+                    .s_decl => decl_blk: {
+                        const decl = module.store.statementView(statement.statement).s_decl.decode();
+                        break :decl_blk if (self.promotedLocalProcedureDeclaredBy(module, decl.pattern, decl.expr)) |lambda|
+                            try items.add(.{ .local_procedure = lambda })
+                        else
+                            try addExpr(items, module, decl.expr);
+                    },
+                    inline .s_var, .s_reassign, .s_expr => |kind| try addExpr(items, module, @field(module.store.statementView(statement.statement), @tagName(kind)).get(.expr)),
                     .s_dbg,
                     .s_expect,
                     => return .{ .value = false },
-                    .s_for => |for_stmt| {
+                    .s_for => {
+                        const for_stmt = module.store.statementView(statement.statement).s_for.decode();
                         try addExpr(items, module, for_stmt.expr);
                         try addExpr(items, module, for_stmt.body);
                     },
-                    .s_while => |while_stmt| {
+                    .s_while => {
+                        const while_stmt = module.store.statementView(statement.statement).s_while.decode();
                         try addExpr(items, module, while_stmt.cond);
                         try addExpr(items, module, while_stmt.body);
                     },
-                    .s_infinite_loop => |loop_stmt| {
+                    .s_infinite_loop => {
+                        const loop_stmt = module.store.statementView(statement.statement).s_infinite_loop.decode();
                         try addExpr(items, module, loop_stmt.cond);
                         try addExpr(items, module, loop_stmt.body);
                     },
-                    .s_breakable_loop => |loop_stmt| {
+                    .s_breakable_loop => {
+                        const loop_stmt = module.store.statementView(statement.statement).s_breakable_loop.decode();
                         try addExpr(items, module, loop_stmt.cond);
                         try addExpr(items, module, loop_stmt.body);
                     },
-                    .s_return => |ret| try addExpr(items, module, ret.expr),
+                    .s_return => try addExpr(items, module, module.store.statementView(statement.statement).s_return.get(.expr)),
                     .s_var_uninitialized,
                     .s_import,
                     .s_alias_decl,
@@ -18140,8 +18228,9 @@ const StoredConstScan = struct {
         // Its published fact observes that final body, not transient local
         // hoist-selection marks that only this check's own roots consume.
         if (scan.publication == null and self.moduleHoistExprInvalidated(module, expr)) return .{ .value = false };
-        switch (module.store.getExpr(expr)) {
-            .e_run_low_level => |run| {
+        switch (module.store.exprKind(expr)) {
+            .e_run_low_level => {
+                const run = module.store.exprView(expr).e_run_low_level.decode();
                 if (run.op == .dict_pseudo_seed) return .{ .value = false };
                 try addExprSpan(items, module, run.args);
             },
@@ -18171,16 +18260,18 @@ const StoredConstScan = struct {
             .e_crash,
             .e_hosted_lambda,
             => return .{ .value = true },
-            .e_str => |str| try addExprSpan(items, module, str.span),
-            .e_list => |list| try addExprSpan(items, module, list.elems),
-            .e_tuple => |tuple| try addExprSpan(items, module, tuple.elems),
-            .e_block => |block| {
+            .e_str => try addExprSpan(items, module, module.store.exprView(expr).e_str.get(.span)),
+            .e_list => try addExprSpan(items, module, module.store.exprView(expr).e_list.get(.elems)),
+            .e_tuple => try addExprSpan(items, module, module.store.exprView(expr).e_tuple.get(.elems)),
+            .e_block => {
+                const block = module.store.exprView(expr).e_block.decode();
                 for (module.store.sliceStatements(block.stmts)) |statement| {
                     try items.add(.{ .statement = .{ .module = module, .statement = statement } });
                 }
                 try addExpr(items, module, block.final_expr);
             },
-            .e_match => |match| {
+            .e_match => {
+                const match = module.store.exprView(expr).e_match.decode();
                 try addExpr(items, module, match.cond);
                 for (module.store.sliceMatchBranches(match.branches)) |branch_id| {
                     const branch = module.store.getMatchBranch(branch_id);
@@ -18188,7 +18279,8 @@ const StoredConstScan = struct {
                     try addExpr(items, module, branch.value);
                 }
             },
-            .e_if => |if_expr| {
+            .e_if => {
+                const if_expr = module.store.exprView(expr).e_if.decode();
                 for (module.store.sliceIfBranches(if_expr.branches)) |branch_id| {
                     const branch = module.store.getIfBranch(branch_id);
                     try addExpr(items, module, branch.cond);
@@ -18196,49 +18288,57 @@ const StoredConstScan = struct {
                 }
                 try addExpr(items, module, if_expr.final_else);
             },
-            .e_call => |call| {
+            .e_call => {
+                const call = module.store.exprView(expr).e_call.decode();
                 try items.add(.{ .callee = .{ .module = module, .callee = call.func } });
                 try addExpr(items, module, call.func);
                 try addExprSpan(items, module, call.args);
             },
-            inline .e_method_call, .e_dispatch_call => |call| {
+            inline .e_method_call, .e_dispatch_call => |kind| {
+                const call = @field(module.store.exprView(expr), @tagName(kind)).decode();
                 try addExpr(items, module, call.receiver);
                 try addExprSpan(items, module, call.args);
             },
-            .e_record => |record| {
+            .e_record => {
+                const record = module.store.exprView(expr).e_record.decode();
                 if (record.ext) |ext_expr| try addExpr(items, module, ext_expr);
                 for (module.store.sliceRecordFields(record.fields)) |field_id| {
                     try addExpr(items, module, module.store.getRecordField(field_id).value);
                 }
             },
-            .e_tag => |tag| try addExprSpan(items, module, tag.args),
-            .e_nominal => |nominal| try addExpr(items, module, nominal.backing_expr),
-            .e_nominal_external => |nominal| try addExpr(items, module, nominal.backing_expr),
-            .e_binop => |binop| {
+            .e_tag => try addExprSpan(items, module, module.store.exprView(expr).e_tag.get(.args)),
+            .e_nominal => try addExpr(items, module, module.store.exprView(expr).e_nominal.get(.backing_expr)),
+            .e_nominal_external => try addExpr(items, module, module.store.exprView(expr).e_nominal_external.get(.backing_expr)),
+            .e_binop => {
+                const binop = module.store.exprView(expr).e_binop.decode();
                 try addExpr(items, module, binop.lhs);
                 try addExpr(items, module, binop.rhs);
             },
-            .e_unary_minus => |unary| try addExpr(items, module, unary.expr),
-            .e_field_access => |field| try addExpr(items, module, field.receiver),
-            .e_interpolation => |interpolation| {
+            .e_unary_minus => try addExpr(items, module, module.store.exprView(expr).e_unary_minus.get(.expr)),
+            .e_field_access => try addExpr(items, module, module.store.exprView(expr).e_field_access.get(.receiver)),
+            .e_interpolation => {
+                const interpolation = module.store.exprView(expr).e_interpolation.decode();
                 try addExpr(items, module, interpolation.first);
                 try addExprSpan(items, module, interpolation.parts);
             },
-            .e_structural_eq => |eq| {
+            .e_structural_eq => {
+                const eq = module.store.exprView(expr).e_structural_eq.decode();
                 try addExpr(items, module, eq.lhs);
                 try addExpr(items, module, eq.rhs);
             },
-            .e_structural_hash => |h| {
+            .e_structural_hash => {
+                const h = module.store.exprView(expr).e_structural_hash.decode();
                 try addExpr(items, module, h.value);
                 try addExpr(items, module, h.hasher);
             },
-            .e_method_eq => |eq| {
+            .e_method_eq => {
+                const eq = module.store.exprView(expr).e_method_eq.decode();
                 try addExpr(items, module, eq.lhs);
                 try addExpr(items, module, eq.rhs);
             },
-            .e_type_method_call => |call| try addExprSpan(items, module, call.args),
-            .e_type_dispatch_call => |call| try addExprSpan(items, module, call.args),
-            .e_tuple_access => |access| try addExpr(items, module, access.tuple),
+            .e_type_method_call => try addExprSpan(items, module, module.store.exprView(expr).e_type_method_call.get(.args)),
+            .e_type_dispatch_call => try addExprSpan(items, module, module.store.exprView(expr).e_type_dispatch_call.get(.args)),
+            .e_tuple_access => try addExpr(items, module, module.store.exprView(expr).e_tuple_access.get(.tuple)),
             .e_dbg,
             .e_expect_err,
             .e_expect,
@@ -18248,13 +18348,14 @@ const StoredConstScan = struct {
             // root that reaches it would report that problem a second time, so
             // the poison reaches every root whose evaluation can call into it.
             .e_runtime_error => return .{ .value = false },
-            .e_for => |for_expr| {
+            .e_for => {
+                const for_expr = module.store.exprView(expr).e_for.decode();
                 try addExpr(items, module, for_expr.expr);
                 try addExpr(items, module, for_expr.body);
             },
-            .e_return => |ret| try addExpr(items, module, ret.expr),
-            .e_closure => |closure| try addExpr(items, module, closure.lambda_idx),
-            .e_lambda => |lambda| try addExpr(items, module, lambda.body),
+            .e_return => try addExpr(items, module, module.store.exprView(expr).e_return.get(.expr)),
+            .e_closure => try addExpr(items, module, module.store.exprView(expr).e_closure.get(.lambda_idx)),
+            .e_lambda => try addExpr(items, module, module.store.exprView(expr).e_lambda.get(.body)),
             .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
         return .{ .group = .all };
@@ -18312,13 +18413,15 @@ fn hoistedCallableDefForExpr(
     module: *const ModuleEnv,
     expr: CIR.Expr.Idx,
 ) ?HoistedCallableDef {
-    return switch (module.store.getExpr(expr)) {
-        .e_lookup_local => |lookup| hoistedTopLevelDefForNode(module, ModuleEnv.nodeIdxFrom(lookup.pattern_idx)),
-        .e_lookup_external => |external| blk: {
+    return switch (module.store.exprKind(expr)) {
+        .e_lookup_local => hoistedTopLevelDefForNode(module, ModuleEnv.nodeIdxFrom(module.store.exprView(expr).e_lookup_local.get(.pattern_idx))),
+        .e_lookup_external => blk: {
+            const external = module.store.exprView(expr).e_lookup_external.decode();
             const imported_module = self.hoistedImportedModule(module, external.module_idx) orelse break :blk null;
             break :blk hoistedTopLevelDefForNode(imported_module, @fromBackingInt(@intCast(external.target_node_idx)));
         },
-        .e_lookup_associated_resolved => |resolved| blk: {
+        .e_lookup_associated_resolved => blk: {
+            const resolved = module.store.exprView(expr).e_lookup_associated_resolved.decode();
             const target_module = self.moduleEnvForIdentity(module, resolved.module_identity);
             break :blk HoistedCallableDef{ .module = target_module.env, .def = resolved.target_def_idx };
         },
@@ -18456,13 +18559,14 @@ fn hoistedRootStatementStep(
     statement: CIR.Statement.Idx,
     pending: *std.ArrayListUnmanaged(HoistedKeptStep),
 ) Allocator.Error!bool {
-    return switch (self.cir.store.getStatement(statement)) {
-        .s_decl => |decl| blk: {
+    return switch (self.cir.store.statementKind(statement)) {
+        .s_decl => blk: {
+            const decl = self.cir.store.statementView(statement).s_decl.decode();
             try pending.append(self.gpa, .{ .expr = decl.expr });
             try pending.append(self.gpa, .{ .bind_decl = decl.pattern });
             break :blk true;
         },
-        .s_expr => |expr| try pushHoistedKeptExpr(self.gpa, pending, expr.expr),
+        .s_expr => try pushHoistedKeptExpr(self.gpa, pending, self.cir.store.statementView(statement).s_expr.get(.expr)),
         .s_import,
         .s_alias_decl,
         .s_nominal_decl,
@@ -19130,10 +19234,10 @@ fn rejectPatternFailureOwner(self: *Self, owner: CIR.Node.Idx) Allocator.Error!v
     // The remaining producer-owned contexts are binding and loop statements.
     // The statement binds nothing and is replaced with a runtime error.
     const stmt_idx: CIR.Statement.Idx = @fromBackingInt(@intCast(@backingInt(owner)));
-    const pattern = switch (self.cir.store.getStatement(stmt_idx)) {
-        .s_decl => |decl| decl.pattern,
-        inline .s_var, .s_var_uninitialized, .s_reassign => |var_| var_.pattern_idx,
-        .s_for => |for_| for_.patt,
+    const pattern = switch (self.cir.store.statementKind(stmt_idx)) {
+        .s_decl => self.cir.store.statementView(stmt_idx).s_decl.get(.pattern),
+        inline .s_var, .s_var_uninitialized, .s_reassign => |kind| @field(self.cir.store.statementView(stmt_idx), @tagName(kind)).get(.pattern_idx),
+        .s_for => self.cir.store.statementView(stmt_idx).s_for.get(.patt),
         .s_crash, .s_dbg, .s_expr, .s_expect, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => unreachable, // pattern-failure owners that are not expressions or defs are binding or loop statements
     };
     try self.poisonPatternBindings(pattern);
@@ -21268,9 +21372,10 @@ fn localProcedureTargetPattern(self: *Self, env: *const ModuleEnv, binding: Modu
     // once before repeating, so the node count bounds the walk.
     var remaining: usize = self.cir.store.nodes.len();
     while (remaining > 0) : (remaining -= 1) {
-        switch (self.cir.store.getExpr(expr)) {
+        switch (self.cir.store.exprKind(expr)) {
             .e_lambda, .e_closure => return pattern,
-            .e_lookup_local => |lookup| {
+            .e_lookup_local => {
+                const lookup = self.cir.store.exprView(expr).e_lookup_local.decode();
                 if (self.patternIsTopLevel(lookup.pattern_idx)) return null;
                 expr = (try self.localDeclExprForPattern(lookup.pattern_idx)) orelse return null;
                 pattern = lookup.pattern_idx;
@@ -23877,8 +23982,8 @@ fn resetAnnotationNodes(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem
 /// it is a lookup of a type variable outside `nodes` (one annotation's
 /// nodes, from `collectAnnotationTypeAnnos`).
 fn enclosingRigidLookup(cir: *const ModuleEnv, nodes: []const CIR.TypeAnno.Idx, anno_idx: CIR.TypeAnno.Idx) ?CIR.TypeAnno.Idx {
-    const lookup = switch (cir.store.getTypeAnno(anno_idx)) {
-        .rigid_var_lookup => |lookup| lookup,
+    const lookup = switch (cir.store.typeAnnoKind(anno_idx)) {
+        .rigid_var_lookup => cir.store.typeAnnoView(anno_idx).rigid_var_lookup.decode(),
         .underscore, .rigid_var, .lookup, .malformed, .apply, .tag_union, .tag, .tuple, .record, .@"fn", .parens => return null,
     };
     for (nodes) |node| {
@@ -23946,43 +24051,49 @@ fn collectAnnotationTypeAnnos(
 
     while (pending.pop()) |anno_idx| {
         try out.append(allocator, anno_idx);
-        switch (self.cir.store.getTypeAnno(anno_idx)) {
+        switch (self.cir.store.typeAnnoKind(anno_idx)) {
             .underscore, .rigid_var, .rigid_var_lookup, .lookup, .malformed => {},
-            .apply => |apply| {
+            .apply => {
+                const apply = self.cir.store.typeAnnoView(anno_idx).apply.decode();
                 for (self.cir.store.sliceTypeAnnos(apply.args)) |arg_idx| {
                     try pending.append(allocator, arg_idx);
                 }
             },
-            .tag_union => |tag_union| {
+            .tag_union => {
+                const tag_union = self.cir.store.typeAnnoView(anno_idx).tag_union.decode();
                 for (self.cir.store.sliceTypeAnnos(tag_union.tags)) |tag_idx| {
                     try pending.append(allocator, tag_idx);
                 }
                 if (tag_union.ext) |ext_idx| try pending.append(allocator, ext_idx);
             },
-            .tag => |tag| {
+            .tag => {
+                const tag = self.cir.store.typeAnnoView(anno_idx).tag.decode();
                 for (self.cir.store.sliceTypeAnnos(tag.args)) |arg_idx| {
                     try pending.append(allocator, arg_idx);
                 }
             },
-            .tuple => |tuple| {
+            .tuple => {
+                const tuple = self.cir.store.typeAnnoView(anno_idx).tuple.decode();
                 for (self.cir.store.sliceTypeAnnos(tuple.elems)) |elem_idx| {
                     try pending.append(allocator, elem_idx);
                 }
             },
-            .record => |record| {
+            .record => {
+                const record = self.cir.store.typeAnnoView(anno_idx).record.decode();
                 for (self.cir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
                     const field = self.cir.store.getAnnoRecordField(field_idx);
                     try pending.append(allocator, field.ty);
                 }
                 if (record.ext) |ext_idx| try pending.append(allocator, ext_idx);
             },
-            .@"fn" => |func| {
+            .@"fn" => {
+                const func = self.cir.store.typeAnnoView(anno_idx).@"fn".decode();
                 for (self.cir.store.sliceTypeAnnos(func.args)) |arg_idx| {
                     try pending.append(allocator, arg_idx);
                 }
                 try pending.append(allocator, func.ret);
             },
-            .parens => |parens| try pending.append(allocator, parens.anno),
+            .parens => try pending.append(allocator, self.cir.store.typeAnnoView(anno_idx).parens.get(.anno)),
         }
     }
 }
@@ -25545,9 +25656,9 @@ fn nominalDeclHasUnnamedFields(self: *const Self, statement_idx: CIR.Statement.I
     var anno_idx = self.cir.store.statementView(statement_idx).s_nominal_decl.get(.anno);
     if (anno_idx == .placeholder) return false;
     const record = while (true) {
-        switch (self.cir.store.getTypeAnno(anno_idx)) {
-            .parens => |parens| anno_idx = parens.anno,
-            .record => |record| break record,
+        switch (self.cir.store.typeAnnoKind(anno_idx)) {
+            .parens => anno_idx = self.cir.store.typeAnnoView(anno_idx).parens.get(.anno),
+            .record => break self.cir.store.typeAnnoView(anno_idx).record.decode(),
             .apply, .rigid_var, .rigid_var_lookup, .underscore, .lookup, .tag_union, .tag, .tuple, .@"fn", .malformed => return false,
         }
     };
@@ -27992,8 +28103,8 @@ fn resolveWhereAliasReference(
 
     switch (base_ref) {
         .local => |local| {
-            const decl = switch (self.cir.store.getStatement(local.decl_idx)) {
-                .s_where_alias_decl => |decl| decl,
+            const decl = switch (self.cir.store.statementKind(local.decl_idx)) {
+                .s_where_alias_decl => self.cir.store.statementView(local.decl_idx).s_where_alias_decl.decode(),
                 .s_decl,
                 .s_var,
                 .s_var_uninitialized,
@@ -28118,14 +28229,14 @@ fn rejectUnappliedTypeConstructorInDeclaration(
 
 /// Whether `anno_idx` is the whole body of the alias declared by `statement_idx`.
 fn isWholeAliasBody(self: *const Self, statement_idx: CIR.Statement.Idx, anno_idx: CIR.TypeAnno.Idx) bool {
-    var body = switch (self.cir.store.getStatement(statement_idx)) {
-        .s_alias_decl => |alias| alias.anno,
+    var body = switch (self.cir.store.statementKind(statement_idx)) {
+        .s_alias_decl => self.cir.store.statementView(statement_idx).s_alias_decl.get(.anno),
         .s_nominal_decl, .s_decl, .s_var, .s_var_uninitialized, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => return false,
     };
     while (true) {
         if (body == anno_idx) return true;
-        switch (self.cir.store.getTypeAnno(body)) {
-            .parens => |parens| body = parens.anno,
+        switch (self.cir.store.typeAnnoKind(body)) {
+            .parens => body = self.cir.store.typeAnnoView(body).parens.get(.anno),
             .apply, .rigid_var, .rigid_var_lookup, .underscore, .lookup, .tag_union, .tag, .tuple, .record, .@"fn", .malformed => return false,
         }
     }
@@ -28304,8 +28415,8 @@ fn declareWhereAliasConstraints(
 
 /// The arguments a where clause supplies for a where alias's parameters.
 fn whereAliasReferenceArgs(self: *Self, alias: std.meta.fieldInfo(CIR.WhereClause, .w_alias).type) []const CIR.TypeAnno.Idx {
-    return switch (self.cir.store.getTypeAnno(alias.alias)) {
-        .apply => |apply| self.cir.store.sliceTypeAnnos(apply.args),
+    return switch (self.cir.store.typeAnnoKind(alias.alias)) {
+        .apply => self.cir.store.sliceTypeAnnos(self.cir.store.typeAnnoView(alias.alias).apply.get(.args)),
         // A name canonicalization could not resolve carries no arguments; it is
         // reported when the reference is resolved.
         .lookup, .malformed => &.{},
@@ -29555,8 +29666,8 @@ fn reportNonFunctionWhereRequirement(
     method: std.meta.fieldInfo(CIR.WhereClause, .w_method).type,
 ) std.mem.Allocator.Error!void {
     var anno_idx = method.anno;
-    const written_variable = while (true) switch (self.cir.store.getTypeAnno(anno_idx)) {
-        .parens => |parens| anno_idx = parens.anno,
+    const written_variable = while (true) switch (self.cir.store.typeAnnoKind(anno_idx)) {
+        .parens => anno_idx = self.cir.store.typeAnnoView(anno_idx).parens.get(.anno),
         .underscore => return,
         .rigid_var, .rigid_var_lookup => break true,
         .apply, .lookup, .tag_union, .tag, .tuple, .record, .@"fn", .malformed => break false,
@@ -30229,9 +30340,9 @@ fn stepRecordAnnoGen(self: *Self, frame: *AnnoGenFrame, rec: std.meta.fieldInfo(
 /// The local where-alias declaration a where-alias reference names, which
 /// must be generated before its constraints can be declared.
 fn whereAliasLocalDecl(self: *Self, alias_anno_idx: CIR.TypeAnno.Idx) ?CIR.Statement.Idx {
-    const base_ref = switch (self.cir.store.getTypeAnno(alias_anno_idx)) {
-        .lookup => |lookup| lookup.base,
-        .apply => |apply| apply.base,
+    const base_ref = switch (self.cir.store.typeAnnoKind(alias_anno_idx)) {
+        .lookup => self.cir.store.typeAnnoView(alias_anno_idx).lookup.get(.base),
+        .apply => self.cir.store.typeAnnoView(alias_anno_idx).apply.get(.base),
         .malformed,
         .rigid_var,
         .rigid_var_lookup,
@@ -31787,8 +31898,8 @@ fn collectPatternBindings(
     defer pending.deinit(self.gpa);
     try pending.append(self.gpa, root);
     while (pending.pop()) |pattern_idx| {
-        switch (self.cir.store.getPattern(pattern_idx)) {
-            inline .assign, .var_assign, .as => |assign| try out.append(self.gpa, .{ .ident = assign.ident, .pattern_idx = pattern_idx }),
+        switch (self.cir.store.patternKind(pattern_idx)) {
+            inline .assign, .var_assign, .as => |kind| try out.append(self.gpa, .{ .ident = @field(self.cir.store.patternView(pattern_idx), @tagName(kind)).get(.ident), .pattern_idx = pattern_idx }),
             .tuple,
             .applied_tag,
             .record_destructure,
@@ -38207,14 +38318,15 @@ fn operandIsErroneousValue(self: *Self, operand: CIR.Expr.Idx) Allocator.Error!b
     var current = operand;
     while (true) {
         if (self.call_operand_type_error_exprs.items[nodeSlot(current)]) return true;
-        switch (self.cir.store.getExpr(current)) {
-            .e_lookup_local => |lookup| {
+        switch (self.cir.store.exprKind(current)) {
+            .e_lookup_local => {
+                const lookup = self.cir.store.exprView(current).e_lookup_local.decode();
                 if (self.erroneous_value_exprs.count() == 0 and self.erroneous_value_patterns.count() == 0) return false;
                 if (self.erroneous_value_exprs.contains(current)) return true;
                 if (self.erroneous_value_patterns.contains(lookup.pattern_idx)) return true;
                 current = self.binder_source_exprs.get(lookup.pattern_idx) orelse return false;
             },
-            .e_block => |block| current = block.final_expr,
+            .e_block => current = self.cir.store.exprView(current).e_block.get(.final_expr),
             .e_num,
             .e_frac_f32,
             .e_frac_f64,
@@ -38292,46 +38404,63 @@ fn noteUnusableJoin(self: *Self, expr: CIR.Expr.Idx) Allocator.Error!void {
 /// any of them have operands here.
 fn appendEvaluationOperands(self: *Self, expr_idx: CIR.Expr.Idx, pool: *std.ArrayListUnmanaged(CIR.Expr.Idx)) Allocator.Error!void {
     const store = &self.cir.store;
-    switch (store.getExpr(expr_idx)) {
-        .e_call => |call| {
+    switch (store.exprKind(expr_idx)) {
+        .e_call => {
+            const call = store.exprView(expr_idx).e_call.decode();
             try pool.append(self.gpa, call.func);
             try pool.appendSlice(self.gpa, store.sliceExpr(call.args));
         },
-        .e_method_call => |call| {
+        .e_method_call => {
+            const call = store.exprView(expr_idx).e_method_call.decode();
             try pool.append(self.gpa, call.receiver);
             try pool.appendSlice(self.gpa, store.sliceExpr(call.args));
         },
-        .e_dispatch_call => |call| {
+        .e_dispatch_call => {
+            const call = store.exprView(expr_idx).e_dispatch_call.decode();
             try pool.append(self.gpa, call.receiver);
             try pool.appendSlice(self.gpa, store.sliceExpr(call.args));
         },
-        .e_type_method_call => |call| try pool.appendSlice(self.gpa, store.sliceExpr(call.args)),
-        .e_type_dispatch_call => |call| try pool.appendSlice(self.gpa, store.sliceExpr(call.args)),
-        .e_run_low_level => |run| try pool.appendSlice(self.gpa, store.sliceExpr(run.args)),
-        .e_interpolation => |interpolation| {
+        .e_type_method_call => try pool.appendSlice(self.gpa, store.sliceExpr(store.exprView(expr_idx).e_type_method_call.get(.args))),
+        .e_type_dispatch_call => try pool.appendSlice(self.gpa, store.sliceExpr(store.exprView(expr_idx).e_type_dispatch_call.get(.args))),
+        .e_run_low_level => try pool.appendSlice(self.gpa, store.sliceExpr(store.exprView(expr_idx).e_run_low_level.get(.args))),
+        .e_interpolation => {
+            const interpolation = store.exprView(expr_idx).e_interpolation.decode();
             try pool.append(self.gpa, interpolation.first);
             try pool.appendSlice(self.gpa, store.sliceExpr(interpolation.parts));
         },
-        .e_binop => |binop| try pool.appendSlice(self.gpa, &.{ binop.lhs, binop.rhs }),
-        .e_unary_minus => |unary| try pool.append(self.gpa, unary.expr),
-        .e_structural_eq => |eq| try pool.appendSlice(self.gpa, &.{ eq.lhs, eq.rhs }),
-        .e_method_eq => |eq| try pool.appendSlice(self.gpa, &.{ eq.lhs, eq.rhs }),
-        .e_structural_hash => |hash| try pool.appendSlice(self.gpa, &.{ hash.value, hash.hasher }),
-        .e_str => |str| try pool.appendSlice(self.gpa, store.sliceExpr(str.span)),
-        .e_list => |list| try pool.appendSlice(self.gpa, store.sliceExpr(list.elems)),
-        .e_tuple => |tuple| try pool.appendSlice(self.gpa, store.sliceExpr(tuple.elems)),
-        .e_tag => |tag| try pool.appendSlice(self.gpa, store.sliceExpr(tag.args)),
-        .e_nominal => |nominal| try pool.append(self.gpa, nominal.backing_expr),
-        .e_nominal_external => |nominal| try pool.append(self.gpa, nominal.backing_expr),
-        .e_record => |record| {
+        .e_binop => binop_blk: {
+            const binop = store.exprView(expr_idx).e_binop.decode();
+            break :binop_blk try pool.appendSlice(self.gpa, &.{ binop.lhs, binop.rhs });
+        },
+        .e_unary_minus => try pool.append(self.gpa, store.exprView(expr_idx).e_unary_minus.get(.expr)),
+        .e_structural_eq => eq_blk: {
+            const eq = store.exprView(expr_idx).e_structural_eq.decode();
+            break :eq_blk try pool.appendSlice(self.gpa, &.{ eq.lhs, eq.rhs });
+        },
+        .e_method_eq => eq_blk: {
+            const eq = store.exprView(expr_idx).e_method_eq.decode();
+            break :eq_blk try pool.appendSlice(self.gpa, &.{ eq.lhs, eq.rhs });
+        },
+        .e_structural_hash => hash_blk: {
+            const hash = store.exprView(expr_idx).e_structural_hash.decode();
+            break :hash_blk try pool.appendSlice(self.gpa, &.{ hash.value, hash.hasher });
+        },
+        .e_str => try pool.appendSlice(self.gpa, store.sliceExpr(store.exprView(expr_idx).e_str.get(.span))),
+        .e_list => try pool.appendSlice(self.gpa, store.sliceExpr(store.exprView(expr_idx).e_list.get(.elems))),
+        .e_tuple => try pool.appendSlice(self.gpa, store.sliceExpr(store.exprView(expr_idx).e_tuple.get(.elems))),
+        .e_tag => try pool.appendSlice(self.gpa, store.sliceExpr(store.exprView(expr_idx).e_tag.get(.args))),
+        .e_nominal => try pool.append(self.gpa, store.exprView(expr_idx).e_nominal.get(.backing_expr)),
+        .e_nominal_external => try pool.append(self.gpa, store.exprView(expr_idx).e_nominal_external.get(.backing_expr)),
+        .e_record => {
+            const record = store.exprView(expr_idx).e_record.decode();
             if (record.ext) |ext| try pool.append(self.gpa, ext);
             for (store.sliceRecordFields(record.fields)) |field_idx| {
                 try pool.append(self.gpa, store.getRecordField(field_idx).value);
             }
         },
-        .e_field_access => |field| try pool.append(self.gpa, field.receiver),
-        .e_tuple_access => |access| try pool.append(self.gpa, access.tuple),
-        .e_for => |for_| try pool.append(self.gpa, for_.expr),
+        .e_field_access => try pool.append(self.gpa, store.exprView(expr_idx).e_field_access.get(.receiver)),
+        .e_tuple_access => try pool.append(self.gpa, store.exprView(expr_idx).e_tuple_access.get(.tuple)),
+        .e_for => try pool.append(self.gpa, store.exprView(expr_idx).e_for.get(.expr)),
         .e_num,
         .e_frac_f32,
         .e_frac_f64,
@@ -38933,8 +39062,9 @@ fn thunkResultText(self: *Self, root: CIR.TypeAnno.Idx, type_region: Region) All
         };
         var children: []const CIR.TypeAnno.Idx = &.{};
         var children_polarity = item.polarity;
-        switch (self.cir.store.getTypeAnno(item.anno)) {
-            .tag_union => |tu| {
+        switch (self.cir.store.typeAnnoKind(item.anno)) {
+            .tag_union => {
+                const tu = self.cir.store.typeAnnoView(item.anno).tag_union.decode();
                 children = self.cir.store.sliceTypeAnnos(tu.tags);
                 // `[]` is never opened, so its `..` is not redundant.
                 if (tu.ext) |ext| {
@@ -38946,21 +39076,24 @@ fn thunkResultText(self: *Self, root: CIR.TypeAnno.Idx, type_region: Region) All
                     }
                 }
             },
-            .tag => |t| children = self.cir.store.sliceTypeAnnos(t.args),
-            .tuple => |t| children = self.cir.store.sliceTypeAnnos(t.elems),
-            .record => |r| {
+            .tag => children = self.cir.store.sliceTypeAnnos(self.cir.store.typeAnnoView(item.anno).tag.get(.args)),
+            .tuple => children = self.cir.store.sliceTypeAnnos(self.cir.store.typeAnnoView(item.anno).tuple.get(.elems)),
+            .record => {
+                const r = self.cir.store.typeAnnoView(item.anno).record.decode();
                 var fields = std.mem.reverseIterator(self.cir.store.sliceAnnoRecordFields(r.fields));
                 while (fields.next()) |field_idx| {
                     try pending.append(pending_allocator, .{ .visit = .{ .anno = self.cir.store.getAnnoRecordField(field_idx).ty, .polarity = item.polarity } });
                 }
             },
-            .@"fn" => |f| {
+            .@"fn" => {
+                const f = self.cir.store.typeAnnoView(item.anno).@"fn".decode();
                 try pending.append(pending_allocator, .{ .visit = .{ .anno = f.ret, .polarity = item.polarity } });
                 children = self.cir.store.sliceTypeAnnos(f.args);
                 children_polarity = item.polarity.flip();
             },
-            .parens => |p| try pending.append(pending_allocator, .{ .visit = .{ .anno = p.anno, .polarity = item.polarity } }),
-            .apply => |a| {
+            .parens => try pending.append(pending_allocator, .{ .visit = .{ .anno = self.cir.store.typeAnnoView(item.anno).parens.get(.anno), .polarity = item.polarity } }),
+            .apply => {
+                const a = self.cir.store.typeAnnoView(item.anno).apply.decode();
                 const positions = try self.applicationPositions(a);
                 const args = self.cir.store.sliceTypeAnnos(a.args);
                 var index = args.len;
@@ -38993,9 +39126,9 @@ fn functionStubArity(self: *const Self, anno_root: CIR.TypeAnno.Idx, rhs: CIR.Ex
     if (!is_stub) return null;
     var anno_idx = anno_root;
     while (true) {
-        switch (self.cir.store.getTypeAnno(anno_idx)) {
-            .parens => |p| anno_idx = p.anno,
-            .@"fn" => |f| return @intCast(self.cir.store.sliceTypeAnnos(f.args).len),
+        switch (self.cir.store.typeAnnoKind(anno_idx)) {
+            .parens => anno_idx = self.cir.store.typeAnnoView(anno_idx).parens.get(.anno),
+            .@"fn" => return @intCast(self.cir.store.sliceTypeAnnos(self.cir.store.typeAnnoView(anno_idx).@"fn".get(.args)).len),
             .rigid_var, .rigid_var_lookup, .underscore, .lookup, .malformed, .apply, .tag_union, .tag, .tuple, .record => return null,
         }
     }
@@ -39021,28 +39154,32 @@ fn annotationWrittenTypeVariables(self: *Self, root: CIR.TypeAnno.Idx) Allocator
     defer pending.deinit(self.gpa);
     try pending.append(self.gpa, root);
     while (pending.pop()) |anno_idx| {
-        switch (self.cir.store.getTypeAnno(anno_idx)) {
-            .rigid_var => |rigid| {
+        switch (self.cir.store.typeAnnoKind(anno_idx)) {
+            .rigid_var => {
+                const rigid = self.cir.store.typeAnnoView(anno_idx).rigid_var.decode();
                 if (rigid.name.eql(self.cir.idents.open_ext)) open_extension = true else named_variable = true;
             },
-            .apply => |a| try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(a.args)),
-            .tag_union => |tu| {
+            .apply => try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(self.cir.store.typeAnnoView(anno_idx).apply.get(.args))),
+            .tag_union => {
+                const tu = self.cir.store.typeAnnoView(anno_idx).tag_union.decode();
                 try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tu.tags));
                 if (tu.ext) |ext| try pending.append(self.gpa, ext);
             },
-            .tag => |t| try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(t.args)),
-            .tuple => |t| try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(t.elems)),
-            .record => |r| {
+            .tag => try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(self.cir.store.typeAnnoView(anno_idx).tag.get(.args))),
+            .tuple => try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(self.cir.store.typeAnnoView(anno_idx).tuple.get(.elems))),
+            .record => {
+                const r = self.cir.store.typeAnnoView(anno_idx).record.decode();
                 for (self.cir.store.sliceAnnoRecordFields(r.fields)) |field_idx| {
                     try pending.append(self.gpa, self.cir.store.getAnnoRecordField(field_idx).ty);
                 }
                 if (r.ext) |ext| try pending.append(self.gpa, ext);
             },
-            .@"fn" => |f| {
+            .@"fn" => {
+                const f = self.cir.store.typeAnnoView(anno_idx).@"fn".decode();
                 try pending.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(f.args));
                 try pending.append(self.gpa, f.ret);
             },
-            .parens => |p| try pending.append(self.gpa, p.anno),
+            .parens => try pending.append(self.gpa, self.cir.store.typeAnnoView(anno_idx).parens.get(.anno)),
             .rigid_var_lookup, .underscore, .lookup, .malformed => {},
         }
     }
@@ -39262,7 +39399,7 @@ fn closeFreeUncoveredPayloadVars(self: *Self, patterns: []const CIR.Pattern.Idx,
     try pending.appendSlice(self.gpa, patterns);
     while (pending.pop()) |pattern_idx| {
         const store = &self.cir.store;
-        switch (store.getPattern(pattern_idx)) {
+        switch (store.patternKind(pattern_idx)) {
             .assign,
             .var_assign,
             .underscore,
@@ -39277,15 +39414,16 @@ fn closeFreeUncoveredPayloadVars(self: *Self, patterns: []const CIR.Pattern.Idx,
             .runtime_error,
             .deferred_import_ref,
             => {},
-            .as => |p| try pending.append(self.gpa, p.pattern),
-            .nominal => |p| try pending.append(self.gpa, p.backing_pattern),
-            .nominal_external => |p| try pending.append(self.gpa, p.backing_pattern),
-            .list => |p| try pending.appendSlice(self.gpa, store.slicePatterns(p.patterns)),
-            .tuple => |p| try pending.appendSlice(self.gpa, store.slicePatterns(p.patterns)),
-            .record_destructure => |p| for (store.sliceRecordDestructs(p.destructs)) |destruct_idx| {
+            .as => try pending.append(self.gpa, store.patternView(pattern_idx).as.get(.pattern)),
+            .nominal => try pending.append(self.gpa, store.patternView(pattern_idx).nominal.get(.backing_pattern)),
+            .nominal_external => try pending.append(self.gpa, store.patternView(pattern_idx).nominal_external.get(.backing_pattern)),
+            .list => try pending.appendSlice(self.gpa, store.slicePatterns(store.patternView(pattern_idx).list.get(.patterns))),
+            .tuple => try pending.appendSlice(self.gpa, store.slicePatterns(store.patternView(pattern_idx).tuple.get(.patterns))),
+            .record_destructure => for (store.sliceRecordDestructs(store.patternView(pattern_idx).record_destructure.get(.destructs))) |destruct_idx| {
                 try pending.append(self.gpa, store.getRecordDestruct(destruct_idx).kind.toPatternIdx());
             },
-            .applied_tag => |p| {
+            .applied_tag => {
+                const p = store.patternView(pattern_idx).applied_tag.decode();
                 try pending.appendSlice(self.gpa, store.slicePatterns(p.args));
                 try tested_unions.append(self.gpa, ModuleEnv.varFrom(pattern_idx));
                 try tested_tags.append(self.gpa, .{ .union_var = ModuleEnv.varFrom(pattern_idx), .name = p.name });
@@ -39642,10 +39780,9 @@ fn unchangedTryErrorReturn(module: *const ModuleEnv, match: CIR.Expr.Match) ?CIR
     const branches = module.store.sliceMatchBranches(match.branches);
     const branch = module.store.getMatchBranch(branches[1]);
     const ret = module.store.exprAs(branch.value, .e_return) orelse return null;
-    const result = module.store.getExpr(ret.expr);
-    const backing = switch (result) {
-        .e_nominal => |nominal| nominal.backing_expr,
-        .e_nominal_external => |nominal| nominal.backing_expr,
+    const backing = switch (module.store.exprKind(ret.expr)) {
+        .e_nominal => module.store.exprView(ret.expr).e_nominal.get(.backing_expr),
+        .e_nominal_external => module.store.exprView(ret.expr).e_nominal_external.get(.backing_expr),
         .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
     };
     const tag = module.store.exprAs(backing, .e_tag) orelse return null;
@@ -39655,8 +39792,7 @@ fn unchangedTryErrorReturn(module: *const ModuleEnv, match: CIR.Expr.Match) ?CIR
 
     const patterns = module.store.sliceMatchBranchPatterns(branch.patterns);
     if (patterns.len != 1) return null;
-    const pattern = module.store.getPattern(module.store.getMatchBranchPattern(patterns[0]).pattern);
-    const pattern_backing = switch (pattern) {
+    const pattern_backing = switch (module.store.getPattern(module.store.getMatchBranchPattern(patterns[0]).pattern)) {
         .nominal => |nominal| nominal.backing_pattern,
         .nominal_external => |nominal| nominal.backing_pattern,
         .assign, .var_assign, .as, .applied_tag, .deferred_import_ref, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .num_from_numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => return null,
@@ -41271,44 +41407,60 @@ fn rewriteDerivedMethodCallAsStructural(
 ) bool {
     const expr_idx = constraintIntroExpr(constraint) orelse return true;
 
-    const operands: [2]CIR.Expr.Idx = switch (self.cir.store.getExpr(expr_idx)) {
-        .e_method_call => |method_call| blk: {
+    const operands: [2]CIR.Expr.Idx = switch (self.cir.store.exprKind(expr_idx)) {
+        .e_method_call => blk: {
+            const method_call = self.cir.store.exprView(expr_idx).e_method_call.decode();
             const args = self.cir.store.sliceExpr(method_call.args);
             if (args.len != 1) return false;
             break :blk .{ method_call.receiver, args[0] };
         },
-        .e_dispatch_call => |method_call| blk: {
+        .e_dispatch_call => blk: {
+            const method_call = self.cir.store.exprView(expr_idx).e_dispatch_call.decode();
             if (method_call.constraint_fn_var != constraint.fn_var) return true;
             const args = self.cir.store.sliceExpr(method_call.args);
             if (args.len != 1) return false;
             break :blk .{ method_call.receiver, args[0] };
         },
-        .e_type_method_call => |method_call| blk: {
+        .e_type_method_call => blk: {
+            const method_call = self.cir.store.exprView(expr_idx).e_type_method_call.decode();
             const args = self.cir.store.sliceExpr(method_call.args);
             if (args.len != 2) return false;
             break :blk .{ args[0], args[1] };
         },
-        .e_type_dispatch_call => |method_call| blk: {
+        .e_type_dispatch_call => blk: {
+            const method_call = self.cir.store.exprView(expr_idx).e_type_dispatch_call.decode();
             if (method_call.constraint_fn_var != constraint.fn_var) return true;
             const args = self.cir.store.sliceExpr(method_call.args);
             if (args.len != 2) return false;
             break :blk .{ args[0], args[1] };
         },
-        .e_method_eq => |eq| switch (derivation) {
-            .equality => if (eq.constraint_fn_var != constraint.fn_var) return true else .{ eq.lhs, eq.rhs },
-            .hash => return true,
+        .e_method_eq => eq_blk: {
+            const eq = self.cir.store.exprView(expr_idx).e_method_eq.decode();
+            break :eq_blk switch (derivation) {
+                .equality => if (eq.constraint_fn_var != constraint.fn_var) return true else .{ eq.lhs, eq.rhs },
+                .hash => return true,
+            };
         },
-        .e_binop => |binop| switch (derivation) {
-            .equality => if (binop.op != .eq and binop.op != .ne) return true else .{ binop.lhs, binop.rhs },
-            .hash => return true,
+        .e_binop => binop_blk: {
+            const binop = self.cir.store.exprView(expr_idx).e_binop.decode();
+            break :binop_blk switch (derivation) {
+                .equality => if (binop.op != .eq and binop.op != .ne) return true else .{ binop.lhs, binop.rhs },
+                .hash => return true,
+            };
         },
-        .e_structural_eq => |eq| switch (derivation) {
-            .equality => .{ eq.lhs, eq.rhs },
-            .hash => return true,
+        .e_structural_eq => eq_blk: {
+            const eq = self.cir.store.exprView(expr_idx).e_structural_eq.decode();
+            break :eq_blk switch (derivation) {
+                .equality => .{ eq.lhs, eq.rhs },
+                .hash => return true,
+            };
         },
-        .e_structural_hash => |hash| switch (derivation) {
-            .equality => return true,
-            .hash => .{ hash.value, hash.hasher },
+        .e_structural_hash => hash_blk: {
+            const hash = self.cir.store.exprView(expr_idx).e_structural_hash.decode();
+            break :hash_blk switch (derivation) {
+                .equality => return true,
+                .hash => .{ hash.value, hash.hasher },
+            };
         },
         .e_num,
         .e_frac_f32,
@@ -42117,8 +42269,7 @@ test "constructor projection retains nominal identity and sparse owned children"
         index = 0;
         while (index < test_env.module_env.store.nodes.len()) : (index += 1) {
             if (!isPatternNodeTag(test_env.module_env.store.nodes.get(@fromBackingInt(@intCast(index))).tag)) continue;
-            const pattern = test_env.module_env.store.getPattern(@fromBackingInt(@intCast(index)));
-            const backing = switch (pattern) {
+            const backing = switch (test_env.module_env.store.getPattern(@fromBackingInt(@intCast(index)))) {
                 .nominal => |nominal| nominal.backing_pattern,
                 .nominal_external => |nominal| nominal.backing_pattern,
                 .assign, .var_assign, .as, .applied_tag, .deferred_import_ref, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .num_from_numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => continue,
@@ -42176,17 +42327,23 @@ fn relateOwnedTagToExpectedNominal(
 /// Only direct syntax owns the construction's fresh row extension. A lookup,
 /// call, or arbitrary solved structural union cannot provide this authority.
 fn ownedExprConstructorTag(self: *Self, expr_idx: CIR.Expr.Idx) ?ConstructorTag {
-    return switch (self.cir.store.getExpr(expr_idx)) {
-        .e_tag => |tag| .{ .name = tag.name, .arity = self.cir.store.sliceExpr(tag.args).len },
-        .e_zero_argument_tag => |tag| .{ .name = tag.name, .arity = 0 },
+    return switch (self.cir.store.exprKind(expr_idx)) {
+        .e_tag => tag_blk: {
+            const tag = self.cir.store.exprView(expr_idx).e_tag.decode();
+            break :tag_blk .{ .name = tag.name, .arity = self.cir.store.sliceExpr(tag.args).len };
+        },
+        .e_zero_argument_tag => .{ .name = self.cir.store.exprView(expr_idx).e_zero_argument_tag.get(.name), .arity = 0 },
         .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_nominal, .e_nominal_external, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => null,
     };
 }
 
 fn ownedPatternConstructorTag(self: *Self, pattern_idx: CIR.Pattern.Idx, ctx: PatternCtx) ?ConstructorTag {
     if (ctx.row_openness != .open) return null;
-    return switch (self.cir.store.getPattern(pattern_idx)) {
-        .applied_tag => |tag| .{ .name = tag.name, .arity = self.cir.store.slicePatterns(tag.args).len },
+    return switch (self.cir.store.patternKind(pattern_idx)) {
+        .applied_tag => tag_blk: {
+            const tag = self.cir.store.patternView(pattern_idx).applied_tag.decode();
+            break :tag_blk .{ .name = tag.name, .arity = self.cir.store.slicePatterns(tag.args).len };
+        },
         .assign, .var_assign, .as, .nominal, .nominal_external, .deferred_import_ref, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .num_from_numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => null,
     };
 }
@@ -42297,9 +42454,10 @@ fn externalNamedNominalDecl(
 /// Canonicalization names only nominal and alias declarations as the type of
 /// a nominal construction or pattern.
 fn nominalUseAliasName(self: *Self, decl_env: *const ModuleEnv, decl_idx: CIR.Statement.Idx) Allocator.Error!?Ident.Idx {
-    return switch (decl_env.store.getStatement(decl_idx)) {
+    return switch (decl_env.store.statementKind(decl_idx)) {
         .s_nominal_decl => null,
-        .s_alias_decl => |alias| blk: {
+        .s_alias_decl => blk: {
+            const alias = decl_env.store.statementView(decl_idx).s_alias_decl.decode();
             const name = decl_env.store.getTypeHeader(alias.header).name;
             if (decl_env == self.cir) break :blk name;
             break :blk try self.cir.insertIdent(Ident.for_text(decl_env.getIdent(name)));
@@ -43175,12 +43333,12 @@ fn settledCauseSources(
     // store; a use among them that checking replaced keeps its node.
     scratch.clearRetainingCapacity();
     const store = &self.cir.store;
-    switch (store.getExpr(expr_idx)) {
-        .e_block => |block| try scratch.append(self.gpa, block.final_expr),
-        .e_tuple => |tuple| try scratch.appendSlice(self.gpa, store.sliceExpr(tuple.elems)),
-        .e_tag => |tag| try scratch.appendSlice(self.gpa, store.sliceExpr(tag.args)),
-        .e_nominal => |nominal| try scratch.append(self.gpa, nominal.backing_expr),
-        .e_nominal_external => |nominal| try scratch.append(self.gpa, nominal.backing_expr),
+    switch (store.exprKind(expr_idx)) {
+        .e_block => try scratch.append(self.gpa, store.exprView(expr_idx).e_block.get(.final_expr)),
+        .e_tuple => try scratch.appendSlice(self.gpa, store.sliceExpr(store.exprView(expr_idx).e_tuple.get(.elems))),
+        .e_tag => try scratch.appendSlice(self.gpa, store.sliceExpr(store.exprView(expr_idx).e_tag.get(.args))),
+        .e_nominal => try scratch.append(self.gpa, store.exprView(expr_idx).e_nominal.get(.backing_expr)),
+        .e_nominal_external => try scratch.append(self.gpa, store.exprView(expr_idx).e_nominal_external.get(.backing_expr)),
         .e_num,
         .e_frac_f32,
         .e_frac_f64,
@@ -45022,9 +45180,10 @@ fn defaultMaterializationIsRecursive(
             const seen_invoked = try visited_invoked.getOrPut(self.gpa, invoked_idx);
             if (seen_invoked.found_existing) continue;
             try expr_work.append(self.gpa, invoked_idx);
-            switch (self.cir.store.getExpr(invoked_idx)) {
-                .e_lambda => |lambda| try expr_work.append(self.gpa, lambda.body),
-                .e_closure => |closure| {
+            switch (self.cir.store.exprKind(invoked_idx)) {
+                .e_lambda => try expr_work.append(self.gpa, self.cir.store.exprView(invoked_idx).e_lambda.get(.body)),
+                .e_closure => {
+                    const closure = self.cir.store.exprView(invoked_idx).e_closure.decode();
                     // `lambda_idx` always names an `e_lambda`
                     // (CIR.Expr.Closure); the closure's captures walk via
                     // the ordinary `.e_closure` arm below.
@@ -45032,14 +45191,16 @@ fn defaultMaterializationIsRecursive(
                     const lambda = self.cir.store.exprAs(closure.lambda_idx, .e_lambda);
                     try expr_work.append(self.gpa, lambda.?.body);
                 },
-                .e_lookup_local => |lookup| {
+                .e_lookup_local => {
+                    const lookup = self.cir.store.exprView(invoked_idx).e_lookup_local.decode();
                     if (evidence.pattern_to_def_expr.get(lookup.pattern_idx) orelse
                         local_pattern_to_expr.get(lookup.pattern_idx)) |bound_expr|
                     {
                         try invoked_work.append(self.gpa, bound_expr);
                     }
                 },
-                .e_lookup_associated_resolved => |lookup| {
+                .e_lookup_associated_resolved => {
+                    const lookup = self.cir.store.exprView(invoked_idx).e_lookup_associated_resolved.decode();
                     if (lookup.module_identity == self_module) {
                         try invoked_work.append(self.gpa, self.cir.store.getDef(lookup.target_def_idx).expr);
                     }
@@ -45054,20 +45215,23 @@ fn defaultMaterializationIsRecursive(
                 // walk: the invoked drain runs before `expr_work` pops the
                 // block, and the final expression's invoked lookups may
                 // consult them first.
-                .e_block => |block| {
+                .e_block => {
+                    const block = self.cir.store.exprView(invoked_idx).e_block.decode();
                     for (self.cir.store.sliceStatements(block.stmts)) |stmt_idx| {
                         try self.recordDefaultWalkStmtBindings(stmt_idx, local_pattern_to_expr);
                     }
                     try invoked_work.append(self.gpa, block.final_expr);
                 },
-                .e_if => |if_expr| {
+                .e_if => {
+                    const if_expr = self.cir.store.exprView(invoked_idx).e_if.decode();
                     for (self.cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                         const branch = self.cir.store.getIfBranch(branch_idx);
                         try invoked_work.append(self.gpa, branch.body);
                     }
                     try invoked_work.append(self.gpa, if_expr.final_else);
                 },
-                .e_match => |match_expr| {
+                .e_match => {
+                    const match_expr = self.cir.store.exprView(invoked_idx).e_match.decode();
                     for (self.cir.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
                         const branch = self.cir.store.getMatchBranch(branch_idx);
                         try invoked_work.append(self.gpa, branch.value);
@@ -45151,21 +45315,23 @@ fn defaultMaterializationIsRecursive(
                 try seed_work.append(self.gpa, @fromBackingInt(@intCast(pair.fresh_var)));
             }
         }
-        const expr = self.cir.store.getExpr(expr_idx);
-        switch (expr) {
-            .e_lookup_local => |lookup| {
+        switch (self.cir.store.exprKind(expr_idx)) {
+            .e_lookup_local => {
+                const lookup = self.cir.store.exprView(expr_idx).e_lookup_local.decode();
                 if (evidence.pattern_to_def_expr.get(lookup.pattern_idx) orelse
                     local_pattern_to_expr.get(lookup.pattern_idx)) |bound_expr|
                 {
                     try expr_work.append(self.gpa, bound_expr);
                 }
             },
-            .e_lookup_associated_resolved => |lookup| {
+            .e_lookup_associated_resolved => {
+                const lookup = self.cir.store.exprView(expr_idx).e_lookup_associated_resolved.decode();
                 if (lookup.module_identity == self_module) {
                     try expr_work.append(self.gpa, self.cir.store.getDef(lookup.target_def_idx).expr);
                 }
             },
-            .e_dispatch_call => |call| {
+            .e_dispatch_call => {
+                const call = self.cir.store.exprView(expr_idx).e_dispatch_call.decode();
                 // The edge canonicalization cannot see: this call's stamped
                 // target(s). A monomorphic site's constraint var matches an
                 // instantiation directly; a site inside a generalized body
@@ -45175,7 +45341,8 @@ fn defaultMaterializationIsRecursive(
                 try expr_work.append(self.gpa, call.receiver);
                 try appendArgsInvoked(self.gpa, invoked_work, self.cir.store.sliceExpr(call.args));
             },
-            .e_type_dispatch_call => |call| {
+            .e_type_dispatch_call => {
+                const call = self.cir.store.exprView(expr_idx).e_type_dispatch_call.decode();
                 // A derived method dispatched through its owner type has no
                 // body for the call to invoke.
                 switch (call.owner) {
@@ -45187,14 +45354,16 @@ fn defaultMaterializationIsRecursive(
                 }
                 try appendArgsInvoked(self.gpa, invoked_work, self.cir.store.sliceExpr(call.args));
             },
-            .e_type_method_call => |call| {
+            .e_type_method_call => {
+                const call = self.cir.store.exprView(expr_idx).e_type_method_call.decode();
                 if (self.cir.lookupMethodBindingForOwnerConst(call.type_dispatch_stmt, call.method_name)) |binding| {
                     // A resolved method binding is INVOKED by this call.
                     try invoked_work.append(self.gpa, self.cir.store.getDef(binding.def_idx).expr);
                 }
                 try appendArgsInvoked(self.gpa, invoked_work, self.cir.store.sliceExpr(call.args));
             },
-            .e_method_call => |call| {
+            .e_method_call => {
+                const call = self.cir.store.exprView(expr_idx).e_method_call.decode();
                 // An unreplaced method call carries no stamped target (it is
                 // an already-diagnosed error form by finalize); walk operands.
                 try expr_work.append(self.gpa, call.receiver);
@@ -45209,7 +45378,8 @@ fn defaultMaterializationIsRecursive(
                     expr_work,
                 )) return true;
             },
-            .e_record => |record| {
+            .e_record => {
+                const record = self.cir.store.exprView(expr_idx).e_record.decode();
                 const fields = self.cir.store.sliceRecordFields(record.fields);
                 if (record.ext == null) {
                     if (try self.appendOmittedDefaultDependencies(
@@ -45228,14 +45398,15 @@ fn defaultMaterializationIsRecursive(
                     try expr_work.append(self.gpa, self.cir.store.getRecordField(field_idx).value);
                 }
             },
-            .e_unary_minus => |unary| try expr_work.append(self.gpa, unary.expr),
-            .e_str => |str| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(str.span)),
-            .e_list => |list| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(list.elems)),
-            .e_tuple => |tuple| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(tuple.elems)),
-            .e_tag => |tag| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(tag.args)),
-            .e_nominal => |nominal| try expr_work.append(self.gpa, nominal.backing_expr),
-            .e_nominal_external => |nominal| try expr_work.append(self.gpa, nominal.backing_expr),
-            .e_call => |call| {
+            .e_unary_minus => try expr_work.append(self.gpa, self.cir.store.exprView(expr_idx).e_unary_minus.get(.expr)),
+            .e_str => try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(self.cir.store.exprView(expr_idx).e_str.get(.span))),
+            .e_list => try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(self.cir.store.exprView(expr_idx).e_list.get(.elems))),
+            .e_tuple => try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(self.cir.store.exprView(expr_idx).e_tuple.get(.elems))),
+            .e_tag => try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(self.cir.store.exprView(expr_idx).e_tag.get(.args))),
+            .e_nominal => try expr_work.append(self.gpa, self.cir.store.exprView(expr_idx).e_nominal.get(.backing_expr)),
+            .e_nominal_external => try expr_work.append(self.gpa, self.cir.store.exprView(expr_idx).e_nominal_external.get(.backing_expr)),
+            .e_call => {
+                const call = self.cir.store.exprView(expr_idx).e_call.decode();
                 // The callee is INVOKED by this call: a lambda/closure
                 // callee's body walks (canonicalization's DefaultCycles
                 // rule for immediately-invoked lambdas), and a
@@ -45256,7 +45427,8 @@ fn defaultMaterializationIsRecursive(
             // A closure reached as a VALUE materializes only its captured
             // values—creating the function value does not run its body—so
             // the captures' reference edges walk and the body does not.
-            .e_closure => |closure| {
+            .e_closure => {
+                const closure = self.cir.store.exprView(expr_idx).e_closure.decode();
                 for (self.cir.store.sliceCaptures(closure.captures)) |capture_idx| {
                     const capture = self.cir.store.getCapture(capture_idx);
                     if (evidence.pattern_to_def_expr.get(capture.pattern_idx) orelse
@@ -45266,7 +45438,8 @@ fn defaultMaterializationIsRecursive(
                     }
                 }
             },
-            .e_if => |if_expr| {
+            .e_if => {
+                const if_expr = self.cir.store.exprView(expr_idx).e_if.decode();
                 for (self.cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                     const branch = self.cir.store.getIfBranch(branch_idx);
                     try expr_work.append(self.gpa, branch.cond);
@@ -45274,7 +45447,8 @@ fn defaultMaterializationIsRecursive(
                 }
                 try expr_work.append(self.gpa, if_expr.final_else);
             },
-            .e_match => |match_expr| {
+            .e_match => {
+                const match_expr = self.cir.store.exprView(expr_idx).e_match.decode();
                 try expr_work.append(self.gpa, match_expr.cond);
                 for (self.cir.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
                     const branch = self.cir.store.getMatchBranch(branch_idx);
@@ -45282,43 +45456,50 @@ fn defaultMaterializationIsRecursive(
                     if (branch.guard) |guard_idx| try expr_work.append(self.gpa, guard_idx);
                 }
             },
-            .e_block => |block| {
+            .e_block => {
+                const block = self.cir.store.exprView(expr_idx).e_block.decode();
                 for (self.cir.store.sliceStatements(block.stmts)) |stmt_idx| {
                     try self.appendDefaultWalkStmtExprs(stmt_idx, expr_work, local_pattern_to_expr);
                 }
                 try expr_work.append(self.gpa, block.final_expr);
             },
-            .e_binop => |binop| {
+            .e_binop => {
+                const binop = self.cir.store.exprView(expr_idx).e_binop.decode();
                 try expr_work.append(self.gpa, binop.lhs);
                 try expr_work.append(self.gpa, binop.rhs);
             },
-            .e_field_access => |access| try expr_work.append(self.gpa, access.receiver),
-            .e_tuple_access => |access| try expr_work.append(self.gpa, access.tuple),
-            .e_interpolation => |interpolation| {
+            .e_field_access => try expr_work.append(self.gpa, self.cir.store.exprView(expr_idx).e_field_access.get(.receiver)),
+            .e_tuple_access => try expr_work.append(self.gpa, self.cir.store.exprView(expr_idx).e_tuple_access.get(.tuple)),
+            .e_interpolation => {
+                const interpolation = self.cir.store.exprView(expr_idx).e_interpolation.decode();
                 try expr_work.append(self.gpa, interpolation.first);
                 try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(interpolation.parts));
             },
-            .e_structural_eq => |eq| {
+            .e_structural_eq => {
+                const eq = self.cir.store.exprView(expr_idx).e_structural_eq.decode();
                 try expr_work.append(self.gpa, eq.lhs);
                 try expr_work.append(self.gpa, eq.rhs);
             },
-            .e_structural_hash => |h| {
+            .e_structural_hash => {
+                const h = self.cir.store.exprView(expr_idx).e_structural_hash.decode();
                 try expr_work.append(self.gpa, h.value);
                 try expr_work.append(self.gpa, h.hasher);
             },
-            .e_method_eq => |eq| {
+            .e_method_eq => {
+                const eq = self.cir.store.exprView(expr_idx).e_method_eq.decode();
                 try expr_work.append(self.gpa, eq.lhs);
                 try expr_work.append(self.gpa, eq.rhs);
             },
-            .e_dbg => |dbg| try expr_work.append(self.gpa, dbg.expr),
-            .e_expect_err => |expect_err| try expr_work.append(self.gpa, expect_err.expr),
-            .e_expect => |expect| try expr_work.append(self.gpa, expect.body),
-            .e_return => |ret| try expr_work.append(self.gpa, ret.expr),
-            .e_for => |for_expr| {
+            .e_dbg => try expr_work.append(self.gpa, self.cir.store.exprView(expr_idx).e_dbg.get(.expr)),
+            .e_expect_err => try expr_work.append(self.gpa, self.cir.store.exprView(expr_idx).e_expect_err.get(.expr)),
+            .e_expect => try expr_work.append(self.gpa, self.cir.store.exprView(expr_idx).e_expect.get(.body)),
+            .e_return => try expr_work.append(self.gpa, self.cir.store.exprView(expr_idx).e_return.get(.expr)),
+            .e_for => {
+                const for_expr = self.cir.store.exprView(expr_idx).e_for.decode();
                 try expr_work.append(self.gpa, for_expr.expr);
                 try expr_work.append(self.gpa, for_expr.body);
             },
-            .e_run_low_level => |run_ll| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(run_ll.args)),
+            .e_run_low_level => try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(self.cir.store.exprView(expr_idx).e_run_low_level.get(.args))),
             .e_num,
             .e_frac_f32,
             .e_frac_f64,
@@ -45379,8 +45560,9 @@ fn recordDefaultWalkStmtBindings(
     stmt_idx: CIR.Statement.Idx,
     local_pattern_to_expr: *collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx),
 ) std.mem.Allocator.Error!void {
-    switch (self.cir.store.getStatement(stmt_idx)) {
-        .s_decl => |decl| {
+    switch (self.cir.store.statementKind(stmt_idx)) {
+        .s_decl => {
+            const decl = self.cir.store.statementView(stmt_idx).s_decl.decode();
             var bindings = std.ArrayList(PatternBinding).empty;
             defer bindings.deinit(self.gpa);
             try self.collectPatternBindings(decl.pattern, &bindings);
@@ -45388,7 +45570,10 @@ fn recordDefaultWalkStmtBindings(
                 try local_pattern_to_expr.put(self.gpa, binding.pattern_idx, decl.expr);
             }
         },
-        .s_var => |var_stmt| try local_pattern_to_expr.put(self.gpa, var_stmt.pattern_idx, var_stmt.expr),
+        .s_var => var_stmt_blk: {
+            const var_stmt = self.cir.store.statementView(stmt_idx).s_var.decode();
+            break :var_stmt_blk try local_pattern_to_expr.put(self.gpa, var_stmt.pattern_idx, var_stmt.expr);
+        },
         // No other statement form binds a pattern to an expression the walk
         // can follow (a reassignment mutates an `s_var` binder already
         // recorded above). Listed exhaustively so a new statement form
@@ -45428,20 +45613,22 @@ fn appendDefaultWalkStmtExprs(
     local_pattern_to_expr: *collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx),
 ) std.mem.Allocator.Error!void {
     try self.recordDefaultWalkStmtBindings(stmt_idx, local_pattern_to_expr);
-    switch (self.cir.store.getStatement(stmt_idx)) {
-        inline .s_decl, .s_var, .s_reassign, .s_dbg, .s_expr => |decl| try expr_work.append(self.gpa, decl.expr),
-        .s_expect => |expect| try expr_work.append(self.gpa, expect.body),
-        .s_return => |ret| try expr_work.append(self.gpa, ret.expr),
-        .s_for => |for_stmt| {
+    switch (self.cir.store.statementKind(stmt_idx)) {
+        inline .s_decl, .s_var, .s_reassign, .s_dbg, .s_expr => |kind| try expr_work.append(self.gpa, @field(self.cir.store.statementView(stmt_idx), @tagName(kind)).get(.expr)),
+        .s_expect => try expr_work.append(self.gpa, self.cir.store.statementView(stmt_idx).s_expect.get(.body)),
+        .s_return => try expr_work.append(self.gpa, self.cir.store.statementView(stmt_idx).s_return.get(.expr)),
+        .s_for => {
+            const for_stmt = self.cir.store.statementView(stmt_idx).s_for.decode();
             try expr_work.append(self.gpa, for_stmt.expr);
             try expr_work.append(self.gpa, for_stmt.body);
         },
-        .s_while => |while_stmt| {
+        .s_while => {
+            const while_stmt = self.cir.store.statementView(stmt_idx).s_while.decode();
             try expr_work.append(self.gpa, while_stmt.cond);
             try expr_work.append(self.gpa, while_stmt.body);
         },
-        .s_infinite_loop => |loop_stmt| try expr_work.append(self.gpa, loop_stmt.body),
-        .s_breakable_loop => |loop_stmt| try expr_work.append(self.gpa, loop_stmt.body),
+        .s_infinite_loop => try expr_work.append(self.gpa, self.cir.store.statementView(stmt_idx).s_infinite_loop.get(.body)),
+        .s_breakable_loop => try expr_work.append(self.gpa, self.cir.store.statementView(stmt_idx).s_breakable_loop.get(.body)),
         .s_var_uninitialized,
         .s_import,
         .s_alias_decl,
@@ -50395,19 +50582,22 @@ fn tailTrySuffixExpr(self: *const Self, root: CIR.Expr.Idx) Allocator.Error!?CIR
 /// The `?` match at `expr_idx` itself, or null after pushing the result
 /// positions to search within it.
 fn tailTrySuffixStep(self: *const Self, expr_idx: CIR.Expr.Idx, pending: *std.ArrayList(CIR.Expr.Idx)) Allocator.Error!?CIR.Expr.Idx {
-    switch (self.cir.store.getExpr(expr_idx)) {
-        .e_block => |block| {
+    switch (self.cir.store.exprKind(expr_idx)) {
+        .e_block => {
+            const block = self.cir.store.exprView(expr_idx).e_block.decode();
             try pending.append(self.gpa, block.final_expr);
             return null;
         },
-        .e_if => |if_expr| {
+        .e_if => {
+            const if_expr = self.cir.store.exprView(expr_idx).e_if.decode();
             for (self.cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                 try pending.append(self.gpa, self.cir.store.getIfBranch(branch_idx).body);
             }
             try pending.append(self.gpa, if_expr.final_else);
             return null;
         },
-        .e_match => |match_expr| {
+        .e_match => {
+            const match_expr = self.cir.store.exprView(expr_idx).e_match.decode();
             if (match_expr.is_try_suffix) return expr_idx;
             for (self.cir.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
                 try pending.append(self.gpa, self.cir.store.getMatchBranch(branch_idx).value);
@@ -53032,9 +53222,10 @@ fn localValueMethodBinding(self: *Self, method_lookup: StaticDispatchMethodBindi
     // once before repeating, so the node count bounds the walk.
     var remaining: usize = self.cir.store.nodes.len();
     while (remaining > 0) : (remaining -= 1) {
-        switch (self.cir.store.getExpr(expr)) {
+        switch (self.cir.store.exprKind(expr)) {
             .e_lambda, .e_closure, .e_anno_only, .e_hosted_lambda, .e_derived_method, .e_runtime_error => return false,
-            .e_lookup_local => |lookup| {
+            .e_lookup_local => {
+                const lookup = self.cir.store.exprView(expr).e_lookup_local.decode();
                 if (self.patternIsTopLevel(lookup.pattern_idx)) {
                     return self.types.resolveThroughAliases(ModuleEnv.varFrom(lookup.pattern_idx)).desc.content.unwrapFunc() == null;
                 }
@@ -66784,10 +66975,9 @@ pub fn createImportMapping(
                 // reserved node.
                 std.debug.assert(@backingInt(stmt_idx) != 0);
                 {
-                    const stmt = builtin_env.store.getStatement(stmt_idx);
-                    const header_idx = switch (stmt) {
-                        .s_nominal_decl => |decl| decl.header,
-                        .s_alias_decl => |alias| alias.header,
+                    const header_idx = switch (builtin_env.store.statementKind(stmt_idx)) {
+                        .s_nominal_decl => builtin_env.store.statementView(stmt_idx).s_nominal_decl.get(.header),
+                        .s_alias_decl => builtin_env.store.statementView(stmt_idx).s_alias_decl.get(.header),
                         .s_decl,
                         .s_var,
                         .s_var_uninitialized,

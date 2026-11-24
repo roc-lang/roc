@@ -463,11 +463,12 @@ pub const ModuleIndex = struct {
 
         fn markExprChildren(self: *Builder, expr_idx: ExprId, id: UnitId) Allocator.Error!void {
             const store = &self.env.store;
-            switch (store.getExpr(expr_idx)) {
-                .e_str => |str| try self.markExprs(store.sliceExpr(str.span), id),
-                .e_list => |list| try self.markExprs(store.sliceExpr(list.elems), id),
-                .e_tuple => |tuple| try self.markExprs(store.sliceExpr(tuple.elems), id),
-                .e_match => |match| {
+            switch (store.exprKind(expr_idx)) {
+                .e_str => try self.markExprs(store.sliceExpr(store.exprView(expr_idx).e_str.get(.span)), id),
+                .e_list => try self.markExprs(store.sliceExpr(store.exprView(expr_idx).e_list.get(.elems)), id),
+                .e_tuple => try self.markExprs(store.sliceExpr(store.exprView(expr_idx).e_tuple.get(.elems)), id),
+                .e_match => {
+                    const match = store.exprView(expr_idx).e_match.decode();
                     try self.mark(.{ .expr = match.cond }, id);
                     for (store.sliceMatchBranches(match.branches)) |branch_idx| {
                         const branch = store.getMatchBranch(branch_idx);
@@ -478,7 +479,8 @@ pub const ModuleIndex = struct {
                         try self.mark(.{ .expr = branch.value }, id);
                     }
                 },
-                .e_if => |if_| {
+                .e_if => {
+                    const if_ = store.exprView(expr_idx).e_if.decode();
                     for (store.sliceIfBranches(if_.branches)) |branch_idx| {
                         const branch = store.getIfBranch(branch_idx);
                         try self.mark(.{ .expr = branch.cond }, id);
@@ -486,89 +488,105 @@ pub const ModuleIndex = struct {
                     }
                     try self.mark(.{ .expr = if_.final_else }, id);
                 },
-                .e_call => |call| {
+                .e_call => {
+                    const call = store.exprView(expr_idx).e_call.decode();
                     try self.mark(.{ .expr = call.func }, id);
                     try self.markExprs(store.sliceExpr(call.args), id);
                 },
-                .e_record => |record| {
+                .e_record => {
+                    const record = store.exprView(expr_idx).e_record.decode();
                     for (store.sliceRecordFields(record.fields)) |field_idx| {
                         try self.mark(.{ .expr = store.getRecordField(field_idx).value }, id);
                     }
                     if (record.ext) |ext| try self.mark(.{ .expr = ext }, id);
                 },
-                .e_block => |block| {
+                .e_block => {
+                    const block = store.exprView(expr_idx).e_block.decode();
                     for (store.sliceStatements(block.stmts)) |statement| try self.mark(.{ .statement = statement }, id);
                     try self.mark(.{ .expr = block.final_expr }, id);
                 },
-                .e_tag => |tag| try self.markExprs(store.sliceExpr(tag.args), id),
-                .e_nominal => |nominal| try self.mark(.{ .expr = nominal.backing_expr }, id),
-                .e_nominal_external => |nominal| try self.mark(.{ .expr = nominal.backing_expr }, id),
-                .e_closure => |closure| {
+                .e_tag => try self.markExprs(store.sliceExpr(store.exprView(expr_idx).e_tag.get(.args)), id),
+                .e_nominal => try self.mark(.{ .expr = store.exprView(expr_idx).e_nominal.get(.backing_expr) }, id),
+                .e_nominal_external => try self.mark(.{ .expr = store.exprView(expr_idx).e_nominal_external.get(.backing_expr) }, id),
+                .e_closure => {
+                    const closure = store.exprView(expr_idx).e_closure.decode();
                     try self.mark(.{ .expr = closure.lambda_idx }, id);
                     for (store.sliceCaptures(closure.captures)) |capture_idx| {
                         try self.mark(.{ .pattern = store.getCapture(capture_idx).pattern_idx }, id);
                     }
                 },
-                .e_lambda => |lambda| {
+                .e_lambda => {
+                    const lambda = store.exprView(expr_idx).e_lambda.decode();
                     try self.markPatterns(store.slicePatterns(lambda.args), id);
                     try self.mark(.{ .expr = lambda.body }, id);
                 },
-                .e_binop => |binop| {
+                .e_binop => {
+                    const binop = store.exprView(expr_idx).e_binop.decode();
                     try self.mark(.{ .expr = binop.lhs }, id);
                     try self.mark(.{ .expr = binop.rhs }, id);
                 },
-                .e_unary_minus => |unary| try self.mark(.{ .expr = unary.expr }, id),
-                .e_field_access => |field| try self.mark(.{ .expr = field.receiver }, id),
-                inline .e_method_call, .e_dispatch_call => |call| {
+                .e_unary_minus => try self.mark(.{ .expr = store.exprView(expr_idx).e_unary_minus.get(.expr) }, id),
+                .e_field_access => try self.mark(.{ .expr = store.exprView(expr_idx).e_field_access.get(.receiver) }, id),
+                inline .e_method_call, .e_dispatch_call => |kind| {
+                    const call = @field(store.exprView(expr_idx), @tagName(kind)).decode();
                     try self.mark(.{ .expr = call.receiver }, id);
                     try self.markExprs(store.sliceExpr(call.args), id);
                 },
-                .e_interpolation => |interpolation| {
+                .e_interpolation => {
+                    const interpolation = store.exprView(expr_idx).e_interpolation.decode();
                     try self.mark(.{ .expr = interpolation.first }, id);
                     try self.markExprs(store.sliceExpr(interpolation.parts), id);
                 },
-                .e_structural_eq => |eq| {
+                .e_structural_eq => {
+                    const eq = store.exprView(expr_idx).e_structural_eq.decode();
                     try self.mark(.{ .expr = eq.lhs }, id);
                     try self.mark(.{ .expr = eq.rhs }, id);
                 },
-                .e_structural_hash => |hash| {
+                .e_structural_hash => {
+                    const hash = store.exprView(expr_idx).e_structural_hash.decode();
                     try self.mark(.{ .expr = hash.value }, id);
                     try self.mark(.{ .expr = hash.hasher }, id);
                 },
-                .e_method_eq => |eq| {
+                .e_method_eq => {
+                    const eq = store.exprView(expr_idx).e_method_eq.decode();
                     try self.mark(.{ .expr = eq.lhs }, id);
                     try self.mark(.{ .expr = eq.rhs }, id);
                 },
-                .e_type_method_call => |call| {
+                .e_type_method_call => {
+                    const call = store.exprView(expr_idx).e_type_method_call.decode();
                     try self.mark(.{ .statement = call.type_dispatch_stmt }, id);
                     try self.markExprs(store.sliceExpr(call.args), id);
                 },
-                .e_type_dispatch_call => |call| {
+                .e_type_dispatch_call => {
+                    const call = store.exprView(expr_idx).e_type_dispatch_call.decode();
                     switch (call.owner) {
                         .statement => |statement| try self.mark(.{ .statement = statement }, id),
                         .dispatcher => {},
                     }
                     try self.markExprs(store.sliceExpr(call.args), id);
                 },
-                .e_tuple_access => |access| try self.mark(.{ .expr = access.tuple }, id),
-                .e_dbg => |dbg| try self.mark(.{ .expr = dbg.expr }, id),
-                .e_expect_err => |expect_err| try self.mark(.{ .expr = expect_err.expr }, id),
-                .e_expect => |expect| {
+                .e_tuple_access => try self.mark(.{ .expr = store.exprView(expr_idx).e_tuple_access.get(.tuple) }, id),
+                .e_dbg => try self.mark(.{ .expr = store.exprView(expr_idx).e_dbg.get(.expr) }, id),
+                .e_expect_err => try self.mark(.{ .expr = store.exprView(expr_idx).e_expect_err.get(.expr) }, id),
+                .e_expect => {
+                    const expect = store.exprView(expr_idx).e_expect.decode();
                     self.has_expects = true;
                     try self.mark(.{ .expr = expect.body }, id);
                 },
-                .e_return => |ret| {
+                .e_return => {
+                    const ret = store.exprView(expr_idx).e_return.decode();
                     try self.mark(.{ .expr = ret.expr }, id);
                     try self.mark(.{ .expr = ret.lambda }, id);
                 },
-                .e_for => |for_| {
+                .e_for => {
+                    const for_ = store.exprView(expr_idx).e_for.decode();
                     try self.mark(.{ .pattern = for_.patt }, id);
                     try self.mark(.{ .expr = for_.expr }, id);
                     try self.mark(.{ .expr = for_.body }, id);
                 },
-                .e_hosted_lambda => |hosted| try self.markPatterns(store.slicePatterns(hosted.args), id),
-                .e_run_low_level => |run| try self.markExprs(store.sliceExpr(run.args), id),
-                .e_runtime_error => |runtime_error| try self.markExprs(store.sliceExpr(runtime_error.evaluated), id),
+                .e_hosted_lambda => try self.markPatterns(store.slicePatterns(store.exprView(expr_idx).e_hosted_lambda.get(.args)), id),
+                .e_run_low_level => try self.markExprs(store.sliceExpr(store.exprView(expr_idx).e_run_low_level.get(.args)), id),
+                .e_runtime_error => try self.markExprs(store.sliceExpr(store.exprView(expr_idx).e_runtime_error.get(.evaluated)), id),
                 .e_num,
                 .e_frac_f32,
                 .e_frac_f64,
@@ -600,20 +618,22 @@ pub const ModuleIndex = struct {
 
         fn markPatternChildren(self: *Builder, pattern_idx: PatternId, id: UnitId) Allocator.Error!void {
             const store = &self.env.store;
-            switch (store.getPattern(pattern_idx)) {
-                .as => |as| try self.mark(.{ .pattern = as.pattern }, id),
-                .applied_tag => |tag| try self.markPatterns(store.slicePatterns(tag.args), id),
-                .nominal => |nominal| try self.mark(.{ .pattern = nominal.backing_pattern }, id),
-                .nominal_external => |nominal| try self.mark(.{ .pattern = nominal.backing_pattern }, id),
-                .record_destructure => |record| for (store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+            switch (store.patternKind(pattern_idx)) {
+                .as => try self.mark(.{ .pattern = store.patternView(pattern_idx).as.get(.pattern) }, id),
+                .applied_tag => try self.markPatterns(store.slicePatterns(store.patternView(pattern_idx).applied_tag.get(.args)), id),
+                .nominal => try self.mark(.{ .pattern = store.patternView(pattern_idx).nominal.get(.backing_pattern) }, id),
+                .nominal_external => try self.mark(.{ .pattern = store.patternView(pattern_idx).nominal_external.get(.backing_pattern) }, id),
+                .record_destructure => for (store.sliceRecordDestructs(store.patternView(pattern_idx).record_destructure.get(.destructs))) |destruct_idx| {
                     try self.mark(.{ .pattern = store.getRecordDestruct(destruct_idx).kind.toPatternIdx() }, id);
                 },
-                .list => |list| {
+                .list => {
+                    const list = store.patternView(pattern_idx).list.decode();
                     try self.markPatterns(store.slicePatterns(list.patterns), id);
                     if (list.rest_info) |rest| if (rest.pattern) |rest_pattern| try self.mark(.{ .pattern = rest_pattern }, id);
                 },
-                .tuple => |tuple| try self.markPatterns(store.slicePatterns(tuple.patterns), id),
-                .str_interpolation => |str| {
+                .tuple => try self.markPatterns(store.slicePatterns(store.patternView(pattern_idx).tuple.get(.patterns)), id),
+                .str_interpolation => {
+                    const str = store.patternView(pattern_idx).str_interpolation.decode();
                     var offset: u32 = 0;
                     while (offset < str.steps.span.len) : (offset += 1) {
                         if (store.getStrPatternStep(str.steps, offset).capture) |capture| try self.mark(.{ .pattern = capture }, id);
@@ -637,40 +657,47 @@ pub const ModuleIndex = struct {
 
         fn markStatementChildren(self: *Builder, statement_idx: StatementId, id: UnitId) Allocator.Error!void {
             const store = &self.env.store;
-            switch (store.getStatement(statement_idx)) {
-                .s_decl => |decl| {
+            switch (store.statementKind(statement_idx)) {
+                .s_decl => {
+                    const decl = store.statementView(statement_idx).s_decl.decode();
                     try self.mark(.{ .pattern = decl.pattern }, id);
                     try self.mark(.{ .expr = decl.expr }, id);
                 },
-                .s_var => |var_| {
+                .s_var => {
+                    const var_ = store.statementView(statement_idx).s_var.decode();
                     try self.mark(.{ .pattern = var_.pattern_idx }, id);
                     try self.mark(.{ .expr = var_.expr }, id);
                 },
-                .s_var_uninitialized => |var_| try self.mark(.{ .pattern = var_.pattern_idx }, id),
-                .s_reassign => |reassign| {
+                .s_var_uninitialized => try self.mark(.{ .pattern = store.statementView(statement_idx).s_var_uninitialized.get(.pattern_idx) }, id),
+                .s_reassign => {
+                    const reassign = store.statementView(statement_idx).s_reassign.decode();
                     try self.mark(.{ .pattern = reassign.pattern_idx }, id);
                     try self.mark(.{ .expr = reassign.expr }, id);
                 },
-                .s_dbg => |dbg| try self.mark(.{ .expr = dbg.expr }, id),
-                .s_expr => |expr| try self.mark(.{ .expr = expr.expr }, id),
-                .s_expect => |expect| {
+                .s_dbg => try self.mark(.{ .expr = store.statementView(statement_idx).s_dbg.get(.expr) }, id),
+                .s_expr => try self.mark(.{ .expr = store.statementView(statement_idx).s_expr.get(.expr) }, id),
+                .s_expect => {
+                    const expect = store.statementView(statement_idx).s_expect.decode();
                     self.has_expects = true;
                     try self.mark(.{ .expr = expect.body }, id);
                 },
-                .s_for => |for_| {
+                .s_for => {
+                    const for_ = store.statementView(statement_idx).s_for.decode();
                     try self.mark(.{ .pattern = for_.patt }, id);
                     try self.mark(.{ .expr = for_.expr }, id);
                     try self.mark(.{ .expr = for_.body }, id);
                 },
-                inline .s_while, .s_infinite_loop, .s_breakable_loop => |loop| {
+                inline .s_while, .s_infinite_loop, .s_breakable_loop => |kind| {
+                    const loop = @field(store.statementView(statement_idx), @tagName(kind)).decode();
                     try self.mark(.{ .expr = loop.cond }, id);
                     try self.mark(.{ .expr = loop.body }, id);
                 },
-                .s_return => |ret| {
+                .s_return => {
+                    const ret = store.statementView(statement_idx).s_return.decode();
                     try self.mark(.{ .expr = ret.expr }, id);
                     try self.mark(.{ .expr = ret.lambda }, id);
                 },
-                .s_runtime_error => |runtime_error| try self.markExprs(store.sliceExpr(runtime_error.evaluated), id),
+                .s_runtime_error => try self.markExprs(store.sliceExpr(store.statementView(statement_idx).s_runtime_error.get(.evaluated)), id),
                 .s_crash,
                 .s_break,
                 .s_import,

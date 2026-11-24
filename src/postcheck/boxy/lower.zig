@@ -3227,8 +3227,8 @@ pub const Program = struct {
                 const node: can.CIR.Node.Idx = @fromBackingInt(@intCast(declaration.source_statement));
                 if (env.store.nodes.get(node).tag != .statement_nominal_decl) continue;
                 const statement_idx: can.CIR.Statement.Idx = @fromBackingInt(@intCast(declaration.source_statement));
-                const header = switch (env.store.getStatement(statement_idx)) {
-                    .s_nominal_decl => |decl| decl.header,
+                const header = switch (env.store.statementKind(statement_idx)) {
+                    .s_nominal_decl => env.store.statementView(statement_idx).s_nominal_decl.get(.header),
                     .s_decl, .s_var, .s_var_uninitialized, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_alias_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => continue,
                 };
                 if (!env.store.getTypeHeader(header).name.eql(ident)) continue;

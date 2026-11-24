@@ -279,12 +279,13 @@ const Pass = struct {
                 // Every invoked expression also materializes as a value
                 // (captures, operands, value reference edges).
                 try self.walk.append(self.gpa, invoked_idx);
-                switch (self.env.store.getExpr(invoked_idx)) {
+                switch (self.env.store.exprKind(invoked_idx)) {
                     // An invoked lambda/closure's body IS evaluated at
                     // materialization, so it walks (a closure's captures
                     // walk via the value `.e_closure` arm below).
-                    .e_lambda => |lambda| try self.walk.append(self.gpa, lambda.body),
-                    .e_closure => |closure| {
+                    .e_lambda => try self.walk.append(self.gpa, self.env.store.exprView(invoked_idx).e_lambda.get(.body)),
+                    .e_closure => {
+                        const closure = self.env.store.exprView(invoked_idx).e_closure.decode();
                         // `lambda_idx` always names an `e_lambda` (see
                         // CIR.Expr.Closure).
                         const lambda = self.env.store.exprAs(closure.lambda_idx, .e_lambda);
@@ -294,7 +295,8 @@ const Pass = struct {
                     // the reference evaluates the named def's body, so the
                     // edge targets the def's INVOKED-flavored node (which
                     // propagates invoked-ness through further chains).
-                    .e_lookup_local => |lookup| {
+                    .e_lookup_local => {
+                        const lookup = self.env.store.exprView(invoked_idx).e_lookup_local.decode();
                         if (self.pattern_to_node.get(lookup.pattern_idx)) |node| {
                             try self.addEdge(self.invokedNode(node));
                         }
@@ -306,15 +308,17 @@ const Pass = struct {
                     // conditions, scrutinees, and guards are not result
                     // positions; they walk as values via the value re-push
                     // above.
-                    .e_block => |block| try self.invoked_walk.append(self.gpa, block.final_expr),
-                    .e_if => |if_expr| {
+                    .e_block => try self.invoked_walk.append(self.gpa, self.env.store.exprView(invoked_idx).e_block.get(.final_expr)),
+                    .e_if => {
+                        const if_expr = self.env.store.exprView(invoked_idx).e_if.decode();
                         for (self.env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                             const branch = self.env.store.getIfBranch(branch_idx);
                             try self.invoked_walk.append(self.gpa, branch.body);
                         }
                         try self.invoked_walk.append(self.gpa, if_expr.final_else);
                     },
-                    .e_match => |match_expr| {
+                    .e_match => {
+                        const match_expr = self.env.store.exprView(invoked_idx).e_match.decode();
                         for (self.env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
                             const branch = self.env.store.getMatchBranch(branch_idx);
                             try self.invoked_walk.append(self.gpa, branch.value);
@@ -385,23 +389,27 @@ const Pass = struct {
             const expr_idx = self.walk.pop() orelse break;
             const seen = try self.seen_exprs.getOrPut(self.gpa, expr_idx);
             if (seen.found_existing) continue;
-            switch (self.env.store.getExpr(expr_idx)) {
-                .e_lookup_local => |lookup| {
+            switch (self.env.store.exprKind(expr_idx)) {
+                .e_lookup_local => {
+                    const lookup = self.env.store.exprView(expr_idx).e_lookup_local.decode();
                     if (self.pattern_to_node.get(lookup.pattern_idx)) |node| {
                         try self.addEdge(node);
                     }
                 },
-                .e_nominal => |nominal| {
+                .e_nominal => {
+                    const nominal = self.env.store.exprView(expr_idx).e_nominal.decode();
                     try self.appendOmissionEdges(nominal.nominal_type_decl, nominal.backing_expr);
                     try self.walk.append(self.gpa, nominal.backing_expr);
                 },
-                .e_nominal_external => |nominal| {
+                .e_nominal_external => {
+                    const nominal = self.env.store.exprView(expr_idx).e_nominal_external.decode();
                     // A foreign construction's omitted defaults are not
                     // visible at canonicalization; the checker's residue
                     // walk owns that edge. The supplied values still walk.
                     try self.walk.append(self.gpa, nominal.backing_expr);
                 },
-                .e_deferred_import_ref => |deferred| {
+                .e_deferred_import_ref => {
+                    const deferred = self.env.store.exprView(expr_idx).e_deferred_import_ref.decode();
                     // The construction's type is still deferred, so its
                     // omitted defaults belong to the checker's residue walk
                     // exactly as for a resolved foreign construction. The
@@ -415,7 +423,8 @@ const Pass = struct {
                 // instead; one merely referenced as a value keeps its body
                 // unwalked. Captures ARE evaluated at materialization, so
                 // their reference edges stay.
-                .e_closure => |closure| {
+                .e_closure => {
+                    const closure = self.env.store.exprView(expr_idx).e_closure.decode();
                     for (self.env.store.sliceCaptures(closure.captures)) |capture_idx| {
                         const capture = self.env.store.getCapture(capture_idx);
                         if (self.pattern_to_node.get(capture.pattern_idx)) |node| {
@@ -429,7 +438,8 @@ const Pass = struct {
                 // callee or as an argument—walks as invoked via `.e_call`
                 // below.
                 .e_lambda => {},
-                .e_call => |call| {
+                .e_call => {
+                    const call = self.env.store.exprView(expr_idx).e_call.decode();
                     // The DIRECT callee is INVOKED by this call: the
                     // invoked drain above walks a lambda/closure callee's
                     // body and follows a name-resolvable callee reference
@@ -439,7 +449,8 @@ const Pass = struct {
                     try self.invoked_walk.append(self.gpa, call.func);
                     try self.appendSpanInvoked(call.args);
                 },
-                .e_if => |if_expr| {
+                .e_if => {
+                    const if_expr = self.env.store.exprView(expr_idx).e_if.decode();
                     for (self.env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                         const branch = self.env.store.getIfBranch(branch_idx);
                         try self.walk.append(self.gpa, branch.cond);
@@ -447,7 +458,8 @@ const Pass = struct {
                     }
                     try self.walk.append(self.gpa, if_expr.final_else);
                 },
-                .e_match => |match_expr| {
+                .e_match => {
+                    const match_expr = self.env.store.exprView(expr_idx).e_match.decode();
                     try self.walk.append(self.gpa, match_expr.cond);
                     for (self.env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
                         const branch = self.env.store.getMatchBranch(branch_idx);
@@ -455,58 +467,66 @@ const Pass = struct {
                         if (branch.guard) |guard_idx| try self.walk.append(self.gpa, guard_idx);
                     }
                 },
-                .e_list => |list| try self.appendSpan(list.elems),
-                .e_tuple => |tuple| try self.appendSpan(tuple.elems),
-                .e_record => |record| {
+                .e_list => try self.appendSpan(self.env.store.exprView(expr_idx).e_list.get(.elems)),
+                .e_tuple => try self.appendSpan(self.env.store.exprView(expr_idx).e_tuple.get(.elems)),
+                .e_record => {
+                    const record = self.env.store.exprView(expr_idx).e_record.decode();
                     for (self.env.store.sliceRecordFields(record.fields)) |field_idx| {
                         const field = self.env.store.getRecordField(field_idx);
                         try self.walk.append(self.gpa, field.value);
                     }
                     if (record.ext) |ext_idx| try self.walk.append(self.gpa, ext_idx);
                 },
-                .e_field_access => |access| try self.walk.append(self.gpa, access.receiver),
-                .e_tuple_access => |access| try self.walk.append(self.gpa, access.tuple),
+                .e_field_access => try self.walk.append(self.gpa, self.env.store.exprView(expr_idx).e_field_access.get(.receiver)),
+                .e_tuple_access => try self.walk.append(self.gpa, self.env.store.exprView(expr_idx).e_tuple_access.get(.tuple)),
                 // Dispatch-form calls: the TARGET is the checker's residue
                 // (resolution needs solved types), but the argument rule is
                 // uniform across every call form—each argument walks as
                 // invoked. Receivers are operands, not arguments.
-                inline .e_method_call, .e_dispatch_call => |call| {
+                inline .e_method_call, .e_dispatch_call => |kind| {
+                    const call = @field(self.env.store.exprView(expr_idx), @tagName(kind)).decode();
                     try self.walk.append(self.gpa, call.receiver);
                     try self.appendSpanInvoked(call.args);
                 },
-                .e_type_method_call => |call| try self.appendSpanInvoked(call.args),
-                .e_type_dispatch_call => |call| try self.appendSpanInvoked(call.args),
-                .e_interpolation => |interpolation| {
+                .e_type_method_call => try self.appendSpanInvoked(self.env.store.exprView(expr_idx).e_type_method_call.get(.args)),
+                .e_type_dispatch_call => try self.appendSpanInvoked(self.env.store.exprView(expr_idx).e_type_dispatch_call.get(.args)),
+                .e_interpolation => {
+                    const interpolation = self.env.store.exprView(expr_idx).e_interpolation.decode();
                     try self.walk.append(self.gpa, interpolation.first);
                     try self.appendSpan(interpolation.parts);
                 },
-                .e_structural_eq => |eq| {
+                .e_structural_eq => {
+                    const eq = self.env.store.exprView(expr_idx).e_structural_eq.decode();
                     try self.walk.append(self.gpa, eq.lhs);
                     try self.walk.append(self.gpa, eq.rhs);
                 },
-                .e_structural_hash => |h| {
+                .e_structural_hash => {
+                    const h = self.env.store.exprView(expr_idx).e_structural_hash.decode();
                     try self.walk.append(self.gpa, h.value);
                     try self.walk.append(self.gpa, h.hasher);
                 },
-                inline .e_method_eq, .e_binop => |eq| {
+                inline .e_method_eq, .e_binop => |kind| {
+                    const eq = @field(self.env.store.exprView(expr_idx), @tagName(kind)).decode();
                     try self.walk.append(self.gpa, eq.lhs);
                     try self.walk.append(self.gpa, eq.rhs);
                 },
-                .e_unary_minus => |unop| try self.walk.append(self.gpa, unop.expr),
-                .e_block => |block| {
+                .e_unary_minus => try self.walk.append(self.gpa, self.env.store.exprView(expr_idx).e_unary_minus.get(.expr)),
+                .e_block => {
+                    const block = self.env.store.exprView(expr_idx).e_block.decode();
                     for (self.env.store.sliceStatements(block.stmts)) |stmt_idx| {
                         try self.appendStmtExprs(stmt_idx);
                     }
                     try self.walk.append(self.gpa, block.final_expr);
                 },
-                .e_tag => |tag| try self.appendSpan(tag.args),
-                .e_str => |str| try self.appendSpan(str.span),
-                .e_run_low_level => |run_ll| try self.appendSpan(run_ll.args),
-                .e_dbg => |dbg| try self.walk.append(self.gpa, dbg.expr),
-                .e_expect_err => |expect_err| try self.walk.append(self.gpa, expect_err.expr),
-                .e_expect => |expect| try self.walk.append(self.gpa, expect.body),
-                .e_return => |ret| try self.walk.append(self.gpa, ret.expr),
-                .e_for => |for_expr| {
+                .e_tag => try self.appendSpan(self.env.store.exprView(expr_idx).e_tag.get(.args)),
+                .e_str => try self.appendSpan(self.env.store.exprView(expr_idx).e_str.get(.span)),
+                .e_run_low_level => try self.appendSpan(self.env.store.exprView(expr_idx).e_run_low_level.get(.args)),
+                .e_dbg => try self.walk.append(self.gpa, self.env.store.exprView(expr_idx).e_dbg.get(.expr)),
+                .e_expect_err => try self.walk.append(self.gpa, self.env.store.exprView(expr_idx).e_expect_err.get(.expr)),
+                .e_expect => try self.walk.append(self.gpa, self.env.store.exprView(expr_idx).e_expect.get(.body)),
+                .e_return => try self.walk.append(self.gpa, self.env.store.exprView(expr_idx).e_return.get(.expr)),
+                .e_for => {
+                    const for_expr = self.env.store.exprView(expr_idx).e_for.decode();
                     try self.walk.append(self.gpa, for_expr.expr);
                     try self.walk.append(self.gpa, for_expr.body);
                 },
@@ -576,20 +596,22 @@ const Pass = struct {
     }
 
     fn appendStmtExprs(self: *Pass, stmt_idx: CIR.Statement.Idx) Allocator.Error!void {
-        switch (self.env.store.getStatement(stmt_idx)) {
-            inline .s_decl, .s_var, .s_reassign, .s_dbg, .s_expr => |decl| try self.walk.append(self.gpa, decl.expr),
-            .s_expect => |expect| try self.walk.append(self.gpa, expect.body),
-            .s_for => |for_stmt| {
+        switch (self.env.store.statementKind(stmt_idx)) {
+            inline .s_decl, .s_var, .s_reassign, .s_dbg, .s_expr => |kind| try self.walk.append(self.gpa, @field(self.env.store.statementView(stmt_idx), @tagName(kind)).get(.expr)),
+            .s_expect => try self.walk.append(self.gpa, self.env.store.statementView(stmt_idx).s_expect.get(.body)),
+            .s_for => {
+                const for_stmt = self.env.store.statementView(stmt_idx).s_for.decode();
                 try self.walk.append(self.gpa, for_stmt.expr);
                 try self.walk.append(self.gpa, for_stmt.body);
             },
-            .s_while => |while_stmt| {
+            .s_while => {
+                const while_stmt = self.env.store.statementView(stmt_idx).s_while.decode();
                 try self.walk.append(self.gpa, while_stmt.cond);
                 try self.walk.append(self.gpa, while_stmt.body);
             },
-            .s_infinite_loop => |loop_stmt| try self.walk.append(self.gpa, loop_stmt.body),
-            .s_breakable_loop => |loop_stmt| try self.walk.append(self.gpa, loop_stmt.body),
-            .s_return => |ret| try self.walk.append(self.gpa, ret.expr),
+            .s_infinite_loop => try self.walk.append(self.gpa, self.env.store.statementView(stmt_idx).s_infinite_loop.get(.body)),
+            .s_breakable_loop => try self.walk.append(self.gpa, self.env.store.statementView(stmt_idx).s_breakable_loop.get(.body)),
+            .s_return => try self.walk.append(self.gpa, self.env.store.statementView(stmt_idx).s_return.get(.expr)),
             .s_var_uninitialized,
             .s_import,
             .s_alias_decl,

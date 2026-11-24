@@ -6823,10 +6823,10 @@ pub fn declarationAnnoNode(
     const module_env = module.moduleEnvConst();
     var current = anno_idx;
     while (true) {
-        switch (module_env.store.getTypeAnno(current)) {
-            .parens => |parens| current = parens.anno,
+        switch (module_env.store.typeAnnoKind(current)) {
+            .parens => current = module_env.store.typeAnnoView(current).parens.get(.anno),
             .tag_union, .tuple, .record, .@"fn", .apply => return .{ .composite = current },
-            .lookup => |lookup| switch (lookup.base) {
+            .lookup => switch (module_env.store.typeAnnoView(current).lookup.get(.base)) {
                 .local => |local| {
                     const finalized = local_type_declarations.finalizedStatementForReference(module, local.decl_idx);
                     if (module.getStatement(finalized) != .s_alias_decl) return .{ .leaf = ModuleEnv.varFrom(finalized) };
@@ -6839,7 +6839,8 @@ pub fn declarationAnnoNode(
                 => return .{ .leaf = ModuleEnv.varFrom(current) },
             },
             .rigid_var => return .{ .rigid = .{ .var_ = ModuleEnv.varFrom(current) } },
-            .rigid_var_lookup => |lookup| {
+            .rigid_var_lookup => {
+                const lookup = module_env.store.typeAnnoView(current).rigid_var_lookup.decode();
                 var binder = lookup.ref;
                 while (module_env.store.typeAnnoKind(binder) == .rigid_var_lookup) {
                     binder = module_env.store.typeAnnoView(binder).rigid_var_lookup.get(.ref);
@@ -7041,11 +7042,12 @@ const DeclarationAnnoWalk = struct {
             },
             .composite => |composite| composite,
         };
-        switch (module_env.store.getTypeAnno(current)) {
-            .tag_union => |tag_union| {
+        switch (module_env.store.typeAnnoKind(current)) {
+            .tag_union => {
+                const tag_union = module_env.store.typeAnnoView(current).tag_union.decode();
                 for (module_env.store.sliceTypeAnnos(tag_union.tags)) |tag_anno_idx| {
-                    const tag = switch (module_env.store.getTypeAnno(tag_anno_idx)) {
-                        .tag => |tag| tag,
+                    const tag = switch (module_env.store.typeAnnoKind(tag_anno_idx)) {
+                        .tag => module_env.store.typeAnnoView(tag_anno_idx).tag.decode(),
                         .apply,
                         .rigid_var,
                         .rigid_var_lookup,
@@ -7064,7 +7066,8 @@ const DeclarationAnnoWalk = struct {
                 }
                 try self.ops.append(gpa, if (tag_union.ext) |ext| .{ .child = ext } else .empty_tag_union);
             },
-            .record => |record| {
+            .record => {
+                const record = module_env.store.typeAnnoView(current).record.decode();
                 // Unnamed (`_` / `_name`) fields are layout padding, not real fields; they
                 // stay in the canonical record annotation (declared order) but are excluded
                 // from the backing row here so they are never name-resolved or unified.
@@ -7077,12 +7080,13 @@ const DeclarationAnnoWalk = struct {
                 }
                 try self.ops.append(gpa, if (record.ext) |ext| .{ .child = ext } else .empty_record);
             },
-            .tuple => |tuple| for (module_env.store.sliceTypeAnnos(tuple.elems)) |elem| try self.ops.append(gpa, .{ .child = elem }),
-            .@"fn" => |func| {
+            .tuple => for (module_env.store.sliceTypeAnnos(module_env.store.typeAnnoView(current).tuple.get(.elems))) |elem| try self.ops.append(gpa, .{ .child = elem }),
+            .@"fn" => {
+                const func = module_env.store.typeAnnoView(current).@"fn".decode();
                 for (module_env.store.sliceTypeAnnos(func.args)) |arg| try self.ops.append(gpa, .{ .child = arg });
                 try self.ops.append(gpa, .{ .child = func.ret });
             },
-            .apply => |apply| for (module_env.store.sliceTypeAnnos(apply.args)) |arg| try self.ops.append(gpa, .{ .child = arg }),
+            .apply => for (module_env.store.sliceTypeAnnos(module_env.store.typeAnnoView(current).apply.get(.args))) |arg| try self.ops.append(gpa, .{ .child = arg }),
             .parens,
             .lookup,
             .rigid_var,
@@ -7113,8 +7117,9 @@ const DeclarationAnnoWalk = struct {
         const frame = self.frames.items[index];
         const module_env = self.module.moduleEnvConst();
         var results = CheckedTypeProjectResults{ .items = self.results.items[frame.results_start..] };
-        switch (module_env.store.getTypeAnno(frame.anno)) {
-            .tag_union => |tag_union| {
+        switch (module_env.store.typeAnnoKind(frame.anno)) {
+            .tag_union => {
+                const tag_union = module_env.store.typeAnnoView(frame.anno).tag_union.decode();
                 const tag_annos = module_env.store.sliceTypeAnnos(tag_union.tags);
                 const tags: []const CheckedTag = if (tag_annos.len == 0) &.{} else blk: {
                     const out = try gpa.alloc(CheckedTag, tag_annos.len);
@@ -7140,7 +7145,8 @@ const DeclarationAnnoWalk = struct {
                     .ext = ext,
                 } });
             },
-            .record => |record| {
+            .record => {
+                const record = module_env.store.typeAnnoView(frame.anno).record.decode();
                 var named_count: usize = 0;
                 for (module_env.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
                     if (!module_env.store.getAnnoRecordField(field_idx).is_unnamed) named_count += 1;
@@ -7187,12 +7193,14 @@ const DeclarationAnnoWalk = struct {
                     .ext = ext,
                 } });
             },
-            .tuple => |tuple| {
+            .tuple => {
+                const tuple = module_env.store.typeAnnoView(frame.anno).tuple.decode();
                 // The payload owns `elems` and releases it on failure.
                 const elems = try results.typeIds(gpa, module_env.store.sliceTypeAnnos(tuple.elems).len);
                 return try appendExplicitCheckedTypePayload(gpa, self.store, .{ .tuple = elems });
             },
-            .@"fn" => |func| {
+            .@"fn" => {
+                const func = module_env.store.typeAnnoView(frame.anno).@"fn".decode();
                 const args = try results.typeIds(gpa, module_env.store.sliceTypeAnnos(func.args).len);
                 // The payload owns `args` and releases it on failure.
                 return try appendExplicitCheckedTypePayload(gpa, self.store, .{ .function = .{
@@ -7201,7 +7209,7 @@ const DeclarationAnnoWalk = struct {
                     .ret = results.typeId(),
                 } });
             },
-            .apply => |apply| return try self.finishApply(index, apply, &results),
+            .apply => return try self.finishApply(index, module_env.store.typeAnnoView(frame.anno).apply.decode(), &results),
             .lookup => {
                 // Only a bare local alias pushes a lookup frame; its op is
                 // the walked alias body.
@@ -7457,9 +7465,9 @@ fn declaredRecordFieldsFromDeclarationAnno(
     // fields (mirrors the parens handling in appendCheckedTypeRootFromDeclarationAnno).
     var record_anno = anno_idx;
     const record = while (true) {
-        switch (module.moduleEnvConst().store.getTypeAnno(record_anno)) {
-            .parens => |parens| record_anno = parens.anno,
-            .record => |record| break record,
+        switch (module.moduleEnvConst().store.typeAnnoKind(record_anno)) {
+            .parens => record_anno = module.moduleEnvConst().store.typeAnnoView(record_anno).parens.get(.anno),
+            .record => break module.moduleEnvConst().store.typeAnnoView(record_anno).record.decode(),
             .apply,
             .rigid_var,
             .rigid_var_lookup,
@@ -25997,8 +26005,9 @@ fn valueFormWalk(allocator: Allocator, bodies: *const CheckedBodies, root: CIR.E
 /// is anything else.
 fn selectedLookup(env: *const ModuleEnv, expr: CIR.Expr.Idx) ?CIR.Expr.Idx {
     var current = expr;
-    while (true) switch (env.store.getExpr(current)) {
-        .e_block => |block| {
+    while (true) switch (env.store.exprKind(current)) {
+        .e_block => {
+            const block = env.store.exprView(current).e_block.decode();
             if (env.store.sliceStatements(block.stmts).len != 0) return null;
             current = block.final_expr;
         },
@@ -26068,14 +26077,16 @@ const ConstLookupScope = struct {
     /// The constant root `expr` reads when it is a lookup of one, or null.
     fn target(self: *const ConstLookupScope, expr: CIR.Expr.Idx) ?Target {
         const env = self.module.moduleEnvConst();
-        switch (env.store.getExpr(expr)) {
-            .e_lookup_local => |local| return if (self.local_roots.get(local.pattern_idx)) |index| .{ .local = index } else null,
-            .e_lookup_external => |external| {
+        switch (env.store.exprKind(expr)) {
+            .e_lookup_local => return if (self.local_roots.get(env.store.exprView(expr).e_lookup_local.get(.pattern_idx))) |index| .{ .local = index } else null,
+            .e_lookup_external => {
+                const external = env.store.exprView(expr).e_lookup_external.decode();
                 const module_idx = self.module.resolvedImportModule(external.module_idx) orelse return null;
                 const import_artifact = publishImportForModule(self.imports, module_idx) orelse return null;
                 return importedConstRoot(&import_artifact.view, @fromBackingInt(@intCast(external.target_node_idx)));
             },
-            .e_lookup_associated_resolved => |resolved| {
+            .e_lookup_associated_resolved => {
+                const resolved = env.store.exprView(expr).e_lookup_associated_resolved.decode();
                 if (resolved.module_identity == env.selfModuleIdentity()) {
                     const pattern = self.module.def(resolved.target_def_idx).pattern.idx;
                     return if (self.local_roots.get(pattern)) |index| .{ .local = index } else null;
@@ -26448,8 +26459,8 @@ pub const CompileTimeRootTable = struct {
             if (kind == .hoisted_constant and selected.body == .expr and !selected.top_level and !selected.read_by_root) {
                 const lookup = selectedLookup(module_env, selected.expr);
                 if (lookup) |read| {
-                    const reads_binding = switch (module_env.store.getExpr(read)) {
-                        .e_lookup_local => |local| selected_bindings.contains(local.pattern_idx),
+                    const reads_binding = switch (module_env.store.exprKind(read)) {
+                        .e_lookup_local => selected_bindings.contains(module_env.store.exprView(read).e_lookup_local.get(.pattern_idx)),
                         .e_num, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external, .e_block, .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => false,
                     };
                     if (reads_binding) continue;
@@ -36536,8 +36547,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .expr_type_dispatch_call_dispatcher,
             .expr_hosted_lambda,
             => {
-                const expr = store.getExpr(@fromBackingInt(@intCast(raw_node_idx)));
-                switch (expr) {
+                switch (store.getExpr(@fromBackingInt(@intCast(raw_node_idx)))) {
                     inline .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral => |typed| try visitor.typeName(typed.type_name),
                     .e_tag => |tag_expr| try visitor.tag(tag_expr.name),
                     .e_zero_argument_tag => |tag_expr| {
@@ -36636,8 +36646,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .ty_lookup,
             .ty_tag,
             => {
-                const anno = store.getTypeAnno(@fromBackingInt(@intCast(raw_node_idx)));
-                switch (anno) {
+                switch (store.getTypeAnno(@fromBackingInt(@intCast(raw_node_idx)))) {
                     .apply => |apply| try visitor.typeName(apply.name),
                     .lookup => |lookup| try visitor.typeName(lookup.name),
                     .tag => |tag_anno| try visitor.tag(tag_anno.name),

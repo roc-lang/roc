@@ -1760,8 +1760,8 @@ fn zeroArgRootInvariant(message: []const u8) noreturn {
 
 fn zeroArgRootBody(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ZeroArgRootBody {
     const def = module_env.store.getDef(def_idx);
-    const lambda_idx = switch (module_env.store.getExpr(def.expr)) {
-        .e_closure => |closure| closure.lambda_idx,
+    const lambda_idx = switch (module_env.store.exprKind(def.expr)) {
+        .e_closure => module_env.store.exprView(def.expr).e_closure.get(.lambda_idx),
         .e_lambda => def.expr,
         .e_num,
         .e_frac_f32,
@@ -1822,8 +1822,8 @@ fn zeroArgRootBody(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ZeroArgRo
         => zeroArgRootInvariant("compile-time REPL root was not a lambda"),
         .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
-    const lambda = switch (module_env.store.getExpr(lambda_idx)) {
-        .e_lambda => |lambda| lambda,
+    const lambda = switch (module_env.store.exprKind(lambda_idx)) {
+        .e_lambda => module_env.store.exprView(lambda_idx).e_lambda.decode(),
         .e_num,
         .e_frac_f32,
         .e_frac_f64,

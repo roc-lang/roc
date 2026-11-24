@@ -847,9 +847,8 @@ const Extractor = struct {
 };
 
 fn typeDeclName(module_env: *const ModuleEnv, statement_idx: can.CIR.Statement.Idx) ?[]const u8 {
-    const statement = module_env.store.getStatement(statement_idx);
-    const header_idx = switch (statement) {
-        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |decl| decl.header,
+    const header_idx = switch (module_env.store.statementKind(statement_idx)) {
+        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |kind| @field(module_env.store.statementView(statement_idx), @tagName(kind)).get(.header),
         .s_decl,
         .s_var,
         .s_var_uninitialized,

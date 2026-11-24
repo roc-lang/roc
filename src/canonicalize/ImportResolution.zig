@@ -362,8 +362,8 @@ const Resolver = struct {
     /// (`Files : Resource.Files`) reaches the module it was declared in.
     fn followAlias(self: *const Resolver, other: *const ModuleEnv, node_idx: u32) ?DeclRef {
         const stmt_idx: Statement.Idx = @fromBackingInt(@intCast(node_idx));
-        const alias = switch (other.store.getStatement(stmt_idx)) {
-            .s_alias_decl => |decl| decl,
+        const alias = switch (other.store.statementKind(stmt_idx)) {
+            .s_alias_decl => other.store.statementView(stmt_idx).s_alias_decl.decode(),
             .s_nominal_decl,
             .s_where_alias_decl,
             .s_decl,
@@ -386,9 +386,9 @@ const Resolver = struct {
             .s_runtime_error,
             => return null,
         };
-        const anno_base = switch (other.store.getTypeAnno(alias.anno)) {
-            .lookup => |lookup| lookup.base,
-            .apply => |apply| apply.base,
+        const anno_base = switch (other.store.typeAnnoKind(alias.anno)) {
+            .lookup => other.store.typeAnnoView(alias.anno).lookup.get(.base),
+            .apply => other.store.typeAnnoView(alias.anno).apply.get(.base),
             .rigid_var,
             .rigid_var_lookup,
             .underscore,
@@ -1202,8 +1202,8 @@ const Resolver = struct {
 /// public declaration, or null when the import names the whole module.
 fn selectedPrefix(other: *const ModuleEnv, selected: ?Statement.Idx) ?[]const u8 {
     const stmt_idx = selected orelse return null;
-    const header_idx = switch (other.store.getStatement(stmt_idx)) {
-        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |decl| decl.header,
+    const header_idx = switch (other.store.statementKind(stmt_idx)) {
+        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |kind| @field(other.store.statementView(stmt_idx), @tagName(kind)).get(.header),
         .s_decl,
         .s_var,
         .s_var_uninitialized,

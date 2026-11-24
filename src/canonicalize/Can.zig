@@ -7412,8 +7412,9 @@ fn checkPublicNominalTypeSurface(
     defer visited_alias_uses.deinit(gpa);
 
     while (stack.pop()) |frame| {
-        switch (self.env.store.getTypeAnno(frame.anno)) {
-            .lookup => |lookup| {
+        switch (self.env.store.typeAnnoKind(frame.anno)) {
+            .lookup => {
+                const lookup = self.env.store.typeAnnoView(frame.anno).lookup.decode();
                 const lookup_region = self.env.store.getTypeAnnoRegion(frame.anno);
                 try self.checkPublicTypeSurfaceBase(
                     exposed_type,
@@ -7426,7 +7427,8 @@ fn checkPublicNominalTypeSurface(
                     &stack,
                 );
             },
-            .apply => |apply| {
+            .apply => {
+                const apply = self.env.store.typeAnnoView(frame.anno).apply.decode();
                 const lookup_region = self.env.store.getTypeAnnoRegion(frame.anno);
                 const args = self.env.store.sliceTypeAnnos(apply.args);
                 var i = args.len;
@@ -7449,7 +7451,8 @@ fn checkPublicNominalTypeSurface(
                     &stack,
                 );
             },
-            .record => |record| {
+            .record => {
+                const record = self.env.store.typeAnnoView(frame.anno).record.decode();
                 if (record.ext) |ext| {
                     try stack.append(gpa, .{
                         .anno = ext,
@@ -7470,7 +7473,8 @@ fn checkPublicNominalTypeSurface(
                     });
                 }
             },
-            .tag_union => |tag_union| {
+            .tag_union => {
+                const tag_union = self.env.store.typeAnnoView(frame.anno).tag_union.decode();
                 if (tag_union.ext) |ext| {
                     try stack.append(gpa, .{
                         .anno = ext,
@@ -7490,7 +7494,8 @@ fn checkPublicNominalTypeSurface(
                     });
                 }
             },
-            .tag => |tag| {
+            .tag => {
+                const tag = self.env.store.typeAnnoView(frame.anno).tag.decode();
                 const args = self.env.store.sliceTypeAnnos(tag.args);
                 var i = args.len;
                 while (i > 0) {
@@ -7502,7 +7507,8 @@ fn checkPublicNominalTypeSurface(
                     });
                 }
             },
-            .tuple => |tuple| {
+            .tuple => {
+                const tuple = self.env.store.typeAnnoView(frame.anno).tuple.decode();
                 const elems = self.env.store.sliceTypeAnnos(tuple.elems);
                 var i = elems.len;
                 while (i > 0) {
@@ -7514,7 +7520,8 @@ fn checkPublicNominalTypeSurface(
                     });
                 }
             },
-            .@"fn" => |func| {
+            .@"fn" => {
+                const func = self.env.store.typeAnnoView(frame.anno).@"fn".decode();
                 try stack.append(gpa, .{
                     .anno = func.ret,
                     .field_name = frame.field_name,
@@ -7532,7 +7539,8 @@ fn checkPublicNominalTypeSurface(
                     });
                 }
             },
-            .parens => |parens| {
+            .parens => {
+                const parens = self.env.store.typeAnnoView(frame.anno).parens.decode();
                 try stack.append(gpa, .{
                     .anno = parens.anno,
                     .field_name = frame.field_name,
@@ -9610,9 +9618,10 @@ fn warnTrailingTrySuffix(self: *Self, root: Expr.Idx) std.mem.Allocator.Error!vo
     var pending = std.ArrayList(Expr.Idx).empty;
     defer pending.deinit(self.env.gpa);
     try pending.append(self.env.gpa, root);
-    while (pending.pop()) |expr_idx| switch (self.env.store.getExpr(expr_idx)) {
-        .e_block => |block| try pending.append(self.env.gpa, block.final_expr),
-        .e_if => |if_expr| {
+    while (pending.pop()) |expr_idx| switch (self.env.store.exprKind(expr_idx)) {
+        .e_block => try pending.append(self.env.gpa, self.env.store.exprView(expr_idx).e_block.get(.final_expr)),
+        .e_if => {
+            const if_expr = self.env.store.exprView(expr_idx).e_if.decode();
             try pending.append(self.env.gpa, if_expr.final_else);
             const branches = self.env.store.sliceIfBranches(if_expr.branches);
             var i = branches.len;
@@ -9621,7 +9630,8 @@ fn warnTrailingTrySuffix(self: *Self, root: Expr.Idx) std.mem.Allocator.Error!vo
                 try pending.append(self.env.gpa, self.env.store.getIfBranch(branches[i]).body);
             }
         },
-        .e_match => |match_expr| {
+        .e_match => {
+            const match_expr = self.env.store.exprView(expr_idx).e_match.decode();
             if (match_expr.is_try_suffix) {
                 try self.env.pushDiagnostic(Diagnostic{ .trailing_try_suffix = .{
                     .region = self.trySuffixOperatorRegion(expr_idx),
@@ -10438,8 +10448,9 @@ const DefiniteInitAnalyzer = struct {
     /// leaf directly.
     fn expandExpr(self: *@This(), frame: *Frame, expr_idx: Expr.Idx, breaks: *std.ArrayList(InitState)) Allocator.Error!?Step {
         const state = frame.state;
-        frame.job = switch (self.can.env.store.getExpr(expr_idx)) {
-            .e_lookup_local => |lookup| {
+        frame.job = switch (self.can.env.store.exprKind(expr_idx)) {
+            .e_lookup_local => {
+                const lookup = self.can.env.store.exprView(expr_idx).e_lookup_local.decode();
                 if (state.isTrackedUninitialized(lookup.pattern_idx)) {
                     try self.reportUninitializedRead(expr_idx, lookup.pattern_idx);
                 }
@@ -10477,49 +10488,85 @@ const DefiniteInitAnalyzer = struct {
                 try breaks.append(self.allocator, try state.clone(self.allocator));
                 return .{ .done = false };
             },
-            .e_str => |str| seqJob(null, str.span, null),
-            .e_list => |list| seqJob(null, list.elems, null),
-            .e_tuple => |tuple| seqJob(null, tuple.elems, null),
-            .e_tag => |tag| seqJob(null, tag.args, null),
-            .e_nominal => |nominal| .{ .expr = nominal.backing_expr },
-            .e_nominal_external => |nominal| .{ .expr = nominal.backing_expr },
-            .e_deferred_import_ref => |deferred| if (deferred.backing) |backing|
+            .e_str => seqJob(null, self.can.env.store.exprView(expr_idx).e_str.get(.span), null),
+            .e_list => seqJob(null, self.can.env.store.exprView(expr_idx).e_list.get(.elems), null),
+            .e_tuple => seqJob(null, self.can.env.store.exprView(expr_idx).e_tuple.get(.elems), null),
+            .e_tag => seqJob(null, self.can.env.store.exprView(expr_idx).e_tag.get(.args), null),
+            .e_nominal => .{ .expr = self.can.env.store.exprView(expr_idx).e_nominal.get(.backing_expr) },
+            .e_nominal_external => .{ .expr = self.can.env.store.exprView(expr_idx).e_nominal_external.get(.backing_expr) },
+            .e_deferred_import_ref => if (self.can.env.store.exprView(expr_idx).e_deferred_import_ref.get(.backing)) |backing|
                 .{ .expr = backing.expr }
             else
                 return .{ .done = true },
-            .e_record => |record| .{ .record = .{ .fields = record.fields, .ext = record.ext } },
-            .e_call => |call| seqJob(call.func, call.args, null),
-            .e_binop => |binop| if (binop.op == .@"and" or binop.op == .@"or")
-                .{ .short_circuit = .{ .lhs = binop.lhs, .rhs = binop.rhs } }
-            else
-                seqJob(binop.lhs, Expr.Span{ .span = DataSpan.empty() }, binop.rhs),
-            .e_unary_minus => |unary| .{ .expr = unary.expr },
-            .e_field_access => |field| .{ .expr = field.receiver },
-            .e_method_call => |call| seqJob(call.receiver, call.args, null),
-            .e_dispatch_call => |call| seqJob(call.receiver, call.args, null),
-            .e_interpolation => |interpolation| seqJob(interpolation.first, interpolation.parts, null),
-            .e_structural_eq => |eq| seqJob(eq.lhs, Expr.Span{ .span = DataSpan.empty() }, eq.rhs),
-            .e_structural_hash => |h| seqJob(h.value, Expr.Span{ .span = DataSpan.empty() }, h.hasher),
-            .e_method_eq => |eq| seqJob(eq.lhs, Expr.Span{ .span = DataSpan.empty() }, eq.rhs),
-            .e_type_method_call => |call| seqJob(null, call.args, null),
-            .e_type_dispatch_call => |call| seqJob(null, call.args, null),
-            .e_tuple_access => |access| .{ .expr = access.tuple },
-            .e_block => |block| .{ .block = .{
-                .stmts = block.stmts,
-                .final_expr = block.final_expr,
-                .track_new_vars = false,
-            } },
-            .e_if => |if_| .{ .if_ = .{ .if_ = if_ } },
-            .e_match => |match| .{ .match = .{ .match = match } },
-            .e_dbg => |dbg| .{ .expr = dbg.expr },
-            .e_expect_err => |expect_err| .{ .expr = expect_err.expr },
-            .e_expect => |expect| .{ .expr = expect.body },
-            .e_return => |ret| return pushWithPost(frame, .{ .expr = ret.expr }, .force_false),
-            .e_for => |for_| .{ .loop = .{ .cond = for_.expr, .body = for_.body, .kind = .ordinary } },
-            .e_run_low_level => |run_| if (run_.op == .crash)
-                return pushWithPost(frame, seqJob(null, run_.args, null), .force_false)
-            else
-                seqJob(null, run_.args, null),
+            .e_record => record_blk: {
+                const record = self.can.env.store.exprView(expr_idx).e_record.decode();
+                break :record_blk .{ .record = .{ .fields = record.fields, .ext = record.ext } };
+            },
+            .e_call => call_blk: {
+                const call = self.can.env.store.exprView(expr_idx).e_call.decode();
+                break :call_blk seqJob(call.func, call.args, null);
+            },
+            .e_binop => binop_blk: {
+                const binop = self.can.env.store.exprView(expr_idx).e_binop.decode();
+                break :binop_blk if (binop.op == .@"and" or binop.op == .@"or")
+                    .{ .short_circuit = .{ .lhs = binop.lhs, .rhs = binop.rhs } }
+                else
+                    seqJob(binop.lhs, Expr.Span{ .span = DataSpan.empty() }, binop.rhs);
+            },
+            .e_unary_minus => .{ .expr = self.can.env.store.exprView(expr_idx).e_unary_minus.get(.expr) },
+            .e_field_access => .{ .expr = self.can.env.store.exprView(expr_idx).e_field_access.get(.receiver) },
+            .e_method_call => call_blk: {
+                const call = self.can.env.store.exprView(expr_idx).e_method_call.decode();
+                break :call_blk seqJob(call.receiver, call.args, null);
+            },
+            .e_dispatch_call => call_blk: {
+                const call = self.can.env.store.exprView(expr_idx).e_dispatch_call.decode();
+                break :call_blk seqJob(call.receiver, call.args, null);
+            },
+            .e_interpolation => interpolation_blk: {
+                const interpolation = self.can.env.store.exprView(expr_idx).e_interpolation.decode();
+                break :interpolation_blk seqJob(interpolation.first, interpolation.parts, null);
+            },
+            .e_structural_eq => eq_blk: {
+                const eq = self.can.env.store.exprView(expr_idx).e_structural_eq.decode();
+                break :eq_blk seqJob(eq.lhs, Expr.Span{ .span = DataSpan.empty() }, eq.rhs);
+            },
+            .e_structural_hash => h_blk: {
+                const h = self.can.env.store.exprView(expr_idx).e_structural_hash.decode();
+                break :h_blk seqJob(h.value, Expr.Span{ .span = DataSpan.empty() }, h.hasher);
+            },
+            .e_method_eq => eq_blk: {
+                const eq = self.can.env.store.exprView(expr_idx).e_method_eq.decode();
+                break :eq_blk seqJob(eq.lhs, Expr.Span{ .span = DataSpan.empty() }, eq.rhs);
+            },
+            .e_type_method_call => seqJob(null, self.can.env.store.exprView(expr_idx).e_type_method_call.get(.args), null),
+            .e_type_dispatch_call => seqJob(null, self.can.env.store.exprView(expr_idx).e_type_dispatch_call.get(.args), null),
+            .e_tuple_access => .{ .expr = self.can.env.store.exprView(expr_idx).e_tuple_access.get(.tuple) },
+            .e_block => block_blk: {
+                const block = self.can.env.store.exprView(expr_idx).e_block.decode();
+                break :block_blk .{ .block = .{
+                    .stmts = block.stmts,
+                    .final_expr = block.final_expr,
+                    .track_new_vars = false,
+                } };
+            },
+            .e_if => .{ .if_ = .{ .if_ = self.can.env.store.exprView(expr_idx).e_if.decode() } },
+            .e_match => .{ .match = .{ .match = self.can.env.store.exprView(expr_idx).e_match.decode() } },
+            .e_dbg => .{ .expr = self.can.env.store.exprView(expr_idx).e_dbg.get(.expr) },
+            .e_expect_err => .{ .expr = self.can.env.store.exprView(expr_idx).e_expect_err.get(.expr) },
+            .e_expect => .{ .expr = self.can.env.store.exprView(expr_idx).e_expect.get(.body) },
+            .e_return => return pushWithPost(frame, .{ .expr = self.can.env.store.exprView(expr_idx).e_return.get(.expr) }, .force_false),
+            .e_for => for__blk: {
+                const for_ = self.can.env.store.exprView(expr_idx).e_for.decode();
+                break :for__blk .{ .loop = .{ .cond = for_.expr, .body = for_.body, .kind = .ordinary } };
+            },
+            .e_run_low_level => run__blk: {
+                const run_ = self.can.env.store.exprView(expr_idx).e_run_low_level.decode();
+                break :run__blk if (run_.op == .crash)
+                    return pushWithPost(frame, seqJob(null, run_.args, null), .force_false)
+                else
+                    seqJob(null, run_.args, null);
+            },
         };
         return null;
     }
@@ -10534,22 +10581,38 @@ const DefiniteInitAnalyzer = struct {
         breaks: *std.ArrayList(InitState),
     ) Allocator.Error!?Step {
         const state = frame.state;
-        frame.job = switch (self.can.env.store.getStatement(stmt_idx)) {
-            .s_decl => |decl| .{ .expr = decl.expr },
-            .s_var => |var_| .{ .expr = var_.expr },
-            .s_var_uninitialized => |var_| {
+        frame.job = switch (self.can.env.store.statementKind(stmt_idx)) {
+            .s_decl => .{ .expr = self.can.env.store.statementView(stmt_idx).s_decl.get(.expr) },
+            .s_var => .{ .expr = self.can.env.store.statementView(stmt_idx).s_var.get(.expr) },
+            .s_var_uninitialized => {
+                const var_ = self.can.env.store.statementView(stmt_idx).s_var_uninitialized.decode();
                 if (track_new_vars) try state.addUninitialized(self.allocator, var_.pattern_idx);
                 return .{ .done = true };
             },
-            .s_reassign => |reassign| return pushWithPost(frame, .{ .expr = reassign.expr }, .{ .reassign = reassign.pattern_idx }),
-            .s_dbg => |dbg| .{ .expr = dbg.expr },
-            .s_expr => |expr| .{ .expr = expr.expr },
-            .s_expect => |expect| .{ .expr = expect.body },
-            .s_for => |for_| .{ .loop = .{ .cond = for_.expr, .body = for_.body, .kind = .ordinary } },
-            .s_while => |while_| .{ .loop = .{ .cond = while_.cond, .body = while_.body, .kind = .ordinary } },
-            .s_infinite_loop => |loop| .{ .loop = .{ .cond = loop.cond, .body = loop.body, .kind = .infinite } },
-            .s_breakable_loop => |loop| .{ .loop = .{ .cond = loop.cond, .body = loop.body, .kind = .breakable } },
-            .s_return => |ret| return pushWithPost(frame, .{ .expr = ret.expr }, .force_false),
+            .s_reassign => {
+                const reassign = self.can.env.store.statementView(stmt_idx).s_reassign.decode();
+                return pushWithPost(frame, .{ .expr = reassign.expr }, .{ .reassign = reassign.pattern_idx });
+            },
+            .s_dbg => .{ .expr = self.can.env.store.statementView(stmt_idx).s_dbg.get(.expr) },
+            .s_expr => .{ .expr = self.can.env.store.statementView(stmt_idx).s_expr.get(.expr) },
+            .s_expect => .{ .expr = self.can.env.store.statementView(stmt_idx).s_expect.get(.body) },
+            .s_for => for__blk: {
+                const for_ = self.can.env.store.statementView(stmt_idx).s_for.decode();
+                break :for__blk .{ .loop = .{ .cond = for_.expr, .body = for_.body, .kind = .ordinary } };
+            },
+            .s_while => while__blk: {
+                const while_ = self.can.env.store.statementView(stmt_idx).s_while.decode();
+                break :while__blk .{ .loop = .{ .cond = while_.cond, .body = while_.body, .kind = .ordinary } };
+            },
+            .s_infinite_loop => loop_blk: {
+                const loop = self.can.env.store.statementView(stmt_idx).s_infinite_loop.decode();
+                break :loop_blk .{ .loop = .{ .cond = loop.cond, .body = loop.body, .kind = .infinite } };
+            },
+            .s_breakable_loop => loop_blk: {
+                const loop = self.can.env.store.statementView(stmt_idx).s_breakable_loop.decode();
+                break :loop_blk .{ .loop = .{ .cond = loop.cond, .body = loop.body, .kind = .breakable } };
+            },
+            .s_return => return pushWithPost(frame, .{ .expr = self.can.env.store.statementView(stmt_idx).s_return.get(.expr) }, .force_false),
             .s_break => {
                 try breaks.append(self.allocator, try state.clone(self.allocator));
                 return .{ .done = false };
@@ -10634,33 +10697,38 @@ const DefiniteInitAnalyzer = struct {
 
         try pending.append(stack_allocator, pattern_idx);
         while (pending.pop()) |current_idx| {
-            const pattern = self.can.env.store.getPattern(current_idx);
-            switch (pattern) {
+            switch (self.can.env.store.patternKind(current_idx)) {
                 .assign, .var_assign => state.markInitialized(current_idx),
-                .as => |as| {
+                .as => {
+                    const as = self.can.env.store.patternView(current_idx).as.decode();
                     state.markInitialized(current_idx);
                     try pending.append(stack_allocator, as.pattern);
                 },
-                .applied_tag => |tag| {
+                .applied_tag => {
+                    const tag = self.can.env.store.patternView(current_idx).applied_tag.decode();
                     for (self.can.env.store.slicePatterns(tag.args)) |child| try pending.append(stack_allocator, child);
                 },
-                .nominal => |nominal| try pending.append(stack_allocator, nominal.backing_pattern),
-                .nominal_external => |nominal| try pending.append(stack_allocator, nominal.backing_pattern),
-                .deferred_import_ref => |deferred| try pending.append(stack_allocator, deferred.backing_pattern),
-                .record_destructure => |record| {
+                .nominal => try pending.append(stack_allocator, self.can.env.store.patternView(current_idx).nominal.get(.backing_pattern)),
+                .nominal_external => try pending.append(stack_allocator, self.can.env.store.patternView(current_idx).nominal_external.get(.backing_pattern)),
+                .deferred_import_ref => try pending.append(stack_allocator, self.can.env.store.patternView(current_idx).deferred_import_ref.get(.backing_pattern)),
+                .record_destructure => {
+                    const record = self.can.env.store.patternView(current_idx).record_destructure.decode();
                     for (self.can.env.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
                         const destruct = self.can.env.store.getRecordDestruct(destruct_idx);
                         try pending.append(stack_allocator, destruct.kind.toPatternIdx());
                     }
                 },
-                .list => |list| {
+                .list => {
+                    const list = self.can.env.store.patternView(current_idx).list.decode();
                     for (self.can.env.store.slicePatterns(list.patterns)) |child| try pending.append(stack_allocator, child);
                     if (list.rest_info) |rest| if (rest.pattern) |child| try pending.append(stack_allocator, child);
                 },
-                .tuple => |tuple| {
+                .tuple => {
+                    const tuple = self.can.env.store.patternView(current_idx).tuple.decode();
                     for (self.can.env.store.slicePatterns(tuple.patterns)) |child| try pending.append(stack_allocator, child);
                 },
-                .str_interpolation => |str| {
+                .str_interpolation => {
+                    const str = self.can.env.store.patternView(current_idx).str_interpolation.decode();
                     var i: u32 = str.steps.span.len;
                     while (i > 0) {
                         i -= 1;
@@ -11178,15 +11246,16 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
     while (pending.pop()) |frame| {
         switch (frame) {
             .expr => |expr_frame| {
-                const expr = self.env.store.getExpr(expr_frame.idx);
-                switch (expr) {
-                    .e_block => |block| {
+                switch (self.env.store.exprKind(expr_frame.idx)) {
+                    .e_block => {
+                        const block = self.env.store.exprView(expr_frame.idx).e_block.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = block.final_expr, .loop_depth = expr_frame.loop_depth } });
                         for (self.env.store.sliceStatements(block.stmts)) |stmt_idx| {
                             try pending.append(stack_allocator, .{ .stmt = .{ .idx = stmt_idx, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_if => |if_expr| {
+                    .e_if => {
+                        const if_expr = self.env.store.exprView(expr_frame.idx).e_if.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = if_expr.final_else, .loop_depth = expr_frame.loop_depth } });
                         for (self.env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                             const branch = self.env.store.getIfBranch(branch_idx);
@@ -11194,7 +11263,8 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = branch.cond, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_match => |match_expr| {
+                    .e_match => {
+                        const match_expr = self.env.store.exprView(expr_frame.idx).e_match.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = match_expr.cond, .loop_depth = expr_frame.loop_depth } });
                         for (self.env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
                             const branch = self.env.store.getMatchBranch(branch_idx);
@@ -11204,70 +11274,83 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = branch.value, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_call => |call| {
+                    .e_call => {
+                        const call = self.env.store.exprView(expr_frame.idx).e_call.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = call.func, .loop_depth = expr_frame.loop_depth } });
                         for (self.env.store.sliceExpr(call.args)) |arg| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_binop => |binop| {
+                    .e_binop => {
+                        const binop = self.env.store.exprView(expr_frame.idx).e_binop.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = binop.lhs, .loop_depth = expr_frame.loop_depth } });
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = binop.rhs, .loop_depth = expr_frame.loop_depth } });
                     },
-                    .e_unary_minus => |unary| try pending.append(stack_allocator, .{ .expr = .{ .idx = unary.expr, .loop_depth = expr_frame.loop_depth } }),
-                    .e_field_access => |field| try pending.append(stack_allocator, .{ .expr = .{ .idx = field.receiver, .loop_depth = expr_frame.loop_depth } }),
-                    .e_method_call => |call| {
+                    .e_unary_minus => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.exprView(expr_frame.idx).e_unary_minus.get(.expr), .loop_depth = expr_frame.loop_depth } }),
+                    .e_field_access => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.exprView(expr_frame.idx).e_field_access.get(.receiver), .loop_depth = expr_frame.loop_depth } }),
+                    .e_method_call => {
+                        const call = self.env.store.exprView(expr_frame.idx).e_method_call.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = call.receiver, .loop_depth = expr_frame.loop_depth } });
                         for (self.env.store.sliceExpr(call.args)) |arg| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_dispatch_call => |call| {
+                    .e_dispatch_call => {
+                        const call = self.env.store.exprView(expr_frame.idx).e_dispatch_call.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = call.receiver, .loop_depth = expr_frame.loop_depth } });
                         for (self.env.store.sliceExpr(call.args)) |arg| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_interpolation => |interpolation| {
+                    .e_interpolation => {
+                        const interpolation = self.env.store.exprView(expr_frame.idx).e_interpolation.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = interpolation.first, .loop_depth = expr_frame.loop_depth } });
                         for (self.env.store.sliceExpr(interpolation.parts)) |part| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = part, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_structural_eq => |eq| {
+                    .e_structural_eq => {
+                        const eq = self.env.store.exprView(expr_frame.idx).e_structural_eq.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = eq.lhs, .loop_depth = expr_frame.loop_depth } });
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = eq.rhs, .loop_depth = expr_frame.loop_depth } });
                     },
-                    .e_structural_hash => |h| {
+                    .e_structural_hash => {
+                        const h = self.env.store.exprView(expr_frame.idx).e_structural_hash.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = h.value, .loop_depth = expr_frame.loop_depth } });
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = h.hasher, .loop_depth = expr_frame.loop_depth } });
                     },
-                    .e_method_eq => |eq| {
+                    .e_method_eq => {
+                        const eq = self.env.store.exprView(expr_frame.idx).e_method_eq.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = eq.lhs, .loop_depth = expr_frame.loop_depth } });
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = eq.rhs, .loop_depth = expr_frame.loop_depth } });
                     },
-                    .e_type_method_call => |call| {
+                    .e_type_method_call => {
+                        const call = self.env.store.exprView(expr_frame.idx).e_type_method_call.decode();
                         for (self.env.store.sliceExpr(call.args)) |arg| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_type_dispatch_call => |call| {
+                    .e_type_dispatch_call => {
+                        const call = self.env.store.exprView(expr_frame.idx).e_type_dispatch_call.decode();
                         for (self.env.store.sliceExpr(call.args)) |arg| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_tuple_access => |access| try pending.append(stack_allocator, .{ .expr = .{ .idx = access.tuple, .loop_depth = expr_frame.loop_depth } }),
-                    .e_list => |list| {
+                    .e_tuple_access => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.exprView(expr_frame.idx).e_tuple_access.get(.tuple), .loop_depth = expr_frame.loop_depth } }),
+                    .e_list => {
+                        const list = self.env.store.exprView(expr_frame.idx).e_list.decode();
                         for (self.env.store.sliceExpr(list.elems)) |elem| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = elem, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_tuple => |tuple| {
+                    .e_tuple => {
+                        const tuple = self.env.store.exprView(expr_frame.idx).e_tuple.decode();
                         for (self.env.store.sliceExpr(tuple.elems)) |elem| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = elem, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_record => |record| {
+                    .e_record => {
+                        const record = self.env.store.exprView(expr_frame.idx).e_record.decode();
                         if (record.ext) |ext| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = ext, .loop_depth = expr_frame.loop_depth } });
                         }
@@ -11276,29 +11359,34 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = field.value, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_str => |str| {
+                    .e_str => {
+                        const str = self.env.store.exprView(expr_frame.idx).e_str.decode();
                         for (self.env.store.sliceExpr(str.span)) |segment| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = segment, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_tag => |tag| {
+                    .e_tag => {
+                        const tag = self.env.store.exprView(expr_frame.idx).e_tag.decode();
                         for (self.env.store.sliceExpr(tag.args)) |arg| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_nominal => |nominal| try pending.append(stack_allocator, .{ .expr = .{ .idx = nominal.backing_expr, .loop_depth = expr_frame.loop_depth } }),
-                    .e_nominal_external => |nominal| try pending.append(stack_allocator, .{ .expr = .{ .idx = nominal.backing_expr, .loop_depth = expr_frame.loop_depth } }),
-                    .e_deferred_import_ref => |deferred| {
+                    .e_nominal => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.exprView(expr_frame.idx).e_nominal.get(.backing_expr), .loop_depth = expr_frame.loop_depth } }),
+                    .e_nominal_external => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.exprView(expr_frame.idx).e_nominal_external.get(.backing_expr), .loop_depth = expr_frame.loop_depth } }),
+                    .e_deferred_import_ref => {
+                        const deferred = self.env.store.exprView(expr_frame.idx).e_deferred_import_ref.decode();
                         if (deferred.backing) |backing| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = backing.expr, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_dbg => |dbg| try pending.append(stack_allocator, .{ .expr = .{ .idx = dbg.expr, .loop_depth = expr_frame.loop_depth } }),
-                    .e_expect => |expect| try pending.append(stack_allocator, .{ .expr = .{ .idx = expect.body, .loop_depth = expr_frame.loop_depth } }),
-                    .e_expect_err => |expect_err| {
+                    .e_dbg => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.exprView(expr_frame.idx).e_dbg.get(.expr), .loop_depth = expr_frame.loop_depth } }),
+                    .e_expect => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.exprView(expr_frame.idx).e_expect.get(.body), .loop_depth = expr_frame.loop_depth } }),
+                    .e_expect_err => {
+                        const expect_err = self.env.store.exprView(expr_frame.idx).e_expect_err.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = expect_err.expr, .loop_depth = expr_frame.loop_depth } });
                     },
-                    .e_return => |ret| {
+                    .e_return => {
+                        const ret = self.env.store.exprView(expr_frame.idx).e_return.decode();
                         if (self.enclosing_lambda == null or ret.lambda == self.enclosing_lambda.?) {
                             facts.has_exit = true;
                         }
@@ -11313,11 +11401,13 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                     .e_crash => {
                         facts.has_exit = true;
                     },
-                    .e_for => |for_expr| {
+                    .e_for => {
+                        const for_expr = self.env.store.exprView(expr_frame.idx).e_for.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = for_expr.expr, .loop_depth = expr_frame.loop_depth } });
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = for_expr.body, .loop_depth = expr_frame.loop_depth + 1 } });
                     },
-                    .e_run_low_level => |run_low_level| {
+                    .e_run_low_level => {
+                        const run_low_level = self.env.store.exprView(expr_frame.idx).e_run_low_level.decode();
                         for (self.env.store.sliceExpr(run_low_level.args)) |arg| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
                         }
@@ -11354,35 +11444,39 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                 }
             },
             .stmt => |stmt_frame| {
-                const stmt = self.env.store.getStatement(stmt_frame.idx);
-                switch (stmt) {
-                    .s_decl => |decl| try pending.append(stack_allocator, .{ .expr = .{ .idx = decl.expr, .loop_depth = stmt_frame.loop_depth } }),
-                    .s_var => |var_stmt| try pending.append(stack_allocator, .{ .expr = .{ .idx = var_stmt.expr, .loop_depth = stmt_frame.loop_depth } }),
+                switch (self.env.store.statementKind(stmt_frame.idx)) {
+                    .s_decl => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.statementView(stmt_frame.idx).s_decl.get(.expr), .loop_depth = stmt_frame.loop_depth } }),
+                    .s_var => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.statementView(stmt_frame.idx).s_var.get(.expr), .loop_depth = stmt_frame.loop_depth } }),
                     .s_var_uninitialized => {},
-                    .s_reassign => |reassign| try pending.append(stack_allocator, .{ .expr = .{ .idx = reassign.expr, .loop_depth = stmt_frame.loop_depth } }),
-                    .s_dbg => |dbg| try pending.append(stack_allocator, .{ .expr = .{ .idx = dbg.expr, .loop_depth = stmt_frame.loop_depth } }),
-                    .s_expr => |expr_stmt| try pending.append(stack_allocator, .{ .expr = .{ .idx = expr_stmt.expr, .loop_depth = stmt_frame.loop_depth } }),
-                    .s_expect => |expect| try pending.append(stack_allocator, .{ .expr = .{ .idx = expect.body, .loop_depth = stmt_frame.loop_depth } }),
-                    .s_for => |for_stmt| {
+                    .s_reassign => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.statementView(stmt_frame.idx).s_reassign.get(.expr), .loop_depth = stmt_frame.loop_depth } }),
+                    .s_dbg => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.statementView(stmt_frame.idx).s_dbg.get(.expr), .loop_depth = stmt_frame.loop_depth } }),
+                    .s_expr => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.statementView(stmt_frame.idx).s_expr.get(.expr), .loop_depth = stmt_frame.loop_depth } }),
+                    .s_expect => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.statementView(stmt_frame.idx).s_expect.get(.body), .loop_depth = stmt_frame.loop_depth } }),
+                    .s_for => {
+                        const for_stmt = self.env.store.statementView(stmt_frame.idx).s_for.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = for_stmt.expr, .loop_depth = stmt_frame.loop_depth } });
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = for_stmt.body, .loop_depth = stmt_frame.loop_depth + 1 } });
                     },
-                    .s_while => |while_stmt| {
+                    .s_while => {
+                        const while_stmt = self.env.store.statementView(stmt_frame.idx).s_while.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = while_stmt.cond, .loop_depth = stmt_frame.loop_depth } });
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = while_stmt.body, .loop_depth = stmt_frame.loop_depth + 1 } });
                     },
-                    .s_infinite_loop => |loop_stmt| {
+                    .s_infinite_loop => {
+                        const loop_stmt = self.env.store.statementView(stmt_frame.idx).s_infinite_loop.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = loop_stmt.cond, .loop_depth = stmt_frame.loop_depth } });
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = loop_stmt.body, .loop_depth = stmt_frame.loop_depth + 1 } });
                     },
-                    .s_breakable_loop => |loop_stmt| {
+                    .s_breakable_loop => {
+                        const loop_stmt = self.env.store.statementView(stmt_frame.idx).s_breakable_loop.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = loop_stmt.cond, .loop_depth = stmt_frame.loop_depth } });
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = loop_stmt.body, .loop_depth = stmt_frame.loop_depth + 1 } });
                     },
                     .s_crash => {
                         facts.has_exit = true;
                     },
-                    .s_return => |ret| {
+                    .s_return => {
+                        const ret = self.env.store.statementView(stmt_frame.idx).s_return.decode();
                         if (self.enclosing_lambda == null or ret.lambda == self.enclosing_lambda.?) {
                             facts.has_exit = true;
                         }
@@ -20403,12 +20497,11 @@ fn addBlockStatement(
 ) std.mem.Allocator.Error!void {
     try self.env.store.addScratchStatement(statement.idx);
 
-    const cir_stmt = self.env.store.getStatement(statement.idx);
-    switch (cir_stmt) {
-        .s_decl => |decl| try self.collectBoundVarsToScratch(decl.pattern),
-        .s_var => |var_stmt| try self.collectBoundVarsToScratch(var_stmt.pattern_idx),
-        .s_var_uninitialized => |var_stmt| try self.collectBoundVarsToScratch(var_stmt.pattern_idx),
-        .s_reassign => |reassign| try self.collectReassignBoundVarsToScratch(reassign.pattern_idx),
+    switch (self.env.store.statementKind(statement.idx)) {
+        .s_decl => try self.collectBoundVarsToScratch(self.env.store.statementView(statement.idx).s_decl.get(.pattern)),
+        .s_var => try self.collectBoundVarsToScratch(self.env.store.statementView(statement.idx).s_var.get(.pattern_idx)),
+        .s_var_uninitialized => try self.collectBoundVarsToScratch(self.env.store.statementView(statement.idx).s_var_uninitialized.get(.pattern_idx)),
+        .s_reassign => try self.collectReassignBoundVarsToScratch(self.env.store.statementView(statement.idx).s_reassign.get(.pattern_idx)),
         .s_crash,
         .s_dbg,
         .s_expr,

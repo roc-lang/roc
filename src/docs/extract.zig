@@ -839,9 +839,9 @@ fn collectScopeEntries(
     // that may not appear in the defs list
     const stmts_slice = module_env.store.sliceStatements(module_env.all_statements);
     for (stmts_slice) |stmt_idx| {
-        const stmt = module_env.store.getStatement(stmt_idx);
-        switch (stmt) {
-            .s_alias_decl => |decl| {
+        switch (module_env.store.statementKind(stmt_idx)) {
+            .s_alias_decl => {
+                const decl = module_env.store.statementView(stmt_idx).s_alias_decl.decode();
                 const header = module_env.store.getTypeHeader(decl.header);
                 const entry_name = module_env.getIdentText(header.relative_name);
                 if (scope.exposed_names != null and !isUnderExposedName(&exposed_names, entry_name)) continue;
@@ -891,7 +891,8 @@ fn collectScopeEntries(
                     .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
                 });
             },
-            .s_nominal_decl => |decl| {
+            .s_nominal_decl => {
+                const decl = module_env.store.statementView(stmt_idx).s_nominal_decl.decode();
                 const header = module_env.store.getTypeHeader(decl.header);
                 const entry_name = module_env.getIdentText(header.relative_name);
                 if (scope.exposed_names != null and !isUnderExposedName(&exposed_names, entry_name)) continue;
@@ -932,7 +933,8 @@ fn collectScopeEntries(
                     .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
                 });
             },
-            .s_where_alias_decl => |decl| {
+            .s_where_alias_decl => {
+                const decl = module_env.store.statementView(stmt_idx).s_where_alias_decl.decode();
                 const header = module_env.store.getTypeHeader(decl.header);
                 const entry_name = module_env.getIdentText(header.relative_name);
                 if (scope.exposed_names != null and !isUnderExposedName(&exposed_names, entry_name)) continue;
@@ -1017,9 +1019,8 @@ fn projectionRootName(module_env: *const ModuleEnv, projection: PublicTypeProjec
 }
 
 fn typeDeclName(module_env: *const ModuleEnv, statement_idx: CIR.Statement.Idx) ?[]const u8 {
-    const statement = module_env.store.getStatement(statement_idx);
-    const header_idx = switch (statement) {
-        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |decl| decl.header,
+    const header_idx = switch (module_env.store.statementKind(statement_idx)) {
+        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |kind| @field(module_env.store.statementView(statement_idx), @tagName(kind)).get(.header),
         .s_decl,
         .s_var,
         .s_var_uninitialized,
@@ -1445,9 +1446,9 @@ fn reparentDottedChildInto(
 
 fn defEntryName(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?[]const u8 {
     const def = module_env.store.getDef(def_idx);
-    return switch (module_env.store.getPattern(def.pattern)) {
-        inline .assign, .var_assign => |assign| module_env.getIdentText(assign.ident),
-        .nominal => |nominal| switch (module_env.store.getStatement(nominal.nominal_type_decl)) {
+    return switch (module_env.store.patternKind(def.pattern)) {
+        inline .assign, .var_assign => |kind| module_env.getIdentText(@field(module_env.store.patternView(def.pattern), @tagName(kind)).get(.ident)),
+        .nominal => switch (module_env.store.getStatement(module_env.store.patternView(def.pattern).nominal.get(.nominal_type_decl))) {
             .s_nominal_decl => |decl| module_env.getIdentText(module_env.store.getTypeHeader(decl.header).relative_name),
             .s_decl,
             .s_var,
@@ -1553,9 +1554,9 @@ fn extractDefEntry(
             };
         },
         .nominal => |n| {
-            const stmt = module_env.store.getStatement(n.nominal_type_decl);
-            switch (stmt) {
-                .s_nominal_decl => |decl| {
+            switch (module_env.store.statementKind(n.nominal_type_decl)) {
+                .s_nominal_decl => {
+                    const decl = module_env.store.statementView(n.nominal_type_decl).s_nominal_decl.decode();
                     const header = module_env.store.getTypeHeader(decl.header);
                     const entry_name = module_env.getIdentText(header.relative_name);
                     const duped_name = try gpa.dupe(u8, entry_name);
@@ -1857,9 +1858,9 @@ fn extractWhereTypeVarName(
 ) Allocator.Error![]const u8 {
     var current = var_idx;
     while (true) {
-        switch (module_env.store.getTypeAnno(current)) {
-            .rigid_var => |rv| return try gpa.dupe(u8, module_env.getIdentText(rv.name)),
-            .rigid_var_lookup => |rv_lookup| current = rv_lookup.ref,
+        switch (module_env.store.typeAnnoKind(current)) {
+            .rigid_var => return try gpa.dupe(u8, module_env.getIdentText(module_env.store.typeAnnoView(current).rigid_var.get(.name))),
+            .rigid_var_lookup => current = module_env.store.typeAnnoView(current).rigid_var_lookup.get(.ref),
             .apply,
             .underscore,
             .lookup,
@@ -2125,9 +2126,9 @@ fn extractTypeAnnoAsDocType(
     while (frames.pop()) |frame| {
         switch (frame) {
             .visit => |idx| {
-                const anno = module_env.store.getTypeAnno(idx);
-                switch (anno) {
-                    .apply => |a| {
+                switch (module_env.store.typeAnnoKind(idx)) {
+                    .apply => {
+                        const a = module_env.store.typeAnnoView(idx).apply.decode();
                         const args_slice = module_env.store.sliceTypeAnnos(a.args);
                         const display = try annotatedTypeReferenceDisplay(
                             gpa,
@@ -2160,18 +2161,21 @@ fn extractTypeAnnoAsDocType(
                             try Builder.pushVisitsReversed(&frames, gpa, args_slice);
                         }
                     },
-                    .rigid_var => |tv| {
+                    .rigid_var => {
+                        const tv = module_env.store.typeAnnoView(idx).rigid_var.decode();
                         try Builder.pushResult(&results, gpa, try allocDocType(gpa, .{
                             .type_var = try gpa.dupe(u8, module_env.getIdentText(tv.name)),
                         }));
                     },
-                    .rigid_var_lookup => |rv| {
+                    .rigid_var_lookup => {
+                        const rv = module_env.store.typeAnnoView(idx).rigid_var_lookup.decode();
                         try frames.append(gpa, .{ .visit = rv.ref });
                     },
                     .underscore => {
                         try Builder.pushResult(&results, gpa, try allocDocType(gpa, .wildcard));
                     },
-                    .lookup => |t| {
+                    .lookup => {
+                        const t = module_env.store.typeAnnoView(idx).lookup.decode();
                         const display = try annotatedTypeReferenceDisplay(
                             gpa,
                             module_env,
@@ -2192,7 +2196,8 @@ fn extractTypeAnnoAsDocType(
                         display_moved = true;
                         try Builder.pushResult(&results, gpa, reference);
                     },
-                    .tag_union => |tu| {
+                    .tag_union => {
+                        const tu = module_env.store.typeAnnoView(idx).tag_union.decode();
                         const tags_slice = module_env.store.sliceTypeAnnos(tu.tags);
                         const has_ext = if (tu.ext) |ext_idx| !isAnonymousOpenExt(module_env, ext_idx) else false;
                         try frames.append(gpa, .{ .finish_tag_union = .{
@@ -2207,8 +2212,7 @@ fn extractTypeAnnoAsDocType(
                         var i = tags_slice.len;
                         while (i > 0) {
                             i -= 1;
-                            const tag_anno = module_env.store.getTypeAnno(tags_slice[i]);
-                            switch (tag_anno) {
+                            switch (module_env.store.getTypeAnno(tags_slice[i])) {
                                 .tag => |t| {
                                     const tag_args_slice = module_env.store.sliceTypeAnnos(t.args);
                                     try frames.append(gpa, .{ .finish_tag = .{
@@ -2235,7 +2239,8 @@ fn extractTypeAnnoAsDocType(
                             }
                         }
                     },
-                    .tag => |t| {
+                    .tag => {
+                        const t = module_env.store.typeAnnoView(idx).tag.decode();
                         const tag_args_slice = module_env.store.sliceTypeAnnos(t.args);
                         try frames.append(gpa, .{ .finish_tag = .{
                             .name = module_env.getIdentText(t.name),
@@ -2244,7 +2249,8 @@ fn extractTypeAnnoAsDocType(
                         } });
                         try Builder.pushVisitsReversed(&frames, gpa, tag_args_slice);
                     },
-                    .tuple => |t| {
+                    .tuple => {
+                        const t = module_env.store.typeAnnoView(idx).tuple.decode();
                         const elems_slice = module_env.store.sliceTypeAnnos(t.elems);
                         try frames.append(gpa, .{ .finish_tuple = .{
                             .elem_count = elems_slice.len,
@@ -2252,7 +2258,8 @@ fn extractTypeAnnoAsDocType(
                         } });
                         try Builder.pushVisitsReversed(&frames, gpa, elems_slice);
                     },
-                    .record => |r| {
+                    .record => {
+                        const r = module_env.store.typeAnnoView(idx).record.decode();
                         const fields_slice = module_env.store.sliceAnnoRecordFields(r.fields);
                         const has_ext = if (r.ext) |ext_idx| !isAnonymousOpenExt(module_env, ext_idx) else false;
                         try frames.append(gpa, .{ .finish_record = .{
@@ -2276,7 +2283,8 @@ fn extractTypeAnnoAsDocType(
                             try frames.append(gpa, .{ .visit = field.ty });
                         }
                     },
-                    .@"fn" => |f| {
+                    .@"fn" => {
+                        const f = module_env.store.typeAnnoView(idx).@"fn".decode();
                         const args_slice = module_env.store.sliceTypeAnnos(f.args);
                         try frames.append(gpa, .{ .finish_fn = .{
                             .arg_count = args_slice.len,
@@ -2285,7 +2293,8 @@ fn extractTypeAnnoAsDocType(
                         try frames.append(gpa, .{ .visit = f.ret });
                         try Builder.pushVisitsReversed(&frames, gpa, args_slice);
                     },
-                    .parens => |p| {
+                    .parens => {
+                        const p = module_env.store.typeAnnoView(idx).parens.decode();
                         try frames.append(gpa, .{ .visit = p.anno });
                     },
                     .malformed => {

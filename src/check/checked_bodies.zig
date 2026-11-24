@@ -890,9 +890,9 @@ pub const CheckedBodies = struct {
     /// `from_numeral` or `from_quote` and `is_eq` (`literalPatternGuard`).
     pub fn literalPatternIsCustom(self: *const CheckedBodies, id: PatternId) bool {
         const node = ModuleEnv.nodeIdxFrom(id);
-        return switch (self.store().getPattern(id)) {
+        return switch (self.store().patternKind(id)) {
             .num_literal, .num_from_numeral_literal => customLiteralPlan(self.env.numeralDispatchPlanForNode(node)),
-            inline .small_dec_literal, .dec_literal => |dec| !dec.has_suffix and customLiteralPlan(self.env.numeralDispatchPlanForNode(node)),
+            inline .small_dec_literal, .dec_literal => |kind| !@field(self.store().patternView(id), @tagName(kind)).get(.has_suffix) and customLiteralPlan(self.env.numeralDispatchPlanForNode(node)),
             .str_literal => customLiteralPlan(self.env.quoteDispatchPlanForNode(node)),
             .assign, .var_assign, .as, .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .frac_f32_literal, .frac_f64_literal, .str_interpolation, .underscore, .runtime_error, .deferred_import_ref => false,
         };
