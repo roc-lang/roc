@@ -10069,8 +10069,14 @@ fn validateSettledValueRows(self: *Self, env: *Env, walk: *SettledWalk) std.mem.
         if (isExprNodeTag(tag)) {
             const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node_idx));
             try seeder.visit(ModuleEnv.varFrom(expr_idx));
-            try output_type_roots.forEachCallTypeRoot(self.cir, expr_idx, &seeder);
-            try output_type_roots.forEachStaticDispatchTypeRoot(self.cir, expr_idx, &seeder);
+            // Only calls and field accesses publish call roots, and only
+            // statically dispatched expressions publish dispatch roots, so
+            // no other expression is decoded.
+            if (tag == .expr_call or tag == .expr_field_access) {
+                try output_type_roots.forEachCallTypeRoot(self.cir, expr_idx, &seeder);
+            } else if (isStaticDispatchExprTag(tag)) {
+                try output_type_roots.forEachStaticDispatchTypeRoot(self.cir, expr_idx, &seeder);
+            }
         } else if (isPatternNodeTag(tag)) {
             try seeder.visit(@fromBackingInt(@intCast(raw_node_idx)));
         }
@@ -38752,6 +38758,14 @@ fn hostedAnnotationIsEffectful(module_env: *const ModuleEnv, annotation_idx: CIR
 
 fn isExprNodeTag(tag: CIR.Node.Tag) bool {
     return Ident.textStartsWith(@tagName(tag), "expr_");
+}
+
+/// Whether a node tag is one of a statically dispatched expression's
+/// (`e_dispatch_call`, `e_interpolation`, `e_type_dispatch_call`,
+/// `e_method_eq`).
+fn isStaticDispatchExprTag(tag: CIR.Node.Tag) bool {
+    return tag == .expr_dispatch_call or tag == .expr_interpolation or tag == .expr_type_dispatch_call or
+        tag == .expr_type_dispatch_call_dispatcher or tag == .expr_method_eq;
 }
 
 fn isPatternNodeTag(tag: CIR.Node.Tag) bool {

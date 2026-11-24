@@ -128,7 +128,12 @@ pub fn forEachCheckedSourceTypeRoot(
             .expr => {
                 const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
                 try visitor.visit(module.exprType(expr_idx));
-                try output_type_roots.forEachCallTypeRoot(module_env, expr_idx, visitor);
+                // Only calls and field accesses publish roots beyond their
+                // own type, so no other expression is decoded.
+                const tag = module.nodeTag(@fromBackingInt(node_idx));
+                if (tag == .expr_call or tag == .expr_field_access) {
+                    try output_type_roots.forEachCallTypeRoot(module_env, expr_idx, visitor);
+                }
             },
             .pattern => {
                 const pattern_idx: CIR.Pattern.Idx = @fromBackingInt(@intCast(node_idx));
