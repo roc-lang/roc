@@ -15,8 +15,12 @@
 //! `kind` is `program` (every procedure, at a stage boundary) or `phase`
 //! (one procedure before and after one procedure-local phase that changed
 //! it, as `pre`/`post` sections).
+//!
+//! The file is written through libc's `open`, which Zig's standard library
+//! does not provide on Windows, so a Windows compiler writes no dump.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const collections = @import("collections");
 const core = @import("lir_core");
@@ -27,6 +31,9 @@ const LirStore = core.LirStore;
 const GuardedList = collections.GuardedList;
 
 /// Writing a dump fails only when its writer or an allocation fails.
+/// Whether this host can write the dump: it needs libc's `open`.
+const supported = builtin.os.tag != .windows;
+
 const DumpError = std.Io.Writer.Error || std.mem.Allocator.Error;
 const Allocator = std.mem.Allocator;
 
@@ -69,6 +76,7 @@ pub fn program(result: *const core.Program.Result, label: []const u8) void {
 /// single `write` on an `O_APPEND` descriptor so blocks from parallel workers
 /// never interleave with each other or with the compiler's own output.
 fn emit(bytes: []const u8) void {
+    if (comptime !supported) return;
     const path = base.dev_diagnostics.get(.lir_pass_dump) orelse return;
     var path_buffer: [4096]u8 = undefined;
     const path_z = std.fmt.bufPrintSentinel(&path_buffer, "{s}", .{path}, 0) catch return;

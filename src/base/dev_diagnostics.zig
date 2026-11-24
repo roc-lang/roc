@@ -35,6 +35,7 @@ pub const Var = enum {
     /// Print every procedure at each LIR pass boundary, and each procedure
     /// before and after each procedure-local phase that changes it, for
     /// the lir-passes model (`src/lir/pass_dump.zig`, `models/lir-passes`).
+    /// Not written on Windows.
     lir_pass_dump,
     /// Print every closed specialization key.
     spec_census,
