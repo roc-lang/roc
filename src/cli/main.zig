@@ -9271,8 +9271,10 @@ fn linkWasmOutput(
     const stack_size = configuredWasmStackBytes(args, link_inputs.wasm);
     const global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null;
     const maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null;
-    switch (linker.wasmStackLayout(global_base)) {
-        .stack_first => {
+    const initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm);
+    // The maximum the link declares, as `linker.link` passes it to wasm-ld.
+    const declared_maximum: ?usize = switch (linker.wasmStackLayout(global_base)) {
+        .stack_first => maximum: {
             const limit = linker.stackFirstMaximumMemory(stack_size);
             if (maximum_memory) |bytes| {
                 if (bytes > limit) return ctx.fail(.{ .wasm_maximum_memory_too_large = .{
@@ -9291,9 +9293,11 @@ fn linkWasmOutput(
                 .needed = stack_size,
                 .configured = maximum,
             }));
+            break :maximum maximum;
         },
-        .data_first => {},
-    }
+        .data_first => maximum_memory,
+    };
+    var memory_problem: ?linker.WasmMemoryProblem = null;
     const link_config = linker.LinkConfig{
         .target_format = .wasm,
         .target_abi = null,
@@ -9306,8 +9310,9 @@ fn linkWasmOutput(
         .extra_args = &.{},
         .can_exit_early = false,
         .disable_output = false,
-        .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
+        .wasm_initial_memory = initial_memory,
         .wasm_maximum_memory = maximum_memory,
+        .wasm_memory_problem = &memory_problem,
         .wasm_stack_size = stack_size,
         .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
         .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
@@ -9320,6 +9325,21 @@ fn linkWasmOutput(
         .scratch_dir = scratch_dir,
     };
     linker.link(ctx, link_config) catch |err| {
+        // wasm-ld finds a size too small only when that size was passed to it.
+        if (memory_problem) |problem| {
+            const configured: ?usize = switch (problem.what) {
+                .initial_memory_too_small => initial_memory,
+                .maximum_memory_too_small => declared_maximum,
+            };
+            if (configured) |bytes| return ctx.fail(wasmMemoryLayoutProblem(link_inputs.target_name, .{
+                .what = switch (problem.what) {
+                    .initial_memory_too_small => .initial_memory_too_small,
+                    .maximum_memory_too_small => .maximum_memory_too_small,
+                },
+                .needed = problem.needed,
+                .configured = bytes,
+            }));
+        }
         return failLink(ctx, err, link_inputs.target_name);
     };
 }

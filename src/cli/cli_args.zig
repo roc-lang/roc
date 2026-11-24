@@ -10,6 +10,7 @@ const testing = std.testing;
 const mem = std.mem;
 const install = @import("install.zig");
 const linker = @import("linker.zig");
+const wasm_memory = @import("roc_target").wasm_memory;
 const RocTarget = @import("target.zig").RocTarget;
 const ResolutionConfig = @import("compile").package_resolution.Config;
 const AnsiStreams = @import("CliCtx.zig").AnsiStreams;
@@ -441,6 +442,11 @@ const IntRule = struct {
     unit: ?[]const u8 = null,
     /// What a value of 0 means, for a rule under which 0 is not a quantity.
     zero_means: ?[]const u8 = null,
+
+    /// The rule for a flag that overrides a wasm size a platform header sets.
+    fn bytes(comptime size: wasm_memory.SizeRule) IntRule {
+        return .{ .min = size.min, .max = size.max, .multiple_of = size.multiple_of, .unit = "bytes" };
+    }
 
     /// The largest value of `Int` the rule accepts.
     fn largest(comptime rule: IntRule, comptime Int: type) Int {
@@ -914,8 +920,8 @@ const commands = [_]Command{
             .{ .name = "--no-cache", .field = "no_cache", .help = "Disable compilation caching" },
             .{ .name = "--watch", .field = "watch", .help = "Rebuild when source inputs change" },
             jobs_flag,
-            .{ .name = "--wasm-memory", .form = .attached, .field = "wasm_memory", .value_name = "<bytes>", .int = .{ .min = linker.wasm_page_size, .max = linker.wasm_memory_limit, .multiple_of = linker.wasm_page_size, .unit = "bytes" }, .help = std.fmt.comptimePrint("Initial memory size for WASM targets in bytes, a multiple of {d} (default: sized from data segments plus the stack)", .{linker.wasm_page_size}) },
-            .{ .name = "--wasm-stack-size", .form = .attached, .field = "wasm_stack_size", .value_name = "<bytes>", .int = .{ .min = linker.wasm_stack_alignment, .max = linker.wasm_memory_limit - linker.wasm_stack_alignment, .multiple_of = linker.wasm_stack_alignment, .unit = "bytes" }, .help = std.fmt.comptimePrint("Stack size for WASM targets in bytes, a multiple of {d} (default: {d} = {d}MB)", .{ linker.wasm_stack_alignment, linker.DEFAULT_WASM_STACK_SIZE, linker.DEFAULT_WASM_STACK_SIZE / bytes_per_mb }) },
+            .{ .name = "--wasm-memory", .form = .attached, .field = "wasm_memory", .value_name = "<bytes>", .int = IntRule.bytes(wasm_memory.memory_size), .help = std.fmt.comptimePrint("Initial memory size for WASM targets in bytes, a multiple of {d} (default: sized from data segments plus the stack)", .{wasm_memory.memory_size.multiple_of}) },
+            .{ .name = "--wasm-stack-size", .form = .attached, .field = "wasm_stack_size", .value_name = "<bytes>", .int = IntRule.bytes(wasm_memory.stack_size), .help = std.fmt.comptimePrint("Stack size for WASM targets in bytes, a multiple of {d} (default: {d} = {d}MB)", .{ wasm_memory.stack_size.multiple_of, linker.DEFAULT_WASM_STACK_SIZE, linker.DEFAULT_WASM_STACK_SIZE / bytes_per_mb }) },
         }),
         .resolve = .limits_and_replace_deps,
         .min_column = 37,
