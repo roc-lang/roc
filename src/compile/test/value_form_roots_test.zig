@@ -697,7 +697,7 @@ test "a value-form literal's stored bytes are the module's literal itself" {
         const blob = switch (app.const_store.get(root.payload.const_node)) {
             .str => |string| string.bytes,
             .list => |list| list.items.packed_bytes.bytes,
-            else => return error.UnexpectedStoredValue,
+            .pending, .zst, .scalar, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => return error.UnexpectedStoredValue,
         };
         const stored = app.const_store.strBytes(blob);
         try std.testing.expect(stored.len != 0);
