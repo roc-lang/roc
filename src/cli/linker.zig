@@ -112,8 +112,11 @@ pub const WasmOptimizeMode = enum {
 pub const DEFAULT_WASM_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 /// WebAssembly linear memory is at most 4 GiB.
-const wasm_memory_limit: u64 = 1 << 32;
-const wasm_page_size: u64 = 64 * 1024;
+pub const wasm_memory_limit: u64 = 1 << 32;
+/// Linear memory is sized in pages of this many bytes.
+pub const wasm_page_size: u64 = 64 * 1024;
+/// The stack pointer stays a multiple of this many bytes, so a stack's size is one too.
+pub const wasm_stack_alignment: u64 = 16;
 
 /// Where a linked wasm module's stack sits relative to its static data.
 pub const WasmStackLayout = union(enum) {

@@ -181,9 +181,9 @@ const max_globals = 1_000_000;
 const max_data_segments = 100_000;
 const max_table_size = 10_000_000;
 const max_body_size = 7_654_321;
-const page_size: u64 = 64 * 1024;
-const memory_limit: u64 = 1 << 32;
-const stack_alignment: u64 = 16;
+const page_size = linker.wasm_page_size;
+const memory_limit = linker.wasm_memory_limit;
+const stack_alignment = linker.wasm_stack_alignment;
 
 /// `__memory_base`: static data is at its linked addresses.
 const memory_base: u32 = 0;
