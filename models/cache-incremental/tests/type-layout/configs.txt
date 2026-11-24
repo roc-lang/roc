@@ -1,0 +1,1 @@
+check,run,dev,test
