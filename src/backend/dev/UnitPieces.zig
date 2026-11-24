@@ -56,7 +56,9 @@ pub const Pieces = struct {
     /// under the content names the unit's code names them by: the roots of
     /// the unit's static data, which no excerpt need reference.
     exported_data: []const CodeExcerpt.DataItem,
-    /// The payload owners `exported_data` shares bytes with, retained once.
+    /// The payload owners `exported_data` shares bytes with, and the keeper
+    /// of the static data exports the pieces were compiled from, each
+    /// retained once.
     data_owners: []const *CodeExcerpt.DataOwner = &.{},
     helper_aliases: []const HelperAlias,
 

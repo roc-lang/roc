@@ -326,7 +326,10 @@ pub const ObjectFileCompiler = struct {
     /// constants it names under their content names. No object is encoded.
     /// The pieces take `static_data_exports`, allocated by `self.allocator`
     /// (`static_data.buildStaticData`), even on failure: their constants
-    /// share those exports' payload bytes rather than copying them.
+    /// share those exports' payload bytes rather than copying them. The
+    /// pieces keep the exports alive at least as long as themselves, so a
+    /// caller may still read them while it holds the pieces, but never
+    /// frees them.
     pub fn compileToPieces(
         self: *ObjectFileCompiler,
         lir_store: *const LirStore,
@@ -1568,8 +1571,10 @@ fn compilePiecesWithCodeGen(
         };
     }
     // The host-visible constants share the catalog's payload bytes, so the
-    // pieces retain its owner; nothing fallible follows.
-    const data_owners = CodeExcerpt.retainPayloadOwners(a, exported_data, null) catch return CompilationError.OutOfMemory;
+    // pieces retain its owner, and they retain the exports' keeper, which
+    // keeps the exports alive for the caller as long as the pieces
+    // (`compileToPieces`); nothing fallible follows.
+    const data_owners = CodeExcerpt.retainPayloadOwners(a, exported_data, exports.keeper) catch return CompilationError.OutOfMemory;
     _ = ObjectFileCompiler.Timing.lapDetail(timing, detail_started, "piece_data_ns");
     if (timing) |timings| timings.finish(extraction_started_ns, .symbol_relocations);
     return .{
