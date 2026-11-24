@@ -15,7 +15,7 @@ fn ruleCounts(env: *const TestEnv) RuleCounts {
     return .{ .general = counts[0], .rule = counts[1] };
 }
 
-fn expectRuleCounts(env: *const TestEnv, expected: RuleCounts) !void {
+fn expectRuleCounts(env: *const TestEnv, expected: RuleCounts) error{TestExpectedEqual}!void {
     if (comptime !base.dev_diagnostics.available) return;
     try std.testing.expectEqual(expected, ruleCounts(env));
 }
