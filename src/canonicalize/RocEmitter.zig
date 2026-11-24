@@ -626,9 +626,9 @@ fn emitExprFrame(
             const segments = self.module_env.store.sliceExpr(str.span);
             try self.write("\"");
             for (segments) |segment_idx| {
-                const segment = self.module_env.store.getExpr(segment_idx);
-                std.debug.assert(segment == .e_str_segment);
-                try self.emitStringBytes(self.module_env.common.getString(segment.e_str_segment.literal));
+                const segment = self.module_env.store.exprAs(segment_idx, .e_str_segment);
+                std.debug.assert(segment != null);
+                try self.emitStringBytes(self.module_env.common.getString(segment.?.literal));
             }
             try self.write("\"");
         },
@@ -1027,9 +1027,9 @@ fn emitPatternRecordFieldFrame(
     try self.write(name);
     switch (destruct.kind) {
         .Required => |pat_idx| {
-            const inner_pat = self.module_env.store.getPattern(pat_idx);
-            const shorthand = if (inner_pat == .assign)
-                std.mem.eql(u8, name, self.module_env.getIdent(inner_pat.assign.ident))
+            const inner_pat = self.module_env.store.patternAs(pat_idx, .assign);
+            const shorthand = if (inner_pat != null)
+                std.mem.eql(u8, name, self.module_env.getIdent(inner_pat.?.ident))
             else
                 false;
             if (!shorthand) {

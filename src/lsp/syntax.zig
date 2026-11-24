@@ -2040,9 +2040,9 @@ pub const SyntaxChecker = struct {
             .tag_union => |tu| {
                 const tags_slice = store.sliceTypeAnnos(tu.tags);
                 for (tags_slice) |tag_idx| {
-                    const tag = store.getTypeAnno(tag_idx);
-                    if (tag == .tag) {
-                        const name = common.idents.getText(tag.tag.name);
+                    const tag = store.typeAnnoAs(tag_idx, .tag);
+                    if (tag != null) {
+                        const name = common.idents.getText(tag.?.name);
                         if (std.mem.eql(u8, name, tag_name)) {
                             return store.getTypeAnnoRegion(tag_idx);
                         }

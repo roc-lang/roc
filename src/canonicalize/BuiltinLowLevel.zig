@@ -929,9 +929,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         // Check if this is an anno-only def (e_anno_only expression)
         if (expr_kind == .e_anno_only and def.annotation != null) {
             // Get the identifier from the pattern
-            const pattern = env.store.getPattern(def.pattern);
-            if (pattern == .assign) {
-                const ident = pattern.assign.ident;
+            const pattern = env.store.patternAs(def.pattern, .assign);
+            if (pattern != null) {
+                const ident = pattern.?.ident;
 
                 // Check if this identifier matches a low-level operation
                 const entry = low_level_map.fetchRemove(ident) orelse {

@@ -9724,9 +9724,8 @@ fn compileForReuseWithStrategy(allocator: Allocator, cache_dir: []const u8, app_
             .def => |def| def,
             .hoisted, .expr, .statement, .required_binding, .literal, .literal_argument => continue,
         };
-        const pattern = env.store.getPattern(env.store.getDef(def).pattern);
-        if (pattern != .assign) continue;
-        try names.append(allocator, try allocator.dupe(u8, env.getIdent(pattern.assign.ident)));
+        const pattern = env.store.patternAs(env.store.getDef(def).pattern, .assign) orelse continue;
+        try names.append(allocator, try allocator.dupe(u8, env.getIdent(pattern.ident)));
         var stored: ?i64 = null;
         if (root.payload == .const_node) {
             var node = app.const_store.get(root.payload.const_node);
@@ -14679,8 +14678,8 @@ test "Boxy checked constants share across checkouts and survive unrelated applic
             const root_id = root: for (artifact.compile_time_roots.roots.items()) |root| {
                 if (root.source != .def) continue;
                 const env = artifact.moduleEnvConst();
-                const pattern = env.store.getPattern(env.store.getDef(root.source.def).pattern);
-                if (pattern == .assign and std.mem.eql(u8, env.getIdent(pattern.assign.ident), "count")) break :root root.id;
+                const pattern = env.store.patternAs(env.store.getDef(root.source.def).pattern, .assign);
+                if (pattern != null and std.mem.eql(u8, env.getIdent(pattern.?.ident), "count")) break :root root.id;
             } else return error.TestUnexpectedResult;
             const cached = artifact.module_env == .cached_entry;
             const stored = artifact.compile_time_roots.root(root_id).payload == .const_node;

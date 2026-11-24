@@ -287,8 +287,8 @@ const Pass = struct {
                     .e_closure => |closure| {
                         // `lambda_idx` always names an `e_lambda` (see
                         // CIR.Expr.Closure).
-                        const lambda = self.env.store.getExpr(closure.lambda_idx);
-                        try self.walk.append(self.gpa, lambda.e_lambda.body);
+                        const lambda = self.env.store.exprAs(closure.lambda_idx, .e_lambda);
+                        try self.walk.append(self.gpa, lambda.?.body);
                     },
                     // A name-resolvable invoked reference: calling through
                     // the reference evaluates the named def's body, so the

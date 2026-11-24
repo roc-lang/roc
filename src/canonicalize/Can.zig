@@ -1449,9 +1449,8 @@ fn addAutoImportedNominalTagExpr(
 pub fn explicitRootDefByName(self: *const Self, name: []const u8) ?CIR.Def.Idx {
     for (self.env.store.sliceDefs(self.env.top_level_value_defs)) |def_idx| {
         const def = self.env.store.getDef(def_idx);
-        const pattern = self.env.store.getPattern(def.pattern);
-        if (pattern != .assign) continue;
-        if (std.mem.eql(u8, self.env.getIdent(pattern.assign.ident), name)) return def_idx;
+        const pattern = self.env.store.patternAs(def.pattern, .assign) orelse continue;
+        if (std.mem.eql(u8, self.env.getIdent(pattern.ident), name)) return def_idx;
     }
     return null;
 }
@@ -5216,10 +5215,9 @@ pub fn canonicalizeFile(
     defer top_level_value_defs_by_ident.deinit(self.env.gpa);
     for (self.scratch_global_value_defs.items) |def_idx| {
         const def = self.env.store.getDef(def_idx);
-        const pattern = self.env.store.getPattern(def.pattern);
-        if (pattern != .assign) continue;
+        const pattern = self.env.store.patternAs(def.pattern, .assign) orelse continue;
 
-        const selected = try top_level_value_defs_by_ident.getOrPut(self.env.gpa, pattern.assign.ident);
+        const selected = try top_level_value_defs_by_ident.getOrPut(self.env.gpa, pattern.ident);
         if (!selected.found_existing) {
             selected.value_ptr.* = def_idx;
         } else {
@@ -5895,9 +5893,9 @@ fn canonicalizeDestructuredLiteralDef(
         try self.markBoundPatternsGloballyResolvable(pattern_idx, null);
     }
 
-    const pattern = self.env.store.getPattern(pattern_idx);
+    const pattern = self.env.store.patternAs(pattern_idx, .assign);
     const mb_anno_idx: ?Annotation.Idx = if (mb_anno) |anno_info| anno: {
-        if (pattern != .assign or !pattern.assign.ident.eql(anno_info.name)) break :anno null;
+        if (pattern == null or !pattern.?.ident.eql(anno_info.name)) break :anno null;
         break :anno try self.createAnnotationFromTypeAnno(
             anno_info.anno_idx,
             anno_info.where,
@@ -5927,8 +5925,8 @@ fn canonicalizeDestructuredLiteralDef(
     }, region);
     try self.env.store.addScratchDef(def_idx);
     try self.recordGlobalValueDef(def_idx);
-    if (pattern == .assign) {
-        try self.recordExposedNamedDef(pattern.assign.ident, self.env.getIdent(pattern.assign.ident), def_idx);
+    if (pattern != null) {
+        try self.recordExposedNamedDef(pattern.?.ident, self.env.getIdent(pattern.?.ident), def_idx);
     } else {
         try self.recordExposedDestructuredNames(def_idx);
     }
@@ -7149,7 +7147,7 @@ fn checkExposedTypeSurfaces(self: *Self) std.mem.Allocator.Error!void {
     }
 
     for (renamed_nominals.keys(), renamed_nominals.values()) |nominal_idx, alias_idx| {
-        const alias_header = self.env.store.getTypeHeader(self.env.store.getStatement(alias_idx).s_alias_decl.header);
+        const alias_header = self.env.store.getTypeHeader(self.env.store.statementView(alias_idx).s_alias_decl.get(.header));
         try self.checkPublicNominalStatementSurface(
             nominal_idx,
             alias_header.name,
@@ -7224,7 +7222,7 @@ fn aliasRenamedNominal(
     next_positions: *std.ArrayList(?u32),
 ) std.mem.Allocator.Error!?Statement.Idx {
     const gpa = self.env.gpa;
-    const alias = self.env.store.getStatement(alias_idx).s_alias_decl;
+    const alias = self.env.store.statementView(alias_idx).s_alias_decl.decode();
     const public_params = self.env.store.sliceTypeAnnos(self.env.store.getTypeHeader(alias.header).args);
 
     positions.clearRetainingCapacity();
@@ -7284,9 +7282,8 @@ fn aliasParamPosition(
     params: []const TypeAnno.Idx,
     positions: []const ?u32,
 ) ?u32 {
-    const arg_anno = self.env.store.getTypeAnno(self.typeAnnoWithoutParens(arg));
-    if (arg_anno != .rigid_var_lookup) return null;
-    const referenced = arg_anno.rigid_var_lookup.ref;
+    const arg_anno = self.env.store.typeAnnoAs(self.typeAnnoWithoutParens(arg), .rigid_var_lookup) orelse return null;
+    const referenced = arg_anno.ref;
     for (params, positions) |param, position| {
         if (param == referenced) return position;
     }
@@ -7296,9 +7293,8 @@ fn aliasParamPosition(
 fn typeAnnoWithoutParens(self: *Self, anno_idx: TypeAnno.Idx) TypeAnno.Idx {
     var current = anno_idx;
     while (true) {
-        const anno = self.env.store.getTypeAnno(current);
-        if (anno != .parens) return current;
-        current = anno.parens.anno;
+        const anno = self.env.store.typeAnnoAs(current, .parens) orelse return current;
+        current = anno.anno;
     }
 }
 
@@ -7388,9 +7384,8 @@ fn checkPublicNominalStatementSurface(
     if (checked_public_nominals.contains(stmt_idx)) return;
     try checked_public_nominals.put(self.env.gpa, stmt_idx, {});
 
-    const stmt = self.env.store.getStatement(stmt_idx);
-    if (stmt != .s_nominal_decl) return;
-    const nominal = stmt.s_nominal_decl;
+    const stmt = self.env.store.statementAs(stmt_idx, .s_nominal_decl) orelse return;
+    const nominal = stmt;
     if (nominal.is_opaque) return;
 
     const header = self.env.store.getTypeHeader(nominal.header);
@@ -11136,15 +11131,15 @@ fn isInfiniteLoopCondition(self: *const Self, cond: Expr.Idx) bool {
 }
 
 fn exprIsBareTrueTag(self: *const Self, expr_idx: Expr.Idx) bool {
-    const expr = self.env.store.getExpr(expr_idx);
-    return expr == .e_tag and expr.e_tag.name.eql(self.env.idents.true_tag) and expr.e_tag.args.span.len == 0;
+    const expr = self.env.store.exprAs(expr_idx, .e_tag);
+    return expr != null and expr.?.name.eql(self.env.idents.true_tag) and expr.?.args.span.len == 0;
 }
 
 fn isBuiltinBoolLocalNominal(self: *const Self, nominal_type_decl: Statement.Idx) bool {
     if (self.env.module_role != .builtin) return false;
 
-    const stmt = self.env.store.getStatement(nominal_type_decl);
-    return stmt == .s_nominal_decl and self.env.store.getTypeHeader(stmt.s_nominal_decl.header).name.eql(self.env.idents.bool);
+    const stmt = self.env.store.statementAs(nominal_type_decl, .s_nominal_decl);
+    return stmt != null and self.env.store.getTypeHeader(stmt.?.header).name.eql(self.env.idents.bool);
 }
 
 fn isBuiltinBoolExternalNominal(self: *const Self, module: Expr.NominalExternalModule, target_node_idx: u32) bool {
@@ -19110,9 +19105,9 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
             if (state.next >= args_slice.len) {
                 const args_span = try self.env.store.typeAnnoSpanFrom(state.scratch_top);
                 self.env.store.clearScratchTypeAnnosFrom(state.scratch_top);
-                const base_anno = self.env.store.getTypeAnno(state.base_anno_idx);
-                if (base_anno == .lookup) {
-                    const ty = base_anno.lookup;
+                const base_anno = self.env.store.typeAnnoAs(state.base_anno_idx, .lookup);
+                if (base_anno != null) {
+                    const ty = base_anno.?;
                     if (type_anno_ctx.isTypeDeclAndHasUnderscore()) {
                         try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
                             .declared = .alias,
@@ -19449,9 +19444,9 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
             const state = stacks.take(.tag_union_tag_after);
             const tag_idx = last orelse unreachable; // every .tag_parse item sets `last` before the work pushed beneath it resumes
             var found_duplicate = false;
-            const tag_anno = self.env.store.getTypeAnno(tag_idx);
-            if (tag_anno == .tag) {
-                const tag = tag_anno.tag;
+            const tag_anno = self.env.store.typeAnnoAs(tag_idx, .tag);
+            if (tag_anno != null) {
+                const tag = tag_anno.?;
                 const tag_region = self.env.store.getTypeAnnoRegion(tag_idx);
                 if (try self.scratch_seen_tags.addOrFind(self.env.gpa, state.scratch_seen_tags_top, tag.name, tag_region)) |original_region| {
                     try self.env.pushDiagnostic(Diagnostic{ .duplicate_tag = .{
@@ -20716,9 +20711,9 @@ fn introduceTypeParametersFromHeader(self: *Self, header_idx: CIR.TypeHeader.Idx
 
     // Introduce each type parameter into the current scope
     for (self.env.store.sliceTypeAnnos(header.args)) |param_idx| {
-        const param = self.env.store.getTypeAnno(param_idx);
-        if (param == .rigid_var) {
-            _ = try self.scopeIntroduceTypeVar(param.rigid_var.name, param_idx);
+        const param = self.env.store.typeAnnoAs(param_idx, .rigid_var);
+        if (param != null) {
+            _ = try self.scopeIntroduceTypeVar(param.?.name, param_idx);
         }
     }
 }
@@ -21482,8 +21477,8 @@ fn canonicalizeWhereAliasClauses(
     const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
     const where_start = self.env.store.scratchWhereClauseTop();
 
-    const receiver_anno = self.env.store.getTypeAnno(receiver);
-    const receiver_name = if (receiver_anno == .rigid_var) receiver_anno.rigid_var.name else null;
+    const receiver_anno = self.env.store.typeAnnoAs(receiver, .rigid_var);
+    const receiver_name = if (receiver_anno != null) receiver_anno.?.name else null;
     for (where_slice) |where_idx| {
         const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .type_decl_anno);
         try self.env.store.addScratchWhereClause(canonicalized_where);
@@ -21498,8 +21493,8 @@ fn canonicalizeWhereAliasClauses(
                 .w_alias => |alias| alias.var_,
                 .w_malformed => continue,
             };
-            const constrained_anno = self.env.store.getTypeAnno(constrained);
-            const constrained_root = if (constrained_anno == .rigid_var_lookup) constrained_anno.rigid_var_lookup.ref else constrained;
+            const constrained_anno = self.env.store.typeAnnoAs(constrained, .rigid_var_lookup);
+            const constrained_root = if (constrained_anno != null) constrained_anno.?.ref else constrained;
             if (constrained_root != receiver) {
                 try self.env.pushDiagnostic(Diagnostic{ .where_alias_constraint_not_on_receiver = .{
                     .receiver_name = name,

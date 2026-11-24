@@ -1237,8 +1237,8 @@ fn getBindingPatternOfName(env: *ModuleEnv, name: []const u8) ?can.CIR.Pattern.I
 fn getDefOfName(env: *ModuleEnv, name: []const u8) ?can.CIR.Def.Idx {
     for (env.store.sliceDefs(env.all_defs)) |def_idx| {
         const def = env.store.getDef(def_idx);
-        const pattern = env.store.getPattern(def.pattern);
-        if (pattern == .assign and std.mem.eql(u8, env.getIdent(pattern.assign.ident), name)) {
+        const pattern = env.store.patternAs(def.pattern, .assign);
+        if (pattern != null and std.mem.eql(u8, env.getIdent(pattern.?.ident), name)) {
             return def_idx;
         }
     }

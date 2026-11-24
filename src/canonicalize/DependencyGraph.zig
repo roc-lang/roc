@@ -696,7 +696,7 @@ const DemandAnalyzer = struct {
                     }
                     continue;
                 }
-                const args = self.cir.store.slicePatterns(self.cir.store.getExpr(job.lambda).e_lambda.args);
+                const args = self.cir.store.slicePatterns(self.cir.store.exprView(job.lambda).e_lambda.get(.args));
                 if (job.next_part <= args.len) {
                     // Each argument pattern and the body is a walk of its own.
                     job.walk.deinit(self);
@@ -704,7 +704,7 @@ const DemandAnalyzer = struct {
                     if (job.next_part < args.len) {
                         try job.walk.push(self.allocator, .{ .visit_pattern = args[job.next_part] });
                     } else {
-                        try job.walk.push(self.allocator, .{ .visit = self.cir.store.getExpr(job.lambda).e_lambda.body });
+                        try job.walk.push(self.allocator, .{ .visit = self.cir.store.exprView(job.lambda).e_lambda.get(.body) });
                     }
                     job.next_part += 1;
                     continue;
@@ -885,8 +885,7 @@ const DemandAnalyzer = struct {
         _ = try current.addFnValue(self.allocator, lambda_idx);
         // Definitions' lambdas are summarized as jobs of their own.
         if (self.summary_lambdas.contains(lambda_idx) or self.active_lambdas.contains(lambda_idx)) return;
-        const expr = self.cir.store.getExpr(lambda_idx);
-        if (expr != .e_lambda) return;
+        const expr = self.cir.store.exprAs(lambda_idx, .e_lambda) orelse return;
         if ((try self.walked_value_lambdas.getOrPut(self.allocator, lambda_idx)).found_existing) return;
         if (self.reader) |reader| {
             const walked = try self.value_lambdas_walked_by.getOrPut(self.allocator, reader);
@@ -897,8 +896,8 @@ const DemandAnalyzer = struct {
         try walk.frames.ensureUnusedCapacity(self.allocator, 1);
         walk.frames.appendAssumeCapacity(try self.takeFrame());
         try walk.push(self.allocator, .{ .finish_value_lambda = lambda_idx });
-        try walk.push(self.allocator, .{ .visit = expr.e_lambda.body });
-        try self.pushPatternSpanReversed(walk, expr.e_lambda.args);
+        try walk.push(self.allocator, .{ .visit = expr.body });
+        try self.pushPatternSpanReversed(walk, expr.args);
     }
 
     /// The local definition an associated lookup checking resolved names,
@@ -1191,8 +1190,7 @@ const DemandAnalyzer = struct {
         demand_node: ?CIR.Node.Idx,
     ) std.mem.Allocator.Error!void {
         if (self.active_lambdas.contains(lambda_idx)) return;
-        const expr = self.cir.store.getExpr(lambda_idx);
-        if (expr != .e_lambda) return;
+        const expr = self.cir.store.exprAs(lambda_idx, .e_lambda) orelse return;
 
         try self.active_lambdas.put(lambda_idx, {});
         try walk.frames.ensureUnusedCapacity(self.allocator, 1);
@@ -1200,8 +1198,8 @@ const DemandAnalyzer = struct {
         // The finish item pops first-in-last-out: argument patterns and the
         // body run inside the frame, then the frame folds into its parent.
         try walk.push(self.allocator, .{ .finish_lambda = .{ .lambda = lambda_idx, .args = call_args, .demand_node = demand_node } });
-        try walk.push(self.allocator, .{ .visit = expr.e_lambda.body });
-        try self.pushPatternSpanReversed(walk, expr.e_lambda.args);
+        try walk.push(self.allocator, .{ .visit = expr.body });
+        try self.pushPatternSpanReversed(walk, expr.args);
     }
 
     /// Fold one lambda's demand summary into `into` for a call with
@@ -1813,10 +1811,9 @@ const DemandAnalyzer = struct {
         call_args: CIR.Expr.Span,
         pattern_idx: CIR.Pattern.Idx,
     ) ?CIR.Expr.Idx {
-        const lambda_expr = self.cir.store.getExpr(lambda_idx);
-        if (lambda_expr != .e_lambda) return null;
+        const lambda_expr = self.cir.store.exprAs(lambda_idx, .e_lambda) orelse return null;
 
-        const args = self.cir.store.slicePatterns(lambda_expr.e_lambda.args);
+        const args = self.cir.store.slicePatterns(lambda_expr.args);
         const call_arg_exprs = self.cir.store.sliceExpr(call_args);
         const arg_count = @min(args.len, call_arg_exprs.len);
         for (args[0..arg_count], call_arg_exprs[0..arg_count]) |arg_pattern, arg_expr| {

@@ -865,7 +865,7 @@ const Resolver = struct {
         switch (entry.kind) {
             .expr_nominal => {
                 const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(entry.node_idx));
-                const deferred = self.env.store.getExpr(expr_idx).e_deferred_import_ref;
+                const deferred = self.env.store.exprView(expr_idx).e_deferred_import_ref.decode();
                 const backing = deferred.backing orelse
                     return self.failEntry(entry, entry.not_found_failure);
                 try self.env.store.resolveDeferredExprToNominalExternal(
@@ -878,7 +878,7 @@ const Resolver = struct {
             },
             .pattern_nominal => {
                 const pattern_idx: CIR.Pattern.Idx = @fromBackingInt(@intCast(entry.node_idx));
-                const deferred = self.env.store.getPattern(pattern_idx).deferred_import_ref;
+                const deferred = self.env.store.patternView(pattern_idx).deferred_import_ref.decode();
                 try self.env.store.resolveDeferredPatternToNominalExternal(
                     pattern_idx,
                     module,

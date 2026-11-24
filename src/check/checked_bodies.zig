@@ -577,14 +577,12 @@ pub const CheckedBodies = struct {
     pub fn quoteText(self: *const CheckedBodies, raw_node: u32) Text {
         switch (self.index().nodeKind(raw_node)) {
             .expr => {
-                const data = self.store().getExpr(@fromBackingInt(@intCast(raw_node)));
-                if (data != .e_str) invariant("a quote literal expression was not a string");
-                return .{ .quote = self.store().sliceExpr(data.e_str.span) };
+                const data = self.store().exprAs(@fromBackingInt(@intCast(raw_node)), .e_str) orelse invariant("a quote literal expression was not a string");
+                return .{ .quote = self.store().sliceExpr(data.span) };
             },
             .pattern => {
-                const data = self.store().getPattern(@fromBackingInt(@intCast(raw_node)));
-                if (data != .str_literal) invariant("a quote literal pattern was not a string literal");
-                return .{ .literal = data.str_literal.literal };
+                const data = self.store().patternAs(@fromBackingInt(@intCast(raw_node)), .str_literal) orelse invariant("a quote literal pattern was not a string literal");
+                return .{ .literal = data.literal };
             },
             .statement, .unreached => invariant("a quote literal was neither a reached expression nor a reached pattern"),
         }
@@ -595,9 +593,8 @@ pub const CheckedBodies = struct {
         switch (value) {
             .literal => |literal| try out.appendSlice(allocator, self.text(literal)),
             .quote => |segments| for (segments) |segment| {
-                const data = self.store().getExpr(segment);
-                if (data != .e_str_segment) invariant("a literal-only string contained an interpolation");
-                try out.appendSlice(allocator, self.text(data.e_str_segment.literal));
+                const data = self.store().exprAs(segment, .e_str_segment) orelse invariant("a literal-only string contained an interpolation");
+                try out.appendSlice(allocator, self.text(data.literal));
             },
         }
     }
@@ -810,8 +807,8 @@ pub const CheckedBodies = struct {
     /// segment writes nothing into the string it is part of, so a lowering
     /// that writes a literal's parts once leaves it out.
     pub fn isEmptyStrSegment(self: *const CheckedBodies, id: ExprId) bool {
-        const data = self.store().getExpr(id);
-        return data == .e_str_segment and self.text(data.e_str_segment.literal).len == 0;
+        const data = self.store().exprAs(id, .e_str_segment);
+        return data != null and self.text(data.?.literal).len == 0;
     }
 
     /// Whether a string literal's conversion dispatches to its target's
@@ -836,7 +833,7 @@ pub const CheckedBodies = struct {
     pub fn interpolationIsBuiltinStr(self: *const CheckedBodies, id: ExprId) bool {
         const is_str = checked_artifact.checkedConcreteBuiltinForLiteralTarget(&self.types, self.typeOfVar(ModuleEnv.varFrom(id))) == .str;
         if (builtin.mode == .debug and is_str) {
-            if (self.store().getExpr(id).e_interpolation.constraint_fn_var) |constraint_fn_var| {
+            if (self.store().exprView(id).e_interpolation.get(.constraint_fn_var)) |constraint_fn_var| {
                 if (self.env.types.varStaticDispatchRejected(constraint_fn_var)) invariant("a rejected builtin Str interpolation reached a checked body");
             }
         }

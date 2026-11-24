@@ -691,7 +691,7 @@ pub const ModuleIndex = struct {
             for (env.method_defs.entries.items()) |entry| {
                 if (store.nodes.get(entry.value.type_node_idx).tag != .statement_decl) continue;
                 const statement: StatementId = @fromBackingInt(@intCast(@backingInt(entry.value.type_node_idx)));
-                const decl = store.getStatement(statement).s_decl;
+                const decl = store.statementView(statement).s_decl.decode();
                 if (store.exprKind(decl.expr) != .e_runtime_error) continue;
                 self.node_flags[@backingInt(statement)].rejected_method_decl = true;
             }
@@ -702,9 +702,8 @@ pub const ModuleIndex = struct {
                 if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.recursive_value_reference)) continue;
                 const node: CIR.Node.Idx = @fromBackingInt(@intCast(record.node_idx));
                 if (store.nodes.get(node).tag != .expr_var) continue;
-                const lookup = store.getExpr(@fromBackingInt(@intCast(record.node_idx)));
-                if (lookup != .e_lookup_local) continue;
-                try recursively_referenced.put(@backingInt(lookup.e_lookup_local.pattern_idx), {});
+                const lookup = store.exprAs(@fromBackingInt(@intCast(record.node_idx)), .e_lookup_local) orelse continue;
+                try recursively_referenced.put(@backingInt(lookup.pattern_idx), {});
             }
 
             var binders: std.ArrayList(PatternId) = .empty;
@@ -714,9 +713,8 @@ pub const ModuleIndex = struct {
             for (self.node_kinds, 0..) |kind, raw| {
                 if (kind != .statement) continue;
                 const statement: StatementId = @fromBackingInt(@intCast(raw));
-                const data = store.getStatement(statement);
-                if (data != .s_decl) continue;
-                const decl = data.s_decl;
+                const data = store.statementAs(statement, .s_decl) orelse continue;
+                const decl = data;
                 if (self.node_flags[@backingInt(decl.pattern)].promoted_pattern) continue;
                 if (bindsLocalSchemeAlias(env, decl.pattern, decl.expr)) {
                     self.node_flags[@backingInt(decl.pattern)].scheme_alias_binder = true;

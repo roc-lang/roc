@@ -95,7 +95,7 @@ const Adapter = struct {
     pub fn node(self: *Adapter, key: Key, initial: Annotation) Allocator.Error!Analysis.Node {
         const owner = key.owner;
         var annotation = initial;
-        while (owner.store.typeAnnoKind(annotation) == .rigid_var_lookup) annotation = owner.store.getTypeAnno(annotation).rigid_var_lookup.ref;
+        while (owner.store.typeAnnoKind(annotation) == .rigid_var_lookup) annotation = owner.store.typeAnnoView(annotation).rigid_var_lookup.get(.ref);
         const header = switch (owner.store.getStatement(key.statement)) {
             .s_alias_decl => |decl| decl.header,
             .s_nominal_decl => |decl| decl.header,

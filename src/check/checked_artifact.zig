@@ -178,12 +178,12 @@ pub fn forEachCheckedSourceTypeRoot(
 
         const aliases = module_env.for_clause_aliases.sliceRange(required_type.type_aliases);
         for (aliases) |alias| {
-            const alias_statement = module_env.store.getStatement(alias.alias_stmt_idx);
-            if (alias_statement != .s_alias_decl) {
+            const alias_statement = module_env.store.statementAs(alias.alias_stmt_idx, .s_alias_decl);
+            if (alias_statement == null) {
                 checkedArtifactInvariant("platform for-clause alias metadata referenced a non-alias statement", .{});
             }
             try visitor.visit(ModuleEnv.varFrom(alias.alias_stmt_idx));
-            try visitor.visit(ModuleEnv.varFrom(alias_statement.s_alias_decl.anno));
+            try visitor.visit(ModuleEnv.varFrom(alias_statement.?.anno));
         }
     }
 
@@ -6842,7 +6842,7 @@ pub fn declarationAnnoNode(
             .rigid_var_lookup => |lookup| {
                 var binder = lookup.ref;
                 while (module_env.store.typeAnnoKind(binder) == .rigid_var_lookup) {
-                    binder = module_env.store.getTypeAnno(binder).rigid_var_lookup.ref;
+                    binder = module_env.store.typeAnnoView(binder).rigid_var_lookup.get(.ref);
                 }
                 return .{ .rigid = .{ .var_ = ModuleEnv.varFrom(binder) } };
             },
@@ -7121,7 +7121,7 @@ const DeclarationAnnoWalk = struct {
                     for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
                     errdefer freeOwned(gpa, out);
                     for (tag_annos, out) |tag_anno_idx, *slot| {
-                        const tag = module_env.store.getTypeAnno(tag_anno_idx).tag;
+                        const tag = module_env.store.typeAnnoView(tag_anno_idx).tag.decode();
                         slot.name = @fromBackingInt(@intCast(results.take()));
                         slot.args = try results.typeIds(gpa, module_env.store.sliceTypeAnnos(tag.args).len);
                     }
@@ -10262,11 +10262,10 @@ test "optional record fields publish through the declaration annotation path" {
     // Find `Thing`'s alias declaration and its record annotation.
     const record_anno = blk: {
         for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
-            const statement = module_env.store.getStatement(statement_idx);
-            if (statement != .s_alias_decl) continue;
-            const anno_kind = module_env.store.typeAnnoKind(statement.s_alias_decl.anno);
+            const statement = module_env.store.statementAs(statement_idx, .s_alias_decl) orelse continue;
+            const anno_kind = module_env.store.typeAnnoKind(statement.anno);
             if (anno_kind != .record) continue;
-            break :blk statement.s_alias_decl.anno;
+            break :blk statement.anno;
         }
         return error.TestUnexpectedResult;
     };
@@ -10345,11 +10344,10 @@ fn checkPublishedNominalBacking(
     const nominal_ident = module_env.getIdentStoreConst().lookup(Ident.for_text(nominal_name)) orelse return error.TestUnexpectedResult;
     const backing_anno = blk: {
         for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
-            const statement = module_env.store.getStatement(statement_idx);
-            if (statement != .s_nominal_decl) continue;
-            const header = module_env.store.getTypeHeader(statement.s_nominal_decl.header);
+            const statement = module_env.store.statementAs(statement_idx, .s_nominal_decl) orelse continue;
+            const header = module_env.store.getTypeHeader(statement.header);
             if (header.relative_name != nominal_ident) continue;
-            break :blk statement.s_nominal_decl.anno;
+            break :blk statement.anno;
         }
         return error.TestUnexpectedResult;
     };
@@ -10950,9 +10948,8 @@ pub const LocalNominalDeclarationIds = struct {
         errdefer ids.deinit();
         var next_id: u32 = 0;
         for (module_env.store.sliceStatements(module_env.all_statements)) |candidate| {
-            const statement = module_env.store.getStatement(candidate);
-            if (statement != .s_nominal_decl) continue;
-            if (!publishesLocalNominal(module_env, candidate, statement.s_nominal_decl.anno)) continue;
+            const statement = module_env.store.statementAs(candidate, .s_nominal_decl) orelse continue;
+            if (!publishesLocalNominal(module_env, candidate, statement.anno)) continue;
             try ids.put(candidate, @fromBackingInt(@intCast(next_id)));
             next_id += 1;
         }
@@ -12491,16 +12488,15 @@ fn publishRetiredExprs(
     for (module_index.node_kinds, 0..) |kind, raw| {
         if (kind != .expr) continue;
         const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw));
-        const data = store.getExpr(expr);
-        if (data != .e_call) continue;
+        const data = store.exprAs(expr, .e_call) orelse continue;
         // Evaluating the callee happens before any argument. A checked
         // error produces neither a callable nor a result type relation.
-        if (Runtime.isError(store, &retired, data.e_call.func)) {
+        if (Runtime.isError(store, &retired, data.func)) {
             retired.set(raw);
             rejected_binding = true;
             continue;
         }
-        const target = directProcedureTargetForCall(refs, data.e_call.func, local_module, bindings, templates, imports, available_modules, relation_modules) orelse continue;
+        const target = directProcedureTargetForCall(refs, data.func, local_module, bindings, templates, imports, available_modules, relation_modules) orelse continue;
         try direct_targets.append(allocator, .{ .call = expr, .target = target });
     }
 
@@ -12522,9 +12518,9 @@ fn publishRetiredExprs(
                 try work.append(allocator, expr);
                 continue;
             }
-            const data = store.getExpr(expr);
-            if (data == .e_call) {
-                const entry = try dependents.getOrPut(@backingInt(data.e_call.func));
+            const data = store.exprAs(expr, .e_call);
+            if (data != null) {
+                const entry = try dependents.getOrPut(@backingInt(data.?.func));
                 if (!entry.found_existing) entry.value_ptr.* = .empty;
                 try entry.value_ptr.append(allocator, expr);
             }
@@ -20504,7 +20500,7 @@ pub const PlatformTypeInputs = struct {
             const alias_start: u32 = @intCast(aliases.items.len);
             const required_type = env.requires_types.items()[declaration.requires_idx];
             for (env.for_clause_aliases.sliceRange(required_type.type_aliases)) |alias| {
-                const anno = env.store.getStatement(alias.alias_stmt_idx).s_alias_decl.anno;
+                const anno = env.store.statementView(alias.alias_stmt_idx).s_alias_decl.get(.anno);
                 const identity = checked_types.rootForSourceVar(module, ModuleEnv.varFrom(anno)) orelse
                     checkedArtifactInvariant("platform alias identity has no checked root", .{});
                 const alias_root = checked_types.rootForSourceVar(module, ModuleEnv.varFrom(alias.alias_stmt_idx)) orelse
@@ -24448,15 +24444,14 @@ pub fn pairCheckedPlatform(
         for ((try platform_analyses.demandIndex()).node_kinds, 0..) |kind, raw| {
             if (kind != .expr) continue;
             const call_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw));
-            const data = env.store.getExpr(call_expr);
-            if (data != .e_call) continue;
-            if (platform.resolved_value_refs.lookupIdByExpr(data.e_call.func) == null) continue;
+            const data = env.store.exprAs(call_expr, .e_call) orelse continue;
+            if (platform.resolved_value_refs.lookupIdByExpr(data.func) == null) continue;
             // The binding supplies the procedure kind that an unpaired
             // requirement cannot classify. Publish the same direct-call
             // decision as a resolved module.
             const target = directProcedureTargetForCall(
                 &result.resolved_value_refs,
-                data.e_call.func,
+                data.func,
                 result.key,
                 &result.top_level_procedure_bindings,
                 &result.callable_eval_templates,
@@ -26496,8 +26491,7 @@ pub const CompileTimeRootTable = struct {
         }
 
         for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
-            const stmt = module_env.store.getStatement(statement_idx);
-            if (stmt != .s_expect) continue;
+            const stmt = module_env.store.statementAs(statement_idx, .s_expect) orelse continue;
             try collectExpectRoot(
                 &roots,
                 allocator,
@@ -26505,7 +26499,7 @@ pub const CompileTimeRootTable = struct {
                 checked_types,
                 module_index,
                 statement_idx,
-                stmt.s_expect.body,
+                stmt.body,
             );
         }
 
@@ -35694,9 +35688,8 @@ pub const ImportedModuleView = struct {
                     .expr, .statement, .required_binding, .hoisted, .literal, .literal_argument => return position,
                 };
                 const env = self.module_env;
-                const pattern = env.store.getPattern(env.store.getDef(def).pattern);
-                if (pattern != .assign) return position;
-                return .{ .constant = .{ .text = env.getIdent(pattern.assign.ident), .shadow = shadowOrdinal(env, def) } };
+                const pattern = env.store.patternAs(env.store.getDef(def).pattern, .assign) orelse return position;
+                return .{ .constant = .{ .text = env.getIdent(pattern.ident), .shadow = shadowOrdinal(env, def) } };
             },
         }
     }
@@ -35730,13 +35723,12 @@ fn shadowOrdinal(env: *const ModuleEnv, def: CIR.Def.Idx) u32 {
     for (env.store.sliceDefs(env.top_level_value_defs)) |candidate| {
         if (candidate == def) return 0;
     }
-    const pattern = env.store.getPattern(env.store.getDef(def).pattern);
-    if (pattern != .assign) checkedArtifactInvariant("a definition canonicalization did not select for its name has no single name", .{});
+    const pattern = env.store.patternAs(env.store.getDef(def).pattern, .assign) orelse checkedArtifactInvariant("a definition canonicalization did not select for its name has no single name", .{});
     var ordinal: u32 = 1;
     for (env.store.sliceDefs(env.global_value_defs)) |other| {
         if (other == def) return ordinal;
-        const other_pattern = env.store.getPattern(env.store.getDef(other).pattern);
-        if (other_pattern == .assign and other_pattern.assign.ident.eql(pattern.assign.ident)) ordinal += 1;
+        const other_pattern = env.store.patternAs(env.store.getDef(other).pattern, .assign);
+        if (other_pattern != null and other_pattern.?.ident.eql(pattern.ident)) ordinal += 1;
     }
     checkedArtifactInvariant("a shadowed definition is no module-global definition", .{});
 }

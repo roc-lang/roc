@@ -320,12 +320,11 @@ fn collectRenames(
     const namespace = namespaces[namespace_index];
     const env = namespace.env;
     for (env.store.sliceStatements(env.all_statements)) |stmt_idx| {
-        const stmt = env.store.getStatement(stmt_idx);
-        if (stmt != .s_alias_decl) continue;
+        const stmt = env.store.statementAs(stmt_idx, .s_alias_decl) orelse continue;
         if (!namespaceIncludes(namespace, stmt_idx)) continue;
         const nominal = unnamedNominalBehind(namespaces, package_modules, env, stmt_idx) orelse continue;
 
-        const alias_name = env.getIdentText(env.store.getTypeHeader(stmt.s_alias_decl.header).relative_name);
+        const alias_name = env.getIdentText(env.store.getTypeHeader(stmt.header).relative_name);
         const public_name = try projectedEntryName(arena, env, namespace.projection, alias_name);
         const gop = try renames.getOrPut(gpa, .{ .identity = nominal.identity.*, .decl = nominal.decl });
         if (gop.found_existing and std.mem.order(u8, gop.value_ptr.projection.?.public_name, public_name) != .gt) continue;
@@ -476,7 +475,7 @@ fn renamedNominalEntry(
     alias_doc: ?DocCommentExtract,
 ) Allocator.Error!DocModel.DocEntry {
     const nominal_env = renamed.source_env;
-    const nominal = nominal_env.store.getStatement(renamed.source_decl).s_nominal_decl;
+    const nominal = nominal_env.store.statementView(renamed.source_decl).s_nominal_decl.decode();
 
     const nominal_module_path = try sourceModulePath(
         gpa,
@@ -1911,9 +1910,8 @@ fn resolveModulePathFromBase(
 /// anonymous open extensions (`..`). Such extensions should be rendered as
 /// `..` with no trailing name, so the caller should skip extracting the ext.
 fn isAnonymousOpenExt(module_env: *const ModuleEnv, ext_idx: CIR.TypeAnno.Idx) bool {
-    const anno = module_env.store.getTypeAnno(ext_idx);
-    if (anno != .rigid_var) return false;
-    const name = module_env.getIdentText(anno.rigid_var.name);
+    const anno = module_env.store.typeAnnoAs(ext_idx, .rigid_var) orelse return false;
+    const name = module_env.getIdentText(anno.name);
     return name.len > 0 and name[0] == '#';
 }
 

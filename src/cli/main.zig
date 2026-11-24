@@ -13733,12 +13733,11 @@ fn collectExpectBindingPatterns(
         .statement => |statement| statement,
         .def, .expr, .required_binding, .hoisted, .literal, .literal_argument => return allocator.alloc(CIR.Pattern.Idx, 0),
     };
-    const statement = env.store.getStatement(statement_idx);
-    if (statement != .s_expect) return allocator.alloc(CIR.Pattern.Idx, 0);
+    const statement = env.store.statementAs(statement_idx, .s_expect) orelse return allocator.alloc(CIR.Pattern.Idx, 0);
 
     var stack = std.ArrayList(CIR.Expr.Idx).empty;
     defer stack.deinit(allocator);
-    try stack.append(allocator, statement.s_expect.body);
+    try stack.append(allocator, statement.body);
 
     var patterns = std.ArrayList(CIR.Pattern.Idx).empty;
     errdefer patterns.deinit(allocator);
