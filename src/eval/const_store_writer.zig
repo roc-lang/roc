@@ -193,7 +193,7 @@ pub const Writer = struct {
         while (pending.pop()) |plan_id| {
             if (seen.contains(plan_id)) continue;
             try seen.put(plan_id, {});
-            switch (self.constPlan(plan_id)) {
+            switch (self.constPlan(plan_id).*) {
                 .boxy_fn => return .boxy,
                 .fn_value, .erased_fn => return .lss,
                 .pending, .layout_only, .zst, .scalar, .str => {},
@@ -251,7 +251,7 @@ pub const Writer = struct {
         // later roots may reuse those addresses for unrelated values.
         self.stored_values.clearRetainingCapacity();
 
-        const plan = self.constPlan(root.plan);
+        const plan = self.constPlan(root.plan).*;
         return switch (root.request.kind) {
             // A value whose plan can hold no function is data alone, which
             // the store holds as its image (design.md "Stored Images").
@@ -381,11 +381,11 @@ pub const Writer = struct {
         box: checked.ConstNodeId,
         tuple: checked.ConstNodeId,
         record: checked.ConstNodeId,
-        nominal: struct { node: checked.ConstNodeId, named: @FieldType(LirProgram.ConstPlan, "named") },
+        nominal: struct { node: checked.ConstNodeId, named: *const @FieldType(LirProgram.ConstPlan, "named") },
         tag: struct { node: checked.ConstNodeId, name: []const u8 },
         /// A function value; `node` is null for a callable root, whose
         /// function id is the store's result.
-        fn_value: struct { node: ?checked.ConstNodeId, template: LirProgram.FnTemplate },
+        fn_value: struct { node: ?checked.ConstNodeId, template: *const LirProgram.FnTemplate },
         /// A `.boxy` function value; `recipe` is the writer's to free.
         boxy_fn: struct { node: checked.ConstNodeId, recipe: []const u8 },
     };
@@ -408,6 +408,13 @@ pub const Writer = struct {
         capture_types_start: usize,
         index: usize = 0,
     };
+
+    // A frame is pushed and finished for every stored composite node, so it
+    // names a function's template and a nominal's plan rather than copying
+    // them.
+    comptime {
+        if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(StoreFrame) == 88);
+    }
 
     fn storeValue(
         self: *Writer,
@@ -521,7 +528,7 @@ pub const Writer = struct {
         }
         const requests_start = self.store_requests.items.len;
         const children = &self.store_requests;
-        const finish: StoreFinish = switch (self.constPlan(request.plan)) {
+        const finish: StoreFinish = switch (self.constPlan(request.plan).*) {
             .pending => writerInvariant("pending const plan reached ConstStore writer"),
             .layout_only => writerInvariant("layout-only const plan reached ConstStore writer"),
             .zst => return self.store.fill(node, .zst),
@@ -551,7 +558,7 @@ pub const Writer = struct {
                 try self.appendTagPayloadRequests(children, selected.payloads, payload_layout, tag_base.value);
                 break :blk .{ .tag = .{ .node = node, .name = selected.name } };
             },
-            .named => |named| blk: {
+            .named => |*named| blk: {
                 try children.append(self.allocator, .{ .plan = named.backing, .layout_idx = layout_idx, .value = part });
                 break :blk .{ .nominal = .{ .node = node, .named = named } };
             },
@@ -576,14 +583,14 @@ pub const Writer = struct {
         try self.store_nodes.resize(self.allocator, nodes_start + requests_len);
         const capture_types_start = self.store_capture_types.items.len;
         try self.store_capture_types.resize(self.allocator, capture_types_start + slots.len);
-        self.store_frames.appendAssumeCapacity(.{
-            .finish = finish,
-            .requests_start = requests_start,
-            .requests_len = requests_len,
-            .nodes_start = nodes_start,
-            .slots = slots,
-            .capture_types_start = capture_types_start,
-        });
+        const frame = self.store_frames.addOneAssumeCapacity();
+        frame.finish = finish;
+        frame.requests_start = requests_start;
+        frame.requests_len = requests_len;
+        frame.nodes_start = nodes_start;
+        frame.slots = slots;
+        frame.capture_types_start = capture_types_start;
+        frame.index = 0;
     }
 
     fn pushFnValue(
@@ -593,12 +600,12 @@ pub const Writer = struct {
         layout_idx: layout.Idx,
         value: Value,
     ) Error!void {
-        const set = self.program.fn_sets.items[@backingInt(set_id)];
+        const set = &self.program.fn_sets.items[@backingInt(set_id)];
         const tag_base = self.resolveTagBase(layout_idx, value);
         const variant = self.selectFnVariant(set, tag_base.layout_idx, tag_base.value);
         const requests_start = self.store_requests.items.len;
         try self.appendCaptureRequests(&self.store_requests, variant.captures, variant.payload_layout, tag_base.value);
-        try self.pushStoreFrame(.{ .fn_value = .{ .node = node, .template = variant.template } }, requests_start, variant.captures);
+        try self.pushStoreFrame(.{ .fn_value = .{ .node = node, .template = &variant.template } }, requests_start, variant.captures);
     }
 
     fn pushErasedFn(
@@ -610,12 +617,12 @@ pub const Writer = struct {
         const entry = try self.resolveErasedEntry(set_id, value);
         const requests_start = self.store_requests.items.len;
         try self.appendCaptureRequests(&self.store_requests, entry.entry.captures, entry.entry.capture_layout, .{ .ptr = entry.capture_ptr });
-        const template = entry.entry.template orelse writerInvariant("erased callable entry has no ConstStore template");
+        const template = if (entry.entry.template) |*template| template else writerInvariant("erased callable entry has no ConstStore template");
         try self.pushStoreFrame(.{ .fn_value = .{ .node = node, .template = template } }, requests_start, entry.entry.captures);
     }
 
     const ResolvedErasedEntry = struct {
-        entry: LirProgram.ErasedFn,
+        entry: *const LirProgram.ErasedFn,
         capture_ptr: [*]u8,
     };
 
@@ -623,7 +630,7 @@ pub const Writer = struct {
         const set = self.program.erased_fns.items[@backingInt(set_id)];
         const data_ptr = self.readErasedCallablePointer(value);
         const resolved = try self.erased_callable_resolver.resolve(self.erased_callable_resolver.context, data_ptr);
-        for (set.entries) |entry| {
+        for (set.entries) |*entry| {
             if (entry.entry != resolved.proc) continue;
             return .{ .entry = entry, .capture_ptr = resolved.capture_ptr };
         }
@@ -1190,7 +1197,7 @@ pub const Writer = struct {
         while (pending.pop()) |part| {
             const layout_value = self.program.layouts.getLayout(part.layout_idx);
             if (layout_value.tag == .zst) continue;
-            switch (self.constPlan(part.plan)) {
+            switch (self.constPlan(part.plan).*) {
                 .scalar, .zst => {},
                 .named => |named| try pending.append(self.allocator, .{ .plan = named.backing, .layout_idx = part.layout_idx, .offset = part.offset }),
                 .tag_union => |variants| try tags.append(self.allocator, .{ .variants = variants, .layout_idx = part.layout_idx, .offset = part.offset }),
@@ -1224,7 +1231,7 @@ pub const Writer = struct {
 
     fn planIsScalar(self: *const Writer, root: LirProgram.ConstPlanId) bool {
         var plan_id = root;
-        while (true) return switch (self.constPlan(plan_id)) {
+        while (true) return switch (self.constPlan(plan_id).*) {
             .scalar => true,
             .named => |named| {
                 plan_id = named.backing;
@@ -1342,13 +1349,13 @@ pub const Writer = struct {
 
     fn selectFnVariant(
         self: *Writer,
-        set: LirProgram.FnSet,
+        set: *const LirProgram.FnSet,
         layout_idx: layout.Idx,
         value: Value,
-    ) LirProgram.FnVariant {
-        if (set.variants.len == 1) return set.variants[0];
+    ) *const LirProgram.FnVariant {
+        if (set.variants.len == 1) return &set.variants[0];
         const discriminant = self.readTagDiscriminant(layout_idx, value);
-        for (set.variants) |variant| {
+        for (set.variants) |*variant| {
             if (variant.discriminant == discriminant) return variant;
         }
         writerInvariant("finite callable result discriminant did not match an explicit variant");
@@ -1509,10 +1516,10 @@ pub const Writer = struct {
         } else null;
     }
 
-    fn constPlan(self: *const Writer, id: LirProgram.ConstPlanId) LirProgram.ConstPlan {
+    fn constPlan(self: *const Writer, id: LirProgram.ConstPlanId) *const LirProgram.ConstPlan {
         const raw = @backingInt(id);
         if (raw >= self.program.const_plans.items.len) writerInvariant("const plan id is out of range");
-        return self.program.const_plans.items[raw];
+        return &self.program.const_plans.items[raw];
     }
 };
 
@@ -1592,7 +1599,7 @@ const ValueFormImage = struct {
         // A recursive type's back edge is a box the committed layout
         // inserted, which holds the part's own bytes.
         const physical = layouts_.getLayout(job.layout_idx);
-        if (physical.tag == .box and plan != .box) {
+        if (physical.tag == .box and plan.* != .box) {
             const payload_layout = physical.getIdx();
             job.dest = try self.allocation(job.dest, job.plan, payload_layout, self.graph.size(payload_layout), self.graph.alignment(payload_layout), layouts_.layoutContainsRefcounted(layouts_.getLayout(payload_layout)), null);
             job.layout_idx = payload_layout;
@@ -1604,7 +1611,7 @@ const ValueFormImage = struct {
             .stored => |stored| return try self.copyStored(stored, job.plan, job.layout_idx, job.dest, size),
         };
         const word = self.graph.word();
-        switch (plan) {
+        switch (plan.*) {
             .pending, .layout_only => writerInvariant("an incomplete const plan reached a value-form root"),
             .fn_value, .erased_fn, .boxy_fn => writerInvariant("a value-form root holds a function"),
             // Value form builds no box.
