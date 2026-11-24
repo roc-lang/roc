@@ -742,7 +742,7 @@ pub const Writer = struct {
     fn partListLen(self: *const Writer, part: Part) usize {
         return switch (part) {
             .runtime => |value| @as(*const RocList, @ptrCast(@alignCast(value.ptr))).len(),
-            .checked => |expr| self.checkedListItems(expr).len,
+            .checked => |expr| self.checkedListLen(expr),
             .stored => |stored| @intCast(storedListItems(stored).len()),
         };
     }
@@ -753,7 +753,7 @@ pub const Writer = struct {
     fn partListCapacity(self: *const Writer, part: Part) u64 {
         return switch (part) {
             .runtime => |value| listCapacity(value),
-            .checked => |expr| self.checkedListItems(expr).len,
+            .checked => |expr| self.checkedListLen(expr),
             // A read of a constant is the constant's value, capacity
             // included.
             .stored => |stored| storedList(stored).capacity,
@@ -1047,16 +1047,22 @@ pub const Writer = struct {
             writerInvariant("a value-form numeral does not fit its type");
     }
 
-    /// A value-form string's bytes: its segments in order.
+    /// A value-form string's bytes: its segments in order. A string of one
+    /// segment borrows that segment's bytes from the module's string
+    /// literal store.
     fn checkedStrText(self: *Writer, expr: CIR.Expr.Idx) Allocator.Error![]const u8 {
         const bodies = self.checkedValues().bodies;
+        const segments = checkedStrSegments(bodies, expr);
+        if (segments.len == 1) return checkedSegmentText(bodies, segments[0]);
         self.checked_text.clearRetainingCapacity();
-        for (checkedStrSegments(bodies, expr)) |segment| {
-            const data = bodies.exprData(segment);
-            if (data != .str_segment) writerInvariant("a value-form string's part is not a literal segment");
-            try self.checked_text.appendSlice(self.allocator, bodies.text(data.str_segment));
-        }
+        for (segments) |segment| try self.checked_text.appendSlice(self.allocator, checkedSegmentText(bodies, segment));
         return self.checked_text.items;
+    }
+
+    fn checkedSegmentText(bodies: checked.CheckedBodies, segment: CIR.Expr.Idx) []const u8 {
+        const data = bodies.exprData(segment);
+        if (data != .str_segment) writerInvariant("a value-form string's part is not a literal segment");
+        return bodies.text(data.str_segment);
     }
 
     /// The items of a value-form list.
@@ -1066,6 +1072,22 @@ pub const Writer = struct {
         if (data == .empty_list) return &.{};
         if (data != .list) writerInvariant("a value-form list is not a list literal");
         return data.list;
+    }
+
+    /// The bytes of value-form list `expr` when it is a bytes literal,
+    /// borrowed from the module's string literal store, whose bytes are the
+    /// packed items of a list of `U8`.
+    fn checkedListBytes(self: *const Writer, expr: CIR.Expr.Idx) ?[]const u8 {
+        const bodies = self.checkedValues().bodies;
+        const data = bodies.exprData(checked.valueFormValueExpr(bodies, expr));
+        if (data != .bytes_literal) return null;
+        return bodies.text(data.bytes_literal);
+    }
+
+    /// How many items value-form list `expr` has.
+    fn checkedListLen(self: *const Writer, expr: CIR.Expr.Idx) usize {
+        if (self.checkedListBytes(expr)) |bytes| return bytes.len;
+        return self.checkedListItems(expr).len;
     }
 
     /// The part of a value-form value a named plan's backing stores: a
@@ -1675,6 +1697,15 @@ pub const Writer = struct {
         const roc_list: *const RocList = switch (part) {
             .runtime => |value| @ptrCast(@alignCast(value.ptr)),
             .checked => |expr| {
+                if (self.checkedListBytes(expr)) |bytes| {
+                    if (builtin.mode == .debug) std.debug.assert(element.byteWidth() == 1);
+                    self.store.fill(target_node, .{ .list = .{ .items = .{ .packed_bytes = .{
+                        .bytes = try self.storeBytes(bytes),
+                        .len = try checkedU32(bytes.len),
+                        .element = element,
+                    } }, .capacity = capacity } });
+                    return;
+                }
                 const items = self.checkedListItems(expr);
                 self.store.fill(target_node, .{ .list = .{ .items = .{ .packed_bytes = .{
                     .bytes = try self.checkedPackedBlob(elem_layout, element, items),

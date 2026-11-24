@@ -2448,6 +2448,8 @@ CIR kinds (as the checked body reader presents them) and checked types:
   value);
 - a string literal whose quote dispatches to no `from_quote`, made of literal
   segments only, whose checked type is the builtin `Str`;
+- a bytes literal (`import "file" as bytes : List(U8)`), whose checked type is
+  always `List(U8)`;
 - an empty list, a tag with no payload, or an empty record whose checked
   type is the empty record (at a record type of optional fields it builds
   each field's presence slot);
@@ -2527,7 +2529,10 @@ where a value's parts come from differs: an evaluator's result memory, the
 checked expression's parts, or the stored value of a constant the expression
 reads. A numeral's bytes are the bytes lowering gives the literal
 (`exact_numeral.encodeBits`), and a literal list or string has no capacity
-beyond its items (Static Lists And Strings Keep Their Capacity). A read of a
+beyond its items (Static Lists And Strings Keep Their Capacity). A string of
+one segment and a bytes literal are stored straight from the module's string
+literal store, whose bytes are the stored blob's, with no intermediate copy;
+a bytes literal is the packed items of its `List(U8)`. A read of a
 constant is the constant's stored value, capacity included: the writer
 copies the read root's nodes into the reading root's store under the
 reading root's own plan, choosing each tag's variant by name, so a read at a
