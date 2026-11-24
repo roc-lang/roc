@@ -32593,6 +32593,8 @@ Generated Zig and Rust bindings provide a `RocHost` helper for host-owned
 allocation state. Its fields are exactly the `env` and callback prefix of
 `RocOps`, with callback self pointers referring to `RocHost`. It has no
 `hosted_fns` member: hosted calls use the platform's declared linker symbols.
+Rust spells each callback as an `unsafe extern "C" fn` pointer, because a
+callback's contract is on the pointers its caller hands it.
 This helper is not passed across compiled Roc entrypoints. The glue ABI lock
 compares its complete prefix size, alignment, field offsets, and callback
 signatures with the interpreter types defined by builtins. C bindings call the runtime
