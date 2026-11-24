@@ -118,13 +118,19 @@ pub extern "C" fn roc_catalog_roundtrip(arg0: abi::EmptyOrPairOrPayloadOrRecursi
 }
 
 #[no_mangle]
-pub extern "C" fn roc_catalog_single_no_payload() -> *mut c_void {
-    core::ptr::null_mut()
-}
+pub extern "C" fn roc_catalog_single_no_payload() {}
 
 #[no_mangle]
 pub extern "C" fn roc_catalog_single_payload_roundtrip(arg0: abi::CatalogPayload) -> abi::CatalogPayload {
     arg0
+}
+
+#[no_mangle]
+pub extern "C" fn roc_catalog_multi_payload_roundtrip(arg0: abi::Stepped) -> abi::Stepped {
+    if arg0._0 != 21 || arg0._1.len() != 3 {
+        fail("multi-payload argument mismatch");
+    }
+    abi::Stepped { _0: arg0._0 + 1, _1: arg0._1 }
 }
 
 fn expect_str(value: &abi::RocStr, expected: &[u8], label: &str) {
@@ -170,6 +176,17 @@ fn run_contract() {
     }
     if unsafe { abi::roc_u128(123456789) } != 123456789 {
         fail("U128 identity mismatch");
+    }
+    let stepped = unsafe { abi::roc_multi_payload() };
+    if stepped._0 != 22 {
+        fail("multi-payload first payload mismatch");
+    }
+    if stepped._1.as_slice() != [3u64, 5, 8] {
+        fail("multi-payload second payload mismatch");
+    }
+    let zero_sized = abi::CatalogZeroSizedWrapper { only: 6.5 };
+    if unsafe { abi::roc_zero_sized_wrapper(zero_sized) }.only != 7.5 {
+        fail("zero-sized wrapper mismatch");
     }
 }
 

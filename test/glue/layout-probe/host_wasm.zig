@@ -112,6 +112,9 @@ export fn roc_probe_roundtrip_vector_hva(arg0: abi.ProbeVectorHva) callconv(.c) 
 export fn roc_probe_roundtrip_vector_wrapper(arg0: abi.ProbeVectorWrapper) callconv(.c) abi.ProbeVectorWrapper {
     return arg0;
 }
+export fn roc_probe_roundtrip_zero_sized_wrapper(arg0: abi.ProbeZeroSizedWrapper) callconv(.c) abi.ProbeZeroSizedWrapper {
+    return .{ .only = arg0.only + 1.0 };
+}
 export fn roc_probe_roundtrip_vector_tag(arg0: abi.ProbeVectorTag) callconv(.c) abi.ProbeVectorTag {
     return arg0;
 }
@@ -242,6 +245,9 @@ fn checkProvidedAbi() void {
 
     const wrapper: abi.ProbeVectorWrapper = .{ .only = u8x16 };
     if (!sameBytes(abi.roc_provide_vector_wrapper(wrapper), wrapper)) fail("provided vector wrapper mismatch");
+
+    const zero_sized: abi.ProbeZeroSizedWrapper = .{ .only = 6.5 };
+    if (abi.roc_provide_zero_sized_wrapper(zero_sized).only != 7.5) fail("provided zero-sized wrapper mismatch");
 
     const record: abi.ProbeVectorRecord = .{ .bytes = u8x16, .words = i32x4, .before = 0x1020304050607080, .after = 0xa0b0c0d0 };
     if (!sameBytes(abi.roc_provide_vector_record(record), record)) fail("provided vector record mismatch");
