@@ -20566,10 +20566,17 @@ owner returns the error once it has received every task. Without an executor,
 the items run and commit in order on one sequential lane through the same
 callbacks.
 
-Each lane lends every item it runs one scratch arena, registered in the lane's
-state and reset after each item to a single retained chunk of at most
+A run gives every lane that runs its items a lane state of the run's own,
+created by the lane's first item and destroyed when the run returns, so the
+scratch a pass keeps per lane (its lane buffers, the item arena below) serves
+every procedure that lane runs in the run and none of it outlives the run: an
+idle worker holds no capacity grown by a pass that finished. Each lane lends
+every item it runs one scratch arena, registered in that lane state and reset
+after each item to a single retained chunk of at most
 `lane_scratch_retain_limit` (4 MiB), so a lane's steady-state items allocate
 nothing from the backing allocator and idle scratch is bounded per lane.
+Without an executor the items run on the caller's sequential lane, whose
+lifetime the caller chooses.
 
 A commit runs while lanes run later items, so it may change nothing an item
 reads. Native code generation commits in the run: lanes read only the frozen
