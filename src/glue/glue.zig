@@ -315,23 +315,31 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     defer if (plugin_image) |*image| image.deinit();
     var dev_code: ?*DevGlueCode = null;
     defer if (dev_code) |code| code.destroy();
+    var installed: ?InstalledGlueSpec = null;
+    defer if (installed) |*spec_plugin| spec_plugin.deinit(gpa);
     const generator: LoadedGenerator = if (args.generator) |source|
         try source.load(source.context)
     else loaded: {
         if (builtin.target.os.tag == .freestanding) return error.GluePluginUnavailable;
+        // An installed plugin is already compiled, so its spec is only
+        // checked; otherwise `--opt=dev` means the dev backend, and the
+        // optimized levels mean LLVM.
+        if (args.installed_plugin_path) |installed_path| {
+            installed = .{};
+            try installed.?.load(gpa, stderr, args, installed_path, std_io);
+            break :loaded installed.?.generator();
+        }
         spec = try compileGlueSpec(gpa, stderr, args.glue_spec, args.no_cache, args.report_config, args.specialization_strategy, std_io);
         const compiled = &spec.?;
-        // An installed plugin is already compiled; otherwise `--opt=dev`
-        // means the dev backend, and the optimized levels mean LLVM.
-        if (args.installed_plugin_path == null and args.opt == .dev) {
+        if (args.opt == .dev) {
             dev_code = try DevGlueCode.create(gpa, compiled);
             break :loaded .{ .entry = dev_code.?.entry(), .boundary = compiled.boundary() };
         }
         const stamp = gluePluginStamp(compiled.root_artifact.executableIdentity(), args.specialization_strategy);
-        plugin = try getOrBuildGluePlugin(gpa, &compiled.lowered, .{
+        plugin = .{ .bytes = try buildGluePlugin(gpa, &compiled.lowered, .{
             .root = CheckedArtifact.loweringViewWithRelations(compiled.root_artifact, compiled.relation_artifacts),
             .imports = compiled.imported_artifacts,
-        }, compiled.glue_proc, compiled.arg_layouts, stamp, args, std_io);
+        }, compiled.glue_proc, compiled.arg_layouts, stamp, args.opt, std_io) };
         plugin_image = try loadVerifiedGluePlugin(gpa, stderr, plugin.?, &stamp, true);
         const entry = plugin_image.?.lookup(GlueEntryFn, builtins.shim_symbols.roc_make_glue) orelse return error.GluePluginUnavailable;
         break :loaded .{ .entry = entry, .boundary = compiled.boundary() };
@@ -413,9 +421,35 @@ const CompiledGlueSpec = struct {
     }
 };
 
-/// Compile a glue spec (an app on the compiler-owned glue platform) and
-/// lower it to LIR, ready for plugin codegen or interpretation.
-fn compileGlueSpec(
+/// A glue spec checked through the module cache: its checked modules and
+/// the platform entrypoints they provide, with nothing lowered.
+const CheckedGlueSpec = struct {
+    build_env: *BuildEnv,
+    imported_artifacts: []check.CheckedArtifact.ImportedModuleView,
+    relation_artifacts: []check.CheckedArtifact.ImportedModuleView,
+    lir_roots: []check.CheckedModule.RootRequest,
+    root_artifact: *const CheckedArtifact.CheckedModuleArtifact,
+
+    /// The module set a lowering of the spec's entrypoints reads.
+    fn modules(self: *const CheckedGlueSpec) lir.CheckedPipeline.CheckedModuleSet {
+        return .{
+            .root = CheckedArtifact.loweringViewWithRelations(self.root_artifact, self.relation_artifacts),
+            .imports = self.imported_artifacts,
+        };
+    }
+
+    fn deinit(self: *CheckedGlueSpec, gpa: Allocator) void {
+        gpa.free(self.lir_roots);
+        gpa.free(self.relation_artifacts);
+        gpa.free(self.imported_artifacts);
+        self.build_env.deinit();
+        gpa.destroy(self.build_env);
+    }
+};
+
+/// Check a glue spec (an app on the compiler-owned glue platform),
+/// rendering its diagnostics.
+fn checkGlueSpec(
     gpa: Allocator,
     stderr: *std.Io.Writer,
     glue_spec: []const u8,
@@ -423,7 +457,7 @@ fn compileGlueSpec(
     report_config: reporting.ReportingConfig,
     specialization_strategy: base.SpecializationStrategy,
     std_io: std.Io,
-) GlueError!CompiledGlueSpec {
+) GlueError!CheckedGlueSpec {
     std.Io.Dir.cwd().access(std_io, glue_spec, .{}) catch {
         return error.GlueSpecNotFound;
     };
@@ -470,7 +504,42 @@ fn compileGlueSpec(
     const lir_roots = lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests.items()) catch {
         return error.OutOfMemory;
     };
-    errdefer gpa.free(lir_roots);
+    return .{
+        .build_env = build_env,
+        .imported_artifacts = imported_artifacts,
+        .relation_artifacts = relation_artifacts,
+        .lir_roots = lir_roots,
+        .root_artifact = root_artifact,
+    };
+}
+
+/// Why a checked app is not a glue spec, reported against its path.
+fn reportNotGlueSpec(gpa: Allocator, stderr: *std.Io.Writer, glue_spec: []const u8, report_config: reporting.ReportingConfig, comptime reason: []const u8) GlueError {
+    printPath(gpa, stderr, "Error: '{s}' is not a glue spec: " ++ reason ++ "\n", glue_spec, report_config) catch {};
+    return error.CompilationFailed;
+}
+
+const no_make_glue_reason = "its platform does not provide `" ++ builtins.shim_symbols.roc_make_glue ++ "`.";
+const make_glue_arity_reason = "`" ++ builtins.shim_symbols.roc_make_glue ++ "` must take exactly one argument.";
+
+/// Compile a glue spec (an app on the compiler-owned glue platform) and
+/// lower it to LIR, ready for dev-backend or plugin codegen.
+fn compileGlueSpec(
+    gpa: Allocator,
+    stderr: *std.Io.Writer,
+    glue_spec: []const u8,
+    no_cache: bool,
+    report_config: reporting.ReportingConfig,
+    specialization_strategy: base.SpecializationStrategy,
+    std_io: std.Io,
+) GlueError!CompiledGlueSpec {
+    var checked_spec = try checkGlueSpec(gpa, stderr, glue_spec, no_cache, report_config, specialization_strategy, std_io);
+    errdefer checked_spec.deinit(gpa);
+    const build_env = checked_spec.build_env;
+    const root_artifact = checked_spec.root_artifact;
+    const imported_artifacts = checked_spec.imported_artifacts;
+    const relation_artifacts = checked_spec.relation_artifacts;
+    const lir_roots = checked_spec.lir_roots;
 
     // The width the glue *script* executes at on this machine. This is a runner
     // implementation detail: the emitted ABI facts inside the Types payload were
@@ -495,19 +564,14 @@ fn compileGlueSpec(
 
     // Any app is a well-formed program, but only one whose platform provides
     // `roc_make_glue` over one argument is a glue spec.
-    const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue) orelse {
-        printPath(gpa, stderr, "Error: '{s}' is not a glue spec: its platform does not provide `" ++ builtins.shim_symbols.roc_make_glue ++ "`.\n", glue_spec, report_config) catch {};
-        return error.CompilationFailed;
-    };
+    const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue) orelse
+        return reportNotGlueSpec(gpa, stderr, glue_spec, report_config, no_make_glue_reason);
 
     const arg_layouts = argLayoutsForProc(gpa, &lowered.lir_result.store, glue_proc) catch {
         return error.OutOfMemory;
     };
     errdefer gpa.free(arg_layouts);
-    if (arg_layouts.len != 1) {
-        printPath(gpa, stderr, "Error: '{s}' is not a glue spec: `" ++ builtins.shim_symbols.roc_make_glue ++ "` must take exactly one argument.\n", glue_spec, report_config) catch {};
-        return error.CompilationFailed;
-    }
+    if (arg_layouts.len != 1) return reportNotGlueSpec(gpa, stderr, glue_spec, report_config, make_glue_arity_reason);
 
     return .{
         .build_env = build_env,
@@ -580,10 +644,10 @@ fn buildGlueSpecPluginFileInner(
 ) GlueError!void {
     if (builtin.target.os.tag == .freestanding) return error.GluePluginUnavailable;
 
-    var spec = try compileGlueSpec(gpa, stderr, glue_spec, false, report_config, .lss, std_io);
+    var spec = try compileGlueSpec(gpa, stderr, glue_spec, false, report_config, InstalledGlueSpec.strategy, std_io);
     defer spec.deinit(gpa);
 
-    const stamp = gluePluginStamp(spec.root_artifact.executableIdentity(), .lss);
+    const stamp = gluePluginStamp(spec.root_artifact.executableIdentity(), InstalledGlueSpec.strategy);
     const object = try buildGluePlugin(gpa, &spec.lowered, .{
         .root = CheckedArtifact.loweringViewWithRelations(spec.root_artifact, spec.relation_artifacts),
         .imports = spec.imported_artifacts,
@@ -805,23 +869,59 @@ const DevGlueCode = if (backend.host_lir_codegen_available) struct {
     fn destroy(_: *Self) void {}
 };
 
-fn getOrBuildGluePlugin(
-    gpa: Allocator,
-    lowered: *lir.CheckedPipeline.LoweredProgram,
-    modules: compile.static_data_exports.ModuleViews,
-    glue_proc: lir.LirProcSpecId,
-    arg_layouts: []const layout.Idx,
-    stamp: GluePluginStampV1,
-    args: GlueArgs,
-    std_io: std.Io,
-) GlueError!BuiltGluePlugin {
-    if (args.installed_plugin_path) |installed_path| {
-        const bytes = readPluginFile(gpa, installed_path, std_io) orelse return error.GluePluginUnavailable;
-        return .{ .bytes = bytes };
+/// An installed glue spec: its prebuilt plugin object, loaded and verified
+/// against the spec's checked modules, and the host boundary values cross
+/// `roc_make_glue` under. The plugin was compiled at install time, so nothing
+/// is lowered here: the stamp needs only the checked root's identity, and
+/// the boundary is the entrypoint's (`BoxyEntrypointBoundary`), which commits
+/// the host ABI layouts every strategy's entrypoint wrapper is compiled
+/// against.
+const InstalledGlueSpec = struct {
+    checked_spec: ?CheckedGlueSpec = null,
+    boundary: ?lir.CheckedPipeline.BoxyEntrypointBoundary = null,
+    plugin: ?BuiltGluePlugin = null,
+    image: ?eval_mod.object_image.Image = null,
+    entry: ?GlueEntryFn = null,
+
+    /// The strategy `buildGlueSpecPluginFile` builds and stamps plugins under.
+    const strategy: base.SpecializationStrategy = .lss;
+
+    fn load(self: *InstalledGlueSpec, gpa: Allocator, stderr: *std.Io.Writer, args: GlueArgs, installed_path: []const u8, std_io: std.Io) GlueError!void {
+        self.checked_spec = try checkGlueSpec(gpa, stderr, args.glue_spec, args.no_cache, args.report_config, strategy, std_io);
+        const checked_spec = &self.checked_spec.?;
+        const request = for (checked_spec.lir_roots) |root| {
+            const symbol = checked_spec.root_artifact.providedEntrypointName(root) orelse continue;
+            if (std.mem.eql(u8, symbol, builtins.shim_symbols.roc_make_glue)) break root;
+        } else return reportNotGlueSpec(gpa, stderr, args.glue_spec, args.report_config, no_make_glue_reason);
+        self.boundary = try lir.CheckedPipeline.BoxyEntrypointBoundary.init(gpa, checked_spec.modules(), request, base.target.TargetUsize.native);
+        if (self.boundary.?.argLayouts().len != 1) return reportNotGlueSpec(gpa, stderr, args.glue_spec, args.report_config, make_glue_arity_reason);
+
+        const stamp = gluePluginStamp(checked_spec.root_artifact.executableIdentity(), strategy);
+        self.plugin = .{ .bytes = readPluginFile(gpa, installed_path, std_io) orelse return error.GluePluginUnavailable };
+        self.image = try loadVerifiedGluePlugin(gpa, stderr, self.plugin.?, &stamp, true);
+        self.entry = self.image.?.lookup(GlueEntryFn, builtins.shim_symbols.roc_make_glue) orelse return error.GluePluginUnavailable;
     }
 
-    return .{ .bytes = try buildGluePlugin(gpa, lowered, modules, glue_proc, arg_layouts, stamp, args.opt, std_io) };
-}
+    fn generator(self: *const InstalledGlueSpec) LoadedGenerator {
+        const boundary = &self.boundary.?;
+        return .{
+            .entry = self.entry.?,
+            .boundary = .{
+                .layouts = boundary.layouts(),
+                .schemas = &boundary.runtime_value_schemas,
+                .types_layout = boundary.argLayouts()[0],
+                .ret_layout = boundary.retLayout(),
+            },
+        };
+    }
+
+    fn deinit(self: *InstalledGlueSpec, gpa: Allocator) void {
+        if (self.image) |*image| image.deinit();
+        if (self.plugin) |plugin| plugin.deinit(gpa);
+        if (self.boundary) |*boundary| boundary.deinit();
+        if (self.checked_spec) |*checked_spec| checked_spec.deinit(gpa);
+    }
+};
 
 /// The bytes of a plugin object file, or null when it cannot be read.
 fn readPluginFile(gpa: Allocator, path: []const u8, std_io: std.Io) ?[]u8 {
@@ -5360,43 +5460,25 @@ fn glueBoundaryOf(boundary: *const lir.CheckedPipeline.BoxyEntrypointBoundary) G
     };
 }
 
-// A glue run from unit images lowers no program, so the entrypoint boundary
-// is its only source of layouts. It must pass the same lock as the program a
-// `.boxy` lowering commits, and commit the same storage for both values.
-test "glue entrypoint boundary matches the lowered Boxy program" {
+// A glue run from unit images, or from an installed plugin, lowers no
+// program, so the entrypoint boundary is its only source of layouts. It must
+// pass the same lock as the programs both strategies lower, and marshal every
+// value of the protocol to the same bytes: the generator on the other side
+// was compiled against one of those programs.
+test "glue entrypoint boundary marshals as the lowered program of either strategy does" {
     const gpa = std.testing.allocator;
     var diagnostics = std.Io.Writer.Allocating.init(gpa);
     defer diagnostics.deinit();
-    var spec = compileGlueSpec(gpa, &diagnostics.writer, "src/glue/src/DebugGlue.roc", true, reporting.ReportingConfig.initMarkdown(), .boxy, std.testing.io) catch |err| {
-        std.debug.print("{s}", .{diagnostics.written()});
-        return err;
-    };
-    defer spec.deinit(gpa);
-    var boundary = try testEntrypointBoundary(gpa, &spec);
-    defer boundary.deinit();
-    try std.testing.expectEqual(@as(usize, 1), boundary.argLayouts().len);
-    const from_boundary = glueBoundaryOf(&boundary);
-    try checkGluePlatformMarshallingSchema(from_boundary);
-
-    const lowered = spec.boundary();
-    for ([_][2]layout.Idx{ .{ from_boundary.types_layout, lowered.types_layout }, .{ from_boundary.ret_layout, lowered.ret_layout } }) |pair| {
-        const boundary_size_align = from_boundary.layouts.layoutSizeAlign(from_boundary.layouts.getLayout(pair[0]));
-        const lowered_size_align = lowered.layouts.layoutSizeAlign(lowered.layouts.getLayout(pair[1]));
-        try std.testing.expectEqual(lowered_size_align.size, boundary_size_align.size);
-        try std.testing.expectEqual(lowered_size_align.alignment, boundary_size_align.alignment);
-    }
-    var runtime_env = eval_mod.RuntimeHostEnv.init(gpa);
-    defer runtime_env.deinit();
-    const boundary_writer = GlueRocValueWriter{ .layouts = from_boundary.layouts, .schemas = from_boundary.schemas, .roc_ops = runtime_env.get_ops() };
-    const lowered_writer = GlueRocValueWriter{ .layouts = lowered.layouts, .schemas = lowered.schemas, .roc_ops = runtime_env.get_ops() };
-    const boundary_types = boundary_writer.listElementLayout(from_boundary.types_layout);
-    const lowered_types = lowered_writer.listElementLayout(lowered.types_layout);
-    try std.testing.expectEqual(lowered_writer.sizeOf(lowered_types), boundary_writer.sizeOf(boundary_types));
-    for ([_][]const u8{ "modules", "provides_entries", "types" }) |field| {
-        const base_address: [*]u8 = @ptrFromInt(0x1000);
-        const boundary_slot = boundary_writer.recordField(base_address, boundary_types, "Types", field);
-        const lowered_slot = lowered_writer.recordField(base_address, lowered_types, "Types", field);
-        try std.testing.expectEqual(@intFromPtr(lowered_slot.ptr), @intFromPtr(boundary_slot.ptr));
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var spec = compileGlueSpec(gpa, &diagnostics.writer, "src/glue/src/DebugGlue.roc", true, reporting.ReportingConfig.initMarkdown(), strategy, std.testing.io) catch |err| {
+            std.debug.print("{s}", .{diagnostics.written()});
+            return err;
+        };
+        defer spec.deinit(gpa);
+        var boundary = try testEntrypointBoundary(gpa, &spec);
+        defer boundary.deinit();
+        try std.testing.expectEqual(@as(usize, 1), boundary.argLayouts().len);
+        try std.testing.expectEqual(try glueWireDigest(spec.boundary()), try glueWireDigest(glueBoundaryOf(&boundary)));
     }
 }
 
@@ -5412,6 +5494,21 @@ fn expectGlueSchemaEqual(expected: anytype, actual: anytype) GlueSchemaLockError
 const GlueProtocolLock = struct {
     schemas: *const lir.CheckedPipeline.RuntimeValueSchemaStore,
     layouts: *const layout.Store,
+    /// When set, digests the bytes the marshaller depends on at every record
+    /// and tag union the walk reaches: sizes, alignments, each named field's
+    /// offset and each named tag's discriminant. Two boundaries with equal
+    /// digests marshal every value identically.
+    wire: ?*std.hash.Wyhash = null,
+
+    fn digest(self: @This(), values: []const u64) void {
+        const hasher = self.wire orelse return;
+        hasher.update(std.mem.sliceAsBytes(values));
+    }
+
+    fn digestSizeAlign(self: @This(), idx: layout.Idx) void {
+        const size_align = self.layouts.layoutSizeAlign(self.layouts.getLayout(idx));
+        self.digest(&[_]u64{ size_align.size, size_align.alignment.toByteUnits() });
+    }
 
     const Type = enum {
         u64_,
@@ -5553,9 +5650,11 @@ const GlueProtocolLock = struct {
         } else return error.GlueSchemaMismatch;
         try expectGlueSchemaEqual(fields.len, schema.fields.len);
         try expectGlueSchemaEqual(fields.len, self.layouts.getStructInfo(value).fields.len);
+        self.digestSizeAlign(idx);
         inline for (fields) |field| {
             const logical_index = schema.fieldLogicalIndex(field.name) orelse return error.GlueSchemaMismatch;
             const field_layout = self.layouts.getStructFieldLayoutByOriginalIndex(value.getStruct().idx, logical_index);
+            self.digest(&[_]u64{self.layouts.getStructFieldOffsetByOriginalIndex(value.getStruct().idx, logical_index)});
             try self.check(field_layout, field.type);
         }
     }
@@ -5569,16 +5668,30 @@ const GlueProtocolLock = struct {
         const info = self.layouts.getTagUnionInfo(value);
         try expectGlueSchemaEqual(tags.len, schema.tags.len);
         try expectGlueSchemaEqual(tags.len, info.variants.len);
+        self.digestSizeAlign(idx);
         inline for (tags) |tag| {
             const discriminant = schema.tagDiscriminant(tag.name) orelse return error.GlueSchemaMismatch;
             if (discriminant >= info.variants.len) return error.GlueSchemaMismatch;
+            self.digest(&[_]u64{discriminant});
+            self.digestSizeAlign(info.variants.get(discriminant).payload_layout);
             try self.check(info.variants.get(discriminant).payload_layout, tag.type);
         }
     }
 };
 
 fn checkGluePlatformMarshallingSchema(boundary: GlueBoundary) GlueSchemaLockError!void {
-    const lock = GlueProtocolLock{ .schemas = boundary.schemas, .layouts = boundary.layouts };
+    return lockGluePlatformMarshalling(boundary, null);
+}
+
+/// Check `boundary` against the protocol and digest its wire layout.
+fn glueWireDigest(boundary: GlueBoundary) GlueSchemaLockError!u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    try lockGluePlatformMarshalling(boundary, &hasher);
+    return hasher.final();
+}
+
+fn lockGluePlatformMarshalling(boundary: GlueBoundary, wire: ?*std.hash.Wyhash) GlueSchemaLockError!void {
+    const lock = GlueProtocolLock{ .schemas = boundary.schemas, .layouts = boundary.layouts, .wire = wire };
     try lock.check(boundary.types_layout, .list_types);
     try lock.tagUnion(boundary.ret_layout, "Builtin.Try", &.{ .{ .name = "Err", .type = .str_ }, .{ .name = "Ok", .type = .list_file } });
 }

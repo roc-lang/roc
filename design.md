@@ -31249,7 +31249,8 @@ compiler's own process, not from a plugin object compiled for the run. The
 choice is the same switch on optimization, strategy, cache presence and host
 as a composed dev run (`unitImageGlueApplies`, `unitImageRunApplies`), never a
 reaction to a failure, and it is what `roc glue` does by default. Every other
-glue run lowers the whole spec and persists nothing it compiled. A dev run
+glue run that compiles its spec lowers the whole spec and persists nothing it
+compiled. A dev run
 (`--opt=dev` with `--no-cache` or `--specialize=yes`) compiles that program
 with the dev backend into the compiler's own executable memory, beside its
 frozen data (`DevGlueCode`); `--opt=dev` never reaches LLVM. `--opt=size` and
@@ -31257,7 +31258,11 @@ frozen data (`DevGlueCode`); `--opt=dev` never reaches LLVM. `--opt=size` and
 object. An installed shorthand names a spec that is already compiled: its
 plugin object, built specialized with `--opt=speed` at install time, is
 loaded whatever `--opt` says, and only an explicit `--specialize=no` compiles
-the installed source instead, as any other spec.
+the installed source instead, as any other spec. Loading it lowers nothing:
+the spec is checked, the plugin's stamp is verified against the checked
+root's identity, and the marshaller reads the entrypoint's host boundary
+(below), which is the host ABI the plugin's wrapper was compiled against
+under either strategy (`InstalledGlueSpec`).
 
 A glue spec is an app on the glue platform, so its program is rooted and
 divided exactly as a composed dev run's is: the spec and every module it
@@ -31270,8 +31275,9 @@ per-module cache or lowered, compiled by the dev backend and filed there
 under the key a run or build of the same program would use, so the three
 commands serve one another's units. The units run in the compiler's process,
 so they are compiled for the CPU level this machine executes
-(`host_cpu.nativeTarget`), the target compile-time evaluation's objects are
-built for. It then loads the builtins' unit, every other library unit after
+(`host_cpu.nativeTarget`), the one target of every unit the compiler runs
+in its own process: compile-time evaluation's objects, `roc test`'s test
+units and these (`inProcessUnitTarget`). It then loads the builtins' unit, every other library unit after
 everything it imports, and the root unit, binding imports as a test unit's
 are bound (`LoadedUnitImages`), and calls the wrapper under the in-process
 host. The loaded images outlive the copying of the generator's result, which

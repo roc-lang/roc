@@ -303,8 +303,7 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     build_env.resolution_config = opts.resolution_config;
     build_env.setWatchInputTracking(opts.track_watch_inputs);
     build_env.setPostCheckPublicationMode(opts.post_check_publication_mode);
-    const object_target = roc_target.host_cpu.nativeTarget();
-    build_env.boxy_object_lowering = lowering_policy.compileTimeObjectLowering(object_target);
+    build_env.boxy_object_lowering = lowering_policy.compileTimeObjectLowering(inProcessUnitTarget());
     build_env.boxy_object_lowering.?.embedded = embeddedBoxyUnits();
     if (opts.runtime_lowering) |config| build_env.setRuntimeLowering(config);
     if (opts.source_dir_override) |source_dir| {
@@ -327,6 +326,20 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     }
 
     return build_env;
+}
+
+/// The target of every unit whose code runs in the compiler's own process:
+/// compile-time evaluation's objects, `roc test`'s test units and a glue
+/// spec's units. It is the native target at the CPU level this machine
+/// executes, so a baseline machine never runs code compiled above its level,
+/// and the three share the units they have in common.
+fn inProcessUnitTarget() RocTarget {
+    return roc_target.host_cpu.nativeTarget();
+}
+
+test "units run in the compiler's process are compiled for the CPU level this machine executes" {
+    try std.testing.expectEqual(roc_target.host_cpu.level(), inProcessUnitTarget().cpuLevel());
+    try std.testing.expectEqual(inProcessUnitTarget(), lowering_policy.compileTimeObjectLowering(inProcessUnitTarget()).target);
 }
 
 const CacheManager = compile.CacheManager;
@@ -15574,7 +15587,7 @@ fn runCompiledTestPlan(
 /// no unit of the app has in view.
 fn unitImageTestApplies(opt: cli_args.OptLevel, no_cache: bool, strategy: base.SpecializationStrategy, root: *const check.CheckedArtifact.CheckedModuleArtifact) bool {
     if (root.module_identity.kind == .default_app) return false;
-    return unitImageRunApplies(opt, no_cache, strategy, RocTarget.detectNative());
+    return unitImageRunApplies(opt, no_cache, strategy, inProcessUnitTarget());
 }
 
 /// Whether this compiler can load test units' images into its own process.
@@ -15777,7 +15790,7 @@ fn prepareUnitImageTests(
 ) CliMainError!UnitImageTestProgram {
     if (comptime !unit_image_tests_supported) unreachable; // unitImageTestApplies holds only on a compiler that loads unit images
     const Artifact = check.CheckedArtifact.CheckedModuleArtifact;
-    const target = RocTarget.detectNative();
+    const target = inProcessUnitTarget();
     var program: UnitImageTestProgram = .{ .gpa = ctx.gpa, .tables = RunUnitTables.init(ctx), .images = .{ .gpa = ctx.gpa } };
     errdefer program.deinit();
     program.tables.digests = try build_env.boxyLinkDigests();
@@ -18798,7 +18811,7 @@ const RocGlueError = glue.GlueError || CliMainError || SourceRefResolveError || 
 /// dev run of a program for this machine. Every other glue run compiles the
 /// spec to a plugin object.
 fn unitImageGlueApplies(opt: cli_args.OptLevel, no_cache: bool, strategy: base.SpecializationStrategy) bool {
-    return unitImageRunApplies(opt, no_cache, strategy, roc_target.host_cpu.nativeTarget());
+    return unitImageRunApplies(opt, no_cache, strategy, inProcessUnitTarget());
 }
 
 /// A glue spec as unit images: its units built as a composed dev run builds
@@ -18870,9 +18883,7 @@ const UnitImageGlueGenerator = struct {
     fn prepare(self: *UnitImageGlueGenerator) CliMainError!glue.LoadedGenerator {
         if (comptime !unit_image_tests_supported) unreachable; // unitImageGlueApplies holds only on a compiler that loads unit images
         const ctx = self.ctx;
-        // The units' code runs in this process, so it is compiled for the
-        // CPU level this machine executes, as compile-time evaluation's is.
-        const target = roc_target.host_cpu.nativeTarget();
+        const target = inProcessUnitTarget();
         var reporter = makeReporter(ctx, "roc glue", false);
         defer reporter.deinit();
         reporter.start();
