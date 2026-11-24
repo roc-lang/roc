@@ -14,7 +14,7 @@ main! : List(String) -> Try({}, _)
 tag_tuple : Value((a, b, c))
 ~~~
 # EXPECTED
-ASCII CONTROL CHARACTER - :0:0:0:0
+ASCII CONTROL CHARACTER - fuzz_crash_048.md:4:12:4:13
 UNDECLARED TYPE - fuzz_crash_048.md:2:7:2:12
 UNDECLARED TYPE - fuzz_crash_048.md:6:14:6:20
 UNDECLARED TYPE - fuzz_crash_048.md:7:13:7:18
@@ -30,9 +30,11 @@ DECLARATION HAS NO VALUE - fuzz_crash_048.md:7:1:7:29
 	(report
 		(severity runtime_error)
 		(title "ASCII Control Character")
+		(region (start 4 12) (end 4 13))
 		(headline
 			(reflow "ASCII control characters are not allowed in Roc source code."))
-		(document))
+		(document
+			(source-region (file "fuzz_crash_048.md") (start 4 12) (end 4 13) (annotation error) (line-text "add_one : (\u{11}"))))
 	(report
 		(severity runtime_error)
 		(title "Undeclared Type")

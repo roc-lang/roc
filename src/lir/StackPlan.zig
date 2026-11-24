@@ -108,10 +108,27 @@ pub const Indexes = struct {
     }
 };
 
+/// How defining a value whose representative is another value touches the
+/// representative's bytes.
+pub const AliasDefinition = enum {
+    /// It writes none of them: the alias names bytes the representative
+    /// already holds, so its definition reads the representative.
+    reads,
+    /// It writes part of them first on every path that reaches the
+    /// representative's other writes, so the bytes start living there.
+    writes,
+    /// It writes part of them after another definition began their life,
+    /// so the bytes it leaves alone stay live across it.
+    updates,
+};
+
 /// One local, or the representative of a proven immutable alias group.
 pub const Value = struct {
     local: LocalId,
     representative: u32,
+    /// How defining this value touches its representative's bytes, when it
+    /// has a representative other than itself.
+    alias_definition: AliasDefinition = .reads,
     definitions: u32 = 0,
     mutable: bool = false,
     size: u32 = 0,
@@ -872,11 +889,14 @@ fn applyAliases(self: *Self, entry: u32, aliases: []Alias) Allocator.Error!void 
 fn resolveAliasAccesses(self: *Self) void {
     for (self.accesses.items) |*a| {
         const root = self.representative(a.value);
-        if (root != a.value and a.write) {
-            // Defining an alias does not overwrite the representative's bytes.
-            a.write = false;
-            a.read = true;
-        }
+        if (root != a.value and a.write) switch (self.values.items[a.value].alias_definition) {
+            .reads => {
+                a.write = false;
+                a.read = true;
+            },
+            .writes => {},
+            .updates => a.read = true,
+        };
         a.value = root;
     }
 }
@@ -1159,6 +1179,12 @@ pub fn sortedAccesses(self: *const Self) []const Access {
 pub fn liveIn(self: *const Self, value: u32, value_accesses: []const Access, at: u32) bool {
     const lifetime = Lifetime{ .plan = self, .ranges = self.liveRanges(value), .accesses = value_accesses };
     return lifetime.liveIn(at);
+}
+
+/// After `solveLifetimes`, the straight-line block holding `at`: a block is
+/// entered only at its first node and runs its nodes in position order.
+pub fn nodeBlock(self: *const Self, at: u32) u32 {
+    return self.nodes.items[at].blockIndex();
 }
 
 /// The positions at which a solved value is occupied: where it is live on

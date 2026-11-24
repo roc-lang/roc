@@ -1,7 +1,8 @@
 name: 'Set up Rust'
 description: >-
-  Make the pinned Rust toolchain the default, with the targets the RustGlue
-  checks and tests compile for: wasm32, and on Linux the host's musl target.
+  Make the pinned Rust toolchain the default, with clippy and the targets the
+  RustGlue checks and tests compile for: wasm32, and on Linux the host's musl
+  target.
 runs:
   using: 'composite'
   steps:
@@ -24,6 +25,7 @@ runs:
             targets="$targets,x86_64-unknown-linux-musl"
           fi
         fi
-        rustup toolchain install "$ROC_CI_RUST" --profile minimal --no-self-update --target "$targets"
+        rustup toolchain install "$ROC_CI_RUST" --profile minimal --no-self-update --component clippy --target "$targets"
         rustup default "$ROC_CI_RUST"
         rustc --version
+        clippy-driver --version

@@ -11,7 +11,7 @@ type=file
 0_
 ~~~
 # EXPECTED
-LEADING ZERO - :0:0:0:0
+LEADING ZERO - fuzz_crash_015.md:2:1:2:4
 UNEXPECTED STATEMENT - fuzz_crash_015.md:1:1:1:4
 UNEXPECTED STATEMENT - fuzz_crash_015.md:1:4:1:6
 UNEXPECTED STATEMENT - fuzz_crash_015.md:2:1:2:4
@@ -24,9 +24,11 @@ UNEXPECTED STATEMENT - fuzz_crash_015.md:4:1:4:3
 	(report
 		(severity runtime_error)
 		(title "Leading Zero")
+		(region (start 2 1) (end 2 4))
 		(headline
 			(reflow "Numbers cannot have leading zeros."))
-		(document))
+		(document
+			(source-region (file "fuzz_crash_015.md") (start 2 1) (end 2 4) (annotation error) (line-text "0_0"))))
 	(report
 		(severity runtime_error)
 		(title "Unexpected Statement")

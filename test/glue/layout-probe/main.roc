@@ -13,6 +13,7 @@ platform ""
 		provide_vector_quad : Probe.VectorQuad -> Probe.VectorQuad,
 		provide_vector_hva : Probe.VectorHva -> Probe.VectorHva,
 		provide_vector_wrapper : Probe.VectorWrapper -> Probe.VectorWrapper,
+		provide_zero_sized_wrapper : [Marker], Probe.ZeroSizedWrapper -> Probe.ZeroSizedWrapper,
 		provide_vector_tuple : (U64, U8x16, I16x8) -> (U64, U8x16, I16x8),
 		provide_vector_tag : Probe.VectorTag -> Probe.VectorTag,
 		make_vector_tag : {} -> Probe.VectorTag,
@@ -41,6 +42,7 @@ platform ""
 		"roc_provide_vector_quad": provide_vector_quad_for_host,
 		"roc_provide_vector_hva": provide_vector_hva_for_host,
 		"roc_provide_vector_wrapper": provide_vector_wrapper_for_host,
+		"roc_provide_zero_sized_wrapper": provide_zero_sized_wrapper_for_host,
 		"roc_provide_vector_tuple": provide_vector_tuple_for_host,
 		"roc_provide_vector_tag": provide_vector_tag_for_host,
 		"roc_make_vector_tag": make_vector_tag_for_host,
@@ -67,6 +69,7 @@ platform ""
 		"roc_probe_roundtrip_vector_quad": Probe.roundtrip_vector_quad!,
 		"roc_probe_roundtrip_vector_hva": Probe.roundtrip_vector_hva!,
 		"roc_probe_roundtrip_vector_wrapper": Probe.roundtrip_vector_wrapper!,
+		"roc_probe_roundtrip_zero_sized_wrapper": Probe.roundtrip_zero_sized_wrapper!,
 		"roc_probe_roundtrip_vector_tuple": Probe.roundtrip_vector_tuple!,
 		"roc_probe_roundtrip_vector_tag": Probe.roundtrip_vector_tag!,
 		"roc_probe_exhaust_registers": Probe.exhaust_registers!,
@@ -147,6 +150,8 @@ provide_vector_quad_for_host = provide_vector_quad
 provide_vector_hva_for_host = provide_vector_hva
 
 provide_vector_wrapper_for_host = provide_vector_wrapper
+
+provide_zero_sized_wrapper_for_host = provide_zero_sized_wrapper
 
 provide_vector_tuple_for_host = provide_vector_tuple
 
