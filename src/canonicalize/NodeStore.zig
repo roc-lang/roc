@@ -1256,6 +1256,13 @@ pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
     return cloned;
 }
 
+/// Move every owned backing list into an allocation that holds exactly its
+/// entries. Checking calls this when it finishes the module; a list that
+/// grows again afterwards regrows from its length.
+pub fn releaseUnusedCapacity(store: *NodeStore) Allocator.Error!void {
+    inline for (comptime backingLists(NodeStore)) |name| try @field(store, name).releaseUnusedCapacity(store.gpa);
+}
+
 /// Deinitializes the NodeStore, freeing any allocated resources.
 pub fn deinit(store: *NodeStore) void {
     inline for (comptime backingLists(NodeStore)) |name| @field(store, name).deinit(store.gpa);

@@ -7131,7 +7131,24 @@ These buffers are reset to empty owners so later destruction is safe. The
 solved columns, nominal declarations, derived-map selections, stable variable
 ids, and borrowed slices into the solved pools remain owned by the sealed
 store until its last consumer is done. No serialized layout changes at this
-boundary, and releasing checker buffers neither allocates nor walks types.
+boundary, and releasing checker buffers walks no types.
+
+Between canonicalization and sealing, the store drops what no class reaches
+any more (`compactForSeal`): the descriptors no slot names, which class merges
+orphan, and the vars, record field and tag pool entries no live descriptor,
+reached tag or nominal declaration's formals covers, which unification,
+instantiation and row flattening leave behind when they append the rows that
+replace a class's earlier ones. Survivors keep their order, so every range
+stays contiguous and only its start moves; descriptor indices move the same
+way, together with the slots and derived-map selections that name them.
+Static-dispatch constraints are not compacted, because checked outputs name
+them by index (`ModuleEnv.binding_scheme_codec_requirements`). Sealing then
+moves every column into storage that holds exactly its entries: an allocated
+column is reallocated to its length and a reservation returns its unused tail
+("Table Storage Lifecycles"). When checking finishes a module it does the same
+for the module's CIR node store, string literal bytes and side lists
+(`ModuleEnv.releaseUnusedCapacity`), so no finished module keeps growth room
+alive for the rest of the build.
 
 There is no second representation of any of this. No pass copies types,
 bodies, templates, names, plans or roots into another table after checking.

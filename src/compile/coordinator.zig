@@ -8521,6 +8521,7 @@ pub const Coordinator = struct {
                 checking_arena = arena;
                 checking_outcome = try check.CheckedReports.captureChecking(arena.allocator(), &typecheck_output.checker);
             }
+            try typecheck_output.checker.problems.releaseUnusedCapacity();
             const state = try result_alloc.create(messages.PendingEvaluationState);
             state.* = .{
                 .allocator = result_alloc,
