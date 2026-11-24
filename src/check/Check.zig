@@ -28514,12 +28514,13 @@ fn runTypeGen(self: *Self, root: TypeGenRequest, env: *Env) std.mem.Allocator.Er
         switch (step) {
             .request => |request| input = try self.beginTypeGen(&frames, request, env),
             .done => |result| {
-                switch (frames.items[frames.items.len - 1]) {
-                    .decl => |decl| try self.finishTypeDeclGeneration(decl.decl_idx),
+                const top = &frames.items[frames.items.len - 1];
+                switch (top.*) {
+                    .decl => |*decl| try self.finishTypeDeclGeneration(decl.decl_idx),
                     .anno, .owners => {},
                 }
-                self.finishTypeGenFrame(&frames.items[frames.items.len - 1]);
-                _ = frames.pop();
+                self.finishTypeGenFrame(top);
+                frames.shrinkRetainingCapacity(frames.items.len - 1);
                 if (frames.items.len == 0) return result;
                 input = result;
             },
@@ -28571,13 +28572,13 @@ fn beginTypeGen(self: *Self, frames: *std.ArrayList(TypeGenFrame), request: Type
             try frames.ensureUnusedCapacity(self.gpa, 1);
             // Put this anno in the "seen" map immediately, to support recursive references
             try self.markTypeAnnoSeen(anno.idx);
-            frames.appendAssumeCapacity(.{ .anno = .{
+            frames.addOneAssumeCapacity().* = .{ .anno = .{
                 .anno_idx = anno.idx,
                 .ctx = anno.ctx,
                 .polarity = anno.polarity,
                 .anno_var = anno_var,
                 .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(anno.idx)),
-            } });
+            } };
             return null;
         },
         .decl => |decl_idx| {
@@ -28627,13 +28628,13 @@ fn beginTypeGen(self: *Self, frames: *std.ArrayList(TypeGenFrame), request: Type
             const anno_scope = self.seen_annos.enterScope();
             const outer_type_decl_rigid_vars = self.type_decl_rigid_vars;
             self.type_decl_rigid_vars = .{};
-            frames.appendAssumeCapacity(.{ .decl = .{
+            frames.addOneAssumeCapacity().* = .{ .decl = .{
                 .decl_idx = decl_idx,
                 .mode = .{ .ensure = .{
                     .anno_scope = anno_scope,
                     .outer_type_decl_rigid_vars = outer_type_decl_rigid_vars,
                 } },
-            } });
+            } };
             return null;
         },
         .stmt_decl => |decl_idx| {
@@ -28642,11 +28643,11 @@ fn beginTypeGen(self: *Self, frames: *std.ArrayList(TypeGenFrame), request: Type
                 .decl = decl_idx,
                 .header_args = self.typeDeclHeaderArgs(decl_idx),
             });
-            frames.appendAssumeCapacity(.{ .decl = .{ .decl_idx = decl_idx, .mode = .direct } });
+            frames.addOneAssumeCapacity().* = .{ .decl = .{ .decl_idx = decl_idx, .mode = .direct } };
             return null;
         },
         .owners => |owners| {
-            try frames.append(self.gpa, .{ .owners = .{ .where_span = owners.where_span, .ctx = owners.ctx } });
+            (try frames.addOne(self.gpa)).* = .{ .owners = .{ .where_span = owners.where_span, .ctx = owners.ctx } };
             return null;
         },
     }
@@ -34683,7 +34684,7 @@ fn resumeBlockCheck(self: *Self, task: *ExprTask, slot: *?*BlockCheck, env: *Env
     switch (state.phase) {
         .start => {
             state.hoist_scope = try self.beginHoistLexicalScope();
-            state.statements = BlockStatementsCheck.init(&nested_expected.forStatement());
+            state.statements.init(&nested_expected.forStatement());
             state.phase = .statements;
         },
         .statements => {},
@@ -34760,8 +34761,8 @@ const BlockStatementsCheck = struct {
     offset: u32 = 0,
     current: ?StatementCheck = null,
 
-    fn init(expected: *const Expected) BlockStatementsCheck {
-        return .{ .expected = expected.* };
+    fn init(self: *BlockStatementsCheck, expected: *const Expected) void {
+        self.* = .{ .expected = expected.* };
     }
 };
 
@@ -40853,7 +40854,8 @@ fn refineCallArgsConflict(
     const receiver_count: usize = if (call.receiver != null) 1 else 0;
     const failed_param = call.failed_arg + receiver_count;
     const first_param: usize = for (0..failed_param) |earlier_param| {
-        var probing = self.beginInstantiatingProbe(.call_args_conflict, env);
+        var probing: InstantiatingProbe = undefined;
+        self.beginInstantiatingProbe(&probing, .call_args_conflict, env);
         const conflicts: ?bool = conflicts: {
             const copy = try self.instantiateVarOrphanFlexed(call.scheme_var, env, .{ .explicit = call.region });
             const func = self.funcThroughAliases(copy) orelse break :conflicts null;
@@ -42171,7 +42173,8 @@ fn relateOwnedTagToExpectedNominal(
     if (expectation.record_field != null) return false;
     const nominal = self.types.resolveThroughAliases(expectation.var_).desc.content.unwrapNominalType() orelse return false;
     if (!nominal.canLiftInner(self.cir.selfModuleIdentity())) return false;
-    var probing = self.beginInstantiatingProbe(.owned_tag_nominal, env);
+    var probing: InstantiatingProbe = undefined;
+    self.beginInstantiatingProbe(&probing, .owned_tag_nominal, env);
     const related = related: {
         const template = try self.selectedConstructorTemplate(nominal, constructor, region) orelse break :related false;
         const backing = (try self.openNominalBackingFromTemplate(nominal, template, env, region, .instantiation)) orelse break :related false;
@@ -43678,9 +43681,9 @@ const InstantiationMark = struct {
     }
 };
 
-/// Open an instantiation mark: the lengths `InstantiationMark.rollback`
-/// restores.
-fn markInstantiations(self: *Self, env: ?*Env) InstantiationMark {
+/// Open an instantiation mark in `mark`: the lengths
+/// `InstantiationMark.rollback` restores.
+fn markInstantiations(self: *Self, mark: *InstantiationMark, env: ?*Env) void {
     const regions_mark = self.var_regions.mark();
     const instantiation_dispatchers_len = self.instantiation_dispatchers.items.len;
     const pending_scheme_requirement_dispatchers_len = self.pending_scheme_requirement_dispatchers.items.len;
@@ -43715,7 +43718,7 @@ fn markInstantiations(self: *Self, env: ?*Env) InstantiationMark {
     const dispatch_relation_owner_log_len = self.dispatch_relation_owner_log.items.len;
     const imported_schemes_len = self.imported_schemes.items.len;
     self.probe_depth += 1;
-    return .{
+    mark.* = .{
         .check = self,
         .env = env,
         .probe_links_len = self.probe_links.items.len,
@@ -43975,11 +43978,11 @@ const InstantiatingProbe = struct {
     lists: InstantiationMark,
 };
 
-fn beginInstantiatingProbe(self: *Self, site: SpeculationSite, env: *Env) InstantiatingProbe {
-    const probe = self.beginProbe(site, env);
-    const lists = self.markInstantiations(env);
+/// Begin an instantiating probe in `probing`.
+fn beginInstantiatingProbe(self: *Self, probing: *InstantiatingProbe, site: SpeculationSite, env: *Env) void {
+    probing.probe = self.beginProbe(site, env);
+    self.markInstantiations(&probing.lists, env);
     self.commit_probe_active = true;
-    return .{ .probe = probe, .lists = lists };
 }
 
 /// Keep everything an instantiating probe wrote, finishing its relations
@@ -45781,7 +45784,8 @@ fn recordInspectOverrideInstances(self: *Self, env: *Env) std.mem.Allocator.Erro
 /// method cannot be used there. The returned use var is unified with that
 /// instance and names its dispatch-target scheme-use record.
 fn inspectOverrideStrInstance(self: *Self, def_idx: CIR.Def.Idx, owner: CIR.Statement.Idx, binding_var: Var, env: *Env) std.mem.Allocator.Error!?Var {
-    var probing = self.beginInstantiatingProbe(.inspect_override, env);
+    var probing: InstantiatingProbe = undefined;
+    self.beginInstantiatingProbe(&probing, .inspect_override, env);
     if (try self.probeInspectOverrideStrInstance(&probing.probe, def_idx, owner, binding_var, env)) |use_var| {
         try self.instantiatingProbeYes(&probing);
         return use_var;
@@ -56081,7 +56085,8 @@ test "issue 12873: private codec copies register nested owners and preserve shar
     try std.testing.expectEqual(null, checker.active_scheme_root);
 
     const speculative = try checker.fresh(&use_env, Region.zero());
-    var probe = checker.markInstantiations(&use_env);
+    var probe: InstantiationMark = undefined;
+    checker.markInstantiations(&probe, &use_env);
     try checker.recordDispatchRelationOwner(speculative);
     probe.rollback();
     try std.testing.expect(!checker.dispatch_relation_owners.contains(speculative));
@@ -57137,7 +57142,8 @@ fn constrainInterpolationPartToStr(self: *Self, part: InterpolationPartMetadata,
     const constraints_range = contentConstraintRange(resolved_expr.desc.content) orelse StaticDispatchConstraint.SafeList.Range.empty();
 
     const compatible = blk: {
-        var probing = self.beginInstantiatingProbe(.interpolation_part, env);
+        var probing: InstantiatingProbe = undefined;
+        self.beginInstantiatingProbe(&probing, .interpolation_part, env);
 
         // Keep successful writes when the probe is kept, but leave mismatch
         // reporting and recovery to this function after it is discarded.
@@ -61048,7 +61054,8 @@ test "issue 11444: complete imported schemes share a cache and roll back with th
     // Repeat after rollback to exercise reuse of the discarded type indices.
     for (0..2) |_| {
         var probe = checker.beginProbe(.discarded_var_update, null);
-        var transaction = checker.markInstantiations(null);
+        var transaction: InstantiationMark = undefined;
+        checker.markInstantiations(&transaction, null);
         const ordinary = (try checker.resolveVarFromExternal(import_idx, @backingInt(nodes[0]))).?;
         const copied_type_count = checker.types.len();
         const method = try checker.importedSchemeFromSource(source.module_env, nodes[0]);
@@ -61082,12 +61089,14 @@ test "issue 11444: complete imported schemes share a cache and roll back with th
 
     // A committed import survives, including across later rolled-back hits.
     var kept = checker.beginProbe(.discarded_var_update, null);
-    var committed = checker.markInstantiations(null);
+    var committed: InstantiationMark = undefined;
+    checker.markInstantiations(&committed, null);
     const retained = try checker.importedSchemeFromSource(source.module_env, nodes[0]);
     try committed.commit();
     try checker.probeYes(&kept);
     var probe = checker.beginProbe(.discarded_var_update, null);
-    var lists = checker.markInstantiations(null);
+    var lists: InstantiationMark = undefined;
+    checker.markInstantiations(&lists, null);
     try std.testing.expectEqual(retained, (try checker.resolveVarFromExternal(import_idx, @backingInt(nodes[0]))).?.local_var);
     lists.rollback();
     checker.probeDiscard(&probe);
@@ -61467,7 +61476,8 @@ test "in-probe ambiguity escalation is journaled: rollback resets, commit keeps"
     // Escalation inside a probe that rolls back: the flip is reset and the
     // journal is drained.
     {
-        var probe = checker.markInstantiations(null);
+        var probe: InstantiationMark = undefined;
+        checker.markInstantiations(&probe, null);
         try checker.recordAmbiguityCandidate(receiver, .creation, null, .value);
         try std.testing.expect(checker.ambiguity_candidates.items[candidate_idx].requires_current_resolution);
         probe.rollback();
@@ -61478,7 +61488,8 @@ test "in-probe ambiguity escalation is journaled: rollback resets, commit keeps"
     // Escalation inside a probe that commits: the flip is permanent and the
     // journal entry drops with the scope.
     {
-        var probe = checker.markInstantiations(null);
+        var probe: InstantiationMark = undefined;
+        checker.markInstantiations(&probe, null);
         try checker.recordAmbiguityCandidate(receiver, .creation, null, .value);
         try probe.commit();
     }
@@ -61501,7 +61512,8 @@ test "in-probe row-tail observation is journaled: rollback resets, commit keeps"
     try std.testing.expectEqual(.value, checker.ambiguity_candidates.items[candidate_idx].position);
 
     {
-        var probe = checker.markInstantiations(null);
+        var probe: InstantiationMark = undefined;
+        checker.markInstantiations(&probe, null);
         try checker.recordAmbiguityCandidate(receiver, .creation, null, .row_tail);
         try std.testing.expectEqual(.row_tail, checker.ambiguity_candidates.items[candidate_idx].position);
         probe.rollback();
@@ -61510,7 +61522,8 @@ test "in-probe row-tail observation is journaled: rollback resets, commit keeps"
     try std.testing.expectEqual(@as(usize, 0), checker.ambiguity_candidate_journal.items.len);
 
     {
-        var probe = checker.markInstantiations(null);
+        var probe: InstantiationMark = undefined;
+        checker.markInstantiations(&probe, null);
         try checker.recordAmbiguityCandidate(receiver, .creation, null, .row_tail);
         try probe.commit();
     }
@@ -66252,7 +66265,9 @@ fn checkFlexVarConstraintCompatibility(
                 break :accepted false;
             }
 
-            var probing = self.beginInstantiatingProbe(.flex_constraint, env);
+            var probing: InstantiatingProbe = undefined;
+
+            self.beginInstantiatingProbe(&probing, .flex_constraint, env);
 
             const method_var = try self.instantiateVar(imported_scheme, env, .{ .explicit = region }, .{ .dispatch_target = .{
                 .node_idx = if (constraintIntroExpr(constraint)) |expr| @backingInt(expr) else 0,
