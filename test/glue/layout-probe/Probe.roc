@@ -21,6 +21,10 @@ Probe := [].{
 	}
 
 	VectorWrapper := { only : U8x16 }
+
+	# The zero-sized field is no member of the struct a host declares, so this
+	# passes exactly as a struct of one F64 does.
+	ZeroSizedWrapper := { empty : {}, only : F64 }
 	TransparentVector := [VectorOnly(U8x16)]
 	NestedVectorHva := { wrapped : TransparentVector, raw : U8x16 }
 	TransparentFloat := [FloatOnly(F64)]
@@ -72,6 +76,7 @@ Probe := [].{
 	roundtrip_vector_quad! : VectorQuad => VectorQuad
 	roundtrip_vector_hva! : VectorHva => VectorHva
 	roundtrip_vector_wrapper! : VectorWrapper => VectorWrapper
+	roundtrip_zero_sized_wrapper! : [Marker], ZeroSizedWrapper => ZeroSizedWrapper
 	roundtrip_vector_tuple! : (U64, U8x16, I16x8) => (U64, U8x16, I16x8)
 	roundtrip_vector_tag! : VectorTag => VectorTag
 	exhaust_registers! : I64, I64, I64, I64, I64, I64, F64, F64, F64, F64, F64, F64, F64, F64, U8x16 => U8x16
