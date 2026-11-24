@@ -240,29 +240,29 @@ field_names_c = |fields| {
 tag_names_c : TagUnionRepr -> List(Str)
 tag_names_c = |tu| List.map(tu.tags, |tag| tag.name)
 
-## The member name of the field or tag `name` among `sibling_names`. Every
+## The member names of the fields or tags named `member_names`. Every
 ## identifier `name_to_c_field_ident` gives is lowercase, so a ranked one is no
 ## other member's own.
-field_ident_among_c : List(Str), Str -> Str
-field_ident_among_c = |sibling_names, name|
-	TypeNamePlan.member_ident(sibling_names, name, name_to_c_field_ident, "_Member")
+field_idents_c : List(Str) -> TypeNamePlan.MemberIdents
+field_idents_c = |member_names|
+	TypeNamePlan.member_idents(member_names, name_to_c_field_ident, "_Member")
 
-## The part of a tag's constant and payload struct names that comes from the
-## tag. No name `name_to_struct_name` gives holds an underscore, so a ranked
-## one is no other tag's own.
-tag_constant_among_c : List(Str), Str -> Str
-tag_constant_among_c = |tag_names, name|
-	TypeNamePlan.member_ident(tag_names, name, name_to_struct_name, "_")
+## For each tag, the part of its constant and payload struct names that comes
+## from the tag. No name `name_to_struct_name` gives holds an underscore, so a
+## ranked one is no other tag's own.
+tag_constants_c : List(Str) -> TypeNamePlan.MemberIdents
+tag_constants_c = |tag_names|
+	TypeNamePlan.member_idents(tag_names, name_to_struct_name, "_")
 
-c_record_field_decl : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, List(Str), AbiFieldLayout, AbiWidth, Bool -> Str
-c_record_field_decl = |type_table, duplicate_record_names, duplicate_tag_names, preferred_names, sibling_names, field, width, wrap_vector_members| {
+c_record_field_decl : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, Str, AbiFieldLayout, AbiWidth, Bool -> Str
+c_record_field_decl = |type_table, duplicate_record_names, duplicate_tag_names, preferred_names, member_name, field, width, wrap_vector_members| {
 	if field.is_padding {
 		field_name = name_to_c_field_ident(field.name)
 
 		# Padding fields are nonzero at both widths (asserted by the compiler).
 		"    uint8_t ${field_name}[${U64.to_str(AbiFieldLayout.size(field, width))}];\n"
 	} else {
-		field_name = field_ident_among_c(sibling_names, field.name)
+		field_name = member_name
 		c_type = type_id_to_c(type_table, duplicate_record_names, duplicate_tag_names, preferred_names, field.type_id)
 		if wrap_vector_members {
 			"    union { ${c_type} value; uint8_t bytes[${U64.to_str(AbiFieldLayout.size(field, width))}]; } ${field_name};\n"
@@ -274,14 +274,23 @@ c_record_field_decl = |type_table, duplicate_record_names, duplicate_tag_names, 
 
 ## Fields arrive in committed layout order (valid at both pointer widths);
 ## only per-width padding byte counts differ between the two renderings.
-c_record_fields_decl : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, List(AbiFieldLayout), AbiWidth, Bool -> Str
-c_record_fields_decl = |type_table, duplicate_record_names, duplicate_tag_names, preferred_names, fields, width, wrap_vector_members| {
-	sibling_names = field_names_c(fields)
+c_record_fields_decl : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, TypeNamePlan.MemberIdents, List(AbiFieldLayout), AbiWidth, Bool -> Str
+c_record_fields_decl = |type_table, duplicate_record_names, duplicate_tag_names, preferred_names, field_idents, fields, width, wrap_vector_members| {
 	var $field_strs = ""
+	var $member_index = 0
 	for field in fields {
+		member_name = if field.is_padding {
+			""
+		} else {
+			field_idents.at($member_index)
+		}
+		if !field.is_padding {
+			$member_index = $member_index + 1
+		}
+
 		# A zero-sized field occupies no storage, and C has no zero-sized member.
 		if !field.is_zero_sized() {
-			$field_strs = Str.concat($field_strs, c_record_field_decl(type_table, duplicate_record_names, duplicate_tag_names, preferred_names, sibling_names, field, width, wrap_vector_members))
+			$field_strs = Str.concat($field_strs, c_record_field_decl(type_table, duplicate_record_names, duplicate_tag_names, preferred_names, member_name, field, width, wrap_vector_members))
 		}
 	}
 	$field_strs
@@ -620,11 +629,13 @@ type_names_declared_as_union_c = |type_table, type_id, tu, struct_name|
 		}
 		var $tag_idx = 0
 		tag_names = tag_names_c(tu)
+		tag_constants = tag_constants_c(tag_names)
+		tag_fields = field_idents_c(tag_names)
 		for tag in tu.tags {
-			constant_name = tag_constant_among_c(tag_names, tag.name)
+			constant_name = tag_constants.at($tag_idx)
 			$names = $names.append("${struct_name}Tag_${constant_name}")
 			if has_payload {
-				field_name = field_ident_among_c(tag_names, tag.name)
+				field_name = tag_fields.at($tag_idx)
 				$names = $names.append("${struct_name}_make_${field_name}")
 				if abi_tag_has_payload_c(abi_tag_at_c(abi_tags, $tag_idx)) {
 					$names = $names.append("${struct_name}_payload_${field_name}")
@@ -1208,14 +1219,15 @@ c_payload_layout_assertions = |type_name, tag_layout, width| {
 		Pointer64 => tag_layout.payload_alignment64
 	}
 	fields = tag_layout.payload_fields
-	Str.concat(static_asserts(type_name, size, alignment), c_record_offset_assertions(type_name, fields, width))
+	Str.concat(static_asserts(type_name, size, alignment), c_record_offset_assertions(type_name, field_idents_c(field_names_c(fields)), fields, width))
 }
 
 generate_payload_type_decl_c : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, Str, AbiTagLayout -> Str
 generate_payload_type_decl_c = |type_table, duplicate_records, duplicate_tags, preferred_names, type_name, tag_layout| {
 	wrap_vector_members = c_needs_vector_union_spelling(type_table, tag_layout.payload_fields)
-	fields64 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, tag_layout.payload_fields, Pointer64, wrap_vector_members)
-	fields32 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, tag_layout.payload_fields, Pointer32, wrap_vector_members)
+	field_idents = field_idents_c(field_names_c(tag_layout.payload_fields))
+	fields64 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, field_idents, tag_layout.payload_fields, Pointer64, wrap_vector_members)
+	fields32 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, field_idents, tag_layout.payload_fields, Pointer32, wrap_vector_members)
 	assertions64 = c_payload_layout_assertions(type_name, tag_layout, Pointer64)
 	assertions32 = c_payload_layout_assertions(type_name, tag_layout, Pointer32)
 	comment = if wrap_vector_members {
@@ -1245,6 +1257,8 @@ c_tag_union_layout_assertions = |type_name, abi_layout, width| {
 generate_tag_union_type_decl : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, U64, TagUnionRepr, AbiLayout -> Str
 generate_tag_union_type_decl = |type_table, duplicate_records, duplicate_tags, preferred_names, type_id, tu, abi_layout| {
 	tag_names = tag_names_c(tu)
+	tag_constants = tag_constants_c(tag_names)
+	tag_fields = field_idents_c(tag_names)
 	struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_tags, type_id, tu)
 	disc_type = c_discriminant_type(abi_layout.discriminant_size())
 	abi_tags = abi_tag_layouts_c(abi_layout)
@@ -1252,13 +1266,13 @@ generate_tag_union_type_decl = |type_table, duplicate_records, duplicate_tags, p
 
 	var $tag_constants = ""
 	var $tag_index = 0
-	for tag in tu.tags {
+	for _tag in tu.tags {
 		separator = if $tag_index == 0 {
 			""
 		} else {
 			","
 		}
-		constant_name = tag_constant_among_c(tag_names, tag.name)
+		constant_name = tag_constants.at($tag_index)
 		$tag_constants = Str.concat($tag_constants, "${separator}\n    ${struct_name}Tag_${constant_name} = ${U64.to_str($tag_index)}")
 		$tag_index = $tag_index + 1
 	}
@@ -1278,8 +1292,8 @@ generate_tag_union_type_decl = |type_table, duplicate_records, duplicate_tags, p
 		var $variant_index = 0
 		for tag in tu.tags {
 			tag_layout = abi_tag_at_c(abi_tags, $variant_index)
-			field_name = field_ident_among_c(tag_names, tag.name)
-			constant_name = tag_constant_among_c(tag_names, tag.name)
+			field_name = tag_fields.at($variant_index)
+			constant_name = tag_constants.at($variant_index)
 			has_payload = abi_tag_has_payload_c(tag_layout)
 			if !has_payload {
 				$union_fields = Str.concat($union_fields, "    uint8_t ${field_name};\n")
@@ -1351,13 +1365,22 @@ generate_tag_union_type_decl = |type_table, duplicate_records, duplicate_tags, p
 abi_record_fields_c : AbiLayout -> List(AbiFieldLayout)
 abi_record_fields_c = |abi_layout| abi_layout.record_fields()
 
-c_record_offset_assertions : Str, List(AbiFieldLayout), AbiWidth -> Str
-c_record_offset_assertions = |type_name, fields, width| {
-	sibling_names = field_names_c(fields)
+c_record_offset_assertions : Str, TypeNamePlan.MemberIdents, List(AbiFieldLayout), AbiWidth -> Str
+c_record_offset_assertions = |type_name, field_idents, fields, width| {
 	var $assertions = ""
+	var $member_index = 0
 	for field in fields {
+		member_name = if field.is_padding {
+			""
+		} else {
+			field_idents.at($member_index)
+		}
+		if !field.is_padding {
+			$member_index = $member_index + 1
+		}
+
 		if !field.is_padding and !field.is_zero_sized() {
-			field_name = field_ident_among_c(sibling_names, field.name)
+			field_name = member_name
 			offset = AbiFieldLayout.offset(field, width)
 			$assertions = Str.concat($assertions, "ROC_STATIC_ASSERT(offsetof(${type_name}, ${field_name}) == ${U64.to_str(offset)}, \"${type_name}.${field_name} offset mismatch\");\n")
 		}
@@ -1380,10 +1403,11 @@ generate_record_type_decl = |type_table, duplicate_records, duplicate_tags, pref
 generate_struct_type_decl : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, Str, List(AbiFieldLayout), AbiLayout -> Str
 generate_struct_type_decl = |type_table, duplicate_records, duplicate_tags, preferred_names, type_name, fields, abi_layout| {
 	wrap_vector_members = c_needs_vector_union_spelling(type_table, fields)
-	fields64 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, fields, Pointer64, wrap_vector_members)
-	fields32 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, fields, Pointer32, wrap_vector_members)
-	assertions64 = Str.concat(static_asserts(type_name, abi_layout.size64, abi_layout.alignment64), c_record_offset_assertions(type_name, fields, Pointer64))
-	assertions32 = Str.concat(static_asserts(type_name, abi_layout.size32, abi_layout.alignment32), c_record_offset_assertions(type_name, fields, Pointer32))
+	field_idents = field_idents_c(field_names_c(fields))
+	fields64 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, field_idents, fields, Pointer64, wrap_vector_members)
+	fields32 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, field_idents, fields, Pointer32, wrap_vector_members)
+	assertions64 = Str.concat(static_asserts(type_name, abi_layout.size64, abi_layout.alignment64), c_record_offset_assertions(type_name, field_idents, fields, Pointer64))
+	assertions32 = Str.concat(static_asserts(type_name, abi_layout.size32, abi_layout.alignment32), c_record_offset_assertions(type_name, field_idents, fields, Pointer32))
 	comment = if wrap_vector_members {
 		"${c_vector_union_comment}\n"
 	} else {
@@ -1447,14 +1471,14 @@ static_asserts = |type_name, size, alignment|
 		""
 	}
 
-add_type_alias_c : { content : Str, seen : Set(Str) }, Str, Str -> { content : Str, seen : Set(Str) }
+add_type_alias_c : { content : Str, seen : List(Str) }, Str, Str -> { content : Str, seen : List(Str) }
 add_type_alias_c = |state, alias, target| {
-	if alias == target or state.seen.contains(alias) {
+	if alias == target or List.contains(state.seen, alias) {
 		state
 	} else {
 		{
 			content: Str.concat(state.content, "typedef ${target} ${alias};\n"),
-			seen: state.seen.insert(alias),
+			seen: state.seen.append(alias),
 		}
 	}
 }
@@ -1494,8 +1518,9 @@ generate_args_struct = |func, type_table, duplicate_records, duplicate_tags, pre
 		NoMeaningfulArgs => ""
 		SingleRecordArg(record) => {
 			wrap_vector_members = c_needs_vector_union_spelling(type_table, record.fields)
-			fields64 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, record.fields, Pointer64, wrap_vector_members)
-			fields32 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, record.fields, Pointer32, wrap_vector_members)
+			field_idents = field_idents_c(field_names_c(record.fields))
+			fields64 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, field_idents, record.fields, Pointer64, wrap_vector_members)
+			fields32 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, field_idents, record.fields, Pointer32, wrap_vector_members)
 
 			doc = doc_comment([
 				"Arguments for ${func.name}",

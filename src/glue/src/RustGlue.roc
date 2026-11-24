@@ -77,51 +77,60 @@ field_names_rust = |fields| {
 	$names
 }
 
-## The member name of the field or tag `name` among `sibling_names`. Every
-## identifier `name_to_rust_field_ident` gives is lowercase, so a ranked one is
-## no other member's own.
-field_ident_among_rust : List(Str), Str -> Str
-field_ident_among_rust = |sibling_names, name|
-	TypeNamePlan.member_ident(sibling_names, name, name_to_rust_field_ident, "_Member")
+## The member names of the fields named `field_names`. Every identifier
+## `name_to_rust_field_ident` gives is lowercase, so a ranked one is no other
+## field's own.
+field_idents_rust : List(Str) -> TypeNamePlan.MemberIdents
+field_idents_rust = |field_names|
+	TypeNamePlan.member_idents(field_names, name_to_rust_field_ident, "_Member")
 
 ## The lint level a declaration needs when two of its members share a
 ## spelling: a ranked member name holds an uppercase letter, which is what
 ## keeps it from being another member's own spelling.
-member_lint_rust : List(Str), (Str -> Str) -> Str
-member_lint_rust = |sibling_names, to_ident|
-	if List.any(sibling_names, |name| TypeNamePlan.member_ident(sibling_names, name, to_ident, "_Member") != to_ident(name)) {
+member_lint_rust : TypeNamePlan.MemberIdents -> Str
+member_lint_rust = |member_idents|
+	if member_idents.any_ranked() {
 		"#[allow(non_snake_case)]\n"
 	} else {
 		""
 	}
 
-## The lowercase name a tag's payload union member and payload accessors are
-## named from, among the tags of its union. Every name `to_lower_snake_case`
-## gives is lowercase, so a ranked one is no other tag's own.
-tag_snake_among_rust : List(Str), Str -> Str
-tag_snake_among_rust = |tag_names, name|
-	TypeNamePlan.member_ident(tag_names, name, to_lower_snake_case, "_Member")
+## For each tag of a union, the lowercase name its payload union member and
+## payload accessors are named from. Every name `to_lower_snake_case` gives is
+## lowercase, so a ranked one is no other tag's own.
+tag_snakes_rust : TagUnionRepr -> TypeNamePlan.MemberIdents
+tag_snakes_rust = |tu|
+	TypeNamePlan.member_idents(List.map(tu.tags, |tag| tag.name), to_lower_snake_case, "_Member")
 
-rust_record_field_decl : TypeTable, List(Str), TypeNamePlan.PreferredNames, List(Str), AbiFieldLayout, AbiWidth -> Str
-rust_record_field_decl = |type_table, duplicate_names, preferred_names, sibling_names, field, width| {
+rust_record_field_decl : TypeTable, List(Str), TypeNamePlan.PreferredNames, Str, AbiFieldLayout, AbiWidth -> Str
+rust_record_field_decl = |type_table, duplicate_names, preferred_names, member_name, field, width| {
 	if field.is_padding {
 		"    pub ${name_to_rust_field_ident(field.name)}: [u8; ${U64.to_str(AbiFieldLayout.size(field, width))}],\n"
 	} else {
 		rust_type = type_id_to_rust(type_table, duplicate_names, preferred_names, field.type_id)
-		"    pub ${field_ident_among_rust(sibling_names, field.name)}: ${rust_type},\n"
+		"    pub ${member_name}: ${rust_type},\n"
 	}
 }
 
 ## Fields arrive in committed layout order (valid at both pointer widths);
 ## only per-width padding byte counts differ between the two renderings.
-rust_record_fields_decl : TypeTable, List(Str), TypeNamePlan.PreferredNames, List(AbiFieldLayout), AbiWidth -> Str
-rust_record_fields_decl = |type_table, duplicate_names, preferred_names, fields, width| {
-	sibling_names = field_names_rust(fields)
+rust_record_fields_decl : TypeTable, List(Str), TypeNamePlan.PreferredNames, TypeNamePlan.MemberIdents, List(AbiFieldLayout), AbiWidth -> Str
+rust_record_fields_decl = |type_table, duplicate_names, preferred_names, field_idents, fields, width| {
 	var $field_strs = ""
+	var $member_index = 0
 	for field in fields {
+		member_name = if field.is_padding {
+			""
+		} else {
+			field_idents.at($member_index)
+		}
+		if !field.is_padding {
+			$member_index = $member_index + 1
+		}
+
 		# A zero-sized field occupies no storage and is not a struct member.
 		if !field.is_zero_sized() {
-			$field_strs = Str.concat($field_strs, rust_record_field_decl(type_table, duplicate_names, preferred_names, sibling_names, field, width))
+			$field_strs = Str.concat($field_strs, rust_record_field_decl(type_table, duplicate_names, preferred_names, member_name, field, width))
 		}
 	}
 	$field_strs
@@ -598,7 +607,7 @@ undeclarable_symbol_rust = |symbols| {
 
 	for symbol in symbols {
 		is_helper = Str.starts_with(symbol, "decref_box_payload_type") or Str.starts_with(symbol, "decref_list_of_")
-		is_owned_wrapper = List.any(symbols, |other| symbol == "${other}_owned")
+		is_owned_wrapper = Str.ends_with(symbol, "_owned") and List.contains(symbols, Str.drop_suffix(symbol, "_owned"))
 		if is_helper or is_owned_wrapper {
 			return Err(TypeNamePlan.symbol_error(symbol))
 		}
@@ -985,23 +994,23 @@ preferred_type_names_rust = |hosted_functions, provides_list, type_table, duplic
 ## `Try` because different hosted functions can use different payload layouts.
 ## These aliases give platform authors stable API names for secondary names that
 ## share a concrete layout.
-add_type_alias_rust : { content : Str, seen : Set(Str) }, Str, Str -> { content : Str, seen : Set(Str) }
+add_type_alias_rust : { content : Str, seen : List(Str) }, Str, Str -> { content : Str, seen : List(Str) }
 add_type_alias_rust = |state, alias, target| {
-	if alias == target or state.seen.contains(alias) {
+	if alias == target or List.contains(state.seen, alias) {
 		state
 	} else {
 		{
 			content: Str.concat(state.content, "pub type ${alias} = ${target};\n"),
-			seen: state.seen.insert(alias),
+			seen: state.seen.append(alias),
 		}
 	}
 }
 
-add_tag_union_aliases_rust : { content : Str, seen : Set(Str) }, Str, Str, AbiLayout -> { content : Str, seen : Set(Str) }
+add_tag_union_aliases_rust : { content : Str, seen : List(Str) }, Str, Str, AbiLayout -> { content : Str, seen : List(Str) }
 add_tag_union_aliases_rust = |state, alias, target, abi_layout| {
 	# The helper aliases are named after the union's alias, so they are its
 	# helpers only when that alias names the union.
-	if alias != target and state.seen.contains(alias) {
+	if alias != target and List.contains(state.seen, alias) {
 		return state
 	}
 
@@ -1256,9 +1265,10 @@ rust_payload_layout_assertions = |type_name, tag_layout| {
 
 generate_record_struct_decl_rust : Str, Str, TypeTable, List(Str), TypeNamePlan.PreferredNames, List(AbiFieldLayout), Bool, AbiLayout -> Str
 generate_record_struct_decl_rust = |plain_doc, struct_name, type_table, duplicate_names, preferred_names, fields, _anonymous, abi_layout| {
-	doc = Str.concat(plain_doc, member_lint_rust(field_names_rust(fields), name_to_rust_field_ident))
-	field_strs64 = rust_record_fields_decl(type_table, duplicate_names, preferred_names, fields, Pointer64)
-	field_strs32 = rust_record_fields_decl(type_table, duplicate_names, preferred_names, fields, Pointer32)
+	field_idents = field_idents_rust(field_names_rust(fields))
+	doc = Str.concat(plain_doc, member_lint_rust(field_idents))
+	field_strs64 = rust_record_fields_decl(type_table, duplicate_names, preferred_names, field_idents, fields, Pointer64)
+	field_strs32 = rust_record_fields_decl(type_table, duplicate_names, preferred_names, field_idents, fields, Pointer32)
 	assertions = rust_layout_assertions(struct_name, abi_layout)
 
 	struct_decl =
@@ -1279,8 +1289,9 @@ generate_record_struct_decl_rust = |plain_doc, struct_name, type_table, duplicat
 
 generate_payload_struct_decl_rust : Str, Str, TypeTable, List(Str), TypeNamePlan.PreferredNames, List(AbiFieldLayout), AbiTagLayout -> Str
 generate_payload_struct_decl_rust = |doc, struct_name, type_table, duplicate_names, preferred_names, fields, tag_layout| {
-	field_strs64 = rust_record_fields_decl(type_table, duplicate_names, preferred_names, fields, Pointer64)
-	field_strs32 = rust_record_fields_decl(type_table, duplicate_names, preferred_names, fields, Pointer32)
+	field_idents = field_idents_rust(field_names_rust(fields))
+	field_strs64 = rust_record_fields_decl(type_table, duplicate_names, preferred_names, field_idents, fields, Pointer64)
+	field_strs32 = rust_record_fields_decl(type_table, duplicate_names, preferred_names, field_idents, fields, Pointer32)
 	assertions = rust_payload_layout_assertions(struct_name, tag_layout)
 
 	struct_decl =
@@ -2684,7 +2695,8 @@ generate_tag_union_structs_rust = |type_table, duplicate_names, preferred_names|
 generate_single_tag_union_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, TagUnionRepr, AbiLayout -> Str
 generate_single_tag_union_rust = |type_table, duplicate_names, preferred_names, type_id, tu, abi_layout| {
 	tag_names = List.map(tu.tags, |tag| tag.name)
-	member_lint = member_lint_rust(tag_names, to_lower_snake_case)
+	tag_snakes = tag_snakes_rust(tu)
+	member_lint = member_lint_rust(tag_snakes)
 	# A variant is spelled as Roc spells its tag, and Roc accepts an underscore
 	# in a tag where Rust's naming lint does not.
 	variant_lint = if List.any(tag_names, |name| Str.contains(name, "_")) {
@@ -2738,7 +2750,7 @@ generate_single_tag_union_rust = |type_table, duplicate_names, preferred_names, 
 		var $union_tag_idx = 0
 		for union_tag in tu.tags {
 			tag_layout = abi_tag_at(abi_tags, $union_tag_idx)
-			snake = tag_snake_among_rust(tag_names, union_tag.name)
+			snake = tag_snakes.at($union_tag_idx)
 			if !(abi_tag_has_payload(tag_layout)) {
 				# No-payload variant: use [u8; 0]
 				$union_fields = Str.concat($union_fields, "    pub ${snake}: [u8; 0],\n")
@@ -3128,13 +3140,16 @@ generate_record_refcount_helpers_rust = |type_table, duplicate_names, preferred_
 			$sibling_names = $sibling_names.append(field.name)
 		}
 	}
+	field_idents = field_idents_rust($sibling_names)
 
 	var $fields = []
+	var $member_index = 0
 	for field in rec.fields {
 		# Padding fields are raw bytes with no Roc type, so they are never
 		# refcounted and contribute no incref/decref statements.
 		if !field.is_padding {
-			$fields = $fields.append({ ident: field_ident_among_rust($sibling_names, field.name), type_id: field.type_id })
+			$fields = $fields.append({ ident: field_idents.at($member_index), type_id: field.type_id })
+			$member_index = $member_index + 1
 		}
 	}
 
@@ -3145,11 +3160,13 @@ generate_record_refcount_helpers_rust = |type_table, duplicate_names, preferred_
 ## which is how a hosted function's argument record is described.
 generate_abi_refcount_helpers_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, Str, List(AbiFieldLayout) -> Str
 generate_abi_refcount_helpers_rust = |type_table, duplicate_names, preferred_names, struct_name, abi_fields| {
-	sibling_names = field_names_rust(abi_fields)
+	field_idents = field_idents_rust(field_names_rust(abi_fields))
 	var $fields = []
+	var $member_index = 0
 	for field in abi_fields {
 		if !field.is_padding {
-			$fields = $fields.append({ ident: field_ident_among_rust(sibling_names, field.name), type_id: field.type_id })
+			$fields = $fields.append({ ident: field_idents.at($member_index), type_id: field.type_id })
+			$member_index = $member_index + 1
 		}
 	}
 
@@ -3190,9 +3207,8 @@ generate_refcount_impl_rust = |type_table, duplicate_names, preferred_names, str
 	}
 }
 
-generate_tag_payload_refcount_branch_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, Str, List(Str), TagVariant, AbiTagLayout, Str -> Str
-generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, preferred_names, struct_name, tag_names, tag, abi_tag, mode| {
-	snake = tag_snake_among_rust(tag_names, tag.name)
+generate_tag_payload_refcount_branch_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, Str, Str, TagVariant, AbiTagLayout, Str -> Str
+generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, preferred_names, struct_name, snake, tag, abi_tag, mode| {
 	variant = capitalize_first(tag.name)
 	if !abi_tag_has_payload(abi_tag) {
 		return "        ${struct_name}Tag::${variant} => {},\n"
@@ -3253,7 +3269,7 @@ generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, prefer
 
 generate_tag_union_refcount_helpers_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, TagUnionRepr -> Str
 generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, preferred_names, type_id, tu| {
-	tag_names = List.map(tu.tags, |tag| tag.name)
+	tag_snakes = tag_snakes_rust(tu)
 	struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)
 	if !(type_table.layout(type_id)).tag_union_has_payload() {
 		return "impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted payload.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n        let _ = self;\n        let _ = roc_host;\n    }\n\n    /// Increment Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let _ = self;\n        let _ = amount;\n    }\n}\n\npub struct ${struct_name}Release;\n\nunsafe impl RocRelease<${struct_name}> for ${struct_name}Release {\n    unsafe fn release(value: ${struct_name}, roc_host: &RocHost) {\n        unsafe { value.decref(roc_host); }\n    }\n}\n\n"
@@ -3267,9 +3283,9 @@ generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, preferr
 	var $tag_index = 0
 	for tag in tu.tags {
 		abi_tag = abi_tag_at(abi_tags, $tag_index)
-		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag_names, tag, abi_tag, "incref"))
+		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag_snakes.at($tag_index), tag, abi_tag, "incref"))
 		if !roc_released {
-			$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag_names, tag, abi_tag, "decref"))
+			$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag_snakes.at($tag_index), tag, abi_tag, "decref"))
 		}
 		if !roc_released and abi_tag_has_payload(abi_tag) {
 			$decref_moves_payload = $decref_moves_payload or List.any(

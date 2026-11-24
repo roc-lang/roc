@@ -46,12 +46,12 @@ TypeNamePlan := { table : TypeTable }.{
 
 	PreferredName := { name : Str, type_id : U64 }
 
-	PreferredNames := { entries : List(PreferredName), declared : Set(Str) }.{
+	PreferredNames := { entries : List(PreferredName), declared : List(Str) }.{
 
 		## Every top-level type name the generated file declares apart from
 		## its aliases: the reserved names, each host type's declared names,
 		## and the names each preferred name claims.
-		declared_names : PreferredNames -> Set(Str)
+		declared_names : PreferredNames -> List(Str)
 		declared_names = |names| names.declared
 
 		lookup : PreferredNames, U64 -> { found : Bool, name : Str }
@@ -98,10 +98,8 @@ TypeNamePlan := { table : TypeTable }.{
 	## name, and `fixed_names` are names it declares that host code depends on.
 	undeclarable_symbol : List(Str), List(Str) -> Try({}, Str)
 	undeclarable_symbol = |symbols, fixed_names| {
-		fixed = Set.from_list(fixed_names)
-
 		for symbol in symbols {
-			if fixed.contains(symbol) {
+			if List.contains(fixed_names, symbol) {
 				return Err(symbol_error(symbol))
 			}
 		}
@@ -125,85 +123,136 @@ TypeNamePlan := { table : TypeTable }.{
 			""
 		}
 
-	## The identifier of the member `name` of a record or a tag union whose
-	## named members are `sibling_names`. A declaration's members have a
-	## namespace of their own, and `to_ident` can give two of them one
-	## identifier (`fooBar` and `foo_bar`, or a keyword's escaped spelling and
-	## a member spelled that way). An identifier two members share denotes
-	## neither, so each takes it followed by `marker` and its rank among the
-	## members that share it, ordered by Roc name, and by `marker` again for as
-	## long as that is another member's identifier.
+	## The identifiers of the members of one record or tag union, in the order
+	## the members were given. A declaration's members have a namespace of
+	## their own, and `to_ident` can give two of them one identifier (`fooBar`
+	## and `foo_bar`, or a keyword's escaped spelling and a member spelled that
+	## way). An identifier two members share denotes neither, so each takes it
+	## followed by `marker` and its rank among the members that share it,
+	## ordered by Roc name, and by `marker` again for as long as that is
+	## another member's identifier.
 	##
-	## The result depends on the Roc names alone, so every place that names a
-	## member agrees on it whatever order it lists the members in. `marker` is
-	## not empty.
-	member_ident : List(Str), Str, (Str -> Str), Str -> Str
-	member_ident = |sibling_names, name, to_ident, marker| {
-		member_names = if List.contains(sibling_names, name) {
-			sibling_names
-		} else {
-			sibling_names.append(name)
-		}
-		idents = List.map(member_names, to_ident)
-		ident = to_ident(name)
-		if List.count_if(idents, |other| other == ident) < 2 {
-			return ident
+	## A member's identifier depends on the Roc names alone, so every place
+	## that names a member agrees on it whatever order it lists the members
+	## in. `marker` is not empty.
+	MemberIdents := { idents : List(Str), ranked : Bool }.{
+
+		## The identifier of the member at `index` of the names given.
+		at : MemberIdents, U64 -> Str
+		at = |members, index|
+			match List.get(members.idents, index) {
+				Ok(ident) => ident
+				Err(_) => {
+					crash "glue invariant violated: a declaration has no member ${U64.to_str(index)}"
+				}
+			}
+
+		## True when two members shared an identifier, so that some member's
+		## identifier holds `marker`.
+		any_ranked : MemberIdents -> Bool
+		any_ranked = |members| members.ranked
+	}
+
+	member_idents : List(Str), (Str -> Str), Str -> MemberIdents
+	member_idents = |member_names, to_ident, marker| {
+		var $members = []
+		var $idents = []
+		for name in member_names {
+			ident = to_ident(name)
+			$idents = $idents.append(ident)
+			$members = $members.append({ name, ident, ident_bytes: Str.to_utf8(ident) })
 		}
 
-		sharing_names = List.sort_with(
-			List.keep_if(member_names, |member| List.count_if(idents, |other| other == to_ident(member)) > 1),
-			|left, right| if (sorts_before(left, right)) Before else if (sorts_before(right, left)) After else Same,
-		)
-		var $taken = Set.from_list(idents)
-		var $settled = ident
+		# Sorted by identifier, the members that share one are neighbors.
+		var $sharing = []
+		var $previous = { name: "", ident: "", ident_bytes: [] }
+		var $previous_shares = Bool.False
+		var $first = Bool.True
+		for member in List.sort_with($members, |left, right| compare_bytes(left.ident_bytes, right.ident_bytes)) {
+			shares = !$first and member.ident == $previous.ident and member.name != $previous.name
+			if shares {
+				if !$previous_shares {
+					$sharing = $sharing.append({ name: $previous.name, ident: $previous.ident, name_bytes: Str.to_utf8($previous.name) })
+				}
+				$sharing = $sharing.append({ name: member.name, ident: member.ident, name_bytes: Str.to_utf8(member.name) })
+			}
+			$previous_shares = shares or ($previous_shares and !$first and member.ident == $previous.ident)
+			$previous = member
+			$first = Bool.False
+		}
 
-		for sharing in sharing_names {
-			sharing_ident = to_ident(sharing)
-			rank = List.count_if(sharing_names, |other| to_ident(other) == sharing_ident and sorts_before(other, sharing))
-			ranked = first_free($taken, "${sharing_ident}${marker}${U64.to_str(rank)}", marker)
-			$taken = $taken.insert(ranked)
-			if sharing == name {
-				$settled = ranked
+		if List.is_empty($sharing) {
+			return MemberIdents.{ idents: $idents, ranked: Bool.False }
+		}
+
+		var $taken = $idents
+		var $ranked = []
+		for member in List.sort_with($sharing, |left, right| compare_bytes(left.name_bytes, right.name_bytes)) {
+			if !List.any($ranked, |settled| settled.name == member.name) {
+				rank = List.count_if($ranked, |settled| settled.plain == member.ident)
+				ident = first_free($taken, "${member.ident}${marker}${U64.to_str(rank)}", marker)
+				$taken = $taken.append(ident)
+				$ranked = $ranked.append({ name: member.name, plain: member.ident, ident })
 			}
 		}
 
-		$settled
+		var $settled = []
+		for member in $members {
+			$settled = $settled.append(ranked_ident($ranked, member.name, member.ident))
+		}
+
+		MemberIdents.{ idents: $settled, ranked: Bool.True }
+	}
+
+	## The identifier `ranked` settled for the member `name`, or `plain` when
+	## the member shares its identifier with no other.
+	ranked_ident : List({ name : Str, plain : Str, ident : Str }), Str, Str -> Str
+	ranked_ident = |ranked, name, plain| {
+		for settled in ranked {
+			if settled.name == name {
+				return settled.ident
+			}
+		}
+
+		plain
 	}
 
 	## `candidate`, followed by `marker` for as long as it is in `taken`.
-	first_free : Set(Str), Str, Str -> Str
+	first_free : List(Str), Str, Str -> Str
 	first_free = |taken, candidate, marker|
-		if taken.contains(candidate) {
+		if List.contains(taken, candidate) {
 			first_free(taken, Str.concat(candidate, marker), marker)
 		} else {
 			candidate
 		}
 
-	## True when `left` comes before `right` in byte order.
-	sorts_before : Str, Str -> Bool
-	sorts_before = |left, right| {
-		left_bytes = Str.to_utf8(left)
-		right_bytes = Str.to_utf8(right)
+	## The order of two names by their bytes.
+	compare_bytes : List(U8), List(U8) -> [Before, Same, After]
+	compare_bytes = |left, right| {
 		var $index = 0
 
-		for byte in left_bytes {
-			match List.get(right_bytes, $index) {
+		for byte in left {
+			match List.get(right, $index) {
 				Ok(other) => {
 					if byte < other {
-						return Bool.True
+						return Before
 					}
 					if byte > other {
-						return Bool.False
+						return After
 					}
 				}
 				Err(_) => {
-					return Bool.False
+					return After
 				}
 			}
 			$index = $index + 1
 		}
 
-		List.len(left_bytes) < List.len(right_bytes)
+		if List.len(left) < List.len(right) {
+			Before
+		} else {
+			Same
+		}
 	}
 
 	## The Roc names emitted under names derived from their ids (a shape id,
@@ -220,51 +269,65 @@ TypeNamePlan := { table : TypeTable }.{
 	## their id-derived names have no distinct names to take, which is an
 	## error.
 	disambiguated : List(Str), List(Str), (List(Str) -> List(Declared)) -> Try(List(Str), Str)
-	disambiguated = |reserved, shared_names, declared_for|
-		disambiguated_from(Set.from_list(reserved), shared_names, declared_for)
+	disambiguated = |reserved, shared_names, declared_for| {
+		var $reserved_claims = []
+		for name in reserved {
+			$reserved_claims = $reserved_claims.append({ name, bytes: Str.to_utf8(name), roc_name: "", id: 0, reserved: Bool.True })
+		}
 
-	disambiguated_from : Set(Str), List(Str), (List(Str) -> List(Declared)) -> Try(List(Str), Str)
-	disambiguated_from = |reserved, renamed_so_far, declared_for| {
-		var $owners = Dict.empty()
-		var $colliding = []
-		var $unresolved = ""
+		disambiguated_from($reserved_claims, shared_names, declared_for)
+	}
 
+	## One declaration of one name: reserved, or made for the Roc name
+	## `roc_name` under `id`.
+	Claim : { name : Str, bytes : List(U8), roc_name : Str, id : U64, reserved : Bool }
+
+	disambiguated_from : List(Claim), List(Str), (List(Str) -> List(Declared)) -> Try(List(Str), Str)
+	disambiguated_from = |reserved_claims, renamed_so_far, declared_for| {
+		var $claims = reserved_claims
 		for declared in declared_for(renamed_so_far) {
-			declared_renamed = List.contains(renamed_so_far, declared.roc_name)
-
 			for name in declared.names {
-				if reserved.contains(name) {
-					if declared_renamed {
-						$unresolved = "Glue cannot name `${declared.roc_name}`: it would be declared as `${name}`, which the generated bindings already declare."
-					} else if !List.contains($colliding, declared.roc_name) {
-						$colliding = $colliding.append(declared.roc_name)
-					}
-				} else {
-					match $owners.get(name) {
-						Ok(owner) =>
-							if owner.id != declared.id {
-								owner_renamed = List.contains(renamed_so_far, owner.roc_name)
-
-								if owner_renamed and declared_renamed {
-									$unresolved = "Glue cannot give `${owner.roc_name}` and `${declared.roc_name}` distinct names: both would be declared as `${name}`."
-								}
-								if !owner_renamed and !List.contains($colliding, owner.roc_name) {
-									$colliding = $colliding.append(owner.roc_name)
-								}
-								if !declared_renamed and !List.contains($colliding, declared.roc_name) {
-									$colliding = $colliding.append(declared.roc_name)
-								}
-							}
-						Err(_) => {
-							$owners = $owners.insert(name, { roc_name: declared.roc_name, id: declared.id })
-						}
-					}
-				}
+				$claims = $claims.append({ name, bytes: Str.to_utf8(name), roc_name: declared.roc_name, id: declared.id, reserved: Bool.False })
 			}
 		}
 
+		var $colliding = []
+		var $unresolved = ""
+		var $previous = { name: "", bytes: [], roc_name: "", id: 0, reserved: Bool.True }
+		var $first = Bool.True
+
+		# Sorted by name, the claims of one name are neighbors, and every claim
+		# of a name with two claimants has a neighbor from another claimant.
+		for claim in List.sort_with($claims, |left, right| compare_bytes(left.bytes, right.bytes)) {
+			if !$first and claim.name == $previous.name {
+				if claim.reserved != $previous.reserved {
+					declared = if (claim.reserved) $previous else claim
+					if List.contains(renamed_so_far, declared.roc_name) {
+						$unresolved = "Glue cannot name `${declared.roc_name}`: it would be declared as `${declared.name}`, which the generated bindings already declare."
+					} else if !List.contains($colliding, declared.roc_name) {
+						$colliding = $colliding.append(declared.roc_name)
+					}
+				} else if !claim.reserved and (claim.id != $previous.id or claim.roc_name != $previous.roc_name) {
+					previous_renamed = List.contains(renamed_so_far, $previous.roc_name)
+					claim_renamed = List.contains(renamed_so_far, claim.roc_name)
+
+					if previous_renamed and claim_renamed {
+						$unresolved = "Glue cannot give `${$previous.roc_name}` and `${claim.roc_name}` distinct names: both would be declared as `${claim.name}`."
+					}
+					if !previous_renamed and !List.contains($colliding, $previous.roc_name) {
+						$colliding = $colliding.append($previous.roc_name)
+					}
+					if !claim_renamed and !List.contains($colliding, claim.roc_name) {
+						$colliding = $colliding.append(claim.roc_name)
+					}
+				}
+			}
+			$previous = claim
+			$first = Bool.False
+		}
+
 		if !List.is_empty($colliding) {
-			disambiguated_from(reserved, List.concat(renamed_so_far, $colliding), declared_for)
+			disambiguated_from(reserved_claims, List.concat(renamed_so_far, $colliding), declared_for)
 		} else if $unresolved != "" {
 			Err($unresolved)
 		} else {
@@ -278,7 +341,7 @@ TypeNamePlan := { table : TypeTable }.{
 	## name, which is what a preferred name claims.
 	preferred_names : TypeNamePlan, List(Str), List(Root), (U64, Str -> List(Str)) -> PreferredNames
 	preferred_names = |planner, existing_names, roots, names_declared_as| {
-		var $state = { entries: [], seen_names: Set.from_list(existing_names), seen_type_ids: [] }
+		var $state = { entries: [], seen_names: existing_names, seen_type_ids: [] }
 
 		for root in roots {
 			$state = collect_preferred_for_type_id(
@@ -313,7 +376,7 @@ TypeNamePlan := { table : TypeTable }.{
 		$state.entries
 	}
 
-	collect_preferred_for_type_id : { entries : List(PreferredName), seen_names : Set(Str), seen_type_ids : List(U64) }, TypeTable, U64, Str, Str, List(U64), (U64, Str -> List(Str)) -> { entries : List(PreferredName), seen_names : Set(Str), seen_type_ids : List(U64) }
+	collect_preferred_for_type_id : { entries : List(PreferredName), seen_names : List(Str), seen_type_ids : List(U64) }, TypeTable, U64, Str, Str, List(U64), (U64, Str -> List(Str)) -> { entries : List(PreferredName), seen_names : List(Str), seen_type_ids : List(U64) }
 	collect_preferred_for_type_id = |state, type_table, type_id, alias_base, module_base, visited_type_ids, names_declared_as| {
 		if List.contains(visited_type_ids, type_id) {
 			return state
@@ -394,25 +457,20 @@ TypeNamePlan := { table : TypeTable }.{
 		}
 	}
 
-	add_preferred_name : { entries : List(PreferredName), seen_names : Set(Str), seen_type_ids : List(U64) }, U64, Str, (U64, Str -> List(Str)) -> { entries : List(PreferredName), seen_names : Set(Str), seen_type_ids : List(U64) }
+	add_preferred_name : { entries : List(PreferredName), seen_names : List(Str), seen_type_ids : List(U64) }, U64, Str, (U64, Str -> List(Str)) -> { entries : List(PreferredName), seen_names : List(Str), seen_type_ids : List(U64) }
 	add_preferred_name = |state, type_id, name, names_declared_as| {
 		if name == "" or List.contains(state.seen_type_ids, type_id) {
 			return state
 		}
 
 		claimed = names_declared_as(type_id, name)
-		if List.any(claimed, |claimed_name| state.seen_names.contains(claimed_name)) {
+		if List.any(claimed, |claimed_name| List.contains(state.seen_names, claimed_name)) {
 			return state
-		}
-
-		var $seen_names = state.seen_names
-		for claimed_name in claimed {
-			$seen_names = $seen_names.insert(claimed_name)
 		}
 
 		{
 			entries: state.entries.append({ type_id, name }),
-			seen_names: $seen_names,
+			seen_names: List.concat(state.seen_names, claimed),
 			seen_type_ids: state.seen_type_ids.append(type_id),
 		}
 	}
@@ -600,28 +658,34 @@ expect TypeNamePlan.index_suffix(["Host.send_it!"], "Host.send_it!", 3, "Hosted"
 expect TypeNamePlan.index_suffix(["Host.send_it!"], "Host.load!", 1, "Hosted") == ""
 
 ## A member whose identifier no sibling shares keeps it.
-expect TypeNamePlan.member_ident(["fooBar", "other"], "fooBar", RocName.lower_snake_ascii, "_Member") == "foo_bar"
+expect TypeNamePlan.member_idents(["fooBar", "other"], RocName.lower_snake_ascii, "_Member").at(0) == "foo_bar"
 
 ## Members that share an identifier are ranked by Roc name, in any order.
-expect TypeNamePlan.member_ident(["foo_bar", "other", "fooBar"], "fooBar", RocName.lower_snake_ascii, "_Member") == "foo_bar_Member0"
+expect TypeNamePlan.member_idents(["foo_bar", "other", "fooBar"], RocName.lower_snake_ascii, "_Member").at(2) == "foo_bar_Member0"
 
 ## Members that share an identifier are ranked by Roc name, in any order.
-expect TypeNamePlan.member_ident(["fooBar", "foo_bar"], "foo_bar", RocName.lower_snake_ascii, "_Member") == "foo_bar_Member1"
+expect TypeNamePlan.member_idents(["fooBar", "foo_bar"], RocName.lower_snake_ascii, "_Member").at(1) == "foo_bar_Member1"
 
 ## A name that another name extends sorts first.
-expect TypeNamePlan.sorts_before("foo", "foo_bar")
+expect TypeNamePlan.compare_bytes(Str.to_utf8("foo"), Str.to_utf8("foo_bar")) == Before
 
 ## A name that another name extends sorts first.
-expect !TypeNamePlan.sorts_before("foo_bar", "foo")
+expect TypeNamePlan.compare_bytes(Str.to_utf8("foo_bar"), Str.to_utf8("foo")) == After
 
-## A name does not sort before itself.
-expect !TypeNamePlan.sorts_before("foo", "foo")
-
-## A ranked identifier that is another member's own takes the marker again.
-expect TypeNamePlan.member_ident(["Self", "Self_", "Self__0"], "Self", |tag| if (tag == "Self") "Self_" else tag, "_") == "Self__0_"
+## A name sorts with itself.
+expect TypeNamePlan.compare_bytes(Str.to_utf8("foo"), Str.to_utf8("foo")) == Same
 
 ## A ranked identifier that is another member's own takes the marker again.
-expect TypeNamePlan.member_ident(["Self", "Self_", "Self__0"], "Self_", |tag| if (tag == "Self") "Self_" else tag, "_") == "Self__1"
+expect TypeNamePlan.member_idents(["Self", "Self_", "Self__0"], |tag| if (tag == "Self") "Self_" else tag, "_").at(0) == "Self__0_"
+
+## A ranked identifier that is another member's own takes the marker again.
+expect TypeNamePlan.member_idents(["Self", "Self_", "Self__0"], |tag| if (tag == "Self") "Self_" else tag, "_").at(1) == "Self__1"
 
 ## A member whose identifier is its own keeps it beside ranked ones.
-expect TypeNamePlan.member_ident(["Self", "Self_", "Self__0"], "Self__0", |tag| if (tag == "Self") "Self_" else tag, "_") == "Self__0"
+expect TypeNamePlan.member_idents(["Self", "Self_", "Self__0"], |tag| if (tag == "Self") "Self_" else tag, "_").at(2) == "Self__0"
+
+## Members that share no identifier are not ranked.
+expect !TypeNamePlan.member_idents(["fooBar", "other"], RocName.lower_snake_ascii, "_Member").any_ranked()
+
+## Members that share an identifier are ranked.
+expect TypeNamePlan.member_idents(["fooBar", "foo_bar"], RocName.lower_snake_ascii, "_Member").any_ranked()

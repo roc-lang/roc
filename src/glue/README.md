@@ -276,15 +276,16 @@ namespace of their own, and a generator can spell two of them alike: `fooBar`
 and `foo_bar` are both `foo_bar` in C and Rust, `HTTPError` and `Httperror`
 are both `httperror` in every generator, and in C the tag `Auto` is escaped
 as `auto_field`, which is how `AutoField` is spelled. A spelling two members
-share denotes neither. `TypeNamePlan.member_ident` gives each the spelling
+share denotes neither. `TypeNamePlan.member_idents` gives each the spelling
 followed by a marker and its rank among the members that share it, ordered by
 Roc name: `foo_bar_Member0` and `foo_bar_Member1`, or `STag_FooBar_0` and
 `STag_FooBar_1` for C tag constants. The marker holds a character the
 spelling never does (an uppercase letter after lowercase spellings, an
 underscore after C constant names), and a ranked name that is still another
-member's own takes the marker again. Every place that names a member asks
-`member_ident` with the declaration's member names, so the declaration, its
-accessors, its constructors, and its refcount helpers agree. A member that is
+member's own takes the marker again. Every place that names members asks
+`member_idents` for the whole declaration at once and reads each member's
+identifier by position, so the declaration, its accessors, its constructors,
+and its refcount helpers agree. A member that is
 a reserved word of the generated language is escaped first (`r#type` in Rust,
 `default_field` in C), and the escaped spelling is what is compared. A Rust
 declaration that holds ranked members carries `#[allow(non_snake_case)]`.

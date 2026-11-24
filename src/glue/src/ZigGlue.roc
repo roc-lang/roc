@@ -1542,7 +1542,7 @@ abi_tag_has_payload = |tag| tag.payload_size32 > 0 or tag.payload_size64 > 0
 ## Generate Zig code for a single multi-variant tag union.
 generate_single_tag_union : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, TagUnionRepr, AbiLayout -> Str
 generate_single_tag_union = |type_table, duplicate_names, preferred_names, type_id, tu, abi_layout| {
-	tag_names = List.map(tu.tags, |tag| tag.name)
+	tag_snakes = tag_snakes_zig(tu)
 	struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)
 	disc_type = disc_type_for_size(abi_discriminant_size(abi_layout))
 	abi_tags = abi_tag_layouts(abi_layout)
@@ -1555,8 +1555,8 @@ generate_single_tag_union = |type_table, duplicate_names, preferred_names, type_
 		method_decls = "    /// Recursively decrement Roc-owned payloads.\n    pub fn decref(self: @This(), roc_host: *RocHost) void {\n        _ = self;\n        _ = roc_host;\n    }\n\n    /// Increment Roc-owned payloads.\n    pub fn incref(self: @This(), amount: isize) void {\n        _ = self;\n        _ = amount;\n    }\n"
 		var $variants = ""
 		var $idx = 0
-		for tag in tu.tags {
-			variant_ident = name_to_zig_quoted_ident(tag_snake_among_zig(tag_names, tag.name))
+		for _tag in tu.tags {
+			variant_ident = name_to_zig_quoted_ident(tag_snakes.at($idx))
 			$variants = Str.concat($variants, "    ${variant_ident} = ${U64.to_str($idx)},\n")
 			$idx = $idx + 1
 		}
@@ -1595,7 +1595,7 @@ generate_single_tag_union = |type_table, duplicate_names, preferred_names, type_
 		var $union_tag_idx = 0
 		for union_tag in tu.tags {
 			tag_layout = abi_tag_at(abi_tags, $union_tag_idx)
-			snake = tag_snake_among_zig(tag_names, union_tag.name)
+			snake = tag_snakes.at($union_tag_idx)
 			field_ident = name_to_zig_quoted_ident(snake)
 			if !(abi_tag_has_payload(tag_layout)) {
 				# No-payload variant: use [0]u8 (Zig extern unions can't have void)
@@ -1954,17 +1954,16 @@ generate_record_refcount_methods = |type_table, duplicate_names, preferred_names
 	"${decref_method}\n    /// Increment Roc-owned fields.\n    pub fn incref(self: @This(), amount: isize) void {\n        const value = self;\n${$incref_body}    }\n"
 }
 
-## The lowercase name a tag's enum variant, payload union member and payload
-## accessor are named from, among the tags of its union. Every name
+## For each tag of a union, the lowercase name its enum variant, payload union
+## member and payload accessor are named from. Every name
 ## `to_lower_snake_case` gives is lowercase, so a ranked one is no other tag's
 ## own.
-tag_snake_among_zig : List(Str), Str -> Str
-tag_snake_among_zig = |tag_names, name|
-	TypeNamePlan.member_ident(tag_names, name, to_lower_snake_case, "_Member")
+tag_snakes_zig : TagUnionRepr -> TypeNamePlan.MemberIdents
+tag_snakes_zig = |tu|
+	TypeNamePlan.member_idents(List.map(tu.tags, |tag| tag.name), to_lower_snake_case, "_Member")
 
-generate_tag_payload_refcount_branch : TypeTable, List(Str), TypeNamePlan.PreferredNames, List(Str), TagVariant, AbiTagLayout, Str -> Str
-generate_tag_payload_refcount_branch = |type_table, duplicate_names, preferred_names, tag_names, tag, abi_tag, mode| {
-	snake = tag_snake_among_zig(tag_names, tag.name)
+generate_tag_payload_refcount_branch : TypeTable, List(Str), TypeNamePlan.PreferredNames, Str, TagVariant, AbiTagLayout, Str -> Str
+generate_tag_payload_refcount_branch = |type_table, duplicate_names, preferred_names, snake, tag, abi_tag, mode| {
 	variant_ident = name_to_zig_quoted_ident(tag.name)
 
 	if !abi_tag_has_payload(abi_tag) {
@@ -2091,7 +2090,7 @@ generate_tag_union_refcount_method_delegates = |struct_name, roc_released| {
 
 generate_tag_union_refcount_helpers : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, TagUnionRepr -> Str
 generate_tag_union_refcount_helpers = |type_table, duplicate_names, preferred_names, type_id, tu| {
-	tag_names = List.map(tu.tags, |tag| tag.name)
+	tag_snakes = tag_snakes_zig(tu)
 	struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)
 	roc_released = is_roc_released(type_table, type_id)
 	var $decref_branches = ""
@@ -2103,9 +2102,9 @@ generate_tag_union_refcount_helpers = |type_table, duplicate_names, preferred_na
 	for tag in tu.tags {
 		abi_tag = abi_tag_at(abi_tags, $tag_index)
 		if !roc_released {
-			$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch(type_table, duplicate_names, preferred_names, tag_names, tag, abi_tag, "decref"))
+			$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch(type_table, duplicate_names, preferred_names, tag_snakes.at($tag_index), tag, abi_tag, "decref"))
 		}
-		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch(type_table, duplicate_names, preferred_names, tag_names, tag, abi_tag, "incref"))
+		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch(type_table, duplicate_names, preferred_names, tag_snakes.at($tag_index), tag, abi_tag, "incref"))
 		if abi_tag_has_payload(abi_tag) {
 			$decref_uses_param = $decref_uses_param or tag_payload_refcount_uses_param(type_table, tag, "decref")
 			$incref_uses_param = $incref_uses_param or tag_payload_refcount_uses_param(type_table, tag, "incref")
@@ -2287,23 +2286,23 @@ generate_release_policy_registry = |type_table, duplicate_names, preferred_names
 ## `Try` because different hosted functions can use different payload layouts.
 ## These aliases give platform authors stable API names for secondary names that
 ## share a concrete layout.
-add_type_alias_zig : { content : Str, seen : Set(Str) }, Str, Str -> { content : Str, seen : Set(Str) }
+add_type_alias_zig : { content : Str, seen : List(Str) }, Str, Str -> { content : Str, seen : List(Str) }
 add_type_alias_zig = |state, alias, target| {
-	if alias == target or state.seen.contains(alias) {
+	if alias == target or List.contains(state.seen, alias) {
 		state
 	} else {
 		{
 			content: Str.concat(state.content, "pub const ${alias} = ${target};\n"),
-			seen: state.seen.insert(alias),
+			seen: state.seen.append(alias),
 		}
 	}
 }
 
-add_tag_union_aliases_zig : { content : Str, seen : Set(Str) }, Str, Str, AbiLayout -> { content : Str, seen : Set(Str) }
+add_tag_union_aliases_zig : { content : Str, seen : List(Str) }, Str, Str, AbiLayout -> { content : Str, seen : List(Str) }
 add_tag_union_aliases_zig = |state, alias, target, abi_layout| {
 	# The helper aliases are named after the union's alias, so they are its
 	# helpers only when that alias names the union.
-	if alias != target and state.seen.contains(alias) {
+	if alias != target and List.contains(state.seen, alias) {
 		return state
 	}
 
