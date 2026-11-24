@@ -5667,7 +5667,14 @@ const Cloner = struct {
             .match_ => |match| switch (frame.cursor) {
                 0 => {
                     frame.cursor = 1;
-                    return .{ .call = .{ .demanding = .{ .expr = match.scrutinee, .bindings = bindings } } };
+                    // A match has one strict operand before its branches, so
+                    // `loop_exit_selection` (where `demanding` only pins multi-child
+                    // operands into fresh locals) must evaluate the scrutinee in
+                    // place to preserve layout-resolved `match` sites.
+                    return .{ .call = if (self.purpose == .loop_exit_selection)
+                        .{ .expr_value = .{ .expr = match.scrutinee, .bindings = bindings } }
+                    else
+                        .{ .demanding = .{ .expr = match.scrutinee, .bindings = bindings } } };
                 },
                 1 => {
                     task.value = input.?.get(.value);
@@ -9298,7 +9305,7 @@ const Cloner = struct {
         switch (frame.cursor) {
             0 => {
                 frame.cursor = 1;
-                return .{ .call = .{ .expr_value_owned = .{ .expr = match.scrutinee, .demand_shape = true } } };
+                return .{ .call = .{ .expr_value_owned = .{ .expr = match.scrutinee, .demand_shape = self.purpose != .loop_exit_selection } } };
             },
             1 => {
                 task.scrutinee = input.?.get(.cloned);
@@ -11812,6 +11819,13 @@ const Cloner = struct {
         // A prefix function holds statements that read no gainable slot;
         // inlining it would copy them again.
         if (self.pass.prefix_fns.contains(callee)) return .residual;
+        // A layout-resolved Builtin wrapper (`list_map_can_reuse`,
+        // `list_item_size_at_most`) must stay a direct call until LIR lowering
+        // so `Ast.layoutResolvedMatch` can fold the unreachable arm away.
+        switch (self.pass.sourceBody(callee)) {
+            .roc => |body| if (Ast.layoutResolvedOpOf(self.pass.program, body) != null) return .residual,
+            .hosted => {},
+        }
         if (!self.inline_direct_requires_productivity) return .required;
         const index = self.crossingIndex();
         if (index.isWrapper(callee)) return .required;
@@ -19531,4 +19545,272 @@ test "SpecConstr reads a mutable version bound ahead of the operand that assigne
     defer cloner.deinit();
     const result = try cloner.cloneExpr(program.getFn(fn_id).body.roc);
     try std.testing.expectEqualDeep(program.getExpr(seven).data, program.getExpr(result).data);
+}
+
+test "SpecConstr keeps layout-resolved builtin wrappers as direct calls for LIR match folding" {
+    const can = @import("can");
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const u8_ty = try program.types.add(.{ .primitive = .u8 });
+    const u64_ty = try program.types.add(.{ .primitive = .u64 });
+    const list_ty = try program.types.add(.{ .list = u64_ty });
+    const fn_ty = try program.types.add(.{ .func = .{
+        .args = try program.types.addSpan(&.{u64_ty}),
+        .ret = u64_ty,
+    } });
+    const zero: can.CIR.IntValue = .{ .bytes = @bitCast(@as(i128, 0)), .kind = .i128 };
+    const one: can.CIR.IntValue = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 };
+    const ninety_six: can.CIR.IntValue = .{ .bytes = @bitCast(@as(i128, 96)), .kind = .i128 };
+
+    // Builtin wrapper for `list_item_size_at_most(items, bound)`.
+    const size_list_arg = try program.addLocal(@fromBackingInt(1), list_ty);
+    const size_bound_arg = try program.addLocal(@fromBackingInt(2), u64_ty);
+    const size_op = try program.addExpr(.{ .ty = u8_ty, .data = .{ .low_level = .{
+        .op = .list_item_size_at_most,
+        .args = try program.addExprSpan(&.{
+            try program.addExpr(.{ .ty = list_ty, .data = .{ .local = size_list_arg } }),
+            try program.addExpr(.{ .ty = u64_ty, .data = .{ .local = size_bound_arg } }),
+        }),
+    } } });
+    const size_wrapper = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(3),
+        .args = try program.addTypedLocalSpan(&.{
+            .{ .local = size_list_arg, .ty = list_ty },
+            .{ .local = size_bound_arg, .ty = u64_ty },
+        }),
+        .captures = .empty(),
+        .body = .{ .roc = size_op },
+        .ret = u8_ty,
+    });
+
+    // Builtin wrapper for `list_map_can_reuse(items, transform)`.
+    const reuse_list_arg = try program.addLocal(@fromBackingInt(4), list_ty);
+    const reuse_fn_arg = try program.addLocal(@fromBackingInt(5), fn_ty);
+    const reuse_op = try program.addExpr(.{ .ty = u8_ty, .data = .{ .low_level = .{
+        .op = .list_map_can_reuse,
+        .args = try program.addExprSpan(&.{
+            try program.addExpr(.{ .ty = list_ty, .data = .{ .local = reuse_list_arg } }),
+            try program.addExpr(.{ .ty = fn_ty, .data = .{ .local = reuse_fn_arg } }),
+        }),
+    } } });
+    const reuse_wrapper = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(6),
+        .args = try program.addTypedLocalSpan(&.{
+            .{ .local = reuse_list_arg, .ty = list_ty },
+            .{ .local = reuse_fn_arg, .ty = fn_ty },
+        }),
+        .captures = .empty(),
+        .body = .{ .roc = reuse_op },
+        .ret = u8_ty,
+    });
+
+    // Ordinary low-level wrapper control (`list_len`) that should still inline.
+    const len_list_arg = try program.addLocal(@fromBackingInt(7), list_ty);
+    const len_op = try program.addExpr(.{ .ty = u64_ty, .data = .{ .low_level = .{
+        .op = .list_len,
+        .args = try program.addExprSpan(&.{
+            try program.addExpr(.{ .ty = list_ty, .data = .{ .local = len_list_arg } }),
+        }),
+    } } });
+    const len_wrapper = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(8),
+        .args = try program.addTypedLocalSpan(&.{
+            .{ .local = len_list_arg, .ty = list_ty },
+        }),
+        .captures = .empty(),
+        .body = .{ .roc = len_op },
+        .ret = u64_ty,
+    });
+
+    // Known callable passed to `list_map_can_reuse`.
+    const transform_arg = try program.addLocal(@fromBackingInt(9), u64_ty);
+    const transform_fn = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(10),
+        .args = try program.addTypedLocalSpan(&.{
+            .{ .local = transform_arg, .ty = u64_ty },
+        }),
+        .captures = .empty(),
+        .body = .{ .roc = try program.addExpr(.{ .ty = u64_ty, .data = .{ .local = transform_arg } }) },
+        .ret = u64_ty,
+    });
+
+    // Caller matching on both layout-resolved wrappers and calling `list_len`.
+    const caller_items = try program.addLocal(@fromBackingInt(11), list_ty);
+    const size_call = try program.addExpr(.{ .ty = u8_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = size_wrapper },
+        .args = try program.addExprSpan(&.{
+            try program.addExpr(.{ .ty = list_ty, .data = .{ .local = caller_items } }),
+            try program.addExpr(.{ .ty = u64_ty, .data = .{ .int_lit = ninety_six } }),
+        }),
+    } } });
+    const wide_arm = try program.addExpr(.{ .ty = u8_ty, .data = .{ .int_lit = zero } });
+    const direct_arm = try program.addExpr(.{ .ty = u8_ty, .data = .{ .int_lit = one } });
+    const size_match = try program.addExpr(.{ .ty = u8_ty, .data = .{ .match_ = .{
+        .scrutinee = size_call,
+        .branches = try program.addBranchSpan(&.{
+            .{ .pat = try program.addPat(.{ .ty = u8_ty, .data = .{ .int_lit = zero } }), .body = wide_arm },
+            .{ .pat = try program.addPat(.{ .ty = u8_ty, .data = .wildcard }), .body = direct_arm },
+        }),
+    } } });
+
+    const reuse_call = try program.addExpr(.{ .ty = u8_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = reuse_wrapper },
+        .args = try program.addExprSpan(&.{
+            try program.addExpr(.{ .ty = list_ty, .data = .{ .local = caller_items } }),
+            try program.addExpr(.{ .ty = fn_ty, .data = .{ .fn_ref = .{ .fn_id = transform_fn, .captures = .empty() } } }),
+        }),
+    } } });
+    const reuse_arm = try program.addExpr(.{ .ty = u8_ty, .data = .{ .int_lit = one } });
+    const copy_arm = try program.addExpr(.{ .ty = u8_ty, .data = .{ .int_lit = zero } });
+    const reuse_match = try program.addExpr(.{ .ty = u8_ty, .data = .{ .match_ = .{
+        .scrutinee = reuse_call,
+        .branches = try program.addBranchSpan(&.{
+            .{ .pat = try program.addPat(.{ .ty = u8_ty, .data = .{ .int_lit = one } }), .body = reuse_arm },
+            .{ .pat = try program.addPat(.{ .ty = u8_ty, .data = .wildcard }), .body = copy_arm },
+        }),
+    } } });
+
+    const len_call = try program.addExpr(.{ .ty = u64_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = len_wrapper },
+        .args = try program.addExprSpan(&.{
+            try program.addExpr(.{ .ty = list_ty, .data = .{ .local = caller_items } }),
+        }),
+    } } });
+
+    const caller_body = try program.addExpr(.{ .ty = u8_ty, .data = .{ .block = .{
+        .statements = try program.addStmtSpan(&.{
+            try program.addStmt(.{ .expr = size_match }),
+            try program.addStmt(.{ .expr = len_call }),
+        }),
+        .final_expr = reuse_match,
+    } } });
+    const caller = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(12),
+        .args = try program.addTypedLocalSpan(&.{
+            .{ .local = caller_items, .ty = list_ty },
+        }),
+        .captures = .empty(),
+        .body = .{ .roc = caller_body },
+        .ret = u8_ty,
+    });
+    program.next_symbol = 13;
+
+    // Wrapper classification and direct-inline admission keep both
+    // layout-resolved wrappers un-inlined while admitting ordinary wrappers.
+    {
+        var pass = try Pass.init(allocator, &program);
+        defer pass.deinit();
+        const index = try pass.buildCrossingIndex();
+        defer index.deinit();
+        var session = try InlineCrossing.Session.init(allocator, index, &program);
+        defer session.deinit();
+        try index.classifyWrappers(&session);
+        pass.crossing_index = index;
+        pass.crossing_session = &session;
+
+        try std.testing.expect(!index.isWrapper(size_wrapper));
+        try std.testing.expect(!index.isWrapper(reuse_wrapper));
+        try std.testing.expect(index.isWrapper(len_wrapper));
+
+        var cloner = Cloner.initForRewrite(&pass);
+        defer cloner.deinit();
+        cloner.crossing_root_fn = caller;
+        const size_call_data = program.getExpr(size_call).data.call_proc;
+        const reuse_call_data = program.getExpr(reuse_call).data.call_proc;
+        const len_call_data = program.getExpr(len_call).data.call_proc;
+
+        cloner.inline_direct_requires_productivity = true;
+        try std.testing.expectEqual(Cloner.DirectInlineAdmission.residual, try cloner.admitsDirectInline(size_call, size_wrapper, size_call_data));
+        try std.testing.expectEqual(Cloner.DirectInlineAdmission.residual, try cloner.admitsDirectInline(reuse_call, reuse_wrapper, reuse_call_data));
+        try std.testing.expectEqual(Cloner.DirectInlineAdmission.required, try cloner.admitsDirectInline(len_call, len_wrapper, len_call_data));
+
+        cloner.inline_direct_requires_productivity = false;
+        try std.testing.expectEqual(Cloner.DirectInlineAdmission.residual, try cloner.admitsDirectInline(size_call, size_wrapper, size_call_data));
+        try std.testing.expectEqual(Cloner.DirectInlineAdmission.residual, try cloner.admitsDirectInline(reuse_call, reuse_wrapper, reuse_call_data));
+    }
+
+    // Full `--opt=speed` SpecConstr run leaves both matches foldable with
+    // `list_item_size_at_most`'s literal bound intact, while still inlining `list_len`.
+    try run(allocator, &program, .all_calls);
+
+    const Inspector = struct {
+        program: *const Ast.Program,
+        len_wrapper: Ast.FnId,
+        saw_size_match: bool = false,
+        saw_reuse_match: bool = false,
+        saw_unexpected_match: bool = false,
+        size_bound_ok: bool = false,
+        size_branches_ok: bool = false,
+        reuse_branch_ok: bool = false,
+        saw_len_call: bool = false,
+        saw_len_low_level: bool = false,
+
+        pub fn enterExpr(self: *@This(), expr_id: Ast.ExprId) Allocator.Error!Ast.ExprWalk {
+            const data = self.program.getExpr(expr_id).data;
+            if (data == .match_) {
+                const match_ = data.match_;
+                if (self.program.layoutResolvedMatch(match_.scrutinee, match_.branches)) |site| {
+                    switch (site.op) {
+                        .list_item_size_at_most => {
+                            const size_args = self.program.exprSpan(site.call_args);
+                            self.size_bound_ok = size_args.len == 2 and
+                                self.program.getExpr(GuardedList.at(size_args, 1)).data == .int_lit and
+                                self.program.getExpr(GuardedList.at(size_args, 1)).data.int_lit.toI128() == 96;
+                            self.size_branches_ok = self.program.branchForAnswer(match_.branches, 0) != null and
+                                self.program.branchForAnswer(match_.branches, 1) != null;
+                            self.saw_size_match = true;
+                        },
+                        .list_map_can_reuse => {
+                            self.reuse_branch_ok = self.program.branchForAnswer(match_.branches, 0) != null;
+                            self.saw_reuse_match = true;
+                        },
+                    }
+                } else {
+                    self.saw_unexpected_match = true;
+                }
+            } else if (data == .call_proc) {
+                if (Ast.localDirectCallee(data.call_proc) == self.len_wrapper) self.saw_len_call = true;
+            } else if (data == .low_level) {
+                if (data.low_level.op == .list_len) self.saw_len_low_level = true;
+            }
+            return .descend;
+        }
+
+        pub fn exitExpr(_: *@This(), _: Ast.ExprId) Allocator.Error!void {}
+    };
+
+    var inspector: Inspector = .{ .program = &program, .len_wrapper = len_wrapper };
+    try Ast.walkExprs(allocator, &program, .{ .expr = program.getFn(caller).body.roc }, &inspector);
+    try std.testing.expect(!inspector.saw_unexpected_match);
+    try std.testing.expect(inspector.saw_size_match);
+    try std.testing.expect(inspector.size_bound_ok);
+    try std.testing.expect(inspector.size_branches_ok);
+    try std.testing.expect(inspector.saw_reuse_match);
+    try std.testing.expect(inspector.reuse_branch_ok);
+    try std.testing.expect(!inspector.saw_len_call);
+    try std.testing.expect(inspector.saw_len_low_level);
+
+    // `projectUnusedLoopResults` (`loop_exit_selection`) must also leave both
+    // layout-resolved `match` scrutinees in place rather than hoisting them
+    // into a fresh `let` local.
+    var loop_pass = try Pass.init(allocator, &program);
+    defer loop_pass.deinit();
+    var loop_cloner = Cloner.initForLoopExitSelection(&loop_pass);
+    defer loop_cloner.deinit();
+    const after_loop_exit = try loop_cloner.cloneExpr(program.getFn(caller).body.roc);
+
+    var loop_inspector: Inspector = .{ .program = &program, .len_wrapper = len_wrapper };
+    try Ast.walkExprs(allocator, &program, .{ .expr = after_loop_exit }, &loop_inspector);
+    try std.testing.expect(!loop_inspector.saw_unexpected_match);
+    try std.testing.expect(loop_inspector.saw_size_match);
+    try std.testing.expect(loop_inspector.size_bound_ok);
+    try std.testing.expect(loop_inspector.size_branches_ok);
+    try std.testing.expect(loop_inspector.saw_reuse_match);
+    try std.testing.expect(loop_inspector.reuse_branch_ok);
 }

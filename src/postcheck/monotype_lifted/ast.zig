@@ -2195,7 +2195,7 @@ fn branchForAnswerIn(program: anytype, branches_span: Span(Branch), answer: u8) 
 }
 
 /// The layout-resolved low-level a Builtin wrapper body runs, if it is one.
-fn layoutResolvedOpOf(program: anytype, root: ExprId) ?can.CIR.Expr.LowLevel.LayoutResolved {
+pub fn layoutResolvedOpOf(program: anytype, root: ExprId) ?can.CIR.Expr.LowLevel.LayoutResolved {
     var expr_id = root;
     while (true) {
         const data = program.getExpr(expr_id).data;

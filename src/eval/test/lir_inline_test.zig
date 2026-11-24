@@ -156,6 +156,7 @@ const LowerModuleOptions = struct {
     tag_reachability: bool = false,
     promote_loop_appends: bool = true,
     prove_ranges: bool = false,
+    list_in_place_map: bool = false,
     spec_constr_clone_inlining: lir.CheckedPipeline.SpecConstrCloneInlining = .all_calls,
     imports: []const helpers.ModuleSource = &.{},
 };
@@ -213,6 +214,7 @@ fn lowerModuleWithOptions(
             .inline_expects = options.inline_expects,
             .promote_loop_appends = .{ .value = options.promote_loop_appends },
             .prove_ranges = options.prove_ranges,
+            .list_in_place_map = options.list_in_place_map,
             .tag_reachability = options.tag_reachability,
             .spec_constr_clone_inlining = options.spec_constr_clone_inlining,
         },
@@ -16903,4 +16905,75 @@ test "range proving: a product guarded by a hoisted limit test overflows where t
     try std.testing.expect(proved_run.termination != eval.RuntimeHostEnv.Termination.returned);
     try std.testing.expect(proved_run.events.len >= 6);
     try expectRecordedRunsEqual(plain_run, proved_run);
+}
+
+test "issue 13416 List.sort_with and List.map fold layout-resolved matches under wrappers mode" {
+    const allocator = std.testing.allocator;
+
+    // `List.sort_with` on `Str` (item size <= 96 on both 32- and 64-bit)
+    // must fold away `sort_wide` before LIR lowering even when SpecConstr runs
+    // with `.all_calls` and `projectUnusedLoopResults` rewrites `sort_impl`.
+    {
+        const sort_source =
+            \\main : U64
+            \\main = {
+            \\    sorted = List.sort_with(["b", "a", "c"], |a, b| a.order_relative_to(b))
+            \\    List.len(sorted)
+            \\}
+        ;
+        var lowered = try lowerModuleWithOptions(allocator, sort_source, .wrappers, .{ .list_in_place_map = true });
+        defer lowered.deinit(allocator);
+
+        const store = &lowered.lowered.lir_result.store;
+        var size_checks: usize = 0;
+        var quad_swap_procs: usize = 0;
+        for (0..store.procSpecCount()) |i| {
+            const proc: LIR.LirProcSpecId = @fromBackingInt(@as(u32, @intCast(i)));
+            if (store.getProcSpecImmediate(proc).body == .none) continue;
+            if (store.procDebugName(proc)) |name| {
+                if (std.mem.eql(u8, name, "quad_swap")) quad_swap_procs += 1;
+            }
+            const stmts = try procStmts(allocator, store, proc);
+            defer allocator.free(stmts);
+            for (stmts) |id| {
+                const stmt = store.getCFStmtImmediate(id);
+                if (stmt.* == .assign_low_level and stmt.assign_low_level.op == .list_item_size_at_most) size_checks += 1;
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 0), size_checks);
+        try std.testing.expectEqual(@as(usize, 1), quad_swap_procs);
+    }
+
+    // `List.map` from `U64` to `Str` (non-interchangeable element layouts on
+    // both widths) must fold away the in-place reuse arm before LIR lowering.
+    {
+        const map_source =
+            \\main : U64
+            \\main = {
+            \\    mapped = List.map([1.U64, 2.U64, 3.U64], |n| n.to_str())
+            \\    List.len(mapped)
+            \\}
+        ;
+        var lowered = try lowerModuleWithOptions(allocator, map_source, .wrappers, .{ .list_in_place_map = true });
+        defer lowered.deinit(allocator);
+
+        const store = &lowered.lowered.lir_result.store;
+        var reuse_checks: usize = 0;
+        var reuse_casts: usize = 0;
+        for (0..store.procSpecCount()) |i| {
+            const proc: LIR.LirProcSpecId = @fromBackingInt(@as(u32, @intCast(i)));
+            if (store.getProcSpecImmediate(proc).body == .none) continue;
+            const stmts = try procStmts(allocator, store, proc);
+            defer allocator.free(stmts);
+            for (stmts) |id| {
+                const stmt = store.getCFStmtImmediate(id);
+                if (stmt.* == .assign_low_level) {
+                    if (stmt.assign_low_level.op == .list_map_can_reuse) reuse_checks += 1;
+                    if (stmt.assign_low_level.op == .list_map_cast_unsafe) reuse_casts += 1;
+                }
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 0), reuse_checks);
+        try std.testing.expectEqual(@as(usize, 0), reuse_casts);
+    }
 }

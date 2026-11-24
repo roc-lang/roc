@@ -698,9 +698,11 @@ pub const Index = struct {
 
     /// Decide which functions always inline as wrappers: a `WrapperBody`
     /// that lies on no call cycle, where inlining would only unroll the
-    /// recursion, and that passes none of its direct calls a value it builds
-    /// where the callee's extent consumes it, which would inline that callee
-    /// into every copy of the body.
+    /// recursion, that is not a layout-resolved Builtin wrapper (which must
+    /// stay a direct call until LIR lowering folds its `match`), and that
+    /// passes none of its direct calls a value it builds itself where the
+    /// callee's extent consumes it, which would inline that callee into every
+    /// copy of the body.
     pub fn classifyWrappers(self: *Index, session: *Session) Allocator.Error!void {
         const gpa = self.gpa;
         const program = session.program;
@@ -710,6 +712,7 @@ pub const Index = struct {
             const body = maybe_body orelse continue;
             const fn_id: Ast.FnId = @fromBackingInt(@as(u32, @intCast(index)));
             if (self.on_cycle[index]) continue;
+            if (Ast.layoutResolvedOpOf(program, body) != null) continue;
             if (try WrapperBody.wrapperBody(gpa, program, fn_id) == null) continue;
             self.wrapper[index] = !try self.bodySpecializesCall(session, fn_id, body, &stack);
         }
