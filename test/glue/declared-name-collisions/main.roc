@@ -5,6 +5,8 @@ platform "glue-declared-name-collisions"
 	exposes [A, AB, Host]
 	packages {}
 	provides {
+		"HostPingArgs": take_ping,
+		"Slot": make_slot,
 		"take_event": take_event,
 		"take_helpers": take_helpers,
 		"take_host_named": take_host_named,
@@ -12,11 +14,16 @@ platform "glue-declared-name-collisions"
 		"take_runtime_named": take_runtime_named,
 		"take_signal": take_signal,
 		"take_signal_named": take_signal_named,
+		"take_slot_it": take_slot_it,
+		"take_slot_it_too": takeSlotIt,
 	}
 	hosted {
 		"roc_host_fetch": Host.fetch!,
 		"roc_host_load": Host.load!,
+		"roc_host_ping": Host.ping!,
 		"roc_host_send": Host.send!,
+		"roc_host_send_it": Host.send_it!,
+		"roc_host_send_it_too": Host.sendIt!,
 	}
 	targets: {}
 
@@ -73,6 +80,10 @@ Option := [Missing, Present(Str)]
 
 VTable := { slots : U16 }
 
+## ZigGlue names this union's refcount helper like one its runtime support
+## declares.
+ErasedCallable := [Stored(Str), Absent]
+
 take_event : Event -> U64
 take_event = |_| 0
 
@@ -85,11 +96,28 @@ take_signal = |_| 0
 take_signal_named : SignalRelease, SignalTag, SignalPayload, SignalDownPayload, SignalPayloadAlignment, SignalTagPayloadStorage -> U64
 take_signal_named = |_, _, _, _, _, _| 0
 
-take_runtime_named : RocStr, RocList, RocOps, HostedFunctions, Ordering, Layout, Option, VTable -> U64
-take_runtime_named = |_, _, _, _, _, _, _, _| 0
+take_runtime_named : RocStr, RocList, RocOps, HostedFunctions, Ordering, Layout, Option, VTable, ErasedCallable -> U64
+take_runtime_named = |_, _, _, _, _, _, _, _, _| 0
 
 take_host_named : Host.SendArgs, Host.FetchRetRecord, Host.LoadResult, Host.LoadResultTag -> U64
 take_host_named = |_, _, _, _| 0
 
 take_joined : A.BC, AB.C -> U64
 take_joined = |_, _| 0
+
+## A type named like a linker symbol the platform declares.
+Slot := { place : U64 }
+
+## Two provided definitions whose names join to one host name, so the
+## aliases of their arguments would be named alike.
+take_slot_it : Slot -> U64
+take_slot_it = |_| 0
+
+takeSlotIt : Key -> U64
+takeSlotIt = |_| 0
+
+make_slot : Slot -> Slot
+make_slot = |slot| slot
+
+take_ping : U64 -> U64
+take_ping = |count| count

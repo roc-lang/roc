@@ -12813,16 +12813,6 @@ is unified with every annotation that refers to it; if a mismatch merges any
 of it into an error it is no longer ground, and the next reference
 instantiates a fresh copy.
 
-An instance is shared only within the kind of scope that made it. A type
-declaration's body is generated at the generalized rank, so every class in it
-is quantified, ground ones included, while a ground class anywhere else
-settles at the outermost rank. A binding is a scheme exactly when its type
-reaches a quantified class, so a declaration body's instance read from a
-binding's annotation would make a monomorphic binding a scheme. The position
-therefore also records whether the instance was made at the generalized rank
-(`Check.SharedInstanceKey`), and the ground subtrees shared between instances
-that are not ground are recorded the same way.
-
 Before a use that decides markers per occurrence (`.preserve_one_sided`,
 `.resolve_by_polarity`, `.defer_open`) copies anything, a pre-walk
 (`Instantiator.collectMarkerChoices`) joins the sides every marker occurs on
@@ -32586,21 +32576,37 @@ Application `requires` declarations are Roc-internal bindings that never cross
 the host boundary, so they are neither glue layout roots nor part of the glue
 input.
 
-A generated file has one namespace for its top-level type names, and a
-generator builds every name it puts there by joining other names: a module and
-a type, a type and a helper suffix, a union, a tag and a suffix, a hosted
-function and a suffix. Joined names can be equal to each other and to the
-names of the generator's own runtime support, so each generator states every
-name it declares, and `TypeNamePlan` gives each name to one declaration. Names
-of the runtime support and of hosted functions' argument and result types are
-reserved. A name declared for two host types, or for a host type and reserved,
-denotes neither: both host types take the names derived from their shape ids,
-exactly like shapes that share a Roc name, and if those still collide the glue
-run fails with an error naming both types. A preferred name is granted only
-when every name its type would declare under it is free, and an alias is
-emitted only under a name nothing else declares. A generator never emits two
-declarations under one name, and never lets one host type's declaration stand
-for another's.
+A generated file has one namespace for its top-level names. A generator builds
+most of them by joining other names (a module and a type, a type and a helper
+suffix, a union, a tag and a suffix, a hosted function and a suffix), and it
+declares each of the platform's linker symbols under the symbol's own name.
+Joined names can be equal to each other, to a symbol, and to the names of the
+generator's own runtime support, so each generator states every name it
+declares, and `TypeNamePlan` gives each name to one declaration. A name the
+generator owns yields to a name it does not:
+
+- A linker symbol and a name of the runtime support are both fixed: the
+  platform header chose the first, and host code is written against the
+  second. A symbol that the generated file cannot declare (a keyword of the
+  file's language, a name of its runtime support, or a helper name the
+  generator derives from a type id, a list item type or another symbol) stops
+  the glue run with an error naming the symbol. Which names those are depends
+  on the language the file is written in, so the generator decides, not the
+  platform header check: that check rejects only what no host in any language
+  could define, the runtime symbols and the `roc__` prefix.
+- The names derived from a hosted function or a provided entry yield to the
+  fixed names and to each other: every function or entry involved takes names
+  derived from its hosted index or its place in the provides list.
+- A host type's names yield to all of those and to other host types': a name
+  declared for two host types denotes neither, and both take the names derived
+  from their shape ids, exactly like shapes that share a Roc name.
+- A preferred name is granted only when every name its type would declare
+  under it is free, and an alias is emitted only under a name nothing else
+  declares.
+
+If two declarations still collide under their id-derived names, the glue run
+fails with an error naming both. A generator never emits two declarations
+under one name, and never lets one declaration stand for another.
 
 The platform header maps linker symbols explicitly, symbol-string first, in
 both directions:

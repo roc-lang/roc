@@ -23,7 +23,10 @@ make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
 	input = GlueInput.from_types(types_list)
 	type_table = TypeTable.from_list(input.types)
-	duplicate_names = duplicate_type_names(input.hosted_functions, type_table)?
+	symbols = TypeNamePlan.platform_symbols(input.hosted_functions, input.provides_entries)
+	undeclarable_symbol_c(symbols)?
+	renamed_roots = renamed_roots_c(input.hosted_functions, input.provides_entries, type_table, symbols)?
+	duplicate_names = duplicate_type_names(input.hosted_functions, type_table, symbols, renamed_roots)?
 	header_content = generate_c_header(input.hosted_functions, type_table, input.provides_entries, duplicate_names)
 
 	Ok([{ name: "roc_platform_abi.h", content: header_content }])
@@ -259,17 +262,19 @@ hosted_module_name_to_struct_name = |name|
 		}
 	}
 
-## Roc names whose host types are emitted under shape-derived names: named
-## tag unions and named records whose name appears in the type table with
-## different shapes, and those whose declarations would collide with another
-## declaration in the generated header. The result is computed once per glue
-## run and reused while rendering type names.
-duplicate_type_names : List(HostedFunctionInfo), TypeTable -> Try(List(Str), Str)
-duplicate_type_names = |hosted_functions, type_table|
-	TypeNamePlan.shape_named(
-		reserved_type_names_c(hosted_functions, type_table),
-		List.concat(duplicate_tag_union_names(type_table), duplicate_record_names(type_table)),
-		|shape_named| declared_types_c(type_table, shape_named),
+## Roc names emitted under id-derived names. For host types these are the
+## named tag unions and named records whose name appears in the type table
+## with different shapes, and those whose declarations would collide with
+## another declaration in the generated header; they take shape-derived names.
+## `renamed_roots` are the hosted functions and provided entries that take
+## index-derived names. The result is computed once per glue run and reused
+## while rendering names.
+duplicate_type_names : List(HostedFunctionInfo), TypeTable, List(Str), List(Str) -> Try(List(Str), Str)
+duplicate_type_names = |hosted_functions, type_table, symbols, renamed_roots|
+	TypeNamePlan.disambiguated(
+		List.concat(reserved_type_names_c(hosted_functions, type_table, renamed_roots), symbols),
+		List.concat(renamed_roots, List.concat(duplicate_tag_union_names(type_table), duplicate_record_names(type_table))),
+		|renamed| declared_types_c(type_table, renamed),
 	)
 
 ## Type names the runtime support in every generated header declares or takes
@@ -303,29 +308,225 @@ runtime_type_names_c = [
 ## Type names the generated header declares whatever the type table's own
 ## types are named: the runtime support and each hosted function's argument
 ## type.
-reserved_type_names_c : List(HostedFunctionInfo), TypeTable -> List(Str)
-reserved_type_names_c = |hosted_functions, type_table| {
+reserved_type_names_c : List(HostedFunctionInfo), TypeTable, List(Str) -> List(Str)
+reserved_type_names_c = |hosted_functions, type_table, renamed| {
 	arg_shape = ArgShape.from_table(type_table)
 	var $names = runtime_type_names_c
 
 	for func in hosted_functions {
-		match arg_shape.hosted_args(func) {
-			NoMeaningfulArgs => {}
-			SingleRecordArg(_) => {
-				$names = $names.append("${name_to_struct_name(func.name)}Args")
-			}
-			PositionalArgs(_) => {
-				$names = $names.append("${name_to_struct_name(func.name)}Args")
-			}
-		}
+		$names = List.concat($names, hosted_top_level_names_c(arg_shape, renamed, func))
 	}
 
 	$names
 }
 
-## Every top-level type name the generated header declares for the host type
-## at `type_id` when it emits that type as `struct_name`: the type itself and
-## each helper type named after it.
+## Names other than type names that the generated header declares or uses
+## whatever the platform holds: its macros and functions, and the names it
+## takes from the standard headers it includes. The header declares each
+## platform symbol under the symbol's own name, which would redefine one of
+## these or be rewritten by it.
+runtime_value_names_c : List(Str)
+runtime_value_names_c = [
+	"HOSTED_FUNCTION_COUNT",
+	"ROC_ALIGNAS",
+	"ROC_ALIGNOF",
+	"ROC_ASSERT_VECTOR",
+	"ROC_ERASED_CALLABLE_CAPTURE_ALIGNMENT",
+	"ROC_ERASED_CALLABLE_CAPTURE_OFFSET",
+	"ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT",
+	"ROC_ERASED_CALLABLE_PAYLOAD_SIZE",
+	"ROC_PLATFORM_ABI_H",
+	"ROC_RETURNS_NONNULL",
+	"ROC_STATIC_ASSERT",
+	"UINT64_MAX",
+	"UINTPTR_MAX",
+	"bool",
+	"false",
+	"int16_t",
+	"int16x8_t",
+	"int32_t",
+	"int32x4_t",
+	"int64_t",
+	"int64x2_t",
+	"int8_t",
+	"int8x16_t",
+	"intptr_t",
+	"offsetof",
+	"ptrdiff_t",
+	"roc_abi_copy_bytes",
+	"roc_erased_callable_capture_ptr",
+	"roc_erased_callable_payload_ptr",
+	"size_t",
+	"true",
+	"uint16_t",
+	"uint16x8_t",
+	"uint32_t",
+	"uint32x4_t",
+	"uint64_t",
+	"uint64x2_t",
+	"uint8_t",
+	"uint8x16_t",
+	"uintptr_t",
+	"v128_t",
+]
+
+## Words C keeps for itself, which cannot name a declaration.
+keywords_c : List(Str)
+keywords_c = [
+	"alignas",
+	"alignof",
+	"auto",
+	"break",
+	"case",
+	"char",
+	"const",
+	"continue",
+	"default",
+	"do",
+	"double",
+	"else",
+	"enum",
+	"extern",
+	"float",
+	"for",
+	"goto",
+	"if",
+	"inline",
+	"int",
+	"long",
+	"register",
+	"restrict",
+	"return",
+	"short",
+	"signed",
+	"sizeof",
+	"static",
+	"static_assert",
+	"struct",
+	"switch",
+	"typedef",
+	"union",
+	"unsigned",
+	"void",
+	"volatile",
+	"while",
+]
+
+## True for the identifiers C reserves for the implementation, which the
+## compiler and its headers may define as anything: those that begin with two
+## underscores, or with an underscore and an uppercase letter.
+is_implementation_name_c : Str -> Bool
+is_implementation_name_c = |name| {
+		bytes = Str.to_utf8(name)
+		match List.get(bytes, 1) {
+			Ok(second) => List.first(bytes) == Ok('_') and (second == '_' or (second >= 'A' and second <= 'Z'))
+			Err(_) => Bool.False
+		}
+	}
+
+## An error when the generated header cannot declare one of the platform's
+## symbols under its own name: the name is a keyword, is reserved for the C
+## implementation, or belongs to the runtime support.
+undeclarable_symbol_c : List(Str) -> Try({}, Str)
+undeclarable_symbol_c = |symbols| {
+	fixed_names = List.concat(runtime_type_names_c, List.concat(runtime_value_names_c, keywords_c))
+	TypeNamePlan.undeclarable_symbol(symbols, fixed_names)?
+
+	for symbol in symbols {
+		if is_implementation_name_c(symbol) {
+			return Err(TypeNamePlan.symbol_error(symbol))
+		}
+	}
+
+	Ok({})
+}
+
+## The name a hosted function's argument type, and the aliases of the types
+## it reaches, are derived from.
+hosted_struct_name_c : List(Str), HostedFunctionInfo -> Str
+hosted_struct_name_c = |renamed, func|
+	Str.concat(name_to_struct_name(func.name), TypeNamePlan.index_suffix(renamed, func.name, func.index, "Hosted"))
+
+## The name of a hosted function's index macro, after `HOSTED_IDX_`.
+hosted_upper_ident_c : List(Str), HostedFunctionInfo -> Str
+hosted_upper_ident_c = |renamed, func|
+	Str.concat(name_to_upper_ident(func.name), TypeNamePlan.index_suffix(renamed, func.name, func.index, "_HOSTED"))
+
+## The name of a hosted function's member of `HostedFunctions`.
+hosted_field_ident_c : List(Str), HostedFunctionInfo -> Str
+hosted_field_ident_c = |renamed, func|
+	Str.concat(name_to_c_field_ident(func.name), TypeNamePlan.index_suffix(renamed, func.name, func.index, "_hosted"))
+
+## The name the aliases of the types a provided entry reaches are derived
+## from. `position` is the entry's place in the platform's provides list.
+provided_struct_name_c : List(Str), ProvidesEntry, U64 -> Str
+provided_struct_name_c = |renamed, entry, position|
+	Str.concat(name_to_struct_name(entry.name), TypeNamePlan.index_suffix(renamed, entry.name, position, "Provided"))
+
+## The top-level names the generated header declares for a hosted function:
+## its index macro and its argument type.
+hosted_top_level_names_c : ArgShape, List(Str), HostedFunctionInfo -> List(Str)
+hosted_top_level_names_c = |arg_shape, renamed, func| {
+	index_macro = "HOSTED_IDX_${hosted_upper_ident_c(renamed, func)}"
+
+	match arg_shape.hosted_args(func) {
+		NoMeaningfulArgs => [index_macro]
+		SingleRecordArg(_) => [index_macro, "${hosted_struct_name_c(renamed, func)}Args"]
+		PositionalArgs(_) => [index_macro, "${hosted_struct_name_c(renamed, func)}Args"]
+	}
+}
+
+## What the generated header derives from the name of each hosted function and
+## each provided entry when the Roc names in `renamed` take index-derived
+## names: a hosted function's top-level names; its member of
+## `HostedFunctions`, which is compared only with other members; and the base
+## its aliases are named from, which is not itself declared and so is compared
+## only with other bases.
+declared_roots_c : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> List(TypeNamePlan.Declared)
+declared_roots_c = |hosted_functions, provides_list, type_table, renamed| {
+	arg_shape = ArgShape.from_table(type_table)
+	var $declared = []
+
+	for func in hosted_functions {
+		$declared = $declared.append({
+			roc_name: func.name,
+			id: func.index * 2,
+			names: List.concat(
+				hosted_top_level_names_c(arg_shape, renamed, func),
+				[
+					"member ${hosted_field_ident_c(renamed, func)}",
+					"base ${hosted_struct_name_c(renamed, func)}",
+				],
+			),
+		})
+	}
+
+	var $position = 0
+	for entry in provides_list {
+		$declared = $declared.append({
+			roc_name: entry.name,
+			id: $position * 2 + 1,
+			names: ["base ${provided_struct_name_c(renamed, entry, $position)}"],
+		})
+		$position = $position + 1
+	}
+
+	$declared
+}
+
+## The hosted functions and provided entries whose derived names take
+## index-derived names, because they would collide with another declaration.
+renamed_roots_c : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> Try(List(Str), Str)
+renamed_roots_c = |hosted_functions, provides_list, type_table, symbols|
+	TypeNamePlan.disambiguated(
+		List.concat(runtime_type_names_c, List.concat(runtime_value_names_c, symbols)),
+		[],
+		|renamed| declared_roots_c(hosted_functions, provides_list, type_table, renamed),
+	)
+
+## Every top-level name the generated header declares for the host type at
+## `type_id` when it emits that type as `struct_name`: the type itself and each
+## helper type, tag constant, and function named after it.
 type_names_declared_as_c : TypeTable, U64, Str -> List(Str)
 type_names_declared_as_c = |type_table, type_id, struct_name|
 	match type_table.get(type_id) {
@@ -338,20 +539,29 @@ type_names_declared_as_c = |type_table, type_id, struct_name|
 		RocTagUnion(tu) =>
 			if is_declared_tag_union_c(tu) {
 				abi_layout = type_table.layout(type_id)
-				if abi_layout.tag_union_has_payload() {
-					abi_tags = abi_tag_layouts_c(abi_layout)
-					var $names = [struct_name, "${struct_name}Tag", "${struct_name}TagPayloadStorage"]
-					var $tag_idx = 0
-					for tag in tu.tags {
-						if abi_tag_has_payload_c(abi_tag_at_c(abi_tags, $tag_idx)) and List.len(tag.payload) != 1 {
-							$names = $names.append("${struct_name}${name_to_struct_name(tag.name)}Payload")
-						}
-						$tag_idx = $tag_idx + 1
-					}
-					$names
+				has_payload = abi_layout.tag_union_has_payload()
+				abi_tags = abi_tag_layouts_c(abi_layout)
+				var $names = if has_payload {
+					[struct_name, "${struct_name}Tag", "${struct_name}TagPayloadStorage"]
 				} else {
 					[struct_name]
 				}
+				var $tag_idx = 0
+				for tag in tu.tags {
+					$names = $names.append("${struct_name}Tag_${name_to_struct_name(tag.name)}")
+					if has_payload {
+						field_name = name_to_c_field_ident(tag.name)
+						$names = $names.append("${struct_name}_make_${field_name}")
+						if abi_tag_has_payload_c(abi_tag_at_c(abi_tags, $tag_idx)) {
+							$names = $names.append("${struct_name}_payload_${field_name}")
+							if List.len(tag.payload) != 1 {
+								$names = $names.append("${struct_name}${name_to_struct_name(tag.name)}Payload")
+							}
+						}
+					}
+					$tag_idx = $tag_idx + 1
+				}
+				$names
 			} else {
 				[]
 			}
@@ -382,7 +592,7 @@ declared_types_c = |type_table, duplicate_names| {
 						struct_name = record_struct_name(type_table, duplicate_names, $type_id, rec)
 						$declared = $declared.append({
 							roc_name: rec.name,
-							shape_id: $type_id,
+							id: $type_id,
 							names: type_names_declared_as_c(type_table, $type_id, struct_name),
 						})
 					}
@@ -391,7 +601,7 @@ declared_types_c = |type_table, duplicate_names| {
 						struct_name = default_tag_union_struct_name(type_table, duplicate_names, $type_id, tu)
 						$declared = $declared.append({
 							roc_name: tu.name,
-							shape_id: $type_id,
+							id: $type_id,
 							names: type_names_declared_as_c(type_table, $type_id, struct_name),
 						})
 					}
@@ -405,11 +615,14 @@ declared_types_c = |type_table, duplicate_names| {
 	$declared
 }
 
-## Every type name the generated header declares before any preferred name or
-## alias is chosen.
-declared_type_names_c : List(HostedFunctionInfo), TypeTable, List(Str) -> List(Str)
-declared_type_names_c = |hosted_functions, type_table, duplicate_names| {
-	var $names = reserved_type_names_c(hosted_functions, type_table)
+## Every name the generated header declares before any preferred name or alias
+## is chosen, which neither of those may take.
+declared_type_names_c : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> List(Str)
+declared_type_names_c = |hosted_functions, provides_list, type_table, duplicate_names| {
+	var $names = List.concat(
+		reserved_type_names_c(hosted_functions, type_table, duplicate_names),
+		TypeNamePlan.platform_symbols(hosted_functions, provides_list),
+	)
 
 	for declared in declared_types_c(type_table, duplicate_names) {
 		$names = List.concat($names, declared.names)
@@ -455,7 +668,7 @@ type_name_roots_c = |hosted_functions, provides_list, type_table, ambiguous_name
 	var $roots = []
 
 	for func in hosted_functions {
-		base = name_to_struct_name(func.name)
+		base = hosted_struct_name_c(ambiguous_names, func)
 		module_base = hosted_module_name_to_struct_name(func.name)
 
 		var $arg_idx = 0
@@ -476,9 +689,11 @@ type_name_roots_c = |hosted_functions, provides_list, type_table, ambiguous_name
 		})
 	}
 
+	var $position = 0
 	for entry in provides_list {
-		base = name_to_struct_name(entry.name)
+		base = provided_struct_name_c(ambiguous_names, entry, $position)
 		module_base = hosted_module_name_to_struct_name(entry.name)
+		$position = $position + 1
 
 		match entry.exported {
 			ProvidedProcedure(func) => {
@@ -552,7 +767,7 @@ type_alias_roots_c = |hosted_functions, provides_list, type_table, ambiguous_nam
 	var $roots = []
 
 	for func in hosted_functions {
-		base = name_to_struct_name(func.name)
+		base = hosted_struct_name_c(ambiguous_names, func)
 		module_base = hosted_module_name_to_struct_name(func.name)
 
 		var $arg_idx = 0
@@ -565,9 +780,11 @@ type_alias_roots_c = |hosted_functions, provides_list, type_table, ambiguous_nam
 		$roots = append_type_alias_roots_c($roots, type_table, ambiguous_names, base, module_base, func.ret_type_id, [])
 	}
 
+	var $position = 0
 	for entry in provides_list {
-		base = name_to_struct_name(entry.name)
+		base = provided_struct_name_c(ambiguous_names, entry, $position)
 		module_base = hosted_module_name_to_struct_name(entry.name)
+		$position = $position + 1
 
 		match entry.exported {
 			ProvidedProcedure(func) => {
@@ -592,7 +809,7 @@ type_alias_roots_c = |hosted_functions, provides_list, type_table, ambiguous_nam
 preferred_type_names_c : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> TypeNamePlan.PreferredNames
 preferred_type_names_c = |hosted_functions, provides_list, type_table, duplicate_names|
 	TypeNamePlan.from_table(type_table).preferred_names(
-		declared_type_names_c(hosted_functions, type_table, duplicate_names),
+		declared_type_names_c(hosted_functions, provides_list, type_table, duplicate_names),
 		type_name_roots_c(hosted_functions, provides_list, type_table, duplicate_names),
 		|type_id, struct_name| type_names_declared_as_c(type_table, type_id, struct_name),
 	)
@@ -710,12 +927,12 @@ generate_c_header = |hosted_functions, type_table, provides_list, duplicate_name
 	duplicate_tags = duplicate_names
 	preferred_names = preferred_type_names_c(hosted_functions, provides_list, type_table, duplicate_names)
 
-	defines = generate_defines(hosted_functions)
+	defines = generate_defines(hosted_functions, duplicate_names)
 	count = List.len(hosted_functions)
 	type_decls = generate_type_decls(type_table, duplicate_records, duplicate_tags, preferred_names)
 	type_aliases = generate_platform_type_aliases_c(hosted_functions, provides_list, type_table, duplicate_records, duplicate_tags, preferred_names)
 	args_structs = generate_all_args_structs(hosted_functions, type_table, duplicate_records, duplicate_tags, preferred_names)
-	hosted_fn_fields = generate_hosted_fn_fields(hosted_functions)
+	hosted_fn_fields = generate_hosted_fn_fields(hosted_functions, duplicate_names)
 	hosted_symbol_decls = generate_hosted_symbol_decls(hosted_functions, type_table, duplicate_records, duplicate_tags, preferred_names)
 	provided_symbol_decls = generate_provided_symbol_decls(provides_list, type_table, duplicate_records, duplicate_tags, preferred_names)
 
@@ -740,12 +957,12 @@ generate_c_header = |hosted_functions, type_table, provides_list, duplicate_name
 		.concat(header_guard_bottom)
 }
 
-generate_defines : List(HostedFunctionInfo) -> Str
-generate_defines = |hosted_functions| {
+generate_defines : List(HostedFunctionInfo), List(Str) -> Str
+generate_defines = |hosted_functions, renamed| {
 	var $defines = ""
 	var $first = Bool.True
 	for func in hosted_functions {
-		upper_name = name_to_upper_ident(func.name)
+		upper_name = hosted_upper_ident_c(renamed, func)
 		if !$first {
 			$defines = Str.concat($defines, "\n")
 		}
@@ -1171,7 +1388,7 @@ generate_all_args_structs = |hosted_functions, type_table, duplicate_records, du
 
 generate_args_struct : HostedFunctionInfo, TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames -> Str
 generate_args_struct = |func, type_table, duplicate_records, duplicate_tags, preferred_names| {
-	struct_name = name_to_struct_name(func.name)
+	struct_name = hosted_struct_name_c(duplicate_records, func)
 	arg_shape = ArgShape.from_table(type_table)
 
 	match arg_shape.hosted_args(func) {
@@ -1254,7 +1471,7 @@ direct_hosted_param_list = |type_table, duplicate_records, duplicate_tags, prefe
 
 	for arg_type_id in arg_shape.positional_non_unit_type_ids(func.arg_type_ids) {
 		arg_c = if use_args_wrapper {
-			"${name_to_struct_name(func.name)}Args"
+			"${hosted_struct_name_c(duplicate_records, func)}Args"
 		} else {
 			type_id_to_c(type_table, duplicate_records, duplicate_tags, preferred_names, arg_type_id)
 		}
@@ -1322,13 +1539,13 @@ generate_provided_symbol_decls = |provides_list, type_table, duplicate_records, 
 	section("Provided Symbols", $decls)
 }
 
-generate_hosted_fn_fields : List(HostedFunctionInfo) -> Str
-generate_hosted_fn_fields = |hosted_functions| {
+generate_hosted_fn_fields : List(HostedFunctionInfo), List(Str) -> Str
+generate_hosted_fn_fields = |hosted_functions, renamed| {
 	var $fields = ""
 	var $first = Bool.True
 
 	for f in hosted_functions {
-		field_name = name_to_c_field_ident(f.name)
+		field_name = hosted_field_ident_c(renamed, f)
 		c_func_name = name_to_c_func_name(f.name)
 		if !$first {
 			$fields = Str.concat($fields, "\n")

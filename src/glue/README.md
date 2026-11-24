@@ -214,38 +214,66 @@ sizes, or field lists.
 
 ### One Namespace Per Generated File
 
-A generated file has one namespace for its top-level type names, and every
-name a generator puts there is built by joining other names: a module and a
-type (`A.BC` and `AB.C` are both `ABC`), a type and a helper suffix
+A generated file has one namespace for its top-level names, and most names a
+generator puts there are built by joining other names: a module and a type
+(`A.BC` and `AB.C` are both `ABC`), a type and a helper suffix
 (`EventRelease`, `EventTag`, `EventPayload`), a union, a tag, and a suffix
-(`EventPressPayload`), or a hosted function and a suffix (`HostSendArgs`).
-Nothing about Roc's own naming rules keeps two of those from being equal, or
-from equaling a name the runtime support declares, imports, or uses for a
-parameter. `TypeNamePlan` therefore decides who gets each name, in this order
-of precedence:
+(`EventPressPayload`), or a hosted function and a suffix (`HostSendArgs`). The
+rest come from the platform header as linker symbols, which the file declares
+under their own names. Nothing about Roc's naming rules keeps two of those
+from being equal, or from equaling a name the runtime support declares,
+imports, or uses for a parameter. `TypeNamePlan` therefore decides who gets
+each name, in this order of precedence:
 
-1. Reserved names: the runtime support's names and each hosted function's
-   argument and result types. Each generator lists its own
-   (`runtime_type_names_*`, `reserved_type_names_*`); a declaration added to a
-   generator's runtime support is added to that list.
-2. Each host type's own name and the helper names derived from it, which a
-   generator reports through `type_names_declared_as_*`. When one of them is
-   reserved, or is also declared for another host type, the name denotes
-   neither, and `TypeNamePlan.shape_named` adds the Roc names involved to the
-   ones emitted under shape-derived names. A generator's `duplicate_names` is
-   that complete list. Two host types whose shape-derived names still collide
-   make the glue run fail with an error that names both.
-3. Preferred names (`HostLoadResult` for the `Try` a hosted `Host.load!`
+1. Fixed names. The platform's linker symbols cannot change, and neither can
+   the runtime support's names, which host code is written against. A symbol
+   that a generator cannot declare stops the glue run with an error that names
+   it (`undeclarable_symbol_*`): a keyword of the generator's language, a name
+   in `runtime_type_names_*` or `runtime_value_names_*`, or a name from a
+   family the generator derives from type ids, list item types, or other
+   symbols (RustGlue's `<symbol>_owned`, for example). What a symbol collides
+   with differs by language: a Rust function shares a namespace only with
+   other values, C adds its macros and the standard headers' names, and Zig
+   rejects a top-level name shared with any parameter or local in the file.
+   So each list holds the names for which a symbol of that name makes
+   that generator's output fail to compile, and a declaration, import,
+   parameter, or local added to a generator's runtime support is added to its
+   list.
+2. Names derived from a hosted function or a provided entry: its argument and
+   result types, its index macro and `HostedFunctions` member in C, and the
+   base its aliases are named from (`declared_roots_*`). When one of them is
+   fixed, or is also derived from another function or entry, both take names
+   derived from their hosted index or their place in the provides list:
+   `Host.send_it!` and `Host.sendIt!` become `HostSendItHosted4Args` and
+   `HostSendItHosted5Args`.
+3. Each host type's own name and the names derived from it, which a generator
+   reports through `type_names_declared_as_*`. When one of them is taken by
+   anything above, or is also declared for another host type, the name denotes
+   neither, and `TypeNamePlan.disambiguated` adds the Roc names involved to
+   the ones emitted under shape-derived names.
+4. Preferred names (`HostLoadResult` for the `Try` a hosted `Host.load!`
    returns), granted only when every name the type would declare under the
    preferred name is free.
-4. Aliases, emitted only under names nothing above declares. A tag union's
+5. Aliases, emitted only under names nothing above declares. A tag union's
    `Payload` and `Tag` aliases are emitted only with the alias they are named
    after.
 
-So a collision renames the declarations that collide and drops the aliases
-that collide, and what remains always compiles. `issue 13350: declared names
-stay distinct in every generator` builds a platform out of such collisions and
-compiles all three outputs.
+A generator's `duplicate_names` is the complete list of Roc names, of types,
+hosted functions, and provided entries, that take id-derived names. Two
+declarations whose id-derived names still collide make the glue run fail with
+an error that names both.
+
+So a collision renames the declarations a generator owns, drops the aliases
+that collide, and rejects only a name the platform fixed, and what a generator
+emits always compiles. `issue 13350: declared names stay distinct in every
+generator` builds a platform out of such collisions and compiles all three
+outputs, and `RustGlue rejects a linker symbol it cannot declare` and its
+ZigGlue and CGlue counterparts cover both sides of the symbol rule.
+
+The rule covers the names a generator's own output declares or uses. It does
+not cover the rest of what C's included headers declare (`<arm_neon.h>`
+alone declares thousands of intrinsics), so a symbol named like one of those
+still fails in the C compiler.
 
 ## Regenerating the C Header Snapshot
 

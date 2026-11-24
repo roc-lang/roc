@@ -1,3 +1,5 @@
+import HostedFunctionInfo
+import ProvidesEntry
 import RocName
 import TypeTable
 
@@ -11,26 +13,36 @@ import TypeTable
 ## because language-specific escaping and reserved words stay local. This module
 ## only walks the reflected type graph and returns data plans.
 ##
-## A generated file has one namespace for its top-level type names. Four kinds
-## of name land in it, and each kind yields to the ones before it:
+## A generated file has one namespace for its top-level names. Five kinds of
+## name land in it, and each kind yields to the ones before it:
 ##
-## 1. The names of the generated runtime support and of each hosted function's
-##    argument and result types. A generator reserves them.
-## 2. Each host type's own name and the helper names derived from it, which a
-##    generator reports as one `Declared`. `shape_named` settles which Roc names
-##    need a shape-derived name for all of these to be distinct.
-## 3. Preferred names, which replace a host type's own name and so claim the
-##    helper names derived from them too. `preferred_names` grants one only
-##    when every name it claims is free.
-## 4. Aliases, which a generator emits only under names that
+## 1. The platform's linker symbols, which the file declares under their own
+##    names, and the names of the generated runtime support, which host code
+##    is written against. Neither can change, so a symbol that is one of the
+##    runtime support's names is an error (`undeclarable_symbol`).
+## 2. The names derived from each hosted function, which a generator reports
+##    as one `Declared`. `disambiguated` settles which functions need names
+##    derived from their hosted index for these to be distinct.
+## 3. Each host type's own name and the names derived from it, also one
+##    `Declared` each. `disambiguated` settles which Roc type names need a
+##    shape-derived name.
+## 4. Preferred names, which replace a host type's own name and so claim the
+##    names derived from them too. `preferred_names` grants one only when
+##    every name it claims is free.
+## 5. Aliases, which a generator emits only under names that
 ##    `PreferredNames.declared_names` leaves free.
 TypeNamePlan := { table : TypeTable }.{
 	Root := { alias_base : Str, module_base : Str, type_id : U64 }
 
-	## The names a generator declares for one host type when it emits that type
-	## under one name: the name itself and every helper name derived from it.
-	## `shape_id` identifies the host type; see `TypeInfo`.
-	Declared := { roc_name : Str, shape_id : U64, names : List(Str) }
+	## The names a generator declares for one host type or one hosted function
+	## when it emits it under one name: the name itself and every name derived
+	## from it. `id` tells the declarations of one kind apart: a host type's
+	## shape id (see `TypeInfo`) or a hosted function's index.
+	##
+	## A name that lives in a namespace of its own, such as a struct member,
+	## is reported with a prefix no identifier can have, so that it is compared
+	## only with the other names of that namespace.
+	Declared := { roc_name : Str, id : U64, names : List(Str) }
 
 	PreferredName := { name : Str, type_id : U64 }
 
@@ -65,46 +77,95 @@ TypeNamePlan := { table : TypeTable }.{
 	from_table : TypeTable -> TypeNamePlan
 	from_table = |table| TypeNamePlan.{ table }
 
-	## The Roc names whose host types are emitted under a shape-derived name
-	## (see `TypeTable.shape_suffix`): `shared_names`, each of which names
-	## several host types, and every Roc name with a declared name that is
-	## also reserved or declared for another host type. A name declared twice
-	## denotes neither declaration, so both host types take shape-derived
-	## names.
+	## Every linker symbol the platform header names: the hosted functions'
+	## symbols, then the provided ones.
+	platform_symbols : List(HostedFunctionInfo), List(ProvidesEntry) -> List(Str)
+	platform_symbols = |hosted_functions, provides_list| {
+		var $symbols = []
+
+		for func in hosted_functions {
+			$symbols = $symbols.append(func.ffi_symbol)
+		}
+		for entry in provides_list {
+			$symbols = $symbols.append(entry.ffi_symbol)
+		}
+
+		$symbols
+	}
+
+	## The first of `symbols` that is one of `fixed_names`, as an error: the
+	## generated file declares each platform symbol under the symbol's own
+	## name, and `fixed_names` are names it declares that host code depends on.
+	undeclarable_symbol : List(Str), List(Str) -> Try({}, Str)
+	undeclarable_symbol = |symbols, fixed_names| {
+		fixed = Set.from_list(fixed_names)
+
+		for symbol in symbols {
+			if fixed.contains(symbol) {
+				return Err(symbol_error(symbol))
+			}
+		}
+
+		Ok({})
+	}
+
+	## The error for a platform symbol the generated file cannot declare.
+	symbol_error : Str -> Str
+	symbol_error = |symbol|
+		"Glue cannot declare the platform symbol `${symbol}`: the generated bindings, or the language they are written in, already use that name. Give the symbol another name in the platform header."
+
+	## The suffix a name derived from the hosted function or provided entry
+	## `name` takes when `renamed` holds that name: `marker` followed by
+	## `index`, which nothing else of its kind has.
+	index_suffix : List(Str), Str, U64, Str -> Str
+	index_suffix = |renamed, name, index, marker|
+		if List.contains(renamed, name) {
+			"${marker}${U64.to_str(index)}"
+		} else {
+			""
+		}
+
+	## The Roc names emitted under names derived from their ids (a shape id,
+	## see `TypeTable.shape_suffix`, or a hosted index, see
+	## `index_suffix`): `shared_names`, each of which names several
+	## declarations, and every Roc name with a declared name that is also
+	## reserved or declared under another id. A name declared twice denotes
+	## neither declaration, so both take id-derived names.
 	##
 	## `declared_for` gives the declarations that result from emitting a given
-	## list of Roc names under shape-derived names. Renaming one type can
+	## list of Roc names under id-derived names. Renaming one declaration can
 	## uncover a collision with another, so the list grows until every
-	## declaration is distinct. Two host types that still collide under their
-	## shape-derived names have no distinct names to take, which is an error.
-	shape_named : List(Str), List(Str), (List(Str) -> List(Declared)) -> Try(List(Str), Str)
-	shape_named = |reserved, shared_names, declared_for|
-		shape_named_from(Set.from_list(reserved), shared_names, declared_for)
+	## declaration is distinct. Two declarations that still collide under
+	## their id-derived names have no distinct names to take, which is an
+	## error.
+	disambiguated : List(Str), List(Str), (List(Str) -> List(Declared)) -> Try(List(Str), Str)
+	disambiguated = |reserved, shared_names, declared_for|
+		disambiguated_from(Set.from_list(reserved), shared_names, declared_for)
 
-	shape_named_from : Set(Str), List(Str), (List(Str) -> List(Declared)) -> Try(List(Str), Str)
-	shape_named_from = |reserved, shape_named_so_far, declared_for| {
+	disambiguated_from : Set(Str), List(Str), (List(Str) -> List(Declared)) -> Try(List(Str), Str)
+	disambiguated_from = |reserved, renamed_so_far, declared_for| {
 		var $owners = Dict.empty()
 		var $colliding = []
 		var $unresolved = ""
 
-		for declared in declared_for(shape_named_so_far) {
-			declared_renamed = List.contains(shape_named_so_far, declared.roc_name)
+		for declared in declared_for(renamed_so_far) {
+			declared_renamed = List.contains(renamed_so_far, declared.roc_name)
 
 			for name in declared.names {
 				if reserved.contains(name) {
 					if declared_renamed {
-						$unresolved = "Glue cannot name the Roc type `${declared.roc_name}`: it would be declared as `${name}`, which the generated bindings already declare."
+						$unresolved = "Glue cannot name `${declared.roc_name}`: it would be declared as `${name}`, which the generated bindings already declare."
 					} else if !List.contains($colliding, declared.roc_name) {
 						$colliding = $colliding.append(declared.roc_name)
 					}
 				} else {
 					match $owners.get(name) {
 						Ok(owner) =>
-							if owner.shape_id != declared.shape_id {
-								owner_renamed = List.contains(shape_named_so_far, owner.roc_name)
+							if owner.id != declared.id {
+								owner_renamed = List.contains(renamed_so_far, owner.roc_name)
 
 								if owner_renamed and declared_renamed {
-									$unresolved = "Glue cannot give the Roc types `${owner.roc_name}` and `${declared.roc_name}` distinct names: both would be declared as `${name}`."
+									$unresolved = "Glue cannot give `${owner.roc_name}` and `${declared.roc_name}` distinct names: both would be declared as `${name}`."
 								}
 								if !owner_renamed and !List.contains($colliding, owner.roc_name) {
 									$colliding = $colliding.append(owner.roc_name)
@@ -114,7 +175,7 @@ TypeNamePlan := { table : TypeTable }.{
 								}
 							}
 						Err(_) => {
-							$owners = $owners.insert(name, { roc_name: declared.roc_name, shape_id: declared.shape_id })
+							$owners = $owners.insert(name, { roc_name: declared.roc_name, id: declared.id })
 						}
 					}
 				}
@@ -122,11 +183,11 @@ TypeNamePlan := { table : TypeTable }.{
 		}
 
 		if !List.is_empty($colliding) {
-			shape_named_from(reserved, List.concat(shape_named_so_far, $colliding), declared_for)
+			disambiguated_from(reserved, List.concat(renamed_so_far, $colliding), declared_for)
 		} else if $unresolved != "" {
 			Err($unresolved)
 		} else {
-			Ok(shape_named_so_far)
+			Ok(renamed_so_far)
 		}
 	}
 
@@ -332,74 +393,86 @@ TypeNamePlan := { table : TypeTable }.{
 }
 
 ## Declares each sample type as a generator would: under its Roc name, or under
-## its shape-derived name when `shape_named` holds that Roc name, together with
+## its shape-derived name when `renamed` holds that Roc name, together with
 ## one helper named after it.
-sample_declared : List({ roc_name : Str, shape_id : U64 }), List(Str) -> List(TypeNamePlan.Declared)
-sample_declared = |types, shape_named|
+sample_declared : List({ roc_name : Str, id : U64 }), List(Str) -> List(TypeNamePlan.Declared)
+sample_declared = |types, renamed|
 	List.map(
 		types,
 		|sample| {
 			name =
-				if List.contains(shape_named, sample.roc_name) {
-					"${sample.roc_name}Type${U64.to_str(sample.shape_id)}"
+				if List.contains(renamed, sample.roc_name) {
+					"${sample.roc_name}Type${U64.to_str(sample.id)}"
 				} else {
 					sample.roc_name
 				}
 
-			{ roc_name: sample.roc_name, shape_id: sample.shape_id, names: [name, "${name}Release"] }
+			{ roc_name: sample.roc_name, id: sample.id, names: [name, "${name}Release"] }
 		},
 	)
 
 ## Distinct declarations leave every type under its own name.
-expect TypeNamePlan.shape_named(
+expect TypeNamePlan.disambiguated(
 	["RocStr"],
 	[],
-	|shape_named| sample_declared([{ roc_name: "Event", shape_id: 0 }, { roc_name: "Key", shape_id: 1 }], shape_named),
+	|renamed| sample_declared([{ roc_name: "Event", id: 0 }, { roc_name: "Key", id: 1 }], renamed),
 ) == Ok([])
 
 ## A type named like another type's helper, and a type named like a reserved
 ## name, take shape-derived names; so does the type whose helper collided.
-expect TypeNamePlan.shape_named(
+expect TypeNamePlan.disambiguated(
 	["RocStr"],
 	[],
-	|shape_named| sample_declared(
+	|renamed| sample_declared(
 		[
-			{ roc_name: "Event", shape_id: 0 },
-			{ roc_name: "EventRelease", shape_id: 1 },
-			{ roc_name: "RocStr", shape_id: 2 },
-			{ roc_name: "Key", shape_id: 3 },
+			{ roc_name: "Event", id: 0 },
+			{ roc_name: "EventRelease", id: 1 },
+			{ roc_name: "RocStr", id: 2 },
+			{ roc_name: "Key", id: 3 },
 		],
-		shape_named,
+		renamed,
 	),
 ) == Ok(["Event", "EventRelease", "RocStr"])
 
 ## Rows of one shape declare one host type, which does not collide with itself.
-expect TypeNamePlan.shape_named(
+expect TypeNamePlan.disambiguated(
 	[],
 	[],
-	|shape_named| sample_declared([{ roc_name: "Event", shape_id: 0 }, { roc_name: "Event", shape_id: 0 }], shape_named),
+	|renamed| sample_declared([{ roc_name: "Event", id: 0 }, { roc_name: "Event", id: 0 }], renamed),
 ) == Ok([])
 
 ## Renaming a type can make it collide with a type that had a distinct name.
-expect TypeNamePlan.shape_named(
+expect TypeNamePlan.disambiguated(
 	[],
 	["Wrap"],
-	|shape_named| sample_declared(
+	|renamed| sample_declared(
 		[
-			{ roc_name: "Wrap", shape_id: 0 },
-			{ roc_name: "Wrap", shape_id: 1 },
-			{ roc_name: "WrapType1", shape_id: 2 },
+			{ roc_name: "Wrap", id: 0 },
+			{ roc_name: "Wrap", id: 1 },
+			{ roc_name: "WrapType1", id: 2 },
 		],
-		shape_named,
+		renamed,
 	),
 ) == Ok(["Wrap", "WrapType1"])
 
 ## Two host types that collide under their shape-derived names are an error.
-expect TypeNamePlan.shape_named(
+expect TypeNamePlan.disambiguated(
 	[],
 	[],
-	|_shape_named| [
-		{ roc_name: "First", shape_id: 0, names: ["Same"] },
-		{ roc_name: "Second", shape_id: 1, names: ["Same"] },
+	|_renamed| [
+		{ roc_name: "First", id: 0, names: ["Same"] },
+		{ roc_name: "Second", id: 1, names: ["Same"] },
 	],
-) == Err("Glue cannot give the Roc types `First` and `Second` distinct names: both would be declared as `Same`.")
+) == Err("Glue cannot give `First` and `Second` distinct names: both would be declared as `Same`.")
+
+## A platform symbol named like a fixed name of the generated file is an error.
+expect TypeNamePlan.undeclarable_symbol(["roc_main", "decref_box"], ["decref_box", "RocStr"]) == Err("Glue cannot declare the platform symbol `decref_box`: the generated bindings, or the language they are written in, already use that name. Give the symbol another name in the platform header.")
+
+## Symbols that leave the fixed names alone can all be declared.
+expect TypeNamePlan.undeclarable_symbol(["roc_main", "roc_host_send"], ["decref_box", "RocStr"]) == Ok({})
+
+## Only a renamed function takes its index-derived suffix.
+expect TypeNamePlan.index_suffix(["Host.send_it!"], "Host.send_it!", 3, "Hosted") == "Hosted3"
+
+## Only a renamed function takes its index-derived suffix.
+expect TypeNamePlan.index_suffix(["Host.send_it!"], "Host.load!", 1, "Hosted") == ""

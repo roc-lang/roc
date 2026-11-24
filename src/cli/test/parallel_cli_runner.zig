@@ -823,6 +823,9 @@ const CustomCase = enum {
     glue_boxed_app_type,
     glue_generic_nominal_shapes,
     glue_declared_name_collisions,
+    glue_symbols_rust,
+    glue_symbols_zig,
+    glue_symbols_c,
     glue_opaque_ownership,
     glue_application_only_requires,
     glue_c_tests,
@@ -2859,6 +2862,9 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue regression: a heap payload holding the app's type by value is opaque in every generator", .body = .{ .custom = .glue_boxed_app_type } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: each instantiation of a generic nominal is its own type in every generator", .body = .{ .custom = .glue_generic_nominal_shapes } },
     .{ .id = 0, .suite = .glue, .name = "issue 13350: declared names stay distinct in every generator", .body = .{ .custom = .glue_declared_name_collisions } },
+    .{ .id = 0, .suite = .glue, .name = "RustGlue rejects a linker symbol it cannot declare", .body = .{ .custom = .glue_symbols_rust } },
+    .{ .id = 0, .suite = .glue, .name = "ZigGlue rejects a linker symbol it cannot declare", .body = .{ .custom = .glue_symbols_zig } },
+    .{ .id = 0, .suite = .glue, .name = "CGlue rejects a linker symbol it cannot declare", .body = .{ .custom = .glue_symbols_c } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: a value holding an opaque Roc value has no host release in any generator", .body = .{ .custom = .glue_opaque_ownership } },
     .{ .id = 0, .suite = .glue, .name = "issue 11504: application requirements are not glue roots", .body = .{ .custom = .glue_application_only_requires } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
@@ -7543,6 +7549,9 @@ fn runCustomCase(
         .glue_boxed_app_type => customGlueBoxedAppType(io, allocator, &env, &timer, timeout_ms),
         .glue_generic_nominal_shapes => customGlueGenericNominalShapes(io, allocator, &env, &timer, timeout_ms),
         .glue_declared_name_collisions => customGlueDeclaredNameCollisions(io, allocator, &env, &timer, timeout_ms),
+        .glue_symbols_rust => customGlueSymbolsRust(io, allocator, &env, &timer, timeout_ms),
+        .glue_symbols_zig => customGlueSymbolsZig(io, allocator, &env, &timer, timeout_ms),
+        .glue_symbols_c => customGlueSymbolsC(io, allocator, &env, &timer, timeout_ms),
         .glue_opaque_ownership => customGlueOpaqueOwnership(io, allocator, &env, &timer, timeout_ms),
         .glue_application_only_requires => customGlueApplicationOnlyRequires(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
@@ -20910,25 +20919,59 @@ fn customGlueBoxedAppType(io: std.Io, allocator: Allocator, env: *const CaseEnv,
 }
 
 fn customGlueDeclaredNameCollisions(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
-    // A generated file has one namespace for its top-level type names, and
-    // this platform fills it with names that would collide: tags whose
-    // payload aliases are named like the union's own helpers, types named
-    // like another type's helpers, like a hosted function's argument and
-    // result types, like the name preferred for a hosted function's result,
-    // and like the runtime support, and two types whose module-qualified
-    // names join to one host name. Every generator must still emit a file
-    // that compiles, which `checkGlueOutput` checks.
+    // A generated file has one namespace for its top-level names, and this
+    // platform fills it with names that would collide: tags whose payload
+    // aliases are named like the union's own helpers, types named like
+    // another type's helpers, like a hosted function's argument and result
+    // types, like the name preferred for a hosted function's result, like the
+    // runtime support, and like a linker symbol, two types whose
+    // module-qualified names join to one host name, two hosted functions and
+    // two provided definitions whose names do the same, and a linker symbol
+    // named like a hosted function's argument type. Every generator must
+    // still emit a file that compiles, which `checkGlueOutput` checks.
+    //
+    // Hosted functions that collide take names derived from their hosted
+    // index, and a type or hosted function named like a linker symbol leaves
+    // the name to the symbol. ZigGlue keeps the underscore of `send_it!`, so
+    // only the other two generators see that collision.
     //
     // A payload alias named like a helper is dropped rather than emitted
     // beside it, and the remaining aliases stay. C declares no release
     // helper, so there `EventRelease` is free for the alias.
     return checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/declared-name-collisions/main.roc", .{
-        .zig = &.{ "pub const EventRelease = struct {", "pub const EventPress = Key;" },
-        .c = &.{ "typedef Key EventPress;", "typedef Key EventRelease;" },
-        .rust = &.{ "pub struct EventRelease;", "pub type EventPress = Key;" },
+        .zig = &.{
+            "pub const EventRelease = struct {",
+            "pub const EventPress = Key;",
+            "pub const HostSend_itArgs = extern struct {",
+            "pub const HostSendItArgs = extern struct {",
+            "pub const HostPingHosted2Args = extern struct {",
+            "pub extern fn Slot(arg0: SlotType",
+            "pub extern fn HostPingArgs(arg0: u64) callconv(.c) u64;",
+        },
+        .c = &.{
+            "typedef Key EventPress;",
+            "typedef Key EventRelease;",
+            "#define HOSTED_IDX_HOST_SEND_IT_HOSTED4 4",
+            "#define HOSTED_IDX_HOST_SEND_IT_HOSTED5 5",
+            "} HostSendItHosted4Args;",
+            "} HostSendItHosted5Args;",
+            "    HostedFn host_send_it_bang_hosted4;",
+            "    HostedFn host_send_it_bang_hosted5;",
+            "} HostPingHosted2Args;",
+            "extern uint64_t HostPingArgs(uint64_t arg0);",
+        },
+        .rust = &.{
+            "pub struct EventRelease;",
+            "pub type EventPress = Key;",
+            "pub struct HostSendItHosted4Args {",
+            "pub struct HostSendItHosted5Args {",
+            "pub struct HostPingHosted2Args {",
+            "    pub fn HostPingArgs(arg0: u64) -> u64;",
+            "    pub fn Slot(arg0: SlotType",
+        },
         // A helper alias is emitted only with the alias it is named after,
         // and `HostLoadResult` is a type here, not an alias.
-        .absent = &.{ "pub type EventRelease", "pub const EventRelease = Key;", "HostLoadResultPayload" },
+        .absent = &.{ "pub type EventRelease", "pub const EventRelease = Key;", "HostLoadResultPayload", "pub struct HostSendItArgs", "} HostSendItArgs;", "HOSTED_IDX_HOST_SEND_IT ", "pub struct Slot {", "struct Slot {", "pub const Slot = " },
         // Each Roc type is still its own host type, with its own fields,
         // under whichever name it was declared.
         .zig_checks =
@@ -20958,6 +21001,120 @@ fn customGlueDeclaredNameCollisions(io: std.Io, allocator: Allocator, env: *cons
         \\    expectField(Param(abi.take_joined, 1), "second");
         \\}
         ,
+    });
+}
+
+/// A linker symbol and whether one generator can declare it.
+const GlueSymbolCase = struct {
+    symbol: []const u8,
+    declarable: bool,
+};
+
+/// A generated file declares each platform symbol under the symbol's own
+/// name, so a symbol named like something the file needs for itself (a
+/// keyword of its language, a name of its runtime support, a helper it derives
+/// from another symbol or from a type id) must stop the glue run with an
+/// error that names the symbol. A symbol that only another language's
+/// generator could not declare is declared, and the file compiles.
+fn checkGlueSymbols(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    language: GlueLanguage,
+    cases: []const GlueSymbolCase,
+) ?TestResult {
+    for (cases) |case| {
+        const platform_dir = createWorkSubdir(io, allocator, env, case.symbol) catch |err|
+            return customInfraFailure(allocator, timer, "failed to create platform dir: {}", .{err});
+        const platform_path = std.fs.path.join(allocator, &.{ platform_dir, "main.roc" }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate platform path: {}", .{err});
+        // `roc_entry` returns a refcounted value, which RustGlue wraps in a
+        // helper named after the symbol.
+        const platform_source = std.fmt.allocPrint(allocator,
+            \\platform "glue-symbol"
+            \\    requires {{
+            \\        unused : {{}} -> {{}}
+            \\    }}
+            \\    exposes []
+            \\    packages {{}}
+            \\    provides {{
+            \\        "roc_entry": entry,
+            \\        "{s}": other,
+            \\    }}
+            \\    targets: {{}}
+            \\
+            \\entry : Str -> Str
+            \\entry = |text| text
+            \\
+            \\other : U64 -> U64
+            \\other = |count| count
+            \\
+        , .{case.symbol}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate platform source: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = platform_path, .data = platform_source }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to write platform: {}", .{err});
+        const output_dir = std.fs.path.join(allocator, &.{ platform_dir, "glue-out" }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate glue output dir: {}", .{err});
+        std.Io.Dir.cwd().createDirPath(io, output_dir) catch |err|
+            return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+
+        if (case.declarable) {
+            if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+                .args = &.{ "glue", "--no-cache", language.glueSpec(), output_dir, platform_path },
+                .not_contains = &no_panic_or_invariant_needles,
+            })) |failure| return failure;
+            if (compileGlueOutput(io, allocator, env, timer, timeout_ms, language, output_dir, "")) |failure| return failure;
+            continue;
+        }
+
+        const message = std.fmt.allocPrint(allocator, "Glue cannot declare the platform symbol `{s}`", .{case.symbol}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate expected message: {}", .{err});
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "glue", "--no-cache", language.glueSpec(), output_dir, platform_path },
+            .exit = .failure,
+            .contains = &.{.{ .stream = .stderr, .text = message }},
+            .not_contains = &no_panic_or_invariant_needles,
+        })) |failure| return failure;
+    }
+    return null;
+}
+
+fn customGlueSymbolsRust(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // `RocStr` and `value` name nothing in the value namespace a Rust
+    // function lives in.
+    return checkGlueSymbols(io, allocator, env, timer, timeout_ms, .rust, &.{
+        .{ .symbol = "decref_box", .declarable = false },
+        .{ .symbol = "fn", .declarable = false },
+        .{ .symbol = "decref_list_of_str", .declarable = false },
+        .{ .symbol = "roc_entry_owned", .declarable = false },
+        .{ .symbol = "RocStr", .declarable = true },
+        .{ .symbol = "value", .declarable = true },
+    });
+}
+
+fn customGlueSymbolsZig(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // Zig rejects a top-level declaration that shares its name with a
+    // parameter or local anywhere in the file, such as `value`.
+    return checkGlueSymbols(io, allocator, env, timer, timeout_ms, .zig, &.{
+        .{ .symbol = "RocStr", .declarable = false },
+        .{ .symbol = "value", .declarable = false },
+        .{ .symbol = "u8", .declarable = false },
+        .{ .symbol = "decrefListOfStr", .declarable = false },
+        .{ .symbol = "decref_box", .declarable = true },
+        .{ .symbol = "Some", .declarable = true },
+    });
+}
+
+fn customGlueSymbolsC(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    return checkGlueSymbols(io, allocator, env, timer, timeout_ms, .c, &.{
+        .{ .symbol = "RocStr", .declarable = false },
+        .{ .symbol = "int", .declarable = false },
+        .{ .symbol = "__reserved", .declarable = false },
+        .{ .symbol = "ROC_ALIGNOF", .declarable = false },
+        .{ .symbol = "decref_box", .declarable = true },
+        .{ .symbol = "value", .declarable = true },
     });
 }
 
@@ -21296,56 +21453,76 @@ fn checkGlueOutput(
             }
         }
 
-        switch (language) {
-            .zig => {},
-            .c => {
-                const test_c_path = std.fs.path.join(allocator, &.{ output_dir, "test_header.c" }) catch |err|
-                    return customInfraFailure(allocator, timer, "failed to allocate test C path: {}", .{err});
-                std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_c_path, .data = "#include \"roc_platform_abi.h\"\n" }) catch |err|
-                    return customInfraFailure(allocator, timer, "failed to write test C file: {}", .{err});
-                const test_o_path = std.fs.path.join(allocator, &.{ output_dir, "test_header.o" }) catch |err|
-                    return customInfraFailure(allocator, timer, "failed to allocate test object path: {}", .{err});
-                const include_flag = std.fmt.allocPrint(allocator, "-I{s}", .{output_dir}) catch |err|
-                    return customInfraFailure(allocator, timer, "failed to allocate include flag: {}", .{err});
-                if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
-                    "zig", "cc", "-c", "-std=c11", "-Wall", "-Werror", include_flag, test_c_path, "-o", test_o_path,
-                }, project_root_path, .{ .args = &.{} })) |failure| return failure;
-                continue;
-            },
-            .rust => {
-                const test_rlib_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rlib" }) catch |err|
-                    return customInfraFailure(allocator, timer, "failed to allocate Rust rlib path: {}", .{err});
-                if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
-                    "rustc", "--edition=2021", "-D", "warnings", "--crate-type", "lib", generated_path, "-o", test_rlib_path,
-                }, project_root_path, .{ .args = &.{} })) |failure| return failure;
-                continue;
-            },
-        }
-        // `refAllDecls` only references declarations inside a test build, so
-        // the generated file is compiled as a test to analyze every
-        // declaration and helper body.
-        const test_zig_path = std.fs.path.join(allocator, &.{ output_dir, "test_abi.zig" }) catch |err|
-            return customInfraFailure(allocator, timer, "failed to allocate test Zig path: {}", .{err});
-        const test_zig_source = std.mem.concat(allocator, u8, &.{
-            \\const std = @import("std");
-            \\const abi = @import("roc_platform_abi.zig");
-            \\comptime {
-            \\    std.testing.refAllDecls(abi);
-            \\}
-            \\
-            ,
-            expectations.zig_checks,
-        }) catch |err|
-            return customInfraFailure(allocator, timer, "failed to allocate test Zig source: {}", .{err});
-        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_zig_path, .data = test_zig_source }) catch |err|
-            return customInfraFailure(allocator, timer, "failed to write test Zig file: {}", .{err});
-        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
-            "zig",
-            "test",
-            "-fno-emit-bin",
-            test_zig_path,
-        }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+        if (compileGlueOutput(io, allocator, env, timer, timeout_ms, language, output_dir, expectations.zig_checks)) |failure| return failure;
     }
+    return null;
+}
+
+/// Compile the file `language`'s generator wrote into `output_dir`: the C and
+/// Rust output as a translation unit and a library, and the Zig output as a
+/// test, which semantically analyzes every declaration, followed by
+/// `zig_checks`.
+fn compileGlueOutput(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    language: GlueLanguage,
+    output_dir: []const u8,
+    zig_checks: []const u8,
+) ?TestResult {
+    switch (language) {
+        .zig => {},
+        .c => {
+            const test_c_path = std.fs.path.join(allocator, &.{ output_dir, "test_header.c" }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate test C path: {}", .{err});
+            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_c_path, .data = "#include \"roc_platform_abi.h\"\n" }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to write test C file: {}", .{err});
+            const test_o_path = std.fs.path.join(allocator, &.{ output_dir, "test_header.o" }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate test object path: {}", .{err});
+            const include_flag = std.fmt.allocPrint(allocator, "-I{s}", .{output_dir}) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate include flag: {}", .{err});
+            if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+                "zig", "cc", "-c", "-std=c11", "-Wall", "-Werror", include_flag, test_c_path, "-o", test_o_path,
+            }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+            return null;
+        },
+        .rust => {
+            const generated_path = std.fs.path.join(allocator, &.{ output_dir, language.generatedFileName() }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate generated glue path: {}", .{err});
+            const test_rlib_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rlib" }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate Rust rlib path: {}", .{err});
+            if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+                "rustc", "--edition=2021", "-D", "warnings", "--crate-type", "lib", generated_path, "-o", test_rlib_path,
+            }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+            return null;
+        },
+    }
+    // `refAllDecls` only references declarations inside a test build, so
+    // the generated file is compiled as a test to analyze every
+    // declaration and helper body.
+    const test_zig_path = std.fs.path.join(allocator, &.{ output_dir, "test_abi.zig" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate test Zig path: {}", .{err});
+    const test_zig_source = std.mem.concat(allocator, u8, &.{
+        \\const std = @import("std");
+        \\const abi = @import("roc_platform_abi.zig");
+        \\comptime {
+        \\    std.testing.refAllDecls(abi);
+        \\}
+        \\
+        ,
+        zig_checks,
+    }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate test Zig source: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_zig_path, .data = test_zig_source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write test Zig file: {}", .{err});
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig",
+        "test",
+        "-fno-emit-bin",
+        test_zig_path,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
     return null;
 }
 

@@ -187,10 +187,10 @@ var_map: collections.DenseMap(Var, Var),
 ground_expected_backups: std.AutoHashMapUnmanaged(u64, Var) = .empty,
 /// Ground instances of type declarations referenced from annotations. See
 /// `instantiateVarPolarized`.
-ground_polarized_instances: std.AutoHashMapUnmanaged(SharedInstanceKey, Var) = .empty,
+ground_polarized_instances: std.AutoHashMapUnmanaged(PolarizedInstanceKey, Var) = .empty,
 /// Ground subtrees of the latest instance of a type declaration at each
 /// position whose instance is not ground. See `instantiateVarPolarized`.
-polarized_instance_subtrees: std.AutoHashMapUnmanaged(SharedInstanceKey, std.ArrayListUnmanaged(Instantiator.SharedSubtree)) = .empty,
+polarized_instance_subtrees: std.AutoHashMapUnmanaged(PolarizedInstanceKey, std.ArrayListUnmanaged(Instantiator.SharedSubtree)) = .empty,
 /// The marker pre-walk outcome of a type declaration at each position it was
 /// instantiated at with a behavior that decides markers per occurrence. See
 /// `polarizedMarkerChoices`.
@@ -12447,9 +12447,8 @@ fn instantiateVarPolarized(
         .polarity = polarity,
         .reach = reach,
     };
-    const shared_key: SharedInstanceKey = .{ .position = instance_key, .quantified = env.rank() == .generalized };
     if (evidence == .none) {
-        if (self.ground_polarized_instances.get(shared_key)) |cached| {
+        if (self.ground_polarized_instances.get(instance_key)) |cached| {
             if (try self.varIsGround(cached)) return cached;
         }
     }
@@ -12471,7 +12470,7 @@ fn instantiateVarPolarized(
     }
     var reads_every_recorded_subtree = false;
     if (evidence == .none) {
-        if (self.polarized_instance_subtrees.get(shared_key)) |entries| {
+        if (self.polarized_instance_subtrees.get(instance_key)) |entries| {
             try self.groundSubtreeEntries(entries.items, &shared_subtrees);
             reads_every_recorded_subtree = shared_subtrees.items.len == entries.items.len and
                 self.codec_instance_copies.len == 0 and
@@ -12497,12 +12496,12 @@ fn instantiateVarPolarized(
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
     if (evidence == .none) {
         if (opened_marker_exts.items.len == 0 and try self.varIsGround(instantiated)) {
-            try self.ground_polarized_instances.put(self.gpa, shared_key, instantiated);
+            try self.ground_polarized_instances.put(self.gpa, instance_key, instantiated);
             if (self.annotation_generation_is_retainable) {
                 try self.retainable_generation_shared_roots.append(self.gpa, instantiated);
             }
         } else {
-            const slot = try self.polarized_instance_subtrees.getOrPut(self.gpa, shared_key);
+            const slot = try self.polarized_instance_subtrees.getOrPut(self.gpa, instance_key);
             if (!slot.found_existing) slot.value_ptr.* = .empty;
             if (reads_every_recorded_subtree) {
                 try self.debugAssertMaximalGroundSubtreeCopies(instantiated, slot.value_ptr.items);
@@ -12804,18 +12803,6 @@ const PolarizedInstanceKey = struct {
     polarity_behavior: PolarityVarBehavior,
     polarity: Polarity,
     reach: Instantiator.AdapterReach,
-};
-
-/// Where a shared instance of a type declaration may be read: at the position
-/// it was instantiated at, and in the same kind of scope. An instance made at
-/// the generalized rank belongs to a scheme (a type declaration's own body),
-/// and every class of a scheme is quantified; a binding's type that reached
-/// one would be classified as a scheme itself (`typeHasGeneralizedVar`). So a
-/// scheme's instances are shared only with schemes, and every other
-/// instance only outside them.
-const SharedInstanceKey = struct {
-    position: PolarizedInstanceKey,
-    quantified: bool,
 };
 
 /// Record alias markers an annotation-position instantiation resolved open,

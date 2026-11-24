@@ -26,7 +26,10 @@ make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
 	input = GlueInput.from_types(types_list)
 	type_table = TypeTable.from_list(input.types)
-	duplicate_names = duplicate_type_names(input.hosted_functions, type_table)?
+	symbols = TypeNamePlan.platform_symbols(input.hosted_functions, input.provides_entries)
+	undeclarable_symbol_zig(symbols)?
+	renamed_roots = renamed_roots_zig(input.hosted_functions, input.provides_entries, type_table, symbols)?
+	duplicate_names = duplicate_type_names(input.hosted_functions, type_table, symbols, renamed_roots)?
 	zig_content = generate_zig_file(input.hosted_functions, type_table, input.provides_entries, duplicate_names)
 
 	Ok([{ name: "roc_platform_abi.zig", content: zig_content }])
@@ -36,17 +39,19 @@ make_glue = |types_list| {
 # TypeRepr-based Type Mapping
 # =============================================================================
 
-## Roc names whose host types are emitted under shape-derived names: named
-## multi-variant tag unions and named records whose name appears in the type
-## table with different shapes, and those whose declarations would collide
-## with another declaration in the generated file. The result is computed once
-## per glue run and reused while rendering type names.
-duplicate_type_names : List(HostedFunctionInfo), TypeTable -> Try(List(Str), Str)
-duplicate_type_names = |hosted_functions, type_table|
-	TypeNamePlan.shape_named(
-		reserved_type_names_zig(hosted_functions, type_table),
-		List.concat(type_table.duplicate_tag_union_names(), type_table.duplicate_record_names()),
-		|shape_named| declared_types_zig(type_table, shape_named),
+## Roc names emitted under id-derived names. For host types these are the
+## named multi-variant tag unions and named records whose name appears in the
+## type table with different shapes, and those whose declarations would
+## collide with another declaration in the generated file; they take
+## shape-derived names. `renamed_roots` are the hosted functions and provided
+## entries that take index-derived names. The result is computed once per glue
+## run and reused while rendering names.
+duplicate_type_names : List(HostedFunctionInfo), TypeTable, List(Str), List(Str) -> Try(List(Str), Str)
+duplicate_type_names = |hosted_functions, type_table, symbols, renamed_roots|
+	TypeNamePlan.disambiguated(
+		List.concat(reserved_type_names_zig(hosted_functions, type_table, renamed_roots), symbols),
+		List.concat(renamed_roots, List.concat(type_table.duplicate_tag_union_names(), type_table.duplicate_record_names())),
+		|renamed| declared_types_zig(type_table, renamed),
 	)
 
 ## Return the default Zig type name for a multi-variant tag union.
@@ -134,41 +139,318 @@ runtime_type_names_zig = [
 	"ValueType",
 ]
 
-## Type names the generated file declares whatever the type table's own types
-## are named: the runtime support and each hosted function's argument and
-## result types.
-reserved_type_names_zig : List(HostedFunctionInfo), TypeTable -> List(Str)
-reserved_type_names_zig = |hosted_functions, type_table| {
+## Names the generated file declares whatever the type table's own types are
+## named: the runtime support's, which include the functions a refcount helper
+## named after a type could be mistaken for, and each hosted function's
+## argument and result types.
+reserved_type_names_zig : List(HostedFunctionInfo), TypeTable, List(Str) -> List(Str)
+reserved_type_names_zig = |hosted_functions, type_table, renamed| {
 	arg_shape = ArgShape.from_table(type_table)
-	var $names = runtime_type_names_zig
+	var $names = List.concat(runtime_type_names_zig, runtime_value_names_zig)
 
 	for func in hosted_functions {
-		struct_name = name_to_struct_name(func.name)
-
-		match arg_shape.record_lookup(func.ret_type_id) {
-			ArgRecordFound(_) => {
-				$names = $names.append("${struct_name}RetRecord")
-			}
-			ArgNotRecord => {}
-		}
-
-		match arg_shape.hosted_args(func) {
-			NoMeaningfulArgs => {}
-			SingleRecordArg(_) => {
-				$names = $names.append("${struct_name}Args")
-			}
-			PositionalArgs(_) => {
-				$names = $names.append("${struct_name}Args")
-			}
-		}
+		$names = List.concat($names, hosted_type_names_zig(arg_shape, renamed, func))
 	}
 
 	$names
 }
 
-## Every top-level type name the generated file declares for the host type at
+## Names other than type names that the generated file declares whatever the
+## platform holds: the runtime support's top-level functions, constants, and
+## imports, and every parameter, local, capture, and unqualified nested
+## declaration in the file. The file declares each platform symbol at the top
+## level under the symbol's own name, and Zig rejects a top-level name that any
+## of these shares.
+runtime_value_names_zig : List(Str)
+runtime_value_names_zig = [
+	"align_enum",
+	"alignment",
+	"alloc_addr",
+	"alloc_align",
+	"alloc_alignment",
+	"alloc_ptr",
+	"allocate",
+	"allocateBox",
+	"allocator",
+	"amount",
+	"base",
+	"base_ptr",
+	"boxDataPtr",
+	"boxRefcountPtr",
+	"builtin",
+	"bytes",
+	"callable",
+	"callable_fn_ptr",
+	"callback",
+	"capacity_or_alloc_ptr",
+	"capture_size",
+	"copy_size",
+	"count",
+	"data",
+	"data_addr",
+	"data_bytes",
+	"data_ptr",
+	"decrefBox",
+	"decrefBoxWith",
+	"decrefErasedCallable",
+	"dest",
+	"dropErasedCallablePayload",
+	"elements_ptr",
+	"elements_refcounted",
+	"empty",
+	"env",
+	"extra_bytes",
+	"freeBoxAllocation",
+	"freeBoxWith",
+	"freestanding",
+	"freestandingOnFatal",
+	"freestandingWriteStderr",
+	"freestanding_vtable",
+	"header_bytes",
+	"increfBox",
+	"increfErasedCallable",
+	"isUniqueBox",
+	"item",
+	"len",
+	"length",
+	"list",
+	"makeRocHost",
+	"min_alignment",
+	"native",
+	"nativeOnFatal",
+	"nativeWriteStderr",
+	"native_vtable",
+	"new_base_ptr",
+	"new_length",
+	"new_size_ptr",
+	"new_total_size",
+	"new_user_ptr",
+	"old_base_ptr",
+	"old_size_ptr",
+	"old_total_size",
+	"old_user_data_size",
+	"old_user_ptr",
+	"on_drop",
+	"payload",
+	"payload_alignment",
+	"payload_contains_refcounted",
+	"payload_decref",
+	"payload_size",
+	"prev",
+	"ptr",
+	"ptr_width",
+	"rc",
+	"releasePayload",
+	"required_space",
+	"result",
+	"retainListAllocation",
+	"rocErasedCallableAllocate",
+	"rocErasedCallableCapturePtr",
+	"rocErasedCallablePayloadPtr",
+	"rocErasedCallablePayloadSize",
+	"rocReleasePolicy",
+	"roc_erased_callable_capture_alignment",
+	"roc_erased_callable_capture_offset",
+	"roc_erased_callable_payload_alignment",
+	"roc_host",
+	"seamless_slice_tag",
+	"self",
+	"size_ptr",
+	"size_storage_bytes",
+	"slice",
+	"small_str_bit",
+	"small_string_size",
+	"src",
+	"std",
+	"total",
+	"total_size",
+	"value",
+]
+
+## Words Zig keeps for itself, which cannot name a declaration: its keywords,
+## its literals, and its primitive types other than the sized integers.
+keywords_zig : List(Str)
+keywords_zig = [
+	"addrspace",
+	"align",
+	"allowzero",
+	"and",
+	"anyerror",
+	"anyframe",
+	"anyopaque",
+	"anytype",
+	"asm",
+	"bool",
+	"break",
+	"c_char",
+	"c_int",
+	"c_long",
+	"c_longdouble",
+	"c_longlong",
+	"c_short",
+	"c_uint",
+	"c_ulong",
+	"c_ulonglong",
+	"c_ushort",
+	"callconv",
+	"catch",
+	"comptime",
+	"comptime_float",
+	"comptime_int",
+	"const",
+	"continue",
+	"defer",
+	"else",
+	"enum",
+	"errdefer",
+	"error",
+	"export",
+	"extern",
+	"f128",
+	"f16",
+	"f32",
+	"f64",
+	"f80",
+	"false",
+	"fn",
+	"for",
+	"if",
+	"inline",
+	"isize",
+	"linksection",
+	"noalias",
+	"noinline",
+	"noreturn",
+	"nosuspend",
+	"null",
+	"opaque",
+	"or",
+	"orelse",
+	"packed",
+	"pub",
+	"resume",
+	"return",
+	"struct",
+	"suspend",
+	"switch",
+	"test",
+	"threadlocal",
+	"true",
+	"try",
+	"type",
+	"undefined",
+	"union",
+	"unreachable",
+	"usize",
+	"var",
+	"void",
+	"volatile",
+	"while",
+]
+
+## True for the names of Zig's sized integer types: `u` or `i` and a bit count.
+is_sized_integer_name_zig : Str -> Bool
+is_sized_integer_name_zig = |name| {
+	bytes = Str.to_utf8(name)
+	match List.first(bytes) {
+		Ok(first) => (first == 'u' or first == 'i') and List.len(bytes) > 1 and List.all(List.drop_first(bytes, 1), |byte| byte >= '0' and byte <= '9')
+		Err(_) => Bool.False
+	}
+}
+
+## An error when the generated file cannot declare one of the platform's
+## symbols under its own name: the name is a keyword or a primitive type,
+## belongs to the runtime support, or belongs to a family of helper names the
+## file derives from type ids and list item types.
+undeclarable_symbol_zig : List(Str) -> Try({}, Str)
+undeclarable_symbol_zig = |symbols| {
+	fixed_names = List.concat(runtime_type_names_zig, List.concat(runtime_value_names_zig, keywords_zig))
+	TypeNamePlan.undeclarable_symbol(symbols, fixed_names)?
+
+	for symbol in symbols {
+		is_helper = Str.starts_with(symbol, "decrefBoxPayloadType") or Str.starts_with(symbol, "decrefListOf")
+		if is_helper or is_sized_integer_name_zig(symbol) {
+			return Err(TypeNamePlan.symbol_error(symbol))
+		}
+	}
+
+	Ok({})
+}
+
+## The name a hosted function's argument and result types, and the aliases of
+## the types it reaches, are derived from.
+hosted_struct_name_zig : List(Str), HostedFunctionInfo -> Str
+hosted_struct_name_zig = |renamed, func|
+	Str.concat(name_to_struct_name(func.name), TypeNamePlan.index_suffix(renamed, func.name, func.index, "Hosted"))
+
+## The name the aliases of the types a provided entry reaches are derived
+## from. `position` is the entry's place in the platform's provides list.
+provided_struct_name_zig : List(Str), ProvidesEntry, U64 -> Str
+provided_struct_name_zig = |renamed, entry, position|
+	Str.concat(name_to_struct_name(entry.name), TypeNamePlan.index_suffix(renamed, entry.name, position, "Provided"))
+
+## The argument and result types the generated file declares for a hosted
+## function.
+hosted_type_names_zig : ArgShape, List(Str), HostedFunctionInfo -> List(Str)
+hosted_type_names_zig = |arg_shape, renamed, func| {
+	struct_name = hosted_struct_name_zig(renamed, func)
+
+	ret_names = match arg_shape.record_lookup(func.ret_type_id) {
+		ArgRecordFound(_) => ["${struct_name}RetRecord"]
+		ArgNotRecord => []
+	}
+
+	match arg_shape.hosted_args(func) {
+		NoMeaningfulArgs => ret_names
+		SingleRecordArg(_) => ret_names.append("${struct_name}Args")
+		PositionalArgs(_) => ret_names.append("${struct_name}Args")
+	}
+}
+
+## What the generated file derives from the name of each hosted function and
+## each provided entry when the Roc names in `renamed` take index-derived
+## names: the base its aliases are named from, which is not itself declared
+## and so is compared only with other bases, and a hosted function's argument
+## and result types.
+declared_roots_zig : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> List(TypeNamePlan.Declared)
+declared_roots_zig = |hosted_functions, provides_list, type_table, renamed| {
+	arg_shape = ArgShape.from_table(type_table)
+	var $declared = []
+
+	for func in hosted_functions {
+		$declared = $declared.append({
+			roc_name: func.name,
+			id: func.index * 2,
+			names: hosted_type_names_zig(arg_shape, renamed, func).append("base ${hosted_struct_name_zig(renamed, func)}"),
+		})
+	}
+
+	var $position = 0
+	for entry in provides_list {
+		$declared = $declared.append({
+			roc_name: entry.name,
+			id: $position * 2 + 1,
+			names: ["base ${provided_struct_name_zig(renamed, entry, $position)}"],
+		})
+		$position = $position + 1
+	}
+
+	$declared
+}
+
+## The hosted functions and provided entries whose derived names take
+## index-derived names, because they would collide with another declaration.
+renamed_roots_zig : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> Try(List(Str), Str)
+renamed_roots_zig = |hosted_functions, provides_list, type_table, symbols|
+	TypeNamePlan.disambiguated(
+		List.concat(runtime_type_names_zig, symbols),
+		[],
+		|renamed| declared_roots_zig(hosted_functions, provides_list, type_table, renamed),
+	)
+
+## Every top-level name the generated file declares for the host type at
 ## `type_id` when it emits that type as `struct_name`: the type itself and each
-## helper type named after it.
+## helper type and function named after it.
 type_names_declared_as_zig : TypeTable, U64, Str -> List(Str)
 type_names_declared_as_zig = |type_table, type_id, struct_name|
 	match type_table.get(type_id) {
@@ -188,6 +470,8 @@ type_names_declared_as_zig = |type_table, type_id, struct_name|
 						"${struct_name}Tag",
 						"${struct_name}Payload",
 						"${struct_name}Release",
+						"decref${struct_name}",
+						"incref${struct_name}",
 					]
 					var $tag_idx = 0
 					for tag in tu.tags {
@@ -221,7 +505,7 @@ declared_types_zig = |type_table, duplicate_names| {
 						struct_name = record_struct_name(type_table, duplicate_names, $type_id, rec)
 						$declared = $declared.append({
 							roc_name: rec.name,
-							shape_id: $type_id,
+							id: $type_id,
 							names: type_names_declared_as_zig(type_table, $type_id, struct_name),
 						})
 					}
@@ -230,7 +514,7 @@ declared_types_zig = |type_table, duplicate_names| {
 						struct_name = default_tag_union_struct_name(type_table, duplicate_names, $type_id, tu)
 						$declared = $declared.append({
 							roc_name: tu.name,
-							shape_id: $type_id,
+							id: $type_id,
 							names: type_names_declared_as_zig(type_table, $type_id, struct_name),
 						})
 					}
@@ -244,11 +528,14 @@ declared_types_zig = |type_table, duplicate_names| {
 	$declared
 }
 
-## Every type name the generated file declares before any preferred name or
-## alias is chosen.
-declared_type_names_zig : List(HostedFunctionInfo), TypeTable, List(Str) -> List(Str)
-declared_type_names_zig = |hosted_functions, type_table, duplicate_names| {
-	var $names = reserved_type_names_zig(hosted_functions, type_table)
+## Every name the generated file declares before any preferred name or alias
+## is chosen, which neither of those may take.
+declared_type_names_zig : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> List(Str)
+declared_type_names_zig = |hosted_functions, provides_list, type_table, duplicate_names| {
+	var $names = List.concat(
+		reserved_type_names_zig(hosted_functions, type_table, duplicate_names),
+		TypeNamePlan.platform_symbols(hosted_functions, provides_list),
+	)
 
 	for declared in declared_types_zig(type_table, duplicate_names) {
 		$names = List.concat($names, declared.names)
@@ -294,7 +581,7 @@ type_name_roots_zig = |hosted_functions, provides_list, type_table, ambiguous_na
 	var $roots = []
 
 	for func in hosted_functions {
-		base = name_to_struct_name(func.name)
+		base = hosted_struct_name_zig(ambiguous_names, func)
 		module_base = hosted_module_name_to_struct_name(func.name)
 
 		var $arg_idx = 0
@@ -315,9 +602,11 @@ type_name_roots_zig = |hosted_functions, provides_list, type_table, ambiguous_na
 		})
 	}
 
+	var $position = 0
 	for entry in provides_list {
-		base = name_to_struct_name(entry.name)
+		base = provided_struct_name_zig(ambiguous_names, entry, $position)
 		module_base = hosted_module_name_to_struct_name(entry.name)
+		$position = $position + 1
 
 		match entry.exported {
 			ProvidedProcedure(func) => {
@@ -391,7 +680,7 @@ type_alias_roots_zig = |hosted_functions, provides_list, type_table, ambiguous_n
 	var $roots = []
 
 	for func in hosted_functions {
-		base = name_to_struct_name(func.name)
+		base = hosted_struct_name_zig(ambiguous_names, func)
 		module_base = hosted_module_name_to_struct_name(func.name)
 
 		var $arg_idx = 0
@@ -404,9 +693,11 @@ type_alias_roots_zig = |hosted_functions, provides_list, type_table, ambiguous_n
 		$roots = append_type_alias_roots_zig($roots, type_table, ambiguous_names, base, module_base, func.ret_type_id, [])
 	}
 
+	var $position = 0
 	for entry in provides_list {
-		base = name_to_struct_name(entry.name)
+		base = provided_struct_name_zig(ambiguous_names, entry, $position)
 		module_base = hosted_module_name_to_struct_name(entry.name)
+		$position = $position + 1
 
 		match entry.exported {
 			ProvidedProcedure(func) => {
@@ -431,7 +722,7 @@ type_alias_roots_zig = |hosted_functions, provides_list, type_table, ambiguous_n
 preferred_type_names_zig : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> TypeNamePlan.PreferredNames
 preferred_type_names_zig = |hosted_functions, provides_list, type_table, duplicate_names|
 	TypeNamePlan.from_table(type_table).preferred_names(
-		declared_type_names_zig(hosted_functions, type_table, duplicate_names),
+		declared_type_names_zig(hosted_functions, provides_list, type_table, duplicate_names),
 		type_name_roots_zig(hosted_functions, provides_list, type_table, duplicate_names),
 		|type_id, struct_name| type_names_declared_as_zig(type_table, type_id, struct_name),
 	)
@@ -2527,7 +2818,7 @@ generate_all_record_structs = |hosted_functions, type_table, duplicate_names, pr
 	for func in hosted_functions {
 		match arg_shape.record_lookup(func.ret_type_id) {
 			ArgRecordFound(record) => {
-				struct_name = name_to_struct_name(func.name)
+				struct_name = hosted_struct_name_zig(duplicate_names, func)
 				fields64 = zig_record_fields_decl(type_table, duplicate_names, preferred_names, record.fields, Pointer64)
 				fields32 = zig_record_fields_decl(type_table, duplicate_names, preferred_names, record.fields, Pointer32)
 
@@ -2557,7 +2848,7 @@ generate_all_args_structs = |hosted_functions, type_table, duplicate_names, pref
 ## Uses type table for single-record args; positional for multi-arg or primitive args.
 generate_args_struct : HostedFunctionInfo, TypeTable, List(Str), TypeNamePlan.PreferredNames -> Str
 generate_args_struct = |func, type_table, duplicate_names, preferred_names| {
-	struct_name = name_to_struct_name(func.name)
+	struct_name = hosted_struct_name_zig(duplicate_names, func)
 	arg_shape = ArgShape.from_table(type_table)
 
 	match arg_shape.hosted_args(func) {
@@ -2624,7 +2915,7 @@ direct_hosted_param_list = |type_table, duplicate_names, preferred_names, func| 
 
 	for arg_type_id in arg_shape.positional_non_unit_type_ids(func.arg_type_ids) {
 		arg_zig = if use_args_wrapper {
-			"${name_to_struct_name(func.name)}Args"
+			"${hosted_struct_name_zig(duplicate_names, func)}Args"
 		} else {
 			type_id_to_zig(type_table, duplicate_names, preferred_names, arg_type_id)
 		}

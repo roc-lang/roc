@@ -17,4 +17,14 @@ Host := [].{
 	load! : Str => Try(Str, U64)
 
 	fetch! : Str => { body : Str, code : U16 }
+
+	## Two functions whose names join to one host name in the generators that
+	## drop the underscore.
+	send_it! : Str, U64 => {}
+
+	sendIt! : Str, U64 => {}
+
+	## The platform declares a linker symbol named like this function's
+	## argument type.
+	ping! : U64, U64 => U64
 }

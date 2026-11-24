@@ -26,7 +26,10 @@ make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
 	input = GlueInput.from_types(types_list)
 	type_table = TypeTable.from_list(input.types)
-	duplicate_names = duplicate_type_names(input.hosted_functions, type_table)?
+	symbols = TypeNamePlan.platform_symbols(input.hosted_functions, input.provides_entries)
+	undeclarable_symbol_rust(symbols)?
+	renamed_roots = renamed_roots_rust(input.hosted_functions, input.provides_entries, type_table, symbols)?
+	duplicate_names = duplicate_type_names(input.hosted_functions, type_table, symbols, renamed_roots)?
 	rust_content = generate_rust_file(input.hosted_functions, type_table, input.provides_entries, duplicate_names)
 
 	Ok([{ name: "roc_platform_abi.rs", content: rust_content }])
@@ -307,17 +310,19 @@ expect name_to_struct_name("Builder.print_value!") == "BuilderPrintValue"
 ## Checks `name_to_struct_name` for this representative case.
 expect name_to_struct_name("__AnonStruct10") == "AnonStruct10"
 
-## Roc names whose host types are emitted under shape-derived names: named
-## multi-variant tag unions and named records whose name appears in the type
-## table with different shapes, and those whose declarations would collide
-## with another declaration in the generated file. The result is computed once
-## per glue run and reused while rendering type names.
-duplicate_type_names : List(HostedFunctionInfo), TypeTable -> Try(List(Str), Str)
-duplicate_type_names = |hosted_functions, type_table|
-	TypeNamePlan.shape_named(
-		reserved_type_names_rust(hosted_functions, type_table),
-		List.concat(type_table.duplicate_tag_union_names(), type_table.duplicate_record_names()),
-		|shape_named| declared_types_rust(type_table, shape_named),
+## Roc names emitted under id-derived names. For host types these are the
+## named multi-variant tag unions and named records whose name appears in the
+## type table with different shapes, and those whose declarations would
+## collide with another declaration in the generated file; they take
+## shape-derived names. `renamed_roots` are the hosted functions and provided
+## entries that take index-derived names. The result is computed once per glue
+## run and reused while rendering names.
+duplicate_type_names : List(HostedFunctionInfo), TypeTable, List(Str), List(Str) -> Try(List(Str), Str)
+duplicate_type_names = |hosted_functions, type_table, symbols, renamed_roots|
+	TypeNamePlan.disambiguated(
+		List.concat(reserved_type_names_rust(hosted_functions, type_table, renamed_roots), symbols),
+		List.concat(renamed_roots, List.concat(type_table.duplicate_tag_union_names(), type_table.duplicate_record_names())),
+		|renamed| declared_types_rust(type_table, renamed),
 	)
 
 ## Return the default Rust struct name for a multi-variant tag union.
@@ -413,34 +418,227 @@ runtime_type_names_rust = [
 	"Self",
 ]
 
+## Names in Rust's value namespace that the runtime support in every generated
+## file declares, imports, or takes unqualified from the Rust prelude. The
+## file declares each platform symbol as a function or a static under the
+## symbol's own name, which would redefine or shadow one of these.
+runtime_value_names_rust : List(Str)
+runtime_value_names_rust = [
+	"DefaultAllocators",
+	"DefaultHandlers",
+	"None",
+	"ROC_ERASED_CALLABLE_CAPTURE_ALIGNMENT",
+	"ROC_ERASED_CALLABLE_CAPTURE_OFFSET",
+	"ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT",
+	"ROC_SEAMLESS_SLICE_TAG",
+	"ROC_SMALL_STR_BIT",
+	"ROC_SMALL_STR_MAX_LEN",
+	"ROC_STR_SIZE",
+	"RocBoxRelease",
+	"RocBoxSpineRelease",
+	"RocErasedCallableRelease",
+	"RocI16x8",
+	"RocI32x4",
+	"RocI64x2",
+	"RocI8x16",
+	"RocListRelease",
+	"RocListSpineRelease",
+	"RocNoopRelease",
+	"RocStrRelease",
+	"RocU16x8",
+	"RocU32x4",
+	"RocU64x2",
+	"RocU8x16",
+	"Some",
+	"allocate_box",
+	"box_data_ptr",
+	"box_refcount_ptr",
+	"checked_add_usize",
+	"checked_mul_usize",
+	"decref_box",
+	"decref_box_with",
+	"decref_erased_callable",
+	"direct_roc_alloc",
+	"direct_roc_crashed",
+	"direct_roc_dbg",
+	"direct_roc_dealloc",
+	"direct_roc_expect_failed",
+	"direct_roc_host",
+	"direct_roc_realloc",
+	"drop_erased_callable_payload",
+	"fence",
+	"free_box_allocation",
+	"free_box_with",
+	"incref_box",
+	"incref_erased_callable",
+	"is_unique_box",
+	"make_roc_host",
+	"release_box_payload",
+	"retain_list_allocation",
+	"roc_erased_callable_allocate",
+	"roc_erased_callable_capture_ptr",
+	"roc_erased_callable_payload_ptr",
+	"roc_erased_callable_payload_size",
+	"shifted_capacity",
+]
+
+## Words Rust keeps for itself, which cannot name a declaration.
+keywords_rust : List(Str)
+keywords_rust = [
+	"Self",
+	"abstract",
+	"as",
+	"async",
+	"await",
+	"become",
+	"box",
+	"break",
+	"const",
+	"continue",
+	"crate",
+	"do",
+	"dyn",
+	"else",
+	"enum",
+	"extern",
+	"false",
+	"final",
+	"fn",
+	"for",
+	"gen",
+	"if",
+	"impl",
+	"in",
+	"let",
+	"loop",
+	"macro",
+	"match",
+	"mod",
+	"move",
+	"mut",
+	"override",
+	"priv",
+	"pub",
+	"ref",
+	"return",
+	"self",
+	"static",
+	"struct",
+	"super",
+	"trait",
+	"true",
+	"try",
+	"type",
+	"typeof",
+	"unsafe",
+	"unsized",
+	"use",
+	"virtual",
+	"where",
+	"while",
+	"yield",
+]
+
+## An error when the generated file cannot declare one of the platform's
+## symbols under its own name: the name is a keyword, belongs to the runtime
+## support, or belongs to a family of helper names the file derives from type
+## ids, list item types, and other symbols.
+undeclarable_symbol_rust : List(Str) -> Try({}, Str)
+undeclarable_symbol_rust = |symbols| {
+	TypeNamePlan.undeclarable_symbol(symbols, List.concat(runtime_value_names_rust, keywords_rust))?
+
+	for symbol in symbols {
+		is_helper = Str.starts_with(symbol, "decref_box_payload_type") or Str.starts_with(symbol, "decref_list_of_")
+		is_owned_wrapper = List.any(symbols, |other| symbol == "${other}_owned")
+		if is_helper or is_owned_wrapper {
+			return Err(TypeNamePlan.symbol_error(symbol))
+		}
+	}
+
+	Ok({})
+}
+
+## The name a hosted function's argument and result types, and the aliases of
+## the types it reaches, are derived from.
+hosted_struct_name_rust : List(Str), HostedFunctionInfo -> Str
+hosted_struct_name_rust = |renamed, func|
+	Str.concat(name_to_struct_name(func.name), TypeNamePlan.index_suffix(renamed, func.name, func.index, "Hosted"))
+
+## The name the aliases of the types a provided entry reaches are derived
+## from. `position` is the entry's place in the platform's provides list.
+provided_struct_name_rust : List(Str), ProvidesEntry, U64 -> Str
+provided_struct_name_rust = |renamed, entry, position|
+	Str.concat(name_to_struct_name(entry.name), TypeNamePlan.index_suffix(renamed, entry.name, position, "Provided"))
+
+## The argument and result types the generated file declares for a hosted
+## function.
+hosted_type_names_rust : ArgShape, List(Str), HostedFunctionInfo -> List(Str)
+hosted_type_names_rust = |arg_shape, renamed, func| {
+	struct_name = hosted_struct_name_rust(renamed, func)
+
+	ret_names = match arg_shape.record_lookup(func.ret_type_id) {
+		ArgRecordFound(_) => ["${struct_name}RetRecord"]
+		ArgNotRecord => []
+	}
+
+	match arg_shape.hosted_args(func) {
+		NoMeaningfulArgs => ret_names
+		SingleRecordArg(_) => List.concat(ret_names, ["${struct_name}Args", "${struct_name}ArgsRelease"])
+		PositionalArgs(_) => ret_names.append("${struct_name}Args")
+	}
+}
+
+## What the generated file derives from the name of each hosted function and
+## each provided entry when the Roc names in `renamed` take index-derived
+## names: the base its aliases are named from, which is not itself declared
+## and so is compared only with other bases, and a hosted function's argument
+## and result types.
+declared_roots_rust : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> List(TypeNamePlan.Declared)
+declared_roots_rust = |hosted_functions, provides_list, type_table, renamed| {
+	arg_shape = ArgShape.from_table(type_table)
+	var $declared = []
+
+	for func in hosted_functions {
+		$declared = $declared.append({
+			roc_name: func.name,
+			id: func.index * 2,
+			names: hosted_type_names_rust(arg_shape, renamed, func).append("base ${hosted_struct_name_rust(renamed, func)}"),
+		})
+	}
+
+	var $position = 0
+	for entry in provides_list {
+		$declared = $declared.append({
+			roc_name: entry.name,
+			id: $position * 2 + 1,
+			names: ["base ${provided_struct_name_rust(renamed, entry, $position)}"],
+		})
+		$position = $position + 1
+	}
+
+	$declared
+}
+
+## The hosted functions and provided entries whose derived names take
+## index-derived names, because they would collide with another declaration.
+renamed_roots_rust : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> Try(List(Str), Str)
+renamed_roots_rust = |hosted_functions, provides_list, type_table, symbols|
+	TypeNamePlan.disambiguated(
+		List.concat(runtime_type_names_rust, symbols),
+		[],
+		|renamed| declared_roots_rust(hosted_functions, provides_list, type_table, renamed),
+	)
+
 ## Type names the generated file declares whatever the type table's own types
 ## are named: the runtime support and each hosted function's argument and
 ## result types.
-reserved_type_names_rust : List(HostedFunctionInfo), TypeTable -> List(Str)
-reserved_type_names_rust = |hosted_functions, type_table| {
+reserved_type_names_rust : List(HostedFunctionInfo), TypeTable, List(Str) -> List(Str)
+reserved_type_names_rust = |hosted_functions, type_table, renamed| {
 	arg_shape = ArgShape.from_table(type_table)
 	var $names = runtime_type_names_rust
 
 	for func in hosted_functions {
-		struct_name = name_to_struct_name(func.name)
-
-		match arg_shape.record_lookup(func.ret_type_id) {
-			ArgRecordFound(_) => {
-				$names = $names.append("${struct_name}RetRecord")
-			}
-			ArgNotRecord => {}
-		}
-
-		match arg_shape.hosted_args(func) {
-			NoMeaningfulArgs => {}
-			SingleRecordArg(_) => {
-				$names = $names.append("${struct_name}Args")
-				$names = $names.append("${struct_name}ArgsRelease")
-			}
-			PositionalArgs(_) => {
-				$names = $names.append("${struct_name}Args")
-			}
-		}
+		$names = List.concat($names, hosted_type_names_rust(arg_shape, renamed, func))
 	}
 
 	$names
@@ -502,7 +700,7 @@ declared_types_rust = |type_table, duplicate_names| {
 						struct_name = record_struct_name(type_table, duplicate_names, $type_id, rec)
 						$declared = $declared.append({
 							roc_name: rec.name,
-							shape_id: $type_id,
+							id: $type_id,
 							names: type_names_declared_as_rust(type_table, $type_id, struct_name),
 						})
 					}
@@ -511,7 +709,7 @@ declared_types_rust = |type_table, duplicate_names| {
 						struct_name = default_tag_union_struct_name(type_table, duplicate_names, $type_id, tu)
 						$declared = $declared.append({
 							roc_name: tu.name,
-							shape_id: $type_id,
+							id: $type_id,
 							names: type_names_declared_as_rust(type_table, $type_id, struct_name),
 						})
 					}
@@ -525,11 +723,14 @@ declared_types_rust = |type_table, duplicate_names| {
 	$declared
 }
 
-## Every type name the generated file declares before any preferred name or
-## alias is chosen.
-declared_type_names_rust : List(HostedFunctionInfo), TypeTable, List(Str) -> List(Str)
-declared_type_names_rust = |hosted_functions, type_table, duplicate_names| {
-	var $names = reserved_type_names_rust(hosted_functions, type_table)
+## Every name the generated file declares before any preferred name or alias
+## is chosen, which neither of those may take.
+declared_type_names_rust : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> List(Str)
+declared_type_names_rust = |hosted_functions, provides_list, type_table, duplicate_names| {
+	var $names = List.concat(
+		reserved_type_names_rust(hosted_functions, type_table, duplicate_names),
+		TypeNamePlan.platform_symbols(hosted_functions, provides_list),
+	)
 
 	for declared in declared_types_rust(type_table, duplicate_names) {
 		$names = List.concat($names, declared.names)
@@ -575,7 +776,7 @@ type_name_roots_rust = |hosted_functions, provides_list, type_table, ambiguous_n
 	var $roots = []
 
 	for func in hosted_functions {
-		base = name_to_struct_name(func.name)
+		base = hosted_struct_name_rust(ambiguous_names, func)
 		module_base = hosted_module_name_to_struct_name(func.name)
 
 		var $arg_idx = 0
@@ -596,9 +797,11 @@ type_name_roots_rust = |hosted_functions, provides_list, type_table, ambiguous_n
 		})
 	}
 
+	var $position = 0
 	for entry in provides_list {
-		base = name_to_struct_name(entry.name)
+		base = provided_struct_name_rust(ambiguous_names, entry, $position)
 		module_base = hosted_module_name_to_struct_name(entry.name)
+		$position = $position + 1
 
 		match entry.exported {
 			ProvidedProcedure(func) => {
@@ -672,7 +875,7 @@ type_alias_roots_rust = |hosted_functions, provides_list, type_table, ambiguous_
 	var $roots = []
 
 	for func in hosted_functions {
-		base = name_to_struct_name(func.name)
+		base = hosted_struct_name_rust(ambiguous_names, func)
 		module_base = hosted_module_name_to_struct_name(func.name)
 
 		var $arg_idx = 0
@@ -685,9 +888,11 @@ type_alias_roots_rust = |hosted_functions, provides_list, type_table, ambiguous_
 		$roots = append_type_alias_roots_rust($roots, type_table, ambiguous_names, base, module_base, func.ret_type_id, [])
 	}
 
+	var $position = 0
 	for entry in provides_list {
-		base = name_to_struct_name(entry.name)
+		base = provided_struct_name_rust(ambiguous_names, entry, $position)
 		module_base = hosted_module_name_to_struct_name(entry.name)
+		$position = $position + 1
 
 		match entry.exported {
 			ProvidedProcedure(func) => {
@@ -712,7 +917,7 @@ type_alias_roots_rust = |hosted_functions, provides_list, type_table, ambiguous_
 preferred_type_names_rust : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> TypeNamePlan.PreferredNames
 preferred_type_names_rust = |hosted_functions, provides_list, type_table, duplicate_names|
 	TypeNamePlan.from_table(type_table).preferred_names(
-		declared_type_names_rust(hosted_functions, type_table, duplicate_names),
+		declared_type_names_rust(hosted_functions, provides_list, type_table, duplicate_names),
 		type_name_roots_rust(hosted_functions, provides_list, type_table, duplicate_names),
 		|type_id, struct_name| type_names_declared_as_rust(type_table, type_id, struct_name),
 	)
@@ -2530,7 +2735,7 @@ generate_all_record_structs_rust = |hosted_functions, type_table, duplicate_name
 	for func in hosted_functions {
 		match arg_shape.record_lookup(func.ret_type_id) {
 			ArgRecordFound(record) => {
-				struct_name = name_to_struct_name(func.name)
+				struct_name = hosted_struct_name_rust(duplicate_names, func)
 				doc = "/// Return type record for ${func.name}\n/// Fields ordered by compiler-emitted ABI offsets.\n"
 				$structs = Str.concat(
 					$structs,
@@ -2556,7 +2761,7 @@ generate_all_args_structs_rust = |hosted_functions, type_table, duplicate_names,
 ## Generate a single argument struct (empty string if no args).
 generate_args_struct_rust : HostedFunctionInfo, TypeTable, List(Str), TypeNamePlan.PreferredNames -> Str
 generate_args_struct_rust = |func, type_table, duplicate_names, preferred_names| {
-	struct_name = name_to_struct_name(func.name)
+	struct_name = hosted_struct_name_rust(duplicate_names, func)
 	arg_shape = ArgShape.from_table(type_table)
 
 	match arg_shape.hosted_args(func) {
@@ -3141,7 +3346,7 @@ direct_hosted_param_list_rust = |type_table, duplicate_names, preferred_names, f
 
 	for arg_type_id in arg_shape.positional_non_unit_type_ids(func.arg_type_ids) {
 		arg_rust = if use_args_wrapper {
-			"${name_to_struct_name(func.name)}Args"
+			"${hosted_struct_name_rust(duplicate_names, func)}Args"
 		} else {
 			type_id_to_rust(type_table, duplicate_names, preferred_names, arg_type_id)
 		}
