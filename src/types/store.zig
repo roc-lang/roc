@@ -1067,10 +1067,9 @@ pub const Store = struct {
 
     /// Close the open probe keeping everything it wrote: the descriptors its
     /// merges orphaned are dead for good, and go on the free list.
-    pub fn endProbeYes(self: *Self, mark: *const ProbeMark) Allocator.Error!void {
+    pub fn endProbeYes(self: *Self) Allocator.Error!void {
         self.debugAssertUnsealed();
         std.debug.assert(self.probe_open);
-        _ = mark;
         self.undo_log.clearRetainingCapacity();
         self.probe_open = false;
         self.probe_baseline_slots = 0;
@@ -4440,11 +4439,11 @@ test "canonicalizing for seal gives children representatives and flattens rows" 
     const joined = try store.fresh();
     const plan = testDerivedMapPlan(5, 1);
     try store.setDerivedMapPlan(callable, plan);
-    const mark = store.beginProbe();
+    _ = store.beginProbe();
     const unifier_entry = store.enterUnifier();
     defer store.leaveUnifier(unifier_entry);
     try store.unifierUnion(callable, joined, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
-    try store.endProbeYes(&mark);
+    try store.endProbeYes();
     const checked_callable = store.resolveVar(callable).var_;
     try store.freezeClass(checked_callable);
     try store.thawFrozenClasses();
@@ -5068,13 +5067,13 @@ test "a probe frees nothing until it is kept and reissues no freed descriptor" {
 
     // A kept probe keeps its merge, so the orphan is freed when it is kept.
     {
-        const mark = store.beginProbe();
+        _ = store.beginProbe();
         const e = try store.fresh();
         const e_desc = store.resolveVar(e).desc_idx;
         const unifier_entry = store.enterUnifier();
         defer store.leaveUnifier(unifier_entry);
         try store.unifierUnion(d, a, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
-        try store.endProbeYes(&mark);
+        try store.endProbeYes();
         try std.testing.expectEqualSlices(DescStore.Idx, &.{ free_before[0], free_before[1], d_desc }, store.free_descs.items);
         try std.testing.expectEqual(@as(usize, 0), store.pending_free_descs.items.len);
         try std.testing.expectEqual(e_desc, store.resolveVar(e).desc_idx);

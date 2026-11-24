@@ -43823,7 +43823,7 @@ fn probeKeep(self: *Self, probe: *Probe, b: Var) Allocator.Error!void {
 /// literals they determined.
 fn probeYes(self: *Self, probe: *Probe) Allocator.Error!void {
     self.noteProbeEnd(probe.site, true);
-    try self.types.endProbeYes(&probe.mark);
+    try self.types.endProbeYes();
     try self.absorbed_defaults.appendSlice(self.gpa, self.probe_absorbed_defaults.items);
     self.probe_absorbed_defaults.clearRetainingCapacity();
     if (self.probe_determined_literals.items.len != 0) {
@@ -43914,7 +43914,7 @@ fn beginInstantiatingProbe(self: *Self, site: SpeculationSite, env: *Env) Instan
 fn instantiatingProbeYes(self: *Self, probing: *InstantiatingProbe) Allocator.Error!void {
     std.debug.assert(self.commit_probe_active);
     self.noteProbeEnd(probing.probe.site, true);
-    try self.types.endProbeYes(&probing.probe.mark);
+    try self.types.endProbeYes();
     try self.absorbed_defaults.appendSlice(self.gpa, self.probe_absorbed_defaults.items);
     self.probe_absorbed_defaults.clearRetainingCapacity();
     if (self.probe_determined_literals.items.len != 0) {

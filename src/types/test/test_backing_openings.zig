@@ -211,19 +211,19 @@ test "a replay inside a probe writes what walking the template writes" {
     defer fixture.deinit(gpa);
 
     // The recording made inside a discarded probe outlives it.
-    var walked_mark = fixture.walked.beginProbe();
-    var replayed_mark = fixture.replayed.beginProbe();
+    const walked_mark = fixture.walked.beginProbe();
+    const replayed_mark = fixture.replayed.beginProbe();
     try fixture.open(.outermost, .fresh);
     fixture.walked.endProbeNo(&walked_mark);
     fixture.replayed.endProbeNo(&replayed_mark);
     try expectSameStores(&fixture.walked, &fixture.replayed);
     try fixture.open(@fromBackingInt(@intCast(2)), .fresh);
 
-    walked_mark = fixture.walked.beginProbe();
-    replayed_mark = fixture.replayed.beginProbe();
+    _ = fixture.walked.beginProbe();
+    _ = fixture.replayed.beginProbe();
     try fixture.open(.outermost, .fresh);
-    try fixture.walked.endProbeYes(&walked_mark);
-    try fixture.replayed.endProbeYes(&replayed_mark);
+    try fixture.walked.endProbeYes();
+    try fixture.replayed.endProbeYes();
     try expectSameStores(&fixture.walked, &fixture.replayed);
     try fixture.open(@fromBackingInt(@intCast(2)), .fresh);
 }
