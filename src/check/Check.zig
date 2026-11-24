@@ -44405,7 +44405,15 @@ fn distributeRecordOmittedDefaults(self: *Self) Allocator.Error!void {
     errdefer output.deinit(self.cir.gpa);
     for (self.record_constructions.items) |expr_idx| {
         if (self.hoistExprInvalidated(expr_idx) or self.erroneous_value_exprs.contains(expr_idx)) continue;
-        const resolved = self.types.resolveVar(ModuleEnv.varFrom(expr_idx));
+        var resolved = self.types.resolveVar(ModuleEnv.varFrom(expr_idx));
+        // An annotated or expected-typed literal builds its record on a
+        // separate body variable and relates its own variable to the
+        // annotation. When the annotation names an alias, the expression's
+        // root is that alias node, and unification related the alias's
+        // backing to the body's record class.
+        while (resolved.desc.content == .alias) {
+            resolved = self.types.resolveVar(self.types.getAliasBackingVar(resolved.desc.content.alias));
+        }
         if (resolved.desc.content == .err) continue;
         const group = by_root.get(resolved.var_) orelse continue;
         const seen = try emitted.getOrPut(expr_idx);
@@ -44433,6 +44441,7 @@ fn distributeRecordOmittedDefaults(self: *Self) Allocator.Error!void {
             });
         }
     }
+    std.mem.sort(ModuleEnv.RecordOmittedDefault, output.items(), {}, ModuleEnv.RecordOmittedDefault.lessThan);
     self.cir.record_omitted_defaults.deinit(self.cir.gpa);
     self.cir.record_omitted_defaults = output;
 }
@@ -44463,16 +44472,8 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     var recursive_defaults: std.ArrayList(PendingDefaultCheck) = .empty;
     defer recursive_defaults.deinit(self.gpa);
 
-    var evidence = DefaultWalkEvidence{
-        .omitted_defaults_by_expr = .init(self.gpa),
-        .next_omitted_default = try self.gpa.alloc(EvidenceLink, self.cir.record_omitted_defaults.items().len),
-    };
+    var evidence = DefaultWalkEvidence{};
     defer evidence.deinit(self.gpa);
-    for (self.cir.record_omitted_defaults.items(), 0..) |omitted, index| {
-        const entry = try evidence.omitted_defaults_by_expr.getOrPut(omitted.expr);
-        evidence.next_omitted_default[index] = if (entry.found_existing) .some(@fromBackingInt(entry.value_ptr.*)) else .none;
-        entry.value_ptr.* = @intCast(index);
-    }
 
     // Top-level binder pattern -> def body, for following reference edges
     // through def bodies during the residue walk. A destructuring def
@@ -44856,10 +44857,6 @@ fn linkedRecord(link: EvidenceLink) ?u32 {
 /// Prebuilt evidence indexes for one `checkDefaultRestrictions` run (built
 /// once, shared by every default's residue walk).
 const DefaultWalkEvidence = struct {
-    /// Construction -> first recorded omission, with links into the CIR table.
-    /// Built once so cycle walks consume exact omission evidence in O(fields).
-    omitted_defaults_by_expr: collections.DenseMap(CIR.Expr.Idx, u32),
-    next_omitted_default: []EvidenceLink,
     pattern_to_def_expr: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
     /// Local instantiating node -> its first scheme-use record index
     /// (`value_use`/`nested_function_use` slots only); `next_node_scheme_use`
@@ -44876,8 +44873,6 @@ const DefaultWalkEvidence = struct {
     next_instantiation: []EvidenceLink = &.{},
 
     fn deinit(evidence: *DefaultWalkEvidence, gpa: std.mem.Allocator) void {
-        evidence.omitted_defaults_by_expr.deinit();
-        gpa.free(evidence.next_omitted_default);
         evidence.pattern_to_def_expr.deinit(gpa);
         evidence.node_to_scheme_uses.deinit(gpa);
         gpa.free(evidence.next_node_scheme_use);
@@ -45200,7 +45195,6 @@ fn defaultMaterializationIsRecursive(
             .e_empty_record => {
                 if (try self.appendOmittedDefaultDependencies(
                     expr_idx,
-                    evidence,
                     self_module,
                     target_expr_node,
                     visited_defaults,
@@ -45212,7 +45206,6 @@ fn defaultMaterializationIsRecursive(
                 if (record.ext == null) {
                     if (try self.appendOmittedDefaultDependencies(
                         expr_idx,
-                        evidence,
                         self_module,
                         target_expr_node,
                         visited_defaults,
@@ -45462,16 +45455,12 @@ fn appendDefaultWalkStmtExprs(
 fn appendOmittedDefaultDependencies(
     self: *Self,
     record_expr: CIR.Expr.Idx,
-    evidence: *const DefaultWalkEvidence,
     self_module: base.ModuleIdentity.Idx,
     target_expr_node: u32,
     visited_defaults: *collections.DenseMapUnmanaged(u32, void),
     expr_work: *std.ArrayList(CIR.Expr.Idx),
 ) std.mem.Allocator.Error!bool {
-    var next = evidence.omitted_defaults_by_expr.get(record_expr);
-    while (next) |index| {
-        const omitted = self.cir.record_omitted_defaults.items()[index];
-        next = linkedRecord(evidence.next_omitted_default[index]);
+    for (ModuleEnv.RecordOmittedDefault.ofExpr(self.cir.record_omitted_defaults.items(), record_expr)) |omitted| {
         if (omitted.origin_module != self_module) continue;
         if (omitted.default_expr_node == target_expr_node) return true;
         const seen = try visited_defaults.getOrPut(self.gpa, omitted.default_expr_node);
