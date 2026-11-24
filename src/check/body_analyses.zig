@@ -2251,7 +2251,8 @@ const ConstantGraph = struct {
         for (roots.roots.items()) |root| {
             if (root.pattern.get()) |pattern| try by_pattern.put(@backingInt(pattern), root.rootExpr());
         }
-        for (refs.records.items()) |record| {
+        var resolved_refs_3 = refs.iterator();
+        while (resolved_refs_3.next()) |record| {
             const ref = switch (record.ref) {
                 .top_level_const => |use| use.const_ref,
                 .selected_hoisted_const => |use| use.const_use.const_ref,
@@ -2686,7 +2687,8 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
     var shapes = try SourceCallShapes.collect(allocator, bodies);
     defer shapes.deinit(allocator);
     const callees = &shapes.callees;
-    for (refs.records.items()) |record| {
+    var resolved_refs_4 = refs.iterator();
+    while (resolved_refs_4.next()) |record| {
         const procedure = switch (record.ref) {
             .top_level_proc, .promoted_top_level_proc => |procedure| procedure,
             .platform_required_proc => |required| required.procedure,

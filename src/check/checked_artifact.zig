@@ -1851,7 +1851,7 @@ const CompileTimeRequestScheduler = struct {
             },
             .use => |expr| {
                 const ref_id = self.resolved_value_refs.lookupIdByExpr(expr) orelse return;
-                const template_ref = (try self.collectResolvedRefDependency(self.resolved_value_refs.records.items()[@backingInt(ref_id)].ref)) orelse return;
+                const template_ref = (try self.collectResolvedRefDependency(self.resolved_value_refs.ref(ref_id))) orelse return;
                 try self.collectTemplateDependencies(template_ref);
             },
             .requirement => |requirement| try self.collectTemplateDependencies(self.procedure_templates.templateRef(self.artifact_key.digest(), requirement.template)),
@@ -1881,10 +1881,10 @@ const CompileTimeRequestScheduler = struct {
             const ref_id = frame.refs[frame.next];
             frame.next += 1;
             const raw = @backingInt(ref_id);
-            if (raw >= self.resolved_value_refs.records.items().len) {
+            if (raw >= self.resolved_value_refs.len()) {
                 checkedArtifactInvariant("compile-time request dependency ref id was outside the checked table", .{});
             }
-            const template_ref = (try self.collectResolvedRefDependency(self.resolved_value_refs.records.items()[raw].ref)) orelse continue;
+            const template_ref = (try self.collectResolvedRefDependency(self.resolved_value_refs.ref(@fromBackingInt(@intCast(raw))))) orelse continue;
             if (try self.enterTemplateDependencies(template_ref)) |refs| try frames.append(self.allocator, .{ .refs = refs });
         }
     }
@@ -1971,7 +1971,7 @@ const CompileTimeRequestScheduler = struct {
                     const lookup = template.forwarded_lookup.get() orelse return null;
                     const ref_id = self.resolved_value_refs.lookupIdByExpr(lookup) orelse
                         checkedArtifactInvariant("an exact procedure alias's forwarded lookup had no resolved value reference", .{});
-                    const ref = self.resolved_value_refs.records.items()[@backingInt(ref_id)].ref;
+                    const ref = self.resolved_value_refs.ref(ref_id);
                     switch (ref) {
                         .top_level_proc, .promoted_top_level_proc => |next| procedure = next,
                         .platform_required_proc => |required| procedure = required.procedure,
@@ -2373,10 +2373,10 @@ fn compileTimeCallableRootIsProcedureReference(
     const ref_id = resolved_value_refs.lookupIdByExpr(evaluated) orelse
         checkedArtifactInvariant("checked callable lookup root had no resolved value reference", .{});
     const raw = @backingInt(ref_id);
-    if (raw >= resolved_value_refs.records.items().len) {
+    if (raw >= resolved_value_refs.len()) {
         checkedArtifactInvariant("checked callable lookup root resolved reference was outside the checked table", .{});
     }
-    return switch (resolved_value_refs.records.items()[raw].ref) {
+    return switch (resolved_value_refs.ref(@fromBackingInt(@intCast(raw)))) {
         .top_level_proc,
         .imported_proc,
         .hosted_proc,
@@ -11360,12 +11360,12 @@ fn directProcedureTargetForCall(
 ) ?ResolvedValueId {
     const ref_id = refs.lookupIdByExpr(callee) orelse return null;
     const raw = @backingInt(ref_id);
-    if (raw >= refs.records.items().len) {
+    if (raw >= refs.len()) {
         checkedArtifactInvariant("checked direct call target referenced a missing resolved value", .{});
     }
     return if (resolvedValueCanBeCalledDirectly(
         refs,
-        refs.records.items()[raw].ref,
+        refs.ref(@fromBackingInt(@intCast(raw))),
         local_module,
         local_procedure_bindings,
         local_callable_eval_templates,
@@ -11394,7 +11394,7 @@ fn resolvedValueCanBeCalledDirectly(
                 checkedArtifactInvariant("callable alias has no published target", .{});
             break :blk resolvedValueCanBeCalledDirectly(
                 refs,
-                refs.records.items()[@backingInt(final)].ref,
+                refs.ref(final),
                 local_module,
                 local_procedure_bindings,
                 local_callable_eval_templates,
@@ -11987,7 +11987,7 @@ fn publishCallableEvalForwarding(
                 checkedArtifactInvariant("checked callable lookup root had no resolved value reference", .{});
             if (!resolvedValueCanBeCalledDirectly(
                 resolved_value_refs,
-                resolved_value_refs.records.items()[@backingInt(ref_id)].ref,
+                resolved_value_refs.ref(ref_id),
                 local_module,
                 local_procedure_bindings,
                 templates,
@@ -12202,17 +12202,56 @@ pub const ResolvedValueRef = union(enum) {
     promoted_top_level_proc: ProcedureUseTemplate,
 };
 
-/// Public `ResolvedValueRefRecord` declaration.
+/// One lookup's resolved reference, as `ResolvedValueRefTable.get` returns it.
 pub const ResolvedValueRefRecord = struct {
     expr: CIR.Expr.Idx,
     ref: ResolvedValueRef,
     checked_ty: CheckedTypeId,
-    scope_depth: u32,
     /// Checking proved that this lookup targets a member of an on-stack
     /// recursive binding group. Monotype may join it to that procedure's
     /// in-progress specialization only when its recorded scheme substitution
     /// is the active specialization's substitution.
     recursive_reference: bool = false,
+};
+
+/// How `ResolvedValueRefTable` stores one record. A reference to a local
+/// binding, the most common kind, keeps its binder in `payload`; a
+/// `platform_required_checked_error` keeps nothing; every other reference is
+/// a row of the table's `refs`, which `payload` indexes.
+pub const StoredResolvedValueRef = extern struct {
+    expr: CIR.Expr.Idx,
+    checked_ty: CheckedTypeId,
+    payload: u32,
+    /// The reference's `ResolvedValueRef` tag.
+    kind: u8,
+    recursive_reference: bool,
+    reserved: [2]u8 = .{ 0, 0 },
+
+    const Kind = std.meta.Tag(ResolvedValueRef);
+
+    fn tag(self: StoredResolvedValueRef) Kind {
+        return @fromBackingInt(@intCast(self.kind));
+    }
+
+    /// Whether a reference of `kind` is kept in `payload` rather than in
+    /// `refs`.
+    fn isInline(kind: Kind) bool {
+        return switch (kind) {
+            .local_param, .local_value, .local_mutable_version, .pattern_binder, .platform_required_checked_error => true,
+            .local_proc,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            .platform_required_const,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => false,
+        };
+    }
 };
 
 /// One call's direct procedure target (`ResolvedValueRefTable.call_direct_targets`).
@@ -12229,7 +12268,9 @@ pub const CallDirectTarget = extern struct {
 /// by-node facts reference resolution decides for its expressions.
 pub const ResolvedValueRefTable = struct {
     /// One record per reached lookup expression, ascending by expression.
-    records: collections.SafeList(ResolvedValueRefRecord) = .{},
+    records: collections.SafeList(StoredResolvedValueRef) = .{},
+    /// The references records do not keep inline, in record order.
+    refs: collections.SafeList(ResolvedValueRef) = .{},
     template_refs: collections.SafeList(ResolvedValueRefId) = .{},
     /// Expressions lowering evaluates as runtime errors because reference
     /// resolution rejected them: uses of rejected bindings, calls of a
@@ -12242,7 +12283,8 @@ pub const ResolvedValueRefTable = struct {
     call_direct_targets: collections.SafeList(CallDirectTarget) = .{},
 
     pub const Serialized = extern struct {
-        records: SerializedSlice(ResolvedValueRefRecord) = .{},
+        records: SerializedSlice(StoredResolvedValueRef) = .{},
+        refs: SerializedSlice(ResolvedValueRef) = .{},
         template_refs: SerializedSlice(ResolvedValueRefId) = .{},
         retired_exprs: SerializedSlice(u64) = .{},
         call_direct_targets: SerializedSlice(CallDirectTarget) = .{},
@@ -12269,8 +12311,8 @@ pub const ResolvedValueRefTable = struct {
         module_index: *const ModuleIndex,
     ) Allocator.Error!ResolvedValueRefTable {
         const module = modules.module(module_idx);
-        var records = std.ArrayList(ResolvedValueRefRecord).empty;
-        errdefer records.deinit(allocator);
+        var table = ResolvedValueRefTable{};
+        errdefer table.deinit(allocator);
         var callable_aliases = std.ArrayList(ResolvedValueRefId).empty;
         defer callable_aliases.deinit(allocator);
 
@@ -12317,12 +12359,10 @@ pub const ResolvedValueRefTable = struct {
             };
             try attachUseTypePayload(&resolved_ref, checked_ty);
 
-            const id: ResolvedValueRefId = @fromBackingInt(@intCast(@as(u32, @intCast(records.items.len))));
-            try records.append(allocator, .{
+            const id = try table.append(allocator, .{
                 .expr = expr_idx,
                 .ref = resolved_ref,
                 .checked_ty = checked_ty,
-                .scope_depth = 0,
                 .recursive_reference = recursive_reference_nodes.contains(node_idx),
             });
             if (resolved_ref == .local_proc and resolved_ref.local_proc.is_alias) {
@@ -12330,17 +12370,147 @@ pub const ResolvedValueRefTable = struct {
             }
         }
 
-        var table = ResolvedValueRefTable{ .records = .fromOwnedSlice(try records.toOwnedSlice(allocator)) };
-        errdefer table.deinit(allocator);
+        try table.records.releaseUnusedCapacity(allocator);
+        try table.refs.releaseUnusedCapacity(allocator);
         table.retired_exprs = .fromOwnedSlice(try retiredWords(allocator, module.nodeCount()));
         try publishCallableAliasTargets(allocator, &table, callable_aliases.items);
         return table;
     }
 
+    /// Append a record after every record already in the table.
+    pub fn append(self: *ResolvedValueRefTable, allocator: Allocator, record: ResolvedValueRefRecord) Allocator.Error!ResolvedValueRefId {
+        const kind = std.meta.activeTag(record.ref);
+        const payload: u32 = switch (record.ref) {
+            .local_param, .local_value, .local_mutable_version, .pattern_binder => |local| @backingInt(local.binder),
+            .platform_required_checked_error => 0,
+            .local_proc,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            .platform_required_const,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => payload: {
+                const index: u32 = @intCast(self.refs.len());
+                _ = try self.refs.append(allocator, record.ref);
+                break :payload index;
+            },
+        };
+        const id: ResolvedValueRefId = @fromBackingInt(@intCast(self.records.len()));
+        _ = try self.records.append(allocator, .{
+            .expr = record.expr,
+            .checked_ty = record.checked_ty,
+            .payload = payload,
+            .kind = @backingInt(kind),
+            .recursive_reference = record.recursive_reference,
+        });
+        return id;
+    }
+
+    /// The number of records.
+    pub fn len(self: *const ResolvedValueRefTable) usize {
+        return @intCast(self.records.len());
+    }
+
+    /// Record `id`.
+    pub fn get(self: *const ResolvedValueRefTable, id: ResolvedValueRefId) ResolvedValueRefRecord {
+        const stored = self.records.items()[@backingInt(id)];
+        return .{
+            .expr = stored.expr,
+            .ref = self.storedRef(stored),
+            .checked_ty = stored.checked_ty,
+            .recursive_reference = stored.recursive_reference,
+        };
+    }
+
+    /// The reference of record `id`.
+    pub fn ref(self: *const ResolvedValueRefTable, id: ResolvedValueRefId) ResolvedValueRef {
+        return self.storedRef(self.records.items()[@backingInt(id)]);
+    }
+
+    /// The reference of record `id`, which is one `refs` keeps, for updating
+    /// in place.
+    pub fn refPtr(self: *ResolvedValueRefTable, id: ResolvedValueRefId) *ResolvedValueRef {
+        const stored = self.records.items()[@backingInt(id)];
+        std.debug.assert(!StoredResolvedValueRef.isInline(stored.tag()));
+        return &self.refs.items()[stored.payload];
+    }
+
+    /// Replace the reference of record `id`, which `refs` keeps. The
+    /// replacement takes the stored reference's row, or, when it is one a
+    /// record keeps inline, the record itself.
+    pub fn replaceStoredRef(self: *ResolvedValueRefTable, id: ResolvedValueRefId, replacement: ResolvedValueRef) void {
+        const stored = &self.records.items()[@backingInt(id)];
+        std.debug.assert(!StoredResolvedValueRef.isInline(stored.tag()));
+        const kind = std.meta.activeTag(replacement);
+        stored.kind = @backingInt(kind);
+        switch (replacement) {
+            .local_param, .local_value, .local_mutable_version, .pattern_binder => |local| stored.payload = @backingInt(local.binder),
+            .platform_required_checked_error => stored.payload = 0,
+            .local_proc,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            .platform_required_const,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => self.refs.items()[stored.payload] = replacement,
+        }
+    }
+
+    /// Iterates the records in order.
+    pub const Iterator = struct {
+        table: *const ResolvedValueRefTable,
+        index: usize = 0,
+
+        pub fn next(self: *Iterator) ?ResolvedValueRefRecord {
+            if (self.index == self.table.len()) return null;
+            const record = self.table.get(@fromBackingInt(@intCast(self.index)));
+            self.index += 1;
+            return record;
+        }
+    };
+
+    /// Iterate the records in order.
+    pub fn iterator(self: *const ResolvedValueRefTable) Iterator {
+        return .{ .table = self };
+    }
+
+    fn storedRef(self: *const ResolvedValueRefTable, stored: StoredResolvedValueRef) ResolvedValueRef {
+        const local: LocalBindingRef = .{ .binder = @fromBackingInt(stored.payload) };
+        return switch (stored.tag()) {
+            .local_param => .{ .local_param = local },
+            .local_value => .{ .local_value = local },
+            .local_mutable_version => .{ .local_mutable_version = local },
+            .pattern_binder => .{ .pattern_binder = local },
+            .platform_required_checked_error => .platform_required_checked_error,
+            .local_proc,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            .platform_required_const,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => self.refs.items()[stored.payload],
+        };
+    }
+
     /// The reference of a lookup expression.
     pub fn lookupIdByExpr(self: *const ResolvedValueRefTable, expr: CIR.Expr.Idx) ?ResolvedValueRefId {
-        const index = artifact_serialize.binarySearchIndexByKey(ResolvedValueRefRecord, CIR.Expr.Idx, self.records.items(), expr, struct {
-            fn order(record: ResolvedValueRefRecord, key: CIR.Expr.Idx) std.math.Order {
+        const index = artifact_serialize.binarySearchIndexByKey(StoredResolvedValueRef, CIR.Expr.Idx, self.records.items(), expr, struct {
+            fn order(record: StoredResolvedValueRef, key: CIR.Expr.Idx) std.math.Order {
                 return std.math.order(@backingInt(record.expr), @backingInt(key));
             }
         }.order) orelse return null;
@@ -12376,11 +12546,11 @@ pub const ResolvedValueRefTable = struct {
     /// The original callable identity of a procedure reference. Alias use
     /// types and substitutions still belong to the requesting record.
     pub fn callableTarget(self: *const ResolvedValueRefTable, id: ResolvedValueRefId) ResolvedValueRefRecord {
-        const record = self.records.items()[@backingInt(id)];
+        const record = self.get(id);
         if (record.ref == .local_proc and record.ref.local_proc.is_alias) {
             const target = record.ref.local_proc.alias_target orelse
                 checkedArtifactInvariant("callable alias has no published target", .{});
-            return self.records.items()[@backingInt(target)];
+            return self.get(target);
         }
         return record;
     }
@@ -12395,15 +12565,14 @@ fn publishCallableAliasTargets(
     table: *ResolvedValueRefTable,
     aliases: []const ResolvedValueRefId,
 ) Allocator.Error!void {
-    const records = table.records.items();
     var path = std.ArrayList(ResolvedValueRefId).empty;
     defer path.deinit(allocator);
     for (aliases) |alias| {
-        if (records[@backingInt(alias)].ref.local_proc.alias_target != null) continue;
+        if (table.ref(alias).local_proc.alias_target != null) continue;
         path.clearRetainingCapacity();
         var target = alias;
         while (true) {
-            const ref = records[@backingInt(target)].ref;
+            const ref = table.ref(target);
             if (ref != .local_proc or !ref.local_proc.is_alias) break;
             if (ref.local_proc.alias_target) |completed| {
                 target = completed;
@@ -12414,7 +12583,7 @@ fn publishCallableAliasTargets(
             target = table.lookupIdByExpr(ref.local_proc.expr) orelse
                 checkedArtifactInvariant("callable alias RHS has no resolved lookup", .{});
         }
-        for (path.items) |id| records[@backingInt(id)].ref.local_proc.alias_target = target;
+        for (path.items) |id| table.refPtr(id).local_proc.alias_target = target;
     }
 }
 
@@ -12449,7 +12618,8 @@ fn publishRetiredExprs(
     };
 
     var rejected_binding = false;
-    for (refs.records.items()) |record| {
+    var resolved_refs_5 = refs.iterator();
+    while (resolved_refs_5.next()) |record| {
         if (record.ref == .platform_required_checked_error) {
             retired.set(@backingInt(record.expr));
             rejected_binding = true;
@@ -12525,7 +12695,8 @@ fn publishRetiredExprs(
                 try entry.value_ptr.append(allocator, expr);
             }
         }
-        for (refs.records.items()) |record| {
+        var resolved_refs_6 = refs.iterator();
+        while (resolved_refs_6.next()) |record| {
             const procedure = switch (record.ref) {
                 .top_level_proc, .promoted_top_level_proc => |proc| proc,
                 .local_param,
@@ -13691,7 +13862,7 @@ fn sealCheckedProcedureTemplateRefs(
         for (collector.value_refs.items, collector.value_ref_scopes.items) |ref_id, use_scope| {
             const seen = try seen_local_uses.getOrPut(ref_id);
             if (seen.found_existing) continue;
-            const record = resolved_value_refs.records.items()[@backingInt(ref_id)];
+            const record = resolved_value_refs.get(ref_id);
             if (diagnostics.isSet(@backingInt(record.expr))) continue;
             try collector.specialization_relations.append(allocator, .{
                 .scope = use_scope,
@@ -13860,9 +14031,10 @@ fn publishLocalProcedureDispatchScopes(
     resolved_value_refs: *ResolvedValueRefTable,
     scope_by_checked_expr: *const collections.DenseMap(CIR.Expr.Idx, DispatchScopeId),
 ) void {
-    for (resolved_value_refs.records.items()) |*record| {
-        if (record.ref != .local_proc) continue;
-        const local = &record.ref.local_proc;
+    for (0..resolved_value_refs.len()) |index| {
+        const id: ResolvedValueRefId = @fromBackingInt(@intCast(index));
+        if (resolved_value_refs.ref(id) != .local_proc) continue;
+        const local = &resolved_value_refs.refPtr(id).local_proc;
 
         local.dispatch_scope = scope_by_checked_expr.get(local.expr);
     }
@@ -17164,7 +17336,7 @@ const EvidencePass = struct {
     /// template: how each of the referenced scheme's obligations was
     /// satisfied at that use.
     fn emitSiteEvidence(self: *EvidencePass, ref_id: ResolvedValueRefId, chain: []const ChainLevel) Allocator.Error!void {
-        const rec = self.resolved_value_refs.records.items()[@backingInt(ref_id)];
+        const rec = self.resolved_value_refs.get(ref_id);
         const site_key = @backingInt(rec.expr);
         if (self.site_seen.contains(site_key)) return;
 
@@ -19771,7 +19943,7 @@ const NestedProcSiteBuilder = struct {
         const callee = self.callee_lookups.remove(expr_id);
         const refs = self.resolved_value_refs orelse return;
         const id = refs.lookupIdByExpr(expr_id) orelse return;
-        try self.recordLocalProcUse(refs.records.items()[@backingInt(id)].ref, callee);
+        try self.recordLocalProcUse(refs.ref(id), callee);
         switch (refs.callableTarget(id).ref) {
             .local_proc => |local| try self.selectLocalProc(local.expr),
             .local_param,
@@ -22473,7 +22645,7 @@ fn publishLiteralArgumentRoots(
                 owned = composed;
                 actuals = composed;
                 const ref_id = refs.lookupIdByExpr(step.lookup) orelse checkedArtifactInvariant("an alias's forwarded lookup has no resolved reference", .{});
-                switch (refs.records.items()[@backingInt(ref_id)].ref) {
+                switch (refs.ref(ref_id)) {
                     .local_proc => |local| {
                         if (!local.is_alias) return try self.takeComposed(&owned, actuals);
                         const scope_id = local.dispatch_scope orelse {
@@ -22733,7 +22905,7 @@ fn publishLiteralArgumentRoots(
         const ref_start = template.resolved_value_refs.start;
         for (resolved_value_refs.template_refs.items()[ref_start..][0..template.resolved_value_refs.len], 0..) |ref_id, i| {
             const scope = scopeKeyOf(t, if (sealed) template_iterator_refs.value_ref_scopes[ref_start + i] else .root);
-            try collector.valueRef(resolved_value_refs.records.items()[@backingInt(ref_id)], scope);
+            try collector.valueRef(resolved_value_refs.get(ref_id), scope);
         }
         if (!sealed) continue;
         const site_span = template_iterator_refs.scope_site_spans[template_index];
@@ -22753,7 +22925,7 @@ fn publishLiteralArgumentRoots(
         }
         const refs = template_iterator_refs.default_value_refs;
         for (resolved_value_refs.template_refs.items()[refs.start..][0..refs.len]) |ref_id| {
-            try collector.valueRef(resolved_value_refs.records.items()[@backingInt(ref_id)], null);
+            try collector.valueRef(resolved_value_refs.get(ref_id), null);
         }
         const sites = template_iterator_refs.default_scope_sites;
         for (template_iterator_refs.scope_sites[sites.start..][0..sites.len]) |site| {
@@ -24361,11 +24533,14 @@ pub fn pairCheckedPlatform(
     var substitutions = try PlatformRelationTypeSubstitutions.fromRelation(session, result.module_identity, &result.canonical_names, &result.checked_types, &result.platform_required_declarations, &result.platform_type_inputs, &relations, relation);
     result.platform_requirement_relations = try PlatformRequirementRelationTable.fromRelation(session, result.module_identity, &result.canonical_names, &result.checked_types, &result.platform_required_declarations, &relations, relation);
     result.platform_required_bindings = try PlatformRequiredBindingTable.fromRelation(session, result.module_identity, &result.canonical_names, result.checked_types.view(), &result.platform_required_declarations, &result.platform_requirement_relations, relation);
-    result.resolved_value_refs.records = .fromOwnedSlice(try session.dupe(ResolvedValueRefRecord, platform.resolved_value_refs.records.items()));
-    for (result.resolved_value_refs.records.items()) |*record| {
-        if (record.ref == .platform_required_declaration) {
-            const required = platform.platform_required_declarations.lookupByDeclarationId(record.ref.platform_required_declaration).?;
-            record.ref = categorizeRequiredValueRef(required.requires_idx, &result.platform_required_declarations, &result.platform_required_bindings);
+    result.resolved_value_refs.records = .fromOwnedSlice(try session.dupe(StoredResolvedValueRef, platform.resolved_value_refs.records.items()));
+    result.resolved_value_refs.refs = .fromOwnedSlice(try session.dupe(ResolvedValueRef, platform.resolved_value_refs.refs.items()));
+    for (0..result.resolved_value_refs.len()) |index| {
+        const id: ResolvedValueRefId = @fromBackingInt(@intCast(index));
+        const ref = result.resolved_value_refs.ref(id);
+        if (ref == .platform_required_declaration) {
+            const required = platform.platform_required_declarations.lookupByDeclarationId(ref.platform_required_declaration).?;
+            result.resolved_value_refs.replaceStoredRef(id, categorizeRequiredValueRef(required.requires_idx, &result.platform_required_declarations, &result.platform_required_bindings));
         }
     }
     var type_memo = substitutions.substitutionIn(session);
@@ -24438,7 +24613,8 @@ pub fn pairCheckedPlatform(
         const retired = try session.dupe(u64, platform.resolved_value_refs.retired_exprs.items());
         var direct_targets = std.ArrayList(CallDirectTarget).empty;
         for (platform.resolved_value_refs.call_direct_targets.items()) |entry| try direct_targets.append(session, entry);
-        for (result.resolved_value_refs.records.items()) |record| {
+        var resolved_refs_7 = result.resolved_value_refs.iterator();
+        while (resolved_refs_7.next()) |record| {
             if (record.ref != .platform_required_checked_error) continue;
             if (env.store.getExpr(record.expr) != .e_lookup_required) continue;
             ResolvedValueRefTable.setRetired(retired, record.expr);
@@ -28752,7 +28928,7 @@ const TemplateDemandPass = struct {
 
     /// The checked template a direct call's target names, when it names one.
     fn directCallTemplate(self: *TemplateDemandPass, target: ResolvedValueRefId) Allocator.Error!?canonical.ProcedureTemplateRef {
-        const procedure = switch (self.resolved_value_refs.records.items()[@backingInt(target)].ref) {
+        const procedure = switch (self.resolved_value_refs.ref(target)) {
             .top_level_proc, .imported_proc, .promoted_top_level_proc => |procedure| procedure,
             .local_param,
             .local_value,
@@ -29104,10 +29280,10 @@ const ExhaustivenessTemplateReachability = struct {
             }
             for (self.resolved_value_refs.template_refs.items()[template.resolved_value_refs.start..end]) |ref_id| {
                 const raw = @backingInt(ref_id);
-                if (raw >= self.resolved_value_refs.records.items().len) {
+                if (raw >= self.resolved_value_refs.len()) {
                     checkedArtifactInvariant("reachable procedure template resolved-ref id was outside table", .{});
                 }
-                try self.markResolvedValueRef(pending.kind, self.resolved_value_refs.records.items()[raw].ref);
+                try self.markResolvedValueRef(pending.kind, self.resolved_value_refs.ref(@fromBackingInt(@intCast(raw))));
             }
         }
     }
@@ -31368,10 +31544,10 @@ const PublicApiClosureDependencyCollector = struct {
                 }
                 for (self.resolved_value_refs.template_refs.items()[table.start..end]) |ref_id| {
                     const raw = @backingInt(ref_id);
-                    if (raw >= self.resolved_value_refs.records.items().len) {
+                    if (raw >= self.resolved_value_refs.len()) {
                         checkedArtifactInvariant("public API closure resolved-ref id was outside table", .{});
                     }
-                    const record = self.resolved_value_refs.records.items()[raw];
+                    const record = self.resolved_value_refs.get(@fromBackingInt(@intCast(raw)));
                     // A generic use's evidence selects the procedures its
                     // dispatches call.
                     if (self.static_dispatch_plans.siteEvidence(record.expr)) |evidence| {
@@ -32232,8 +32408,8 @@ const ImportedTemplateClosureBuilder = struct {
         if (end > self.context.resolved_value_refs_table.template_refs.items().len) checkedArtifactInvariant("checked template resolved-ref span was outside table", .{});
         for (self.context.resolved_value_refs_table.template_refs.items()[table.start..end]) |ref_id| {
             const raw = @backingInt(ref_id);
-            if (raw >= self.context.resolved_value_refs_table.records.items().len) checkedArtifactInvariant("checked template resolved-ref id was outside table", .{});
-            try pending.append(self.context.allocator, .{ .direct_dependency = self.context.resolved_value_refs_table.records.items()[raw].ref });
+            if (raw >= self.context.resolved_value_refs_table.len()) checkedArtifactInvariant("checked template resolved-ref id was outside table", .{});
+            try pending.append(self.context.allocator, .{ .direct_dependency = self.context.resolved_value_refs_table.ref(@fromBackingInt(@intCast(raw))) });
         }
     }
 
@@ -33685,7 +33861,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 234);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 235);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -34791,10 +34967,10 @@ pub const CheckedModuleArtifact = struct {
                     }
                     if (call.direct_target) |target| {
                         const raw_target = @backingInt(target);
-                        if (raw_target >= self.resolved_value_refs.records.items().len) {
+                        if (raw_target >= self.resolved_value_refs.len()) {
                             return .{ .kind = .specialization_relation_value_ref_out_of_bounds, .index = @intCast(i) };
                         }
-                        switch (self.resolved_value_refs.records.items()[raw_target].ref) {
+                        switch (self.resolved_value_refs.ref(@fromBackingInt(@intCast(raw_target)))) {
                             .top_level_proc,
                             .imported_proc,
                             .hosted_proc,
@@ -34825,10 +35001,10 @@ pub const CheckedModuleArtifact = struct {
                 },
                 .local_proc_use => |ref_id| {
                     const raw_ref = @backingInt(ref_id);
-                    if (raw_ref >= self.resolved_value_refs.records.items().len) {
+                    if (raw_ref >= self.resolved_value_refs.len()) {
                         return .{ .kind = .specialization_relation_value_ref_out_of_bounds, .index = @intCast(i) };
                     }
-                    const record = self.resolved_value_refs.records.items()[raw_ref];
+                    const record = self.resolved_value_refs.get(@fromBackingInt(@intCast(raw_ref)));
                     if (!self.typesView().containsId(record.checked_ty)) {
                         return .{ .kind = .specialization_relation_type_out_of_bounds, .index = @intCast(i) };
                     }
@@ -35546,7 +35722,8 @@ pub const CheckedModuleArtifact = struct {
                 base.invariant("checked artifact invariant violated: hosted representation references missing host checked function root", .{});
             }
         }
-        for (self.resolved_value_refs.records.items()) |record| {
+        var resolved_refs_8 = self.resolved_value_refs.iterator();
+        while (resolved_refs_8.next()) |record| {
             std.debug.assert(@backingInt(record.expr) < self.moduleEnvConst().store.nodes.len());
             if (self.checking_context_identity.platform_app_relation != null) {
                 switch (record.ref) {
@@ -37148,7 +37325,7 @@ const MethodBindingTargets = struct {
                 if (view != null) checkedArtifactInvariant("a forwarded procedure alias lookup had no resolved reference", .{});
                 return self.computedCallableTarget(binding);
             };
-            const use: ProcedureUseTemplate = switch (refs.records.items()[@backingInt(ref_id)].ref) {
+            const use: ProcedureUseTemplate = switch (refs.ref(ref_id)) {
                 .local_proc => |local| {
                     if (view != null) checkedArtifactInvariant("a top-level procedure alias forwarded to a local procedure", .{});
                     if (local.is_alias) {
@@ -38324,27 +38501,18 @@ fn testIndexId(comptime Id: type, index: usize) Id {
 }
 
 test "local procedure uses carry exact producer-recorded dispatch scope ownership" {
-    var records = [_]ResolvedValueRefRecord{
-        .{
-            .expr = @fromBackingInt(@intCast(10)),
+    var refs = ResolvedValueRefTable{};
+    defer refs.deinit(std.testing.allocator);
+    for (0..2) |offset| {
+        _ = try refs.append(std.testing.allocator, .{
+            .expr = @fromBackingInt(@intCast(10 + offset)),
             .ref = .{ .local_proc = .{
-                .binder = @fromBackingInt(@intCast(20)),
-                .expr = @fromBackingInt(@intCast(30)),
+                .binder = @fromBackingInt(@intCast(20 + offset)),
+                .expr = @fromBackingInt(@intCast(30 + offset)),
             } },
-            .checked_ty = @fromBackingInt(@intCast(40)),
-            .scope_depth = 0,
-        },
-        .{
-            .expr = @fromBackingInt(@intCast(11)),
-            .ref = .{ .local_proc = .{
-                .binder = @fromBackingInt(@intCast(21)),
-                .expr = @fromBackingInt(@intCast(31)),
-            } },
-            .checked_ty = @fromBackingInt(@intCast(41)),
-            .scope_depth = 0,
-        },
-    };
-    var refs = ResolvedValueRefTable{ .records = .fromBorrowedSlice(&records) };
+            .checked_ty = @fromBackingInt(@intCast(40 + offset)),
+        });
+    }
     const scopes = [_]DispatchRefScope{.{
         .parent = .none,
         .scheme_var = @fromBackingInt(@intCast(50)),
@@ -38358,11 +38526,11 @@ test "local procedure uses carry exact producer-recorded dispatch scope ownershi
 
     try std.testing.expectEqual(
         @as(?DispatchScopeId, testIndexId(DispatchScopeId, 0)),
-        refs.records.items()[0].ref.local_proc.dispatch_scope,
+        refs.ref(@fromBackingInt(@intCast(0))).local_proc.dispatch_scope,
     );
     try std.testing.expectEqual(
         @as(?DispatchScopeId, null),
-        refs.records.items()[1].ref.local_proc.dispatch_scope,
+        refs.ref(@fromBackingInt(@intCast(1))).local_proc.dispatch_scope,
     );
 }
 
@@ -39896,8 +40064,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x81, 0x32, 0x7D, 0x3C, 0xF6, 0xF0, 0x75, 0xA5, 0xA7, 0xE7, 0xBF, 0xB0, 0x6E, 0x9B, 0xDC, 0x2D,
-        0x80, 0xBE, 0xA0, 0xCC, 0xAA, 0xEA, 0x13, 0x24, 0x5F, 0xDE, 0xA0, 0x77, 0x57, 0xF0, 0x46, 0x07,
+        0x19, 0xE9, 0x71, 0x71, 0x33, 0x58, 0x74, 0x44, 0x69, 0xE7, 0xAC, 0xFC, 0x4F, 0x52, 0x7A, 0xC4,
+        0xBC, 0xB4, 0x68, 0x37, 0x6D, 0xC2, 0xE2, 0x71, 0x8A, 0x4F, 0x8D, 0x06, 0x00, 0xF7, 0x91, 0x0C,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

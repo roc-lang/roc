@@ -1110,7 +1110,8 @@ pub const Program = struct {
         }
         // A local procedure's uses all reach it through its binding, so its
         // own scheme's arguments are passed per call.
-        for (view.view.resolved_value_refs.records.items()) |record| {
+        var resolved_refs_2 = view.view.resolved_value_refs.iterator();
+        while (resolved_refs_2.next()) |record| {
             const local = switch (record.ref) {
                 .local_proc => |local| local,
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => continue,
@@ -1126,7 +1127,7 @@ pub const Program = struct {
         base.dev_diagnostics.countTestWork(.boxy_body_index_prepared_modules, 1);
         base.dev_diagnostics.countTestWork(.boxy_body_index_rows, view.view.checked_procedure_templates.dispatch_scopes.items().len +
             view.view.nested_proc_sites.sites.items().len + bodies.recordOmittedDefaults().len +
-            view.view.method_registry.entries.items().len + view.view.resolved_value_refs.records.items().len);
+            view.view.method_registry.entries.items().len + view.view.resolved_value_refs.len());
     }
 
     pub fn localScope(self: *Program, module_index: ModuleIndex, expr: ExprId) Allocator.Error!?checked.DispatchScopeId {
@@ -5226,11 +5227,11 @@ fn recordExports(program: *Program) Allocator.Error!void {
                     };
                     const ref_id = owner.view.resolved_value_refs.lookupIdByExpr(forwarded) orelse
                         invariant("a procedure alias's lookup has no resolved reference");
-                    var ref = owner.view.resolved_value_refs.records.items()[@backingInt(ref_id)].ref;
+                    var ref = owner.view.resolved_value_refs.ref(ref_id);
                     while (true) switch (ref) {
                         .local_proc => |local| {
                             const final = local.alias_target orelse invariant("a callable alias has no recorded target");
-                            ref = owner.view.resolved_value_refs.records.items()[@backingInt(final)].ref;
+                            ref = owner.view.resolved_value_refs.ref(final);
                         },
                         .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => break,
                     };

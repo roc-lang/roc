@@ -9152,7 +9152,7 @@ fn compileAppRootIdentityExpecting(
     }
     var direct_required_call_count: usize = 0;
     for (root.resolved_value_refs.call_direct_targets.items()) |call| {
-        if (root.resolved_value_refs.records.items()[@backingInt(call.target)].ref == .platform_required_proc) {
+        if (root.resolved_value_refs.ref(call.target) == .platform_required_proc) {
             direct_required_call_count += 1;
         }
     }

@@ -5131,7 +5131,7 @@ pub const Builder = struct {
             },
             .use => |expr| {
                 if (self.view.view.resolved_value_refs.lookupIdByExpr(expr)) |ref_id| {
-                    const record = self.view.view.resolved_value_refs.records.items()[@backingInt(ref_id)];
+                    const record = self.view.view.resolved_value_refs.get(ref_id);
                     switch (record.ref) {
                         .local_proc => |local| {
                             const scope_id = local.dispatch_scope orelse invariant("a literal argument's edge uses a local procedure without a scheme");
@@ -5233,7 +5233,7 @@ pub const Builder = struct {
             subst = self.siteSubstitution(lookup);
             evidence = self.view.view.static_dispatch_plans.siteEvidence(lookup) orelse &.{};
             const ref_id = self.view.view.resolved_value_refs.lookupIdByExpr(lookup) orelse invariant("an alias's forwarded lookup has no resolved reference");
-            const ref = self.view.view.resolved_value_refs.records.items()[@backingInt(ref_id)].ref;
+            const ref = self.view.view.resolved_value_refs.ref(ref_id);
             switch (ref) {
                 .local_proc => |local| {
                     if (!local.is_alias) invariant("an alias chain reaches a non-alias local procedure");
@@ -5498,7 +5498,7 @@ pub const Builder = struct {
     }
 
     pub fn resolvedRef(self: *const Builder, id: checked.ResolvedValueRefId) checked.ResolvedValueRefRecord {
-        return self.view.view.resolved_value_refs.records.items()[@backingInt(id)];
+        return self.view.view.resolved_value_refs.get(id);
     }
 
     pub fn lowerLookupLocal(self: *Builder, expr_id: ExprId, pattern: PatternId, resolved: ?checked.ResolvedValueRefId) Allocator.Error!void {
@@ -6271,7 +6271,7 @@ pub const Builder = struct {
         const view = self.program.module(alias_step.module);
         const ref_id = view.view.resolved_value_refs.lookupIdByExpr(alias_step.lookup) orelse
             invariant("a forwarded procedure alias lookup has no resolved reference");
-        return switch (view.view.resolved_value_refs.records.items()[@backingInt(ref_id)].ref) {
+        return switch (view.view.resolved_value_refs.ref(ref_id)) {
             inline .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |ref| switch (try self.procedureUseCallee(ref)) {
                 .worker => |id| id,
                 .alias, .callable_eval => invariant("an alias chain's last lookup names no procedure template"),
@@ -6286,7 +6286,7 @@ pub const Builder = struct {
         const view = self.program.module(alias_step.module);
         const ref_id = view.view.resolved_value_refs.lookupIdByExpr(alias_step.lookup) orelse
             invariant("a forwarded procedure alias lookup has no resolved reference");
-        return switch (view.view.resolved_value_refs.records.items()[@backingInt(ref_id)].ref) {
+        return switch (view.view.resolved_value_refs.ref(ref_id)) {
             .local_proc => |local| if (local.is_alias)
                 self.localAliasStep(alias_step.module, local.expr, local.dispatch_scope)
             else
@@ -7338,12 +7338,12 @@ pub const Builder = struct {
         const forwarded = template.forwarded_lookup.get() orelse invariant("a callable-eval template that is no alias forwards nothing");
         const ref_id = owner.view.resolved_value_refs.lookupIdByExpr(forwarded) orelse
             invariant("a procedure alias's lookup has no resolved reference");
-        var ref = owner.view.resolved_value_refs.records.items()[@backingInt(ref_id)].ref;
+        var ref = owner.view.resolved_value_refs.ref(ref_id);
         while (true) switch (ref) {
             .local_proc => |local| {
                 if (!local.is_alias) invariant("a top-level procedure alias names a top-level procedure, as checking forwards only those");
                 const final = local.alias_target orelse invariant("a callable alias has no recorded target");
-                ref = owner.view.resolved_value_refs.records.items()[@backingInt(final)].ref;
+                ref = owner.view.resolved_value_refs.ref(final);
             },
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => break,
         };
@@ -8276,7 +8276,7 @@ pub const Builder = struct {
             const evidence = self.view.view.static_dispatch_plans.siteEvidence(alias_step.lookup) orelse &.{};
             const ref_id = self.view.view.resolved_value_refs.lookupIdByExpr(alias_step.lookup) orelse
                 invariant("a forwarded procedure alias lookup has no resolved reference");
-            const lookup_ref = self.view.view.resolved_value_refs.records.items()[@backingInt(ref_id)].ref;
+            const lookup_ref = self.view.view.resolved_value_refs.ref(ref_id);
             const next: AliasStep = switch (lookup_ref) {
                 .local_proc => |local| if (local.is_alias)
                     self.localAliasStep(alias_step.module, local.expr, local.dispatch_scope)

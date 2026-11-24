@@ -10377,14 +10377,14 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
 
     const raw_direct_call = direct_call_index orelse return error.TestUnexpectedResult;
     const saved_direct_target = templates.specialization_interface_relations.items()[raw_direct_call].data.call.direct_target;
-    templates.specialization_interface_relations.items()[raw_direct_call].data.call.direct_target = @fromBackingInt(@intCast(artifact.resolved_value_refs.records.items().len));
+    templates.specialization_interface_relations.items()[raw_direct_call].data.call.direct_target = @fromBackingInt(@intCast(artifact.resolved_value_refs.len()));
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_value_ref_out_of_bounds, failure.kind);
     templates.specialization_interface_relations.items()[raw_direct_call].data.call.direct_target = saved_direct_target;
 
     var non_procedure_ref: ?check.CheckedArtifact.ResolvedValueRefId = null;
-    for (artifact.resolved_value_refs.records.items(), 0..) |record, i| {
-        const ref_tag = std.meta.activeTag(record.ref);
+    for (0..artifact.resolved_value_refs.len()) |i| {
+        const ref_tag = std.meta.activeTag(artifact.resolved_value_refs.ref(@fromBackingInt(@intCast(i))));
         if (ref_tag != .local_proc and
             ref_tag != .top_level_proc and
             ref_tag != .imported_proc and
@@ -10409,7 +10409,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
     templates.specialization_interface_relations.items()[raw_local_use].data.local_proc_use = saved_local_ref;
 
-    const local_record = artifact.resolved_value_refs.records.items()[@backingInt(saved_local_ref)].ref.local_proc;
+    const local_record = artifact.resolved_value_refs.ref(saved_local_ref).local_proc;
     const local_scope = local_record.dispatch_scope orelse return error.TestUnexpectedResult;
     const raw_local_scope = @backingInt(local_scope);
     const saved_scope_expr = templates.dispatch_scopes.items()[raw_local_scope].checked_expr;
