@@ -24088,7 +24088,7 @@ test "issue 13186: x64mac inline expect site survives unit image construction" {
         arena.allocator(),
         .x64mac,
         codegen.codegen.emit.buf.items,
-        &.{},
+        .{},
         0,
         &symbols,
         codegen.codegen.relocations.items,
@@ -24128,10 +24128,10 @@ test "x86_64 expect sites are zero-extended 32-bit fields in every object format
 
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        const image = try writer.indexedImageObject(arena.allocator(), target, code, &.{}, 0, &symbols, codegen.codegen.relocations.items, &.{}, &.{}, null, false);
+        const image = try writer.indexedImageObject(arena.allocator(), target, code, .{}, 0, &symbols, codegen.codegen.relocations.items, &.{}, &.{}, null, false);
         var encoded: std.ArrayList(u8) = .empty;
         defer encoded.deinit(allocator);
-        try writer.generateIndexedObjectFileWithDebug(allocator, target, code, &.{}, 0, &symbols, codegen.codegen.relocations.items, &.{}, &.{}, null, &encoded);
+        try writer.generateIndexedObjectFileWithDebug(allocator, target, code, .{}, 0, &symbols, codegen.codegen.relocations.items, &.{}, &.{}, null, &encoded);
         try std.testing.expectEqual(@as(usize, 2), image.relocs.len);
         for (image.relocs, [_]u64{ 1, 7 }, [_]i64{ 0, std.math.maxInt(u32) }) |reloc, offset, addend| {
             try std.testing.expectEqual(UnitImage.RelocKind.abs32, reloc.kind);

@@ -181,7 +181,7 @@ pub const ElfWriter = struct {
 
     // Borrowed section contents, valid until write completes
     text: []const u8,
-    rodata: []const u8,
+    rodata: UnitImage.PiecedBytes,
     /// Size of `.bss`, which the file declares without storing bytes.
     zero_fill_size: u64,
 
@@ -216,7 +216,7 @@ pub const ElfWriter = struct {
             .arch = arch,
             .osabi = osabi,
             .text = &.{},
-            .rodata = &.{},
+            .rodata = .{},
             .zero_fill_size = 0,
             .symbols = .empty,
             .text_relocs = .empty,
@@ -249,7 +249,7 @@ pub const ElfWriter = struct {
         self.zero_fill_size = size;
     }
 
-    pub fn setRodata(self: *Self, rodata: []const u8) void {
+    pub fn setRodata(self: *Self, rodata: UnitImage.PiecedBytes) void {
         self.rodata = rodata;
     }
 
@@ -496,7 +496,7 @@ pub const ElfWriter = struct {
         output.appendSliceAssumeCapacity(self.text);
 
         padTo(output, rodata_offset);
-        output.appendSliceAssumeCapacity(self.rodata);
+        self.rodata.appendAssumeCapacity(output);
 
         // Pad to rela sections
         padTo(output, rela_text_offset);
@@ -663,7 +663,7 @@ pub const ElfWriter = struct {
         const sections = try arena.alloc(UnitImage.Section, 14);
         sections[0] = skipped;
         sections[1] = .{ .class = .text, .bytes = self.text, .size = self.text.len, .addralign = 16 };
-        sections[2] = .{ .class = if (pointer_bearing) .data else .rodata, .bytes = self.rodata, .size = self.rodata.len, .addralign = 16 };
+        sections[2] = .{ .class = if (pointer_bearing) .data else .rodata, .bytes = &.{}, .pieced = self.rodata, .size = self.rodata.len, .addralign = 16 };
         for (sections[3..8]) |*section| section.* = skipped;
         sections[8] = .{ .class = debug_class(keep_debug, .debug_line), .bytes = self.debug.line, .size = self.debug.line.len, .addralign = 1 };
         sections[9] = .{ .class = debug_class(keep_debug, .debug_abbrev), .bytes = self.debug.abbrev, .size = self.debug.abbrev.len, .addralign = 1 };

@@ -1105,8 +1105,21 @@ generator the object is encoded from (`arrange`, `assembleArranged`):
   excerpt's location) and every helper with a frame, whether the program
   declares it or only spliced code reaches it.
 
-A prepared data catalog owns one immutable copy of its payload bytes, names,
-and relocations. It records exact outgoing data and code-symbol edges once;
+A prepared data catalog owns one immutable copy of its items' names and
+relocations. Payload bytes have one owner, and every later holder borrows
+them: each item names the owner keeping its bytes alive (`DataItem.
+payload_owner`), and a catalog, set or unit's pieces holding an item retains
+that owner instead of copying the bytes. A catalog built from exports either
+copies their bytes into its own storage, when the exports go away first, or
+borrows them from exports a keeper owns (`DataOwner.initKeeper`), which the
+catalog retains: a unit's pieces borrow the bytes of the unit's literal
+backings and frozen constants this way, and the keeper frees those exports
+with the last catalog retaining it. Object writers are given the read-only
+data as pieces borrowed from the data items (`UnitImage.PiecedBytes`), and a
+unit image writes its block and writable data straight from the sections
+into the image, patching the block's in-place references there, so each
+datum's bytes are copied once, into the encoded object or image. The
+catalog records exact outgoing data and code-symbol edges once;
 each catalog entry holds both its datum and its edges. Fragments carry only dense
 root indices into this shared graph, and an excerpt set retains each graph owner
 once. Copying, pruning and object assembly preserve these graph references.
@@ -1116,8 +1129,9 @@ The graph producer propagates the code-pointer property along reverse data edges
 once, including cycles.
 The catalog, workers, and copied sets can be destroyed independently. This is
 compiler-storage ownership; it changes no generated reference-count operation.
-Renaming data first gives the new set its own metadata and backing, preserving
-the catalog's immutable contents. Catalogs belong to one program's symbol
+Renaming data first gives the new set its own metadata, preserving the
+catalog's immutable contents; the renamed items share the catalog's payload
+bytes and retain its owner. Catalogs belong to one program's symbol
 domain; equal program-local names from other programs never establish sharing.
 
 ### Read-Only Type Analysis

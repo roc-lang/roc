@@ -324,15 +324,20 @@ pub const ObjectFileCompiler = struct {
     /// Whole-Program Dead Code"): every procedure, helper and entrypoint
     /// wrapper lifted out of the unit's code as its own excerpt, with the
     /// constants it names under their content names. No object is encoded.
+    /// The pieces take `static_data_exports`, allocated by `self.allocator`
+    /// (`static_data.buildStaticData`), even on failure: their constants
+    /// share those exports' payload bytes rather than copying them.
     pub fn compileToPieces(
         self: *ObjectFileCompiler,
         lir_store: *const LirStore,
         layout_store: *const layout.Store,
         entrypoints: []const Entrypoint,
-        static_data_exports: []const StaticDataExport,
+        static_data_exports: []StaticDataExport,
         proc_specs: []const LirProcSpec,
         target: RocTarget,
     ) CompilationError!UnitPieces.Pieces {
+        const exports = try UnitExports.keep(self.allocator, lir_store, target, static_data_exports);
+        defer exports.keeper.release();
         const enum_info = @typeInfo(RocTarget).@"enum";
         const default_target = target.defaultCpuTarget();
         inline for (enum_info.field_values) |field_value| {
@@ -346,7 +351,7 @@ pub const ObjectFileCompiler = struct {
                         lir_store,
                         layout_store,
                         entrypoints,
-                        static_data_exports,
+                        exports,
                         proc_specs,
                         target,
                         self.enable_default_platform_runtime,
@@ -620,7 +625,7 @@ fn compileWithCodeGen(
     // names, into the code generator the object is encoded from.
     var symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
     codegen.finishImage() catch return CompilationError.OutOfMemory;
-    var catalog = CodeExcerpt.PreparedData.init(allocator, static_strings.exports, static_data_exports, native_data) catch return CompilationError.OutOfMemory;
+    var catalog = CodeExcerpt.PreparedData.init(allocator, static_strings.exports, static_data_exports, .copy, native_data) catch return CompilationError.OutOfMemory;
     defer catalog.deinit();
     var staged = CodeExcerpt.extractCataloged(CodeGen, allocator, &codegen, proc_specs, layout_store, &catalog) catch |err| switch (err) {
         error.OutOfMemory => return CompilationError.OutOfMemory,
@@ -750,7 +755,7 @@ fn compileWithCodeGen(
     var symbols = std.ArrayList(SymbolDefinition).empty;
     defer symbols.deinit(allocator);
 
-    var rodata = std.ArrayList(u8).empty;
+    var rodata: Rodata = .{};
     defer rodata.deinit(allocator);
 
     var rodata_relocations = std.ArrayList(ObjectWriter.IndexedDataRelocation).empty;
@@ -956,7 +961,7 @@ fn compileWithCodeGen(
     if (timing) |timings| timings.finish(symbol_relocations_started_ns, .symbol_relocations);
 
     const object_bytes: []const u8 = if (emit_object)
-        try encodeObject(allocator, lir_store, target, &final, code, rodata.items, zero_fill_size, resolved.symbols, relocations, rodata_relocations.items, dwarf_procs.items, timing)
+        try encodeObject(allocator, lir_store, target, &final, code, rodata.bytes(), zero_fill_size, resolved.symbols, relocations, rodata_relocations.items, dwarf_procs.items, timing)
     else
         &.{};
     errdefer allocator.free(object_bytes);
@@ -1013,7 +1018,7 @@ fn encodeObject(
     target: RocTarget,
     codegen: anytype,
     code: []const u8,
-    rodata: []const u8,
+    rodata: UnitImage.PiecedBytes,
     zero_fill_size: u64,
     symbols: []const ObjectWriter.Symbol,
     relocations: []const IndexedRelocation,
@@ -1094,7 +1099,7 @@ fn buildCompositionImage(
     target: RocTarget,
     codegen: anytype,
     code: []const u8,
-    rodata: []const u8,
+    rodata: UnitImage.PiecedBytes,
     zero_fill_size: u64,
     symbols: []const ObjectWriter.Symbol,
     relocations: []const IndexedRelocation,
@@ -1202,11 +1207,27 @@ fn resolveObjectSymbols(
     return .{ .symbols = symbols };
 }
 
+/// An object's read-only data as its writer is given it: each export a
+/// piece at its aligned offset, borrowed from the export, so the data is
+/// copied once, into what the writer writes.
+const Rodata = struct {
+    len: usize = 0,
+    pieces: std.ArrayList(UnitImage.SectionPiece) = .empty,
+
+    fn deinit(self: *Rodata, allocator: Allocator) void {
+        self.pieces.deinit(allocator);
+    }
+
+    fn bytes(self: *const Rodata) UnitImage.PiecedBytes {
+        return .{ .len = self.len, .pieces = self.pieces.items };
+    }
+};
+
 fn appendStaticDataExports(
     allocator: Allocator,
     table: *SymbolTable.Table,
     exports: []const StaticDataExport,
-    rodata: *std.ArrayList(u8),
+    rodata: *Rodata,
     zero_fill_size: *u64,
     relocations: *std.ArrayList(ObjectWriter.IndexedDataRelocation),
     symbols: *std.ArrayList(SymbolDefinition),
@@ -1222,7 +1243,7 @@ fn appendStaticDataExports(
     var helpers = std.AutoHashMap(layout.RcHelperKey, SymbolTable.Id).init(allocator);
     defer helpers.deinit();
     for (exports, data_symbols) |data_export, definition_id| {
-        const start = rodata.items.len;
+        const start = rodata.len;
         try appendStaticDataExport(allocator, data_export, definition_id, rodata, zero_fill_size, symbols);
         // A zero-fill export has no relocations, so this offset is only ever
         // used for exports placed in readonly data.
@@ -1273,7 +1294,7 @@ fn appendStaticDataExport(
     allocator: Allocator,
     data_export: StaticDataExport,
     id: SymbolTable.Id,
-    rodata: *std.ArrayList(u8),
+    rodata: *Rodata,
     zero_fill_size: *u64,
     static_data_symbols: *std.ArrayList(SymbolDefinition),
 ) CompilationError!void {
@@ -1303,13 +1324,11 @@ fn appendStaticDataExport(
         };
         return;
     }
-    const aligned_offset = std.mem.alignForward(usize, rodata.items.len, alignment);
-    rodata.appendNTimes(allocator, 0, aligned_offset - rodata.items.len) catch {
+    const aligned_offset = std.mem.alignForward(usize, rodata.len, alignment);
+    rodata.pieces.append(allocator, .{ .offset = aligned_offset, .bytes = data_export.bytes }) catch {
         return CompilationError.OutOfMemory;
     };
-    rodata.appendSlice(allocator, data_export.bytes) catch {
-        return CompilationError.OutOfMemory;
-    };
+    rodata.len = aligned_offset + data_export.bytes.len;
 
     static_data_symbols.append(allocator, .{ .id = id, .symbol = .{
         .name = data_export.symbol_name,
@@ -1340,7 +1359,7 @@ fn compileStaticDataObjectBytes(
     var symbols = std.ArrayList(SymbolDefinition).empty;
     defer symbols.deinit(allocator);
 
-    var rodata = std.ArrayList(u8).empty;
+    var rodata: Rodata = .{};
     defer rodata.deinit(allocator);
 
     var rodata_relocations = std.ArrayList(ObjectWriter.IndexedDataRelocation).empty;
@@ -1366,7 +1385,7 @@ fn compileStaticDataObjectBytes(
         allocator,
         target,
         &.{},
-        rodata.items,
+        rodata.bytes(),
         zero_fill_size,
         resolved.symbols,
         &.{},
@@ -1385,6 +1404,37 @@ fn compileStaticDataObjectBytes(
     };
 }
 
+/// A unit's literal backings and frozen constants, which the data catalogs
+/// of its pieces borrow payload bytes from: their keeper (`CodeExcerpt.
+/// DataOwner.initKeeper`) frees them when the last catalog retaining it goes.
+const UnitExports = struct {
+    allocator: Allocator,
+    literal_backings: StaticStringData.Table,
+    constants: []StaticDataExport,
+    keeper: *CodeExcerpt.DataOwner,
+
+    /// Keep `constants`, which the result owns even on failure, with the
+    /// literal backings of `lir_store`. The caller holds the keeper's first
+    /// reference.
+    fn keep(allocator: Allocator, lir_store: *const LirStore, target: RocTarget, constants: []StaticDataExport) CompilationError!*UnitExports {
+        errdefer static_data_export.deinitStaticData(allocator, constants);
+        const self = allocator.create(UnitExports) catch return CompilationError.OutOfMemory;
+        errdefer allocator.destroy(self);
+        var literal_backings = StaticStringData.build(allocator, lir_store, target) catch return CompilationError.OutOfMemory;
+        errdefer literal_backings.deinit();
+        self.* = .{ .allocator = allocator, .literal_backings = literal_backings, .constants = constants, .keeper = undefined };
+        self.keeper = CodeExcerpt.DataOwner.initKeeper(allocator, .{ .context = self, .release = release }) catch return CompilationError.OutOfMemory;
+        return self;
+    }
+
+    fn release(context: *anyopaque) void {
+        const self: *UnitExports = @ptrCast(@alignCast(context));
+        self.literal_backings.deinit();
+        static_data_export.deinitStaticData(self.allocator, self.constants);
+        self.allocator.destroy(self);
+    }
+};
+
 /// Runtime-to-comptime dispatch for compilation.
 /// Uses inline for over RocTarget enum fields to select the correct LirCodeGen instantiation.
 ///
@@ -1398,7 +1448,7 @@ fn compilePiecesWithCodeGen(
     lir_store: *const LirStore,
     layout_store: *const layout.Store,
     entrypoints: []const Entrypoint,
-    static_data_exports: []const StaticDataExport,
+    exports: *const UnitExports,
     proc_specs: []const LirProcSpec,
     target: RocTarget,
     enable_default_platform_runtime: bool,
@@ -1409,13 +1459,15 @@ fn compilePiecesWithCodeGen(
     relocatable_expect_sites: bool,
 ) CompilationError!UnitPieces.Pieces {
     const backend_setup_started_ns = if (timing) |timings| timings.start() else 0;
-    var static_strings = StaticStringData.build(allocator, lir_store, target) catch return CompilationError.OutOfMemory;
-    defer static_strings.deinit();
+    const static_data_exports = exports.constants;
+    // Every catalog of the unit borrows the payload bytes of its literal
+    // backings and constants, which the keeper holds as long as any of them.
+    const borrowed: CodeExcerpt.PreparedData.ExportPayload = .{ .borrow = exports.keeper };
     var codegen = CodeGen.initWithCapturePrefix(
         allocator,
         lir_store,
         layout_store,
-        static_strings.view(),
+        exports.literal_backings.view(),
         erased_capture_prefix,
         target.cpuLevel(),
     ) catch return CompilationError.OutOfMemory;
@@ -1443,6 +1495,7 @@ fn compilePiecesWithCodeGen(
         .timing = if (native_timing) |*native| native else null,
         .static_helpers = static_rc_helpers,
         .constant_exports = static_data_exports,
+        .export_payload = borrowed,
     }) catch return CompilationError.OutOfMemory;
     ObjectFileCompiler.Timing.addNative(timing, native_timing);
     defer retained.deinit();
@@ -1461,7 +1514,7 @@ fn compilePiecesWithCodeGen(
     var detail_started = ObjectFileCompiler.Timing.startDetail(timing);
     codegen.finishImage() catch return CompilationError.OutOfMemory;
     detail_started = ObjectFileCompiler.Timing.lapDetail(timing, detail_started, "finish_image_ns");
-    var catalog = CodeExcerpt.PreparedData.init(allocator, static_strings.exports, static_data_exports, &.{}) catch return CompilationError.OutOfMemory;
+    var catalog = CodeExcerpt.PreparedData.init(allocator, exports.literal_backings.exports, static_data_exports, borrowed, &.{}) catch return CompilationError.OutOfMemory;
     defer catalog.deinit();
     detail_started = ObjectFileCompiler.Timing.lapDetail(timing, detail_started, "catalog_ns");
     var staged = CodeExcerpt.extractCataloged(CodeGen, allocator, &codegen, proc_specs, layout_store, &catalog) catch |err| switch (err) {
@@ -1514,6 +1567,9 @@ fn compilePiecesWithCodeGen(
             .identity = identity,
         };
     }
+    // The host-visible constants share the catalog's payload bytes, so the
+    // pieces retain its owner; nothing fallible follows.
+    const data_owners = CodeExcerpt.retainPayloadOwners(a, exported_data, null) catch return CompilationError.OutOfMemory;
     _ = ObjectFileCompiler.Timing.lapDetail(timing, detail_started, "piece_data_ns");
     if (timing) |timings| timings.finish(extraction_started_ns, .symbol_relocations);
     return .{
@@ -1522,6 +1578,7 @@ fn compilePiecesWithCodeGen(
         .erased_capture_prefix = erased_capture_prefix,
         .source_files = source_files,
         .exported_data = exported_data,
+        .data_owners = data_owners,
         .helper_aliases = helper_aliases,
     };
 }
@@ -1656,7 +1713,7 @@ fn composeWithCodeGen(
     }
     var symbols = std.ArrayList(SymbolDefinition).empty;
     defer symbols.deinit(allocator);
-    var rodata = std.ArrayList(u8).empty;
+    var rodata: Rodata = .{};
     defer rodata.deinit(allocator);
     var rodata_relocations = std.ArrayList(ObjectWriter.IndexedDataRelocation).empty;
     defer rodata_relocations.deinit(allocator);
@@ -1793,10 +1850,10 @@ fn composeWithCodeGen(
     defer resolved.deinit(allocator);
     if (timing) |timings| timings.finish(symbol_relocations_started_ns, .symbol_relocations);
     if (options.unit_image) {
-        const image = try buildCompositionImage(allocator, &store, target, &final, code, rodata.items, zero_fill_size, resolved.symbols, relocations, rodata_relocations.items, dwarf_procs.items, &patched_refs, timing);
+        const image = try buildCompositionImage(allocator, &store, target, &final, code, rodata.bytes(), zero_fill_size, resolved.symbols, relocations, rodata_relocations.items, dwarf_procs.items, &patched_refs, timing);
         errdefer allocator.free(image);
         if (options.check_unit_image or dev_diagnostics.isSet(.dev_unit_image_roundtrip)) {
-            const object_bytes = try encodeObject(allocator, &store, target, &final, code, rodata.items, zero_fill_size, resolved.symbols, relocations, rodata_relocations.items, dwarf_procs.items, null);
+            const object_bytes = try encodeObject(allocator, &store, target, &final, code, rodata.bytes(), zero_fill_size, resolved.symbols, relocations, rodata_relocations.items, dwarf_procs.items, null);
             defer allocator.free(object_bytes);
             const read_back = UnitImage.build(allocator, &.{object_bytes}, .{
                 .keep_debug = true,
@@ -1822,7 +1879,7 @@ fn composeWithCodeGen(
             .code_locations = if (options.capture_code_locations) try encodeCodeLocations(allocator, &store, &final) else &.{},
         };
     }
-    const object_bytes = try encodeObject(allocator, &store, target, &final, code, rodata.items, zero_fill_size, resolved.symbols, relocations, rodata_relocations.items, dwarf_procs.items, timing);
+    const object_bytes = try encodeObject(allocator, &store, target, &final, code, rodata.bytes(), zero_fill_size, resolved.symbols, relocations, rodata_relocations.items, dwarf_procs.items, timing);
     errdefer allocator.free(object_bytes);
     return CompilationResult{
         .object_bytes = object_bytes,
