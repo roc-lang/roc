@@ -91,7 +91,7 @@ pub const Var = enum {
     /// Write every Monotype Lifted program, after lifting and after
     /// SpecConstr, into the named directory in the line format of
     /// `postcheck/monotype_lifted/ir_export.zig`, one file per program and
-    /// stage.
+    /// stage. Not written on Windows.
     lifted_ir_export,
 
     /// The variable's name in the environment.

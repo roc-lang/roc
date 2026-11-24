@@ -13,8 +13,12 @@
 //! program's own tables, `-` for an absent optional, names percent-escaped.
 //! Only the expressions, patterns and statements reachable from a function
 //! body are written; types and locals are written in full.
+//!
+//! Files are created through libc's `open`, which Zig's standard library does
+//! not provide on Windows, so a Windows compiler exports nothing.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 
 const Mono = @import("../monotype/ast.zig");
@@ -36,8 +40,12 @@ pub const Stage = enum {
 /// under that number is skipped over.
 var next_number: std.atomic.Value(u32) = .init(0);
 
+/// Whether this host can export: it needs libc's `open`.
+const supported = builtin.os.tag != .windows;
+
 /// Write `program` to the export directory when exporting is switched on.
 pub fn exportLifted(allocator: Allocator, program: *const Lifted.Program, stage: Stage) Allocator.Error!void {
+    if (comptime !supported) return;
     const dir = base.dev_diagnostics.get(.lifted_ir_export) orelse return;
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
