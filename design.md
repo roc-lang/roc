@@ -3569,16 +3569,26 @@ An entry-block slot is allocated for the whole activation, so LLVM can overlap
 two slots only through `llvm.lifetime.start` and `llvm.lifetime.end`. The LLVM
 backend brackets the slot of every local whose address it passes to an
 out-of-line Roc procedure call (a result returned through memory, or an
-argument passed by pointer) or an explicit RC helper call with markers at that
-storage owner's exact lifetime boundaries, which the shared LIR stack planner
-solves over the procedure's explicit control-flow graph. Other slots carry no
-markers: SROA removes slots whose addresses never escape, and markers on them
-would only add optimizer work. RC argument emission and lifetime planning
-share the same size rule: small values use the shared RC scratch slot; larger
-values pass their own storage. Views extend their owner's lifetime. Procedure
-arguments, which the prologue writes, and locals in deferred string-match
-captures, which the backend materializes outside the statements that access
-them, keep their activation lifetime.
+argument passed by pointer), an explicit RC helper call, or a low-level
+operation's operand that `ValuePlan.lowLevelAccess` declares is accessed by
+address, with markers at that storage owner's exact lifetime boundaries, which
+the shared LIR stack planner solves over the procedure's explicit control-flow
+graph. A builtin reads and writes those operands only during its own
+statement. Other slots carry no markers: SROA removes slots whose addresses
+never escape, and markers on them would only add optimizer work. RC argument
+emission and lifetime planning share the same size rule: small values use the
+shared RC scratch slot; larger values pass their own storage. Views and parts
+extend their owner's lifetime: a view's definition writes none of its owner's
+bytes, the owner's first part's definition starts them, and each later part's
+keeps the bytes before it live. Procedure arguments, which the prologue
+writes, and locals in deferred string-match captures, which the backend
+materializes outside the statements that access them, keep their activation
+lifetime.
+
+The operands of a `str_from_parts` concatenation are copied into one array per
+procedure, sized for the procedure's largest concatenation, which the value
+plan records. The builtin reads the parts before it returns, so every
+concatenation in the procedure reuses the same frame bytes.
 
 A speed build marks two kinds of procedure `alwaysinline`: a wrapper, a
 loop-free body of a few statements of its own, and a leaf, a moderate body
@@ -3667,6 +3677,15 @@ word count and flag-byte encoding, the target pointer width and byte order, and
 zeroed unused bytes. Longer literals use the allocating runtime constructor.
 This is representation lowering of explicit LIR literal bytes; it introduces no
 ownership decisions and leaves all explicit LIR ARC statements intact.
+
+LLVM reads a string's length as a select between the small length in its last
+byte and the length word with the small-string bit cleared. The bit is already
+clear whenever the heap arm is taken, so clearing it changes no value; it
+states in the arm itself that the word's sign bit is zero. LLVM otherwise
+learns that only from the select's condition, and InstCombine then proves the
+loaded word is not undef by walking the dominator chain to the function entry
+for every checked arithmetic operation the length reaches, which is quadratic
+in a function of many such operations.
 
 The runtime encoding of values is defined once, by the structs
 and constants in `src/builtins`: `RocStr` and `RocList` field order and word
@@ -30175,10 +30194,19 @@ all argument registers and introduce no new callee-save or frame requirements.
 
 ## LLVM Value Representation
 
-Aggregate transport preserves storage identity. Records, tuples, and inline tag
-payloads use the same memory-view plan: an immutable alias or field read names
-its ultimate storage owner and a committed byte offset. LLVM does not rebuild
-these aliases or field reads field by field. The existing per-proc
+Aggregate transport preserves storage identity. Records, tuples, inline tag
+payloads, strings, lists, and boxes use the same memory-view plan: an
+immutable alias (an `assign_ref` of kind `local`, `nominal`, or
+`list_reinterpret`) of any of these layouts, or a record or tag payload
+component read of a record or tag union, names its ultimate storage owner and
+a committed byte offset. LLVM does not rebuild these aliases or field reads
+field by field, and does not copy a string, list, or box header into a slot of
+its own. Every emitter of these layouts writes a local's slot only at the
+local's own definition: builtins read headers by value and write only through
+the target's address, and in-place list and string updates change heap memory
+only. Locals in deferred string-match captures are the exception, because
+emission writes them outside their LIR definition, so they are never views or
+view sources. The existing per-proc
 value planner uses the shared LIR access inventory and liveness solution to
 prove these views. A join declaration does not mutate its parameters: an
 `initialize_join_param` write is an ordinary definition. Single-definition join
@@ -30188,6 +30216,19 @@ execute repeatedly: a view may not remain live across its storage owner's next
 definition. View chains are resolved once, and all reads through them extend the
 owner's LLVM slot lifetime. A view's definition does not overwrite its owner's
 bytes.
+
+The inverse also holds: a record field or tag payload operand of a
+construction is a part of the construction's target, defined directly at the
+byte offset where the construction stores it, so the construction leaves it in
+place instead of copying it. The plan admits a part when the operand has
+exactly the stored layout, when the operand and the target each have one
+static definition and are immutable, non-parameter, memory locals outside
+deferred captures, when every definition writing the owner's bytes lies in the
+owner's definition's straight-line block, and when no local that reads the
+bytes a part's definitions write (the owner, a view of it, or an enclosing
+aggregate the target is itself a part of) is live on entry to any of those
+definitions. A box target's bytes live in a fresh heap cell, so its operands
+are never parts.
 
 An ordinary indirect fast-call parameter with no body writes can use the
 caller's storage directly. Tail-group parameters keep their snapshots because
@@ -30274,9 +30315,14 @@ A record or tag literal writes each byte of its storage once: its fields, or
 its payload and discriminant, and then zeroes only the bytes those leave (the
 padding between fields, the bytes between a short payload and the
 discriminant, and the alignment tail). It never zero-fills its storage and
-then overwrites it. LLVM's SROA rewrites an `llvm.memset` that lands on a part
-of a slot it promotes as a vector by first loading that part's old value. The
-load makes the slot live into its block, so mem2reg gives every join inside a
+then overwrites it. A gap shorter than the aggregate's alignment is padding
+and is zeroed by aligned integer stores; only a short variant's unused payload
+bytes take an `llvm.memset`. A constructed aggregate is often copied whole
+right after it is built, into a list item, a box, or a parent, and LLVM's
+memcpy optimization pass rewrites a `memset` followed by such a copy by
+updating its memory SSA at a cost proportional to the block, once per pair.
+LLVM's SROA rewrites an `llvm.memset` that lands on a part of a slot it
+promotes as a vector by first loading that part's old value. The load makes the slot live into its block, so mem2reg gives every join inside a
 loop around the write a phi of the slot's previous-iteration bytes, which
 nothing reads. A zero-fill under every field puts such a memset on every part
 of the slot; zeroing only the gaps puts it only on bytes nothing else writes.
