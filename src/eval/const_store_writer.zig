@@ -986,7 +986,12 @@ pub const Writer = struct {
             // Lists And Strings Keep Their Capacity").
             .checked => |expr| blk: {
                 const bodies = self.checkedValues().bodies;
-                const segments = checkedStrSegments(bodies, expr);
+                const value_expr = checked.valueFormValueExpr(bodies, expr);
+                // A file imported as `Str` is one segment on its own.
+                const segments: []const CIR.Expr.Idx = if (bodies.exprData(value_expr) == .str_segment)
+                    @as(*const [1]CIR.Expr.Idx, &value_expr)
+                else
+                    checkedStrSegments(bodies, expr);
                 // One segment's bytes are a literal of the module's string
                 // literal store, which the store borrows.
                 if (segments.len == 1) {

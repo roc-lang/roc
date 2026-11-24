@@ -2461,7 +2461,8 @@ CIR kinds (as the checked body reader presents them) and checked types:
   (`exact_numeral.fits`; a float literal always converts, to its nearest
   value);
 - a string literal whose quote dispatches to no `from_quote`, made of literal
-  segments only, whose checked type is the builtin `Str`;
+  segments only, whose checked type is the builtin `Str`, and a file imported
+  as `Str`, which is one such segment on its own;
 - a bytes literal (`import "file" as bytes : List(U8)`), whose checked type is
   always `List(U8)`;
 - an empty list, a tag with no payload, or an empty record whose checked
