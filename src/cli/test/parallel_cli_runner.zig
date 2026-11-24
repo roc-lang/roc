@@ -20294,11 +20294,12 @@ fn compileGlueRuntimeRustWasmHost(
 /// and spliced into a module by `include!`, under each Rust edition, for the
 /// native target with the std helpers and for a 32-bit target without them.
 ///
+/// One crate holds both forms, so each edition and target is one compiler run.
 /// `clippy-driver` runs rustc's own lints together with clippy's default set,
 /// and `--check-cfg` is what cargo passes for every crate, so a passing run
 /// means a cargo-built host with default lints gets no diagnostic from the
-/// generated file. The `include!` crate uses nothing from the file, which is
-/// how every unused generated item shows up.
+/// generated file. Nothing uses the private `include!` module, which is how
+/// every unused generated item shows up.
 fn compileGeneratedRustGlue(
     io: std.Io,
     allocator: Allocator,
@@ -20307,13 +20308,22 @@ fn compileGeneratedRustGlue(
     timeout_ms: u64,
     output_dir: []const u8,
 ) ?TestResult {
-    const generated_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rs" }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate generated Rust path: {}", .{err});
-    const include_path = std.fs.path.join(allocator, &.{ output_dir, "include_roc_platform_abi.rs" }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate Rust include crate path: {}", .{err});
-    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = include_path, .data = "mod abi {\n    include!(\"roc_platform_abi.rs\");\n}\n" }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to write Rust include crate: {}", .{err});
-    const metadata_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rmeta" }) catch |err|
+    const crate_path = std.fs.path.join(allocator, &.{ output_dir, "glue_forms.rs" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Rust glue crate path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = crate_path, .data =
+        \\// Each form declares the same foreign symbols with its own copy of the types.
+        \\#![allow(clashing_extern_declarations)]
+        \\
+        \\#[path = "roc_platform_abi.rs"]
+        \\pub mod module_file;
+        \\
+        \\mod included {
+        \\    include!("roc_platform_abi.rs");
+        \\}
+        \\
+    }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write Rust glue crate: {}", .{err});
+    const metadata_path = std.fs.path.join(allocator, &.{ output_dir, "glue_forms.rmeta" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate Rust metadata path: {}", .{err});
 
     const target_configs = [_][]const []const u8{
@@ -20321,16 +20331,14 @@ fn compileGeneratedRustGlue(
         &.{ "--target", "wasm32-unknown-unknown", "-C", "target-feature=+simd128", "--cfg", "no_roc_std_helpers" },
     };
     for ([_][]const u8{ "--edition=2021", "--edition=2024" }) |edition| {
-        for ([_][]const u8{ generated_path, include_path }) |crate_root| {
-            for (target_configs) |target_config| {
-                const argv = std.mem.concat(allocator, []const u8, &.{
-                    &.{ "clippy-driver", edition, "-D", "warnings", "--check-cfg", "cfg()", "--crate-type", "lib", "--emit=metadata" },
-                    target_config,
-                    &.{ crate_root, "-o", metadata_path },
-                }) catch |err|
-                    return customInfraFailure(allocator, timer, "failed to allocate Rust glue compile arguments: {}", .{err});
-                if (runRawAndCheck(io, allocator, env, timer, timeout_ms, argv, project_root_path, .{ .args = &.{} })) |failure| return failure;
-            }
+        for (target_configs) |target_config| {
+            const argv = std.mem.concat(allocator, []const u8, &.{
+                &.{ "clippy-driver", edition, "-D", "warnings", "--check-cfg", "cfg()", "--crate-type", "lib", "--emit=metadata" },
+                target_config,
+                &.{ crate_path, "-o", metadata_path },
+            }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate Rust glue compile arguments: {}", .{err});
+            if (runRawAndCheck(io, allocator, env, timer, timeout_ms, argv, project_root_path, .{ .args = &.{} })) |failure| return failure;
         }
     }
     return null;

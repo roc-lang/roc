@@ -531,6 +531,17 @@ expect name_to_c_func_name("Stdout.line!") == "stdout_line"
 ## Checks `name_to_c_func_name` for this representative case.
 expect name_to_c_func_name("Foo.barBaz!") == "foo_bar_baz"
 
+## Names a C field cannot have: C11 keywords, the names C23 made keywords, and
+## the macros `<stdbool.h>` defines.
+c_reserved_field_names : List(Str)
+c_reserved_field_names = [
+	"alignas", "alignof", "auto", "bool", "break", "case", "char", "const", "constexpr", "continue",
+	"default", "do", "double", "else", "enum", "extern", "false", "float", "for", "goto", "if",
+	"inline", "int", "long", "nullptr", "register", "restrict", "return", "short", "signed", "sizeof",
+	"static", "static_assert", "struct", "switch", "thread_local", "true", "typedef", "typeof",
+	"typeof_unqual", "union", "unsigned", "void", "volatile", "while",
+]
+
 name_to_c_field_ident : Str -> Str
 name_to_c_field_ident = |name| {
 	sanitized =
@@ -539,52 +550,7 @@ name_to_c_field_ident = |name| {
 	match sanitized {
 		"" => "field"
 		"_" => "field"
-		"alignas" => "alignas_field"
-		"alignof" => "alignof_field"
-		"auto" => "auto_field"
-		"bool" => "bool_field"
-		"break" => "break_field"
-		"case" => "case_field"
-		"char" => "char_field"
-		"const" => "const_field"
-		"constexpr" => "constexpr_field"
-		"continue" => "continue_field"
-		"default" => "default_field"
-		"do" => "do_field"
-		"double" => "double_field"
-		"else" => "else_field"
-		"enum" => "enum_field"
-		"extern" => "extern_field"
-		"false" => "false_field"
-		"float" => "float_field"
-		"for" => "for_field"
-		"goto" => "goto_field"
-		"if" => "if_field"
-		"inline" => "inline_field"
-		"int" => "int_field"
-		"long" => "long_field"
-		"nullptr" => "nullptr_field"
-		"register" => "register_field"
-		"restrict" => "restrict_field"
-		"return" => "return_field"
-		"short" => "short_field"
-		"signed" => "signed_field"
-		"sizeof" => "sizeof_field"
-		"static" => "static_field"
-		"static_assert" => "static_assert_field"
-		"struct" => "struct_field"
-		"switch" => "switch_field"
-		"thread_local" => "thread_local_field"
-		"true" => "true_field"
-		"typedef" => "typedef_field"
-		"typeof" => "typeof_field"
-		"typeof_unqual" => "typeof_unqual_field"
-		"union" => "union_field"
-		"unsigned" => "unsigned_field"
-		"void" => "void_field"
-		"volatile" => "volatile_field"
-		"while" => "while_field"
-		_ => sanitized
+		_ => if List.contains(c_reserved_field_names, sanitized) "${sanitized}_field" else sanitized
 	}
 }
 

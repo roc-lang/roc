@@ -713,6 +713,16 @@ name_to_rust_field_ident = |name| {
 	}
 }
 
+## Every word Rust reserves in some edition that it accepts as a raw identifier.
+rust_raw_identifier_keywords : List(Str)
+rust_raw_identifier_keywords = [
+	"abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "do", "dyn",
+	"else", "enum", "extern", "false", "final", "fn", "for", "gen", "if", "impl", "in", "let", "loop",
+	"macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref", "return", "static",
+	"struct", "trait", "true", "try", "type", "typeof", "unsafe", "unsized", "use", "virtual",
+	"where", "while", "yield",
+]
+
 ## Spell `ident` so that Rust reads it as an identifier in every edition.
 ##
 ## Strict and reserved keywords, including the ones only some editions reserve,
@@ -721,59 +731,11 @@ name_to_rust_field_ident = |name| {
 rust_keyword_safe_ident : Str -> Str
 rust_keyword_safe_ident = |ident| {
 	match ident {
-		"abstract" => "r#abstract"
-		"as" => "r#as"
-		"async" => "r#async"
-		"await" => "r#await"
-		"become" => "r#become"
-		"box" => "r#box"
-		"break" => "r#break"
-		"const" => "r#const"
-		"continue" => "r#continue"
-		"do" => "r#do"
-		"dyn" => "r#dyn"
-		"else" => "r#else"
-		"enum" => "r#enum"
-		"extern" => "r#extern"
-		"false" => "r#false"
-		"final" => "r#final"
-		"fn" => "r#fn"
-		"for" => "r#for"
-		"gen" => "r#gen"
-		"if" => "r#if"
-		"impl" => "r#impl"
-		"in" => "r#in"
-		"let" => "r#let"
-		"loop" => "r#loop"
-		"macro" => "r#macro"
-		"match" => "r#match"
-		"mod" => "r#mod"
-		"move" => "r#move"
-		"mut" => "r#mut"
-		"override" => "r#override"
-		"priv" => "r#priv"
-		"pub" => "r#pub"
-		"ref" => "r#ref"
-		"return" => "r#return"
-		"static" => "r#static"
-		"struct" => "r#struct"
-		"trait" => "r#trait"
-		"true" => "r#true"
-		"try" => "r#try"
-		"type" => "r#type"
-		"typeof" => "r#typeof"
-		"unsafe" => "r#unsafe"
-		"unsized" => "r#unsized"
-		"use" => "r#use"
-		"virtual" => "r#virtual"
-		"where" => "r#where"
-		"while" => "r#while"
-		"yield" => "r#yield"
 		"crate" => "crate_"
 		"self" => "self_"
 		"Self" => "self_type"
 		"super" => "super_"
-		_ => ident
+		_ => if List.contains(rust_raw_identifier_keywords, ident) "r#${ident}" else ident
 	}
 }
 
