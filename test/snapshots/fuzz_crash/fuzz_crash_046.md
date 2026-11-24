@@ -8,7 +8,7 @@ type=file
 app[]{f:platform""}import fS
 ~~~
 # EXPECTED
-ASCII CONTROL CHARACTER - :0:0:0:0
+ASCII CONTROL CHARACTER - fuzz_crash_046.md:1:28:1:29
 INCOMPLETE IMPORT - fuzz_crash_046.md:1:20:1:26
 # PROBLEMS
 ~~~clojure
@@ -16,9 +16,11 @@ INCOMPLETE IMPORT - fuzz_crash_046.md:1:20:1:26
 	(report
 		(severity runtime_error)
 		(title "ASCII Control Character")
+		(region (start 1 28) (end 1 29))
 		(headline
 			(reflow "ASCII control characters are not allowed in Roc source code."))
-		(document))
+		(document
+			(source-region (file "fuzz_crash_046.md") (start 1 28) (end 1 29) (annotation error) (line-text "app[]{f:platform\"\"}import f\u{14}S"))))
 	(report
 		(severity runtime_error)
 		(title "Incomplete Import")

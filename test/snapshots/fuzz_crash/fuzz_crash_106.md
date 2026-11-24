@@ -9,8 +9,8 @@ source_escapes=true
 a=0O0\r.0
 ~~~
 # EXPECTED
-UPPERCASE BASE - :0:0:0:0
-MISPLACED CARRIAGE RETURN - :0:0:0:0
+UPPERCASE BASE - fuzz_crash_106.md:1:4:1:5
+MISPLACED CARRIAGE RETURN - fuzz_crash_106.md:1:6:1:7
 INVALID TUPLE ACCESS - fuzz_crash_106.md:1:3:1:9
 # PROBLEMS
 ~~~clojure
@@ -18,15 +18,19 @@ INVALID TUPLE ACCESS - fuzz_crash_106.md:1:3:1:9
 	(report
 		(severity runtime_error)
 		(title "Uppercase Base")
+		(region (start 1 4) (end 1 5))
 		(headline
 			(reflow "Number base prefixes must be lowercase (0x, 0o, 0b)."))
-		(document))
+		(document
+			(source-region (file "fuzz_crash_106.md") (start 1 4) (end 1 5) (annotation error) (line-text "a=0O0\r.0"))))
 	(report
 		(severity runtime_error)
 		(title "Misplaced Carriage Return")
+		(region (start 1 6) (end 1 7))
 		(headline
 			(reflow "Carriage return characters (\\r) are not allowed in Roc source code."))
-		(document))
+		(document
+			(source-region (file "fuzz_crash_106.md") (start 1 6) (end 1 7) (annotation error) (line-text "a=0O0\r.0"))))
 	(report
 		(severity runtime_error)
 		(title "Invalid Tuple Access")

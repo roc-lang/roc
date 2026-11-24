@@ -93,6 +93,9 @@ pub const Var = enum {
     /// `postcheck/monotype_lifted/ir_export.zig`, one file per program and
     /// stage. Not written on Windows.
     lifted_ir_export,
+    /// Print, for every module the type checker checks, how many of each
+    /// probe site's probes were kept and how many were discarded.
+    checker_speculation_stats,
 
     /// The variable's name in the environment.
     pub fn envName(comptime self: Var) [:0]const u8 {
@@ -122,6 +125,7 @@ pub const Var = enum {
             .trace_run_order => "ROC_TRACE_RUN_ORDER",
             .hoist_root_stats => "ROC_HOIST_ROOT_STATS",
             .lifted_ir_export => "ROC_LIFTED_IR_EXPORT",
+            .checker_speculation_stats => "ROC_CHECKER_SPECULATION_STATS",
         };
     }
 };

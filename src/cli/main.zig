@@ -9250,6 +9250,11 @@ fn staticDataFunctionPointerTargets(ctx: *CliCtx, static_data_exports: []const b
     return names.toOwnedSlice(ctx.arena);
 }
 
+/// The problem reported for a wasm memory configuration `target`'s program does not fit.
+fn wasmMemoryLayoutProblem(target: []const u8, problem: wasm_link.MemoryProblem) cli_problem.CliProblem {
+    return .{ .wasm_memory_layout = .{ .what = @tagName(problem.what), .needed = problem.needed, .configured = problem.configured, .target = target } };
+}
+
 /// Links one relocatable wasm app object against the platform's wasm inputs
 /// into `final_output_path`.
 fn linkWasmOutput(
@@ -9266,18 +9271,33 @@ fn linkWasmOutput(
     const stack_size = configuredWasmStackBytes(args, link_inputs.wasm);
     const global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null;
     const maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null;
-    switch (linker.wasmStackLayout(global_base)) {
-        .stack_first => if (maximum_memory) |bytes| {
+    const initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm);
+    // The maximum the link declares, as `linker.link` passes it to wasm-ld.
+    const declared_maximum: ?usize = switch (linker.wasmStackLayout(global_base)) {
+        .stack_first => maximum: {
             const limit = linker.stackFirstMaximumMemory(stack_size);
-            if (bytes > limit) return ctx.fail(.{ .wasm_maximum_memory_too_large = .{
-                .target = link_inputs.target_name,
-                .maximum_memory = bytes,
-                .limit = limit,
-                .stack_size = stack_size,
-            } });
+            if (maximum_memory) |bytes| {
+                if (bytes > limit) return ctx.fail(.{ .wasm_maximum_memory_too_large = .{
+                    .target = link_inputs.target_name,
+                    .maximum_memory = bytes,
+                    .limit = limit,
+                    .stack_size = stack_size,
+                } });
+            }
+            // The stack is the lowest region of memory, so memory holds at
+            // least the stack. wasm-ld reads a maximum of 0 as no maximum at
+            // all, so a maximum the stack does not fit under never reaches it.
+            const maximum = maximum_memory orelse limit;
+            if (maximum < stack_size) return ctx.fail(wasmMemoryLayoutProblem(link_inputs.target_name, .{
+                .what = .maximum_memory_too_small,
+                .needed = stack_size,
+                .configured = maximum,
+            }));
+            break :maximum maximum;
         },
-        .data_first => {},
-    }
+        .data_first => maximum_memory,
+    };
+    var memory_problem: ?linker.WasmMemoryProblem = null;
     const link_config = linker.LinkConfig{
         .target_format = .wasm,
         .target_abi = null,
@@ -9290,8 +9310,9 @@ fn linkWasmOutput(
         .extra_args = &.{},
         .can_exit_early = false,
         .disable_output = false,
-        .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
+        .wasm_initial_memory = initial_memory,
         .wasm_maximum_memory = maximum_memory,
+        .wasm_memory_problem = &memory_problem,
         .wasm_stack_size = stack_size,
         .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
         .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
@@ -9304,6 +9325,21 @@ fn linkWasmOutput(
         .scratch_dir = scratch_dir,
     };
     linker.link(ctx, link_config) catch |err| {
+        // wasm-ld finds a size too small only when that size was passed to it.
+        if (memory_problem) |problem| {
+            const configured: ?usize = switch (problem.what) {
+                .initial_memory_too_small => initial_memory,
+                .maximum_memory_too_small => declared_maximum,
+            };
+            if (configured) |bytes| return ctx.fail(wasmMemoryLayoutProblem(link_inputs.target_name, .{
+                .what = switch (problem.what) {
+                    .initial_memory_too_small => .initial_memory_too_small,
+                    .maximum_memory_too_small => .maximum_memory_too_small,
+                },
+                .needed = problem.needed,
+                .configured = bytes,
+            }));
+        }
         return failLink(ctx, err, link_inputs.target_name);
     };
 }
@@ -11830,7 +11866,7 @@ const WasmFastLink = struct {
             error.UndefinedExports => return ctx.fail(.{ .wasm_exports_undefined = .{ .symbols = outcome.undefined_exports, .target = target_name } }),
             error.ImportConflict => return ctx.fail(.{ .wasm_import_conflict = .{ .symbol = outcome.conflict.?, .target = target_name } }),
             error.EngineLimit => return ctx.fail(.{ .wasm_engine_limit = .{ .what = outcome.limit.?.what, .count = outcome.limit.?.count, .limit = outcome.limit.?.limit, .target = target_name } }),
-            error.MemoryLayout => return ctx.fail(.{ .wasm_memory_layout = .{ .what = @tagName(outcome.memory.?.what), .needed = outcome.memory.?.needed, .configured = outcome.memory.?.configured, .target = target_name } }),
+            error.MemoryLayout => return ctx.fail(wasmMemoryLayoutProblem(target_name, outcome.memory.?)),
             error.ParameterLimit => {
                 for (outcome.parameters) |problem| try ctx.addProblem(.{ .wasm_host_parameter_limit = .{
                     .symbol = problem.symbol,

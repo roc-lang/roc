@@ -9,7 +9,7 @@ source_escapes=true
 a=(0\r.e)
 ~~~
 # EXPECTED
-MISPLACED CARRIAGE RETURN - :0:0:0:0
+MISPLACED CARRIAGE RETURN - fuzz_crash_098.md:1:5:1:6
 TYPE MISMATCH - fuzz_crash_098.md:1:4:1:5
 # PROBLEMS
 ~~~clojure
@@ -17,9 +17,11 @@ TYPE MISMATCH - fuzz_crash_098.md:1:4:1:5
 	(report
 		(severity runtime_error)
 		(title "Misplaced Carriage Return")
+		(region (start 1 5) (end 1 6))
 		(headline
 			(reflow "Carriage return characters (\\r) are not allowed in Roc source code."))
-		(document))
+		(document
+			(source-region (file "fuzz_crash_098.md") (start 1 5) (end 1 6) (annotation error) (line-text "a=(0\r.e)"))))
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")

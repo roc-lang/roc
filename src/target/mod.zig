@@ -1055,6 +1055,9 @@ pub const RocTarget = enum {
 /// answer because the compiler itself is built for the architecture baseline.
 pub const host_cpu = @import("host_cpu.zig");
 
+/// The sizes a WebAssembly module's memory and stack can be configured to.
+pub const wasm_memory = @import("wasm_memory.zig");
+
 /// LLVM spelling of a resolved Zig CPU model.
 pub fn llvmCpuName(target: std.Target) []const u8 {
     return target.cpu.model.llvm_name orelse "";
@@ -1087,6 +1090,7 @@ test {
     // Nothing in this file references host CPU detection, so name it here to
     // put its tests and its comptime check of the CPU floor in this run.
     std.testing.refAllDecls(host_cpu);
+    std.testing.refAllDecls(wasm_memory);
 }
 
 test "native target matches host OS and architecture" {

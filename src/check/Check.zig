@@ -187,10 +187,10 @@ var_map: collections.DenseMap(Var, Var),
 ground_expected_backups: std.AutoHashMapUnmanaged(u64, Var) = .empty,
 /// Ground instances of type declarations referenced from annotations. See
 /// `instantiateVarPolarized`.
-ground_polarized_instances: std.AutoHashMapUnmanaged(PolarizedInstanceKey, Var) = .empty,
+ground_polarized_instances: std.AutoHashMapUnmanaged(SharedInstanceKey, Var) = .empty,
 /// Ground subtrees of the latest instance of a type declaration at each
 /// position whose instance is not ground. See `instantiateVarPolarized`.
-polarized_instance_subtrees: std.AutoHashMapUnmanaged(PolarizedInstanceKey, std.ArrayListUnmanaged(Instantiator.SharedSubtree)) = .empty,
+polarized_instance_subtrees: std.AutoHashMapUnmanaged(SharedInstanceKey, std.ArrayListUnmanaged(Instantiator.SharedSubtree)) = .empty,
 /// The marker pre-walk outcome of a type declaration at each position it was
 /// instantiated at with a behavior that decides markers per occurrence. See
 /// `polarizedMarkerChoices`.
@@ -882,6 +882,9 @@ widen_closed_rows_only: bool = false,
 /// (`ResultTarget.annotated`), so a reached variable an enclosing scope owns
 /// gets a placeholder and a deferred relation (`DeferredResultRelation`).
 result_relation_defers: bool = false,
+/// Per probe site, how many of its probes were kept and how many discarded
+/// (`checker_speculation_stats`).
+speculation_counts: SpeculationCounts = @splat(@splat(0)),
 /// Scratch for `widenedReachCopy`: one row's tags, gathered along its
 /// extension chain.
 widened_use_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty,
@@ -1209,9 +1212,9 @@ ambiguity_candidate_by_key: std.AutoHashMapUnmanaged(AmbiguityCandidateKey, u32)
 /// Undo journal for the monotone candidate payload flips performed while a
 /// probe is open: each entry names a candidate and the payload an in-probe
 /// repeated observation flipped (`requires_current_resolution` escalated, or
-/// `position` raised to `.row_tail`). `Probe.rollback` resets the flips its
+/// `position` raised to `.row_tail`). `InstantiationMark.rollback` resets the flips its
 /// scope journaled (the observation was speculative work that did not
-/// survive), while `Probe.commit` drops the entries keeping the flips (a
+/// survive), while `InstantiationMark.commit` drops the entries keeping the flips (a
 /// committed probe's observation is as real as an unprobed one). Flips
 /// performed with no probe open are permanent and never journaled.
 ambiguity_candidate_journal: std.ArrayListUnmanaged(AmbiguityCandidateFlip) = .empty,
@@ -1547,7 +1550,7 @@ scratch_generated_codec_calls: std.ArrayListUnmanaged(ModuleEnv.GeneratedCodecCa
 /// every registration site lives in this file (literal creation,
 /// `instantiateVarHelp`, `copyVar`), and the defaulting passes iterate it
 /// (re-resolving each entry, skipping resolved ones) instead of scanning the
-/// whole type store. Append-only within a probe scope—`Probe.rollback`
+/// whole type store. Append-only within an instantiation mark—`InstantiationMark.rollback`
 /// truncates it alongside the other Check-side buffers a probe grows.
 open_literal_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// Number literal expressions whose conversion is deferred (design.md
@@ -1764,22 +1767,18 @@ function_effect_dependency_frame_starts: std.ArrayListUnmanaged(usize) = .empty,
 function_effect_dependency_scope_start: usize = 0,
 /// Reusable sparse directed solver. Sessions never cross source-store mutations.
 function_effect_resolution: effect_solver.Solver,
-/// Scratch for `beginCommitProbe`: the caller env's var-pool length per rank
-/// at probe start, restored on a failed probe's rollback. One buffer suffices
-/// because commit-probes never nest. The type store's trail-based savepoints
-/// never nest either (`createSavepointImpl` asserts `!savepoint_active`), but
-/// that assertion guards the store, not this buffer, so `commit_probe_active`
-/// asserts the invariant at this layer too instead of leaving it
-/// load-bearing-by-convention.
-probe_var_pool_lens: std.ArrayListUnmanaged(usize) = .empty,
-/// True while a `CommitProbe` is open. A second `beginCommitProbe` would
-/// `clearRetainingCapacity` and repopulate `probe_var_pool_lens`, corrupting the
-/// outer probe's saved per-rank lengths; this asserts that never happens.
+/// True while an instantiating probe is open (`InstantiatingProbe`): the checker
+/// code that runs inside it, instantiation above all, runs as it does inside
+/// a speculation that may still be discarded.
 commit_probe_active: bool = false,
-/// Number of live type-store savepoints. Generalization-boundary capture is a
-/// destructive side-table transition and is forbidden while any probe can
-/// still roll the type store back.
+/// Number of open instantiation marks (`InstantiationMark`).
+/// Generalization-boundary capture is a destructive side-table transition and
+/// is forbidden while one is open.
 probe_depth: u32 = 0,
+/// The literals the relations an open probe kept determined, and the defaults
+/// they absorbed, which `probeYes` settles and keeps (`Probe`).
+probe_determined_literals: std.ArrayListUnmanaged(Var) = .empty,
+probe_absorbed_defaults: std.ArrayListUnmanaged(unifier.AbsorbedRecordDefault) = .empty,
 /// Scratch for the variables one batch of copies gives a region
 /// (`setSortedVarsRegion`).
 scratch_region_vars: std.ArrayListUnmanaged(Var) = .empty,
@@ -1815,6 +1814,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .widened_use_copies = .scratch,
     .widen_closed_rows_only = .lexical,
     .result_relation_defers = .lexical,
+    .speculation_counts = .scratch,
     .widened_use_tags = .scratch,
     .widened_kept_tail_rows = .scratch,
     .occurs_scratch = .scratch,
@@ -2270,9 +2270,10 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .function_effect_dependency_frame_starts = .frame_stack,
     .function_effect_dependency_scope_start = .lexical,
     .function_effect_resolution = .scratch,
-    .probe_var_pool_lens = .scratch,
     .commit_probe_active = .lexical,
     .probe_depth = .lexical,
+    .probe_determined_literals = .lexical,
+    .probe_absorbed_defaults = .lexical,
     .scratch_region_vars = .scratch,
     .scratch_group_values = .scratch,
     .generalization_nesting_limit_region = .keyed,
@@ -9007,9 +9008,7 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     // conflict once (design.md "Row Union Normalization"), and the operands
     // are related again with the row normalized or poisoned.
     var unify_opts = opts;
-    if (self.probe_depth == 0 or self.commit_probe_active) {
-        unify_opts.repeated_label_rows = .return_row;
-    }
+    unify_opts.repeated_label_rows = .return_row;
     const saved_fresh_region_var = self.unify_fresh_region_var;
     self.unify_fresh_region_var = b;
     defer self.unify_fresh_region_var = saved_fresh_region_var;
@@ -9020,6 +9019,15 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
         try self.normalizeRowUnionOrReport(row, b, env);
         result = try unifier.unify(&unify_env, a, b, unify_opts);
     }
+    try self.finishUnify(result, b, env, owner);
+    return result;
+}
+
+/// What `runUnify` does once the unifier has related `b` to its expected
+/// type: complete a reported mismatch, keep the defaults the relation
+/// absorbed, settle the literals it determined, and give the checker its
+/// fresh variables and deferred constraints.
+fn finishUnify(self: *Self, result: unifier.Result, b: Var, env: *Env, owner: DeferredDispatchObligationOwner) Allocator.Error!void {
     switch (result) {
         .problem => |problem_idx| {
             const mismatch = &self.problems.problems.items[@backingInt(problem_idx)].type_mismatch;
@@ -9053,8 +9061,6 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
 
     // Ensure arrays are in sync
     self.debugAssertArraysInSync();
-
-    return result;
 }
 
 /// `runUnify` for a relation whose operands an earlier relation has often
@@ -9066,7 +9072,7 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
 /// than `runUnify`, so only relations that often find one come through here.
 fn runUnifyOftenRelated(self: *Self, a: Var, b: Var, env: *Env, opts: unifier.Options) Allocator.Error!unifier.Result {
     if (opts.root_relation == .ordinary and self.types.resolveDescIdx(a) == self.types.resolveDescIdx(b)) {
-        if (opts.on_mismatch == .poison_to_err) self.types.assertNoSavepointActive();
+        if (opts.on_mismatch == .poison_to_err) self.types.assertNoProbeOpen();
         _ = self.types.resolveVarWordAndCompressPath(a);
         _ = self.types.resolveVarWordAndCompressPath(b);
         self.unify_scratch.reset();
@@ -9919,7 +9925,7 @@ test "settled walk finds a cycle through structure and none through a method req
 test "a default-decided class merged into a frozen class renders its pre-default type" {
     // A recorded variable can merge into a frozen class a replay shares. The
     // diagnostic's view of its pre-default type is of that whole class, and
-    // the savepoint it is rendered under restores the frozen class after.
+    // rendering it leaves the frozen class as it was.
     const TestEnv = @import("test/TestEnv.zig");
     var test_env = try TestEnv.initExprOpen("FrozenPreDefault", "1.U64");
     defer test_env.deinit();
@@ -9931,7 +9937,7 @@ test "a default-decided class merged into a frozen class renders its pre-default
 
     const ground = try store.freshFromContent(.{ .structure = .empty_record });
     const frozen = (try checker.freezeTypeGraph(ground)).?;
-    defer store.thawFrozenClasses() catch unreachable; // no savepoint is active at scope exit, so thawing records no trail entries and allocates nothing
+    defer store.thawFrozenClasses() catch unreachable; // no probe is open at scope exit, so thawing logs nothing and allocates nothing
     try store.union_(defaulted, frozen, store.resolveVar(frozen).desc);
 
     _ = try checker.snapshotPreDefaultType(defaulted, null);
@@ -9964,7 +9970,7 @@ test "a frozen copy carries exactly the flags an instantiated copy carries" {
     try store.dangerousSetVarDesc(original, desc);
 
     const copy = (try checker.freezeTypeGraph(original)).?;
-    defer store.thawFrozenClasses() catch unreachable; // no savepoint is active at scope exit, so thawing records no trail entries and allocates nothing
+    defer store.thawFrozenClasses() catch unreachable; // no probe is open at scope exit, so thawing logs nothing and allocates nothing
     var expected = original_flags.copied();
     expected.frozen = true;
     try std.testing.expectEqual(expected, store.resolveVar(copy).desc.flags);
@@ -10265,7 +10271,7 @@ const RowUnionScratch = struct {
 };
 
 fn normalizeRowUnion(self: *Self, row: Var, env: *Env) Allocator.Error!?RowLabelConflict {
-    std.debug.assert(self.probe_depth == 0 or self.commit_probe_active);
+    std.debug.assert(self.probe_depth == 0 and !self.types.probeOpen());
     var scratch = self.row_union_scratch;
     self.row_union_scratch = .{};
     defer {
@@ -10336,8 +10342,10 @@ fn normalizeRowUnion(self: *Self, row: Var, env: *Env) Allocator.Error!?RowLabel
         }
         if (pairs.items.len == 0) return null;
 
-        // The whole set relates or none of it does: a rejected row leaves no
-        // relation behind on the types it shares.
+        // Pairs relate in order. The first whose relation fails, or makes an
+        // acyclic row anonymously recursive, is the row's conflict. The whole
+        // set relates or none of it does: a rejected row leaves no relation
+        // behind on the types it shares.
         if (try self.firstRowLabelConflict(row, pairs.items)) |conflict| return conflict;
         for (pairs.items) |pair| {
             if (!try self.relateRepeatedRowLabel(pair.outer, pair.inner, env)) return pair;
@@ -10369,35 +10377,36 @@ fn normalizeRowUnion(self: *Self, row: Var, env: *Env) Allocator.Error!?RowLabel
 /// an acyclic `row` anonymously recursive once every earlier pair is related.
 /// The relations are probed together against throwaway problem stores and
 /// always rolled back, so this records nothing and needs no checker
-/// bookkeeping; only a set known to hold is then related for real.
+/// bookkeeping; only a set known to hold is then related for real. Only
+/// called outside a probe: probes never nest.
 fn firstRowLabelConflict(self: *Self, row: Var, pairs: []const RowLabelConflict) Allocator.Error!?RowLabelConflict {
     const row_acyclic = (try occurs.occurs(self.types, &self.occurs_scratch, row)) == .valid;
-    var savepoint = try self.types.createSavepoint();
-    defer self.types.rollbackToSavepoint(&savepoint);
+    var probe = self.beginProbe(.row_label_conflict, null);
+    defer self.probeDiscard(&probe);
     for (pairs) |pair| {
-        if (!try self.probeRepeatedRowLabel(pair.outer, pair.inner)) return pair;
+        if (!try self.probeRepeatedRowLabel(&probe, pair.outer, pair.inner)) return pair;
         if (row_acyclic and (try occurs.occurs(self.types, &self.occurs_scratch, row)) != .valid) return pair;
     }
     return null;
 }
 
-fn probeRepeatedRowLabel(self: *Self, outer: RowLabelOccurrence, inner: RowLabelOccurrence) Allocator.Error!bool {
+fn probeRepeatedRowLabel(self: *Self, probe: *Probe, outer: RowLabelOccurrence, inner: RowLabelOccurrence) Allocator.Error!bool {
     switch (outer.payload) {
         .tag => |outer_args| {
             const inner_args = inner.payload.tag;
             if (outer_args.len() != inner_args.len()) return false;
             for (self.types.sliceVars(outer_args), self.types.sliceVars(inner_args)) |outer_arg, inner_arg| {
-                if (!try self.probeUnifyWithoutRecordingProblems(outer_arg, inner_arg)) return false;
+                if (!(try self.probeRelate(probe, outer_arg, inner_arg, .{})).isEstablished()) return false;
             }
         },
         .field => |outer_presence| {
             const outer_value, const outer_kind = rowFieldAxes(outer_presence);
             const inner_value, const inner_kind = rowFieldAxes(inner.payload.field);
-            if (!try self.probeUnifyWithoutRecordingProblems(outer_value, inner_value)) return false;
+            if (!(try self.probeRelate(probe, outer_value, inner_value, .{})).isEstablished()) return false;
             if (outer_kind != null or inner_kind != null) {
                 const outer_kind_var = outer_kind orelse try self.types.freshFromContent(.{ .field_presence = .required });
                 const inner_kind_var = inner_kind orelse try self.types.freshFromContent(.{ .field_presence = .required });
-                if (!try self.probeUnifyWithoutRecordingProblems(outer_kind_var, inner_kind_var)) return false;
+                if (!(try self.probeRelate(probe, outer_kind_var, inner_kind_var, .{})).isEstablished()) return false;
             }
         },
     }
@@ -10414,27 +10423,34 @@ fn rowFieldAxes(presence: types_mod.RecordField.Presence) struct { Var, ?Var } {
 
 /// Relate a repeated label occurrence to the one outside it, exactly: tag
 /// payloads are equal, and a field's value types and kinds are equal.
+/// `firstRowLabelConflict` has already probed the pair, so this relation
+/// succeeds.
 fn relateRepeatedRowLabel(self: *Self, outer: RowLabelOccurrence, inner: RowLabelOccurrence, env: *Env) Allocator.Error!bool {
     switch (outer.payload) {
         .tag => |outer_args| {
             const inner_args = inner.payload.tag;
             if (outer_args.len() != inner_args.len()) return false;
             for (self.types.sliceVars(outer_args), self.types.sliceVars(inner_args)) |outer_arg, inner_arg| {
-                if (!(try self.runUnify(outer_arg, inner_arg, env, .{ .on_mismatch = .write_no_report })).isEstablished()) return false;
+                if (!try self.relateRepeatedRowLabelAxis(outer_arg, inner_arg, env)) return false;
             }
             return true;
         },
         .field => |outer_presence| {
             const outer_value, const outer_kind = rowFieldAxes(outer_presence);
             const inner_value, const inner_kind = rowFieldAxes(inner.payload.field);
-            if (!(try self.runUnify(outer_value, inner_value, env, .{ .on_mismatch = .write_no_report })).isEstablished()) return false;
+            if (!try self.relateRepeatedRowLabelAxis(outer_value, inner_value, env)) return false;
             if (outer_kind == null and inner_kind == null) return true;
             const region = self.getRegionAt(outer_value);
             const outer_kind_var = outer_kind orelse try self.freshFromContent(.{ .field_presence = .required }, env, region);
             const inner_kind_var = inner_kind orelse try self.freshFromContent(.{ .field_presence = .required }, env, region);
-            return (try self.runUnify(outer_kind_var, inner_kind_var, env, .{ .on_mismatch = .write_no_report })).isEstablished();
+            return try self.relateRepeatedRowLabelAxis(outer_kind_var, inner_kind_var, env);
         },
     }
+}
+
+/// One axis of `relateRepeatedRowLabel`.
+fn relateRepeatedRowLabelAxis(self: *Self, outer: Var, inner: Var, env: *Env) Allocator.Error!bool {
+    return (try self.runUnify(outer, inner, env, .{ .on_mismatch = .write_no_report })).isEstablished();
 }
 
 /// Whether a scanned tag occurrence is pattern-only.
@@ -12441,14 +12457,22 @@ fn instantiateVarPolarized(
     // with every annotation that refers to it, so a mismatch against one of
     // them can merge it into `.err`; it is then no longer ground and the next
     // reference instantiates a fresh copy.
+    //
+    // The annotation node that refers to an instance joins its class, so an
+    // instance is shared only among references whose nodes belong to the same
+    // kind of graph (`SharedInstanceOwner`).
     const instance_key: PolarizedInstanceKey = .{
         .declaration = var_to_instantiate,
         .polarity_behavior = polarity_behavior,
         .polarity = polarity,
         .reach = reach,
     };
+    const shared_key: SharedInstanceKey = .{
+        .position = instance_key,
+        .owner = if (env.rank() == .generalized) .template else .use,
+    };
     if (evidence == .none) {
-        if (self.ground_polarized_instances.get(instance_key)) |cached| {
+        if (self.ground_polarized_instances.get(shared_key)) |cached| {
             if (try self.varIsGround(cached)) return cached;
         }
     }
@@ -12470,7 +12494,7 @@ fn instantiateVarPolarized(
     }
     var reads_every_recorded_subtree = false;
     if (evidence == .none) {
-        if (self.polarized_instance_subtrees.get(instance_key)) |entries| {
+        if (self.polarized_instance_subtrees.get(shared_key)) |entries| {
             try self.groundSubtreeEntries(entries.items, &shared_subtrees);
             reads_every_recorded_subtree = shared_subtrees.items.len == entries.items.len and
                 self.codec_instance_copies.len == 0 and
@@ -12496,12 +12520,12 @@ fn instantiateVarPolarized(
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
     if (evidence == .none) {
         if (opened_marker_exts.items.len == 0 and try self.varIsGround(instantiated)) {
-            try self.ground_polarized_instances.put(self.gpa, instance_key, instantiated);
+            try self.ground_polarized_instances.put(self.gpa, shared_key, instantiated);
             if (self.annotation_generation_is_retainable) {
                 try self.retainable_generation_shared_roots.append(self.gpa, instantiated);
             }
         } else {
-            const slot = try self.polarized_instance_subtrees.getOrPut(self.gpa, instance_key);
+            const slot = try self.polarized_instance_subtrees.getOrPut(self.gpa, shared_key);
             if (!slot.found_existing) slot.value_ptr.* = .empty;
             if (reads_every_recorded_subtree) {
                 try self.debugAssertMaximalGroundSubtreeCopies(instantiated, slot.value_ptr.items);
@@ -12803,6 +12827,26 @@ const PolarizedInstanceKey = struct {
     polarity_behavior: PolarityVarBehavior,
     polarity: Polarity,
     reach: Instantiator.AdapterReach,
+};
+
+/// Which graph the annotation nodes that read a shared instance belong to.
+/// Each such node joins the instance's class, and a merged class holds the
+/// lower of the two ranks.
+const SharedInstanceOwner = enum {
+    /// A reference generated at generalized rank, inside a type declaration:
+    /// the instance is part of that declaration's template, which every use
+    /// of the declaration copies.
+    template,
+    /// A reference generated at a scope's own rank: the instance is a
+    /// monotype, which settles at `outermost` like every ground type and is
+    /// read where it stands.
+    use,
+};
+
+/// The key of an instance that references share (`instantiateVarPolarized`).
+const SharedInstanceKey = struct {
+    position: PolarizedInstanceKey,
+    owner: SharedInstanceOwner,
 };
 
 /// Record alias markers an annotation-position instantiation resolved open,
@@ -15718,7 +15762,54 @@ const PendingRecordDestruct = struct {
 /// and seal the solved type store: every later stage only reads it.
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     try self.checkFileInternal(false);
+    self.printSpeculationStats();
     try self.types.canonicalizeAndSeal(self.cir.getIdentStoreConst());
+}
+
+/// The checker's probe sites (`checker_speculation_stats`).
+const SpeculationSite = enum {
+    branch_compatible,
+    branch_fold,
+    widened_result,
+    deferred_result,
+    lambda_seed,
+    expected_tag_payload,
+    expected_aggregate_shape,
+    projected_stored_value,
+    call_args_conflict,
+    owned_tag_nominal,
+    inspect_override,
+    same_method_requirements,
+    equivalent_callables,
+    return_constraints,
+    dispatch_method,
+    interpolation_part,
+    flex_constraint,
+    discarded_var_update,
+    row_label_conflict,
+    dispatch_replay_check,
+};
+
+/// Per probe site, its discarded probes (index 0) and kept probes (index 1).
+const SpeculationCounts = [std.enums.values(SpeculationSite).len][2]u32;
+
+fn noteProbeEnd(self: *Self, site: SpeculationSite, kept: bool) void {
+    if (comptime !base.dev_diagnostics.available) return;
+    self.speculation_counts[@backingInt(site)][@intFromBool(kept)] += 1;
+}
+
+fn printSpeculationStats(self: *const Self) void {
+    if (!base.dev_diagnostics.isSet(.checker_speculation_stats)) return;
+    for (std.enums.values(SpeculationSite)) |site| {
+        const counts = self.speculation_counts[@backingInt(site)];
+        if (counts[0] == 0 and counts[1] == 0) continue;
+        std.debug.print("checker-speculation: {s} {s} yes={d} no={d}\n", .{
+            self.cir.module_name,
+            @tagName(site),
+            counts[1],
+            counts[0],
+        });
+    }
 }
 
 /// `checkFile` for a test that drives solver machinery on the checked module
@@ -18707,9 +18798,9 @@ fn recordOwnDispatch(self: *Self, constraint: StaticDispatchConstraint) Allocato
     // The creating step is the expression's own relation over its operands,
     // which `ownDispatchRelation` names for the constraint from then on.
     std.debug.assert(self.relation_owner.eql(ownDispatchRelation(intro)));
-    // The map is keyed by raw var, and a savepoint's rollback frees the vars
-    // created after it for reuse, so no expression is checked under one.
-    std.debug.assert(!self.types.savepointActive());
+    // The map is keyed by raw var, and a discarded probe frees the vars
+    // created after it for reuse, so no expression is checked inside one.
+    std.debug.assert(!self.types.probeOpen());
     try self.own_dispatch_exprs.putNoClobber(constraint.fn_var, intro);
 }
 
@@ -18720,7 +18811,7 @@ fn recordOwnDispatch(self: *Self, constraint: StaticDispatchConstraint) Allocato
 /// interpolation itself.
 fn recordLoopDispatch(self: *Self, fn_var: Var, iterable: CIR.Expr.Idx) Allocator.Error!void {
     // Keyed by raw var, as `own_dispatch_exprs` is.
-    std.debug.assert(!self.types.savepointActive());
+    std.debug.assert(!self.types.probeOpen());
     try self.loop_dispatch_iterables.putNoClobber(fn_var, iterable);
 }
 
@@ -20499,8 +20590,8 @@ fn checkInstantiatedStaticDispatchConstraints(
     default_phase: enum { ordinary, settled },
 ) std.mem.Allocator.Error!void {
     // This fixpoint compacts the pending index and advances the checked-prefix
-    // cursor—positional state no probe savepoint captures. It must only run
-    // outside every speculative save/restore window.
+    // cursor—positional state no probe or instantiation mark captures. It must
+    // only run outside every one.
     std.debug.assert(self.probe_depth == 0);
 
     // Default-materialized roots and exact callable edges instantiated from a
@@ -26140,7 +26231,7 @@ fn boundedExtRefusalIsProduction(self: *Self, ext: Var) bool {
 fn boundAnnotationRows(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
     const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return;
     // A mark outlives any rollback scope, so it is only made outside one.
-    self.types.assertNoSavepointActive();
+    self.types.assertNoProbeOpen();
     for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
         try self.bounded_row_marks.append(self.gpa, .{ .owner = annotation_idx, .ext = entry.var_ });
         try self.markBoundedRowChain(entry.var_);
@@ -26714,7 +26805,8 @@ const KeptTailRow = struct {
 /// nominal at its own arguments. The coercion then relates the nominal at
 /// the value's arguments to the nominal at the result's. Returns whether
 /// every source lifted.
-fn liftKeptTailSources(self: *Self, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!bool {
+/// Inside a probe (`probe`), each lift is a relation the probe keeps.
+fn liftKeptTailSources(self: *Self, env: *Env, ctx: problem.Context, probe: ?*Probe) std.mem.Allocator.Error!bool {
     for (self.widened_kept_tail_rows.items) |kept| {
         const nominal = self.resolvedNominalOrNull(kept.copy) orelse continue;
         if (self.resolvedNominalOrNull(kept.source) != null) continue;
@@ -26726,7 +26818,11 @@ fn liftKeptTailSources(self: *Self, env: *Env, ctx: problem.Context) std.mem.All
         var lifted = nominal;
         lifted.args = try self.types.appendVars(args);
         const target = try self.freshFromContent(.{ .structure = .{ .nominal_type = lifted } }, env, region);
-        if (!(try self.runUnify(kept.source, target, env, unifyOptionsForContext(ctx, .write_no_report))).isAccepted()) return false;
+        const opts = unifyOptionsForContext(ctx, .write_no_report);
+        if (probe) |open| {
+            if (!(try self.probeRelate(open, kept.source, target, opts)).isAccepted()) return false;
+            try self.probeKeep(open, target);
+        } else if (!(try self.runUnify(kept.source, target, env, opts)).isAccepted()) return false;
     }
     return true;
 }
@@ -32045,14 +32141,36 @@ fn projectExpectedTagPayload(
     env: *Env,
 ) Allocator.Error!?Var.SafeList.Range {
     const aggregate_type = expected.aggregateType() orelse return null;
-    var commit_probe = try self.beginCommitProbe(env);
-    var committed = false;
-    defer if (!committed) commit_probe.rollback();
+    // Without a record field to borrow, every refusal below is read before
+    // the copy writes anything, and the copy itself cannot fail.
+    const field = aggregate_type.record_field orelse {
+        return self.copyExpectedTagPayload(aggregate_type.var_, name, arity, env);
+    };
+    // Borrowing a nominal record's field opens its backing before the field
+    // can be refused, so a refusal discards that opening with the probe.
+    var probe = self.beginProbe(.expected_tag_payload, env);
+    const copied_args = copied: {
+        const source = try self.borrowExpectedRecordField(aggregate_type.var_, field, env) orelse break :copied null;
+        break :copied try self.copyExpectedTagPayload(source, name, arity, env);
+    };
+    if (copied_args == null) {
+        try self.probeNo(&probe);
+        return null;
+    }
+    try self.probeYes(&probe);
+    return copied_args;
+}
 
-    const source = if (aggregate_type.record_field) |field|
-        try self.borrowExpectedRecordField(aggregate_type.var_, field, env) orelse return null
-    else
-        aggregate_type.var_;
+/// The payload slots of tag `name` in the expected type `source`, copied
+/// together, or null when `source` holds an error or no such tag of `arity`.
+/// Every refusal is read before anything is written.
+fn copyExpectedTagPayload(
+    self: *Self,
+    source: Var,
+    name: Ident.Idx,
+    arity: usize,
+    env: *Env,
+) Allocator.Error!?Var.SafeList.Range {
     self.var_set.clearRetainingCapacity();
     const contains_error = try self.varContainsError(source, &self.var_set);
     self.var_set.clearRetainingCapacity();
@@ -32104,10 +32222,7 @@ fn projectExpectedTagPayload(
         try self.scratch_vars.append(try copier.instantiateVar(slot));
     }
     try self.registerExpectedShapeVars(fresh_start, env);
-    const copied_args = try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_top));
-    committed = true;
-    try commit_probe.commit();
-    return copied_args;
+    return try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_top));
 }
 
 test "tag projection copies selected slots together without copying other variants" {
@@ -32200,10 +32315,6 @@ fn projectExpectedAggregateShape(
     env: *Env,
 ) std.mem.Allocator.Error!bool {
     const aggregate_type = expected.aggregateType() orelse return false;
-    var commit_probe = try self.beginCommitProbe(env);
-    var committed = false;
-    defer if (!committed) commit_probe.rollback();
-
     if (aggregate_type.projected_cell and aggregate_type.record_field == null) {
         // Copying an already-copied shape would give an isomorphic fresh copy
         // of every level beneath it, once per level of nesting. A sibling may
@@ -32215,31 +32326,38 @@ fn projectExpectedAggregateShape(
             self.var_set.clearRetainingCapacity();
             if (cell_contains_error) return false;
         }
-        const result = try commit_probe.unifyInContext(aggregate_type.var_, shape_var, aggregate_type.context);
-        if (!result.isEstablished()) return false;
-        committed = true;
-        try commit_probe.commit();
-        return true;
+        return self.unifyIfRelates(.expected_aggregate_shape, aggregate_type.var_, shape_var, env, unifyOptionsForContext(aggregate_type.context, .write_no_report));
     }
-    const source = if (aggregate_type.record_field) |name|
-        try self.borrowExpectedRecordField(aggregate_type.var_, name, env) orelse return false
-    else
-        aggregate_type.var_;
-    // Error context is diagnostic recovery, never construction evidence. No
-    // variable can reach the error state before one has been written.
-    if (self.types.mayContainErrorState()) {
-        self.var_set.clearRetainingCapacity();
-        const expected_contains_error = try self.varContainsError(source, &self.var_set);
-        self.var_set.clearRetainingCapacity();
-        if (expected_contains_error) return false;
-    }
+    while (true) {
+        var probe = self.beginProbe(.expected_aggregate_shape, env);
+        const kept = kept: {
+            const source = if (aggregate_type.record_field) |name|
+                try self.borrowExpectedRecordField(aggregate_type.var_, name, env) orelse break :kept false
+            else
+                aggregate_type.var_;
+            // Error context is diagnostic recovery, never construction evidence. No
+            // variable can reach the error state before one has been written.
+            if (self.types.mayContainErrorState()) {
+                self.var_set.clearRetainingCapacity();
+                const expected_contains_error = try self.varContainsError(source, &self.var_set);
+                self.var_set.clearRetainingCapacity();
+                if (expected_contains_error) break :kept false;
+            }
 
-    const expected_copy = try self.copyExpectedShape(source, env);
-    const result = try commit_probe.unifyInContext(expected_copy, shape_var, aggregate_type.context);
-    if (!result.isEstablished()) return false;
-    committed = true;
-    try commit_probe.commit();
-    return true;
+            const expected_copy = try self.copyExpectedShape(source, env);
+            const result = try self.probeRelate(&probe, expected_copy, shape_var, unifyOptionsForContext(aggregate_type.context, .write_no_report));
+            if (!result.isEstablished()) break :kept false;
+            try self.probeKeep(&probe, shape_var);
+            break :kept true;
+        };
+        if (kept) {
+            try self.probeYes(&probe);
+            return true;
+        }
+        const retry = probe.repeated_label_row != null;
+        try self.probeNo(&probe);
+        if (!retry) return false;
+    }
 }
 
 /// Expected Shape Context: a call's result constrains shared formal slots
@@ -32267,14 +32385,7 @@ fn commitProjectedStoredValue(
     actual: Var,
     env: *Env,
 ) std.mem.Allocator.Error!bool {
-    var commit_probe = try self.beginCommitProbe(env);
-    var committed = false;
-    defer if (!committed) commit_probe.rollback();
-    const result = try commit_probe.unify(projected, actual);
-    if (!result.isEstablished()) return false;
-    committed = true;
-    try commit_probe.commit();
-    return true;
+    return self.unifyIfRelates(.projected_stored_value, projected, actual, env, .{});
 }
 
 /// A frame is begun, finished, and aborted by one checker against the one
@@ -33916,8 +34027,8 @@ fn resumeListCheck(self: *Self, task: *ExprTask, state: *ListCheck, env: *Env, c
             // with kinds still undetermined (design.md "Field Kinds
             // (All-Dynamic Optional Fields)"). The copy is unpacked to its
             // element through one unification with `List(seed)` inside a
-            // CommitProbe: if the expected type is not a List at all, the
-            // rollback discards the attempt (no problem is recorded) and the
+            // probe: if the expected type is not a List at all, discarding the
+            // probe discards the attempt (no problem is recorded) and the
             // annotation mismatch is reported after the element checks,
             // exactly as without seeding.
             state.seed_elem_var = seed: {
@@ -35473,9 +35584,9 @@ fn discardedVarUpdate(self: *Self, expr_idx: CIR.Expr.Idx, empty_rec: Var) std.m
 /// by a unification that is rolled back and records no problems. The gating
 /// probe for Discarded Var Update (`discardedVarUpdate`).
 fn probeCanUseAs(self: *Self, expected_var: Var, actual_var: Var) std.mem.Allocator.Error!bool {
-    var probe = try self.beginProbe(null);
-    defer probe.rollback();
-    return try self.probeUnifyWithoutRecordingProblems(expected_var, actual_var);
+    var probe = self.beginProbe(.discarded_var_update, null);
+    defer self.probeDiscard(&probe);
+    return (try self.probeRelate(&probe, expected_var, actual_var, .{})).isEstablished();
 }
 
 /// Canonicalization gives a loop body no final expression: the body is a block
@@ -40694,7 +40805,7 @@ fn publishUnaryDispatchExpr(
 /// Relate a lambda's parameter vars to the function type a call expects in
 /// its position, so the body checks against known parameter types. A skeleton
 /// function over the parameter vars (with a fresh return) is unified with the
-/// expected var inside a commit probe; a mismatch rolls back and records
+/// expected var inside a probe; a mismatch is discarded and records
 /// nothing, leaving the call's argument relation to report it.
 /// POLICY: Lambda Parameters Seeded From Context (design.md). Relate a
 /// skeleton over an unannotated lambda's parameter vars to the function type
@@ -40709,8 +40820,8 @@ fn publishUnaryDispatchExpr(
 ///     and copied (`copyExpectedShape`) so the base's own type is untouched.
 ///
 /// Only a context that already names a type constructor seeds anything. The
-/// relation runs inside one commit probe: an expectation the lambda does not
-/// fit is rolled back with its copy and left to the owning relation, which
+/// relation runs inside one probe: an expectation the lambda does not
+/// fit is discarded with its copy and left to the owning relation, which
 /// reports the mismatch.
 fn seedLambdaParamsFromContext(
     self: *Self,
@@ -40722,24 +40833,42 @@ fn seedLambdaParamsFromContext(
     if (contextual.context != .fn_call_arg and !contextual.projected_cell and contextual.record_field == null) return null;
     if (contextual.record_field == null and !self.varResolvesToKnownType(contextual.var_)) return null;
 
-    var commit_probe = try self.beginCommitProbe(env);
-    var committed = false;
-    defer if (!committed) commit_probe.rollback();
+    while (true) {
+        var probe = self.beginProbe(.lambda_seed, env);
+        const seed = seed: {
+            const source = if (contextual.record_field) |name|
+                try self.borrowExpectedRecordField(contextual.var_, name, env) orelse break :seed null
+            else
+                contextual.var_;
+            if (contextual.record_field != null and !self.varResolvesToKnownType(source)) break :seed null;
+            // Error context is diagnostic recovery, never construction evidence.
+            if ((contextual.projected_cell or contextual.record_field != null) and self.types.mayContainErrorState()) {
+                self.var_set.clearRetainingCapacity();
+                const source_contains_error = try self.varContainsError(source, &self.var_set);
+                self.var_set.clearRetainingCapacity();
+                if (source_contains_error) break :seed null;
+            }
+            const expected_fn = if (contextual.record_field != null) try self.copyExpectedShape(source, env) else source;
 
-    const source = if (contextual.record_field) |name|
-        try self.borrowExpectedRecordField(contextual.var_, name, env) orelse return null
-    else
-        contextual.var_;
-    if (contextual.record_field != null and !self.varResolvesToKnownType(source)) return null;
-    // Error context is diagnostic recovery, never construction evidence.
-    if ((contextual.projected_cell or contextual.record_field != null) and self.types.mayContainErrorState()) {
-        self.var_set.clearRetainingCapacity();
-        const source_contains_error = try self.varContainsError(source, &self.var_set);
-        self.var_set.clearRetainingCapacity();
-        if (source_contains_error) return null;
+            const seed_fn_var, const seed_ret = try self.lambdaSeedSkeleton(args, env, region);
+            const result = try self.probeRelate(&probe, expected_fn, seed_fn_var, unifyOptionsForContext(contextual.context, .write_no_report));
+            if (!result.isEstablished()) break :seed null;
+            try self.probeKeep(&probe, seed_fn_var);
+            break :seed seed_ret;
+        };
+        if (seed) |seed_ret| {
+            try self.probeYes(&probe);
+            return seed_ret;
+        }
+        const retry = probe.repeated_label_row != null;
+        try self.probeNo(&probe);
+        if (!retry) return null;
     }
-    const expected_fn = if (contextual.record_field != null) try self.copyExpectedShape(source, env) else source;
+}
 
+/// A function over a lambda's own parameter variables with a fresh result,
+/// which `seedLambdaParamsFromContext` relates to the expected function type.
+fn lambdaSeedSkeleton(self: *Self, args: CIR.Pattern.Span, env: *Env, region: Region) Allocator.Error!struct { Var, Var } {
     const arg_vars_top = try self.pushLambdaArgVars(args);
     const seed_args = blk: {
         defer self.scratch_vars.clearFrom(arg_vars_top);
@@ -40750,12 +40879,7 @@ fn seedLambdaParamsFromContext(
         .args = seed_args,
         .ret = seed_ret,
     } } }, env, region);
-
-    const result = try commit_probe.unifyInContext(expected_fn, seed_fn_var, contextual.context);
-    if (!result.isEstablished()) return null;
-    committed = true;
-    try commit_probe.commit();
-    return seed_ret;
+    return .{ seed_fn_var, seed_ret };
 }
 
 /// Whether a var already resolves to a type constructor (through aliases), so
@@ -40811,13 +40935,16 @@ fn refineCallArgsConflict(
     const receiver_count: usize = if (call.receiver != null) 1 else 0;
     const failed_param = call.failed_arg + receiver_count;
     const first_param: usize = for (0..failed_param) |earlier_param| {
-        var probe = try self.beginCommitProbe(env);
-        defer probe.rollback();
-        const copy = try self.instantiateVarOrphanFlexed(call.scheme_var, env, .{ .explicit = call.region });
-        const func = self.funcThroughAliases(copy) orelse return;
-        if (func.args.len() != call.args.len + receiver_count) return;
-        if (!try self.callOperandFitsParam(&probe, func, call, failed_param)) return;
-        if (!try self.callOperandFitsParam(&probe, func, call, earlier_param)) break earlier_param;
+        var probing = self.beginInstantiatingProbe(.call_args_conflict, env);
+        const conflicts: ?bool = conflicts: {
+            const copy = try self.instantiateVarOrphanFlexed(call.scheme_var, env, .{ .explicit = call.region });
+            const func = self.funcThroughAliases(copy) orelse break :conflicts null;
+            if (func.args.len() != call.args.len + receiver_count) break :conflicts null;
+            if (!try self.callOperandFitsParam(&probing.probe, func, call, failed_param)) break :conflicts null;
+            break :conflicts !try self.callOperandFitsParam(&probing.probe, func, call, earlier_param);
+        };
+        try self.instantiatingProbeNo(&probing);
+        if (conflicts orelse return) break earlier_param;
     } else return;
 
     const first: problem.Context.FnCallArgsConflictContext.Operand, const first_expr: CIR.Expr.Idx = if (first_param < receiver_count)
@@ -40844,19 +40971,19 @@ fn refineCallArgsConflict(
 /// parameter, as the call's own relation of it does.
 fn callOperandFitsParam(
     self: *Self,
-    probe: *CommitProbe,
+    probe: *Probe,
     func: types_mod.Func,
     call: RejectedCallArg,
     param: usize,
 ) std.mem.Allocator.Error!bool {
     const param_var = self.types.getVarAt(func.args, @intCast(param));
     if (call.receiver) |receiver| {
-        if (param == 0) return (try probe.unify(param_var, ModuleEnv.varFrom(receiver))).isEstablished();
+        if (param == 0) return (try self.probeUnify(probe, param_var, ModuleEnv.varFrom(receiver), .{})).isEstablished();
     }
     const arg = call.args[param - @intFromBool(call.receiver != null)];
     const arg_var = ModuleEnv.varFrom(arg);
     const row_width_relation: unifier.RowWidthRelation = if (self.exprIsFreshRecordConstruction(arg)) .construction else .exact;
-    return (try self.runUnify(param_var, arg_var, probe.env, ownedRelationOptions(
+    return (try self.probeUnify(probe, param_var, arg_var, ownedRelationOptions(
         .none,
         row_width_relation,
         .ordinary,
@@ -42126,16 +42253,19 @@ fn relateOwnedTagToExpectedNominal(
     if (expectation.record_field != null) return false;
     const nominal = self.types.resolveThroughAliases(expectation.var_).desc.content.unwrapNominalType() orelse return false;
     if (!nominal.canLiftInner(self.cir.selfModuleIdentity())) return false;
-    var probe = try self.beginCommitProbe(env);
-    var committed = false;
-    defer if (!committed) probe.rollback();
-    const template = try self.selectedConstructorTemplate(nominal, constructor, region) orelse return false;
-    const backing = (try self.openNominalBackingFromTemplate(nominal, template, env, region, .instantiation)) orelse return false;
-    const actual = try self.freshFromContent(content, env, region);
-    if (!(try probe.unify(backing, actual)).isEstablished()) return false;
-    if (!(try probe.unify(target, expectation.var_)).isEstablished()) return false;
-    committed = true;
-    try probe.commit();
+    var probing = self.beginInstantiatingProbe(.owned_tag_nominal, env);
+    const related = related: {
+        const template = try self.selectedConstructorTemplate(nominal, constructor, region) orelse break :related false;
+        const backing = (try self.openNominalBackingFromTemplate(nominal, template, env, region, .instantiation)) orelse break :related false;
+        const actual = try self.freshFromContent(content, env, region);
+        if (!(try self.probeUnify(&probing.probe, backing, actual, .{})).isEstablished()) break :related false;
+        break :related (try self.probeUnify(&probing.probe, target, expectation.var_, .{})).isEstablished();
+    };
+    if (!related) {
+        try self.instantiatingProbeNo(&probing);
+        return false;
+    }
+    try self.instantiatingProbeYes(&probing);
     return true;
 }
 
@@ -43464,17 +43594,14 @@ fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.E
     try self.checkAllConstraints(env);
 }
 
-/// A speculative-probe scope. Brackets type-store speculation together with the
-/// Check-level append-only buffers a probe also grows (`regions`,
-/// `instantiation_dispatchers`, `open_literal_vars`), so the probe sites don't
-/// repeat the bookkeeping. Begin before invoking the unifier; `rollback`
-/// discards everything the probe did to the store and those buffers. (The store's
-/// own child lists—vars, tags, etc.—are handled inside
-/// begin/rollbackToSavepoint.)
-const Probe = struct {
+/// The lengths of the checker lists instantiation grows (`regions`,
+/// `instantiation_dispatchers`, `open_literal_vars` and the rest), held by an
+/// instantiating probe (`InstantiatingProbe`) so that discarding it (`rollback`)
+/// discards what its instantiations registered, and keeping it (`commit`)
+/// keeps it. The type store is the probe's.
+const InstantiationMark = struct {
     check: *Self,
     env: ?*Env,
-    savepoint: types_mod.Store.Savepoint,
     deferred_constraints_len: usize,
     regions_mark: VarRegions.Mark,
     instantiation_dispatchers_len: usize,
@@ -43518,12 +43645,11 @@ const Probe = struct {
     probe_links_len: usize,
     probe_link_copies_len: usize,
 
-    fn rollback(self: *Probe) void {
+    fn rollback(self: *InstantiationMark) void {
         std.debug.assert(self.check.probe_depth > 0);
-        self.check.types.rollbackToSavepoint(&self.savepoint);
         if (self.env) |env| {
             // Instantiation inside a probe can enqueue a range allocated after
-            // the type-store savepoint. Rewind the owning env before any later
+            // the probe's type-store mark. Rewind the owning env before any later
             // pass can observe those now-invalid indices.
             env.deferred_static_dispatch_constraints.shrinkRetainingCapacity(self.deferred_constraints_len);
             env.truncateClean(self.deferred_constraints_len);
@@ -43548,7 +43674,7 @@ const Probe = struct {
         self.check.shrinkAmbiguityCandidatesTo(self.ambiguity_candidates_len);
         self.check.shrinkSchemeRequirementCandidatesTo(self.scheme_requirement_candidates_len);
         // Likewise, open literals registered during the probe (by in-probe
-        // instantiation) reference vars the savepoint rollback just discarded.
+        // instantiation) reference vars the discarded probe drops.
         self.check.open_literal_vars.shrinkRetainingCapacity(self.open_literal_vars_len);
         self.check.open_numeral_literals.shrinkRetainingCapacity(self.open_numeral_literals_len);
         self.check.instantiated_interpolation_owners.shrinkRetainingCapacity(self.instantiated_interpolation_owners_len);
@@ -43557,7 +43683,7 @@ const Probe = struct {
         self.check.instantiated_literal_conversion_uses.shrinkRetainingCapacity(self.instantiated_literal_conversion_uses_len);
         self.check.pending_tuple_accesses.shrinkRetainingCapacity(self.pending_tuple_accesses_len);
         // Scheme-use evidence recorded during the probe can reference fresh
-        // vars the savepoint rollback just discarded.
+        // vars the discarded probe drops.
         while (self.check.cir.scheme_uses.items().len > self.scheme_uses_len) {
             const removed = self.check.cir.scheme_uses.pop().?;
             if (removed.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
@@ -43578,12 +43704,12 @@ const Probe = struct {
         self.check.codec_row_demands.shrinkRetainingCapacity(self.codec_row_demands_len);
         self.check.codec_row_demand_tags.shrinkRetainingCapacity(self.codec_row_demand_tags_len);
         // The durable records drop here; the rejection markers they mirror live
-        // on descriptors the savepoint rollback above already restored.
+        // on descriptors the discarded probe restores.
         self.check.cir.rejected_static_dispatches.shrinkRetainingCapacity(self.rejected_static_dispatches_len);
         self.check.absorbed_defaults.shrinkRetainingCapacity(self.absorbed_defaults_len);
         self.check.record_constructions.shrinkRetainingCapacity(self.record_constructions_len);
         // Constructor relations recorded during the probe name the operand var
-        // and the backing content the savepoint rollback just discarded.
+        // and the backing content the discarded probe drops.
         self.check.accepted_nominal_constructor_backings.shrinkRetainingCapacity(self.accepted_nominal_constructor_backings_len);
         while (self.check.open_recursive_dispatches.getLastOrNull()) |open| {
             if (open.instantiation < self.dispatch_target_instantiations_len) break;
@@ -43620,12 +43746,9 @@ const Probe = struct {
 
     /// Close the probe scope KEEPING everything it did: the type-store
     /// speculation is committed and the appended regions / per-instantiation
-    /// dispatchers stay (they describe vars that now survive). Only
-    /// `CommitProbe` commits, through the real unification wrapper;
-    /// pure-predicate probes always roll back.
-    fn commit(self: *Probe) Allocator.Error!void {
+    /// dispatchers stay (they describe vars that now survive).
+    fn commit(self: *InstantiationMark) Allocator.Error!void {
         std.debug.assert(self.check.probe_depth > 0);
-        self.check.types.commitSavepoint(&self.savepoint);
         self.check.probe_depth -= 1;
         // Payload flips this scope journaled are kept—the committed
         // observations are real—so the journal entries are dead weight and
@@ -43637,7 +43760,9 @@ const Probe = struct {
     }
 };
 
-fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
+/// Open an instantiation mark: the lengths `InstantiationMark.rollback`
+/// restores.
+fn markInstantiations(self: *Self, env: ?*Env) InstantiationMark {
     const regions_mark = self.var_regions.mark();
     const instantiation_dispatchers_len = self.instantiation_dispatchers.items.len;
     const pending_scheme_requirement_dispatchers_len = self.pending_scheme_requirement_dispatchers.items.len;
@@ -43671,7 +43796,6 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const component_derived_relations_len = self.component_derived_relations.items.len;
     const dispatch_relation_owner_log_len = self.dispatch_relation_owner_log.items.len;
     const imported_schemes_len = self.imported_schemes.items.len;
-    const savepoint = try self.types.createSavepoint();
     self.probe_depth += 1;
     return .{
         .check = self,
@@ -43721,123 +43845,273 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .component_derived_relations_len = component_derived_relations_len,
         .dispatch_relation_owner_log_len = dispatch_relation_owner_log_len,
         .imported_schemes_len = imported_schemes_len,
-        .savepoint = savepoint,
     };
 }
 
-/// A speculative scope whose SUCCESS is committed in place instead of being
-/// rolled back and redone. Unlike a plain `Probe` (whose unifications run against
-/// throwaway problem/snapshot stores precisely because they never survive), a
-/// commit-probe runs its unifications through the REAL `runUnify` wrapper—full
-/// bookkeeping: fresh vars ranked into the caller env's var pool, regions
-/// stamped, and deferred dispatch constraints copied out. Its unification
-/// methods hardcode `.write_no_report`: a failed speculative relation is rolled
-/// back before its caller reports or poisons anything. The ordinary poisoning
-/// wrappers assert if called while this savepoint is active. On failure the
-/// probe must rewind everything that bookkeeping grew:
-///   - problems / snapshots recorded by any other in-probe operation;
-///   - the caller env's var-pool rank lists (entries for vars the savepoint
-///     rollback just discarded would dangle into the generalizer);
-///   - the caller env's deferred dispatch constraints (their receivers and
-///     constraint ranges were rolled back with the type store).
-const CommitProbe = struct {
-    check: *Self,
-    env: *Env,
-    probe: Probe,
-    problems_len: usize,
-    extra_strings_len: usize,
-    missing_patterns_len: usize,
-    snapshots_mark: SnapshotStore.Mark,
-
-    fn unify(self: *CommitProbe, a: Var, b: Var) std.mem.Allocator.Error!unifier.Result {
-        return self.check.runUnify(a, b, self.env, .{ .on_mismatch = .write_no_report });
-    }
-
-    fn unifyInContext(self: *CommitProbe, a: Var, b: Var, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
-        return self.check.runUnify(a, b, self.env, unifyOptionsForContext(ctx, .write_no_report));
-    }
-
-    fn rollback(self: *CommitProbe) void {
-        std.debug.assert(self.check.commit_probe_active);
-        self.check.commit_probe_active = false;
-        self.probe.rollback();
-        // `truncate` rewinds only the problem entries; the string/pattern backing
-        // arrays are assumed untouched by probe paths (only exhaustiveness
-        // checking writes them, and it never runs inside a probe). Assert that so
-        // a future probe path that grows them fails loudly instead of leaking
-        // entries past the rollback.
-        std.debug.assert(self.check.problems.extra_strings_backing.items.len == self.extra_strings_len);
-        std.debug.assert(self.check.problems.missing_patterns_backing.items.len == self.missing_patterns_len);
-        self.check.truncateProblems(self.problems_len);
-        self.check.snapshots.truncateToMark(self.snapshots_mark);
-        for (self.check.probe_var_pool_lens.items, 0..) |pool_len, rank_idx| {
-            self.env.var_pool.shrinkRank(@fromBackingInt(@intCast(rank_idx)), pool_len);
-        }
-    }
-
-    fn commit(self: *CommitProbe) Allocator.Error!void {
-        std.debug.assert(self.check.commit_probe_active);
-        self.check.commit_probe_active = false;
-        try self.probe.commit();
-    }
+/// An open probe (design.md "Probes"): one or more relations the unifier
+/// runs against the type store, whose writes are kept (`probeYes`) or
+/// discarded (`probeNo`) as one. Between `beginProbe` and its end only the
+/// unifier writes to an entry that predates the probe; everything else
+/// appends, and the checker reads the tentative result through
+/// non-compressing resolves. The checker state a probe may grow is
+/// declared: the regions of the variables it creates (`var_regions`), the
+/// links the deferred-callable hook makes (`probe_links`), and, when the probe
+/// has an env, that env's var pool and deferred dispatch queue, which a kept
+/// relation (`probeKeep`) or a fresh variable grows.
+const Probe = struct {
+    /// The site that opened the probe (`checker_speculation_stats`).
+    site: SpeculationSite,
+    mark: types_mod.Store.ProbeMark,
+    regions_mark: VarRegions.Mark,
+    env: ?*Env,
+    /// The first variable the probe created.
+    first_var: Var,
+    deferred_len: usize,
+    /// A relation stopped at a row that repeats a label and predates the
+    /// probe, and the actual operand of that relation.
+    repeated_label_row: ?struct { row: Var, actual: Var } = null,
+    side_lists: ProbeSideLists,
 };
 
-fn beginCommitProbe(self: *Self, env: *Env) std.mem.Allocator.Error!CommitProbe {
-    // Commit-probes must not nest: a nested `beginCommitProbe` would clobber the
-    // shared `probe_var_pool_lens` buffer the outer probe's rollback depends on.
-    if (self.probe_depth != 0) {
-        base.invariant("{s}", .{"commit probes cannot nest inside another solver probe"});
-    }
-    self.commit_probe_active = true;
-    errdefer self.commit_probe_active = false;
-    // Capture the var pool's per-rank lengths (through the current rank): real
-    // unification can rank a fresh var BELOW the current rank (it takes the min of
-    // the unified descriptors), so capturing only the current rank's list would
-    // miss entries.
-    self.probe_var_pool_lens.clearRetainingCapacity();
-    const rank_count = @as(usize, @backingInt(env.rank())) + 1;
-    try self.probe_var_pool_lens.ensureTotalCapacity(self.gpa, rank_count);
-    for (0..rank_count) |rank_idx| {
-        const rank: Rank = @fromBackingInt(@intCast(rank_idx));
-        self.probe_var_pool_lens.appendAssumeCapacity(env.var_pool.getVarsForRank(rank).len);
-    }
+/// Every other checker list's length when a probe began, which a discarded
+/// probe leaves unchanged. Debug builds only.
+const ProbeSideLists = if (std.debug.runtime_safety) [probe_side_list_count]usize else void;
+const probe_side_list_count = 37;
+
+fn probeSideLists(self: *Self) ProbeSideLists {
+    if (!std.debug.runtime_safety) return {};
     return .{
-        .check = self,
-        .env = env,
-        .problems_len = self.problems.len(),
-        .extra_strings_len = self.problems.extra_strings_backing.items.len,
-        .missing_patterns_len = self.problems.missing_patterns_backing.items.len,
-        .snapshots_mark = self.snapshots.mark(),
-        .probe = try self.beginProbe(env),
+        self.instantiation_dispatchers.items.len,
+        self.pending_scheme_requirement_dispatchers.items.len,
+        self.ambiguity_candidates.items.len,
+        self.ambiguity_candidate_journal.items.len,
+        self.scheme_requirement_candidates.items.len,
+        self.open_literal_vars.items.len,
+        self.open_numeral_literals.items.len,
+        self.instantiated_interpolation_owners.items.len,
+        self.open_row_holders.items.len,
+        self.interpolation_dispatchers.items.len,
+        self.instantiated_literal_conversion_uses.items.len,
+        self.pending_tuple_accesses.items.len,
+        self.cir.scheme_uses.items().len,
+        self.cir.scheme_use_pairs.items().len,
+        self.waiting_predeclared_dispatch_uses.items.len,
+        self.cir.generated_codec_derivations.items().len,
+        self.cir.generated_codec_calls.items().len,
+        self.cir.generated_codec_renamings.items().len,
+        self.boundary_codec_derivations.items.len,
+        self.boundary_codec_calls.items.len,
+        self.codec_row_demands.items.len,
+        self.codec_row_demand_tags.items.len,
+        self.cir.rejected_static_dispatches.items().len,
+        self.absorbed_defaults.items.len,
+        self.record_constructions.items.len,
+        self.accepted_nominal_constructor_backings.items.len,
+        self.dispatch_target_instantiations.items.len,
+        self.dispatch_derivations.items.len,
+        self.nested_template_links.items.len,
+        self.codec_derivation_frames.items.len,
+        self.cir.generated_codec_recurrences.items().len,
+        self.codec_derivation_children.items.len,
+        self.codec_derivation_recurrences.items.len,
+        self.component_derivations.items.len,
+        self.component_derived_relations.items.len,
+        self.dispatch_relation_owner_log.items.len,
+        self.problems.len(),
     };
 }
 
-fn probeUnifyWithoutRecordingProblems(
-    self: *Self,
-    expected: Var,
-    actual: Var,
-) Allocator.Error!bool {
-    return (try self.probeUnifyResultWithoutRecordingProblems(expected, actual)).isEstablished();
+/// Open a probe for `site`. `env` is the env whose var pool and deferred
+/// queue the probe's kept relations and fresh variables grow, when it has
+/// any. Probes never nest.
+fn beginProbe(self: *Self, site: SpeculationSite, env: ?*Env) Probe {
+    std.debug.assert(self.probe_depth == 0 and !self.commit_probe_active);
+    std.debug.assert(self.probe_links.items.len == 0 and self.probe_link_copies.items.len == 0);
+    std.debug.assert(self.probe_determined_literals.items.len == 0 and self.probe_absorbed_defaults.items.len == 0);
+    return .{
+        .site = site,
+        .mark = self.types.beginProbe(),
+        .regions_mark = self.var_regions.mark(),
+        .env = env,
+        .first_var = @fromBackingInt(@intCast(self.types.len())),
+        .deferred_len = if (env) |probe_env| probe_env.deferred_static_dispatch_constraints.items().len else 0,
+        .side_lists = self.probeSideLists(),
+    };
 }
 
-/// The raw unifier result of relating `expected` and `actual` against
-/// throwaway problem/snapshot stores, so a mismatch is neither recorded nor
-/// poisoned. Callers own any rollback of the type store.
-fn probeUnifyResultWithoutRecordingProblems(
-    self: *Self,
-    expected: Var,
-    actual: Var,
-) Allocator.Error!unifier.Result {
-    var probe_problems = try ProblemStore.initCapacity(self.gpa, 1);
-    defer probe_problems.deinit();
+/// Relate `b` to its expected type `a` inside `probe`, as `runUnify` would
+/// without its bookkeeping, which `probeKeep` gives a relation the site keeps
+/// in the probe. A mismatch is neither reported nor poisoned. A relation that
+/// stops at a row repeating a label notes the row on the probe when it
+/// predates the probe; `probeNo` normalizes it.
+fn probeRelate(self: *Self, probe: *Probe, a: Var, b: Var, opts: unifier.Options) Allocator.Error!unifier.Result {
+    std.debug.assert(self.types.probeOpen());
+    const unify_env = self.unifyEnv();
+    var unify_opts = opts;
+    unify_opts.on_mismatch = .write_no_report;
+    unify_opts.repeated_label_rows = .return_row;
+    const saved_fresh_region_var = self.unify_fresh_region_var;
+    self.unify_fresh_region_var = b;
+    defer self.unify_fresh_region_var = saved_fresh_region_var;
+    const result = try unifier.unify(&unify_env, a, b, unify_opts);
+    if (result == .mismatch and probe.repeated_label_row == null) {
+        if (self.unify_scratch.repeatedLabelRow()) |row| {
+            if (self.types.predatesProbe(row)) probe.repeated_label_row = .{ .row = row, .actual = b };
+        }
+    }
+    return result;
+}
 
-    var probe_snapshots = try SnapshotStore.initCapacity(self.gpa, 8);
-    defer probe_snapshots.deinit();
+/// Keep the relation `probeRelate` just ran in `probe`: its fresh variables are
+/// ranked in the probe's env and given `b`'s region, and its deferred dispatch
+/// constraints are queued, as `runUnify` does after a relation; the
+/// defaults it absorbed and the literals it determined wait for `probeYes`.
+fn probeKeep(self: *Self, probe: *Probe, b: Var) Allocator.Error!void {
+    const env = probe.env orelse unreachable; // a probe that keeps a relation has the env it ranks the relation's variables in
+    try self.probe_absorbed_defaults.appendSlice(self.gpa, self.unify_scratch.absorbed_record_defaults.items());
+    try self.probe_determined_literals.appendSlice(self.gpa, self.unify_scratch.determined_literals.items());
+    try self.adoptUnifyScratch(env, b, .current_group);
+}
 
-    var env = self.unifyEnv();
-    env.problems = &probe_problems;
-    env.snapshots = &probe_snapshots;
-    return try unifier.unify(&env, expected, actual, .{ .on_mismatch = .write_no_report });
+/// Keep everything `probe` wrote, then finish the relations it kept as
+/// `runUnify` finishes one: keep the defaults they absorbed and settle the
+/// literals they determined.
+fn probeYes(self: *Self, probe: *Probe) Allocator.Error!void {
+    self.noteProbeEnd(probe.site, true);
+    try self.types.endProbeYes();
+    try self.absorbed_defaults.appendSlice(self.gpa, self.probe_absorbed_defaults.items);
+    self.probe_absorbed_defaults.clearRetainingCapacity();
+    if (self.probe_determined_literals.items.len != 0) {
+        const env = probe.env orelse unreachable; // only a kept relation determines a literal, and keeping one needs the env
+        const determined_top = self.determined_literal_vars.items.len;
+        defer self.determined_literal_vars.shrinkRetainingCapacity(determined_top);
+        try self.determined_literal_vars.appendSlice(self.gpa, self.probe_determined_literals.items);
+        self.probe_determined_literals.clearRetainingCapacity();
+        self.pending_literals_scanned = 0;
+        try self.settlePendingLiteralsAt(env, .introduced, determined_top);
+    }
+    try self.registerProbeLinks();
+    self.debugAssertArraysInSync();
+}
+
+/// Discard everything `probe` wrote: the type store, the regions, the
+/// deferred-callable links and the probe's env are as they were when it
+/// began. A row repeating a label that stopped one of its relations is then
+/// normalized, which reports its conflict when it has one.
+fn probeNo(self: *Self, probe: *Probe) Allocator.Error!void {
+    self.discardProbe(probe);
+    if (probe.repeated_label_row) |repeated| {
+        const env = probe.env orelse unreachable; // a relation that can repeat a label runs in a probe with an env
+        try self.normalizeRowUnionOrReport(repeated.row, repeated.actual, env);
+    }
+}
+
+/// `probeNo` for a probe whose relations only decide a verdict and that has no
+/// env: a row repeating a label is a mismatch of the relation.
+fn probeDiscard(self: *Self, probe: *Probe) void {
+    std.debug.assert(probe.env == null);
+    self.discardProbe(probe);
+}
+
+fn discardProbe(self: *Self, probe: *Probe) void {
+    self.noteProbeEnd(probe.site, false);
+    self.types.endProbeNo(&probe.mark);
+    self.var_regions.truncate(probe.regions_mark);
+    for (self.probe_links.items) |link| {
+        self.use_instances.items[link.use].deferred_linked = false;
+    }
+    self.probe_links.clearRetainingCapacity();
+    self.probe_link_copies.clearRetainingCapacity();
+    self.probe_absorbed_defaults.clearRetainingCapacity();
+    self.probe_determined_literals.clearRetainingCapacity();
+    if (probe.env) |env| {
+        env.var_pool.dropVarsFrom(probe.first_var);
+        env.deferred_static_dispatch_constraints.shrinkRetainingCapacity(probe.deferred_len);
+        env.truncateClean(probe.deferred_len);
+    }
+    if (std.debug.runtime_safety) {
+        const now = self.probeSideLists();
+        for (probe.side_lists, now) |before, after| std.debug.assert(before == after);
+    }
+}
+
+/// `probeRelate` followed by `probeKeep` when the relation is accepted.
+fn probeUnify(self: *Self, probe: *Probe, a: Var, b: Var, opts: unifier.Options) Allocator.Error!unifier.Result {
+    const result = try self.probeRelate(probe, a, b, opts);
+    if (result.isAccepted()) try self.probeKeep(probe, b);
+    return result;
+}
+
+/// A probe whose site instantiates schemes inside it (design.md "Probes").
+/// Instantiation grows checker lists an ordinary probe leaves alone (scheme
+/// uses, dispatchers, open literals and the rest of `InstantiationMark`'s),
+/// so the probe also holds their lengths, and sets the probe flags
+/// (`probe_depth`, `commit_probe_active`) while it is open: what an
+/// instantiation and a dispatch pass do inside it depends on them
+/// (`recordAmbiguityCandidate` journals the flips a discarded probe resets,
+/// `instantiateVarHelpFromScheme` registers no use for whole-use replay, and
+/// `settlePendingLiteralsAt` leaves the literals the kept relations determine
+/// to the next dispatch pass).
+const InstantiatingProbe = struct {
+    probe: Probe,
+    lists: InstantiationMark,
+};
+
+fn beginInstantiatingProbe(self: *Self, site: SpeculationSite, env: *Env) InstantiatingProbe {
+    const probe = self.beginProbe(site, env);
+    const lists = self.markInstantiations(env);
+    self.commit_probe_active = true;
+    return .{ .probe = probe, .lists = lists };
+}
+
+/// Keep everything an instantiating probe wrote, finishing its relations
+/// while the probe flags are still set.
+fn instantiatingProbeYes(self: *Self, probing: *InstantiatingProbe) Allocator.Error!void {
+    std.debug.assert(self.commit_probe_active);
+    self.noteProbeEnd(probing.probe.site, true);
+    try self.types.endProbeYes();
+    try self.absorbed_defaults.appendSlice(self.gpa, self.probe_absorbed_defaults.items);
+    self.probe_absorbed_defaults.clearRetainingCapacity();
+    if (self.probe_determined_literals.items.len != 0) {
+        const determined_top = self.determined_literal_vars.items.len;
+        defer self.determined_literal_vars.shrinkRetainingCapacity(determined_top);
+        try self.determined_literal_vars.appendSlice(self.gpa, self.probe_determined_literals.items);
+        self.probe_determined_literals.clearRetainingCapacity();
+        self.pending_literals_scanned = 0;
+        try self.settlePendingLiteralsAt(probing.probe.env.?, .introduced, determined_top);
+    }
+    self.commit_probe_active = false;
+    try probing.lists.commit();
+    self.debugAssertArraysInSync();
+}
+
+/// Discard everything an instantiating probe wrote, its checker lists with
+/// its type store.
+fn instantiatingProbeNo(self: *Self, probing: *InstantiatingProbe) Allocator.Error!void {
+    std.debug.assert(self.commit_probe_active);
+    self.commit_probe_active = false;
+    probing.lists.rollback();
+    try self.probeNo(&probing.probe);
+}
+
+/// Relate `b` to its expected type `a` when the relation succeeds, keeping
+/// it with the bookkeeping `runUnify` gives it, and change nothing when it
+/// fails. A row repeating a label that the relation meets is normalized,
+/// which reports its conflict when it has one, and the relation is probed
+/// again.
+fn unifyIfRelates(self: *Self, site: SpeculationSite, a: Var, b: Var, env: *Env, opts: unifier.Options) Allocator.Error!bool {
+    while (true) {
+        var probe = self.beginProbe(site, env);
+        const result = try self.probeRelate(&probe, a, b, opts);
+        if (result.isEstablished()) {
+            try self.probeKeep(&probe, b);
+            try self.probeYes(&probe);
+            return true;
+        }
+        const retry = probe.repeated_label_row != null;
+        try self.probeNo(&probe);
+        if (!retry) return false;
+    }
 }
 
 /// Finalize still-open literal defaults at end of module checking, via the
@@ -44377,7 +44651,15 @@ fn distributeRecordOmittedDefaults(self: *Self) Allocator.Error!void {
     errdefer output.deinit(self.cir.gpa);
     for (self.record_constructions.items) |expr_idx| {
         if (self.hoistExprInvalidated(expr_idx) or self.erroneous_value_exprs.contains(expr_idx)) continue;
-        const resolved = self.types.resolveVar(ModuleEnv.varFrom(expr_idx));
+        var resolved = self.types.resolveVar(ModuleEnv.varFrom(expr_idx));
+        // An annotated or expected-typed literal builds its record on a
+        // separate body variable and relates its own variable to the
+        // annotation. When the annotation names an alias, the expression's
+        // root is that alias node, and unification related the alias's
+        // backing to the body's record class.
+        while (resolved.desc.content == .alias) {
+            resolved = self.types.resolveVar(self.types.getAliasBackingVar(resolved.desc.content.alias));
+        }
         if (resolved.desc.content == .err) continue;
         const group = by_root.get(resolved.var_) orelse continue;
         const seen = try emitted.getOrPut(expr_idx);
@@ -44405,6 +44687,7 @@ fn distributeRecordOmittedDefaults(self: *Self) Allocator.Error!void {
             });
         }
     }
+    std.mem.sort(ModuleEnv.RecordOmittedDefault, output.items(), {}, ModuleEnv.RecordOmittedDefault.lessThan);
     self.cir.record_omitted_defaults.deinit(self.cir.gpa);
     self.cir.record_omitted_defaults = output;
 }
@@ -44435,16 +44718,8 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     var recursive_defaults: std.ArrayList(PendingDefaultCheck) = .empty;
     defer recursive_defaults.deinit(self.gpa);
 
-    var evidence = DefaultWalkEvidence{
-        .omitted_defaults_by_expr = .init(self.gpa),
-        .next_omitted_default = try self.gpa.alloc(EvidenceLink, self.cir.record_omitted_defaults.items().len),
-    };
+    var evidence = DefaultWalkEvidence{};
     defer evidence.deinit(self.gpa);
-    for (self.cir.record_omitted_defaults.items(), 0..) |omitted, index| {
-        const entry = try evidence.omitted_defaults_by_expr.getOrPut(omitted.expr);
-        evidence.next_omitted_default[index] = if (entry.found_existing) .some(@fromBackingInt(entry.value_ptr.*)) else .none;
-        entry.value_ptr.* = @intCast(index);
-    }
 
     // Top-level binder pattern -> def body, for following reference edges
     // through def bodies during the residue walk. A destructuring def
@@ -44828,10 +45103,6 @@ fn linkedRecord(link: EvidenceLink) ?u32 {
 /// Prebuilt evidence indexes for one `checkDefaultRestrictions` run (built
 /// once, shared by every default's residue walk).
 const DefaultWalkEvidence = struct {
-    /// Construction -> first recorded omission, with links into the CIR table.
-    /// Built once so cycle walks consume exact omission evidence in O(fields).
-    omitted_defaults_by_expr: collections.DenseMap(CIR.Expr.Idx, u32),
-    next_omitted_default: []EvidenceLink,
     pattern_to_def_expr: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
     /// Local instantiating node -> its first scheme-use record index
     /// (`value_use`/`nested_function_use` slots only); `next_node_scheme_use`
@@ -44848,8 +45119,6 @@ const DefaultWalkEvidence = struct {
     next_instantiation: []EvidenceLink = &.{},
 
     fn deinit(evidence: *DefaultWalkEvidence, gpa: std.mem.Allocator) void {
-        evidence.omitted_defaults_by_expr.deinit();
-        gpa.free(evidence.next_omitted_default);
         evidence.pattern_to_def_expr.deinit(gpa);
         evidence.node_to_scheme_uses.deinit(gpa);
         gpa.free(evidence.next_node_scheme_use);
@@ -45172,7 +45441,6 @@ fn defaultMaterializationIsRecursive(
             .e_empty_record => {
                 if (try self.appendOmittedDefaultDependencies(
                     expr_idx,
-                    evidence,
                     self_module,
                     target_expr_node,
                     visited_defaults,
@@ -45184,7 +45452,6 @@ fn defaultMaterializationIsRecursive(
                 if (record.ext == null) {
                     if (try self.appendOmittedDefaultDependencies(
                         expr_idx,
-                        evidence,
                         self_module,
                         target_expr_node,
                         visited_defaults,
@@ -45434,16 +45701,12 @@ fn appendDefaultWalkStmtExprs(
 fn appendOmittedDefaultDependencies(
     self: *Self,
     record_expr: CIR.Expr.Idx,
-    evidence: *const DefaultWalkEvidence,
     self_module: base.ModuleIdentity.Idx,
     target_expr_node: u32,
     visited_defaults: *collections.DenseMapUnmanaged(u32, void),
     expr_work: *std.ArrayList(CIR.Expr.Idx),
 ) std.mem.Allocator.Error!bool {
-    var next = evidence.omitted_defaults_by_expr.get(record_expr);
-    while (next) |index| {
-        const omitted = self.cir.record_omitted_defaults.items()[index];
-        next = linkedRecord(evidence.next_omitted_default[index]);
+    for (ModuleEnv.RecordOmittedDefault.ofExpr(self.cir.record_omitted_defaults.items(), record_expr)) |omitted| {
         if (omitted.origin_module != self_module) continue;
         if (omitted.default_expr_node == target_expr_node) return true;
         const seen = try visited_defaults.getOrPut(self.gpa, omitted.default_expr_node);
@@ -45570,9 +45833,11 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
 /// The method is an override exactly when such an instance exists: its
 /// scheme, annotated or inferred, however general, can be used at `T -> Str`
 /// with every requirement the instance carries satisfied. Publication
-/// publishes the use's evidence as it does a dispatch target's. The method's
-/// own type is never changed: the instance is a fresh copy, related exactly
-/// as a call site at `T -> Str` relates one.
+/// publishes the use's evidence as it does a dispatch target's. A generalized
+/// method keeps its own type: the instance is a fresh copy, related exactly
+/// as a call site at `T -> Str` relates one. A method whose type is not
+/// generalized is its own instance, so a qualifying one's type becomes the
+/// instance.
 fn recordInspectOverrideInstances(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.cir.method_defs.entries.items()) |entry| {
         if (!entry.key.methodIdent().eql(self.cir.idents.to_inspect)) continue;
@@ -45587,10 +45852,17 @@ fn recordInspectOverrideInstances(self: *Self, env: *Env) std.mem.Allocator.Erro
 /// method cannot be used there. The returned use var is unified with that
 /// instance and names its dispatch-target scheme-use record.
 fn inspectOverrideStrInstance(self: *Self, def_idx: CIR.Def.Idx, owner: CIR.Statement.Idx, binding_var: Var, env: *Env) std.mem.Allocator.Error!?Var {
-    var probe = try self.beginCommitProbe(env);
-    var committed = false;
-    defer if (!committed) probe.rollback();
+    var probing = self.beginInstantiatingProbe(.inspect_override, env);
+    if (try self.probeInspectOverrideStrInstance(&probing.probe, def_idx, owner, binding_var, env)) |use_var| {
+        try self.instantiatingProbeYes(&probing);
+        return use_var;
+    }
+    try self.instantiatingProbeNo(&probing);
+    return null;
+}
 
+/// The relations of `inspectOverrideStrInstance`, inside its probe.
+fn probeInspectOverrideStrInstance(self: *Self, probe: *Probe, def_idx: CIR.Def.Idx, owner: CIR.Statement.Idx, binding_var: Var, env: *Env) std.mem.Allocator.Error!?Var {
     const region = self.getRegionAt(binding_var);
     const use_var = try self.fresh(env, region);
     const generalized = self.isBindingSchemeVar(binding_var) or self.types.resolveVar(binding_var).desc.rank == .generalized;
@@ -45601,7 +45873,7 @@ fn inspectOverrideStrInstance(self: *Self, def_idx: CIR.Def.Idx, owner: CIR.Stat
         } })
     else
         binding_var;
-    if (!(try probe.unify(use_var, instance)).isEstablished()) return null;
+    if (!(try self.probeUnify(probe, use_var, instance, .{})).isEstablished()) return null;
     const func = self.pureFunctionThroughAliases(instance) orelse return null;
     if (self.types.sliceVars(func.args).len != 1) return null;
 
@@ -45610,18 +45882,15 @@ fn inspectOverrideStrInstance(self: *Self, def_idx: CIR.Def.Idx, owner: CIR.Stat
     try self.collectInstanceRequirements(instance, &requirements);
 
     const owner_var = try self.instantiateVar(ModuleEnv.varFrom(owner), env, .{ .explicit = region }, .none);
-    if (!(try probe.unify(self.types.sliceVars(func.args)[0], owner_var)).isEstablished()) return null;
+    if (!(try self.probeUnify(probe, self.types.sliceVars(func.args)[0], owner_var, .{})).isEstablished()) return null;
     const str_var = try self.freshStr(env, region);
-    if (!(try probe.unify(str_var, func.ret)).isEstablished()) return null;
-    if (!try self.instanceRequirementsAccept(&probe, requirements.items, env)) return null;
+    if (!(try self.probeUnify(probe, str_var, func.ret, .{})).isEstablished()) return null;
+    if (!try self.instanceRequirementsAccept(probe, requirements.items, env)) return null;
 
     // Inspection calls the method at any instantiation of its owner, so the
     // instance's argument must still be the owner over distinct type
     // variables that carry no requirements.
     if (!self.isNominalOverDistinctUnconstrainedVars(func)) return null;
-
-    committed = true;
-    try probe.commit();
     return use_var;
 }
 
@@ -45691,7 +45960,7 @@ fn collectInstanceRequirements(self: *Self, root: Var, out: *std.ArrayListUnmana
 /// unbound is one the instance leaves to its uses.
 fn instanceRequirementsAccept(
     self: *Self,
-    probe: *CommitProbe,
+    probe: *Probe,
     requirements: []const InstanceRequirement,
     env: *Env,
 ) Allocator.Error!bool {
@@ -45734,13 +46003,13 @@ fn instanceRequirementsAccept(
 
 /// An interpolation producing a builtin `Str` makes each interpolated part a
 /// `Str`, exactly as a call site's does.
-fn interpolatedPartsAreStr(self: *Self, probe: *CommitProbe, constraint: StaticDispatchConstraint, env: *Env) Allocator.Error!bool {
+fn interpolatedPartsAreStr(self: *Self, probe: *Probe, constraint: StaticDispatchConstraint, env: *Env) Allocator.Error!bool {
     if (constraint.interpolation == .none) return true;
     const parts = self.types.getInterpolationMetadata(constraint.interpolation).interpolated_parts;
     for (0..parts.len()) |part_index| {
         const part = self.types.getInterpolationPartAt(parts, @intCast(part_index));
         const str_var = try self.freshStr(env, self.getRegionAt(part.var_));
-        if (!(try probe.unify(str_var, part.var_)).isEstablished()) return false;
+        if (!(try self.probeUnify(probe, str_var, part.var_, .{})).isEstablished()) return false;
     }
     return true;
 }
@@ -47327,46 +47596,55 @@ fn relateSameMethodRequirements(
     const duplicate = duplicate_requirement.constraint;
     const retained_fn_var = retained.fn_var;
     const deferred_start = env.deferred_static_dispatch_constraints.len();
-    var probe = try self.beginCommitProbe(env);
-    const result = try probe.unify(retained_fn_var, duplicate.fn_var);
+    var probe, const result = while (true) {
+        var probe = self.beginProbe(.same_method_requirements, env);
+        const result = try self.probeRelate(&probe, retained_fn_var, duplicate.fn_var, .{});
+        if (probe.repeated_label_row == null) break .{ probe, result };
+        try self.probeNo(&probe);
+    };
+    if (result.isEstablished()) try self.probeKeep(&probe, duplicate.fn_var);
+    // Whether the relation deferred obligations onto the types it related.
+    const defers = env.deferred_static_dispatch_constraints.len() != deferred_start;
     const conflict = conflict: {
         if (!result.isEstablished()) {
-            probe.rollback();
+            try self.probeNo(&probe);
             if (!result.isProblem()) return .erroneous;
             break :conflict true;
         }
-        if ((try occurs.occursOwnType(self.types, &self.occurs_scratch, retained_fn_var)) == .valid) break :conflict false;
+        if ((try occurs.occursOwnType(self.types, &self.occurs_scratch, retained_fn_var)) == .valid) {
+            if (!defers) {
+                try self.probeYes(&probe);
+                return .merged;
+            }
+            try self.probeNo(&probe);
+            break :conflict false;
+        }
         // The method's type is infinite. When either requirement's type
         // already was, the relation did not make it so: that type is the
         // problem, and the settled walk reports it.
-        probe.rollback();
+        try self.probeNo(&probe);
         if ((try occurs.occursOwnType(self.types, &self.occurs_scratch, retained_fn_var)) == .valid and
             (try occurs.occursOwnType(self.types, &self.occurs_scratch, duplicate.fn_var)) == .valid) break :conflict true;
-        probe = try self.beginCommitProbe(env);
-        const redo_result = try probe.unify(retained_fn_var, duplicate.fn_var);
-        std.debug.assert(redo_result.isEstablished());
         break :conflict false;
     };
     if (!conflict) {
-        if (env.deferred_static_dispatch_constraints.len() == deferred_start) {
-            try probe.commit();
+        // The rolled-back relation succeeded, so it is related again for
+        // real. When it deferred obligations onto the types it related, those
+        // fail as this method conflict, which is described by the two method
+        // types as they were before the relation, so they are recorded first.
+        if (!defers) {
+            const redo_result = try self.runUnify(retained_fn_var, duplicate.fn_var, env, .{ .on_mismatch = .write_no_report });
+            std.debug.assert(redo_result.isEstablished());
             return .merged;
         }
-        // The relation deferred obligations onto the types it related. Those
-        // fail as this method conflict, which is described by the two method
-        // types as they were before the relation, so the relation is redone
-        // after recording them.
-        probe.rollback();
         const merged: MergedMethodObligation = .{
             .conflict = try self.methodConflict(retained, duplicate, receiver_var),
             .first_fn_var = retained_fn_var,
             .use_var = self.methodConflictUseVar(duplicate_requirement, roots),
             .definitions = try self.recordMergedMethodDefinitions(roots),
         };
-        var redo = try self.beginCommitProbe(env);
-        const redo_result = try redo.unify(retained_fn_var, duplicate.fn_var);
+        const redo_result = try self.runUnify(retained_fn_var, duplicate.fn_var, env, .{ .on_mismatch = .write_no_report });
         std.debug.assert(redo_result.isEstablished());
-        try redo.commit();
         const deferred_end = env.deferred_static_dispatch_constraints.len();
         var deferred_index = deferred_start;
         while (deferred_index < deferred_end) : (deferred_index += 1) {
@@ -47384,7 +47662,7 @@ fn relateSameMethodRequirements(
         self.methodConflictUseVar(duplicate_requirement, roots),
         duplicate.fn_var,
     ));
-    self.types.assertNoSavepointActive();
+    self.types.assertNoProbeOpen();
     try self.types.poisonOnMismatch(receiver_var, receiver_var);
     for (roots) |root| {
         const definition = root.definition.get() orelse
@@ -47495,21 +47773,15 @@ fn methodConflictUseVar(self: *Self, duplicate: SameMethodRequirement, roots: []
 
 fn unifyEquivalentGeneralizedCallables(self: *Self, retained_fn_var: Var, duplicate_fn_var: Var, env: *Env) Allocator.Error!bool {
     if (self.types.resolveVar(retained_fn_var).var_ == self.types.resolveVar(duplicate_fn_var).var_) return false;
-    var probe = try self.beginCommitProbe(env);
-    const result = try probe.unify(retained_fn_var, duplicate_fn_var);
-    // `isEstablished`, not `!isProblem`: `.suppressed_by_error` means an
-    // existing `.err` stopped unification BEFORE the relation was established
-    // (src/check/unify.zig:130-132), and is accepted for diagnostic recovery
-    // only. Committing on it would make two callables one relation on the
-    // strength of a unification that never happened, and the checked-artifact
-    // side treats this probe's class as the equality authority
-    // (`where_method_use_by_fn_root`, src/check/checked_artifact.zig:17985).
-    if (result.isEstablished()) {
-        try probe.commit();
-        return true;
-    }
-    probe.rollback();
-    return false;
+    // Kept only when established, not merely not a problem:
+    // `.suppressed_by_error` means an existing `.err` stopped unification
+    // BEFORE the relation was established (src/check/unify.zig:130-132), and
+    // is accepted for diagnostic recovery only. Keeping it would make two
+    // callables one relation on the strength of a unification that never
+    // happened, and the checked-artifact side treats this class as the
+    // equality authority (`where_method_use_by_fn_root`,
+    // src/check/checked_artifact.zig:17985).
+    return self.unifyIfRelates(.equivalent_callables, retained_fn_var, duplicate_fn_var, env, .{});
 }
 
 /// Retire side-table requirements only after their exact deferred callable was
@@ -49294,9 +49566,9 @@ fn defaultDecidedRecordOfClass(self: *const Self, var_: Var) usize {
 /// Snapshot `var_` as the program wrote it: every class a defaulting decision
 /// chose shows the undetermined content it had before its default was
 /// committed, and literal-conversion requirements—the literal itself, not a
-/// requirement anyone wrote on its type—are left out. The restoration is
-/// written under a store savepoint that is always rolled back, so no solved
-/// type changes.
+/// requirement anyone wrote on its type—are left out. The snapshot only
+/// shows those classes that way (`snapshotVarForErrorWithFlexViews`); no
+/// solved type is written.
 fn snapshotPreDefaultType(self: *Self, var_: Var, stating_record: ?usize) Allocator.Error!snapshot_mod.SnapshotContentIdx {
     std.debug.assert(self.probe_depth == 0);
 
@@ -49331,20 +49603,20 @@ fn snapshotPreDefaultType(self: *Self, var_: Var, stating_record: ?usize) Alloca
         }
     }
 
-    var savepoint = try self.types.createSavepoint();
-    defer self.types.rollbackToSavepoint(&savepoint);
+    var views: SnapshotStore.FlexViews = .empty;
+    defer views.deinit(self.gpa);
+    try views.ensureTotalCapacity(self.gpa, groups.count());
     var groups_iter = groups.iterator();
     while (groups_iter.next()) |entry| {
-        const constraints = try self.types.appendStaticDispatchConstraints(entry.value_ptr.constraints.items);
-        try self.types.setClassContentInSavepoint(entry.key_ptr.*, .{ .flex = .{
+        views.putAssumeCapacity(entry.key_ptr.*, .{
             .name = entry.value_ptr.name,
-            .constraints = constraints,
-        } });
+            .constraints = entry.value_ptr.constraints.items,
+        });
     }
 
     self.type_writer.omit_literal_conversion_constraints = true;
     defer self.type_writer.omit_literal_conversion_constraints = false;
-    return try self.snapshots.snapshotVarForError(self.types, &self.type_writer, var_);
+    return try self.snapshots.snapshotVarForErrorWithFlexViews(self.types, &self.type_writer, var_, &views);
 }
 
 const PreDefaultGroup = struct {
@@ -49734,14 +50006,13 @@ fn literalAcceptsBuiltinNumKind(self: *const Self, constraint: StaticDispatchCon
 /// upstream of this check).
 ///
 /// Speculatively mutates the real stores (copyVar/instantiateVar, real
-/// unification) and does NOT roll them back itself—the caller's commit-probe
-/// rollback does (or its commit keeps them). The `*CommitProbe` parameter is a
-/// scope-proof token making that contract compile-time: this function is
-/// unreachable without an open commit-probe scope that settles the speculation one
-/// way or the other.
+/// unification) and does NOT discard them itself—the caller's instantiating
+/// probe does (or keeps them). The `*Probe` parameter is a scope-proof token
+/// making that contract compile-time: this function is unreachable without an
+/// open probe that settles the speculation one way or the other.
 fn staticDispatchConstraintAcceptsCandidate(
     self: *Self,
-    probe: *CommitProbe,
+    probe: *Probe,
     constraint: StaticDispatchConstraint,
     candidate_var: Var,
     env: *Env,
@@ -49773,8 +50044,8 @@ fn staticDispatchConstraintAcceptsCandidate(
     // The real unify wrapper, not the throwaway-store probe unify: on the commit
     // path this merge (and its rank/region/deferred-constraint bookkeeping) is
     // kept. The probe owns failure, so a mismatch must not run occurrence-directed
-    // poisoning while the store savepoint is active.
-    const result = try probe.unify(method_var, constraint.fn_var);
+    // poisoning while it is open.
+    const result = try self.probeUnify(probe, method_var, constraint.fn_var, .{});
     return result.isEstablished();
 }
 
@@ -49883,7 +50154,7 @@ fn relateResultValue(
     const problem_idx = try self.appendTypeMismatch(expected, actual, self.mismatchContext(ctx, actual));
     self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
     self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.actual_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(result_expr));
-    self.types.assertNoSavepointActive();
+    self.types.assertNoProbeOpen();
     try self.types.poisonOnMismatch(expected, actual);
     try self.markErroneousValueExpr(result_expr);
     return .{ .problem = problem_idx };
@@ -49916,15 +50187,18 @@ fn relateWidenedResultValue(
     try self.collectScopeRigids(&scope, expected, env);
     const related = if (widening) |w| w.wide_var else ModuleEnv.varFrom(actual_expr);
     if (scope.rigids.items.len != 0) {
-        var probe = try self.beginCommitProbe(env);
-        const result = try probe.unifyInContext(expected, related, ctx);
-        const accepted = result.isAccepted() and (widening == null or try self.liftKeptTailSources(env, ctx)) and !try scope.escapes(self);
+        var probe = self.beginProbe(.widened_result, env);
+        const result = try self.probeRelate(&probe, expected, related, unifyOptionsForContext(ctx, .write_no_report));
+        const accepted = result.isAccepted() and accepted: {
+            try self.probeKeep(&probe, related);
+            break :accepted (widening == null or try self.liftKeptTailSources(env, ctx, &probe)) and !try scope.escapes(self);
+        };
         if (accepted) {
-            try probe.commit();
+            try self.probeYes(&probe);
             if (widening) |w| try self.recordResultWidening(w, expected, ctx);
             return result;
         }
-        probe.rollback();
+        try self.probeNo(&probe);
         if (widening) |w| self.discardResultWidening(w);
         const result_expr = self.resultValueExpr(actual_expr);
         const idx = try self.appendTypeMismatch(expected, ModuleEnv.varFrom(result_expr), self.mismatchContext(ctx, ModuleEnv.varFrom(result_expr)));
@@ -49939,7 +50213,7 @@ fn relateWidenedResultValue(
         self.discardResultWidening(widening.?);
         return null;
     }
-    if (try self.liftKeptTailSources(env, ctx)) {
+    if (try self.liftKeptTailSources(env, ctx, null)) {
         try self.recordResultWidening(widening.?, expected, ctx);
         return result;
     }
@@ -49951,7 +50225,7 @@ fn relateWidenedResultValue(
     const problem_idx = try self.appendTypeMismatch(expected, actual, self.mismatchContext(ctx, actual));
     self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
     self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.actual_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(result_expr));
-    self.types.assertNoSavepointActive();
+    self.types.assertNoProbeOpen();
     try self.types.poisonOnMismatch(expected, actual);
     try self.markErroneousValueExpr(result_expr);
     return .{ .problem = problem_idx };
@@ -50097,24 +50371,25 @@ fn dischargeDeferredResultRelation(self: *Self, pending: DeferredResultRelation,
         if (self.types.resolveVar(copied.*).desc.content == .rigid) try self.scratch_vars.append(copied.*);
     }
 
-    // The relation runs under a savepoint so that a rejection reports the
+    // The relation runs in a probe so that a rejection reports the
     // variable's type as the enclosing scope determined it.
     const rows_start = self.widened_use_rows.items.len;
     const deferred_len = self.deferred_result_relations.items.len;
-    var probe = try self.beginCommitProbe(env);
+    var probe = self.beginProbe(.deferred_result, env);
     std.debug.assert(!self.result_relation_defers);
     self.result_relation_defers = true;
     const copy = try self.widenedClosedRowsCopy(pending.escaped, pending.value_expr, env, region, null);
     self.result_relation_defers = false;
     const related = copy orelse pending.escaped;
-    var accepted = (try self.runUnify(target, related, env, unifyOptionsForContext(pending.ctx, .write_no_report))).isAccepted();
-    if (accepted and copy != null) accepted = try self.liftKeptTailSources(env, pending.ctx);
+    var accepted = (try self.probeRelate(&probe, target, related, unifyOptionsForContext(pending.ctx, .write_no_report))).isAccepted();
+    if (accepted) try self.probeKeep(&probe, related);
+    if (accepted and copy != null) accepted = try self.liftKeptTailSources(env, pending.ctx, &probe);
     if (accepted) accepted = !(try self.varReachesAny(pending.escaped, self.scratch_vars.sliceFromStart(rigids_start)));
     if (accepted) {
-        try probe.commit();
+        try self.probeYes(&probe);
         return;
     }
-    probe.rollback();
+    try self.probeNo(&probe);
     self.widened_use_rows.shrinkRetainingCapacity(rows_start);
     self.deferred_result_relations.shrinkRetainingCapacity(deferred_len);
 
@@ -50124,7 +50399,7 @@ fn dischargeDeferredResultRelation(self: *Self, pending: DeferredResultRelation,
     try self.registerInstantiatedCopies(&instantiator, pending.expected, expected, region, env);
     const result_expr = self.resultValueExpr(pending.value_expr);
     try self.recordRolledBackTypeMismatch(ModuleEnv.varFrom(result_expr), expected, pending.ctx);
-    self.types.assertNoSavepointActive();
+    self.types.assertNoProbeOpen();
     try self.types.poisonOnMismatch(target, pending.escaped);
     try self.markErroneousValueExpr(result_expr);
 }
@@ -50589,31 +50864,36 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
         body_try = self.tryArgsFromVar(frame.body_result);
     }
     if (body_try == null) {
-        // Still not a `Try`: commit-probe a seed from the first concrete `?`
+        // Still not a `Try`: probe for a seed from the first concrete `?`
         // success parameter and a fresh error row. A rejected probe leaves the
         // body and its diagnostics untouched.
         for (constraints) |constraint| {
             if (constraint.kind != .try_suffix) continue;
             const actual = self.tryArgsFromVar(ModuleEnv.varFrom(constraint.actual_expr)) orelse continue;
 
-            var commit_probe = try self.beginCommitProbe(env);
-            var committed = false;
-            defer if (!committed) commit_probe.rollback();
-            const region = self.cir.store.getExprRegion(constraint.actual_expr);
-            const inferred_err = try self.fresh(env, region);
-            const inferred_try = try self.freshFromContent(
-                try self.mkTryContent(actual.ok, inferred_err),
-                env,
-                region,
-            );
-            const result = try commit_probe.unifyInContext(
-                frame.body_result,
-                inferred_try,
-                constraint.kind.problemContext(body_tail_try),
-            );
-            if (!result.isEstablished()) break;
-            committed = true;
-            try commit_probe.commit();
+            const seeded = while (true) {
+                var probe = self.beginProbe(.return_constraints, env);
+                const region = self.cir.store.getExprRegion(constraint.actual_expr);
+                const inferred_err = try self.fresh(env, region);
+                const inferred_try = try self.freshFromContent(
+                    try self.mkTryContent(actual.ok, inferred_err),
+                    env,
+                    region,
+                );
+                const result = try self.probeRelate(&probe, frame.body_result, inferred_try, unifyOptionsForContext(
+                    constraint.kind.problemContext(body_tail_try),
+                    .write_no_report,
+                ));
+                if (result.isEstablished()) {
+                    try self.probeKeep(&probe, inferred_try);
+                    try self.probeYes(&probe);
+                    break true;
+                }
+                const retry = probe.repeated_label_row != null;
+                try self.probeNo(&probe);
+                if (!retry) break false;
+            };
+            if (!seeded) break;
             body_try = self.tryArgsFromVar(frame.body_result);
             break;
         }
@@ -53984,8 +54264,11 @@ fn saveDeferredCallables(
 /// requirement callables a use's instantiation deferred exactly as that
 /// instantiation would have, continuing from what it copied and under its
 /// state, link each placeholder to its callable's copy, and register the
-/// copies as the instantiation would have.
-fn linkUseCallables(self: *Self, use_idx: u32) Allocator.Error!void {
+/// copies as the instantiation would have. `linker` is who links it: the
+/// unifier, through its deferred-callable hook, writes the redirect as one of
+/// its own writes (`Store.unifierDangerousSetVarRedirect`), which an open probe
+/// journals.
+fn linkUseCallables(self: *Self, comptime linker: CallableLinker, use_idx: u32) Allocator.Error!void {
     const use = self.use_instances.items[use_idx];
     if (use.deferred_linked) return;
     self.use_instances.items[use_idx].deferred_linked = true;
@@ -54011,7 +54294,10 @@ fn linkUseCallables(self: *Self, use_idx: u32) Allocator.Error!void {
     };
     for (self.use_deferred_callables.items[use.deferred_start..][0..use.deferred_len]) |deferred| {
         const copy = try instantiator.instantiateDeferredCallable(deferred);
-        try self.types.dangerousSetVarRedirect(.deferred_requirement_callable, deferred.placeholder, copy);
+        switch (linker) {
+            .unifier => try self.types.unifierDangerousSetVarRedirect(.deferred_requirement_callable, deferred.placeholder, copy),
+            .checker => try self.types.dangerousSetVarRedirect(.deferred_requirement_callable, deferred.placeholder, copy),
+        }
     }
     self.link_new_copies.clearRetainingCapacity();
     var copies = self.link_var_map.iterator();
@@ -54044,10 +54330,10 @@ fn linkUseCallables(self: *Self, use_idx: u32) Allocator.Error!void {
         },
     }
 
-    // Inside a probe the copies are part of the speculation: a rollback
-    // undoes them and the link with them, and the outermost commit
-    // registers them.
-    if (self.probe_depth != 0 or self.commit_probe_active) {
+    // Inside a probe, or while an instantiating probe's flags are set, the
+    // copies are part of the speculation: discarding the probe undoes them
+    // and the link with them, and keeping it registers them.
+    if (self.types.probeOpen() or self.probe_depth != 0 or self.commit_probe_active) {
         const copies_start: u32 = @intCast(self.probe_link_copies.items.len);
         try self.probe_link_copies.appendSlice(self.gpa, self.link_new_copies.items);
         try self.probe_links.append(self.gpa, .{
@@ -54165,7 +54451,7 @@ fn linkEntryUses(self: *Self, entry: DeferredConstraintCheck) Allocator.Error!vo
     if (self.uses_with_deferred_callables.items.len == 0) return;
     for (self.types.sliceStaticDispatchConstraints(entry.constraints)) |constraint| {
         const use_idx = self.use_instance_by_fn_var.get(constraint.fn_var) orelse continue;
-        try self.linkUseCallables(use_idx);
+        try self.linkUseCallables(.checker, use_idx);
     }
 }
 
@@ -54180,7 +54466,7 @@ fn linkDeferredUsesFrom(self: *Self, min_rank: Rank) Allocator.Error!void {
         if (!use.deferred_linked and use.state != .replayed and
             @backingInt(self.use_link_contexts.items[use.link.get().?].rank) >= @backingInt(min_rank))
         {
-            try self.linkUseCallables(use_idx);
+            try self.linkUseCallables(.checker, use_idx);
         }
         const done = self.use_instances.items[use_idx];
         const in_probe = self.probe_depth != 0 or self.commit_probe_active;
@@ -54198,11 +54484,14 @@ fn linkAllDeferredUses(self: *Self) Allocator.Error!void {
     try self.linkDeferredUsesFrom(.generalized);
 }
 
+/// Who links a use's deferred requirement callables (`linkUseCallables`).
+const CallableLinker = enum { unifier, checker };
+
 fn linkDeferredCallableHook(ctx: *anyopaque, placeholder: Var) Allocator.Error!void {
     const self: *Self = @ptrCast(@alignCast(ctx));
     const use_idx = self.use_instance_by_fn_var.get(placeholder) orelse
         base.invariant("a deferred requirement callable has no use to link it", .{});
-    try self.linkUseCallables(use_idx);
+    try self.linkUseCallables(.unifier, use_idx);
 }
 
 fn linkAllDeferredCallablesHook(ctx: *anyopaque) Allocator.Error!void {
@@ -54986,7 +55275,7 @@ fn replayDispatchTarget(
 
 /// Builds with runtime safety check every replay against the work it
 /// replaces: a fresh copy of the method's scheme related to this edge's
-/// callable, on a savepoint the check rolls back, must be exactly the frozen
+/// callable, in a probe the check discards, must be exactly the frozen
 /// instance the edge is about to share. The callable as that relation leaves
 /// it goes in `expected_callable`, for the replay's own result to match.
 fn verifyDispatchReplayAgainstFresh(
@@ -55006,10 +55295,10 @@ fn verifyDispatchReplayAgainstFresh(
     var fresh_tree: std.ArrayListUnmanaged(u8) = .empty;
     defer fresh_tree.deinit(self.gpa);
     {
-        var savepoint = try self.types.createSavepoint();
-        defer self.types.rollbackToSavepoint(&savepoint);
+        var probe = self.beginProbe(.dispatch_replay_check, null);
+        defer self.probeDiscard(&probe);
         const fresh_instance = try self.copySchemeForReplayCheck(scheme_root);
-        if (!(try self.probeUnifyResultWithoutRecordingProblems(fresh_instance, constraint.fn_var)).isEstablished()) {
+        if (!(try self.probeRelate(&probe, fresh_instance, constraint.fn_var, .{})).isEstablished()) {
             base.invariant("a replayed dispatch edge's callable does not relate to a fresh instance of its method", .{});
         }
         try self.appendReplayTree(fresh_instance, &fresh_tree);
@@ -55660,8 +55949,8 @@ fn deferredDispatchRelationWasRetained(
 }
 
 /// Record exact callable relations that this pass conclusively consumed. This
-/// is checker lifecycle data, so speculative commit-probes never update it;
-/// their committed constraints are revisited by the ordinary post-commit pass.
+/// is checker lifecycle data, so an instantiating probe never updates it; the
+/// constraints it keeps are revisited by the ordinary pass after it.
 /// Whether every relation of a queued entry was already consumed by an entry
 /// attributing its failure to the same use, so consuming it again could
 /// neither decide, record, nor report anything new. On a concrete receiver,
@@ -55862,7 +56151,7 @@ test "issue 12873: private codec copies register nested owners and preserve shar
     try std.testing.expectEqual(null, checker.active_scheme_root);
 
     const speculative = try checker.fresh(&use_env, Region.zero());
-    var probe = try checker.beginProbe(&use_env);
+    var probe = checker.markInstantiations(&use_env);
     try checker.recordDispatchRelationOwner(speculative);
     probe.rollback();
     try std.testing.expect(!checker.dispatch_relation_owners.contains(speculative));
@@ -56167,8 +56456,8 @@ fn resumeStaticDispatchDrain(
     self.scratch_deferred_static_dispatch_constraints.clearFrom(scratch_deferred_top);
     if (!self.commit_probe_active) try self.extendCleanDeferredPrefix(env, start);
 
-    // A failed commit-probe must leave checker side tables untouched along
-    // with the solved graph. Normal solve passes can retire requirements whose
+    // A discarded instantiating probe must leave checker side tables untouched
+    // along with the solved graph. Normal solve passes can retire requirements whose
     // receivers this pass conclusively discharged.
     if (!self.commit_probe_active and
         self.settled_static_dispatch_constraint_fns.count() != drain.settled_relations_before)
@@ -56674,23 +56963,27 @@ inline fn processDeferredDispatchEntryRelations(
                     // requirement not yet checked against it. A requirement
                     // the default rejects must not retype anything the
                     // relation's argument graph reaches, so the unify runs in
-                    // a commit-probe, which rewinds the store, the deferred
+                    // a probe, which discards the store's writes, the deferred
                     // queue, and the var-pool tails on mismatch. The failure
-                    // is reported below, after the rollback, as an
+                    // is reported below, after the probe is discarded, as an
                     // undetermined type: the default's own method signature
                     // is not a type the program wrote, so it is never shown.
-                    // Success commits—a default that satisfies a requirement
-                    // is real. An enclosing probe takes the explicit
-                    // non-poisoning path above instead of nesting another
-                    // savepoint.
-                    var probe = try self.beginCommitProbe(env);
-                    const probed_result = try probe.unifyInContext(method_var, constraint.fn_var, fn_ctx);
-                    if (probed_result.isEstablished()) {
-                        try probe.commit();
-                    } else {
-                        probe.rollback();
+                    // Success is kept—a default that satisfies a requirement
+                    // is real. An enclosing instantiating probe takes the
+                    // explicit non-poisoning path above instead of nesting
+                    // another probe.
+                    while (true) {
+                        var probe = self.beginProbe(.dispatch_method, env);
+                        const probed_result = try self.probeRelate(&probe, method_var, constraint.fn_var, unifyOptionsForContext(fn_ctx, .write_no_report));
+                        if (probed_result.isEstablished()) {
+                            try self.probeKeep(&probe, constraint.fn_var);
+                            try self.probeYes(&probe);
+                            break :fn_result probed_result;
+                        }
+                        const retry = probe.repeated_label_row != null;
+                        try self.probeNo(&probe);
+                        if (!retry) break :fn_result probed_result;
                     }
-                    break :fn_result probed_result;
                 };
                 switch (fn_result) {
                     .unified => {
@@ -56873,13 +57166,13 @@ fn recordInterpolationPartTypeMismatch(self: *Self, expected_var: Var, actual_va
     } });
 }
 
-/// Under an open commit-probe, validate the constraints already attached to an
+/// Inside an open probe, validate the constraints already attached to an
 /// interpolation part against builtin Str. Str discharges its primitive quote
 /// and interpolation conversions directly; every other obligation must resolve
 /// through the ordinary static-dispatch acceptance rule.
 fn interpolationPartConstraintsAcceptBuiltinStr(
     self: *Self,
-    probe: *CommitProbe,
+    probe: *Probe,
     constraints_range: StaticDispatchConstraint.SafeList.Range,
     expected_str_var: Var,
     env: *Env,
@@ -56914,20 +57207,17 @@ fn constrainInterpolationPartToStr(self: *Self, part: InterpolationPartMetadata,
     const constraints_range = contentConstraintRange(resolved_expr.desc.content) orelse StaticDispatchConstraint.SafeList.Range.empty();
 
     const compatible = blk: {
-        var probe = try self.beginCommitProbe(env);
-        var committed = false;
-        defer if (!committed) probe.rollback();
+        var probing = self.beginInstantiatingProbe(.interpolation_part, env);
 
-        // Keep successful writes for the commit path, but leave mismatch
-        // reporting and recovery to this function after the probe rolls back.
-        const result = try probe.unify(expected_str_var, part.var_);
-        if (!result.isEstablished()) break :blk false;
-        if (!try self.interpolationPartConstraintsAcceptBuiltinStr(&probe, constraints_range, expected_str_var, env)) {
+        // Keep successful writes when the probe is kept, but leave mismatch
+        // reporting and recovery to this function after it is discarded.
+        const accepted = (try self.probeUnify(&probing.probe, expected_str_var, part.var_, .{})).isEstablished() and
+            try self.interpolationPartConstraintsAcceptBuiltinStr(&probing.probe, constraints_range, expected_str_var, env);
+        if (!accepted) {
+            try self.instantiatingProbeNo(&probing);
             break :blk false;
         }
-
-        committed = true;
-        try probe.commit();
+        try self.instantiatingProbeYes(&probing);
         break :blk true;
     };
 
@@ -58042,7 +58332,7 @@ fn syncSnapshotGroundEpoch(self: *Self) void {
 /// inside a probe can become non-ground again when the probe rolls back, so
 /// a probe remembers nothing.
 fn rememberGroundTypes(self: *Self, roots: []const Var) Allocator.Error!void {
-    if (self.types.savepointActive()) return;
+    if (self.types.probeOpen()) return;
     self.syncSnapshotGroundEpoch();
     var marks = try self.computeGroundMarksKnowing(roots, &self.snapshot_ground_copies, .any);
     defer self.releaseGroundMarks(&marks);
@@ -60827,7 +61117,8 @@ test "issue 11444: complete imported schemes share a cache and roll back with th
 
     // Repeat after rollback to exercise reuse of the discarded type indices.
     for (0..2) |_| {
-        var transaction = try checker.beginProbe(null);
+        var probe = checker.beginProbe(.discarded_var_update, null);
+        var transaction = checker.markInstantiations(null);
         const ordinary = (try checker.resolveVarFromExternal(import_idx, @backingInt(nodes[0]))).?;
         const copied_type_count = checker.types.len();
         const method = try checker.importedSchemeFromSource(source.module_env, nodes[0]);
@@ -60848,6 +61139,7 @@ test "issue 11444: complete imported schemes share a cache and roll back with th
         try std.testing.expectEqual(second_method, second_ordinary.local_var);
         try std.testing.expectEqual(second_type_count, checker.types.len());
         transaction.rollback();
+        checker.probeDiscard(&probe);
 
         try std.testing.expectEqual(type_count, checker.types.len());
         try std.testing.expectEqual(cache_count, checker.imported_schemes.items.len);
@@ -60859,12 +61151,16 @@ test "issue 11444: complete imported schemes share a cache and roll back with th
     }
 
     // A committed import survives, including across later rolled-back hits.
-    var committed = try checker.beginProbe(null);
+    var kept = checker.beginProbe(.discarded_var_update, null);
+    var committed = checker.markInstantiations(null);
     const retained = try checker.importedSchemeFromSource(source.module_env, nodes[0]);
     try committed.commit();
-    var probe = try checker.beginProbe(null);
+    try checker.probeYes(&kept);
+    var probe = checker.beginProbe(.discarded_var_update, null);
+    var lists = checker.markInstantiations(null);
     try std.testing.expectEqual(retained, (try checker.resolveVarFromExternal(import_idx, @backingInt(nodes[0]))).?.local_var);
-    probe.rollback();
+    lists.rollback();
+    checker.probeDiscard(&probe);
     try std.testing.expect(checker.typeSchemeIndexForRoot(retained) != null);
     try std.testing.expect(checker.isBindingSchemeVar(retained));
     try std.testing.expectEqual(retained, try checker.importedSchemeFromSource(source.module_env, nodes[0]));
@@ -61241,7 +61537,7 @@ test "in-probe ambiguity escalation is journaled: rollback resets, commit keeps"
     // Escalation inside a probe that rolls back: the flip is reset and the
     // journal is drained.
     {
-        var probe = try checker.beginProbe(null);
+        var probe = checker.markInstantiations(null);
         try checker.recordAmbiguityCandidate(receiver, .creation, null, .value);
         try std.testing.expect(checker.ambiguity_candidates.items[candidate_idx].requires_current_resolution);
         probe.rollback();
@@ -61252,7 +61548,7 @@ test "in-probe ambiguity escalation is journaled: rollback resets, commit keeps"
     // Escalation inside a probe that commits: the flip is permanent and the
     // journal entry drops with the scope.
     {
-        var probe = try checker.beginProbe(null);
+        var probe = checker.markInstantiations(null);
         try checker.recordAmbiguityCandidate(receiver, .creation, null, .value);
         try probe.commit();
     }
@@ -61275,7 +61571,7 @@ test "in-probe row-tail observation is journaled: rollback resets, commit keeps"
     try std.testing.expectEqual(.value, checker.ambiguity_candidates.items[candidate_idx].position);
 
     {
-        var probe = try checker.beginProbe(null);
+        var probe = checker.markInstantiations(null);
         try checker.recordAmbiguityCandidate(receiver, .creation, null, .row_tail);
         try std.testing.expectEqual(.row_tail, checker.ambiguity_candidates.items[candidate_idx].position);
         probe.rollback();
@@ -61284,7 +61580,7 @@ test "in-probe row-tail observation is journaled: rollback resets, commit keeps"
     try std.testing.expectEqual(@as(usize, 0), checker.ambiguity_candidate_journal.items.len);
 
     {
-        var probe = try checker.beginProbe(null);
+        var probe = checker.markInstantiations(null);
         try checker.recordAmbiguityCandidate(receiver, .creation, null, .row_tail);
         try probe.commit();
     }
@@ -62446,7 +62742,7 @@ fn recordGeneratedCodecDerivationSnapshot(
         try self.scratch_region_vars.append(self.gpa, copied.*);
     }
     try self.setSortedVarsRegion(region);
-    if (!self.types.savepointActive()) {
+    if (!self.types.probeOpen()) {
         for (ground_marks.order.items, ground_marks.ground.items) |source, is_ground| {
             if (!is_ground) continue;
             const slot = try self.snapshot_ground_copies.getOrPut(self.gpa, source);
@@ -65960,8 +66256,8 @@ fn checkFlexVarConstraintCompatibility(
         const constraint = self.types.static_dispatch_constraints.items()[constraints_start + constraint_i];
 
         // A constraint already rejected durably has its diagnostic; the
-        // receiver stays flex after a rejected validation (the commit-probe
-        // rolls the attempt back without poisoning), so a later visit of the
+        // receiver stays flex after a rejected validation (the discarded probe
+        // leaves the attempt without poisoning), so a later visit of the
         // same equivalence class—another worklist entry or dispatcher record
         // resolving to it—must not re-validate and re-report the identical
         // mismatch.
@@ -66010,10 +66306,10 @@ fn checkFlexVarConstraintCompatibility(
         // An outer-arity difference is already an exact proof of failure and
         // avoids allocating a throwaway target instantiation. Every remaining
         // case is validated speculatively: instantiate the default owner's
-        // method and unify it against the recorded relation inside a
-        // commit-probe. Success commits in place—the real unify wrapper
-        // already propagated regions, ranks, and deferred constraints into the
-        // live env. Failure rolls the entire attempt back as one unit: the
+        // method and unify it against the recorded relation inside an
+        // instantiating probe. Success keeps it in place—the probe already
+        // propagated regions, ranks, and deferred constraints into the
+        // live env. Failure discards the entire attempt as one unit: the
         // store's partial merges, the nested obligations the incompatible
         // target's own scheme recorded, and every evidence buffer the attempt
         // grew—so a rejected target leaves the receiver, and every var
@@ -66025,23 +66321,22 @@ fn checkFlexVarConstraintCompatibility(
                 break :accepted false;
             }
 
-            var commit_probe = try self.beginCommitProbe(env);
-            var committed = false;
-            defer if (!committed) commit_probe.rollback();
+            var probing = self.beginInstantiatingProbe(.flex_constraint, env);
 
             const method_var = try self.instantiateVar(imported_scheme, env, .{ .explicit = region }, .{ .dispatch_target = .{
                 .node_idx = if (constraintIntroExpr(constraint)) |expr| @backingInt(expr) else 0,
                 .constraint_fn_var = constraint.fn_var,
             } });
 
-            // The mismatch is reported below, after the rollback, against the
-            // pristine relation—occurrence-directed poisoning must not run
-            // under the savepoint.
-            const result = try commit_probe.unify(method_var, constraint.fn_var);
-            if (!result.isEstablished()) break :accepted false;
-
-            committed = true;
-            try commit_probe.commit();
+            // The mismatch is reported below, after the probe is discarded,
+            // against the pristine relation—occurrence-directed poisoning
+            // must not run inside the probe.
+            const result = try self.probeUnify(&probing.probe, method_var, constraint.fn_var, .{});
+            if (!result.isEstablished()) {
+                try self.instantiatingProbeNo(&probing);
+                break :accepted false;
+            }
+            try self.instantiatingProbeYes(&probing);
             break :accepted true;
         };
         if (!target_accepted) reported: {
@@ -66132,15 +66427,277 @@ fn recordRolledBackTypeMismatch(self: *Self, actual: Var, expected: Var, ctx: pr
     } });
 }
 
-/// Probe whether `body_var` can be used as `target`, recording and committing
-/// nothing: run the non-recording raw-unifier probe inside a `beginProbe` scope,
-/// then always roll back. Nothing in the live solver state is disturbed. A
-/// relation stopped by an already-reported `.err` inside either type is
-/// accepted: that error owns the diagnostic, so the branch adds none.
+/// Small random types over a module's `Str`, `U64` and `Choice(a) := [Yes(a), No]`, for tests
+/// that compare ways of relating them (`RandomTypeGen.init`).
+const RandomTypeGen = struct {
+    checker: *Self,
+    random: std.Random,
+    str_content: Content,
+    u64_content: Content,
+    choice: types_mod.NominalType,
+    names: [6]Ident.Idx,
+    pool: std.ArrayListUnmanaged(Var) = .empty,
+
+    fn leafOrStructure(gen: *@This(), depth: u32) Allocator.Error!Var {
+        const store = gen.checker.types;
+        const choices: u32 = if (depth == 0) 6 else 15;
+        const var_ = switch (gen.random.uintLessThan(u32, choices)) {
+            0, 1 => if (gen.pool.items.len != 0)
+                gen.pool.items[gen.random.uintLessThan(usize, gen.pool.items.len)]
+            else
+                try store.fresh(),
+            2 => try store.fresh(),
+            3 => try store.freshFromContent(.{ .rigid = types_mod.Rigid.init(gen.names[0]) }),
+            4 => try store.freshFromContent(gen.str_content),
+            5 => try store.freshFromContent(gen.u64_content),
+            6 => try store.freshFromContent(try gen.checker.mkListContent(try gen.leafOrStructure(depth - 1))),
+            7 => try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{
+                try gen.leafOrStructure(depth - 1),
+                try gen.leafOrStructure(depth - 1),
+            }) } } }),
+            8, 9 => blk: {
+                const arg = try gen.leafOrStructure(depth - 1);
+                const ret = try gen.leafOrStructure(depth - 1);
+                const func: types_mod.Func = .{ .args = try store.appendVars(&.{arg}), .ret = ret };
+                break :blk try store.freshFromContent(.{ .structure = switch (gen.random.uintLessThan(u32, 3)) {
+                    0 => .{ .fn_pure = func },
+                    1 => .{ .fn_effectful = func },
+                    else => .{ .fn_unbound = func },
+                } });
+            },
+            10 => blk: {
+                const x = try gen.leafOrStructure(depth - 1);
+                const fields = if (gen.random.boolean())
+                    try store.appendRecordFields(&.{.{ .name = gen.names[2], .presence = try gen.fieldKind(x) }})
+                else
+                    try store.appendRecordFields(&.{
+                        .{ .name = gen.names[2], .presence = .required(x) },
+                        .{ .name = gen.names[3], .presence = try gen.fieldKind(try gen.leafOrStructure(depth - 1)) },
+                    });
+                const ext = if (gen.random.boolean())
+                    try store.freshFromContent(.{ .structure = .empty_record })
+                else
+                    try store.fresh();
+                break :blk try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
+            },
+            11, 12 => blk: {
+                const tag_a = try store.mkTag(gen.names[0], &.{});
+                const tag_b = try store.mkTag(gen.names[1], &.{try gen.leafOrStructure(depth - 1)});
+                const ext = if (gen.random.boolean())
+                    try store.freshFromContent(.{ .structure = .empty_tag_union })
+                else
+                    try store.fresh();
+                const tags: []const types_mod.Tag = if (gen.random.boolean()) &.{ tag_a, tag_b } else &.{tag_b};
+                const tag_union = try store.freshFromContent(try store.mkTagUnion(tags, ext));
+                if (gen.random.uintLessThan(u32, 4) == 0) try store.markAnnotationTagUnion(tag_union);
+                break :blk tag_union;
+            },
+            13 => try gen.choiceOf(try gen.leafOrStructure(depth - 1)),
+            14 => try gen.choiceTags(try gen.leafOrStructure(depth - 1)),
+            else => unreachable, // the choice is below `choices`
+        };
+        try gen.pool.append(gen.checker.gpa, var_);
+        return var_;
+    }
+
+    /// Two types of one shape whose leaves, field kinds and marks are
+    /// chosen apart, so their relation reaches deep pairs.
+    fn shapedPair(gen: *@This(), depth: u32) Allocator.Error![2]Var {
+        const store = gen.checker.types;
+        if (depth == 0 or gen.random.uintLessThan(u32, 4) == 0) {
+            return .{ try gen.leafOrStructure(0), try gen.leafOrStructure(0) };
+        }
+        var out: [2]Var = undefined;
+        switch (gen.random.uintLessThan(u32, 6)) {
+            5 => {
+                const payload = try gen.shapedPair(depth - 1);
+                const nominal = try gen.choiceOf(payload[0]);
+                const tags = try gen.choiceTags(payload[1]);
+                out = if (gen.random.boolean()) .{ nominal, tags } else .{ tags, nominal };
+            },
+            0 => {
+                const elems = try gen.shapedPair(depth - 1);
+                for (&out, elems) |*var_, elem| var_.* = try store.freshFromContent(try gen.checker.mkListContent(elem));
+            },
+            1 => {
+                const first = try gen.shapedPair(depth - 1);
+                const second = try gen.shapedPair(depth - 1);
+                for (&out, 0..) |*var_, side| var_.* = try store.freshFromContent(.{ .structure = .{ .tuple = .{
+                    .elems = try store.appendVars(&.{ first[side], second[side] }),
+                } } });
+            },
+            2 => {
+                const arg = try gen.shapedPair(depth - 1);
+                const ret = try gen.shapedPair(depth - 1);
+                for (&out, 0..) |*var_, side| {
+                    const func: types_mod.Func = .{ .args = try store.appendVars(&.{arg[side]}), .ret = ret[side] };
+                    var_.* = try store.freshFromContent(.{ .structure = if (gen.random.boolean()) .{ .fn_pure = func } else .{ .fn_unbound = func } });
+                }
+            },
+            3 => {
+                const x = try gen.shapedPair(depth - 1);
+                const ext = try store.freshFromContent(.{ .structure = .empty_record });
+                for (&out, 0..) |*var_, side| var_.* = try store.freshFromContent(.{ .structure = .{ .record = .{
+                    .fields = try store.appendRecordFields(&.{.{ .name = gen.names[2], .presence = try gen.fieldKind(x[side]) }}),
+                    .ext = if (gen.random.boolean()) ext else try store.freshFromContent(.{ .structure = .empty_record }),
+                } } });
+            },
+            else => {
+                const payload = try gen.shapedPair(depth - 1);
+                const ext = try store.freshFromContent(.{ .structure = .empty_tag_union });
+                for (&out, 0..) |*var_, side| {
+                    const tag = try store.mkTag(gen.names[1], &.{payload[side]});
+                    var_.* = try store.freshFromContent(try store.mkTagUnion(&.{tag}, ext));
+                    if (gen.random.uintLessThan(u32, 3) == 0) try store.markAnnotationTagUnion(var_.*);
+                }
+            },
+        }
+        return out;
+    }
+
+    /// `Choice(arg)`.
+    fn choiceOf(gen: *@This(), arg: Var) Allocator.Error!Var {
+        var nominal = gen.choice;
+        nominal.args = try gen.checker.types.appendVars(&.{arg});
+        return gen.checker.types.freshFromContent(.{ .structure = .{ .nominal_type = nominal } });
+    }
+
+    /// An anonymous union of some of `Choice`'s tags, or of a tag it
+    /// lacks, over a fresh extension.
+    fn choiceTags(gen: *@This(), payload: Var) Allocator.Error!Var {
+        const store = gen.checker.types;
+        const yes = try store.mkTag(gen.names[4], &.{payload});
+        const no = try store.mkTag(gen.names[5], &.{});
+        const other = try store.mkTag(gen.names[0], &.{});
+        const tags: []const types_mod.Tag = switch (gen.random.uintLessThan(u32, 4)) {
+            0 => &.{ no, yes },
+            1 => &.{yes},
+            2 => &.{no},
+            else => &.{ other, yes },
+        };
+        return store.freshFromContent(try store.mkTagUnion(tags, try store.fresh()));
+    }
+
+    fn fieldKind(gen: *@This(), value: Var) Allocator.Error!types_mod.RecordField.Presence {
+        const store = gen.checker.types;
+        return switch (gen.random.uintLessThan(u32, 5)) {
+            0, 1 => .required(value),
+            2 => .unknown(try store.fresh(), value),
+            3 => .unknown(try store.freshFromContent(.{ .field_presence = .required }), value),
+            else => .unknown(try store.freshFromContent(.{ .field_presence = .optional }), value),
+        };
+    }
+    const source =
+        \\text : Str
+        \\text = "t"
+        \\count : U64
+        \\count = 1
+        \\Choice(a) := [Yes(a), No]
+        \\pick : Choice(U64)
+        \\pick = Choice.No
+    ;
+
+    const TestEnv = @import("test/TestEnv.zig");
+
+    fn init(test_env: *TestEnv, random: std.Random) TestEnv.TestEnvError!RandomTypeGen {
+        const content_of = struct {
+            fn of(env: *TestEnv, name: []const u8) TestEnv.TestEnvError!Content {
+                return env.checker.types.resolveVar(ModuleEnv.varFrom(try env.defExpr(name))).desc.content;
+            }
+        }.of;
+        var names: [6]Ident.Idx = undefined;
+        for ([_][]const u8{ "A", "B", "x", "y", "Yes", "No" }, &names) |text, *name| name.* = try test_env.module_env.insertIdent(Ident.for_text(text));
+        return .{
+            .checker = &test_env.checker,
+            .random = random,
+            .str_content = try content_of(test_env, "text"),
+            .u64_content = try content_of(test_env, "count"),
+            .choice = (try content_of(test_env, "pick")).structure.nominal_type,
+            .names = names,
+        };
+    }
+
+    /// One pair to relate: two types drawn apart, a type and a structural
+    /// copy over the same leaves, or two types of one shape.
+    fn pair(gen: *RandomTypeGen) Allocator.Error![2]Var {
+        const depth = gen.random.uintLessThan(u32, 4);
+        return switch (gen.random.uintLessThan(u32, 3)) {
+            0 => .{ try gen.leafOrStructure(depth), try gen.leafOrStructure(depth) },
+            1 => blk: {
+                // A structural copy over the same leaves often relates.
+                const a = try gen.leafOrStructure(depth);
+                break :blk .{ a, try gen.checker.types.freshFromContent(gen.checker.types.resolveVar(a).desc.content) };
+            },
+            else => try gen.shapedPair(depth),
+        };
+    }
+};
+
+test "a probe relates random small type pairs as a direct relation does, and a discarded probe changes nothing" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var prng_asked = std.Random.DefaultPrng.init(0xa5c);
+    var prng_direct = std.Random.DefaultPrng.init(0xa5c);
+    var kept: usize = 0;
+    var discarded: usize = 0;
+    var pairs: usize = 0;
+    // A relation that fails leaves the directly related store apart from
+    // the probed one, so both start again from a freshly checked module.
+    envs: while (pairs < 1500) {
+        var probed_env = try TestEnv.initOpen("Probe", RandomTypeGen.source);
+        defer probed_env.deinit();
+        var direct_env = try TestEnv.initOpen("Probe", RandomTypeGen.source);
+        defer direct_env.deinit();
+        const probed = &probed_env.checker;
+        const direct = &direct_env.checker;
+        var probed_gen = try RandomTypeGen.init(&probed_env, prng_asked.random());
+        defer probed_gen.pool.deinit(probed.gpa);
+        var direct_gen = try RandomTypeGen.init(&direct_env, prng_direct.random());
+        defer direct_gen.pool.deinit(direct.gpa);
+        var probed_solver = try probed.env_pool.acquire();
+        defer probed.env_pool.release(probed_solver);
+        var direct_solver = try direct.env_pool.acquire();
+        defer direct.env_pool.release(direct_solver);
+        // The generated types are at the outermost rank.
+        try probed_solver.var_pool.pushRank();
+        try direct_solver.var_pool.pushRank();
+        try probed.types.expectSameSolvedTypes(direct.types);
+
+        while (pairs < 1500) {
+            pairs += 1;
+            const a = try probed_gen.pair();
+            try std.testing.expectEqual(a, try direct_gen.pair());
+            var before = try probed.types.testCopy();
+            defer before.deinit(probed.gpa);
+            var probe = probed.beginProbe(.discarded_var_update, &probed_solver);
+            const probed_result = try probed.probeRelate(&probe, a[0], a[1], .{});
+            try std.testing.expect(probe.repeated_label_row == null);
+            const direct_result = try direct.runUnify(a[0], a[1], &direct_solver, .{ .on_mismatch = .write_no_report });
+            try std.testing.expectEqual(direct_result.isEstablished(), probed_result.isEstablished());
+            if (probed_result.isEstablished()) {
+                try probed.probeKeep(&probe, a[1]);
+                try probed.probeYes(&probe);
+                try probed.types.expectSameSolvedTypes(direct.types);
+                kept += 1;
+            } else {
+                try probed.probeNo(&probe);
+                try probed.types.expectRestoredTo(&before);
+                discarded += 1;
+                continue :envs;
+            }
+        }
+    }
+    try std.testing.expect(kept > 100 and discarded > 100);
+}
+
+/// Probe whether `body_var` can be used as `target` without leaking a rigid of
+/// `scope`, keeping nothing: the probe is always discarded, so nothing in the
+/// live solver state is disturbed. A relation stopped by an already-reported
+/// `.err` inside either type is accepted: that error owns the diagnostic, so
+/// the branch adds none.
 fn probeBranchCompatible(self: *Self, body_var: Var, target: Var, scope: *const ResultScope) std.mem.Allocator.Error!bool {
-    var probe = try self.beginProbe(null);
-    defer probe.rollback();
-    return (try self.probeUnifyResultWithoutRecordingProblems(body_var, target)).isAccepted() and !try scope.escapes(self);
+    var probe = self.beginProbe(.branch_compatible, null);
+    defer self.probeDiscard(&probe);
+    return (try self.probeRelate(&probe, body_var, target, .{})).isAccepted() and !try scope.escapes(self);
 }
 
 /// Record a branch-vs-`mismatch_against` diagnostic (actual = the expression
@@ -66186,7 +66743,7 @@ const BranchBodyRelation = enum { related, rejected };
 ///      return type. Reported against `expected_ret`. This MUST stay a
 ///      rolled-back probe—branches never merge into the shared annotation var
 ///      (see above).
-///   2. One real unify against `acc` inside a `CommitProbe`: the fold and the
+///   2. One relation against `acc` inside a probe: the fold and the
 ///      compatibility check are the same operation. Success, or a relation
 ///      stopped by an already-reported `.err`, commits in place—the wrapper
 ///      already propagated regions/rank/deferred-constraints into the live
@@ -66194,7 +66751,7 @@ const BranchBodyRelation = enum { related, rejected };
 ///      annotation yet diverges from an earlier sibling already folded in—only
 ///      observable when the annotation is LOOSER than the accumulated branches,
 ///      e.g. an inferred `_` return, where step (1) passes for every branch but
-///      the branches still disagree. The commit-probe rollback then restores every
+///      the branches still disagree. Discarding the probe then restores every
 ///      store and buffer (including the unifier's own mismatch problem and
 ///      snapshots), leaving `body_var` and `acc` pristine, and the mismatch is
 ///      reported against `acc`.
@@ -66240,7 +66797,8 @@ fn checkBranchBodyAgainstExpected(
     // Probe (1): does the body match the annotated return type? That relation
     // reads only this branch's value.
     try self.collectScopeRigids(&scope, expected_ret, env);
-    if (!try self.probeBranchCompatible(related_var, expected_ret, &scope)) {
+    const compatible = try self.probeBranchCompatible(related_var, expected_ret, &scope);
+    if (!compatible) {
         if (widening) |w| self.discardResultWidening(w);
         const previous_relation = try self.enterRelation(.of(.value, body_expr_idx, 0));
         try self.reportBranchMismatchAndPoison(body_expr_idx, expected_ret, ctx);
@@ -66252,23 +66810,24 @@ fn checkBranchBodyAgainstExpected(
     const previous_relation = try self.enterRelation(branchRelationOwner(ctx));
     defer self.relation_owner = previous_relation;
 
-    // Step (2): fold the body into the accumulator with one real unify inside a
-    // commit-probe. Success keeps the merge (regions/rank/deferred constraints
+    // Step (2): fold the body into the accumulator with one relation inside a
+    // probe. Success keeps the merge (regions/rank/deferred constraints
     // already propagated into env); failure falls through to the report below
-    // AFTER the scope's rollback, so the snapshots it takes see the pristine vars.
+    // AFTER the probe is discarded, so the snapshots it takes see the pristine vars.
     {
-        var commit_probe = try self.beginCommitProbe(env);
-        var committed = false;
-        defer if (!committed) commit_probe.rollback();
-
-        const result = try commit_probe.unifyInContext(related_var, acc, ctx);
-        if (result.isAccepted() and (widening == null or try self.liftKeptTailSources(env, ctx))) {
-            committed = true;
-            try commit_probe.commit();
+        var probe = self.beginProbe(.branch_fold, env);
+        const result = try self.probeRelate(&probe, related_var, acc, unifyOptionsForContext(ctx, .write_no_report));
+        const accepted = result.isAccepted() and accepted: {
+            try self.probeKeep(&probe, acc);
+            break :accepted widening == null or try self.liftKeptTailSources(env, ctx, &probe);
+        };
+        if (accepted) {
+            try self.probeYes(&probe);
             if (widening) |w| try self.recordResultWidening(w, acc, ctx);
             try self.claimRecordedProblems();
             return .related;
         }
+        try self.probeNo(&probe);
         if (widening) |w| self.discardResultWidening(w);
     }
 
@@ -67100,4 +67659,17 @@ test "a dispatch state repeats a row label exactly when the canonical key writer
         const other = try Case.tagRow(store, &.{a}, empty_tags);
         try Case.expectAgreement(checker, receiver, try Case.callable(store, other), false);
     }
+}
+
+test "an unconstrained to_inspect taking any value is an inspect override" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("Insp",
+        \\Foo := [Foo].{
+        \\    to_inspect : a -> Str
+        \\    to_inspect = |_| "foo"
+        \\}
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), test_env.module_env.inspect_override_instances.len());
 }

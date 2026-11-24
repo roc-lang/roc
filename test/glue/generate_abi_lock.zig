@@ -46,7 +46,9 @@ fn declaration(comptime T: type, comptime name: []const u8, comptime lang: Langu
         return if (lang == .c)
             returnType(f.return_type.?, lang) ++ " (*" ++ name ++ ")(" ++ args ++ ")"
         else
-            name ++ ": extern \"C\" fn(" ++ args ++ ") -> " ++ returnType(f.return_type.?, lang);
+            // A callback's contract is on the pointers it is handed, so Rust
+            // spells it as an `unsafe` function pointer.
+            name ++ ": unsafe extern \"C\" fn(" ++ args ++ ") -> " ++ returnType(f.return_type.?, lang);
     }
     return if (lang == .c) scalar(T, lang) ++ " " ++ name else name ++ ": " ++ scalar(T, lang);
 }
@@ -133,11 +135,10 @@ fn output(comptime lang: Language) []const u8 {
             result = result ++ "const _: fn(" ++ name ++ ") = |value| { let _: " ++ d[colon + 2 ..] ++ " = value; };\n";
         }
         for (@typeInfo(builtins.host_abi.ExternHostFns).@"struct".decl_names) |decl_name| {
-            // Rust foreign declarations are unsafe to call, unlike vtable callbacks.
             const T = @field(builtins.host_abi.ExternHostFns, decl_name);
             const d = declaration(T, "_", lang);
             const colon = std.mem.findScalar(u8, d, ':').?;
-            result = result ++ "const _: unsafe " ++ d[colon + 2 ..] ++ " = " ++ decl_name ++ ";\n";
+            result = result ++ "const _: " ++ d[colon + 2 ..] ++ " = " ++ decl_name ++ ";\n";
         }
     }
     return result;
@@ -151,6 +152,12 @@ pub fn main(init: std.process.Init) GenerateError!void {
     if (args.len != 4) return error.ExpectedHeaderRustInputRustOutput;
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[1], .data = comptime output(.c) });
     const rust = try std.Io.Dir.cwd().readFileAlloc(init.io, args[2], init.arena.allocator(), .limited(16 * 1024 * 1024));
-    const combined = try std.mem.concat(init.arena.allocator(), u8, &.{ rust, "\n", comptime output(.rust) });
+    // The canonical mirrors exist only to be compared against, so nothing reads them.
+    const combined = try std.mem.concat(init.arena.allocator(), u8, &.{
+        rust,
+        "\n#[allow(dead_code)]\nmod canonical_host_abi_lock {\nuse super::*;\n",
+        comptime output(.rust),
+        "}\n",
+    });
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[3], .data = combined });
 }

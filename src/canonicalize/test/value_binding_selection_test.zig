@@ -155,6 +155,36 @@ test "platform header targets and hosted rewrite share top-level selection" {
     }
 }
 
+test "a default app's echo! is its one hosted definition" {
+    const source =
+        \\main! = |_args| {
+        \\    echo!("hi")
+        \\    Ok({})
+        \\}
+    ;
+
+    const allocator = std.testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+    var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
+    defer can.deinit();
+    try can.canonicalizeFile();
+
+    try std.testing.expect(env.module_kind == .default_app);
+    const echo = findAssignedDef(&env, env.all_defs, "echo!") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(.e_hosted_lambda, std.meta.activeTag(env.store.getExpr(env.store.getDef(echo).expr)));
+    try std.testing.expectEqualSlices(CIR.Def.Idx, &.{echo}, env.store.sliceDefs(env.hosted_defs));
+}
+
 test "canonicalization records the top-level def owning each def, expression and pattern node" {
     const source =
         \\pair = (1, (2, 3))

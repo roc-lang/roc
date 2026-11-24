@@ -9,7 +9,7 @@ source_escapes=true
 t=|(0|(#\r))|0
 ~~~
 # EXPECTED
-MISPLACED CARRIAGE RETURN - :0:0:0:0
+MISPLACED CARRIAGE RETURN - fuzz_crash_084.md:1:9:1:10
 NOT IMPLEMENTED - fuzz_crash_084.md:1:5:1:11
 # PROBLEMS
 ~~~clojure
@@ -17,9 +17,11 @@ NOT IMPLEMENTED - fuzz_crash_084.md:1:5:1:11
 	(report
 		(severity runtime_error)
 		(title "Misplaced Carriage Return")
+		(region (start 1 9) (end 1 10))
 		(headline
 			(reflow "Carriage return characters (\\r) are not allowed in Roc source code."))
-		(document))
+		(document
+			(source-region (file "fuzz_crash_084.md") (start 1 9) (end 1 10) (annotation error) (line-text "t=|(0|(#\r))|0"))))
 	(report
 		(severity fatal)
 		(title "Not Implemented")

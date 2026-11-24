@@ -26,7 +26,11 @@ make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
 	input = GlueInput.from_types(types_list)
 	type_table = TypeTable.from_list(input.types)
-	zig_content = generate_zig_file(input.hosted_functions, type_table, input.provides_entries)
+	symbols = TypeNamePlan.platform_symbols(input.hosted_functions, input.provides_entries)
+	undeclarable_symbol_zig(symbols)?
+	renamed_roots = renamed_roots_zig(input.hosted_functions, input.provides_entries, type_table, symbols)?
+	duplicate_names = duplicate_type_names(input.hosted_functions, type_table, symbols, renamed_roots)?
+	zig_content = generate_zig_file(input.hosted_functions, type_table, input.provides_entries, duplicate_names)
 
 	Ok([{ name: "roc_platform_abi.zig", content: zig_content }])
 }
@@ -35,13 +39,20 @@ make_glue = |types_list| {
 # TypeRepr-based Type Mapping
 # =============================================================================
 
-## Roc names that more than one host type is emitted under: named multi-variant
-## tag unions and named records whose name appears in the type table with
-## different shapes. The result is computed once per glue run and reused while
-## rendering type names.
-duplicate_type_names : TypeTable -> List(Str)
-duplicate_type_names = |type_table|
-	List.concat(type_table.duplicate_tag_union_names(), type_table.duplicate_record_names())
+## Roc names emitted under id-derived names. For host types these are the
+## named multi-variant tag unions and named records whose name appears in the
+## type table with different shapes, and those whose declarations would
+## collide with another declaration in the generated file; they take
+## shape-derived names. `renamed_roots` are the hosted functions and provided
+## entries that take index-derived names. The result is computed once per glue
+## run and reused while rendering names.
+duplicate_type_names : List(HostedFunctionInfo), TypeTable, List(Str), List(Str) -> Try(List(Str), Str)
+duplicate_type_names = |hosted_functions, type_table, symbols, renamed_roots|
+	TypeNamePlan.disambiguated(
+		List.concat(reserved_type_names_zig(hosted_functions, type_table, renamed_roots), symbols),
+		List.concat(renamed_roots, List.concat(type_table.duplicate_tag_union_names(), type_table.duplicate_record_names())),
+		|renamed| declared_types_zig(type_table, renamed),
+	)
 
 ## Return the default Zig type name for a multi-variant tag union.
 ##
@@ -80,35 +91,464 @@ hosted_module_name_to_struct_name = |name|
 		}
 	}
 
-generated_type_names_zig : TypeTable, List(Str) -> List(Str)
-generated_type_names_zig = |type_table, duplicate_names| {
-	var $names = []
+## Type names the runtime support in every generated file declares, at the top
+## level or in a nested scope. Zig rejects a nested declaration, parameter, or
+## local that shares its name with a top-level one, so a host type declared
+## under any of them would not compile.
+runtime_type_names_zig : List(Str)
+runtime_type_names_zig = [
+	"DefaultAllocators",
+	"DefaultHandlers",
+	"ItemRelease",
+	"ListType",
+	"PayloadRelease",
+	"PayloadType",
+	"RocBox",
+	"RocBoxPayloadDecref",
+	"RocBoxRelease",
+	"RocBoxSpineRelease",
+	"RocDec",
+	"RocEnv",
+	"RocErasedCallable",
+	"RocErasedCallableFn",
+	"RocErasedCallableOnDrop",
+	"RocErasedCallablePayload",
+	"RocErasedCallableRelease",
+	"RocHeldList",
+	"RocHost",
+	"RocI16x8",
+	"RocI32x4",
+	"RocI64x2",
+	"RocI8x16",
+	"RocIo",
+	"RocList",
+	"RocListRelease",
+	"RocListSpineRelease",
+	"RocListWith",
+	"RocNoopRelease",
+	"RocOpaqueList",
+	"RocStr",
+	"RocStrRelease",
+	"RocU16x8",
+	"RocU32x4",
+	"RocU64x2",
+	"RocU8x16",
+	"Self",
+	"T",
+	"VTable",
+	"ValueType",
+]
+
+## Names the generated file declares whatever the type table's own types are
+## named: the runtime support's, which include the functions a refcount helper
+## named after a type could be mistaken for, and each hosted function's
+## argument and result types.
+reserved_type_names_zig : List(HostedFunctionInfo), TypeTable, List(Str) -> List(Str)
+reserved_type_names_zig = |hosted_functions, type_table, renamed| {
+	arg_shape = ArgShape.from_table(type_table)
+	var $names = List.concat(runtime_type_names_zig, runtime_value_names_zig)
+
+	for func in hosted_functions {
+		$names = List.concat($names, hosted_type_names_zig(arg_shape, renamed, func))
+	}
+
+	$names
+}
+
+## Names other than type names that the generated file declares whatever the
+## platform holds: the runtime support's top-level functions, constants, and
+## imports, and every parameter, local, capture, and unqualified nested
+## declaration in the file. The file declares each platform symbol at the top
+## level under the symbol's own name, and Zig rejects a top-level name that any
+## of these shares.
+runtime_value_names_zig : List(Str)
+runtime_value_names_zig = [
+	"align_enum",
+	"alignment",
+	"alloc_addr",
+	"alloc_align",
+	"alloc_alignment",
+	"alloc_ptr",
+	"allocate",
+	"allocateBox",
+	"allocator",
+	"amount",
+	"base",
+	"base_ptr",
+	"boxDataPtr",
+	"boxRefcountPtr",
+	"builtin",
+	"bytes",
+	"callable",
+	"callable_fn_ptr",
+	"callback",
+	"capacity_or_alloc_ptr",
+	"capture_size",
+	"copy_size",
+	"count",
+	"data",
+	"data_addr",
+	"data_bytes",
+	"data_ptr",
+	"decrefBox",
+	"decrefBoxWith",
+	"decrefErasedCallable",
+	"dest",
+	"dropErasedCallablePayload",
+	"elements_ptr",
+	"elements_refcounted",
+	"empty",
+	"env",
+	"extra_bytes",
+	"freeBoxAllocation",
+	"freeBoxWith",
+	"freestanding",
+	"freestandingOnFatal",
+	"freestandingWriteStderr",
+	"freestanding_vtable",
+	"header_bytes",
+	"increfBox",
+	"increfErasedCallable",
+	"isUniqueBox",
+	"item",
+	"len",
+	"length",
+	"list",
+	"makeRocHost",
+	"min_alignment",
+	"native",
+	"nativeOnFatal",
+	"nativeWriteStderr",
+	"native_vtable",
+	"new_base_ptr",
+	"new_length",
+	"new_size_ptr",
+	"new_total_size",
+	"new_user_ptr",
+	"old_base_ptr",
+	"old_size_ptr",
+	"old_total_size",
+	"old_user_data_size",
+	"old_user_ptr",
+	"on_drop",
+	"payload",
+	"payload_alignment",
+	"payload_contains_refcounted",
+	"payload_decref",
+	"payload_size",
+	"prev",
+	"ptr",
+	"ptr_width",
+	"rc",
+	"releasePayload",
+	"required_space",
+	"result",
+	"retainListAllocation",
+	"rocErasedCallableAllocate",
+	"rocErasedCallableCapturePtr",
+	"rocErasedCallablePayloadPtr",
+	"rocErasedCallablePayloadSize",
+	"rocReleasePolicy",
+	"roc_erased_callable_capture_alignment",
+	"roc_erased_callable_capture_offset",
+	"roc_erased_callable_payload_alignment",
+	"roc_host",
+	"seamless_slice_tag",
+	"self",
+	"size_ptr",
+	"size_storage_bytes",
+	"slice",
+	"small_str_bit",
+	"small_string_size",
+	"src",
+	"std",
+	"total",
+	"total_size",
+	"value",
+]
+
+## Words Zig keeps for itself, which cannot name a declaration: its keywords,
+## its literals, and its primitive types other than the sized integers.
+keywords_zig : List(Str)
+keywords_zig = [
+	"addrspace",
+	"align",
+	"allowzero",
+	"and",
+	"anyerror",
+	"anyframe",
+	"anyopaque",
+	"anytype",
+	"asm",
+	"bool",
+	"break",
+	"c_char",
+	"c_int",
+	"c_long",
+	"c_longdouble",
+	"c_longlong",
+	"c_short",
+	"c_uint",
+	"c_ulong",
+	"c_ulonglong",
+	"c_ushort",
+	"callconv",
+	"catch",
+	"comptime",
+	"comptime_float",
+	"comptime_int",
+	"const",
+	"continue",
+	"defer",
+	"else",
+	"enum",
+	"errdefer",
+	"error",
+	"export",
+	"extern",
+	"f128",
+	"f16",
+	"f32",
+	"f64",
+	"f80",
+	"false",
+	"fn",
+	"for",
+	"if",
+	"inline",
+	"isize",
+	"linksection",
+	"noalias",
+	"noinline",
+	"noreturn",
+	"nosuspend",
+	"null",
+	"opaque",
+	"or",
+	"orelse",
+	"packed",
+	"pub",
+	"resume",
+	"return",
+	"struct",
+	"suspend",
+	"switch",
+	"test",
+	"threadlocal",
+	"true",
+	"try",
+	"type",
+	"undefined",
+	"union",
+	"unreachable",
+	"usize",
+	"var",
+	"void",
+	"volatile",
+	"while",
+]
+
+## True for the names of Zig's sized integer types: `u` or `i` and a bit count.
+is_sized_integer_name_zig : Str -> Bool
+is_sized_integer_name_zig = |name| {
+	bytes = Str.to_utf8(name)
+	match List.first(bytes) {
+		Ok(first) => (first == 'u' or first == 'i') and List.len(bytes) > 1 and List.all(List.drop_first(bytes, 1), |byte| byte >= '0' and byte <= '9')
+		Err(_) => Bool.False
+	}
+}
+
+## An error when the generated file cannot declare one of the platform's
+## symbols under its own name: the name is a keyword or a primitive type,
+## belongs to the runtime support, or belongs to a family of helper names the
+## file derives from type ids and list item types.
+undeclarable_symbol_zig : List(Str) -> Try({}, Str)
+undeclarable_symbol_zig = |symbols| {
+	fixed_names = List.concat(runtime_type_names_zig, List.concat(runtime_value_names_zig, keywords_zig))
+	TypeNamePlan.undeclarable_symbol(symbols, fixed_names)?
+
+	for symbol in symbols {
+		is_helper = Str.starts_with(symbol, "decrefBoxPayloadType") or Str.starts_with(symbol, "decrefListOf")
+		if is_helper or is_sized_integer_name_zig(symbol) {
+			return Err(TypeNamePlan.symbol_error(symbol))
+		}
+	}
+
+	Ok({})
+}
+
+## The name a hosted function's argument and result types, and the aliases of
+## the types it reaches, are derived from.
+hosted_struct_name_zig : List(Str), HostedFunctionInfo -> Str
+hosted_struct_name_zig = |renamed, func|
+	Str.concat(name_to_struct_name(func.name), TypeNamePlan.index_suffix(renamed, func.name, func.index, "Hosted"))
+
+## The name the aliases of the types a provided entry reaches are derived
+## from. `position` is the entry's place in the platform's provides list.
+provided_struct_name_zig : List(Str), ProvidesEntry, U64 -> Str
+provided_struct_name_zig = |renamed, entry, position|
+	Str.concat(name_to_struct_name(entry.name), TypeNamePlan.index_suffix(renamed, entry.name, position, "Provided"))
+
+## The argument and result types the generated file declares for a hosted
+## function.
+hosted_type_names_zig : ArgShape, List(Str), HostedFunctionInfo -> List(Str)
+hosted_type_names_zig = |arg_shape, renamed, func| {
+	struct_name = hosted_struct_name_zig(renamed, func)
+
+	ret_names = match arg_shape.record_lookup(func.ret_type_id) {
+		ArgRecordFound(_) => ["${struct_name}RetRecord"]
+		ArgNotRecord => []
+	}
+
+	match arg_shape.hosted_args(func) {
+		NoMeaningfulArgs => ret_names
+		SingleRecordArg(_) => ret_names.append("${struct_name}Args")
+		PositionalArgs(_) => ret_names.append("${struct_name}Args")
+	}
+}
+
+## What the generated file derives from the name of each hosted function and
+## each provided entry when the Roc names in `renamed` take index-derived
+## names: the base its aliases are named from, which is not itself declared
+## and so is compared only with other bases, and a hosted function's argument
+## and result types.
+declared_roots_zig : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> List(TypeNamePlan.Declared)
+declared_roots_zig = |hosted_functions, provides_list, type_table, renamed| {
+	arg_shape = ArgShape.from_table(type_table)
+	var $declared = []
+
+	for func in hosted_functions {
+		$declared = $declared.append({
+			roc_name: func.name,
+			id: func.index * 2,
+			names: hosted_type_names_zig(arg_shape, renamed, func).append("base ${hosted_struct_name_zig(renamed, func)}"),
+		})
+	}
+
+	var $position = 0
+	for entry in provides_list {
+		$declared = $declared.append({
+			roc_name: entry.name,
+			id: $position * 2 + 1,
+			names: ["base ${provided_struct_name_zig(renamed, entry, $position)}"],
+		})
+		$position = $position + 1
+	}
+
+	$declared
+}
+
+## The hosted functions and provided entries whose derived names take
+## index-derived names, because they would collide with another declaration.
+renamed_roots_zig : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> Try(List(Str), Str)
+renamed_roots_zig = |hosted_functions, provides_list, type_table, symbols|
+	TypeNamePlan.disambiguated(
+		List.concat(runtime_type_names_zig, symbols),
+		[],
+		|renamed| declared_roots_zig(hosted_functions, provides_list, type_table, renamed),
+	)
+
+## Every top-level name the generated file declares for the host type at
+## `type_id` when it emits that type as `struct_name`: the type itself and each
+## helper type and function named after it.
+type_names_declared_as_zig : TypeTable, U64, Str -> List(Str)
+type_names_declared_as_zig = |type_table, type_id, struct_name|
+	match type_table.get(type_id) {
+		RocRecord(rec) =>
+			if rec.name != "" and !type_table.is_zero_sized(type_id) {
+				[struct_name, "${struct_name}Release"]
+			} else {
+				[]
+			}
+		RocTagUnion(tu) =>
+			match type_table.single_variant_payload(type_id, tu) {
+				SinglePayloadStruct(_) => [struct_name, "${struct_name}Release"]
+				NotSingleVariant => type_names_declared_as_union_zig(type_table, type_id, tu, struct_name)
+				SinglePayload(_) => []
+				SingleNoPayload => []
+			}
+		_ => []
+	}
+
+## `type_names_declared_as_zig` of the tag union `tu` with several variants.
+type_names_declared_as_union_zig : TypeTable, U64, TagUnionRepr, Str -> List(Str)
+type_names_declared_as_union_zig = |type_table, type_id, tu, struct_name|
+	if tu.name != "" {
+		abi_layout = type_table.layout(type_id)
+		if abi_layout.tag_union_has_payload() {
+			abi_tags = abi_tag_layouts(abi_layout)
+			var $names = [
+				struct_name,
+				"${struct_name}Tag",
+				"${struct_name}Payload",
+				"${struct_name}Release",
+				"decref${struct_name}",
+				"incref${struct_name}",
+			]
+			var $tag_idx = 0
+			for tag in tu.tags {
+				if abi_tag_has_payload(abi_tag_at(abi_tags, $tag_idx)) and List.len(tag.payload) > 1 {
+					$names = $names.append("${struct_name}${capitalize_first(tag.name)}Payload")
+				}
+				$tag_idx = $tag_idx + 1
+			}
+			$names
+		} else {
+			[struct_name]
+		}
+	} else {
+		[]
+	}
+
+## What the generated file declares for each named host type when the Roc
+## names in `duplicate_names` are emitted under shape-derived names.
+declared_types_zig : TypeTable, List(Str) -> List(TypeNamePlan.Declared)
+declared_types_zig = |type_table, duplicate_names| {
+	var $declared = []
 	var $type_id = 0
 
 	for type_info in type_table_entries(type_table) {
-		match type_info.repr {
-			RocRecord(rec) =>
-				if rec.name != "" {
-					$names = $names.append(record_struct_name(type_table, duplicate_names, $type_id, rec))
-				}
-			RocTagUnion(tu) =>
-				if List.len(tu.tags) >= 2 and tu.name != "" {
-					struct_name = default_tag_union_struct_name(type_table, duplicate_names, $type_id, tu)
-					$names = $names.append(struct_name)
-					if type_info.layout.tag_union_has_payload() {
-						$names = $names.append("${struct_name}Tag")
-						$names = $names.append("${struct_name}Payload")
-						for tag in type_info.layout.tag_layouts() {
-							if abi_tag_has_payload(tag) and List.len(tag.payload) > 1 {
-								$names = $names.append("${struct_name}${capitalize_first(tag.name)}Payload")
-							}
-						}
+		if type_info.shape_id == $type_id {
+			match type_info.repr {
+				RocRecord(rec) =>
+					if rec.name != "" and !type_table.is_zero_sized($type_id) {
+						struct_name = record_struct_name(type_table, duplicate_names, $type_id, rec)
+						$declared = $declared.append({
+							roc_name: rec.name,
+							id: $type_id,
+							names: type_names_declared_as_zig(type_table, $type_id, struct_name),
+						})
 					}
-				}
-			_ => {}
+				RocTagUnion(tu) =>
+					if type_table.declares_tag_union($type_id, tu) {
+						struct_name = default_tag_union_struct_name(type_table, duplicate_names, $type_id, tu)
+						$declared = $declared.append({
+							roc_name: tu.name,
+							id: $type_id,
+							names: type_names_declared_as_zig(type_table, $type_id, struct_name),
+						})
+					}
+				_ => {}
+			}
 		}
 
 		$type_id = $type_id + 1
+	}
+
+	$declared
+}
+
+## Every name the generated file declares before any preferred name or alias
+## is chosen, which neither of those may take.
+declared_type_names_zig : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> List(Str)
+declared_type_names_zig = |hosted_functions, provides_list, type_table, duplicate_names| {
+	var $names = List.concat(
+		reserved_type_names_zig(hosted_functions, type_table, duplicate_names),
+		TypeNamePlan.platform_symbols(hosted_functions, provides_list),
+	)
+
+	for declared in declared_types_zig(type_table, duplicate_names) {
+		$names = List.concat($names, declared.names)
 	}
 
 	$names
@@ -151,7 +591,7 @@ type_name_roots_zig = |hosted_functions, provides_list, type_table, ambiguous_na
 	var $roots = []
 
 	for func in hosted_functions {
-		base = name_to_struct_name(func.name)
+		base = hosted_struct_name_zig(ambiguous_names, func)
 		module_base = hosted_module_name_to_struct_name(func.name)
 
 		var $arg_idx = 0
@@ -172,9 +612,11 @@ type_name_roots_zig = |hosted_functions, provides_list, type_table, ambiguous_na
 		})
 	}
 
+	var $position = 0
 	for entry in provides_list {
-		base = name_to_struct_name(entry.name)
+		base = provided_struct_name_zig(ambiguous_names, entry, $position)
 		module_base = hosted_module_name_to_struct_name(entry.name)
+		$position = $position + 1
 
 		match entry.exported {
 			ProvidedProcedure(func) => {
@@ -248,7 +690,7 @@ type_alias_roots_zig = |hosted_functions, provides_list, type_table, ambiguous_n
 	var $roots = []
 
 	for func in hosted_functions {
-		base = name_to_struct_name(func.name)
+		base = hosted_struct_name_zig(ambiguous_names, func)
 		module_base = hosted_module_name_to_struct_name(func.name)
 
 		var $arg_idx = 0
@@ -261,9 +703,11 @@ type_alias_roots_zig = |hosted_functions, provides_list, type_table, ambiguous_n
 		$roots = append_type_alias_roots_zig($roots, type_table, ambiguous_names, base, module_base, func.ret_type_id, [])
 	}
 
+	var $position = 0
 	for entry in provides_list {
-		base = name_to_struct_name(entry.name)
+		base = provided_struct_name_zig(ambiguous_names, entry, $position)
 		module_base = hosted_module_name_to_struct_name(entry.name)
+		$position = $position + 1
 
 		match entry.exported {
 			ProvidedProcedure(func) => {
@@ -288,13 +732,19 @@ type_alias_roots_zig = |hosted_functions, provides_list, type_table, ambiguous_n
 preferred_type_names_zig : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> TypeNamePlan.PreferredNames
 preferred_type_names_zig = |hosted_functions, provides_list, type_table, duplicate_names|
 	TypeNamePlan.from_table(type_table).preferred_names(
-		generated_type_names_zig(type_table, duplicate_names),
+		declared_type_names_zig(hosted_functions, provides_list, type_table, duplicate_names),
 		type_name_roots_zig(hosted_functions, provides_list, type_table, duplicate_names),
+		|type_id, struct_name| type_names_declared_as_zig(type_table, type_id, struct_name),
 	)
 
 ## Map a type table entry to its Zig type string using structured TypeRepr
 type_id_to_zig : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64 -> Str
 type_id_to_zig = |type_table, duplicate_names, preferred_names, type_id| {
+	# A zero-sized value has no host representation.
+	if type_table.is_zero_sized(type_id) {
+		return "void"
+	}
+
 	type_repr_to_zig(type_table, duplicate_names, preferred_names, type_id, type_table.get(type_id))
 }
 
@@ -318,7 +768,10 @@ zig_record_fields_decl : TypeTable, List(Str), TypeNamePlan.PreferredNames, List
 zig_record_fields_decl = |type_table, duplicate_names, preferred_names, fields, width| {
 	var $field_strs = ""
 	for field in fields {
-		$field_strs = Str.concat($field_strs, zig_record_field_decl(type_table, duplicate_names, preferred_names, field, width))
+		# A zero-sized field occupies no storage and is not a struct member.
+		if !field.is_zero_sized() {
+			$field_strs = Str.concat($field_strs, zig_record_field_decl(type_table, duplicate_names, preferred_names, field, width))
+		}
 	}
 	$field_strs
 }
@@ -397,6 +850,9 @@ type_repr_to_zig = |type_table, duplicate_names, preferred_names, type_id, type_
 					inner_zig = type_id_to_zig(type_table, duplicate_names, preferred_names, inner_id)
 					if inner_zig == "*anyopaque" {
 						"*anyopaque"
+					} else if type_table.is_zero_sized(inner_id) {
+						# The box points at nothing the host can read.
+						"RocBox"
 					} else {
 						"*${inner_zig}"
 					}
@@ -490,13 +946,15 @@ abi_discriminant_offset = |abi_layout, width| abi_layout.discriminant_offset(wid
 abi_discriminant_size : AbiLayout -> U64
 abi_discriminant_size = |abi_layout| abi_layout.discriminant_size()
 
-## Resolve a tag union to a Zig type. Single-variant unions are unwrapped to their payload.
+## Resolve a tag union to a Zig type. A single-variant union is unwrapped to
+## its payload, or names the generated struct of its several payloads.
 ## Multi-variant unions with a name return a generated struct name.
 resolve_tag_union_type : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, TagUnionRepr -> Str
 resolve_tag_union_type = |type_table, duplicate_names, preferred_names, type_id, tu|
-	match TypeTable.single_variant_payload(tu) {
+	match type_table.single_variant_payload(type_id, tu) {
 		SinglePayload(payload_id) => type_id_to_zig(type_table, duplicate_names, preferred_names, payload_id)
-		SingleNoPayload => "*anyopaque"
+		SinglePayloadStruct(_) => tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)
+		SingleNoPayload => "void"
 		NotSingleVariant =>
 			if tu.name != "" {
 				tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)
@@ -937,7 +1395,7 @@ generate_element_type_structs = |type_table, duplicate_names, preferred_names| {
 	for type_info in type_table_entries(type_table) {
 		match type_info.repr {
 			RocRecord(rec) =>
-				if rec.name != "" {
+				if rec.name != "" and !type_table.is_zero_sized($type_id) {
 					struct_name = record_struct_name(type_table, duplicate_names, $type_id, rec)
 					if !(List.contains($seen_names, struct_name)) {
 						$seen_names = $seen_names.append(struct_name)
@@ -1003,12 +1461,33 @@ generate_tag_union_structs = |type_table, duplicate_names, preferred_names| {
 	for type_info in type_table_entries(type_table) {
 		match type_info.repr {
 			RocTagUnion(tu) =>
-				if List.len(tu.tags) >= 2 and tu.name != "" {
-					struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, $type_id, tu)
-					if !(List.contains($seen_names, struct_name)) {
-						$seen_names = $seen_names.append(struct_name)
-						$structs = Str.concat($structs, generate_single_tag_union(type_table, duplicate_names, preferred_names, $type_id, tu, type_info.layout))
+				match type_table.single_variant_payload($type_id, tu) {
+					SinglePayloadStruct(tag_layout) => {
+						struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, $type_id, tu)
+						if !(List.contains($seen_names, struct_name)) {
+							$seen_names = $seen_names.append(struct_name)
+
+							abi_fields = tag_layout.payload_fields
+							field_strs64 = zig_record_fields_decl(type_table, duplicate_names, preferred_names, abi_fields, Pointer64)
+							field_strs32 = zig_record_fields_decl(type_table, duplicate_names, preferred_names, abi_fields, Pointer32)
+							method_decls = generate_record_refcount_methods(type_table, duplicate_names, preferred_names, abi_fields)
+
+							$structs = Str.concat(
+								$structs,
+								zig_record_struct_decl("/// Payloads of the only variant of ${tu.name}, which stores no discriminant.\n", struct_name, field_strs64, field_strs32, method_decls, method_decls, type_info.layout),
+							)
+						}
 					}
+					NotSingleVariant =>
+						if tu.name != "" {
+							struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, $type_id, tu)
+							if !(List.contains($seen_names, struct_name)) {
+								$seen_names = $seen_names.append(struct_name)
+								$structs = Str.concat($structs, generate_single_tag_union(type_table, duplicate_names, preferred_names, $type_id, tu, type_info.layout))
+							}
+						}
+					SinglePayload(_) => {}
+					SingleNoPayload => {}
 				}
 			RocBox(_) => {}
 			RocRecord(_) => {}
@@ -1063,6 +1542,7 @@ abi_tag_has_payload = |tag| tag.payload_size32 > 0 or tag.payload_size64 > 0
 ## Generate Zig code for a single multi-variant tag union.
 generate_single_tag_union : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, TagUnionRepr, AbiLayout -> Str
 generate_single_tag_union = |type_table, duplicate_names, preferred_names, type_id, tu, abi_layout| {
+	tag_snakes = tag_snakes_zig(tu)
 	struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)
 	disc_type = disc_type_for_size(abi_discriminant_size(abi_layout))
 	abi_tags = abi_tag_layouts(abi_layout)
@@ -1075,8 +1555,8 @@ generate_single_tag_union = |type_table, duplicate_names, preferred_names, type_
 		method_decls = "    /// Recursively decrement Roc-owned payloads.\n    pub fn decref(self: @This(), roc_host: *RocHost) void {\n        _ = self;\n        _ = roc_host;\n    }\n\n    /// Increment Roc-owned payloads.\n    pub fn incref(self: @This(), amount: isize) void {\n        _ = self;\n        _ = amount;\n    }\n"
 		var $variants = ""
 		var $idx = 0
-		for tag in tu.tags {
-			variant_ident = name_to_zig_quoted_ident(to_lower_snake_case(tag.name))
+		for _tag in tu.tags {
+			variant_ident = name_to_zig_quoted_ident(tag_snakes.at($idx))
 			$variants = Str.concat($variants, "    ${variant_ident} = ${U64.to_str($idx)},\n")
 			$idx = $idx + 1
 		}
@@ -1115,7 +1595,7 @@ generate_single_tag_union = |type_table, duplicate_names, preferred_names, type_
 		var $union_tag_idx = 0
 		for union_tag in tu.tags {
 			tag_layout = abi_tag_at(abi_tags, $union_tag_idx)
-			snake = to_lower_snake_case(union_tag.name)
+			snake = tag_snakes.at($union_tag_idx)
 			field_ident = name_to_zig_quoted_ident(snake)
 			if !(abi_tag_has_payload(tag_layout)) {
 				# No-payload variant: use [0]u8 (Zig extern unions can't have void)
@@ -1263,8 +1743,9 @@ release_policy_for_type_id = |type_table, duplicate_names, preferred_names, type
 				"${record_struct_name(type_table, duplicate_names, type_id, rec)}Release"
 			}
 		RocTagUnion(tu) =>
-			match TypeTable.single_variant_payload(tu) {
+			match type_table.single_variant_payload(type_id, tu) {
 				SinglePayload(payload_id) => release_policy_for_type_id(type_table, duplicate_names, preferred_names, payload_id)
+				SinglePayloadStruct(_) => "${tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)}Release"
 				SingleNoPayload => ""
 				NotSingleVariant =>
 					if tu.name == "" {
@@ -1301,8 +1782,9 @@ type_ident_zig = |type_table, duplicate_names, preferred_names, type_id|
 		# resolves through its payload's fragment: that function can return
 		# a rendered type such as `RocList(RocStr)`, which is not an
 		# identifier.
-			match TypeTable.single_variant_payload(tu) {
+			match type_table.single_variant_payload(type_id, tu) {
 				SinglePayload(payload_id) => type_ident_zig(type_table, duplicate_names, preferred_names, payload_id)
+				SinglePayloadStruct(_) => tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)
 				SingleNoPayload => "Type${U64.to_str(type_id)}"
 				NotSingleVariant =>
 					if tu.name != "" {
@@ -1323,6 +1805,10 @@ list_decref_helper_name = |type_table, duplicate_names, preferred_names, elem_id
 
 decref_stmt_for_type_id : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, Str -> Str
 decref_stmt_for_type_id = |type_table, duplicate_names, preferred_names, type_id, expr| {
+	if type_table.is_zero_sized(type_id) {
+		return ""
+	}
+
 	if is_roc_released(type_table, type_id) {
 		# Every emitter leaves out the release of a value that holds an opaque
 		# Roc value, so reaching this is a generator bug. It must not compile.
@@ -1334,7 +1820,7 @@ decref_stmt_for_type_id = |type_table, duplicate_names, preferred_names, type_id
 }
 
 decref_stmt_for_repr : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, TypeRepr, Str -> Str
-decref_stmt_for_repr = |type_table, duplicate_names, preferred_names, _type_id, type_repr, expr| {
+decref_stmt_for_repr = |type_table, duplicate_names, preferred_names, type_id, type_repr, expr| {
 	match type_repr {
 		RocStr => "    ${expr}.decref(roc_host);\n"
 		RocList(elem_id) => {
@@ -1370,8 +1856,9 @@ decref_stmt_for_repr = |type_table, duplicate_names, preferred_names, _type_id, 
 			}
 		}
 		RocTagUnion(tu) =>
-			match TypeTable.single_variant_payload(tu) {
+			match type_table.single_variant_payload(type_id, tu) {
 				SinglePayload(payload_id) => decref_stmt_for_type_id(type_table, duplicate_names, preferred_names, payload_id, expr)
+				SinglePayloadStruct(_) => "    ${expr}.decref(roc_host);\n"
 				SingleNoPayload => ""
 				NotSingleVariant => {
 					if tu.name != "" {
@@ -1388,12 +1875,16 @@ decref_stmt_for_repr = |type_table, duplicate_names, preferred_names, _type_id, 
 
 incref_stmt_for_type_id : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, Str -> Str
 incref_stmt_for_type_id = |type_table, duplicate_names, preferred_names, type_id, expr| {
+	if type_table.is_zero_sized(type_id) {
+		return ""
+	}
+
 	type_repr = type_table.get(type_id)
 	incref_stmt_for_repr(type_table, duplicate_names, preferred_names, type_id, type_repr, expr)
 }
 
 incref_stmt_for_repr : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, TypeRepr, Str -> Str
-incref_stmt_for_repr = |type_table, duplicate_names, preferred_names, _type_id, type_repr, expr| {
+incref_stmt_for_repr = |type_table, duplicate_names, preferred_names, type_id, type_repr, expr| {
 	match type_repr {
 		RocStr => "    ${expr}.incref(amount);\n"
 		RocList(_) => "    ${expr}.incref(amount);\n"
@@ -1409,8 +1900,9 @@ incref_stmt_for_repr = |type_table, duplicate_names, preferred_names, _type_id, 
 			}
 		}
 		RocTagUnion(tu) =>
-			match TypeTable.single_variant_payload(tu) {
+			match type_table.single_variant_payload(type_id, tu) {
 				SinglePayload(payload_id) => incref_stmt_for_type_id(type_table, duplicate_names, preferred_names, payload_id, expr)
+				SinglePayloadStruct(_) => "    ${expr}.incref(amount);\n"
 				SingleNoPayload => ""
 				NotSingleVariant =>
 					if tu.name != "" {
@@ -1462,9 +1954,16 @@ generate_record_refcount_methods = |type_table, duplicate_names, preferred_names
 	"${decref_method}\n    /// Increment Roc-owned fields.\n    pub fn incref(self: @This(), amount: isize) void {\n        const value = self;\n${$incref_body}    }\n"
 }
 
-generate_tag_payload_refcount_branch : TypeTable, List(Str), TypeNamePlan.PreferredNames, TagVariant, AbiTagLayout, Str -> Str
-generate_tag_payload_refcount_branch = |type_table, duplicate_names, preferred_names, tag, abi_tag, mode| {
-	snake = to_lower_snake_case(tag.name)
+## For each tag of a union, the lowercase name its enum variant, payload union
+## member and payload accessor are named from. Every name
+## `to_lower_snake_case` gives is lowercase, so a ranked one is no other tag's
+## own.
+tag_snakes_zig : TagUnionRepr -> TypeNamePlan.MemberIdents
+tag_snakes_zig = |tu|
+	TypeNamePlan.member_idents(List.map(tu.tags, |tag| tag.name), to_lower_snake_case, "_Member")
+
+generate_tag_payload_refcount_branch : TypeTable, List(Str), TypeNamePlan.PreferredNames, Str, TagVariant, AbiTagLayout, Str -> Str
+generate_tag_payload_refcount_branch = |type_table, duplicate_names, preferred_names, snake, tag, abi_tag, mode| {
 	variant_ident = name_to_zig_quoted_ident(tag.name)
 
 	if !abi_tag_has_payload(abi_tag) {
@@ -1514,6 +2013,10 @@ generate_tag_payload_refcount_branch = |type_table, duplicate_names, preferred_n
 
 decref_stmt_uses_roc_host_for_type_id : TypeTable, U64 -> Bool
 decref_stmt_uses_roc_host_for_type_id = |type_table, type_id| {
+	if type_table.is_zero_sized(type_id) {
+		return Bool.False
+	}
+
 	type_repr = type_table.get(type_id)
 	match type_repr {
 		RocStr => Bool.True
@@ -1522,8 +2025,9 @@ decref_stmt_uses_roc_host_for_type_id = |type_table, type_id| {
 		RocErasedCallable(_) => Bool.True
 		RocRecord(rec) => rec.name != ""
 		RocTagUnion(tu) =>
-			match TypeTable.single_variant_payload(tu) {
+			match type_table.single_variant_payload(type_id, tu) {
 				SinglePayload(payload_id) => decref_stmt_uses_roc_host_for_type_id(type_table, payload_id)
+				SinglePayloadStruct(_) => Bool.True
 				SingleNoPayload => Bool.False
 				NotSingleVariant => tu.name != ""
 			}
@@ -1533,6 +2037,10 @@ decref_stmt_uses_roc_host_for_type_id = |type_table, type_id| {
 
 incref_stmt_uses_amount_for_type_id : TypeTable, U64 -> Bool
 incref_stmt_uses_amount_for_type_id = |type_table, type_id| {
+	if type_table.is_zero_sized(type_id) {
+		return Bool.False
+	}
+
 	type_repr = type_table.get(type_id)
 	match type_repr {
 		RocStr => Bool.True
@@ -1541,8 +2049,9 @@ incref_stmt_uses_amount_for_type_id = |type_table, type_id| {
 		RocErasedCallable(_) => Bool.True
 		RocRecord(rec) => rec.name != ""
 		RocTagUnion(tu) =>
-			match TypeTable.single_variant_payload(tu) {
+			match type_table.single_variant_payload(type_id, tu) {
 				SinglePayload(payload_id) => incref_stmt_uses_amount_for_type_id(type_table, payload_id)
+				SinglePayloadStruct(_) => Bool.True
 				SingleNoPayload => Bool.False
 				NotSingleVariant => tu.name != ""
 			}
@@ -1581,6 +2090,7 @@ generate_tag_union_refcount_method_delegates = |struct_name, roc_released| {
 
 generate_tag_union_refcount_helpers : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, TagUnionRepr -> Str
 generate_tag_union_refcount_helpers = |type_table, duplicate_names, preferred_names, type_id, tu| {
+	tag_snakes = tag_snakes_zig(tu)
 	struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)
 	roc_released = is_roc_released(type_table, type_id)
 	var $decref_branches = ""
@@ -1592,9 +2102,9 @@ generate_tag_union_refcount_helpers = |type_table, duplicate_names, preferred_na
 	for tag in tu.tags {
 		abi_tag = abi_tag_at(abi_tags, $tag_index)
 		if !roc_released {
-			$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch(type_table, duplicate_names, preferred_names, tag, abi_tag, "decref"))
+			$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch(type_table, duplicate_names, preferred_names, tag_snakes.at($tag_index), tag, abi_tag, "decref"))
 		}
-		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch(type_table, duplicate_names, preferred_names, tag, abi_tag, "incref"))
+		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch(type_table, duplicate_names, preferred_names, tag_snakes.at($tag_index), tag, abi_tag, "incref"))
 		if abi_tag_has_payload(abi_tag) {
 			$decref_uses_param = $decref_uses_param or tag_payload_refcount_uses_param(type_table, tag, "decref")
 			$incref_uses_param = $incref_uses_param or tag_payload_refcount_uses_param(type_table, tag, "incref")
@@ -1705,7 +2215,7 @@ generate_refcount_helpers = |type_table, duplicate_names, preferred_names| {
 	for type_info in type_table_entries(type_table) {
 		match type_info.repr {
 			RocRecord(rec) =>
-				if rec.name != "" and !is_roc_released(type_table, $type_id) {
+				if rec.name != "" and !type_table.is_zero_sized($type_id) and !is_roc_released(type_table, $type_id) {
 					struct_name = record_struct_name(type_table, duplicate_names, $type_id, rec)
 					if !(List.contains($seen_names, struct_name)) {
 						$seen_names = $seen_names.append(struct_name)
@@ -1713,12 +2223,25 @@ generate_refcount_helpers = |type_table, duplicate_names, preferred_names| {
 					}
 				}
 			RocTagUnion(tu) =>
-				if List.len(tu.tags) >= 2 and tu.name != "" and type_info.layout.tag_union_has_payload() {
-					struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, $type_id, tu)
-					if !(List.contains($seen_names, struct_name)) {
-						$seen_names = $seen_names.append(struct_name)
-						$helpers = Str.concat($helpers, generate_tag_union_refcount_helpers(type_table, duplicate_names, preferred_names, $type_id, tu))
-					}
+				match type_table.single_variant_payload($type_id, tu) {
+					SinglePayloadStruct(_) =>
+						if !is_roc_released(type_table, $type_id) {
+							struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, $type_id, tu)
+							if !(List.contains($seen_names, struct_name)) {
+								$seen_names = $seen_names.append(struct_name)
+								$helpers = Str.concat($helpers, generate_record_release_policy(struct_name))
+							}
+						}
+					NotSingleVariant =>
+						if tu.name != "" and type_info.layout.tag_union_has_payload() {
+							struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, $type_id, tu)
+							if !(List.contains($seen_names, struct_name)) {
+								$seen_names = $seen_names.append(struct_name)
+								$helpers = Str.concat($helpers, generate_tag_union_refcount_helpers(type_table, duplicate_names, preferred_names, $type_id, tu))
+							}
+						}
+					SinglePayload(_) => {}
+					SingleNoPayload => {}
 				}
 			_ => {}
 		}
@@ -1777,6 +2300,12 @@ add_type_alias_zig = |state, alias, target| {
 
 add_tag_union_aliases_zig : { content : Str, seen : List(Str) }, Str, Str, AbiLayout -> { content : Str, seen : List(Str) }
 add_tag_union_aliases_zig = |state, alias, target, abi_layout| {
+	# The helper aliases are named after the union's alias, so they are its
+	# helpers only when that alias names the union.
+	if alias != target and List.contains(state.seen, alias) {
+		return state
+	}
+
 	with_main_alias = add_type_alias_zig(state, alias, target)
 
 	if abi_layout.tag_union_has_payload() {
@@ -1789,7 +2318,7 @@ add_tag_union_aliases_zig = |state, alias, target, abi_layout| {
 
 generate_platform_type_aliases_zig : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str), TypeNamePlan.PreferredNames -> Str
 generate_platform_type_aliases_zig = |hosted_functions, provides_list, type_table, duplicate_names, preferred_names| {
-	var $state = { content: "", seen: generated_type_names_zig(type_table, duplicate_names) }
+	var $state = { content: "", seen: preferred_names.declared_names() }
 	name_plan = TypeNamePlan.from_table(type_table)
 
 	for plan in name_plan.alias_plan(type_alias_roots_zig(hosted_functions, provides_list, type_table, duplicate_names)) {
@@ -1941,9 +2470,8 @@ expect lowercase_first("") == ""
 # =============================================================================
 
 ## Generate the complete Zig source file
-generate_zig_file : List(HostedFunctionInfo), TypeTable, List(ProvidesEntry) -> Str
-generate_zig_file = |hosted_functions, type_table, provides_list| {
-	duplicate_names = duplicate_type_names(type_table)
+generate_zig_file : List(HostedFunctionInfo), TypeTable, List(ProvidesEntry), List(Str) -> Str
+generate_zig_file = |hosted_functions, type_table, provides_list, duplicate_names| {
 	preferred_names = preferred_type_names_zig(hosted_functions, provides_list, type_table, duplicate_names)
 
 	file_header
@@ -2378,7 +2906,7 @@ generate_all_record_structs = |hosted_functions, type_table, duplicate_names, pr
 	for func in hosted_functions {
 		match arg_shape.record_lookup(func.ret_type_id) {
 			ArgRecordFound(record) => {
-				struct_name = name_to_struct_name(func.name)
+				struct_name = hosted_struct_name_zig(duplicate_names, func)
 				fields64 = zig_record_fields_decl(type_table, duplicate_names, preferred_names, record.fields, Pointer64)
 				fields32 = zig_record_fields_decl(type_table, duplicate_names, preferred_names, record.fields, Pointer32)
 
@@ -2408,7 +2936,7 @@ generate_all_args_structs = |hosted_functions, type_table, duplicate_names, pref
 ## Uses type table for single-record args; positional for multi-arg or primitive args.
 generate_args_struct : HostedFunctionInfo, TypeTable, List(Str), TypeNamePlan.PreferredNames -> Str
 generate_args_struct = |func, type_table, duplicate_names, preferred_names| {
-	struct_name = name_to_struct_name(func.name)
+	struct_name = hosted_struct_name_zig(duplicate_names, func)
 	arg_shape = ArgShape.from_table(type_table)
 
 	match arg_shape.hosted_args(func) {
@@ -2449,7 +2977,7 @@ direct_param_list = |type_table, duplicate_names, preferred_names, arg_type_ids|
 	var $idx = 0
 	arg_shape = ArgShape.from_table(type_table)
 
-	for arg_type_id in arg_shape.positional_non_unit_type_ids(arg_type_ids) {
+	for arg_type_id in arg_shape.abi_visible_type_ids(arg_type_ids) {
 		arg_zig = type_id_to_zig(type_table, duplicate_names, preferred_names, arg_type_id)
 		sep = if $params == "" {
 			""
@@ -2473,9 +3001,9 @@ direct_hosted_param_list = |type_table, duplicate_names, preferred_names, func| 
 	var $params = ""
 	var $idx = 0
 
-	for arg_type_id in arg_shape.positional_non_unit_type_ids(func.arg_type_ids) {
+	for arg_type_id in arg_shape.abi_visible_type_ids(func.arg_type_ids) {
 		arg_zig = if use_args_wrapper {
-			"${name_to_struct_name(func.name)}Args"
+			"${hosted_struct_name_zig(duplicate_names, func)}Args"
 		} else {
 			type_id_to_zig(type_table, duplicate_names, preferred_names, arg_type_id)
 		}
@@ -2549,7 +3077,7 @@ hosted_ownership_doc_zig = |type_table, duplicate_names, preferred_names, func| 
 	var $arg_lines = ""
 	var $idx = 0
 
-	for arg_type_id in arg_shape.positional_non_unit_type_ids(func.arg_type_ids) {
+	for arg_type_id in arg_shape.abi_visible_type_ids(func.arg_type_ids) {
 		arg_name = "arg${U64.to_str($idx)}"
 		stmt = if is_roc_released(type_table, arg_type_id) {
 			"${arg_name} holds an opaque Roc value, which only Roc can release: pass it back to Roc."
