@@ -243,9 +243,8 @@ fn llvmInvariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
 /// Statement budget for a proc with no loop to be inlined everywhere: a
 /// checked wrapper around one operation.
 const max_wrapper_inline_stmts: usize = 32;
-/// Statement budget for a leaf proc to be inlined everywhere: a helper the
-/// size of a compressor's match extender, whose per-call cost in its callers'
-/// loops exceeds the work it does.
+/// Statement budget for a loop-free, call-free leaf proc to be inlined
+/// everywhere.
 const max_leaf_inline_stmts: usize = 400;
 
 /// One crash block a function shares among the checked operations that fail
@@ -4150,20 +4149,23 @@ pub const MonoLlvmCodeGen = struct {
     /// than its LIR is. Two shapes are inlined everywhere, because their
     /// per-call cost in their callers' loops exceeds the work they do: a
     /// wrapper (no loop, few statements of its own) and a leaf (moderate
-    /// size, no calls). Larger bodies remain ordinary calls, so LLVM can
-    /// simplify them before deciding whether to duplicate them into their
-    /// callers. That is a speed policy; a size build selects nothing and
-    /// leaves every decision to LLVM's size cost model.
+    /// size, no loop, no calls). Larger, looping, or runtime-calling bodies
+    /// remain ordinary calls, so LLVM can simplify them before deciding
+    /// whether to duplicate them into their callers. That is a speed policy;
+    /// a size build selects nothing and leaves every decision to LLVM's size
+    /// cost model.
     ///
     /// A leaf is judged by the body it has once its always-inline callees
     /// are expanded into it, which is the body LLVM emits: it calls nothing
-    /// only when every proc it calls is inlined everywhere and calls nothing
-    /// itself, and its size counts a copy of each such callee at each of its
-    /// call sites. A helper is a leaf whether an earlier stage inlined its
-    /// callees into it or this selection does, and a leaf's every call site
-    /// duplicates at most `max_leaf_inline_stmts` statements of expanded
-    /// body either way. A proc on a cycle of direct calls always keeps a
-    /// call, so it is never a leaf.
+    /// only when it emits no runtime, builtin, RC, erased, dynamic, or
+    /// diagnostic calls and every proc it calls is inlined everywhere and
+    /// calls nothing itself; it is loop-free only when neither it nor any
+    /// always-inline callee contains a loop; and its size counts a copy of
+    /// each such callee at each of its call sites. A helper is a leaf whether
+    /// an earlier stage inlined its callees into it or this selection does,
+    /// and a leaf's every call site duplicates at most `max_leaf_inline_stmts`
+    /// statements of expanded body either way. A proc on a cycle of direct
+    /// calls always keeps a call, so it is never a leaf.
     fn computeInlineEverywhere(self: *MonoLlvmCodeGen, procs: []const LirProcSpec, entrypoints: []const Entrypoint) Error!void {
         self.inline_everywhere.clearRetainingCapacity();
         try self.inline_everywhere.appendNTimes(self.allocator, false, procs.len);
@@ -4190,6 +4192,8 @@ pub const MonoLlvmCodeGen = struct {
             /// Whether a call remains once every always-inline callee is
             /// expanded.
             calls: bool = false,
+            /// Whether the body or any always-inline callee contains a loop.
+            has_loop: bool = false,
         };
         const expansions = try self.allocator.alloc(Expansion, procs.len);
         defer self.allocator.free(expansions);
@@ -4201,7 +4205,12 @@ pub const MonoLlvmCodeGen = struct {
         for (procs, 0..) |root_proc, root| {
             if (root_proc.body == .none or root_proc.is_static_initializer) continue;
             if (expansions[root].state != .unvisited) continue;
-            expansions[root] = .{ .state = .active, .size = shapes[root].count, .calls = shapes[root].opaque_call };
+            expansions[root] = .{
+                .state = .active,
+                .size = shapes[root].count,
+                .calls = shapes[root].opaque_call,
+                .has_loop = shapes[root].has_loop,
+            };
             try stack.append(self.allocator, .{ .proc = root, .next_callee = 0 });
             while (stack.items.len > 0) {
                 const frame = &stack.items[stack.items.len - 1];
@@ -4216,7 +4225,12 @@ pub const MonoLlvmCodeGen = struct {
                     }
                     switch (expansions[callee].state) {
                         .unvisited => {
-                            expansions[callee] = .{ .state = .active, .size = shapes[callee].count, .calls = shapes[callee].opaque_call };
+                            expansions[callee] = .{
+                                .state = .active,
+                                .size = shapes[callee].count,
+                                .calls = shapes[callee].opaque_call,
+                                .has_loop = shapes[callee].has_loop,
+                            };
                             try stack.append(self.allocator, .{ .proc = callee, .next_callee = 0 });
                             continue;
                         },
@@ -4227,6 +4241,7 @@ pub const MonoLlvmCodeGen = struct {
                             if (self.inline_everywhere.items[callee]) {
                                 expansions[frame.proc].size +|= expansions[callee].size;
                                 expansions[frame.proc].calls = expansions[frame.proc].calls or expansions[callee].calls;
+                                expansions[frame.proc].has_loop = expansions[frame.proc].has_loop or expansions[callee].has_loop;
                             } else {
                                 expansions[frame.proc].calls = true;
                             }
@@ -4244,7 +4259,7 @@ pub const MonoLlvmCodeGen = struct {
                 // it after simplification. Forcing transitive leaves in early
                 // pessimizes that code; retain the original direct-leaf rule.
                 const eligible_leaf = !shape.application_entry or shape.callees.items.len == 0;
-                const leaf = eligible_leaf and expansion.size <= max_leaf_inline_stmts and !expansion.calls;
+                const leaf = eligible_leaf and expansion.size <= max_leaf_inline_stmts and !expansion.calls and !expansion.has_loop;
                 self.inline_everywhere.items[finished] = wrapper or leaf;
             }
         }
@@ -4392,6 +4407,404 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
+    /// Whether `emitLowLevel` lowers a `LowLevel` op to a runtime/builtin call.
+    const LowLevelCallKind = enum {
+        inline_only,
+        runtime_call,
+        int128_mul_overflow,
+        dec_or_int128_div_rem,
+        dec_sqrt,
+        list_owned_unique,
+        list_map_can_reuse,
+    };
+
+    fn conversionCallKind(comptime spec: numeric_conversion.Conversion) LowLevelCallKind {
+        return switch (spec.src.class()) {
+            .int => switch (spec.dst.class()) {
+                .int => if (spec.mode == .exact or spec.mode == .wrap) .inline_only else .runtime_call,
+                .float => if (spec.src.bits() == 128) .runtime_call else .inline_only,
+                .dec => .runtime_call,
+            },
+            .float => switch (spec.dst.class()) {
+                .int => .runtime_call,
+                .float => if (spec.mode == .exact or spec.mode == .wrap) .inline_only else .runtime_call,
+                .dec => .runtime_call,
+            },
+            .dec => .runtime_call,
+        };
+    }
+
+    const ExplicitLowLevelCallKind = blk: {
+        @setEvalBranchQuota(1 << 14);
+        var names: []const []const u8 = &.{};
+        for (std.enums.values(lir.LowLevel)) |op| {
+            if (numeric_conversion.getConversionSpec(op) == null) names = names ++ .{@tagName(op)};
+        }
+        break :blk @Struct(.auto, null, names, &@splat(LowLevelCallKind), &@splat(.{}));
+    };
+
+    /// Exact call classification matching `emitLowLevel` for every non-conversion
+    /// `LowLevel` op. Adding a new `LowLevel` op without a row here fails to compile.
+    const explicit_low_level_call_kind: ExplicitLowLevelCallKind = .{
+        // String operations
+        .str_is_eq = .inline_only,
+        .str_is_eq_static_small = .inline_only,
+        .str_static_small_word_eq = .inline_only,
+        .str_static_small_word_caseless_eq = .inline_only,
+        .str_concat = .runtime_call,
+        .str_append = .runtime_call,
+        .str_contains = .inline_only,
+        .str_trim = .runtime_call,
+        .str_trim_start = .runtime_call,
+        .str_trim_end = .runtime_call,
+        .str_caseless_ascii_equals = .inline_only,
+        .str_with_ascii_lowercased = .runtime_call,
+        .str_with_ascii_uppercased = .runtime_call,
+        .str_starts_with = .inline_only,
+        .str_ends_with = .inline_only,
+        .str_repeat = .runtime_call,
+        .str_drop_prefix = .runtime_call,
+        .str_drop_prefix_caseless_ascii = .runtime_call,
+        .str_drop_suffix = .runtime_call,
+        .str_split_first = .runtime_call,
+        .str_split_last = .runtime_call,
+        .str_count_utf8_bytes = .inline_only,
+        .str_get_utf8_byte_unsafe = .runtime_call,
+        .str_substring_unsafe = .runtime_call,
+        .str_with_capacity = .runtime_call,
+        .str_reserve = .runtime_call,
+        .str_release_excess_capacity = .runtime_call,
+        .str_to_utf8 = .runtime_call,
+        .str_from_utf8_lossy = .runtime_call,
+        .str_from_utf8_validated = .runtime_call,
+        .str_from_utf16_le_short = .runtime_call,
+        .str_from_utf16_be_short = .runtime_call,
+        .str_from_utf32_le_short = .runtime_call,
+        .str_from_utf32_be_short = .runtime_call,
+        .str_from_utf8 = .runtime_call,
+        .str_split_on = .runtime_call,
+        .str_join_with = .runtime_call,
+        .str_from_parts = .runtime_call,
+        .str_inspect = .runtime_call,
+
+        // Numeric to_str operations
+        .u8_to_str = .runtime_call,
+        .i8_to_str = .runtime_call,
+        .u16_to_str = .runtime_call,
+        .i16_to_str = .runtime_call,
+        .u32_to_str = .runtime_call,
+        .i32_to_str = .runtime_call,
+        .u64_to_str = .runtime_call,
+        .i64_to_str = .runtime_call,
+        .u128_to_str = .runtime_call,
+        .i128_to_str = .runtime_call,
+        .dec_to_str = .runtime_call,
+        .f32_to_str = .runtime_call,
+        .f64_to_str = .runtime_call,
+
+        // List operations
+        .list_len = .inline_only,
+        .list_capacity = .inline_only,
+        .list_get_unsafe = .inline_only,
+        .list_prefetched = .inline_only,
+        .list_prefetch = .inline_only,
+        .list_append_unsafe = .inline_only,
+        .list_concat = .runtime_call,
+        .list_append_range_within = .runtime_call,
+        .list_copy_range_within = .runtime_call,
+        .list_append_range_within_unsafe = .runtime_call,
+        .list_append_sublist = .runtime_call,
+        .list_append_le_bytes = .runtime_call,
+        .list_append_le_bytes_unsafe = .inline_only,
+        .list_slack_unique = .runtime_call,
+        .list_owned_unique = .list_owned_unique,
+        .list_set_in_place_unsafe = .runtime_call,
+        .list_with_capacity = .runtime_call,
+        .list_drop_at = .runtime_call,
+        .list_sublist = .runtime_call,
+        .list_sublist_borrowed = .runtime_call,
+        .list_set = .runtime_call,
+        .list_replace_unsafe = .runtime_call,
+        .list_swap = .runtime_call,
+        .list_prepend = .runtime_call,
+        .list_reverse = .runtime_call,
+        .list_reserve = .runtime_call,
+        .list_reserve_for_append = .runtime_call,
+        .list_release_excess_capacity = .runtime_call,
+        .list_clear = .runtime_call,
+        .list_map_prepare_reuse = .inline_only,
+        .list_map_can_reuse = .list_map_can_reuse,
+        .list_map_cast_unsafe = .inline_only,
+        .list_map_extract_unsafe = .inline_only,
+        .list_map_write_unsafe = .inline_only,
+        .list_move_out_unsafe = .inline_only,
+        .list_item_size_at_most = .inline_only,
+
+        // Bool operations
+        .bool_not = .inline_only,
+        .bool_likely = .inline_only,
+
+        // Hasher operations
+        .dict_pseudo_seed = .runtime_call,
+        .hasher_finish = .runtime_call,
+        .hasher_write_bool = .runtime_call,
+        .hasher_write_u8 = .runtime_call,
+        .hasher_write_u16 = .runtime_call,
+        .hasher_write_u32 = .runtime_call,
+        .hasher_write_u64 = .runtime_call,
+        .hasher_write_u128 = .runtime_call,
+        .hasher_write_i8 = .runtime_call,
+        .hasher_write_i16 = .runtime_call,
+        .hasher_write_i32 = .runtime_call,
+        .hasher_write_i64 = .runtime_call,
+        .hasher_write_i128 = .runtime_call,
+        .hasher_write_f32 = .runtime_call,
+        .hasher_write_f64 = .runtime_call,
+        .hasher_write_dec = .runtime_call,
+        .hasher_write_bytes = .runtime_call,
+        .hasher_write_str = .runtime_call,
+
+        // Crypto operations
+        .crypto_sha256_hash_bytes = .runtime_call,
+        .crypto_sha256_hasher_empty = .runtime_call,
+        .crypto_sha256_hasher_write = .runtime_call,
+        .crypto_sha256_hasher_finish = .runtime_call,
+        .crypto_blake3_hash_bytes = .runtime_call,
+        .crypto_blake3_hasher_empty = .runtime_call,
+        .crypto_blake3_hasher_write = .runtime_call,
+        .crypto_blake3_hasher_finish = .runtime_call,
+
+        // Numeric comparisons and ordering
+        .num_is_eq = .inline_only,
+        .num_is_gt = .inline_only,
+        .num_is_gte = .inline_only,
+        .num_is_lt = .inline_only,
+        .num_is_lte = .inline_only,
+        .compare = .inline_only,
+
+        // Numeric arithmetic
+        .num_negate = .inline_only,
+        .num_abs = .inline_only,
+        .num_abs_diff = .inline_only,
+        .num_plus = .inline_only,
+        .num_minus = .inline_only,
+        .num_times = .inline_only,
+        .num_int_add_wrap = .inline_only,
+        .num_int_add_crash_on_overflow = .inline_only,
+        .num_int_add_overflows = .inline_only,
+        .num_int_add_proven_cannot_overflow = .inline_only,
+        .num_int_sub_wrap = .inline_only,
+        .num_int_sub_crash_on_overflow = .inline_only,
+        .num_int_sub_overflows = .inline_only,
+        .num_int_sub_proven_cannot_overflow = .inline_only,
+        .num_int_mul_wrap = .inline_only,
+        .num_int_mul_crash_on_overflow = .int128_mul_overflow,
+        .num_int_mul_overflows = .int128_mul_overflow,
+        .num_int_mul_proven_cannot_overflow = .inline_only,
+        .num_float_add = .inline_only,
+        .num_float_sub = .inline_only,
+        .num_float_mul = .inline_only,
+        .dec_mul = .runtime_call,
+        .dec_mul_saturated = .runtime_call,
+        .num_div_by = .dec_or_int128_div_rem,
+        .num_div_by_checked = .dec_or_int128_div_rem,
+        .num_div_trunc_by = .dec_or_int128_div_rem,
+        .num_div_trunc_by_checked = .dec_or_int128_div_rem,
+        .num_rem_by = .dec_or_int128_div_rem,
+        .num_rem_by_checked = .dec_or_int128_div_rem,
+        .num_mod_by = .dec_or_int128_div_rem,
+        .num_mod_by_checked = .dec_or_int128_div_rem,
+        .num_negate_checked = .inline_only,
+        .num_abs_checked = .inline_only,
+        .num_pow = .runtime_call,
+        .num_atan2 = .runtime_call,
+        .num_sqrt = .dec_sqrt,
+        .num_sin = .runtime_call,
+        .num_cos = .runtime_call,
+        .num_tan = .runtime_call,
+        .num_asin = .runtime_call,
+        .num_acos = .runtime_call,
+        .num_atan = .runtime_call,
+        .num_floor = .inline_only,
+        .num_ceiling = .inline_only,
+        .f32_to_bits = .inline_only,
+        .f32_from_bits = .inline_only,
+        .f64_to_bits = .inline_only,
+        .f64_from_bits = .inline_only,
+        .dec_to_attos = .inline_only,
+        .dec_from_attos = .inline_only,
+
+        // Bitwise and byte-read operations
+        .num_shift_left_by = .inline_only,
+        .num_shift_right_by = .inline_only,
+        .num_shift_right_zf_by = .inline_only,
+        .num_bitwise_and = .inline_only,
+        .num_bitwise_or = .inline_only,
+        .num_bitwise_xor = .inline_only,
+        .num_bitwise_not = .inline_only,
+        .num_count_one_bits = .inline_only,
+        .num_count_leading_zero_bits = .inline_only,
+        .num_count_trailing_zero_bits = .inline_only,
+        .num_from_le_bytes_unchecked = .inline_only,
+
+        // SIMD operations
+        .simd_load_16_unchecked = .inline_only,
+        .simd_store_16_unchecked = .runtime_call,
+        .simd_append_16 = .runtime_call,
+        .simd_splat = .inline_only,
+        .simd_get_lane_unchecked = .inline_only,
+        .simd_with_lane_unchecked = .inline_only,
+        .simd_to_u128_bits = .inline_only,
+        .simd_from_u128_bits = .inline_only,
+        .simd_add_wrap = .inline_only,
+        .simd_sub_wrap = .inline_only,
+        .simd_add_sat = .inline_only,
+        .simd_sub_sat = .inline_only,
+        .simd_neg_wrap = .inline_only,
+        .simd_abs_wrap = .inline_only,
+        .simd_min = .inline_only,
+        .simd_max = .inline_only,
+        .simd_abs_diff = .inline_only,
+        .simd_avg_rounded = .inline_only,
+        .simd_mul_wrap = .inline_only,
+        .simd_mul_high = .inline_only,
+        .simd_mul_q15_sat = .inline_only,
+        .simd_mul_wide_lo = .inline_only,
+        .simd_mul_wide_hi = .inline_only,
+        .simd_dot_pairs = .inline_only,
+        .simd_dot_pairs_sat = .inline_only,
+        .simd_sad = .inline_only,
+        .simd_and = .inline_only,
+        .simd_or = .inline_only,
+        .simd_xor = .inline_only,
+        .simd_not = .inline_only,
+        .simd_bit_select = .inline_only,
+        .simd_eq_lanes = .inline_only,
+        .simd_gt_lanes = .inline_only,
+        .simd_gte_lanes = .inline_only,
+        .simd_bitmask = .inline_only,
+        .simd_shl_wrap = .inline_only,
+        .simd_shr_wrap = .inline_only,
+        .simd_shr_zf_wrap = .inline_only,
+        .simd_shr_rounded = .inline_only,
+        .simd_interleave_lo = .inline_only,
+        .simd_interleave_hi = .inline_only,
+        .simd_even_lanes = .inline_only,
+        .simd_odd_lanes = .inline_only,
+        .simd_reverse_lanes = .inline_only,
+        .simd_table_lookup = .inline_only,
+        .simd_concat_shift_bytes = .inline_only,
+        .simd_widen_lo = .inline_only,
+        .simd_widen_hi = .inline_only,
+        .simd_pairwise_add_widen = .inline_only,
+        .simd_narrow_wrap = .inline_only,
+        .simd_narrow_sat = .inline_only,
+        .simd_sum_lanes = .inline_only,
+        .simd_sum_lanes_wrap = .inline_only,
+        .simd_clmul_lo = .inline_only,
+        .simd_clmul_hi = .inline_only,
+
+        // Numeric parsing
+        .u8_from_str = .runtime_call,
+        .i8_from_str = .runtime_call,
+        .u16_from_str = .runtime_call,
+        .i16_from_str = .runtime_call,
+        .u32_from_str = .runtime_call,
+        .i32_from_str = .runtime_call,
+        .u64_from_str = .runtime_call,
+        .i64_from_str = .runtime_call,
+        .u128_from_str = .runtime_call,
+        .i128_from_str = .runtime_call,
+        .dec_from_str = .runtime_call,
+        .f32_from_str = .runtime_call,
+        .f64_from_str = .runtime_call,
+        .u8_from_str_prefix = .runtime_call,
+        .u8_from_utf8_prefix = .runtime_call,
+        .i8_from_str_prefix = .runtime_call,
+        .i8_from_utf8_prefix = .runtime_call,
+        .u16_from_str_prefix = .runtime_call,
+        .u16_from_utf8_prefix = .runtime_call,
+        .i16_from_str_prefix = .runtime_call,
+        .i16_from_utf8_prefix = .runtime_call,
+        .u32_from_str_prefix = .runtime_call,
+        .u32_from_utf8_prefix = .runtime_call,
+        .i32_from_str_prefix = .runtime_call,
+        .i32_from_utf8_prefix = .runtime_call,
+        .u64_from_str_prefix = .runtime_call,
+        .u64_from_utf8_prefix = .runtime_call,
+        .i64_from_str_prefix = .runtime_call,
+        .i64_from_utf8_prefix = .runtime_call,
+        .u128_from_str_prefix = .runtime_call,
+        .u128_from_utf8_prefix = .runtime_call,
+        .i128_from_str_prefix = .runtime_call,
+        .i128_from_utf8_prefix = .runtime_call,
+        .dec_from_str_prefix = .runtime_call,
+        .dec_from_utf8_prefix = .runtime_call,
+        .f32_from_str_prefix = .runtime_call,
+        .f32_from_utf8_prefix = .runtime_call,
+        .f64_from_str_prefix = .runtime_call,
+        .f64_from_utf8_prefix = .runtime_call,
+
+        // Box, pointer, and crash operations
+        .box_box = .runtime_call,
+        .box_unbox = .inline_only,
+        .box_unbox_borrowed = .inline_only,
+        .box_prepare_update = .runtime_call,
+        .erased_capture_load = .inline_only,
+        .erased_capture_load_borrowed = .inline_only,
+        .ptr_alloca = .inline_only,
+        .box_alloc_zeroed = .runtime_call,
+        .ptr_store = .inline_only,
+        .ptr_load = .inline_only,
+        .ptr_cast = .inline_only,
+        .crash = .inline_only,
+    };
+
+    const low_level_call_kind = blk: {
+        @setEvalBranchQuota(1 << 14);
+        const ops = std.enums.values(lir.LowLevel);
+        var table: [ops.len]LowLevelCallKind = undefined;
+        for (ops) |op| {
+            table[@backingInt(op)] = if (numeric_conversion.getConversionSpec(op)) |spec|
+                conversionCallKind(spec)
+            else
+                @field(explicit_low_level_call_kind, @tagName(op));
+        }
+        break :blk table;
+    };
+
+    fn lowLevelEmitsCall(self: *const MonoLlvmCodeGen, assign: @FieldType(lir.LIR.CFStmt, "assign_low_level")) bool {
+        const extra = self.store.stmtRowOrDefault(assign.extra);
+        if (extra.dyn_elem_desc) return true;
+        return switch (low_level_call_kind[@backingInt(assign.op)]) {
+            .inline_only => false,
+            .runtime_call => true,
+            .int128_mul_overflow => blk: {
+                const args = self.store.getLocalSpan(assign.args);
+                const operand_layout = self.store.getLocal(GuardedList.at(args, 0)).layout_idx;
+                break :blk operand_layout == .i128 or operand_layout == .u128;
+            },
+            .dec_or_int128_div_rem => blk: {
+                const target_layout = self.store.getLocal(assign.target).layout_idx;
+                break :blk target_layout == .dec or target_layout == .i128 or target_layout == .u128;
+            },
+            .dec_sqrt => self.store.getLocal(assign.target).layout_idx == .dec,
+            .list_owned_unique => (extra.unique_args & 1) == 0,
+            .list_map_can_reuse => if (self.layout_store) |layout_store|
+                extra.interchangeable.get(layout_store.targetUsize())
+            else
+                true,
+        };
+    }
+
+    fn assignListEmitsCall(self: *const MonoLlvmCodeGen, list: @FieldType(lir.LIR.CFStmt, "assign_list")) bool {
+        if (list.elems.len == 0) return false;
+        if (self.layout_store) |layout_store| {
+            return layout_store.builtinListAbi(self.store.getLocal(list.target).layout_idx).elem_size != 0;
+        }
+        return true;
+    }
+
     fn inlineShapeOf(self: *MonoLlvmCodeGen, body: CFStmtId, shape: *InlineShape) Error!void {
         try self.beginStmtVisit();
         var work = std.ArrayList(CFStmtId).empty;
@@ -4406,26 +4819,33 @@ pub const MonoLlvmCodeGen = struct {
             switch (stmt) {
                 .join => |join| try joins.append(self.allocator, .{ .id = join.id, .body = join.body }),
                 .assign_call => |call| try shape.callees.append(self.allocator, call.proc),
-                .assign_call_erased, .assign_packed_erased_fn, .dyn => shape.opaque_call = true,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .dyn,
+                .debug,
+                .expect,
+                .expect_err,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                => shape.opaque_call = true,
+                .assign_low_level => |assign| if (self.lowLevelEmitsCall(assign)) {
+                    shape.opaque_call = true;
+                },
+                .assign_list => |list| if (self.assignListEmitsCall(list)) {
+                    shape.opaque_call = true;
+                },
                 .init_uninitialized,
                 .assign_ref,
                 .assign_literal,
-                .assign_low_level,
-                .assign_list,
                 .assign_struct,
                 .assign_tag,
                 .store_struct,
                 .store_tag,
                 .set_local,
-                .debug,
-                .expect,
-                .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .incref,
-                .decref,
-                .decref_if_initialized,
-                .free,
                 .switch_stmt,
                 .switch_initialized_payload,
                 .str_match,
@@ -4437,7 +4857,11 @@ pub const MonoLlvmCodeGen = struct {
             }
             try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id, self.allocator);
         }
-        if (shape.count > max_wrapper_inline_stmts) return;
+        // Only procedures that could qualify as a wrapper or a call-free leaf
+        // need loop detection; larger or non-wrapper call-emitting bodies are
+        // never inlined everywhere.
+        if (shape.count > max_leaf_inline_stmts) return;
+        if (shape.count > max_wrapper_inline_stmts and shape.opaque_call) return;
         // A loop is a join reached again from inside its own body.
         for (joins.items) |join| {
             try self.beginStmtVisit();
@@ -16832,7 +17256,7 @@ test "issue 11451: forced inlining at deep call sites is capped per caller" {
     try std.testing.expect(forced_sites <= max_forced_sites);
 }
 
-test "a looping helper whose only callees are inlined everywhere is a leaf" {
+test "only loop-free, call-free helpers qualify as always-inline leaves" {
     const gpa = std.testing.allocator;
     var store = lir.LirStore.init(gpa);
     defer store.deinit();
@@ -16841,6 +17265,7 @@ test "a looping helper whose only callees are inlined everywhere is a leaf" {
 
     const Fixture = struct {
         store: *lir.LirStore,
+        gpa: Allocator,
         next_join: u32 = 0,
         next_proc: u32 = 0,
 
@@ -16851,72 +17276,166 @@ test "a looping helper whose only callees are inlined everywhere is a leaf" {
             return self.proc(arg, body, &.{});
         }
 
-        fn directLeaf(self: *@This()) Allocator.Error!LirProcSpecId {
-            const arg = try self.store.addLocal(.{ .layout_idx = .i64 });
-            const join: lir.LIR.JoinPointId = @fromBackingInt(self.next_join);
-            self.next_join += 1;
-            const repeat = try self.store.addCFStmt(.{ .jump = .{ .target = join } }, .test_fixture);
-            const enter = try self.store.addCFStmt(.{ .jump = .{ .target = join } }, .test_fixture);
-            const body = try self.store.addCFStmt(.{ .join = .{
-                .id = join,
-                .params = .empty(),
-                .body = repeat,
-                .remainder = enter,
+        /// A wrapper that emits a runtime-calling low-level (`<= max_wrapper_inline_stmts`).
+        fn runtimeWrapper(self: *@This(), op: lir.LowLevel) Allocator.Error!LirProcSpecId {
+            const arg = try self.store.addLocal(.{ .layout_idx = .str });
+            const res = try self.store.addLocal(.{ .layout_idx = .str });
+            const rc_effect = try self.store.addRcEffect(op.rcEffect());
+            const ret_stmt = try self.store.addCFStmt(.{ .ret = .{ .value = res } }, .test_fixture);
+            const ll_stmt = try self.store.addCFStmt(.{ .assign_low_level = .{
+                .target = res,
+                .op = op,
+                .rc_effect = rc_effect,
+                .args = try self.store.addLocalSpan(&.{arg}),
+                .next = ret_stmt,
             } }, .test_fixture);
-            return self.proc(arg, body, &.{});
+            return self.procWithLayout(arg, .str, ll_stmt, &.{res});
         }
 
-        /// A loop calling `callee` on every pass, or calling itself when
-        /// `callee` is null.
-        fn looping(self: *@This(), callee: ?LirProcSpecId) Allocator.Error!LirProcSpecId {
+        /// Straight-line body past `max_wrapper_inline_stmts` so only the leaf
+        /// rule can select it. Optionally calls `callee`, runs an inline
+        /// low-level, runs a runtime-calling low-level, or runs a `decref`.
+        fn straightLineOverWrapperBudget(
+            self: *@This(),
+            callee: ?LirProcSpecId,
+            self_recursive: bool,
+            low_level: ?lir.LowLevel,
+            has_decref: bool,
+        ) Allocator.Error!LirProcSpecId {
+            var locals: std.ArrayList(LocalId) = .empty;
+            defer locals.deinit(self.gpa);
             const arg = try self.store.addLocal(.{ .layout_idx = .i64 });
-            const result = try self.store.addLocal(.{ .layout_idx = .i64 });
+            try locals.append(self.gpa, arg);
+            const id: LirProcSpecId = @fromBackingInt(self.next_proc);
+            var body = try self.store.addCFStmt(.{ .ret = .{ .value = arg } }, .test_fixture);
+            for (0..max_wrapper_inline_stmts + 4) |_| {
+                const scratch = try self.store.addLocal(.{ .layout_idx = .i64 });
+                try locals.append(self.gpa, scratch);
+                body = try self.store.addCFStmt(.{ .assign_literal = .{
+                    .target = scratch,
+                    .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
+                    .next = body,
+                } }, .test_fixture);
+            }
+            if (low_level) |op| {
+                const target = try self.store.addLocal(.{ .layout_idx = .i64 });
+                try locals.append(self.gpa, target);
+                const rc_effect = try self.store.addRcEffect(op.rcEffect());
+                body = try self.store.addCFStmt(.{ .assign_low_level = .{
+                    .target = target,
+                    .op = op,
+                    .rc_effect = rc_effect,
+                    .args = try self.store.addLocalSpan(&.{ arg, arg }),
+                    .next = body,
+                } }, .test_fixture);
+            }
+            if (has_decref) {
+                const str_local = try self.store.addLocal(.{ .layout_idx = .str });
+                try locals.append(self.gpa, str_local);
+                const rc = try self.store.addRcHelperRef(.{ .concrete = .{ .op = .decref, .layout_idx = .str } });
+                body = try self.store.addCFStmt(.{ .decref = .{
+                    .value = str_local,
+                    .rc = rc,
+                    .next = body,
+                } }, .test_fixture);
+            }
+            if (callee != null or self_recursive) {
+                const result = try self.store.addLocal(.{ .layout_idx = .i64 });
+                try locals.append(self.gpa, result);
+                body = try self.store.addCFStmt(.{ .assign_call = .{
+                    .target = result,
+                    .proc = callee orelse id,
+                    .args = try self.store.addLocalSpan(&.{arg}),
+                    .next = body,
+                } }, .test_fixture);
+            }
+            return self.proc(arg, body, locals.items[1..]);
+        }
+
+        /// A looping body with `extra_stmts` straight-line statements before
+        /// the loop, testing both `<= max_wrapper_inline_stmts` and
+        /// `> max_wrapper_inline_stmts` procedures.
+        fn looping(self: *@This(), callee: ?LirProcSpecId, extra_stmts: usize) Allocator.Error!LirProcSpecId {
+            var locals: std.ArrayList(LocalId) = .empty;
+            defer locals.deinit(self.gpa);
+            const arg = try self.store.addLocal(.{ .layout_idx = .i64 });
+            try locals.append(self.gpa, arg);
             const join: lir.LIR.JoinPointId = @fromBackingInt(self.next_join);
             self.next_join += 1;
-            const id: LirProcSpecId = @fromBackingInt(self.next_proc);
             const repeat = try self.store.addCFStmt(.{ .jump = .{ .target = join } }, .test_fixture);
-            const call = try self.store.addCFStmt(.{ .assign_call = .{
-                .target = result,
-                .proc = callee orelse id,
-                .args = try self.store.addLocalSpan(&.{arg}),
-                .next = repeat,
-            } }, .test_fixture);
+            var loop_body = repeat;
+            if (callee) |target_proc| {
+                const result = try self.store.addLocal(.{ .layout_idx = .i64 });
+                try locals.append(self.gpa, result);
+                loop_body = try self.store.addCFStmt(.{ .assign_call = .{
+                    .target = result,
+                    .proc = target_proc,
+                    .args = try self.store.addLocalSpan(&.{arg}),
+                    .next = loop_body,
+                } }, .test_fixture);
+            }
             const enter = try self.store.addCFStmt(.{ .jump = .{ .target = join } }, .test_fixture);
-            const body = try self.store.addCFStmt(.{ .join = .{
+            var body = try self.store.addCFStmt(.{ .join = .{
                 .id = join,
                 .params = .empty(),
-                .body = call,
+                .body = loop_body,
                 .remainder = enter,
             } }, .test_fixture);
-            return self.proc(arg, body, &.{result});
+            for (0..extra_stmts) |_| {
+                const scratch = try self.store.addLocal(.{ .layout_idx = .i64 });
+                try locals.append(self.gpa, scratch);
+                body = try self.store.addCFStmt(.{ .assign_literal = .{
+                    .target = scratch,
+                    .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
+                    .next = body,
+                } }, .test_fixture);
+            }
+            return self.proc(arg, body, locals.items[1..]);
         }
 
         fn proc(self: *@This(), arg: LocalId, body: CFStmtId, extra_locals: []const LocalId) Allocator.Error!LirProcSpecId {
-            var locals: [2]LocalId = undefined;
-            locals[0] = arg;
-            for (extra_locals, 1..) |local, i| locals[i] = local;
+            return self.procWithLayout(arg, .i64, body, extra_locals);
+        }
+
+        fn procWithLayout(self: *@This(), arg: LocalId, ret_layout: layout.Idx, body: CFStmtId, extra_locals: []const LocalId) Allocator.Error!LirProcSpecId {
+            var locals: std.ArrayList(LocalId) = .empty;
+            defer locals.deinit(self.gpa);
+            try locals.append(self.gpa, arg);
+            try locals.appendSlice(self.gpa, extra_locals);
             self.next_proc += 1;
             return self.store.addProcSpec(.{
                 .name = .fromRaw(self.next_proc),
                 .identity = lir.LIR.ProcIdentity.forTest(self.next_proc),
                 .args = try self.store.addLocalSpan(&.{arg}),
-                .frame_locals = try self.store.addLocalSpan(locals[0 .. extra_locals.len + 1]),
+                .frame_locals = try self.store.addLocalSpan(locals.items),
                 .body = .some(body),
-                .ret_layout = .i64,
+                .ret_layout = ret_layout,
             }, .none);
         }
     };
-    var fixture: Fixture = .{ .store = &store };
+    var fixture: Fixture = .{ .store = &store, .gpa = gpa };
     const wrapper = try fixture.identity();
-    // Calls only the wrapper: once it is expanded, a loop that calls nothing.
-    const over_wrapper = try fixture.looping(wrapper);
-    // Calls only that leaf, which expands to a loop calling nothing.
-    const over_leaf = try fixture.looping(over_wrapper);
+    const direct_leaf = try fixture.straightLineOverWrapperBudget(null, false, .num_int_add_wrap, false);
+    // Calls only the pure wrapper: once expanded, still loop-free and call-free.
+    const over_wrapper = try fixture.straightLineOverWrapperBudget(wrapper, false, null, false);
+    // Calls only that leaf: transitively loop-free and call-free within budget.
+    const over_leaf = try fixture.straightLineOverWrapperBudget(over_wrapper, false, null, false);
     // Calls itself, which no expansion removes.
-    const recursive = try fixture.looping(null);
+    const recursive = try fixture.straightLineOverWrapperBudget(null, true, null, false);
     // Calls a proc that stays a call.
-    const over_recursive = try fixture.looping(recursive);
-    const direct_leaf = try fixture.directLeaf();
+    const over_recursive = try fixture.straightLineOverWrapperBudget(recursive, false, null, false);
+
+    // Issue #13415: looping and runtime-calling procedures must not be leaves.
+    const small_loop = try fixture.looping(null, 0);
+    const medium_loop = try fixture.looping(wrapper, max_wrapper_inline_stmts + 10);
+    const calling_str_to_utf8 = try fixture.straightLineOverWrapperBudget(null, false, .str_to_utf8, false);
+    const calling_list_reserve = try fixture.straightLineOverWrapperBudget(null, false, .list_reserve_for_append, false);
+    const calling_str_concat = try fixture.straightLineOverWrapperBudget(null, false, .str_concat, false);
+    const calling_decref = try fixture.straightLineOverWrapperBudget(null, false, null, true);
+    // A small wrapper around a runtime call is still a wrapper, but a larger
+    // caller calling it inherits the runtime call and is NOT a call-free leaf.
+    const runtime_wrapper = try fixture.runtimeWrapper(.str_to_utf8);
+    const over_runtime_wrapper = try fixture.straightLineOverWrapperBudget(runtime_wrapper, false, null, false);
 
     var codegen = MonoLlvmCodeGen.init(gpa, &store);
     defer codegen.deinit();
@@ -16924,10 +17443,20 @@ test "a looping helper whose only callees are inlined everywhere is a leaf" {
     try codegen.computeInlineEverywhere(store.getProcSpecs(), &.{});
 
     try std.testing.expect(codegen.inlineEverywhere(wrapper));
+    try std.testing.expect(codegen.inlineEverywhere(direct_leaf));
     try std.testing.expect(codegen.inlineEverywhere(over_wrapper));
     try std.testing.expect(codegen.inlineEverywhere(over_leaf));
     try std.testing.expect(!codegen.inlineEverywhere(recursive));
     try std.testing.expect(!codegen.inlineEverywhere(over_recursive));
+
+    try std.testing.expect(!codegen.inlineEverywhere(small_loop));
+    try std.testing.expect(!codegen.inlineEverywhere(medium_loop));
+    try std.testing.expect(!codegen.inlineEverywhere(calling_str_to_utf8));
+    try std.testing.expect(!codegen.inlineEverywhere(calling_list_reserve));
+    try std.testing.expect(!codegen.inlineEverywhere(calling_str_concat));
+    try std.testing.expect(!codegen.inlineEverywhere(calling_decref));
+    try std.testing.expect(codegen.inlineEverywhere(runtime_wrapper));
+    try std.testing.expect(!codegen.inlineEverywhere(over_runtime_wrapper));
 
     const entrypoints = [_]MonoLlvmCodeGen.Entrypoint{
         .{ .symbol_name = "arbitrary_export", .proc = over_leaf, .arg_layouts = &.{.i64}, .ret_layout = .i64 },
