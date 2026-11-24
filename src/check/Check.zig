@@ -16189,7 +16189,7 @@ fn recordErroneousNodes(self: *Self) Allocator.Error!void {
         const node: CIR.Node.Idx = @fromBackingInt(raw_node);
         const tag = store.nodes.get(node).tag;
         const node_erroneous = if (isExprNodeTag(tag))
-            try self.exprIsErroneous(&errors, @fromBackingInt(raw_node))
+            try self.exprIsErroneous(&errors, tag, @fromBackingInt(raw_node))
         else if (isPatternNodeTag(tag)) blk: {
             const pattern_idx: CIR.Pattern.Idx = @fromBackingInt(raw_node);
             if (store.getPattern(pattern_idx) == .runtime_error) break :blk true;
@@ -16208,25 +16208,28 @@ fn recordErroneousNodes(self: *Self) Allocator.Error!void {
     try self.cir.recordErroneousNodes(erroneous.items);
 }
 
-fn exprIsErroneous(self: *Self, errors: *ErroneousTypeMemo, expr_idx: CIR.Expr.Idx) Allocator.Error!bool {
-    const expr = self.cir.store.getExpr(expr_idx);
-    switch (expr) {
-        .e_runtime_error => return true,
-        .e_call => |call| if (call.constraint_fn_var) |fn_var| {
+/// Whether an expression is erroneous in its own right. Only a call, an
+/// interpolation, and a static dispatch are decided by their payload, so
+/// only those nodes (by `tag`) are decoded.
+fn exprIsErroneous(self: *Self, errors: *ErroneousTypeMemo, tag: CIR.Node.Tag, expr_idx: CIR.Expr.Idx) Allocator.Error!bool {
+    if (tag == .expr_call) {
+        if (self.cir.store.getExpr(expr_idx).e_call.constraint_fn_var) |fn_var| {
             if (try errors.contains(fn_var)) return true;
-        },
-        .e_interpolation => |interpolation| {
-            if (interpolation.assembler_fn_var) |assembler| {
-                if (try errors.contains(assembler)) return true;
-            }
-            if (interpolation.constraint_fn_var) |fn_var| {
-                if (self.types.varStaticDispatchRejected(fn_var)) return true;
-            }
-        },
-        inline .e_dispatch_call, .e_method_eq, .e_type_dispatch_call => |dispatch| {
-            if (self.types.varStaticDispatchRejected(dispatch.constraint_fn_var)) return true;
-        },
-        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_structural_eq, .e_structural_hash, .e_type_method_call, .e_tuple_access, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => {},
+        }
+    } else if (tag == .expr_interpolation) {
+        const interpolation = self.cir.store.getExpr(expr_idx).e_interpolation;
+        if (interpolation.assembler_fn_var) |assembler| {
+            if (try errors.contains(assembler)) return true;
+        }
+        if (interpolation.constraint_fn_var) |fn_var| {
+            if (self.types.varStaticDispatchRejected(fn_var)) return true;
+        }
+    } else if (tag == .expr_dispatch_call) {
+        if (self.types.varStaticDispatchRejected(self.cir.store.getExpr(expr_idx).e_dispatch_call.constraint_fn_var)) return true;
+    } else if (tag == .expr_method_eq) {
+        if (self.types.varStaticDispatchRejected(self.cir.store.getExpr(expr_idx).e_method_eq.constraint_fn_var)) return true;
+    } else if (tag == .expr_type_dispatch_call or tag == .expr_type_dispatch_call_dispatcher) {
+        if (self.types.varStaticDispatchRejected(self.cir.store.getExpr(expr_idx).e_type_dispatch_call.constraint_fn_var)) return true;
     }
     if (self.cir.rowCoercedResultWideVar(ModuleEnv.nodeIdxFrom(expr_idx))) |wide_var| {
         if (try errors.contains(wide_var)) return true;
