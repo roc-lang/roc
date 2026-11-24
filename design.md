@@ -12527,6 +12527,120 @@ arithmetic remains polymorphic, and mixed-type user methods stay callable by nam
 nominal and extended rows still guide nested defaulted/optional construction;
 inconsistent shared type variables and unsupported real dispatches still fail.
 
+### The Literal Typing Rule
+
+**A literal checked against an expected type that is fully known is checked
+by one structural walk of literal and type together, and each literal node's
+type is the corresponding part of the expected type.** Where the expected type
+has nothing left to decide, unification can learn nothing from relating the
+literal to it, so the literal gets no skeleton, no expected-shape copy and no
+probe. Whether the rule applies is decided once, up front, from explicit data
+alone (the literal's syntax and the expected type as it stands), before
+anything is written (`literalTypingRuleCovers`, through
+`literalTypingRulePart`); a literal outside the rule is checked by the general
+path (Expected Shape Context) from the start. The rule is never tried and then
+retried: a literal it covers cannot fail it.
+
+The literal forms are: a record construction with no update base and no unset
+field, `{}`, a tuple, a list, `[]`, a tag with or without payloads, a number
+literal with no suffix, and a string literal with no suffix and no
+interpolation.
+
+The rule starts at a literal whose expected type reaches it through a channel
+whose owner relates the literal to that type anyway: the literal's own
+annotation or expected type (its expression frame owns that relation), or a
+cell of an enclosing construction's projected shape, which is already a fresh
+copy that the construction relates to the literal's value. Context that only
+guides, without that relation (a branch body's, a call or method argument's,
+a binary operand's or a nominal constructor backing's contextual type, a
+lambda's seeded result), and a borrowed record-update field, do not start it:
+the general path copies such context and never unifies into it. A tag starts
+no walk of its own either: on the general path a tag relates to the union it
+is expected at by extending it, which leaves the merged union holding the
+tags the literal lacked as an extension row rather than the union's own one
+row; as a part of a literal under the rule, the general path's owning
+relation relates the whole union to the union's one row, which is the
+union's own content. Every literal
+part of a literal under the rule is under the rule with the part of the
+expected type it matched (`ExpectedType.literal_rule`).
+
+The decision walks literal and type together, following aliases, and the
+rule applies exactly when every pair matches:
+
+- a record construction: a record row, ending in the empty record, of exactly
+  the literal's fields, each `required`;
+- `{}`: the empty record, or a row of no fields ending in it;
+- a tuple: a tuple of the literal's arity;
+- a list, and `[]`: the builtin `List` of one argument, which each item
+  matches and which for `[]` is fully known;
+- a tag: a structural tag union of one row closed directly by the empty tag
+  union, holding the tag once with the literal's arity, each payload matching
+  its slot and every other tag's payloads fully known;
+- a number: a builtin number type holding the literal's exact value (the fit
+  Concrete Builtin Numeral Introduction uses);
+- a string: the builtin `Str`.
+
+A type is fully known when nothing reachable from it is a flex variable (a
+deferred literal's, a `_` hole's, a row extension), a rigid, an error, a
+function, or a variable at generalized rank, and every field kind in it is
+decided. Everything else is outside the rule, so the whole literal keeps the
+general path: a nominal type other than `List`, `Str` and the builtin number
+types (a record or tag lifted into a declared nominal), an optional or
+defaulted field whether supplied or omitted, an open or uncommitted row, a
+tag union written over an extension, a number that does not fit or whose type
+is custom, a suffixed literal, an interpolation, a lambda, and any
+sub-expression that is not a literal form (a lookup, a call). A literal part
+outside the rule does not stop a literal nested inside it from starting the
+rule again at its own projected cell.
+
+Each node takes its part by one ordinary unification of its own variable with
+that part, after its children, and a record construction first gives its
+variable its own row. A record construction's fields keep kind variables of
+their own (Field Kinds), and the expected row decides each `required`; the
+relation of a required field to a field of kind variable keeps the kind
+variable as the merged field's kind. Every record a literal built therefore
+reaches its fields through kind variables, which makes its type no ground
+type, and a use of a checked definition shares a type that is not ground
+where it copies a ground one. So under the rule the record's row is its
+fields at their parts, each over a fresh kind already decided `required`,
+ending in the part's own tail, and that row relates to the part: the merged
+row is the one the general path leaves. `{}` builds its row over an
+uncommitted tail exactly as the general path does before relating it.
+
+This is a mechanism (Solver-Mutating Rewrites). Inside the rule every relation
+the general path runs succeeds: the skeleton's relation to the expected copy,
+each item's relation to its cell, the construction's relation to its
+projected row, the list fold, and the owning relation. None of them can decide
+anything, so each node's class ends merged with the corresponding part of the
+expected type, with the content the owning relation's merge gives it, which
+is the content the rule gives it; the only difference is the variables the
+general path minted and merged, so only variable numbering changes. A literal
+the rule covers yields no diagnostic on either path, and a literal that would
+yield one is outside the rule, so every diagnostic, with its region, its
+rendered types and its count, is the general path's.
+
+What the general path leaves behind for such a literal, and what the rule
+leaves:
+
+- every node's own expression frame runs as for any expression (rank,
+  hoisting and value-form roots, dispatch checks, relation operands);
+- a record construction and `{}` are registered as record constructions;
+- a record construction's field kinds are its own variables, decided
+  `required`; they are not listed for `defaultLiteralFieldKinds`, which skips
+  a decided kind;
+- a number literal records its literal plan with no conversion function and a
+  string literal its quote plan, exactly as Concrete Builtin Numeral
+  Introduction and Concrete Builtin Quote Introduction do, so finalization
+  seals both `builtin_direct`;
+- a record construction mints no uncommitted tail: its row ends in the
+  part's committed tail, which is what the tail commits to;
+- no default is absorbed and no literal is deferred, determined or left open,
+  since no field is omitted and every number and string has its builtin type.
+
+`ROC_CHECKER_SPECULATION_STATS` also prints how many literal nodes each module
+checked by the rule and by the general path. Accepted and rejected sides are
+pinned in `literal_typing_rule_test.zig`.
+
 ### Lambda Parameters Seeded From Context
 
 A lambda with no annotation of its own is checked knowing the parameter types
@@ -17112,6 +17226,14 @@ Other solved-graph mutations:
   Introduction (above). Uses the existing `unifyWith` descriptor-introduction
   mechanism for a proved concrete builtin conversion; does not mutate the
   context's type or introduce a redirect rule.
+- `literalTypingRulePart`—mechanism: The Literal Typing Rule (above). A
+  read-only match of a literal's syntax against its fully known expected
+  type gates one ordinary unification of each literal node's variable (a
+  record construction's over its own row of decided field kinds) with the
+  part of that type it matched, in place of the general path's skeleton,
+  shape copy and probes, whose relations would all succeed and decide
+  nothing. It writes nothing outside unification, restamps no plan, and
+  introduces no redirect rule.
 - `projectExpectedTagPayload` without a borrowed record field—mechanism:
   Expected Shape Context (above). Every refusal is read before the copy
   writes anything, and the copy cannot fail, so it opens no probe.
