@@ -394,9 +394,9 @@ fn writeStmt(
         .assign_packed_erased_fn => |s| {
             const row = store.stmtRow(s.data);
             try useLocal(used, s.target);
-            if (row.capture) |c| try useLocal(used, c);
+            if (row.capture.get()) |c| try useLocal(used, c);
             try w.print("packed_fn {d} {d} ", .{ @backingInt(s.target), @backingInt(row.proc) });
-            try optLocal(w, row.capture);
+            try optLocal(w, row.capture.get());
             try next(stmts, s.next, w);
         },
         .assign_low_level => |s| {
