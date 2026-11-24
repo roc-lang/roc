@@ -912,6 +912,10 @@ const FnSource = struct {
     /// emitted by earlier clones.
     body: Ast.FnBody,
     size: BodySize,
+    /// Precomputed when `body` is `.roc` and `size.admits()`: whether the body
+    /// contains a `return` or a lexical `break`/`continue` outside any
+    /// enclosing loop in the body.
+    blocks_inline_control: bool,
 };
 
 const FnPlan = struct {
@@ -1715,11 +1719,19 @@ const Pass = struct {
             const used_args = try allocator.alloc(bool, args.len);
             errdefer allocator.free(used_args);
             @memset(used_args, false);
+            const size = try fnBodySizeWithin(allocator, program, fn_.body, spec_constr_body_expr_threshold);
+            const blocks_inline_control = switch (fn_.body) {
+                .roc => |body_expr| size.admits() and
+                    (try exprContainsReturn(allocator, program, body_expr) or
+                        try exprContainsFreeLoopControl(allocator, program, body_expr)),
+                .hosted => false,
+            };
             plan.* = .{
                 .used_args = used_args,
                 .source = .{
                     .body = fn_.body,
-                    .size = try fnBodySizeWithin(allocator, program, fn_.body, spec_constr_body_expr_threshold),
+                    .size = size,
+                    .blocks_inline_control = blocks_inline_control,
                 },
                 .specs = .empty,
             };
@@ -2623,6 +2635,19 @@ const Pass = struct {
     // copies the run moves into one prefix function that every copy calls
     // (design.md "SpecConstr And Loop Scalarization").
 
+    /// Whether `notePrefixCopy(fn_id)` could still split `fn_id`'s source body
+    /// (and therefore reduce its size before `admitInlineBodyGrowth`).
+    fn canPrefixSplit(self: *const Pass, fn_id: Ast.FnId) bool {
+        if (self.borrowed_worker) return false;
+        if (self.clone_inlining != .all_calls) return false;
+        const raw = @backingInt(fn_id);
+        if (raw >= self.plans.len) return false;
+        return switch (self.prefix_splits[raw]) {
+            .none, .committed => false,
+            .unanalyzed, .candidate => true,
+        };
+    }
+
     /// Record that a clone copies `fn_id`'s body: an inline admitted only
     /// because it is productive, or a call-pattern worker. A copy of a body
     /// that is not placed once splits the source body.
@@ -3031,9 +3056,14 @@ const Pass = struct {
         } } });
         try self.prefix_source_ranges.append(self.allocator, .{ .start = range_start, .end = program.exprCount() });
 
+        const new_size = try exprBodySizeWithin(self.allocator, program, new_body, spec_constr_body_expr_threshold);
+        const blocks_inline_control = new_size.admits() and
+            (try exprContainsReturn(self.allocator, program, new_body) or
+                try exprContainsFreeLoopControl(self.allocator, program, new_body));
         self.plans[raw].source = .{
             .body = .{ .roc = new_body },
-            .size = try exprBodySizeWithin(self.allocator, program, new_body, spec_constr_body_expr_threshold),
+            .size = new_size,
+            .blocks_inline_control = blocks_inline_control,
         };
         self.prefix_splits[raw] = .committed;
         for (self.plans[raw].specs.items) |*spec| spec.written = false;
@@ -3302,6 +3332,7 @@ const Pass = struct {
     const InlineSourceBody = struct {
         expr: Ast.ExprId,
         size: BodySize,
+        blocks_inline_control: bool,
     };
 
     fn sourceBody(self: *const Pass, fn_id: Ast.FnId) Ast.FnBody {
@@ -3318,11 +3349,19 @@ const Pass = struct {
             .roc => |body| body,
             .hosted => return null,
         };
-        const size = if (raw < self.plans.len)
-            self.plans[raw].source.size
-        else
-            try exprBodySizeWithin(self.allocator, self.program, body, spec_constr_body_expr_threshold);
-        return .{ .expr = body, .size = size };
+        if (raw < self.plans.len) {
+            const source = self.plans[raw].source;
+            return .{
+                .expr = body,
+                .size = source.size,
+                .blocks_inline_control = source.blocks_inline_control,
+            };
+        }
+        const size = try exprBodySizeWithin(self.allocator, self.program, body, spec_constr_body_expr_threshold);
+        const blocks_inline_control = size.admits() and
+            (try exprContainsReturn(self.allocator, self.program, body) or
+                try exprContainsFreeLoopControl(self.allocator, self.program, body));
+        return .{ .expr = body, .size = size, .blocks_inline_control = blocks_inline_control };
     }
 
     fn recordCallPattern(self: *Pass, fn_id: Ast.FnId, args_span: Ast.Span(Ast.ExprId)) Allocator.Error!void {
@@ -5937,11 +5976,26 @@ const Cloner = struct {
         const value_task: CloneTask = .{ .expr_value = .{ .expr = expr_id, .bindings = bindings } };
         switch (expr.data) {
             .call_proc => |call| {
-                if (frame.cursor != 0) return .{ .ret = input.? };
-                if (call.is_cold or !self.inline_calls.admits()) return .{ .tail = value_task };
-                const callee = Ast.localDirectCallee(call) orelse return .{ .tail = value_task };
+                switch (frame.cursor) {
+                    0 => {},
+                    // The call inlined.
+                    1 => return .{ .ret = input.? },
+                    // The call cloned plainly.
+                    else => return retValue(.{ .expr = input.?.get(.expr) }),
+                }
+                if (call.is_cold or !self.inline_calls.admits()) {
+                    frame.cursor = 2;
+                    return .{ .call = .{ .plain = .{ .expr = expr_id } } };
+                }
+                const callee = Ast.localDirectCallee(call) orelse {
+                    frame.cursor = 2;
+                    return .{ .call = .{ .plain = .{ .expr = expr_id } } };
+                };
                 const admission = try self.admitsDirectInline(expr_id, callee, call);
-                if (admission == .residual) return .{ .tail = value_task };
+                if (admission == .residual) {
+                    frame.cursor = 2;
+                    return .{ .call = .{ .plain = .{ .expr = expr_id } } };
+                }
                 frame.cursor = 1;
                 return .{ .call = .{ .inline_direct = .{
                     .callee = callee,
@@ -10274,11 +10328,7 @@ const Cloner = struct {
                 const source_fn = self.pass.program.getFn(callable.fn_id);
                 const source = try self.pass.inlineSourceBody(callable.fn_id) orelse return residualCallableCall(frame, task);
                 if (!source.size.admits()) return residualCallableCall(frame, task);
-                if (try exprContainsReturn(self.pass.allocator, self.pass.program, source.expr) or
-                    try exprContainsFreeLoopControl(self.pass.allocator, self.pass.program, source.expr))
-                {
-                    return residualCallableCall(frame, task);
-                }
+                if (source.blocks_inline_control) return residualCallableCall(frame, task);
                 // Independently specialized Monotype graphs can give the caller and
                 // callee representation-distinct result types; such a call stays a
                 // call.
@@ -10446,11 +10496,7 @@ const Cloner = struct {
                 task.result_ty = original.ty;
                 const source = try self.pass.inlineSourceBody(callee) orelse return plainDirectCall(frame, task);
                 if (!source.size.admits()) return plainDirectCall(frame, task);
-                if (try exprContainsReturn(self.pass.allocator, self.pass.program, source.expr) or
-                    try exprContainsFreeLoopControl(self.pass.allocator, self.pass.program, source.expr))
-                {
-                    return plainDirectCall(frame, task);
-                }
+                if (source.blocks_inline_control) return plainDirectCall(frame, task);
                 // A callee result whose independently specialized type differs from
                 // the call-site type stays behind its call.
                 task.needs_typed_boundary = !sameType(self.pass.program, task.result_ty, source_fn.ret);
@@ -11830,7 +11876,41 @@ const Cloner = struct {
         // local the context does not have, so the call cannot stay residual
         // and must inline.
         if (self.callCapturesAreForeign(call.captures)) return .required;
+        if (!try self.canInlineDirectCall(expr_id, callee, call)) return .residual;
         return if (try self.crossingIsProductive(expr_id, callee, call)) .productive else .residual;
+    }
+
+    /// Whether `stepInlineDirect` can pass its unconditional pre-inline gates
+    /// for `expr_id` calling `callee`. Running this before
+    /// `crossingIsProductive` avoids pushdown crossing queries for calls
+    /// `stepInlineDirect` would unconditionally reject.
+    fn canInlineDirectCall(self: *Cloner, expr_id: Ast.ExprId, callee: Ast.FnId, call: Mono.CallProc) Allocator.Error!bool {
+        if (call.demand_shaped) return false;
+        if (self.inline_body_growth.remaining == 0) return false;
+        const source = try self.pass.inlineSourceBody(callee) orelse return false;
+        if (!source.size.admits()) return false;
+        if (source.blocks_inline_control) return false;
+        const source_fn = self.pass.program.getFn(callee);
+        const result_ty = self.pass.program.getExpr(expr_id).ty;
+        if (!sameType(self.pass.program, result_ty, source_fn.ret)) return false;
+        if (!self.pass.canPrefixSplit(callee)) {
+            const exact_size = source.size.exactValue() orelse return false;
+            if (@max(exact_size, 1) > self.inline_body_growth.remaining) return false;
+        }
+        var active_min_size: ?usize = null;
+        var is_recursive = false;
+        for (self.inline_stack.items) |active| {
+            if (active.fn_id != callee) continue;
+            is_recursive = true;
+            const active_size = active.known_size orelse return false;
+            if (active_min_size == null or active_size < active_min_size.?) active_min_size = active_size;
+        }
+        if (is_recursive) {
+            const direct_call_size = (try self.argsKnownConstructorSize(call.args)).plus(try self.captureOperandsKnownConstructorSize(call.captures));
+            const current_size = direct_call_size.exactValue() orelse return false;
+            if (current_size == 0 or current_size >= active_min_size.?) return false;
+        }
+        return true;
     }
 
     fn crossingIndex(self: *const Cloner) *const InlineCrossing.Index {
@@ -17941,6 +18021,140 @@ test "a known record entering a loop is productive only through the parts the lo
     try std.testing.expect(!try cloner.crossingIsProductive(make_ignored, make, program.getExpr(make_ignored).data.call_proc));
     cloner.crossing_root_fn = looping_reading;
     try std.testing.expect(try cloner.crossingIsProductive(make_read, make, program.getExpr(make_read).data.call_proc));
+}
+
+test "admitsDirectInline rejects uninlinable callees before running crossing queries" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const tag_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+    const tag_a = try program.names.internTagLabel("A");
+    const unit_expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const known_a = try program.addExpr(.{ .ty = tag_ty, .data = .{ .tag = .{ .name = tag_a, .payloads = .empty() } } });
+
+    const MatchHelper = struct {
+        fn matchArg(p: *Ast.Program, arg: Ast.LocalId, ty: Type.TypeId, u_ty: Type.TypeId, a: names.TagNameId, arm: Ast.ExprId) Allocator.Error!Ast.ExprId {
+            const pat = try p.addPat(.{ .ty = ty, .data = .{ .tag = .{ .name = a, .payloads = .empty() } } });
+            const wild = try p.addPat(.{ .ty = ty, .data = .wildcard });
+            return p.addExpr(.{ .ty = u_ty, .data = .{ .match_ = .{
+                .scrutinee = try p.addExpr(.{ .ty = ty, .data = .{ .local = arg } }),
+                .branches = try p.addBranchSpan(&.{
+                    .{ .pat = pat, .body = arm },
+                    .{ .pat = wild, .body = arm },
+                }),
+            } } });
+        }
+    };
+
+    // 1. Oversized callee (> spec_constr_body_expr_threshold exprs) that matches its tag argument.
+    const big_arg = try program.addLocal(@fromBackingInt(1), tag_ty);
+    var big_stmts: [spec_constr_body_expr_threshold + 5]Ast.StmtId = undefined;
+    for (&big_stmts) |*slot| {
+        const stmt_expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+        slot.* = try program.addStmt(.{ .expr = stmt_expr });
+    }
+    const big_body = try program.addExpr(.{ .ty = unit_ty, .data = .{ .block = .{
+        .statements = try program.addStmtSpan(&big_stmts),
+        .final_expr = try MatchHelper.matchArg(&program, big_arg, tag_ty, unit_ty, tag_a, unit_expr),
+    } } });
+    const big_fn = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(2),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = big_arg, .ty = tag_ty }}),
+        .captures = .empty(),
+        .body = .{ .roc = big_body },
+        .ret = unit_ty,
+    });
+
+    // 2. Small callee containing a `return` statement that matches its tag argument.
+    const ret_arg = try program.addLocal(@fromBackingInt(3), tag_ty);
+    const ret_stmt = try program.addStmt(.{ .return_ = .{ .value = unit_expr, .target = unit_ty } });
+    const ret_body = try program.addExpr(.{ .ty = unit_ty, .data = .{ .block = .{
+        .statements = try program.addStmtSpan(&.{ret_stmt}),
+        .final_expr = try MatchHelper.matchArg(&program, ret_arg, tag_ty, unit_ty, tag_a, unit_expr),
+    } } });
+    const ret_fn = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(4),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = ret_arg, .ty = tag_ty }}),
+        .captures = .empty(),
+        .body = .{ .roc = ret_body },
+        .ret = unit_ty,
+    });
+
+    // 3. Small non-wrapper callee that matches its tag argument (eligible when not gated).
+    const ok_arg = try program.addLocal(@fromBackingInt(5), tag_ty);
+    const guard_stmt = try program.addStmt(.{ .expr = unit_expr });
+    const ok_body = try program.addExpr(.{ .ty = unit_ty, .data = .{ .block = .{
+        .statements = try program.addStmtSpan(&.{guard_stmt}),
+        .final_expr = try MatchHelper.matchArg(&program, ok_arg, tag_ty, unit_ty, tag_a, unit_expr),
+    } } });
+    const ok_fn = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(6),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = ok_arg, .ty = tag_ty }}),
+        .captures = .empty(),
+        .body = .{ .roc = ok_body },
+        .ret = unit_ty,
+    });
+
+    const big_call = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = big_fn },
+        .args = try program.addExprSpan(&.{known_a}),
+    } } });
+    const ret_call = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = ret_fn },
+        .args = try program.addExprSpan(&.{known_a}),
+    } } });
+    const demand_call = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = ok_fn },
+        .args = try program.addExprSpan(&.{known_a}),
+        .demand_shaped = true,
+    } } });
+    const ok_call = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = ok_fn },
+        .args = try program.addExprSpan(&.{known_a}),
+    } } });
+    const caller = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(7),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = try program.addExpr(.{ .ty = unit_ty, .data = .{ .tuple = try program.addExprSpan(&.{ big_call, ret_call, demand_call, ok_call }) } }) },
+        .ret = unit_ty,
+    });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    const index = try pass.buildCrossingIndex();
+    defer index.deinit();
+    var session = try InlineCrossing.Session.init(allocator, index, &program);
+    defer session.deinit();
+    try index.classifyWrappers(&session);
+    pass.crossing_index = index;
+    // Leave crossing_session null while checking gated calls: if any of these
+    // reached crossingIsProductive, crossingSession() would fail its invariant.
+    pass.crossing_session = null;
+
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    cloner.inline_direct_requires_productivity = true;
+    cloner.crossing_root_fn = caller;
+
+    try std.testing.expectEqual(Cloner.DirectInlineAdmission.residual, try cloner.admitsDirectInline(big_call, big_fn, program.getExpr(big_call).data.call_proc));
+    try std.testing.expectEqual(Cloner.DirectInlineAdmission.residual, try cloner.admitsDirectInline(ret_call, ret_fn, program.getExpr(ret_call).data.call_proc));
+    try std.testing.expectEqual(Cloner.DirectInlineAdmission.residual, try cloner.admitsDirectInline(demand_call, ok_fn, program.getExpr(demand_call).data.call_proc));
+
+    // Exhausted growth budget also rejects before consulting crossing_session.
+    cloner.inline_body_growth = .init(0);
+    try std.testing.expectEqual(Cloner.DirectInlineAdmission.residual, try cloner.admitsDirectInline(ok_call, ok_fn, program.getExpr(ok_call).data.call_proc));
+
+    // With budget restored and crossing_session attached, the eligible call is productive.
+    cloner.inline_body_growth = .init(Cloner.inline_body_work_budget);
+    pass.crossing_session = &session;
+    try std.testing.expectEqual(Cloner.DirectInlineAdmission.productive, try cloner.admitsDirectInline(ok_call, ok_fn, program.getExpr(ok_call).data.call_proc));
 }
 
 test "SpecConstr bounds cumulative inlining across small acyclic wrappers" {
