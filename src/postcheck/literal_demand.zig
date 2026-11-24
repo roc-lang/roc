@@ -909,6 +909,9 @@ fn requirementFlagsOf(view: checked.ImportedModuleView, template: checked.Checke
             .numeral => .{ .dependent_numeral = true },
             .quote => .{ .dependent_quote = true },
             .interpolation => .{ .strict = true },
+            // A polymorphic constant's instance this instantiation reaches
+            // with no checked edge is a literal root at its instance.
+            .constant_instance => .{ .strict = true },
         });
     }
     return flags;

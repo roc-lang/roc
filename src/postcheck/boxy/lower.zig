@@ -1010,6 +1010,10 @@ pub const Program = struct {
     /// module and root (`evaluatesRoot`), each with its request's checked
     /// type (`rootValueType`).
     requested_roots: std.AutoHashMapUnmanaged(RootSlotKey, checked.CheckedTypeId) = .empty,
+    /// Every module's `constant_instance` roots, by the constant and the
+    /// closed type each is the constant's value at (`constantInstance`),
+    /// built at the first lookup.
+    constant_instances: ?std.AutoHashMapUnmanaged(ConstantInstanceKey, RootSlotKey) = null,
     /// The Builtin `Hasher` type, once asked for (`defaultHasher`).
     default_hasher: ?TypeId = null,
     /// Each module's callable-eval templates, by their binding pattern.
@@ -1716,6 +1720,7 @@ pub const Program = struct {
         self.stored_data_alone.deinit(self.allocator);
         self.inline_literal_slots.deinit(self.allocator);
         self.requested_roots.deinit(self.allocator);
+        if (self.constant_instances) |*instances| instances.deinit(self.allocator);
         self.const_schema.deinit(self.allocator);
         self.wrapper_by_root.deinit(self.allocator);
         self.hosted.deinit(self.allocator);
@@ -3956,6 +3961,21 @@ pub const Program = struct {
     /// The thunk of literal requirement `literal requirement` of the own scope of `target`
     /// instantiated at `bound` (`WorkerKey.literal_thunk`).
     pub fn literalThunkWorker(self: *Program, target: WorkerId, bound: []const TypeId, literal_requirement: u32) Allocator.Error!WorkerId {
+        {
+            const target_worker = self.worker(target).*;
+            if (target_worker.literal_scopes.len != 0 and literal_requirement < target_worker.literal_scopes[0].len) {
+                const requirement = target_worker.literal_scopes[0][literal_requirement];
+                // A polymorphic constant's instance is never computed where
+                // it is read: it is the compile-time root of the constant at
+                // the instance's closed type.
+                if (requirement.site.kind == .constant_instance) {
+                    const ty = try self.converter().convert(target_worker.module, requirement.ty, .{ .module = target_worker.module, .vars = target_worker.scheme_vars, .bound = bound });
+                    const instance = try self.constantInstance(requirement.site, ty) orelse
+                        invariant("a polymorphic constant is read at a closed instance no compile-time root evaluates");
+                    return try self.rootThunkEntry(instance.module, instance.root, ty);
+                }
+            }
+        }
         const bound_ty = try self.store.intern(.{ .tuple = bound });
         const key: WorkerKey = .{ .literal_thunk = .{ .target = target, .bound = bound_ty, .literal_requirement = literal_requirement } };
         if (self.worker_ids.get(key)) |existing| return existing;
@@ -3965,6 +3985,22 @@ pub const Program = struct {
         const ty = target_worker.literal_scopes[0][literal_requirement].ty;
         const ret = try self.converter().convert(target_worker.module, ty, .{ .module = target_worker.module, .vars = target_worker.scheme_vars, .bound = bound });
         return try self.addErasedWorker(key, target_worker.module, &.{}, &.{}, ret, "boxy.literal_thunk");
+    }
+
+    /// The entry of the immortal callable of `literal_argument` root `root`
+    /// of `module_index`, whose value has type `ty`: its entry wrapper,
+    /// which restores the stored value, or converts the literal where none
+    /// is stored; in the compile-time program evaluating the root, the read
+    /// of its slot once it completes (a validate-only root stores no value,
+    /// so its wrapper converts for every reader).
+    pub fn rootThunkEntry(self: *Program, module_index: ModuleIndex, root: checked.ComptimeRootId, ty: TypeId) Allocator.Error!WorkerId {
+        const compile_time_root = self.module(module_index).view.compile_time_roots.root(root);
+        const argument = compile_time_root.literal_argument orelse invariant("a literal argument root records no literal argument");
+        if (compile_time_root.payloadFor(.boxy) == .pending and !argument.validate_only and self.evaluatesRoot(module_index, root))
+            return try self.rootSlotThunkWorker(module_index, root, ty);
+        const wrapper = self.wrapper_by_root.get(.{ .module = module_index, .root = root }) orelse
+            invariant("a literal argument root has no entry wrapper");
+        return try self.methodEntryWorker(try self.templateRefWorker(wrapper));
     }
 
     /// The thunk reading the compile-time value slot of literal argument root
@@ -4094,6 +4130,35 @@ pub const Program = struct {
 
     /// A compile-time root of a module of the program.
     pub const RootSlotKey = struct { module: ModuleIndex, root: checked.ComptimeRootId };
+
+    /// A polymorphic constant, by its module and compile-time root, at a
+    /// closed type.
+    pub const ConstantInstanceKey = struct { module: [32]u8, constant: u32, ty: TypeId };
+
+    /// The `constant_instance` root of some module of the program holding
+    /// the value of the polymorphic constant `site` names at the closed type
+    /// `ty` (design.md "Polymorphic Constants"), for a read whose instance
+    /// no checked edge names: a frame deriving its literal arguments from
+    /// its types, or a dictionary entry. Every root of one constant at one
+    /// type holds one value, so any of them serves.
+    pub fn constantInstance(self: *Program, site: checked.LiteralSite, ty: TypeId) Allocator.Error!?RootSlotKey {
+        std.debug.assert(site.kind == .constant_instance);
+        if (self.constant_instances == null) {
+            var instances: std.AutoHashMapUnmanaged(ConstantInstanceKey, RootSlotKey) = .empty;
+            errdefer instances.deinit(self.allocator);
+            for (self.modules.views.items) |*view| {
+                for (view.view.compile_time_roots.roots.items()) |root| {
+                    const argument = root.literal_argument orelse continue;
+                    if (argument.site.kind != .constant_instance or argument.sealed) continue;
+                    const root_ty = try self.converter().convert(view.index, root.checked_type, .{ .module = view.index, .vars = &.{}, .bound = &.{} });
+                    const entry = try instances.getOrPut(self.allocator, .{ .module = argument.site.module.bytes, .constant = argument.site.node, .ty = root_ty });
+                    if (!entry.found_existing) entry.value_ptr.* = .{ .module = view.index, .root = root.id };
+                }
+            }
+            self.constant_instances = instances;
+        }
+        return self.constant_instances.?.get(.{ .module = site.module.bytes, .constant = site.node, .ty = ty });
+    }
 
     /// Whether this program evaluates compile-time root `root` of module
     /// `module_index`: the root is one of the program's requests. A pending

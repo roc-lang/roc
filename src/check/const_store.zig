@@ -958,6 +958,70 @@ pub const ConstTypeStore = struct {
         };
     }
 
+    /// The identity of stored type `root` as the type of a value: its
+    /// structure, with record field and tag names by their text and each
+    /// named type by its declaring module, its name, its declaring
+    /// statement and its arguments, in `names`. A named type's backing is
+    /// its declaration's, which its declaring module's identity covers.
+    pub fn identityDigest(self: *const ConstTypeStore, allocator: Allocator, type_names: *const names.CanonicalNameStore, root: ConstTypeId) Allocator.Error![32]u8 {
+        var hasher = base.Sha256.init(.{});
+        hasher.update("roc.const.type.v1");
+        var pending: std.ArrayList(ConstTypeId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |id| {
+            const ty = self.get(id);
+            hasher.update(@tagName(std.meta.activeTag(ty)));
+            hasher.update(&[_]u8{0});
+            // Children are pushed in reverse, so they are hashed in order.
+            const start = pending.items.len;
+            switch (ty) {
+                .zst => {},
+                .primitive => |primitive| hasher.update(@tagName(primitive)),
+                .erased => |digest| hasher.update(std.mem.asBytes(&digest)),
+                .list, .box => |item| try pending.append(allocator, item),
+                .tuple => |items| try pending.appendSlice(allocator, self.typeSpan(items)),
+                .func => |func| {
+                    try pending.appendSlice(allocator, self.typeSpan(func.args));
+                    try pending.append(allocator, func.ret);
+                    hasher.update(std.mem.asBytes(&func.args.len));
+                },
+                .record => |fields| {
+                    hasher.update(std.mem.asBytes(&fields.len));
+                    for (self.fieldSpan(fields)) |field| {
+                        hashIdentityText(&hasher, type_names.recordFieldLabelText(field.name));
+                        try pending.append(allocator, field.ty);
+                    }
+                },
+                .tag_union => |tags| {
+                    hasher.update(std.mem.asBytes(&tags.len));
+                    for (self.tagSpan(tags)) |tag| {
+                        hashIdentityText(&hasher, type_names.tagLabelText(tag.name));
+                        const payloads = self.typeSpan(tag.payloads);
+                        hasher.update(std.mem.asBytes(&payloads.len));
+                        try pending.appendSlice(allocator, payloads);
+                    }
+                },
+                .named => |named| {
+                    hasher.update(&named.named_type.module.bytes);
+                    hashIdentityText(&hasher, type_names.typeNameText(named.def.type_name));
+                    const decl: u32 = if (named.def.source_decl.get()) |decl| decl + 1 else 0;
+                    hasher.update(std.mem.asBytes(&decl));
+                    const args = self.typeSpan(named.args);
+                    hasher.update(std.mem.asBytes(&args.len));
+                    try pending.appendSlice(allocator, args);
+                },
+            }
+            std.mem.reverse(ConstTypeId, pending.items[start..]);
+        }
+        return hasher.finalResult();
+    }
+
+    fn hashIdentityText(hasher: *base.Sha256, text: []const u8) void {
+        hasher.update(std.mem.asBytes(&@as(u64, text.len)));
+        hasher.update(text);
+    }
+
     pub fn typeSpan(self: *const ConstTypeStore, range: ConstRange) []const ConstTypeId {
         return self.type_pool.items()[range.start .. range.start + range.len];
     }
@@ -1498,13 +1562,18 @@ pub const ConstStore = struct {
         root_size: u32,
         root_type: ConstTypeId,
         layout_digest: [32]u8,
+        /// The identity of `root_type` (`ConstTypeStore.identityDigest`).
+        type_digest: [32]u8,
     };
 
-    /// The digest of an image: of its layout digest, block and pointer
-    /// offsets.
+    /// The digest of an image: of its type's identity, its layout digest,
+    /// block and pointer offsets. Two values with the same layout and bytes
+    /// at different types (`[A, B]` and `[C, D]`, or two nominal types with
+    /// one backing) are different values, so their digests differ.
     pub fn imageDigest(input: ImageInput) [32]u8 {
         var hasher = base.Sha256.init(.{});
-        hasher.update("roc.const.image.v1");
+        hasher.update("roc.const.image.v2");
+        hasher.update(&input.type_digest);
         hasher.update(&input.layout_digest);
         hasher.update(std.mem.asBytes(&input.root_size));
         hasher.update(std.mem.asBytes(&@as(u64, input.bytes.len)));
@@ -2579,6 +2648,59 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     var corrupt_range = loaded_fn;
     corrupt_range.evidence_frames = &corrupt_range_frames;
     try std.testing.expect(!try ConstStore.evidenceFramesValid(std.testing.allocator, corrupt_range));
+}
+
+test "an image's digest covers its type: equal bytes at unions with other tag names, or nominal types, differ" {
+    const gpa = std.testing.allocator;
+    var type_names = names.NameStore.init(gpa);
+    defer type_names.deinit();
+    var types = ConstTypeStore.init(gpa);
+    defer types.deinit();
+    const a = try type_names.internTagLabel("A");
+    const b = try type_names.internTagLabel("B");
+    const c = try type_names.internTagLabel("C");
+    const d = try type_names.internTagLabel("D");
+    const ab = try types.append(.{ .tag_union = try types.appendTagSpan(&.{
+        .{ .name = a, .checked_name = a, .payloads = .{} },
+        .{ .name = b, .checked_name = b, .payloads = .{} },
+    }) });
+    const cd = try types.append(.{ .tag_union = try types.appendTagSpan(&.{
+        .{ .name = c, .checked_name = c, .payloads = .{} },
+        .{ .name = d, .checked_name = d, .payloads = .{} },
+    }) });
+    const ab_again = try types.append(.{ .tag_union = try types.appendTagSpan(&.{
+        .{ .name = a, .checked_name = a, .payloads = .{} },
+        .{ .name = b, .checked_name = b, .payloads = .{} },
+    }) });
+    const u8_ty = try types.append(.{ .primitive = .u8 });
+    const module: [32]u8 = @splat(0x11);
+    var nominals: [2]ConstTypeId = undefined;
+    for (&nominals, [_][]const u8{ "Celsius", "Fahrenheit" }) |*nominal, name| nominal.* = try types.append(.{ .named = .{
+        .named_type = .{ .module = .{} },
+        .def = .{ .module = try type_names.internModuleIdentity(&module), .type_name = try type_names.internTypeName(name) },
+        .kind = .nominal,
+        .args = .{},
+        .backing = .some(.{ .ty = u8_ty, .use = .inspectable }),
+    } });
+
+    const digest = struct {
+        fn of(store: *const ConstTypeStore, store_names: *const names.NameStore, ty: ConstTypeId) Allocator.Error![32]u8 {
+            const bytes = [_]u8{0};
+            return ConstStore.imageDigest(.{
+                .bytes = &bytes,
+                .pointers = &.{},
+                .alignment = 1,
+                .root_size = 1,
+                .root_type = ty,
+                .layout_digest = @splat(0x77),
+                .type_digest = try store.identityDigest(std.testing.allocator, store_names, ty),
+            });
+        }
+    }.of;
+    try std.testing.expectEqualSlices(u8, &try digest(&types, &type_names, ab), &try digest(&types, &type_names, ab_again));
+    try std.testing.expect(!std.mem.eql(u8, &try digest(&types, &type_names, ab), &try digest(&types, &type_names, cd)));
+    try std.testing.expect(!std.mem.eql(u8, &try digest(&types, &type_names, nominals[0]), &try digest(&types, &type_names, nominals[1])));
+    try std.testing.expect(!std.mem.eql(u8, &try digest(&types, &type_names, nominals[0]), &try digest(&types, &type_names, u8_ty)));
 }
 
 test "ConstTypeStore: one translation copies each shared type once and the copies survive serialization" {

@@ -436,6 +436,7 @@ pub const Walker = struct {
                 try self.walkRef(artifact.resolved_value_refs.records.items()[@backingInt(ref_id)].ref);
             },
             .requirement => |requirement| try self.pushTemplate(artifact.checked_procedure_templates.templateRef(artifact.key.digest(), requirement.template)),
+            .canonical => |template| try self.pushTemplate(artifact.checked_procedure_templates.templateRef(artifact.key.digest(), template)),
         }
     }
 
@@ -464,10 +465,10 @@ pub const Walker = struct {
         switch (artifact.const_templates.get(const_ref).state) {
             // A declaration with no implementation evaluates nothing.
             .unimplemented => return,
-            // A value holding function values is restored by lowering its
-            // body inline, so a reader reads everything that body reads,
-            // its literal arguments included.
-            .eval_template => |eval| try self.pushTemplate(eval.entry_template),
+            // A polymorphic constant is read as the instance its use's edge
+            // names, a root the reader's template demands (design.md
+            // "Polymorphic Constants"); its own root is never evaluated.
+            .eval_template => |eval| if (artifact.checked_procedure_templates.isPolymorphicConstantWrapper(eval.entry_template.template)) return else try self.pushTemplate(eval.entry_template),
             .stored_const, .reserved => {},
         }
         const root: checked.ComptimeRootId = switch (const_ref.owner) {
@@ -503,7 +504,13 @@ pub const Walker = struct {
                 .checked => |template| try self.pushTemplate(template),
                 .lifted, .synthetic => base.invariant("compile-time finalization invariant violated: a checked procedure dependency named a post-check template", .{}),
             },
-            .callable_eval_template => |template_id| try self.readRoot(module, artifact.callable_eval_templates.templates[@backingInt(template_id)].root),
+            .callable_eval_template => |template_id| {
+                const root = artifact.callable_eval_templates.templates[@backingInt(template_id)].root;
+                // A polymorphic binding is read as the instance its use's
+                // edge names (design.md "Polymorphic Constants").
+                if (artifact.entry_wrappers.lookupByRoot(root)) |wrapper| if (artifact.checked_procedure_templates.isPolymorphicConstantWrapper(wrapper.template.template)) return;
+                try self.readRoot(module, root);
+            },
             .checked_error => {},
         }
     }

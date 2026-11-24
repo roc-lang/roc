@@ -1855,6 +1855,7 @@ const CompileTimeRequestScheduler = struct {
                 try self.collectTemplateDependencies(template_ref);
             },
             .requirement => |requirement| try self.collectTemplateDependencies(self.procedure_templates.templateRef(self.artifact_key.digest(), requirement.template)),
+            .canonical => |template| try self.collectTemplateDependencies(self.procedure_templates.templateRef(self.artifact_key.digest(), template)),
         }
     }
 
@@ -19085,6 +19086,22 @@ pub const CheckedProcedureTemplateTable = struct {
         return self.literal_requirements_pool.items()[template.literal_requirements.start .. template.literal_requirements.start + template.literal_requirements.len];
     }
 
+    /// The literal requirement of `template`, a polymorphic constant's entry
+    /// wrapper, that is the constant's own value (design.md "Polymorphic
+    /// Constants"); null for any other template.
+    pub fn constantInstanceRequirement(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) ?u32 {
+        for (self.templateLiteralRequirements(template), 0..) |requirement, index| {
+            if (requirement.edge == .literal and requirement.site.kind == .constant_instance) return @intCast(index);
+        }
+        return null;
+    }
+
+    /// Whether the template `ref` names in `templates`' module is a
+    /// polymorphic constant's entry wrapper.
+    pub fn isPolymorphicConstantWrapper(self: *const CheckedProcedureTemplateTable, id: canonical.CheckedProcedureTemplateId) bool {
+        return self.constantInstanceRequirement(&self.templates.items()[@backingInt(id)]) != null;
+    }
+
     /// The reference to this table's template `id`, in the module `artifact`.
     pub fn templateRef(self: *const CheckedProcedureTemplateTable, artifact: canonical.ArtifactRef, id: canonical.CheckedProcedureTemplateId) canonical.ProcedureTemplateRef {
         return .{ .artifact = artifact, .proc_base = self.templates.items()[@backingInt(id)].proc_base, .template = id };
@@ -19108,7 +19125,7 @@ pub const CheckedProcedureTemplateTable = struct {
             .use => |expr| .{ self.literal_use_edges.items(), @backingInt(expr) },
             // The invocation's frame derives its literal arguments from its
             // types, as the platform's call does.
-            .literal, .requirement => return &.{},
+            .literal, .requirement, .canonical => return &.{},
         };
         const found = artifact_serialize.binarySearchByKey(LiteralEdgeEntry, u32, entries, key, literalEdgeEntryOrder) orelse return &.{};
         return self.literal_edge_args_pool.items()[found.args.start .. found.args.start + found.args.len];
@@ -22103,6 +22120,26 @@ fn sealDecidedVariables(
     store: *CheckedTypeStore,
     ty: CheckedTypeId,
 ) Allocator.Error!CheckedTypeId {
+    return try sealVariables(allocator, store, ty, .decided);
+}
+
+/// Which variables `sealVariables` may meet.
+const SealedVariables = enum {
+    /// Only decided variables (design.md "Decided Variables").
+    decided,
+    /// Any variable: a polymorphic constant's instance at a type whose
+    /// variables no use fixes is that constant's value with each of them at
+    /// its row default or the empty tag union, as its canonical instance is
+    /// (design.md "Polymorphic Constants").
+    any,
+};
+
+fn sealVariables(
+    allocator: Allocator,
+    store: *CheckedTypeStore,
+    ty: CheckedTypeId,
+    sealed_variables: SealedVariables,
+) Allocator.Error!CheckedTypeId {
     if (!try store.rootContainsIdentityVariables(ty)) return ty;
 
     const Instantiation = enum { empty_record, empty_tag_union, required_kind };
@@ -22111,20 +22148,23 @@ fn sealDecidedVariables(
         store: *const CheckedTypeStore,
         formals: *std.ArrayListUnmanaged(CheckedTypeId),
         defaults: *std.ArrayListUnmanaged(Instantiation),
+        sealed_variables: SealedVariables,
 
         fn variable(self: @This(), root: CheckedTypeId, payload: CheckedTypePayload) Allocator.Error!void {
-            if (!payload.variableSealsWithoutSpecialization()) {
+            if (self.sealed_variables == .decided and !payload.variableSealsWithoutSpecialization()) {
                 checkedArtifactInvariant("a type sealed at its decided variables reached a variable that is not decided", .{});
             }
             try self.formals.append(self.allocator, root);
-            try self.defaults.append(self.allocator, if (payload.flex.row_default) |row_default| switch (row_default) {
+            // `walkCheckedTypeStructure` hands a variable as a flex or a rigid.
+            const row_default = if (payload == .flex) payload.flex.row_default else payload.rigid.row_default;
+            try self.defaults.append(self.allocator, if (row_default) |default| switch (default) {
                 .empty_record => .empty_record,
                 .empty_tag_union => .empty_tag_union,
             } else .empty_tag_union);
         }
 
         fn kindVariable(self: @This(), root: CheckedTypeId) Allocator.Error!void {
-            if (!self.store.payload(root).variableSealsWithoutSpecialization()) {
+            if (self.sealed_variables == .decided and !self.store.payload(root).variableSealsWithoutSpecialization()) {
                 checkedArtifactInvariant("a type sealed at its decided variables reached a field kind variable that is not decided", .{});
             }
             try self.formals.append(self.allocator, root);
@@ -22135,7 +22175,7 @@ fn sealDecidedVariables(
     defer formals.deinit(allocator);
     var defaults: std.ArrayListUnmanaged(Instantiation) = .empty;
     defer defaults.deinit(allocator);
-    try walkCheckedTypeStructure(allocator, store, ty, Visitor{ .allocator = allocator, .store = store, .formals = &formals, .defaults = &defaults });
+    try walkCheckedTypeStructure(allocator, store, ty, Visitor{ .allocator = allocator, .store = store, .formals = &formals, .defaults = &defaults, .sealed_variables = sealed_variables });
 
     // The walk reads payloads that alias the store's pools, so the sealed
     // roots are appended only once it is over.
@@ -22192,6 +22232,7 @@ fn publishLiteralArgumentRoots(
     top_level_values: *const TopLevelValueTable,
     requirement_solutions: []const ModuleEnv.PlatformRequirementSolution,
     requirement_root_substs: []const artifact_serialize.Span,
+    platform_identities: []const CheckedTypeId,
 ) Allocator.Error!void {
     const store = &checked_types.store;
     const template_count = templates.templates.items().len;
@@ -22284,12 +22325,62 @@ fn publishLiteralArgumentRoots(
                     break :blk bodies.interpolationAssemblerType(expr);
                 },
                 .numeral, .quote => bodies.literalConversion(plan.node).ty,
+                .constant_instance => unreachable, // `literalKindOfPlan` names a literal's conversion
             };
             const slot = try entry.value_ptr.index.getOrPut(allocator, .{ .site = site, .ty = try literalRequirementTypeIdentity(store, &identity_orderer, ty) });
             if (slot.found_existing) continue;
             slot.value_ptr.* = @intCast(entry.value_ptr.list.items.len);
             try entry.value_ptr.list.append(allocator, .{ .site = site, .ty = ty, .edge = .literal, .callee_requirement = 0 });
         }
+    }
+    // Each polymorphic constant's own value is a literal requirement of its
+    // entry wrapper's scheme (design.md "Polymorphic Constants"): every use
+    // instantiates that scheme, so a closed use is a `constant_instance`
+    // root and an open use forwards the instance to its enclosing scheme.
+    const PolymorphicConstant = struct { template: u32, requirement: u32, root: ComptimeRootId, ty: CheckedTypeId, owner_expr: CIR.Expr.Idx };
+    var polymorphic_constants = std.ArrayListUnmanaged(PolymorphicConstant).empty;
+    defer polymorphic_constants.deinit(allocator);
+    for (roots.roots.items()) |root| {
+        switch (root.kind) {
+            .constant => {},
+            .callable_binding => if (callableEvalTemplateIsAlias(callable_eval_templates, root.id)) continue,
+            // A hoisted constant's variables are those of the generic body
+            // it was hoisted from, whose instantiation fixes them; the body
+            // computes it in place.
+            .hoisted_constant, .hoisted_validation, .expect, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => continue,
+        }
+        const wrapper = wrappers.lookupByRoot(root.id) orelse continue;
+        if (!wrapper.template.artifact.eql(owner_artifact)) continue;
+        const template_index = @backingInt(wrapper.template.template);
+        const template = templates.templates.items()[template_index];
+        if (template.scheme_vars.len == 0) continue;
+        // A platform's abstract type (`[Model : model] for main`) is the
+        // type of the app it is paired with, which checking the platform
+        // does not know: a constant whose type mentions one has no instance
+        // the platform's checking could evaluate.
+        const mentions_platform_identity = for (templates.scheme_vars_pool.items()[template.scheme_vars.start..][0..template.scheme_vars.len]) |variable| {
+            if (sliceContains(CheckedTypeId, platform_identities, variable)) break true;
+        } else false;
+        if (mentions_platform_identity) continue;
+        const ty = switch (store.payload(template.checked_fn_root)) {
+            .function => |function| function.ret,
+            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union, .field_kind => checkedArtifactInvariant("a constant's entry wrapper type is not a function", .{}),
+        };
+        const key: ScopeKey = .{ .template = template_index, .scope = null };
+        const entry = try scope_states.getOrPut(allocator, key);
+        if (!entry.found_existing) entry.value_ptr.* = .{};
+        const site: LiteralSite = .{ .module = owner_artifact, .node = @backingInt(root.id), .kind = .constant_instance };
+        const slot = try entry.value_ptr.index.getOrPut(allocator, .{ .site = site, .ty = try literalRequirementTypeIdentity(store, &identity_orderer, ty) });
+        if (slot.found_existing) checkedArtifactInvariant("a polymorphic constant's own value was required twice", .{});
+        slot.value_ptr.* = @intCast(entry.value_ptr.list.items.len);
+        try entry.value_ptr.list.append(allocator, .{ .site = site, .ty = ty, .edge = .literal, .callee_requirement = 0 });
+        try polymorphic_constants.append(allocator, .{
+            .template = template_index,
+            .requirement = slot.value_ptr.*,
+            .root = root.id,
+            .ty = ty,
+            .owner_expr = root.expr.get() orelse checkedArtifactInvariant("a polymorphic constant's root has no expression", .{}),
+        });
     }
     {
         const span = template_iterator_refs.default_plan_refs;
@@ -22313,6 +22404,13 @@ fn publishLiteralArgumentRoots(
         /// The scope the edge is in; null inside a defaulted field expression.
         scope: ?ScopeKey,
         owner_expr: CIR.Expr.Idx,
+        /// For a dispatch to a method bound to a polymorphic callable binding
+        /// (`to_inspect = plain`), which checking instantiates at no
+        /// substitution: the method's callable at the dispatch, which is the
+        /// binding's value at this edge (design.md "Polymorphic Constants").
+        /// The binding's own value is the only requirement such an edge
+        /// instantiates.
+        value_ty: ?CheckedTypeId = null,
     };
     var edges = std.ArrayListUnmanaged(EdgeRec).empty;
     defer edges.deinit(allocator);
@@ -22387,11 +22485,23 @@ fn publishLiteralArgumentRoots(
                         .scope = scope,
                         .owner_expr = owner_expr,
                     }),
+                    // A method bound to a polymorphic callable binding is the
+                    // binding's value at the dispatch's callable.
+                    .callable_binding => |binding| if (self.callableBindingWrapper(binding)) |wrapper| switch (node.instantiation) {
+                        .callable => |callable| try self.add(.{
+                            .key = .{ .node = id },
+                            .callee = .{ .template = wrapper },
+                            .subst = &.{},
+                            .scope = scope,
+                            .owner_expr = owner_expr,
+                            .value_ty = callable,
+                        }),
+                        .monomorphic, .alias, .derived_from_callable => {},
+                    },
                     // A method declared in a function body is called through
                     // its function value, whose scheme its construction or
-                    // use instantiates; a computed callable is a monomorphic
-                    // value, which instantiates nothing.
-                    .local_proc, .structural, .callable_binding => {},
+                    // use instantiates.
+                    .local_proc, .structural => {},
                 }
                 switch (node.nested) {
                     .resolved => try self.entries(self.plans.nestedEvidence(node)),
@@ -22615,6 +22725,21 @@ fn publishLiteralArgumentRoots(
         /// procedure's, an exact procedure alias's entry wrapper, whose
         /// scheme is the alias's, or a constant's entry wrapper. A use of a
         /// computed callable instantiates nothing.
+        /// The entry wrapper of the callable binding a method is bound to,
+        /// when the binding is a polymorphic constant of this module or of a
+        /// module whose view is available.
+        fn callableBindingWrapper(self: *@This(), binding: static_dispatch.CallableBindingTarget) ?canonical.ProcedureTemplateRef {
+            const view: ?ImportedModuleView = if (binding.module.eql(self.owner)) null else self.import_views.viewForKey(binding.module) orelse return null;
+            const eval_templates: CallableEvalTemplateTableView = if (view) |v| v.callable_eval_templates else self.callable_eval_templates.view();
+            const template = eval_templates.templates[@backingInt(binding.template)];
+            if (template.forwarded_lookup != .none) return null;
+            const wrapper_table: *const EntryWrapperTable = if (view) |v| v.entry_wrappers else self.entry_wrappers;
+            const wrapper = wrapper_table.lookupByRoot(template.root) orelse return null;
+            const table: *const CheckedProcedureTemplateTable = if (view) |v| v.checked_procedure_templates else self.templates;
+            if (view == null) return wrapper.template;
+            return if (table.isPolymorphicConstantWrapper(wrapper.template.template)) wrapper.template else null;
+        }
+
         fn templateOfValueRef(self: *@This(), ref: ResolvedValueRef) ?canonical.ProcedureTemplateRef {
             const use: ProcedureUseTemplate = switch (ref) {
                 .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| use,
@@ -22644,8 +22769,10 @@ fn publishLiteralArgumentRoots(
                 },
                 .callable_eval_template => |template_id| blk: {
                     const eval_templates: CallableEvalTemplateTableView = if (alias_view) |view| view.callable_eval_templates else self.callable_eval_templates.view();
+                    // An exact procedure alias forwards its lookup inside
+                    // its entry wrapper's scheme; any other binding is a
+                    // constant whose value the wrapper's scheme carries.
                     const template = eval_templates.templates[@backingInt(template_id)];
-                    if (template.forwarded_lookup == .none) break :blk null;
                     const wrapper_table: *const EntryWrapperTable = if (alias_view) |view| view.entry_wrappers else self.entry_wrappers;
                     const wrapper = wrapper_table.lookupByRoot(template.root) orelse
                         checkedArtifactInvariant("a callable-eval template's root has no entry wrapper", .{});
@@ -22704,6 +22831,32 @@ fn publishLiteralArgumentRoots(
     defer {
         for (collector.composed_substs.items) |slice| allocator.free(slice);
         collector.composed_substs.deinit(allocator);
+    }
+    // Each polymorphic constant's canonical instantiation, first, so that a
+    // use at that very instance shares the canonical root.
+    for (polymorphic_constants.items) |constant| {
+        const template = templates.templates.items()[constant.template];
+        const vars = templates.scheme_vars_pool.items()[template.scheme_vars.start..][0..template.scheme_vars.len];
+        const actuals = try allocator.alloc(CheckedTypeId, vars.len);
+        try collector.composed_substs.append(allocator, actuals);
+        for (vars, actuals) |variable, *actual| {
+            const payload = store.payload(variable);
+            const row_default = switch (payload) {
+                .flex, .rigid => |v| v.row_default,
+                .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union, .field_kind => checkedArtifactInvariant("a polymorphic constant's scheme variable is not a variable", .{}),
+            };
+            actual.* = try store.appendSyntheticPayloadRoot(allocator, if (row_default) |default| switch (default) {
+                .empty_record => .empty_record,
+                .empty_tag_union => .empty_tag_union,
+            } else .empty_tag_union);
+        }
+        try collector.add(.{
+            .key = .{ .canonical = @fromBackingInt(constant.template) },
+            .callee = .{ .template = templates.templateRef(owner_artifact, @fromBackingInt(constant.template)) },
+            .subst = actuals,
+            .scope = null,
+            .owner_expr = constant.owner_expr,
+        });
     }
     // The dispatch scopes were sealed over the templates published before
     // literal conversion roots got their entry wrappers
@@ -22809,11 +22962,12 @@ fn publishLiteralArgumentRoots(
     }
     try edge_args.resize(allocator, edges.items.len);
     for (edge_args.items) |*list| list.* = .empty;
-    const NewRoot = struct { site: LiteralSite, ty: CheckedTypeId, edge: LiteralEdge, callee_requirement: u32, validate_only: bool, sealed: bool, owner_expr: CIR.Expr.Idx };
+    const NewRoot = struct { site: LiteralSite, ty: CheckedTypeId, edge: LiteralEdge, callee_requirement: u32, validate_only: bool, sealed: bool, canonical: bool = false, holds_function: bool = false, owner_expr: CIR.Expr.Idx };
     var new_roots = std.ArrayListUnmanaged(NewRoot).empty;
     defer new_roots.deinit(allocator);
     var root_index = std.AutoHashMapUnmanaged(ObligationKey, u32).empty;
     defer root_index.deinit(allocator);
+
     var projectors = std.AutoHashMapUnmanaged([32]u8, *CheckedTypeStoreImportProjector).empty;
     defer {
         var it = projectors.valueIterator();
@@ -22931,8 +23085,10 @@ fn publishLiteralArgumentRoots(
             if (args.items.len >= callee.obligations.len) continue;
             if (edge.subst.len != 0 and edge.subst.len != callee.vars.len) checkedArtifactInvariant("an edge's substitution differs from its callee's scheme", .{});
             // A use with no recorded instantiation of a scheme with
-            // variables instantiates nothing.
-            if (callee.vars.len != 0 and edge.subst.len == 0) continue;
+            // variables instantiates nothing, but for a dispatch to a method
+            // bound to a polymorphic callable binding, whose one requirement
+            // is the binding's value at the dispatch's callable.
+            if (callee.vars.len != 0 and edge.subst.len == 0 and edge.value_ty == null) continue;
             var projector: ?*CheckedTypeStoreImportProjector = null;
             if (callee.artifact) |artifact| {
                 const slot = try projectors.getOrPut(allocator, artifact.bytes);
@@ -22952,8 +23108,14 @@ fn publishLiteralArgumentRoots(
             // A self-recursive edge appends to the list it instantiates.
             while (j < liveObligations(callee, &scope_states).len) : (j += 1) {
                 const obligation = liveObligations(callee, &scope_states)[j];
-                const projected = if (projector) |p| try p.project(obligation.ty) else obligation.ty;
-                const instantiated = if (substitution) |*s| try store.cloneCheckedTypeRootSubstituting(allocator, projected, s) else projected;
+                const instantiated = if (edge.value_ty) |value_ty| blk: {
+                    if (j != 0 or obligation.edge != .literal or obligation.site.kind != .constant_instance or liveObligations(callee, &scope_states).len != 1)
+                        checkedArtifactInvariant("a method bound to a polymorphic callable binding requires more than the binding's value", .{});
+                    break :blk value_ty;
+                } else blk: {
+                    const projected = if (projector) |p| try p.project(obligation.ty) else obligation.ty;
+                    break :blk if (substitution) |*s| try store.cloneCheckedTypeRootSubstituting(allocator, projected, s) else projected;
+                };
                 // A type that names no variable is closed, and so is one
                 // whose every variable is decided at the edge: its root
                 // converts the literal at the type those variables seal to.
@@ -22961,8 +23123,12 @@ fn publishLiteralArgumentRoots(
                     try literalRequirementInstance(store, &identity_orderer, templates, edge.scope, instantiated)
                 else
                     null;
-                const closed = instance == null or instance.? == .decided;
-                const ty = if (closed) try sealDecidedVariables(allocator, store, instantiated) else instantiated;
+                // A polymorphic constant's instance at a type no use fixes
+                // is its value with those variables sealed, as its
+                // canonical instance's are: the use reads that value.
+                const constant_instance = obligation.site.kind == .constant_instance;
+                const closed = instance == null or instance.? == .decided or (constant_instance and instance.? == .unbound);
+                const ty = if (closed) try sealVariables(allocator, store, instantiated, if (constant_instance) .any else .decided) else instantiated;
                 const key: ObligationKey = .{ .site = obligation.site, .ty = try literalRequirementTypeIdentity(store, &identity_orderer, ty) };
                 // A variable that no scheme around the edge quantifies and
                 // that is not decided is fixed by no use. When that variable
@@ -22980,14 +23146,21 @@ fn publishLiteralArgumentRoots(
                 if (closed or sealed) {
                     const slot = try root_index.getOrPut(allocator, key);
                     if (!slot.found_existing) {
+                        const holds_function = try checkedTypeHoldsFunction(allocator, store.view(), owner_artifact, import_views, ty);
                         slot.value_ptr.* = @intCast(new_roots.items.len);
                         try new_roots.append(allocator, .{
                             .site = obligation.site,
                             .ty = ty,
                             .edge = edge.key,
                             .callee_requirement = j,
-                            .validate_only = sealed or !obligation.site.carriesValue() or try checkedTypeHoldsFunction(allocator, store.view(), owner_artifact, import_views, ty),
+                            // A constant's instance is stored whatever it
+                            // holds: no reader recomputes it.
+                            .validate_only = !constant_instance and (sealed or !obligation.site.carriesValue() or holds_function),
+                            .holds_function = constant_instance and holds_function,
                             .sealed = sealed,
+                            // The canonical instantiation's own constant;
+                            // its other requirements are other constants'.
+                            .canonical = edge.key == .canonical and constant_instance and obligation.edge == .literal,
                             .owner_expr = edge.owner_expr,
                         });
                         if (base.dev_diagnostics.isSet(.trace_boxy_work)) {
@@ -22996,6 +23169,7 @@ fn publishLiteralArgumentRoots(
                                 .node => |id| @backingInt(id),
                                 .use => |use_expr| @backingInt(use_expr),
                                 .requirement => |requirement| requirement.requires_idx,
+                                .canonical => |template| @backingInt(template),
                             };
                             std.debug.print("literal-args: root {d}: literal expr {d} ({s}) at type root {d}, edge {s} {d} (owner expr {d}), callee obligation {d}\n", .{ new_roots.items.len - 1, obligation.site.node, @tagName(obligation.site.kind), @backingInt(ty), @tagName(edge.key), edge_id, @backingInt(edge.owner_expr), j });
                         }
@@ -23061,6 +23235,7 @@ fn publishLiteralArgumentRoots(
                         .node => |id| @backingInt(id),
                         .use => |use_expr| @backingInt(use_expr),
                         .requirement => |requirement| requirement.requires_idx,
+                        .canonical => |wrapper| @backingInt(wrapper),
                     };
                     std.debug.print("literal-args: template {d} obligation {d}: literal expr {d} ({s}) at type root {d}, edge {s} {d}, callee obligation {d}\n", .{ template_index, index, obligation.site.node, @tagName(obligation.site.kind), @backingInt(obligation.ty), @tagName(obligation.edge), edge_id, obligation.callee_requirement });
                 }
@@ -23094,6 +23269,8 @@ fn publishLiteralArgumentRoots(
                     .callee_requirement = new_root.callee_requirement,
                     .validate_only = new_root.validate_only,
                     .sealed = new_root.sealed,
+                    .canonical = new_root.canonical,
+                    .holds_function = new_root.holds_function,
                 },
             });
         }
@@ -23142,9 +23319,10 @@ fn publishLiteralArgumentRoots(
         @memset(demand, .empty);
         for (edges.items, edge_args.items, edge_templates.items) |edge, args, holders| {
             if (args.items.len == 0) continue;
-            // A requirement's invocation is held by no template, and its
-            // frame derives its literal arguments from its types.
-            if (edge.key == .requirement) continue;
+            // A requirement's invocation and a canonical instantiation are
+            // held by no template, and each frame derives its literal
+            // arguments from its types.
+            if (edge.key == .requirement or edge.key == .canonical) continue;
             const start: u32 = @intCast(pool.items.len);
             for (args.items) |arg| {
                 try pool.append(allocator, switch (arg) {
@@ -23165,14 +23343,14 @@ fn publishLiteralArgumentRoots(
                     .node => |id| @backingInt(id),
                     .use => |expr| @backingInt(expr),
                     .literal => checkedArtifactInvariant("a literal obligation's own literal is no edge", .{}),
-                    .requirement => unreachable, // the loop skips requirement edges above
+                    .requirement, .canonical => unreachable, // the loop skips requirement and canonical edges above
                 },
                 .args = .{ .start = start, .len = @intCast(pool.items.len - start) },
             };
             switch (edge.key) {
                 .node => try node_edges.append(allocator, entry),
                 .use => try use_edges.append(allocator, entry),
-                .literal, .requirement => unreachable, // the entry's key switch above rejects these keys
+                .literal, .requirement, .canonical => unreachable, // the entry's key switch above rejects these keys
             }
         }
         std.sort.pdq(LiteralEdgeEntry, node_edges.items, {}, literalEdgeEntryLessThan);
@@ -23198,6 +23376,16 @@ fn publishLiteralArgumentRoots(
 }
 
 /// Whether `items` holds `value`.
+/// Whether the callable binding whose root is `root` is an exact procedure
+/// alias (`f = g`), which instantiates the procedure it names rather than
+/// holding a value of its own.
+fn callableEvalTemplateIsAlias(callable_eval_templates: *const CallableEvalTemplateTable, root: ComptimeRootId) bool {
+    for (callable_eval_templates.templates.items()) |template| {
+        if (template.root == root) return template.forwarded_lookup != .none;
+    }
+    return false;
+}
+
 fn sliceContains(comptime T: type, items: []const T, value: T) bool {
     for (items) |item| {
         if (item == value) return true;
@@ -25519,6 +25707,8 @@ pub const LiteralSite = struct {
     module: CheckedModuleDigest,
     /// The literal's CIR node in that module: a literal expression, or a
     /// custom literal pattern whose literal converts at the pattern's type.
+    /// For a `constant_instance`, the compile-time root of the polymorphic
+    /// constant in that module, as `@backingInt`.
     node: u32,
     kind: LiteralArgumentKind,
 
@@ -25531,17 +25721,30 @@ pub const LiteralSite = struct {
     /// body converts it through its dictionary.
     pub fn carriesValue(self: LiteralSite) bool {
         return switch (self.kind) {
-            .numeral, .quote => true,
+            .numeral, .quote, .constant_instance => true,
             .interpolation => false,
         };
     }
+
+    /// The polymorphic constant's compile-time root a `constant_instance`
+    /// site names.
+    pub fn constantRoot(self: LiteralSite) ComptimeRootId {
+        std.debug.assert(self.kind == .constant_instance);
+        return @fromBackingInt(@intCast(self.node));
+    }
 };
 
-/// The conversion a literal argument's literal dispatches.
+/// The conversion a literal argument's literal dispatches, or, for a
+/// `constant_instance`, the polymorphic constant whose value at a closed
+/// instance the argument is (design.md "Polymorphic Constants").
 pub const LiteralArgumentKind = enum(u8) {
     numeral,
     quote,
     interpolation,
+    /// A polymorphic constant's own value: the requirement of its entry
+    /// wrapper's scheme that every use instantiates, so each closed instance
+    /// is a compile-time root and an open use forwards the instance.
+    constant_instance,
 };
 
 /// One instantiation edge of a scheme inside a body: a dispatch edge (the
@@ -25558,6 +25761,13 @@ pub const LiteralEdge = union(enum(u8)) {
     /// requirement, which the app's checking instantiated
     /// (`PlatformRequirementSolution`).
     requirement: PlatformRequirementEdge,
+    /// The canonical instantiation of this module's polymorphic constant
+    /// whose entry wrapper is the template: every variable of its scheme at
+    /// its row default, or at the empty tag union (design.md "Polymorphic
+    /// Constants"). Every compilation evaluates the constant there, so the
+    /// edge is held by no template, and its frame takes its types from that
+    /// rule and its literal arguments from its types.
+    canonical: canonical.CheckedProcedureTemplateId,
 };
 
 /// A platform requirement's invocation of this module's procedure `template`.
@@ -25633,6 +25843,18 @@ pub const LiteralArgumentRoot = struct {
     /// `helper : {} -> Sql(a)` and nothing relates the result's `a` to the
     /// program. A sealed root is validate-only.
     sealed: bool,
+    /// The root is a polymorphic constant's canonical instance of the
+    /// constant itself (its `edge` is the constant's `LiteralEdge.canonical`),
+    /// rather than an instance of another constant that the canonical
+    /// instance's body reads at an open type. Every compilation evaluates
+    /// it, and it alone reports the constant's `dbg` and `expect` (design.md
+    /// "Polymorphic Constants").
+    canonical: bool = false,
+    /// A polymorphic constant's instance whose type holds a function value.
+    /// Its value is stored, as every instance's is; under `.lss` the Solved
+    /// program evaluates it, as it evaluates every root holding a function
+    /// value (design.md "Compile-Time Evaluation Under `.lss`").
+    holds_function: bool = false,
 };
 
 /// The literal-conversion root kinds, as a payload-free classification
@@ -25816,13 +26038,24 @@ pub const CompileTimeRoot = struct {
         return self.kind == .interpolation_conversion;
     }
 
+    /// Whether the root is a polymorphic constant's instance (design.md
+    /// "Polymorphic Constants"): a `literal_argument` root whose value, a
+    /// function among it, is stored.
+    pub fn isConstantInstance(self: CompileTimeRoot) bool {
+        const argument = self.literal_argument orelse return false;
+        return argument.site.kind == .constant_instance;
+    }
+
     /// Whether the `.boxy` evaluator owns the root under either strategy: a
     /// literal argument root, and an interpolation conversion root, which
     /// stores nothing a Solved program could read (design.md "Literal
     /// Arguments").
     pub fn isBoxyEvaluated(self: CompileTimeRoot) bool {
         return switch (self.kind) {
-            .literal_argument, .interpolation_conversion => true,
+            // A polymorphic constant's instance holding a function value is
+            // a Solved program's under `.lss`, as any root holding one is.
+            .literal_argument => !self.literal_argument.?.holds_function,
+            .interpolation_conversion => true,
             .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .repl_expr => false,
         };
     }
@@ -26807,13 +27040,15 @@ fn publishCompileTimeRootRequestEligibility(
                 .expr, .statement, .hoisted, .required_binding, .literal, .literal_argument => false,
             },
             .hoisted_constant => selected[root.source.hoisted.index].value_kind == .proven_data_constant,
+            // A polymorphic constant's instance is its body's value at a
+            // closed type: the body fixes any function it holds.
+            .literal_argument => root.literal_argument.?.site.kind == .constant_instance,
             .hoisted_validation,
             .expect,
             .numeral_conversion,
             .quote_conversion,
             .interpolation_conversion,
             .repl_expr,
-            .literal_argument,
             => false,
         };
         // A validate-only root's value is never read from its slot, so no
@@ -37795,6 +38030,7 @@ pub fn publishFromTypedModule(
         &top_level_values,
         requirement_solutions,
         platform_requirement_root_substs,
+        platform_type_inputs.identities.items(),
     );
     clock.lap(.literal_roots);
     try classifyTemplateDispatchPlanRefs(
@@ -39892,8 +40128,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x95, 0x31, 0x44, 0xBD, 0x9E, 0xA7, 0xD4, 0xC9, 0x50, 0x8A, 0x58, 0x28, 0xD9, 0x6C, 0x39, 0xFE,
-        0x81, 0xAB, 0x71, 0x2F, 0xFB, 0x30, 0x15, 0x04, 0x48, 0x48, 0x2B, 0x86, 0x57, 0xC7, 0x22, 0x8D,
+        0xF4, 0x1B, 0x82, 0x35, 0xC4, 0xA0, 0x25, 0x66, 0x6C, 0x7C, 0x26, 0x89, 0x49, 0x6B, 0xA0, 0xC8,
+        0x2D, 0xCF, 0x35, 0xBF, 0x7F, 0x38, 0xB8, 0x76, 0x71, 0xF3, 0xD0, 0x64, 0x0D, 0xF9, 0x31, 0x64,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

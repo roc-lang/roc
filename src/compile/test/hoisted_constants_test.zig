@@ -1356,12 +1356,22 @@ test "callable binding with alias annotation is const-evaluated" {
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
+    // `validate`'s result row is implicitly open, so the binding is a
+    // polymorphic constant (design.md "Polymorphic Constants"): each of its
+    // instances, the canonical one and `main!`'s, is evaluated and stored.
     const app_artifact = coord.appRootCheckedArtifact();
     var saw_callable_binding = false;
     for (app_artifact.compile_time_roots.roots.items()) |root| {
         if (root.kind != .callable_binding) continue;
         saw_callable_binding = true;
-        if (root.payload != .fn_value) return error.CallableBindingConstFnNotStored;
+        var instances: usize = 0;
+        for (app_artifact.compile_time_roots.roots.items()) |instance| {
+            const argument = instance.literal_argument orelse continue;
+            if (argument.site.kind != .constant_instance or argument.site.node != @backingInt(root.id)) continue;
+            instances += 1;
+            if (instance.payload != .fn_value) return error.CallableBindingConstFnNotStored;
+        }
+        if (instances == 0) return error.CallableBindingConstFnNotStored;
     }
     try std.testing.expect(saw_callable_binding);
 }

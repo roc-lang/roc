@@ -3560,9 +3560,18 @@ pub const Builder = struct {
                         if (payload == .pending and root.request_eligibility != .ineligible) {
                             return try self.pendingValueRead(eval.module, template.root, eval.ty);
                         }
-                        const wrapper = self.program.wrapper_by_root.get(.{ .module = eval.module, .root = template.root }) orelse
-                            invariant("a callable-eval binding's root has no entry wrapper");
-                        const callee = try self.program.templateRefWorker(wrapper);
+                        const callee = try self.callableEvalWrapper(eval.module, eval.template);
+                        // A polymorphic binding is the instance its use's
+                        // edge names, or, read with no edge (a dictionary
+                        // entry), the root of its instance at the read's
+                        // closed type (design.md "Polymorphic Constants").
+                        if (self.constantInstanceRequirement(callee)) |own| {
+                            if (eval.use) |use| return try self.readConstantInstance(callee, .{ .use = use }, eval.ty);
+                            const site = self.program.worker(callee).literal_scopes[0][own].site;
+                            const instance = try self.program.constantInstance(site, eval.ty) orelse
+                                invariant("a polymorphic callable binding is read at a closed instance no compile-time root evaluates");
+                            return try self.callInstanceThunk(try self.composeDictionary(try self.program.rootThunkEntry(instance.module, instance.root, eval.ty), &.{}), eval.ty);
+                        }
                         const callee_worker = self.program.worker(callee).*;
                         if (callee_worker.params.len != 0) invariant("a callable-eval entry wrapper takes arguments");
                         const bound = try self.relateWorkerVariables(callee, callee_worker.ret, eval.ty);
@@ -4754,21 +4763,8 @@ pub const Builder = struct {
 
     /// `rootThunk`'s callable.
     fn composeRootThunk(self: *Builder, root: checked.ComptimeRootId) Allocator.Error!Word {
-        const compile_time_root = self.view.view.compile_time_roots.root(root);
-        const argument = compile_time_root.literal_argument orelse invariant("a literal argument root records no literal argument");
-        // In the compile-time program evaluating the root, a reader reads
-        // its value from its slot once it completes; its wrapper converts
-        // the literal only as the root's own evaluation. A validate-only
-        // root stores no value, so its wrapper converts for every reader.
-        const slot_read = compile_time_root.payloadFor(.boxy) == .pending and !argument.validate_only and self.program.evaluatesRoot(self.module, root);
-        const entry = if (slot_read)
-            try self.program.rootSlotThunkWorker(self.module, root, try self.convert(argument.ty))
-        else blk: {
-            const wrapper = self.program.wrapper_by_root.get(.{ .module = self.module, .root = root }) orelse
-                invariant("a literal argument root has no entry wrapper");
-            break :blk try self.program.methodEntryWorker(try self.program.templateRefWorker(wrapper));
-        };
-        return try self.composeDictionary(entry, &.{});
+        const argument = self.view.view.compile_time_roots.root(root).literal_argument orelse invariant("a literal argument root records no literal argument");
+        return try self.composeDictionary(try self.program.rootThunkEntry(self.module, root, try self.convert(argument.ty)), &.{});
     }
 
     /// The literal arguments of `worker` whose scheme takes `bound`, for an
@@ -5023,6 +5019,10 @@ pub const Builder = struct {
                     // Forwarding can enter an imported scheme whose linked
                     // worker needed no body index. Reading its literal does.
                     try self.bodies().demandIndex();
+                    // A polymorphic constant's own value is its entry
+                    // wrapper's at the instance (design.md "Polymorphic
+                    // Constants").
+                    if (literal_requirement.site.kind == .constant_instance) return try self.callConstantWrapper(literal_requirement.site.constantRoot(), index, result_ty);
                     // A custom literal pattern's literal converts at the
                     // pattern's type.
                     if (self.bodies().index().nodeKind(node) == .pattern) {
@@ -5040,12 +5040,41 @@ pub const Builder = struct {
                         .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a literal literal_requirement's literal is not a literal expression"),
                     };
                 },
-                .node, .use, .requirement => {
+                .node, .use, .requirement, .canonical => {
                     literal_requirements = try self.enterEdge(literal_requirement.edge);
                     index = literal_requirement.callee_requirement;
                 },
             }
         }
+    }
+
+    /// Call the entry wrapper of polymorphic constant `root` of the innermost
+    /// entered frame's module, the frame being its scheme's at the instance
+    /// whose value has type `result_ty`: the wrapper takes that instance's
+    /// descriptors, the frame's dictionaries (a constant hoisted out of a
+    /// generic function keeps the requirements of its variables) and
+    /// literal arguments, and for its own requirement `own`, which its body
+    /// never reads, a crash nothing calls. This is the instance root's
+    /// evaluation, the only place a polymorphic constant's body runs.
+    fn callConstantWrapper(self: *Builder, root: checked.ComptimeRootId, own: u32, result_ty: TypeId) Allocator.Error!void {
+        const wrapper = self.program.wrapper_by_root.get(.{ .module = self.module, .root = root }) orelse
+            invariant("a polymorphic constant's root has no entry wrapper");
+        const callee = try self.program.templateRefWorker(wrapper);
+        const callee_worker = self.program.worker(callee).*;
+        if (callee_worker.params.len != 0) invariant("a polymorphic constant's entry wrapper takes arguments");
+        const owned = try self.relateWorkerVariables(callee, callee_worker.ret, result_ty);
+        defer self.allocator.free(owned);
+        const bound = try self.program.arena.allocator().dupe(TypeId, owned);
+        const dictionaries = callee_worker.dictionary_params.len;
+        const hidden = try self.allocator.alloc(Word, bound.len + dictionaries + callee_worker.literal_params);
+        defer self.allocator.free(hidden);
+        for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
+        const frame = self.alias_scopes.items.len - 1;
+        for (callee_worker.dictionary_params, hidden[bound.len..][0..dictionaries]) |param, *dictionary| dictionary.* = try self.frameDictionary(frame, param);
+        for (hidden[bound.len + dictionaries ..], 0..) |*literal, index| {
+            literal.* = if (index == own) try self.unreadLiteralArg() else try self.frameLiteral(frame, @intCast(index));
+        }
+        try self.finishCall(callee, hidden, bound, &.{}, try self.program.signatureAt(callee, callee_worker.ret, bound), result_ty);
     }
 
     /// Enter the frame of the scheme the edge `edge` of this body's module
@@ -5060,7 +5089,23 @@ pub const Builder = struct {
                 const node = table.evidenceNode(node_id);
                 const procedure = switch (node.target.kind) {
                     .procedure => |procedure| procedure,
-                    .local_proc, .structural, .callable_binding => invariant("a literal argument's edge instantiates no procedure template"),
+                    // A method bound to a polymorphic callable binding: the
+                    // binding's entry wrapper at the dispatch's callable,
+                    // its literal arguments derived from those types.
+                    .callable_binding => |target| {
+                        const binding = self.program.callableEvalBinding(target);
+                        const callee = try self.callableEvalWrapper(binding.module, binding.template);
+                        const callable = switch (node.instantiation) {
+                            .callable => |callable| callable,
+                            .monomorphic, .alias, .derived_from_callable => invariant("a literal argument's edge to a callable binding has no callable"),
+                        };
+                        const owned = try self.relateWorkerVariables(callee, self.program.worker(callee).ret, try self.convert(callable));
+                        defer self.allocator.free(owned);
+                        try self.enterDerivedFrame(callee, try self.program.arena.allocator().dupe(TypeId, owned));
+                        const worker = self.program.worker(callee).*;
+                        return if (worker.literal_scopes.len == 0) &.{} else worker.literal_scopes[0];
+                    },
+                    .local_proc, .structural => invariant("a literal argument's edge instantiates no procedure template"),
                 };
                 const callee = try self.program.templateRefWorker(procedure.template);
                 const subst = table.site_substitutions.items()[node.subst.start..][0..node.subst.len];
@@ -5076,6 +5121,21 @@ pub const Builder = struct {
                         .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
                     },
                 };
+            },
+            // A polymorphic constant's canonical instantiation: its entry
+            // wrapper's scheme with every variable sealed, as a scope that
+            // binds none seals it; the frame derives its dictionaries and
+            // literal arguments from those types.
+            .canonical => |template| {
+                const callee = try self.program.templateRefWorker(self.view.view.checked_procedure_templates.templateRef(self.view.key, template));
+                const wrapper_template = self.view.view.checked_procedure_templates.templates.items()[@backingInt(template)];
+                const sealed_fn = try self.program.converter().convert(self.module, wrapper_template.checked_fn_root, .{ .module = self.module, .vars = &.{}, .bound = &.{} });
+                const owned = try self.boundTypesAt(callee, &.{}, sealed_fn);
+                defer self.allocator.free(owned);
+                const bound = try self.program.arena.allocator().dupe(TypeId, owned);
+                try self.enterDerivedFrame(callee, bound);
+                const worker = self.program.worker(callee).*;
+                return if (worker.literal_scopes.len == 0) &.{} else worker.literal_scopes[0];
             },
             // The platform's invocation of the app procedure: its frame
             // derives its dictionaries and literal arguments from its types,
@@ -5113,7 +5173,10 @@ pub const Builder = struct {
                                     if (tag == .platform_required_proc) invariant("a platform requirement's use is no literal argument edge");
                                     return try self.enterAliasFrame(alias, expr);
                                 },
-                                .callable_eval => invariant("a literal argument's edge uses a computed callable"),
+                                // A use of a callable binding instantiates
+                                // its entry wrapper's scheme, as a read of a
+                                // constant does.
+                                .callable_eval => |eval| return try self.enterSubstitutedWorkerFrame(try self.callableEvalWrapper(eval.module, eval.template), self.siteSubstitution(expr), self.view.view.static_dispatch_plans.siteEvidence(expr) orelse &.{}, edge, .{ .value = self.bodies().exprType(expr) }),
                             };
                             if (tag == .platform_required_proc) invariant("a platform requirement's use is no literal argument edge");
                             return try self.enterSubstitutedWorkerFrame(callee, self.siteSubstitution(expr), self.view.view.static_dispatch_plans.siteEvidence(expr) orelse &.{}, edge, .{ .function = self.bodies().exprType(expr) });
@@ -6828,6 +6891,53 @@ pub const Builder = struct {
         try self.push(.{ .restore = .{ .source = source, .node = stored.node, .ty = stored_ty, .root = root } });
     }
 
+    /// The literal requirement of the scheme of `wrapper`, a polymorphic
+    /// constant's entry wrapper, that is the constant's own value.
+    fn constantInstanceRequirement(self: *Builder, wrapper: WorkerId) ?u32 {
+        const worker = self.program.worker(wrapper).*;
+        if (worker.literal_scopes.len == 0) return null;
+        for (worker.literal_scopes[0], 0..) |requirement, index| {
+            if (requirement.edge == .literal and requirement.site.kind == .constant_instance) return @intCast(index);
+        }
+        return null;
+    }
+
+    /// Push the value at `ty` of the polymorphic constant whose entry
+    /// wrapper is `wrapper`, read through edge `edge` of this body: the
+    /// stored instance a closed use's root holds, or the instance this
+    /// body's own literal argument forwards (design.md "Polymorphic
+    /// Constants"). Nothing computes the constant here.
+    fn readConstantInstance(self: *Builder, wrapper: WorkerId, edge: checked.LiteralEdge, ty: TypeId) Allocator.Error!void {
+        const own = self.constantInstanceRequirement(wrapper) orelse invariant("a read of a polymorphic constant names an entry wrapper that carries no instance");
+        const args = self.view.view.checked_procedure_templates.literalEdgeArgs(edge);
+        if (own >= args.len) invariant("a read of a polymorphic constant has no instance argument");
+        switch (args[own]) {
+            .root => |root| switch (self.view.view.compile_time_roots.root(root).payloadFor(.boxy)) {
+                .const_node => |node| return try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = ty, .root = root } }),
+                .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => {},
+            },
+            .forwarded => {},
+            .unbound => invariant("a polymorphic constant's instance is unbound"),
+        }
+        try self.callInstanceThunk(try self.literalArg(args[own]), ty);
+    }
+
+    /// Push the value of `ty` the immortal thunk `word` produces.
+    fn callInstanceThunk(self: *Builder, word: Word, ty: TypeId) Allocator.Error!void {
+        const thunk = try self.literalThunkLocal(word);
+        const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = ty, .effectful = false } });
+        try self.pushValue(try self.emitErasedCall(thunk, fn_ty, &.{}, ty));
+    }
+
+    /// The entry wrapper worker of callable-eval binding `template` of
+    /// `module`: the procedure computing the binding's value.
+    fn callableEvalWrapper(self: *Builder, module: ModuleIndex, template: checked.CallableEvalTemplateId) Allocator.Error!WorkerId {
+        const root = self.program.module(module).view.callable_eval_templates.templates[@backingInt(template)].root;
+        const wrapper = self.program.wrapper_by_root.get(.{ .module = module, .root = root }) orelse
+            invariant("a callable-eval binding's root has no entry wrapper");
+        return try self.program.templateRefWorker(wrapper);
+    }
+
     /// The compile-time root whose value a stored constant reference is.
     fn rootOfConstRef(owner: *const types.ModuleView, const_ref: checked.ConstRef) ?checked.ComptimeRootId {
         return switch (const_ref.owner) {
@@ -6847,18 +6957,21 @@ pub const Builder = struct {
         }
         switch (template.state) {
             .stored_const => |stored| try self.pushStoredRestore(.{ .module = owner.index }, stored, ty, rootOfConstRef(owner, use.const_ref)),
-            // A constant this compile-time program evaluates is read from
-            // its slot. A polymorphic constant compile-time evaluation did
-            // not store is its entry procedure's value at the read's
-            // instantiation.
+            // A polymorphic constant is the instance its use's edge names
+            // (design.md "Polymorphic Constants"). A constant this
+            // compile-time program evaluates is read from its slot. A
+            // constant whose type is a platform's abstract type is its entry
+            // procedure's value at the app's type, which no compile-time
+            // evaluation of the platform could produce.
             .eval_template => |eval| {
+                const wrapper = try self.program.templateRefWorker(eval.entry_template);
+                if (self.constantInstanceRequirement(wrapper) != null) return try self.readConstantInstance(wrapper, .{ .use = expr_id }, ty);
                 if (rootOfConstRef(owner, use.const_ref)) |root| if (try self.program.readsRootSlot(owner.index, root)) return try self.pendingValueRead(owner.index, root, ty);
-                const callee = try self.program.templateRefWorker(eval.entry_template);
                 const read_ty = try self.exprType(expr_id);
                 const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = read_ty, .effectful = false } });
-                const instance = try self.callInstanceAt(callee, self.siteSubstitution(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{}, fn_ty, .{ .use = expr_id });
+                const instance = try self.callInstanceAt(wrapper, self.siteSubstitution(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{}, fn_ty, .{ .use = expr_id });
                 defer self.allocator.free(instance.hidden);
-                try self.finishCall(callee, instance.hidden, instance.bound, &.{}, instance.ret, read_ty);
+                try self.finishCall(wrapper, instance.hidden, instance.bound, &.{}, instance.ret, read_ty);
             },
             .unimplemented => |unimplemented| {
                 self.region = unimplemented.region;

@@ -122,6 +122,7 @@ const corpus =
     \\    \\the first line of a string on several lines
     \\    \\and the second
     \\
+    \\yes : Bool
     \\yes = True
     \\no : Bool
     \\no = False

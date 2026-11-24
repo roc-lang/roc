@@ -299,6 +299,7 @@ pub const Writer = struct {
             .root_size = @intCast(graph.size(shape.ret_layout)),
             .root_type = root_type,
             .layout_digest = try self.layoutDigest(shape.ret_layout),
+            .type_digest = try self.store.type_store.identityDigest(self.allocator, self.typeNames(), root_type),
         });
     }
 
@@ -336,6 +337,7 @@ pub const Writer = struct {
             .root_size = @intCast(image.graph.size(ret_layout)),
             .root_type = root_type,
             .layout_digest = try self.layoutDigest(ret_layout),
+            .type_digest = try self.store.type_store.identityDigest(self.allocator, self.typeNames(), root_type),
         });
     }
 

@@ -90,8 +90,10 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// gives the remaining absences explicit representations. Version 59 stores
 /// a compile-time root whose value is data alone as an image with the type
 /// it was stored at, and files each strategy's entry under its own key.
-/// Platform-pairing entries share it.
-const checked_envelope_version: u32 = 59;
+/// Version 60 stores each closed instance of a polymorphic constant as a
+/// `constant_instance` root of its own, with the canonical instantiation's
+/// roots. Platform-pairing entries share it.
+const checked_envelope_version: u32 = 60;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment. Version 5 rejects builtin-conflicting import

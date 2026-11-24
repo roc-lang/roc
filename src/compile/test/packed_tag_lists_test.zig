@@ -1,7 +1,10 @@
 //! A list constant is stored as its image (design.md "Stored Images"), and a
 //! list literal stores the image evaluating the same list stores. A list of
 //! tag unions whose payloads are all zero-sized holds each item's
-//! discriminant, its tag's index in byte-wise name order.
+//! discriminant, its tag's index in byte-wise name order. A constant whose
+//! annotation names a tag union is polymorphic in the union's implicitly
+//! open row (design.md "Polymorphic Constants"), and its canonical instance,
+//! evaluated at the union closed, is what is read.
 const std = @import("std");
 const roc_target = @import("roc_target");
 const compile_build = @import("../compile_build.zig");
@@ -18,6 +21,9 @@ const Stored = struct {
     /// Whether the checked-value writer stored the constant from its
     /// expression, rather than an evaluator from its result.
     value_form: bool,
+    /// Whether the constant is polymorphic, so that its canonical
+    /// instance, which an evaluator stores, holds the list.
+    polymorphic: bool,
 };
 
 fn storedList(source: []const u8) TestError!Stored {
@@ -46,9 +52,15 @@ fn storedList(source: []const u8) TestError!Stored {
     };
     var found: ?Stored = null;
     errdefer if (found) |stored| gpa.free(stored.items);
-    for (artifact.compile_time_roots.roots.items()) |root| {
-        if (root.kind != .constant) continue;
-        try std.testing.expect(found == null and root.payload == .const_node);
+    for (artifact.compile_time_roots.roots.items()) |constant| {
+        if (constant.kind != .constant) continue;
+        try std.testing.expect(found == null);
+        const canonical = for (artifact.compile_time_roots.roots.items()) |candidate| {
+            const argument = candidate.literal_argument orelse continue;
+            if (argument.canonical and argument.site.node == @backingInt(constant.id)) break candidate;
+        } else null;
+        const root = canonical orelse constant;
+        try std.testing.expect(root.payload == .const_node);
         const image = artifact.const_store.image(artifact.const_store.imageOf(root.payload.const_node) orelse return error.TestUnexpectedResult);
         const word = 8;
         const len = std.mem.readInt(u64, image.bytes[word..][0..word], .little);
@@ -59,6 +71,7 @@ fn storedList(source: []const u8) TestError!Stored {
             .items = try gpa.dupe(u8, items),
             .len = len,
             .value_form = root.completion == .write_value,
+            .polymorphic = canonical != null,
         };
     }
     return found orelse error.TestUnexpectedResult;
@@ -79,7 +92,8 @@ fn expectSameImageBothWays(header: []const u8, annotation: []const u8, literal: 
     defer gpa.free(from_literal.items);
     const from_evaluation = try storedList(evaluated_source);
     defer gpa.free(from_evaluation.items);
-    try std.testing.expect(from_literal.value_form);
+    try std.testing.expectEqual(from_literal.polymorphic, from_evaluation.polymorphic);
+    try std.testing.expect(from_literal.value_form != from_literal.polymorphic);
     try std.testing.expect(!from_evaluation.value_form);
     // The evaluated concatenation may keep more capacity than the literal,
     // so the two agree on the items they hold.
