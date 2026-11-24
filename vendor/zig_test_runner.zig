@@ -3,7 +3,9 @@
 //! `src/base/death_test.zig`), Roc's suite selection
 //! (`--roc-test-suite=<namespace>`, for binaries that hold several suites),
 //! and Roc's scratch directory (`--roc-scratch-root=<dir>`, for tests that
-//! write files while reading their fixture tree from the working directory).
+//! write files while reading their fixture tree from the working directory),
+//! and, in Debug builds, Roc's stale-borrow allocator wrapper
+//! (`src/stale_borrow_allocator.zig`) as the backing of `std.testing.allocator`.
 //! Default test runner for unit tests.
 const builtin = @import("builtin");
 
@@ -14,6 +16,16 @@ const testing = std.testing;
 const assert = std.debug.assert;
 const panic = std.debug.panic;
 const fuzz_abi = std.Build.abi.fuzz;
+const stale_borrow = @import("stale_borrow_allocator");
+
+var stale_borrow_backing: if (stale_borrow.available) stale_borrow else void =
+    if (stale_borrow.available) stale_borrow.init(std.heap.page_allocator, .{}) else {};
+
+/// The backing allocator of each unit test's `std.testing.allocator`.
+fn testingBacking() std.mem.Allocator {
+    if (stale_borrow.available) return stale_borrow_backing.allocator();
+    return std.heap.page_allocator;
+}
 
 pub const std_options: std.Options = .{
     .logFn = log,
@@ -238,7 +250,7 @@ fn mainServer(init: std.process.Init.Minimal) !void {
 
             .run_test => {
                 testing.environ = init.environ;
-                testing.allocator_instance = .init(std.heap.page_allocator, .{
+                testing.allocator_instance = .init(testingBacking(), .{
                     .canary = 0xc3a701ba,
                     .check_write_after_free = true,
                 });
@@ -396,7 +408,7 @@ fn mainTerminal(init: std.process.Init.Minimal) void {
     var leaks: usize = 0;
     for (selected_tests[0..selected_count], 0..) |index, i| {
         const test_fn = test_fn_list[index];
-        testing.allocator_instance = .init(std.heap.page_allocator, .{
+        testing.allocator_instance = .init(testingBacking(), .{
             .canary = 0xc3a701ba,
             .check_write_after_free = true,
         });

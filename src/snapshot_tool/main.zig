@@ -486,6 +486,9 @@ var debug_allocator: std.heap.DebugAllocator(.{ .stack_trace_frames = build_opti
     .backing_allocator = std.heap.page_allocator,
 };
 
+/// In a Debug build, the wrapper over `debug_allocator` that makes stale borrows fail.
+var stale_borrow_allocator: if (base.StaleBorrowAllocator.available) base.StaleBorrowAllocator else void = undefined;
+
 const default_snapshot_max_threads = 4;
 
 fn defaultSnapshotThreadCount() usize {
@@ -500,7 +503,12 @@ pub fn main(init: std.process.Init) SnapshotError!void {
     // Always use the debug allocator with the snapshot tool to help find allocation bugs.
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
     var gpa = debug_allocator.allocator();
+    if (base.StaleBorrowAllocator.available) {
+        stale_borrow_allocator = .init(gpa, .{});
+        gpa = stale_borrow_allocator.allocator();
+    }
     defer {
+        if (base.StaleBorrowAllocator.available) stale_borrow_allocator.flush();
         std.debug.assert(build_options.debugGpaOk(debug_allocator.deinit()));
     }
 
