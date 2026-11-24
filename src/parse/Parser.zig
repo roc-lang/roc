@@ -6609,11 +6609,16 @@ fn runExprStatementKernel(
                 open_syntax.peekPayload(StatementAssociatedStatementState).expr_block_depth == expr_blocks.depth())
             {
                 const state = open_syntax.popStatementPayload(.statement_type_associated_statement, StatementAssociatedStatementState);
-                if (self.store.nodes.field(.tag)[@backingInt(completed)] == .expr) {
-                    try self.pushDiagnostic(.associated_block_cannot_have_expression, .{
-                        .start = state.statement_pos,
-                        .end = self.pos,
-                    });
+                const node_tags = self.store.nodes.field(.tag);
+                if (node_tags[@backingInt(completed)] == .expr) {
+                    // A malformed expression already has its own report.
+                    const expr_node = self.store.nodes.field(.data)[@backingInt(completed)].lhs;
+                    if (node_tags[expr_node] != .malformed) {
+                        try self.pushDiagnostic(.associated_block_cannot_have_expression, .{
+                            .start = state.statement_pos,
+                            .end = self.pos,
+                        });
+                    }
                 }
                 try self.store.addScratch(AST.Statement, completed);
                 continue :expr_kernel .associated_next;
