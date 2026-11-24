@@ -46,6 +46,7 @@ const layout = @import("layout");
 const unit_walk = @import("unit_walk.zig");
 const patch_link = @import("patch_link.zig");
 const linker = @import("linker.zig");
+const roc_target = @import("roc_target");
 
 const Allocator = std.mem.Allocator;
 const WasmUnitImage = backend.wasm.WasmUnitImage;
@@ -127,7 +128,7 @@ pub const ParameterProblem = struct {
 
 /// A memory configuration the program does not fit.
 pub const MemoryProblem = struct {
-    what: enum { initial_memory_too_small, maximum_memory_too_small, memory_not_page_aligned, stack_size_not_aligned, memory_too_large },
+    what: enum { initial_memory_too_small, maximum_memory_too_small, memory_too_large },
     needed: u64,
     configured: u64,
 };
@@ -182,9 +183,9 @@ const max_globals = 1_000_000;
 const max_data_segments = 100_000;
 const max_table_size = 10_000_000;
 const max_body_size = 7_654_321;
-const page_size: u64 = 64 * 1024;
-const memory_limit: u64 = 1 << 32;
-const stack_alignment: u64 = 16;
+const page_size = roc_target.wasm_memory.page_size;
+const memory_limit = roc_target.wasm_memory.limit;
+const stack_alignment = roc_target.wasm_memory.stack_alignment;
 
 /// `__memory_base`: static data is at its linked addresses.
 const memory_base: u32 = 0;
@@ -1211,10 +1212,9 @@ fn definedValue(plan: *const Layout, found: SymbolRef) collections.OptionalU32 {
 fn planMemory(plan: *Layout, config: ModuleConfig, outcome: *Outcome) LinkError!void {
     const program = plan.program;
     var memory: Memory = .{};
-    if (config.stack_size % stack_alignment != 0) {
-        outcome.memory = .{ .what = .stack_size_not_aligned, .needed = stack_alignment, .configured = config.stack_size };
-        return error.MemoryLayout;
-    }
+    // Configured sizes are ones `roc_target.wasm_memory` accepts, so each is
+    // already a whole number of its unit.
+    std.debug.assert(config.stack_size % stack_alignment == 0);
     var at: u64 = switch (linker.wasmStackLayout(config.global_base)) {
         .stack_first => blk: {
             memory.stack_low = 0;
@@ -1263,10 +1263,7 @@ fn planMemory(plan: *Layout, config: ModuleConfig, outcome: *Outcome) LinkError!
     }
     var initial = std.mem.alignForward(u64, memory.heap_base, page_size);
     if (config.initial_memory) |configured| {
-        if (configured % page_size != 0) {
-            outcome.memory = .{ .what = .memory_not_page_aligned, .needed = page_size, .configured = configured };
-            return error.MemoryLayout;
-        }
+        std.debug.assert(configured % page_size == 0);
         if (configured < memory.heap_base) {
             outcome.memory = .{ .what = .initial_memory_too_small, .needed = memory.heap_base, .configured = configured };
             return error.MemoryLayout;
@@ -1279,10 +1276,7 @@ fn planMemory(plan: *Layout, config: ModuleConfig, outcome: *Outcome) LinkError!
         .data_first => config.maximum_memory,
     };
     if (maximum) |bytes| {
-        if (bytes % page_size != 0) {
-            outcome.memory = .{ .what = .memory_not_page_aligned, .needed = page_size, .configured = bytes };
-            return error.MemoryLayout;
-        }
+        std.debug.assert(bytes % page_size == 0);
         if (bytes < initial) {
             outcome.memory = .{ .what = .maximum_memory_too_small, .needed = initial, .configured = bytes };
             return error.MemoryLayout;

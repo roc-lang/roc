@@ -18,9 +18,9 @@ UNEXPECTED ASSOCIATED EXPRESSION - nominal_associated_with_final_expression.md:2
 		(title "Unexpected Associated Expression")
 		(region (start 2 1) (end 2 2))
 		(headline
-			(reflow "I was parsing associated items for a nominal type, and I found a plain final expression."))
+			(reflow "I was parsing associated items for a nominal type, and I found a plain expression."))
 		(document
-			(reflow "Associated item blocks can contain associated types and values. Remove the trailing expression or turn it into a named associated value.")
+			(reflow "Associated item blocks can contain associated types and values. Remove this expression or turn it into a named associated value.")
 			(line-break)
 			(line-break)
 			(text "For example:")

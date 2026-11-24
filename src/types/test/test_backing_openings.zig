@@ -204,26 +204,26 @@ test "an opening reads args the pool it appends to held" {
     try fixture.open(.outermost, .pool);
 }
 
-test "a replay under a savepoint writes what walking the template writes" {
+test "a replay inside a probe writes what walking the template writes" {
     const gpa = std.testing.allocator;
     var fixture: Fixture = undefined;
     try fixture.init(gpa, false);
     defer fixture.deinit(gpa);
 
-    // The recording made under the savepoint outlives its rollback.
-    var walked_savepoint = try fixture.walked.createSavepoint();
-    var replayed_savepoint = try fixture.replayed.createSavepoint();
+    // The recording made inside a discarded probe outlives it.
+    const walked_mark = fixture.walked.beginProbe();
+    const replayed_mark = fixture.replayed.beginProbe();
     try fixture.open(.outermost, .fresh);
-    fixture.walked.rollbackToSavepoint(&walked_savepoint);
-    fixture.replayed.rollbackToSavepoint(&replayed_savepoint);
+    fixture.walked.endProbeNo(&walked_mark);
+    fixture.replayed.endProbeNo(&replayed_mark);
     try expectSameStores(&fixture.walked, &fixture.replayed);
     try fixture.open(@fromBackingInt(@intCast(2)), .fresh);
 
-    walked_savepoint = try fixture.walked.createSavepoint();
-    replayed_savepoint = try fixture.replayed.createSavepoint();
+    _ = fixture.walked.beginProbe();
+    _ = fixture.replayed.beginProbe();
     try fixture.open(.outermost, .fresh);
-    fixture.walked.commitSavepoint(&walked_savepoint);
-    fixture.replayed.commitSavepoint(&replayed_savepoint);
+    try fixture.walked.endProbeYes();
+    try fixture.replayed.endProbeYes();
     try expectSameStores(&fixture.walked, &fixture.replayed);
     try fixture.open(@fromBackingInt(@intCast(2)), .fresh);
 }

@@ -823,11 +823,19 @@ const CustomCase = enum {
     glue_boxed_iter_stream,
     glue_boxed_app_type,
     glue_generic_nominal_shapes,
+    glue_declared_name_collisions,
+    glue_symbols_rust,
+    glue_symbols_zig,
+    glue_symbols_c,
     glue_single_tag_multi_payload,
     glue_zero_sized_values,
     glue_opaque_ownership,
     glue_application_only_requires,
+    glue_rust_include,
+    glue_keyword_names,
     glue_c_tests,
+    glue_type_name_plan_tests,
+    glue_rust_tests,
     roc_test_skips_url_dependency_expects,
     issue_12592_inference_reuse_current_tests,
 };
@@ -2859,11 +2867,19 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "issue 12887: Box(Iter) and Box(Stream) are boxes of their backing record in every generator", .body = .{ .custom = .glue_boxed_iter_stream } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: a heap payload holding the app's type by value is opaque in every generator", .body = .{ .custom = .glue_boxed_app_type } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: each instantiation of a generic nominal is its own type in every generator", .body = .{ .custom = .glue_generic_nominal_shapes } },
+    .{ .id = 0, .suite = .glue, .name = "issue 13350: declared names stay distinct in every generator", .body = .{ .custom = .glue_declared_name_collisions } },
+    .{ .id = 0, .suite = .glue, .name = "RustGlue rejects a linker symbol it cannot declare", .body = .{ .custom = .glue_symbols_rust } },
+    .{ .id = 0, .suite = .glue, .name = "ZigGlue rejects a linker symbol it cannot declare", .body = .{ .custom = .glue_symbols_zig } },
+    .{ .id = 0, .suite = .glue, .name = "CGlue rejects a linker symbol it cannot declare", .body = .{ .custom = .glue_symbols_c } },
     .{ .id = 0, .suite = .glue, .name = "issue 13348: a one-tag union with several payloads is a struct of them in every generator", .body = .{ .custom = .glue_single_tag_multi_payload } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: a zero-sized value is no parameter, result, or struct member in any generator", .body = .{ .custom = .glue_zero_sized_values } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: a value holding an opaque Roc value has no host release in any generator", .body = .{ .custom = .glue_opaque_ownership } },
     .{ .id = 0, .suite = .glue, .name = "issue 11504: application requirements are not glue roots", .body = .{ .custom = .glue_application_only_requires } },
+    .{ .id = 0, .suite = .glue, .name = "issue 13349: RustGlue output works through include! and is lint-clean in every edition", .body = .{ .custom = .glue_rust_include } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: fields and tags named after host-language keywords compile in every generator", .body = .{ .custom = .glue_keyword_names } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
+    .{ .id = 0, .suite = .glue, .name = "TypeNamePlan.roc expect tests pass", .body = .{ .custom = .glue_type_name_plan_tests } },
+    .{ .id = 0, .suite = .glue, .name = "RustGlue.roc expect tests pass", .body = .{ .custom = .glue_rust_tests } },
 };
 
 // Subcommand suite cases
@@ -3199,6 +3215,17 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11126: build stops at a missing import", .body = .{ .command = .{ .args = &.{ "build", "--no-cache", "--jobs=2" }, .roc_file = "test/cli/issue_11126_missing_module_import/app.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "file not found", .wrapped = true }}, .occurrences = &.{.{ .stream = .stderr, .text = "FileNotFound", .count = 1 }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11126: check reports a missing import", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_11126_missing_module_import/app.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "file not found", .wrapped = true }}, .occurrences = &.{.{ .stream = .stderr, .text = "FileNotFound", .count = 1 }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11126: checked errors preserve unaffected execution", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_11126_missing_module_import/checked_error.roc", .exit = .{ .code = 1 }, .stdout_exact = "entrypoint ran\n", .contains = &.{.{ .stream = .stderr, .text = "type mismatch" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    // Compile-time lowering of a default app reaches `echo!` without calling
+    // it: through the body of a function whose literal a caller converts, and
+    // through a function value a constant holds.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13359: roc test lowers a default app function that calls echo! before a literal (specialize=no)", .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--specialize=no" }, .roc_file = "test/cli/issue_13359_default_app_hosted_echo/effect_before_literal.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (0) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "a hosted procedure has no host binding" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13359: roc test lowers a default app function that calls echo! before a literal (specialize=yes)", .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--specialize=yes" }, .roc_file = "test/cli/issue_13359_default_app_hosted_echo/effect_before_literal.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (0) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "a hosted procedure has no host binding" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13359: roc test evaluates a default app constant holding functions that call echo! (specialize=no)", .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--specialize=no" }, .roc_file = "test/cli/issue_13359_default_app_hosted_echo/function_value_in_constant.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "a hosted procedure has no host binding" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13359: roc test evaluates a default app constant holding functions that call echo! (specialize=yes)", .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--specialize=yes" }, .roc_file = "test/cli/issue_13359_default_app_hosted_echo/function_value_in_constant.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "a hosted procedure has no host binding" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    // Converting a literal a caller fixes enters the callee's scope without
+    // lowering the callee, so the compile-time program holds neither the
+    // callee nor anything only the callee reaches.
+    .{ .id = 0, .suite = .subcommands, .name = "a literal argument root lowers no body of the scheme it converts in", .body = .{ .command = .{ .args = &.{ "check", "--no-cache", "--specialize=no" }, .roc_file = "test/cli/LiteralRootEntersSchemeOnly.roc", .exit = .success, .env = &.{.{ .name = "ROC_PROC_CENSUS", .value = "1" }}, .contains = if (build_options.dev_diagnostics) &.{.{ .stream = .stderr, .text = "proc-census: program 0 (boxy)" }} else &.{}, .not_contains = &.{ .{ .stream = .stderr, .text = "proc-census:   0 next_after!" }, .{ .stream = .stderr, .text = "proc-census:   0 only_runtime_helper" }, .{ .stream = .stderr, .text = "proc-census:   0 Builtin.Str.join_with" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "reassignment type error under a platform target reports without postcheck panic", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/reassign_type_error_platform_root/app.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "type mismatch" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "erroneous checked type reached Monotype instantiation" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10705: app imports two nested types from one platform module", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10705_two_nested_platform_exposes/app.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "module not found" }, .{ .stream = .stderr, .text = "type not exposed" }, .{ .stream = .stderr, .text = "duplicate module name" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11065: app imports a same-named module from two packages", .body = .{ .custom = .issue_11065_duplicate_module_name_across_packages } },
@@ -5671,12 +5698,23 @@ const subcommand_cases = [_]CliCase{
     // compile-time constant is reported and stops the build, rather than being
     // dropped and linked without.
     .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 rejects a target configuration field that is not a constant", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/target_config_not_constant/app.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "invalid target configuration" }, .{ .stream = .stderr, .text = "global_base" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    // A memory size a platform header names through a constant is held to
+    // the sizes a literal is, once the constant's value is known.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13368: roc build wasm32 rejects a constant memory size that is not whole pages", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/target_config_memory_size_invalid/app.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "invalid target configuration" }, .{ .stream = .stderr, .text = "minimum_memory" }, .{ .stream = .stderr, .text = "must resolve to a multiple of 65536 between 65536 and" } }, .not_contains = &.{ .{ .stream = .stdout, .text = "successfully building" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 succeeds with per-specialization field defaults", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/field_default_root_order/app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "compile-time root request order placed a root before another root it depends on" }, .{ .stream = .stderr, .text = "panic" } } } } },
     // A misspelled or unsupported target field is reported, not ignored.
     .{ .id = 0, .suite = .subcommands, .name = "issue 12554: roc build wasm32 rejects an unknown target configuration field", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/target_config_unknown_field/app.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "invalid target configuration" }, .{ .stream = .stderr, .text = "stack_first" }, .{ .stream = .stderr, .text = "field named `stack_first`" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     // Without global_base the stack goes first, and a memory reaching 4 GiB
     // would let a stack pointer that wrapped below 0 address memory.
     .{ .id = 0, .suite = .subcommands, .name = "issue 12554: roc build wasm32 rejects a stack-first maximum memory a wrapped stack pointer could reach", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/stack_first_maximum_memory_too_large/app.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "invalid target configuration" }, .{ .stream = .stderr, .text = "maximum memory of 4294967296 bytes" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    // A stack that fills the address space leaves the stack-first layout no
+    // maximum memory to declare, which the wasm-ld link reports as the
+    // composed link does.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13368: roc build wasm32 reports a stack the maximum memory cannot hold", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache", "--wasm-stack-size=4294967280" }, .roc_file = "test/wasm/issue_10951_wasm_exports/empty_exports/app.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "wasm memory configuration" }, .{ .stream = .stderr, .text = "maximum_memory_too_small (needs 4294967280, configured 0)" } }, .not_contains = &.{ .{ .stream = .stdout, .text = "successfully building" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    // wasm-ld alone knows the size the program needs, and the build reports
+    // it as the composed link reports the size it computes.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13368: wasm32 initial memory too small for the program is reported (wasm-ld link)", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache", "--wasm-memory=65536" }, .roc_file = "test/wasm/issue_10951_wasm_exports/empty_exports/app.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "wasm memory configuration" }, .{ .stream = .stderr, .text = "initial_memory_too_small (needs 8388608, configured 65536)" } }, .not_contains = &.{ .{ .stream = .stdout, .text = "successfully building" }, .{ .stream = .stderr, .text = "linker failed" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13368: wasm32 maximum memory too small for the program is reported (wasm-ld link)", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache", "--wasm-stack-size=2147483648", "--wasm-memory=4294967296" }, .roc_file = "test/wasm/issue_10951_wasm_exports/empty_exports/app.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "wasm memory configuration" }, .{ .stream = .stderr, .text = "maximum_memory_too_small (needs 4294967296, configured 2147483648)" } }, .not_contains = &.{ .{ .stream = .stdout, .text = "successfully building" }, .{ .stream = .stderr, .text = "linker failed" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12554: wasm32 platform that reserves memory below a global_base smaller than its stack links (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=dev", "--no-cache" }, .roc_file = "test/wasm/issue_12554_reserved_low_memory/app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "linker failed" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12554: wasm32 platform that reserves memory below a global_base smaller than its stack links (LLVM)", .backend = .size, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=size", "--no-cache" }, .roc_file = "test/wasm/issue_12554_reserved_low_memory/app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "linker failed" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: dev wasm32 emits a valid sealed Boxy object", .backend = .dev, .body = .{ .custom = .issue_10733_wasm_boxy_dev_sealed_object } },
@@ -5884,6 +5922,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc check with --jobs=1 succeeds on valid file", .body = .{ .command = .{ .args = &.{ "check", "--no-cache", "--jobs=1" }, .roc_file = "test/cli/simple_success.roc" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check with --jobs=2 succeeds on valid file", .body = .{ .command = .{ .args = &.{ "check", "--no-cache", "--jobs=2" }, .roc_file = "test/cli/simple_success.roc" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check with invalid --jobs value returns error", .body = .{ .command = .{ .args = &.{ "check", "--jobs=abc" }, .roc_file = "test/cli/simple_success.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "not a valid value" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13368: roc check rejects --jobs=0", .body = .{ .command = .{ .args = &.{ "check", "--jobs=0" }, .roc_file = "test/cli/simple_success.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "is not a valid value for the --jobs flag" }, .{ .stream = .stderr, .text = "The value must be a positive integer." } } } } },
     // https://github.com/roc-lang/roc/issues/12357: an invalid --opt value is
     // reported as a formatted `── ` report naming the bad value and listing the
     // valid ones, like other CLI problems such as "file not found".
@@ -7546,11 +7585,19 @@ fn runCustomCase(
         .glue_boxed_iter_stream => customGlueBoxedIterStream(io, allocator, &env, &timer, timeout_ms),
         .glue_boxed_app_type => customGlueBoxedAppType(io, allocator, &env, &timer, timeout_ms),
         .glue_generic_nominal_shapes => customGlueGenericNominalShapes(io, allocator, &env, &timer, timeout_ms),
+        .glue_declared_name_collisions => customGlueDeclaredNameCollisions(io, allocator, &env, &timer, timeout_ms),
+        .glue_symbols_rust => customGlueSymbolsRust(io, allocator, &env, &timer, timeout_ms),
+        .glue_symbols_zig => customGlueSymbolsZig(io, allocator, &env, &timer, timeout_ms),
+        .glue_symbols_c => customGlueSymbolsC(io, allocator, &env, &timer, timeout_ms),
         .glue_single_tag_multi_payload => customGlueSingleTagMultiPayload(io, allocator, &env, &timer, timeout_ms),
         .glue_zero_sized_values => customGlueZeroSizedValues(io, allocator, &env, &timer, timeout_ms),
         .glue_opaque_ownership => customGlueOpaqueOwnership(io, allocator, &env, &timer, timeout_ms),
         .glue_application_only_requires => customGlueApplicationOnlyRequires(io, allocator, &env, &timer, timeout_ms),
+        .glue_rust_include => customGlueRustInclude(io, allocator, &env, &timer, timeout_ms),
+        .glue_keyword_names => customGlueKeywordNames(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
+        .glue_type_name_plan_tests => customGlueTypeNamePlanTests(io, allocator, &env, &timer, timeout_ms),
+        .glue_rust_tests => customGlueRustTests(io, allocator, &env, &timer, timeout_ms),
         .roc_test_skips_url_dependency_expects => customRocTestSkipsUrlDependencyExpects(io, allocator, &env, &timer, timeout_ms),
         .issue_12592_inference_reuse_current_tests => customIssue12592(io, allocator, &env, &timer, timeout_ms),
     };
@@ -20281,6 +20328,52 @@ fn compileGlueRuntimeRustWasmHost(
     return null;
 }
 
+/// Compile generated Rust glue every way a host consumes it: as a module file
+/// and spliced into a module by `include!`, under each Rust edition, for the
+/// native target with the std helpers and for a 32-bit target without them.
+///
+/// `clippy-driver` runs rustc's own lints together with clippy's default set,
+/// and `--check-cfg` is what cargo passes for every crate, so a passing run
+/// means a cargo-built host with default lints gets no diagnostic from the
+/// generated file. The `include!` crate uses nothing from the file, which is
+/// how every unused generated item shows up.
+fn compileGeneratedRustGlue(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    output_dir: []const u8,
+) ?TestResult {
+    const generated_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rs" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated Rust path: {}", .{err});
+    const include_path = std.fs.path.join(allocator, &.{ output_dir, "include_roc_platform_abi.rs" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Rust include crate path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = include_path, .data = "mod abi {\n    include!(\"roc_platform_abi.rs\");\n}\n" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write Rust include crate: {}", .{err});
+    const metadata_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rmeta" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Rust metadata path: {}", .{err});
+
+    const target_configs = [_][]const []const u8{
+        &.{},
+        &.{ "--target", "wasm32-unknown-unknown", "-C", "target-feature=+simd128", "--cfg", "no_roc_std_helpers" },
+    };
+    for ([_][]const u8{ "--edition=2021", "--edition=2024" }) |edition| {
+        for ([_][]const u8{ generated_path, include_path }) |crate_root| {
+            for (target_configs) |target_config| {
+                const argv = std.mem.concat(allocator, []const u8, &.{
+                    &.{ "clippy-driver", edition, "-D", "warnings", "--check-cfg", "cfg()", "--crate-type", "lib", "--emit=metadata" },
+                    target_config,
+                    &.{ crate_root, "-o", metadata_path },
+                }) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to allocate Rust glue compile arguments: {}", .{err});
+                if (runRawAndCheck(io, allocator, env, timer, timeout_ms, argv, project_root_path, .{ .args = &.{} })) |failure| return failure;
+            }
+        }
+    }
+    return null;
+}
+
 fn customGlueDebug(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
@@ -20974,6 +21067,225 @@ fn customGlueBoxedAppType(io: std.Io, allocator: Allocator, env: *const CaseEnv,
     });
 }
 
+fn customGlueDeclaredNameCollisions(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // A generated file has one namespace for its top-level names, and this
+    // platform fills it with names that would collide: tags whose payload
+    // aliases are named like the union's own helpers, types named like
+    // another type's helpers, like a hosted function's argument and result
+    // types, like the name preferred for a hosted function's result, like the
+    // runtime support, and like a linker symbol, two types whose
+    // module-qualified names join to one host name, two hosted functions and
+    // two provided definitions whose names do the same, and a linker symbol
+    // named like a hosted function's argument type. Every generator must
+    // still emit a file that compiles, which `checkGlueOutput` checks.
+    //
+    // Hosted functions that collide take names derived from their hosted
+    // index, and a type or hosted function named like a linker symbol leaves
+    // the name to the symbol. ZigGlue keeps the underscore of `send_it!`, so
+    // only the other two generators see that collision.
+    //
+    // The members of one record or union have a namespace of their own.
+    // `Members`, `PureMembers` and `MemberFields` hold tags and fields that a
+    // generator spells alike (`HTTPError` and `Httperror`, `fooBar` and
+    // `foo_bar`, and in C `Auto`, escaped the way `AutoField` is spelled),
+    // which take ranked names. A union without payloads is an integer type
+    // in C, declared once.
+    //
+    // A payload alias named like a helper is dropped rather than emitted
+    // beside it, and the remaining aliases stay. C declares no release
+    // helper, so there `EventRelease` is free for the alias.
+    return checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/declared-name-collisions/main.roc", .{
+        .zig = &.{
+            "pub const EventRelease = struct {",
+            "pub const EventPress = Key;",
+            "pub const HostSend_itArgs = extern struct {",
+            "pub const HostSendItArgs = extern struct {",
+            "pub const HostPingHosted2Args = extern struct {",
+            "pub extern fn Slot(arg0: SlotType",
+            "pub extern fn HostPingArgs(arg0: u64) callconv(.c) u64;",
+            "        @\"httperror_Member0\": RocStr,",
+            "        @\"httperror_Member1\": u16,",
+            "    @\"httperror_Member0\" = 0,",
+        },
+        .c = &.{
+            "typedef Key EventPress;",
+            "typedef Key EventRelease;",
+            "#define HOSTED_IDX_HOST_SEND_IT_HOSTED4 4",
+            "#define HOSTED_IDX_HOST_SEND_IT_HOSTED5 5",
+            "} HostSendItHosted4Args;",
+            "} HostSendItHosted5Args;",
+            "    HostedFn host_send_it_bang_hosted4;",
+            "    HostedFn host_send_it_bang_hosted5;",
+            "} HostPingHosted2Args;",
+            "extern uint64_t HostPingArgs(uint64_t arg0);",
+            "    MembersTag_FooBar_0 = ",
+            "    MembersTag_FooBar_1 = ",
+            "    uint8_t auto_field_Member0;",
+            "    uint16_t auto_field_Member1;",
+            "    RocStr httperror_Member0;",
+            "typedef uint8_t PureMembers;",
+        },
+        .rust = &.{
+            "pub struct EventRelease;",
+            "pub type EventPress = Key;",
+            "pub struct HostSendItHosted4Args {",
+            "pub struct HostSendItHosted5Args {",
+            "pub struct HostPingHosted2Args {",
+            "    pub fn HostPingArgs(arg0: u64) -> u64;",
+            "    pub fn Slot(arg0: SlotType",
+            "    pub foo_bar_Member0: u8,",
+            "    pub foo_bar_Member1: u16,",
+            "    pub httperror_Member0: core::mem::ManuallyDrop<RocStr>,",
+        },
+        // A helper alias is emitted only with the alias it is named after,
+        // and `HostLoadResult` is a type here, not an alias.
+        .absent = &.{ "pub type EventRelease", "pub const EventRelease = Key;", "HostLoadResultPayload", "pub struct HostSendItArgs", "} HostSendItArgs;", "HOSTED_IDX_HOST_SEND_IT ", "pub struct Slot {", "struct Slot {", "pub const Slot = ", "typedef struct PureMembers PureMembers;" },
+        // Each Roc type is still its own host type, with its own fields,
+        // under whichever name it was declared.
+        .zig_checks =
+        \\fn Param(comptime function: anytype, comptime index: usize) type {
+        \\    return @typeInfo(@TypeOf(function)).@"fn".param_types[index].?;
+        \\}
+        \\fn expectField(comptime Struct: type, comptime name: []const u8) void {
+        \\    if (!@hasField(Struct, name)) @compileError("expected " ++ @typeName(Struct) ++ " to have the field " ++ name);
+        \\}
+        \\comptime {
+        \\    expectField(Param(abi.take_signal_named, 0), "held");
+        \\    expectField(Param(abi.take_signal_named, 1), "index");
+        \\    expectField(Param(abi.take_signal_named, 2), "bytes");
+        \\    expectField(Param(abi.take_signal_named, 3), "depth");
+        \\    expectField(Param(abi.take_signal_named, 4), "boundary");
+        \\    expectField(Param(abi.take_signal_named, 5), "stored");
+        \\    expectField(Param(abi.take_runtime_named, 0), "text");
+        \\    expectField(Param(abi.take_runtime_named, 2), "ops");
+        \\    expectField(Param(abi.take_runtime_named, 3), "count");
+        \\    expectField(Param(abi.take_runtime_named, 5), "size");
+        \\    expectField(Param(abi.take_runtime_named, 7), "slots");
+        \\    expectField(Param(abi.take_host_named, 0), "text");
+        \\    expectField(Param(abi.take_host_named, 1), "status");
+        \\    expectField(Param(abi.take_host_named, 2), "loaded");
+        \\    expectField(Param(abi.take_host_named, 3), "index");
+        \\    expectField(Param(abi.take_joined, 0), "first");
+        \\    expectField(Param(abi.take_joined, 1), "second");
+        \\}
+        ,
+    });
+}
+
+/// A linker symbol and whether one generator can declare it.
+const GlueSymbolCase = struct {
+    symbol: []const u8,
+    declarable: bool,
+};
+
+/// A generated file declares each platform symbol under the symbol's own
+/// name, so a symbol named like something the file needs for itself (a
+/// keyword of its language, a name of its runtime support, a helper it derives
+/// from another symbol or from a type id) must stop the glue run with an
+/// error that names the symbol. A symbol that only another language's
+/// generator could not declare is declared, and the file compiles.
+fn checkGlueSymbols(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    language: GlueLanguage,
+    cases: []const GlueSymbolCase,
+) ?TestResult {
+    for (cases) |case| {
+        const platform_dir = createWorkSubdir(io, allocator, env, case.symbol) catch |err|
+            return customInfraFailure(allocator, timer, "failed to create platform dir: {}", .{err});
+        const platform_path = std.fs.path.join(allocator, &.{ platform_dir, "main.roc" }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate platform path: {}", .{err});
+        // `roc_entry` returns a refcounted value, which RustGlue wraps in a
+        // helper named after the symbol.
+        const platform_source = std.fmt.allocPrint(allocator,
+            \\platform "glue-symbol"
+            \\    requires {{
+            \\        unused : {{}} -> {{}}
+            \\    }}
+            \\    exposes []
+            \\    packages {{}}
+            \\    provides {{
+            \\        "roc_entry": entry,
+            \\        "{s}": other,
+            \\    }}
+            \\    targets: {{}}
+            \\
+            \\entry : Str -> Str
+            \\entry = |text| text
+            \\
+            \\other : U64 -> U64
+            \\other = |count| count
+            \\
+        , .{case.symbol}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate platform source: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = platform_path, .data = platform_source }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to write platform: {}", .{err});
+        const output_dir = std.fs.path.join(allocator, &.{ platform_dir, "glue-out" }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate glue output dir: {}", .{err});
+        std.Io.Dir.cwd().createDirPath(io, output_dir) catch |err|
+            return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+
+        if (case.declarable) {
+            if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+                .args = &.{ "glue", "--no-cache", language.glueSpec(), output_dir, platform_path },
+                .not_contains = &no_panic_or_invariant_needles,
+            })) |failure| return failure;
+            if (compileGlueOutput(io, allocator, env, timer, timeout_ms, language, output_dir, "")) |failure| return failure;
+            continue;
+        }
+
+        const message = std.fmt.allocPrint(allocator, "Glue cannot declare the platform symbol `{s}`", .{case.symbol}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate expected message: {}", .{err});
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "glue", "--no-cache", language.glueSpec(), output_dir, platform_path },
+            .exit = .failure,
+            .contains = &.{.{ .stream = .stderr, .text = message }},
+            .not_contains = &no_panic_or_invariant_needles,
+        })) |failure| return failure;
+    }
+    return null;
+}
+
+fn customGlueSymbolsRust(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // `RocStr` and `value` name nothing in the value namespace a Rust
+    // function lives in.
+    return checkGlueSymbols(io, allocator, env, timer, timeout_ms, .rust, &.{
+        .{ .symbol = "decref_box", .declarable = false },
+        .{ .symbol = "fn", .declarable = false },
+        .{ .symbol = "decref_list_of_str", .declarable = false },
+        .{ .symbol = "roc_entry_owned", .declarable = false },
+        .{ .symbol = "RocStr", .declarable = true },
+        .{ .symbol = "value", .declarable = true },
+    });
+}
+
+fn customGlueSymbolsZig(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // Zig rejects a top-level declaration that shares its name with a
+    // parameter or local anywhere in the file, such as `value`.
+    return checkGlueSymbols(io, allocator, env, timer, timeout_ms, .zig, &.{
+        .{ .symbol = "RocStr", .declarable = false },
+        .{ .symbol = "value", .declarable = false },
+        .{ .symbol = "u8", .declarable = false },
+        .{ .symbol = "decrefListOfStr", .declarable = false },
+        .{ .symbol = "decref_box", .declarable = true },
+        .{ .symbol = "Some", .declarable = true },
+    });
+}
+
+fn customGlueSymbolsC(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    return checkGlueSymbols(io, allocator, env, timer, timeout_ms, .c, &.{
+        .{ .symbol = "RocStr", .declarable = false },
+        .{ .symbol = "int", .declarable = false },
+        .{ .symbol = "__reserved", .declarable = false },
+        .{ .symbol = "ROC_ALIGNOF", .declarable = false },
+        .{ .symbol = "decref_box", .declarable = true },
+        .{ .symbol = "value", .declarable = true },
+    });
+}
+
 fn customGlueOpaqueOwnership(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     // A box or list over a value of the application's type is a Roc reference
     // the host owns and cannot release: the allocation header and the payload
@@ -21460,6 +21772,75 @@ fn customGlueApplicationOnlyRequires(io: std.Io, allocator: Allocator, env: *con
     });
 }
 
+fn customGlueRustInclude(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // Issue 13349: a build script writes the generated file to `OUT_DIR`, and
+    // the host splices it into a module with `include!`, where an inner doc
+    // comment or inner attribute is a syntax error. The file also has to be
+    // free of rustc and default clippy diagnostics under edition 2024.
+    const output_dir = createWorkSubdir(io, allocator, env, "rust-include-glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "--no-cache", "src/glue/src/RustGlue.roc", output_dir, "test/glue/rust-include/main.roc" },
+        .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "unreachable" } },
+    })) |failure| return failure;
+    if (compileGeneratedRustGlue(io, allocator, env, timer, timeout_ms, output_dir)) |failure| return failure;
+
+    // A host that includes the file reaches every public item through the
+    // including module, and its own safe callbacks fit the `RocHost` fields.
+    const host_path = std.fs.path.join(allocator, &.{ output_dir, "include_host.rs" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Rust include host path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = host_path, .data =
+        \\mod abi {
+        \\    include!("roc_platform_abi.rs");
+        \\}
+        \\
+        \\extern "C" fn host_dbg(_host: *mut abi::RocHost, _bytes: *const u8, _len: usize) {}
+        \\
+        \\pub fn run(n: u64) -> (u64, usize) {
+        \\    let mut host = abi::make_roc_host(core::ptr::null_mut());
+        \\    host.roc_dbg = host_dbg;
+        \\    host.roc_expect_failed = abi::DefaultHandlers::roc_expect_failed;
+        \\    let greeting = abi::RocStr::from_str("a string too long to be stored inline", &host);
+        \\    let len = greeting.len();
+        \\    unsafe { greeting.decref(&host) };
+        \\    (unsafe { abi::roc_main(n) }, len)
+        \\}
+        \\
+    }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write Rust include host: {}", .{err});
+    const metadata_path = std.fs.path.join(allocator, &.{ output_dir, "include_host.rmeta" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Rust include host metadata path: {}", .{err});
+    for ([_][]const u8{ "--edition=2021", "--edition=2024" }) |edition| {
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+            "clippy-driver", edition, "-D", "warnings", "--check-cfg", "cfg()", "--crate-type", "lib", "--emit=metadata", host_path, "-o", metadata_path,
+        }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+    }
+    return null;
+}
+
+fn customGlueKeywordNames(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // A Roc field or tag name can be a keyword of the language glue is
+    // generated for, including a keyword only some editions or standards
+    // reserve, one that cannot be escaped as a raw identifier (`crate`,
+    // `self`, `super`, `Self`), and a macro the generated file's own includes
+    // define (`true`, `false`). Each generator spells such a name so that its
+    // output still compiles.
+    return checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/keyword-names/main.roc", .{
+        .zig = &.{"@\"struct\""},
+        .c = &.{ "uint8_t true_field;", "uint8_t false_field;", "uint8_t struct_field;" },
+        .rust = &.{
+            "pub r#gen: u8,",
+            "pub r#try: u8,",
+            "pub r#async: u8,",
+            "pub crate_: u8,",
+            "pub self_: u8,",
+            "pub super_: u8,",
+            "    Self_ = 2,",
+            "pub r#struct: core::mem::ManuallyDrop<",
+        },
+    });
+}
+
 const GlueOutputExpectations = struct {
     zig: []const []const u8,
     c: []const []const u8,
@@ -21523,56 +21904,70 @@ fn checkGlueOutput(
             }
         }
 
-        switch (language) {
-            .zig => {},
-            .c => {
-                const test_c_path = std.fs.path.join(allocator, &.{ output_dir, "test_header.c" }) catch |err|
-                    return customInfraFailure(allocator, timer, "failed to allocate test C path: {}", .{err});
-                std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_c_path, .data = "#include \"roc_platform_abi.h\"\n" }) catch |err|
-                    return customInfraFailure(allocator, timer, "failed to write test C file: {}", .{err});
-                const test_o_path = std.fs.path.join(allocator, &.{ output_dir, "test_header.o" }) catch |err|
-                    return customInfraFailure(allocator, timer, "failed to allocate test object path: {}", .{err});
-                const include_flag = std.fmt.allocPrint(allocator, "-I{s}", .{output_dir}) catch |err|
-                    return customInfraFailure(allocator, timer, "failed to allocate include flag: {}", .{err});
-                if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
-                    "zig", "cc", "-c", "-std=c11", "-Wall", "-Werror", include_flag, test_c_path, "-o", test_o_path,
-                }, project_root_path, .{ .args = &.{} })) |failure| return failure;
-                continue;
-            },
-            .rust => {
-                const test_rlib_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rlib" }) catch |err|
-                    return customInfraFailure(allocator, timer, "failed to allocate Rust rlib path: {}", .{err});
-                if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
-                    "rustc", "--edition=2021", "-D", "warnings", "--crate-type", "lib", generated_path, "-o", test_rlib_path,
-                }, project_root_path, .{ .args = &.{} })) |failure| return failure;
-                continue;
-            },
-        }
-        // `refAllDecls` only references declarations inside a test build, so
-        // the generated file is compiled as a test to analyze every
-        // declaration and helper body.
-        const test_zig_path = std.fs.path.join(allocator, &.{ output_dir, "test_abi.zig" }) catch |err|
-            return customInfraFailure(allocator, timer, "failed to allocate test Zig path: {}", .{err});
-        const test_zig_source = std.mem.concat(allocator, u8, &.{
-            \\const std = @import("std");
-            \\const abi = @import("roc_platform_abi.zig");
-            \\comptime {
-            \\    std.testing.refAllDecls(abi);
-            \\}
-            \\
-            ,
-            expectations.zig_checks,
-        }) catch |err|
-            return customInfraFailure(allocator, timer, "failed to allocate test Zig source: {}", .{err});
-        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_zig_path, .data = test_zig_source }) catch |err|
-            return customInfraFailure(allocator, timer, "failed to write test Zig file: {}", .{err});
-        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
-            "zig",
-            "test",
-            "-fno-emit-bin",
-            test_zig_path,
-        }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+        if (compileGlueOutput(io, allocator, env, timer, timeout_ms, language, output_dir, expectations.zig_checks)) |failure| return failure;
     }
+    return null;
+}
+
+/// Compile the file `language`'s generator wrote into `output_dir`: the C and
+/// Rust output as a translation unit and a library, and the Zig output as a
+/// test, which semantically analyzes every declaration, followed by
+/// `zig_checks`.
+fn compileGlueOutput(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    language: GlueLanguage,
+    output_dir: []const u8,
+    zig_checks: []const u8,
+) ?TestResult {
+    switch (language) {
+        .zig => {},
+        .c => {
+            const test_c_path = std.fs.path.join(allocator, &.{ output_dir, "test_header.c" }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate test C path: {}", .{err});
+            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_c_path, .data = "#include \"roc_platform_abi.h\"\n" }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to write test C file: {}", .{err});
+            const test_o_path = std.fs.path.join(allocator, &.{ output_dir, "test_header.o" }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate test object path: {}", .{err});
+            const include_flag = std.fmt.allocPrint(allocator, "-I{s}", .{output_dir}) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate include flag: {}", .{err});
+            if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+                "zig", "cc", "-c", "-std=c11", "-Wall", "-Werror", include_flag, test_c_path, "-o", test_o_path,
+            }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+            return null;
+        },
+        .rust => {
+            if (compileGeneratedRustGlue(io, allocator, env, timer, timeout_ms, output_dir)) |failure| return failure;
+            return null;
+        },
+    }
+    // `refAllDecls` only references declarations inside a test build, so
+    // the generated file is compiled as a test to analyze every
+    // declaration and helper body.
+    const test_zig_path = std.fs.path.join(allocator, &.{ output_dir, "test_abi.zig" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate test Zig path: {}", .{err});
+    const test_zig_source = std.mem.concat(allocator, u8, &.{
+        \\const std = @import("std");
+        \\const abi = @import("roc_platform_abi.zig");
+        \\comptime {
+        \\    std.testing.refAllDecls(abi);
+        \\}
+        \\
+        ,
+        zig_checks,
+    }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate test Zig source: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_zig_path, .data = test_zig_source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write test Zig file: {}", .{err});
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig",
+        "test",
+        "-fno-emit-bin",
+        test_zig_path,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
     return null;
 }
 
@@ -21750,20 +22145,7 @@ fn customGlueRustBoxPayloadAlignment(io: std.Io, allocator: Allocator, env: *con
         return customFailure(allocator, timer, "generated Rust glue decref_box_with does not thread payload_contains_refcounted into free_box_allocation", .{});
     }
 
-    const test_rlib_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rlib" }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate Rust rlib path: {}", .{err});
-    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
-        "rustc",
-        "--edition=2021",
-        "-D",
-        "warnings",
-        "--crate-type",
-        "lib",
-        generated_path,
-        "-o",
-        test_rlib_path,
-    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
-    return null;
+    return compileGeneratedRustGlue(io, allocator, env, timer, timeout_ms, output_dir);
 }
 
 fn customGlueRustProvidedContextCallableOutcome(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
@@ -21820,7 +22202,7 @@ fn customGlueRust(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: 
         "pub unsafe fn decref_box_with",
         "pub unsafe fn allocate_box",
         "pub unsafe fn decref_erased_callable",
-        "pub type RocErasedCallableFn = extern \"C\" fn(*mut RocHost, *mut u8, *const u8, *mut u8, *mut u8, *mut *const c_void);",
+        "pub type RocErasedCallableFn = unsafe extern \"C\" fn(*mut RocHost, *mut u8, *const u8, *mut u8, *mut u8, *mut *const c_void);",
         "pub unsafe fn borrow_payload_",
         "pub unsafe fn take_payload_",
         "core::mem::ManuallyDrop::take",
@@ -21853,22 +22235,7 @@ fn customGlueRust(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: 
         }
     }
 
-    const test_rlib_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rlib" }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate Rust rlib path: {}", .{err});
-    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
-        "rustc",
-        "--edition=2021",
-        "-D",
-        "warnings",
-        "--check-cfg",
-        "cfg()",
-        "--crate-type",
-        "lib",
-        generated_path,
-        "-o",
-        test_rlib_path,
-    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
-    return null;
+    return compileGeneratedRustGlue(io, allocator, env, timer, timeout_ms, output_dir);
 }
 
 fn customGlueZig(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
@@ -22135,22 +22502,7 @@ fn customGlueRustReturnedListElements(io: std.Io, allocator: Allocator, env: *co
         }
     }
 
-    const rlib_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rlib" }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate Rust release rlib path: {}", .{err});
-    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
-        "rustc",
-        "--edition=2021",
-        "-D",
-        "warnings",
-        "--check-cfg",
-        "cfg()",
-        "--crate-type",
-        "lib",
-        generated_path,
-        "-o",
-        rlib_path,
-    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
-    return null;
+    return compileGeneratedRustGlue(io, allocator, env, timer, timeout_ms, output_dir);
 }
 
 fn customGlueZigBoxHelperTest(
@@ -22431,6 +22783,24 @@ fn customGlueZigKeywordTagNames(io: std.Io, allocator: Allocator, env: *const Ca
 fn customGlueCTests(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "test", "--opt=interpreter", "src/glue/src/CGlue.roc" },
+        .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "unreachable" } },
+    })) |failure| return failure;
+    return null;
+}
+
+/// Runs the expects of the glue platform's shared naming plan, and of the
+/// platform modules it imports, from their sources.
+fn customGlueTypeNamePlanTests(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "test", "--opt=interpreter", "src/glue/platform/TypeNamePlan.roc" },
+        .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "unreachable" } },
+    })) |failure| return failure;
+    return null;
+}
+
+fn customGlueRustTests(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "test", "--opt=interpreter", "src/glue/src/RustGlue.roc" },
         .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "unreachable" } },
     })) |failure| return failure;
     return null;

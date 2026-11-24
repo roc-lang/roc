@@ -314,8 +314,8 @@ pub const MismatchBehavior = enum {
     /// Merge on success exactly like a normal unify. On a top-level mismatch,
     /// keep successful child unifications, record nothing, and do not poison the
     /// top-level operands; return `Result.mismatch`. The caller owns the
-    /// diagnostic (with correct expected/actual roles) and may wrap the call in a
-    /// savepoint when it explicitly needs rollback.
+    /// diagnostic (with correct expected/actual roles) and relates inside a
+    /// probe (`Store.beginProbe`) when it explicitly needs to discard the writes.
     write_no_report,
 };
 
@@ -374,8 +374,10 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
     // that contract independent of whether this particular relation happens to
     // mismatch or whether its first operand is a checked representative.
     if (opts.on_mismatch == .poison_to_err) {
-        env.types.assertNoSavepointActive();
+        env.types.assertNoProbeOpen();
     }
+    const unifier_running = env.types.enterUnifier();
+    defer env.types.leaveUnifier(unifier_running);
 
     // First reset the scratch store
     env.unify_scratch.reset();
@@ -448,8 +450,8 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         return Result{ .problem = problem_idx };
     };
 
-    // Openings from a call that may still roll back must not outlive it.
-    if (!env.types.savepointActive()) try env.unify_scratch.persistOpenings();
+    // Openings from a relation a probe may still discard must not outlive it.
+    if (!env.types.probeOpen()) try env.unify_scratch.persistOpenings();
     // A refusal a mismatch handler absorbed did not reject this relation.
     env.unify_scratch.bounded_row_violation = null;
     env.unify_scratch.record_tail_refusal = null;
@@ -464,6 +466,8 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
 /// merged with `kind_source`. A mismatch is returned without a report or
 /// poisoning, keeping completed writes as `.write_no_report` does.
 pub fn relateFunctionKind(env: *const Env, kind_source: Var, target: Var) std.mem.Allocator.Error!Result {
+    const unifier_running = env.types.enterUnifier();
+    defer env.types.leaveUnifier(unifier_running);
     env.unify_scratch.reset();
     var unifier = Unifier.init(
         env.ident_store,
@@ -599,6 +603,10 @@ pub fn poisonMethodConflictReceivers(env: *const Env) std.mem.Allocator.Error!vo
 /// * basic support for function, tuple, and number types
 ///
 /// Callers are not expected to construct `Unifier`. Instead  call `unify(...)`.
+///
+/// Every in-place write it makes to the type store is one of the store's
+/// unifier writes (`Store.unifierUnion` and the rest), which journal an
+/// entry that predates an open probe before overwriting it.
 const Unifier = struct {
     const Self = @This();
 
@@ -657,7 +665,7 @@ const Unifier = struct {
     /// In the old compiler, this function was called "merge"
     fn merge(self: *Self, vars: *const ResolvedVarDescs, new_content: Content) std.mem.Allocator.Error!void {
         const content = try self.contentForMerge(vars, new_content);
-        try self.types_store.union_(vars.a.var_, vars.b.var_, .{
+        try self.types_store.unifierUnion(vars.a.var_, vars.b.var_, .{
             .content = content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
         });
@@ -760,7 +768,7 @@ const Unifier = struct {
     fn lowerRankTo(self: *Self, var_: Var, rank: Rank) std.mem.Allocator.Error!void {
         const resolved = self.types_store.resolveVar(var_);
         if (@backingInt(resolved.desc.rank) > @backingInt(rank)) {
-            try self.types_store.setDescRank(resolved.desc_idx, rank);
+            try self.types_store.unifierSetDescRank(resolved.desc_idx, rank);
         }
     }
 
@@ -1029,7 +1037,7 @@ const Unifier = struct {
                 .b = self.types_store.resolvedAtRoot(pair.b, pair.b_desc),
             }),
             .merge => |merge_frame| try self.merge(&merge_frame.vars, merge_frame.content),
-            .merge_stored => |merge_frame| try self.types_store.unionStoringContent(merge_frame.a, merge_frame.b, merge_frame.content, merge_frame.rank),
+            .merge_stored => |merge_frame| try self.types_store.unifierUnionStoringContent(merge_frame.a, merge_frame.b, merge_frame.content, merge_frame.rank),
             .same_alias_after_args => |post| try self.processSameAliasAfterArgs(post),
             .shared_fields_after_children => |post| try self.processSharedFieldsAfterChildren(post),
             .shared_tags_after_children => |post| try self.processSharedTagsAfterChildren(post),
@@ -1062,8 +1070,8 @@ const Unifier = struct {
             // Only the two classes' words are read here. Their content is
             // decoded when the pair's `unify_vars` frame runs, if it comes to
             // that.
-            const a = self.types_store.resolveVarWordAndCompressPath(a_var);
-            const b = self.types_store.resolveVarWordAndCompressPath(b_var);
+            const a = self.types_store.unifierResolveVarWord(a_var);
+            const b = self.types_store.unifierResolveVarWord(b_var);
             if (a.desc_idx == b.desc_idx) return;
 
             // Check kind before the plain-flex and same-content fast paths.
@@ -1084,7 +1092,7 @@ const Unifier = struct {
             }
 
             if (self.storedContentMerge(a, b)) |kept| {
-                return self.types_store.unionKeepingContent(a.var_, b.var_, kept, Rank.min(a.word.rank, b.word.rank));
+                return self.types_store.unifierUnionKeepingContent(a.var_, b.var_, kept, Rank.min(a.word.rank, b.word.rank));
             }
 
             switch (try self.relateThroughAlias(a_var, b_var, a, b)) {
@@ -1205,7 +1213,7 @@ const Unifier = struct {
             return .related;
         }
         if (store.resolveDescIdx(a_backing_var) == store.resolveDescIdx(b_backing_var)) {
-            try store.unionStoringContent(merge_after.a, merge_after.b, merge_after.content, merge_after.rank);
+            try store.unifierUnionStoringContent(merge_after.a, merge_after.b, merge_after.content, merge_after.rank);
             return .related;
         }
         try self.enterGuardedPair(a_var, b_var);
@@ -1236,7 +1244,7 @@ const Unifier = struct {
 
         const rank = Rank.min(a.word.rank, b.word.rank);
         if (self.sameClasses(a_type.args, b_type.args)) {
-            try store.unionKeepingContent(a.var_, b.var_, .b, rank);
+            try store.unifierUnionKeepingContent(a.var_, b.var_, .b, rank);
             return true;
         }
         try self.enterGuardedPair(a_var, b_var);
@@ -1535,7 +1543,7 @@ const Unifier = struct {
                     if (current.word.flags().uncommitted_record_tail) return error.TypeMismatch;
                     // A transparent alias keeps its own spelling. The
                     // obligation must reach its backing's independent uses.
-                    if (other.word.kind == .alias) try self.types_store.requireTagRow(current.var_);
+                    if (other.word.kind == .alias) try self.types_store.unifierRequireTagRow(current.var_);
                     return;
                 },
                 .alias => current = self.types_store.resolveVarWord(self.types_store.aliasBackingVarAt(current.desc_idx)),
@@ -1587,7 +1595,7 @@ const Unifier = struct {
                 },
                 .flex => {
                     // Direct flex merges already propagate the descriptor flag.
-                    if (saw_row) try self.types_store.markBoundedRowExt(current);
+                    if (saw_row) try self.types_store.unifierMarkBoundedRowExt(current);
                     return;
                 },
                 .rigid => return error.TypeMismatch,
@@ -2677,7 +2685,7 @@ const Unifier = struct {
         }
 
         const appended = kind.row(kind.storeEntries(self.types_store).rangeToEnd(range_start), ext);
-        try self.types_store.union_(pair.a, pair.b, .{
+        try self.types_store.unifierUnion(pair.a, pair.b, .{
             .content = kind.content(try self.rowForMerge(kind, pair, appended)),
             .rank = pair.rank,
         });
@@ -2685,7 +2693,7 @@ const Unifier = struct {
 
     /// A fresh row holding `entries` over `ext`.
     fn freshRow(self: *Self, comptime kind: RowKind, vars: *const ResolvedVarDescs, entries: []const kind.Entry(), ext: Var) std.mem.Allocator.Error!Var {
-        if (kind == .tag_union) try self.types_store.requireTagRow(ext);
+        if (kind == .tag_union) try self.types_store.unifierRequireTagRow(ext);
         const range = try kind.appendToStore(self.types_store, entries);
         return try self.freshParent(vars, kind.content(kind.row(range, ext)));
     }
@@ -4044,7 +4052,7 @@ const Unifier = struct {
         const pending = &self.scratch.pure_demands;
         while (pending.items.len > pending_base) {
             const demand = pending.pop().?;
-            try self.types_store.setVarContent(demand.var_, .{ .structure = .{ .fn_unbound = demand.func } });
+            try self.types_store.unifierSetVarContent(demand.var_, .{ .structure = .{ .fn_unbound = demand.func } });
         }
         return err;
     }
@@ -4068,7 +4076,7 @@ const Unifier = struct {
                         // so a recursive group, whose members depend on each
                         // other, terminates at the member already made pure.
                         try pending.ensureUnusedCapacity(self.scratch.gpa, 1);
-                        try self.types_store.setVarContent(resolved.var_, .{ .structure = .{ .fn_pure = .{ .args = func.args, .ret = func.ret } } });
+                        try self.types_store.unifierSetVarContent(resolved.var_, .{ .structure = .{ .fn_pure = .{ .args = func.args, .ret = func.ret } } });
                         pending.appendAssumeCapacity(.{ .var_ = resolved.var_, .func = func });
                         return;
                     },
@@ -4563,8 +4571,8 @@ const Unifier = struct {
         const b_whole = self.keptWhole(kept_b, b_constraints, partitioned.b_order, &self.scratch.b_static_dispatch_constraint_indices);
         if (a_whole and kept_b.len == 0) return a_constraints;
         if (b_whole and kept_a.len == 0) return b_constraints;
-        if (a_whole and a_len >= b_len) return try self.types_store.appendStaticDispatchConstraintsAfter(a_constraints, kept_b);
-        if (b_whole) return try self.types_store.appendStaticDispatchConstraintsAfter(b_constraints, kept_a);
+        if (a_whole and a_len >= b_len) return try self.types_store.unifierAppendStaticDispatchConstraintsAfter(a_constraints, kept_b);
+        if (b_whole) return try self.types_store.unifierAppendStaticDispatchConstraintsAfter(b_constraints, kept_a);
 
         const top: u32 = @intCast(self.types_store.static_dispatch_constraints.len());
 
@@ -5510,8 +5518,8 @@ pub const Scratch = struct {
     // never converges—every lift would mint a fresh backing whose interior
     // recursive application is a new var, so the in-progress pair guard never
     // sees a repeat. Reusing the first opening restores the fixed graph the
-    // guard needs. Reset per unify call; savepoints bracket whole unify calls,
-    // so a rollback never leaves a memo entry dangling.
+    // guard needs. Reset per unify call; probes bracket whole unify calls, so a
+    // discarded probe never leaves a memo entry dangling.
     opened_nominals: std.ArrayListUnmanaged(OpenedNominalMemo),
     opened_nominal_args: VarSafeList,
     // Whether each entry of `opened_nominals` may outlive this unify call:
