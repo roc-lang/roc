@@ -7021,7 +7021,7 @@ fn warnIfComptimeConditionalExpr(
     self: *Self,
     expr: CIR.Expr.Idx,
     kind: @FieldType(problem.ComptimeCondition, "kind"),
-    expected: Expected,
+    expected: *const Expected,
 ) Allocator.Error!void {
     if (!expected.emitsComptimeConditionWarnings()) return;
 
@@ -14901,7 +14901,7 @@ fn checkConcreteBuiltinNumeral(
     node_idx: CIR.Node.Idx,
     occurrence_var: Var,
     region: Region,
-    expected: Expected,
+    expected: *const Expected,
     env: *Env,
 ) Allocator.Error!bool {
     const suffix = self.cir.numericSuffixTargetForNode(node_idx);
@@ -14929,7 +14929,7 @@ fn checkNumeralExpression(
     node_idx: CIR.Node.Idx,
     occurrence_var: Var,
     region: Region,
-    expected: Expected,
+    expected: *const Expected,
     env: *Env,
 ) Allocator.Error!void {
     if (try self.checkConcreteBuiltinNumeral(node_idx, occurrence_var, region, expected, env)) return;
@@ -16002,7 +16002,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         switch (stmt) {
             .s_expect => |expr_stmt| {
                 // Check the body expression
-                _ = try self.checkExpectBody(expr_stmt.body, &env, Expected.none(), stmt_region);
+                _ = try self.checkExpectBody(expr_stmt.body, &env, &Expected.none(), stmt_region);
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
 
                 // Expects must be bool expressions
@@ -22402,7 +22402,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     std.debug.assert(env.rank() == .outermost);
 
     // Check the expr
-    _ = try self.checkExpr(expr_idx, &env, Expected.none());
+    _ = try self.checkExpr(expr_idx, &env, &Expected.none());
 
     try self.finalizeTypes(&env, .{ .repl_expr = expr_idx });
     try self.reportPolymorphicConstrainedExpr(expr_idx);
@@ -32073,7 +32073,7 @@ fn borrowExpectedTagPayload(self: *Self, source: Var, name: Ident.Idx) ?Borrowed
 /// The full enclosing relation remains responsible for diagnosing rejection.
 fn projectExpectedTagPayload(
     self: *Self,
-    expected: Expected,
+    expected: *const Expected,
     name: Ident.Idx,
     arity: usize,
     env: *Env,
@@ -32187,13 +32187,13 @@ test "tag projection copies selected slots together without copying other varian
     }, try store.freshFromContent(.{ .structure = .empty_tag_union })));
     const expected = Expected.none().withContextualType(.{ .var_ = expected_union, .context = .none });
     const before = store.len();
-    const slots = (try checker.projectExpectedTagPayload(expected, selected, 2, &env)).?;
+    const slots = (try checker.projectExpectedTagPayload(&expected, selected, 2, &env)).?;
     // One repeated flex leaf, not a row head, extension, or unrelated tuple.
     try std.testing.expectEqual(@as(u64, 1), store.len() - before);
     const first = store.getVarAt(slots, 0);
     try std.testing.expectEqual(first, store.getVarAt(slots, 1));
     try std.testing.expect(first != shared);
-    const second_slots = (try checker.projectExpectedTagPayload(expected, selected, 2, &env)).?;
+    const second_slots = (try checker.projectExpectedTagPayload(&expected, selected, 2, &env)).?;
     try std.testing.expect(first != store.getVarAt(second_slots, 0));
     const empty_record = try checker.freshFromContent(.{ .structure = .empty_record }, &env, Region.zero());
     _ = try checker.commitProjectedStoredValue(first, empty_record, &env);
@@ -32201,8 +32201,8 @@ test "tag projection copies selected slots together without copying other varian
     try std.testing.expect(store.resolveVar(store.getVarAt(second_slots, 0)).desc.content == .flex);
 
     const before_rejection = store.len();
-    try std.testing.expectEqual(@as(?Var.SafeList.Range, null), try checker.projectExpectedTagPayload(expected, missing, 2, &env));
-    try std.testing.expectEqual(@as(?Var.SafeList.Range, null), try checker.projectExpectedTagPayload(expected, selected, 1, &env));
+    try std.testing.expectEqual(@as(?Var.SafeList.Range, null), try checker.projectExpectedTagPayload(&expected, missing, 2, &env));
+    try std.testing.expectEqual(@as(?Var.SafeList.Range, null), try checker.projectExpectedTagPayload(&expected, selected, 1, &env));
     try std.testing.expectEqual(before_rejection, store.len());
 }
 
@@ -32248,7 +32248,7 @@ test "tag projection carries numeric and from_quote context into optional record
 /// aggregate still owns the ordinary full-shape relation and its diagnostic.
 fn projectExpectedAggregateShape(
     self: *Self,
-    expected: Expected,
+    expected: *const Expected,
     shape_var: Var,
     env: *Env,
 ) std.mem.Allocator.Error!bool {
@@ -32301,7 +32301,7 @@ fn projectExpectedAggregateShape(
 /// Expected Shape Context: a call's result constrains shared formal slots
 /// before argument constructors meet. The owning result relation still
 /// validates the complete expected type and owns any mismatch.
-fn seedCallResultFromContext(self: *Self, expected: Expected, result_var: Var, env: *Env) Allocator.Error!void {
+fn seedCallResultFromContext(self: *Self, expected: *const Expected, result_var: Var, env: *Env) Allocator.Error!void {
     const context = expected.aggregateType() orelse return;
     // A standalone unknown/rigid leaf copies to a fresh unconstrained flex,
     // which supplies no shape. Projected cells instead carry shared equality
@@ -32698,7 +32698,7 @@ fn beginExprCheckFrame(
     self.checking_binding_rhs_pattern = null;
 }
 
-fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
+fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: *const Expected) std.mem.Allocator.Error!bool {
     return self.checkExprWithFunctionOwner(expr_idx, env, expected, expr_idx);
 }
 
@@ -32788,12 +32788,12 @@ const ExprKernelActivity = struct {
     boundary_root: BoundaryRoot = undefined,
 };
 
-fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected, function_owner: CIR.Expr.Idx) std.mem.Allocator.Error!bool {
+fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: *const Expected, function_owner: CIR.Expr.Idx) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
     return (try self.runCheckActivities(.{ .expr = try self.newExprKernelActivity(&.{
         .expr = expr_idx,
-        .expected = expected,
+        .expected = expected.*,
         .function_owner = function_owner,
     }) }, env)).doesFx();
 }
@@ -33184,25 +33184,25 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: *const Expected,
         .e_num => |num| {
             switch (num.kind) {
                 // For unannotated literals, create a flex var with from_numeral constraint
-                .num_unbound, .int_unbound => try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, frame.nested_expected, env),
+                .num_unbound, .int_unbound => try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, &frame.nested_expected, env),
                 .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => try self.unifyWith(expr_var, try self.mkNumberTypeContent(num.kind), env),
             }
         },
         .e_num_from_numeral => {
-            try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, frame.nested_expected, env);
+            try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, &frame.nested_expected, env);
         },
         .e_frac_f32 => |frac| {
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f32), env);
             } else {
-                try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, frame.nested_expected, env);
+                try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, &frame.nested_expected, env);
             }
         },
         .e_frac_f64 => |frac| {
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f64), env);
             } else {
-                try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, frame.nested_expected, env);
+                try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, &frame.nested_expected, env);
             }
         },
         inline .e_dec, .e_dec_small => |frac| {
@@ -33212,19 +33212,19 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: *const Expected,
                 _ = try self.reportInvalidBuiltinFromNumeralInfo(expr_var, .dec, num_literal_info, env);
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent(.dec), env);
             } else {
-                try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, frame.nested_expected, env);
+                try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, &frame.nested_expected, env);
             }
         },
         .e_typed_int => {
             // Typed integer literal like 123.U64
-            try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, frame.nested_expected, env);
+            try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, &frame.nested_expected, env);
         },
         .e_typed_frac => {
             // Typed fractional literal like 3.14.Dec
-            try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, frame.nested_expected, env);
+            try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, &frame.nested_expected, env);
         },
         .e_typed_num_from_numeral => {
-            try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, frame.nested_expected, env);
+            try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, &frame.nested_expected, env);
         },
         // list //
         .e_empty_list => {
@@ -33239,7 +33239,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: *const Expected,
                 .fields = try self.types.appendRecordFields(&.{}),
                 .ext = try self.freshUncommittedTail(env, expr_region),
             } } }, env);
-            _ = try self.projectExpectedAggregateShape(frame.nested_expected, expr_var, env);
+            _ = try self.projectExpectedAggregateShape(&frame.nested_expected, expr_var, env);
         },
         // tags //
         .e_zero_argument_tag => |e| {
@@ -33249,7 +33249,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: *const Expected,
             const tag_union_content = try self.types.mkTagUnion(&[_]types_mod.Tag{tag}, ext_var);
 
             // Update the expr to point to the new type
-            if (!try self.relateOwnedTagToExpectedNominal(expr_var, .{ .name = e.name, .arity = 0 }, tag_union_content, frame.nested_expected, env, expr_region)) {
+            if (!try self.relateOwnedTagToExpectedNominal(expr_var, .{ .name = e.name, .arity = 0 }, tag_union_content, &frame.nested_expected, env, expr_region)) {
                 try self.unifyWith(expr_var, tag_union_content, env);
             }
         },
@@ -33806,7 +33806,7 @@ fn checkConcreteBuiltinQuote(
     self: *Self,
     node_idx: CIR.Node.Idx,
     occurrence_var: Var,
-    expected: Expected,
+    expected: *const Expected,
     env: *Env,
 ) Allocator.Error!bool {
     if (self.cir.numericSuffixTargetForNode(node_idx) != null) return false;
@@ -33829,7 +33829,7 @@ fn checkConcreteBuiltinInterpolation(
     expr_idx: CIR.Expr.Idx,
     expr_var: Var,
     parts: []const CIR.Expr.Idx,
-    expected: Expected,
+    expected: *const Expected,
     env: *Env,
 ) Allocator.Error!bool {
     if (self.cir.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) != null) return false;
@@ -33918,7 +33918,7 @@ fn resumeStrCheck(self: *Self, task: *ExprTask, state: *StrCheck, env: *Env, chi
         // Interpolated strings are Str
         const str_var = try self.freshStr(env, expr_region);
         _ = try self.unify(expr_var, str_var, env);
-    } else if (try self.checkConcreteBuiltinQuote(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, frame.nested_expected, env)) {
+    } else if (try self.checkConcreteBuiltinQuote(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, &frame.nested_expected, env)) {
         // The context already names the builtin `Str`.
     } else if (try self.deferQuoteConversion(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, env)) {
         // The conversion waits for the literal's type to settle.
@@ -33961,7 +33961,7 @@ fn resumeListCheck(self: *Self, task: *ExprTask, state: *ListCheck, env: *Env, c
     const frame = &task.frame;
     const expr_var = frame.expr_var;
     const expr_region = frame.expr_region;
-    const nested_expected = frame.nested_expected;
+    const nested_expected = &frame.nested_expected;
     const child_expected = nested_expected.forStatement();
     const elems = self.cir.store.exprSlice(frame.expr.e_list.elems);
 
@@ -34106,7 +34106,7 @@ fn resumeTupleCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: *
     const frame = &task.frame;
     const expr_var = frame.expr_var;
     const expr_region = frame.expr_region;
-    const nested_expected = frame.nested_expected;
+    const nested_expected = &frame.nested_expected;
     const elems_slice = self.cir.store.exprSlice(frame.expr.e_tuple.elems);
 
     if (!state.started) {
@@ -34372,7 +34372,7 @@ fn resumeRecordCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: 
     const expr_idx = frame.expr_idx;
     const expr_var = frame.expr_var;
     const expr_region = frame.expr_region;
-    const nested_expected = frame.nested_expected;
+    const nested_expected = &frame.nested_expected;
     const e = frame.expr.e_record;
     const source_fields = self.cir.store.sliceRecordFields(e.fields);
 
@@ -34523,7 +34523,7 @@ fn resumeTagCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: *En
     const frame = &task.frame;
     const expr_var = frame.expr_var;
     const expr_region = frame.expr_region;
-    const nested_expected = frame.nested_expected;
+    const nested_expected = &frame.nested_expected;
     const e = frame.expr.e_tag;
     const arg_expr_idx_slice = self.cir.store.sliceExpr(e.args);
 
@@ -34671,7 +34671,7 @@ const BlockCheck = struct {
 fn resumeBlockCheck(self: *Self, task: *ExprTask, slot: *?*BlockCheck, env: *Env, child_does_fx: ?bool, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_var = frame.expr_var;
-    const nested_expected = frame.nested_expected;
+    const nested_expected = &frame.nested_expected;
     const block = frame.expr.e_block;
     const state = slot.* orelse blk: {
         const acquired = self.block_check_pool.pop() orelse try self.gpa.create(BlockCheck);
@@ -34683,7 +34683,7 @@ fn resumeBlockCheck(self: *Self, task: *ExprTask, slot: *?*BlockCheck, env: *Env
     switch (state.phase) {
         .start => {
             state.hoist_scope = try self.beginHoistLexicalScope();
-            state.statements = BlockStatementsCheck.init(nested_expected.forStatement());
+            state.statements = BlockStatementsCheck.init(&nested_expected.forStatement());
             state.phase = .statements;
         },
         .statements => {},
@@ -34729,7 +34729,7 @@ fn resumeBlockCheck(self: *Self, task: *ExprTask, slot: *?*BlockCheck, env: *Env
         .expected = if (state.statements.diverges)
             nested_expected.suppressHoistSelection()
         else
-            nested_expected,
+            nested_expected.*,
     };
     return .child;
 }
@@ -34760,8 +34760,8 @@ const BlockStatementsCheck = struct {
     offset: u32 = 0,
     current: ?StatementCheck = null,
 
-    fn init(expected: Expected) BlockStatementsCheck {
-        return .{ .expected = expected };
+    fn init(expected: *const Expected) BlockStatementsCheck {
+        return .{ .expected = expected.* };
     }
 };
 
@@ -34893,7 +34893,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
     const stmt = statement.stmt;
     const stmt_var = ModuleEnv.varFrom(stmt_idx);
     const stmt_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(stmt_idx));
-    const statement_expected = statement.statement_expected;
+    const statement_expected = &statement.statement_expected;
 
     switch (stmt) {
         .s_decl => |decl_stmt| {
@@ -34990,7 +34990,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                 if (self.appliedAnnotation(decl_stmt.pattern, decl_stmt.anno)) |annotation_idx| {
                     break :blk statement_expected.withAnnotation(annotation_idx);
                 } else {
-                    break :blk statement_expected;
+                    break :blk statement_expected.*;
                 }
             };
 
@@ -35048,11 +35048,11 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                 if (var_stmt.anno) |annotation_idx| {
                     if (self.cir.store.getAnnotation(annotation_idx).introduces_type_var) {
                         _ = try self.problems.appendProblem(.{ .polymorphic_var_annotation = .{ .region = self.cir.store.getAnnotationRegion(annotation_idx) } });
-                        break :blk statement_expected;
+                        break :blk statement_expected.*;
                     }
                     break :blk statement_expected.withAnnotation(annotation_idx);
                 } else {
-                    break :blk statement_expected;
+                    break :blk statement_expected.*;
                 }
             };
             child_request.* = .{ .expr = var_stmt.expr, .expected = expectation };
@@ -35114,7 +35114,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                 try self.markErroneousValueExpr(reassign.expr);
             }
             self.discardHoistBindingCandidate(reassign.pattern_idx);
-            child_request.* = .{ .expr = reassign.expr, .expected = statement_expected };
+            child_request.* = .{ .expr = reassign.expr, .expected = statement_expected.* };
             return .child;
         },
         .s_for => |for_stmt| {
@@ -35136,16 +35136,16 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
             // Check the condition
             // while $count < 10 {
             //       ^^^^^^^^^^^
-            child_request.* = .{ .expr = while_stmt.cond, .expected = statement_expected };
+            child_request.* = .{ .expr = while_stmt.cond, .expected = statement_expected.* };
             return .child;
         },
         .s_expr => |expr| {
-            child_request.* = .{ .expr = expr.expr, .expected = statement_expected };
+            child_request.* = .{ .expr = expr.expr, .expected = statement_expected.* };
             return .child;
         },
         .s_dbg => |expr| {
             self.markCurrentHoistObservableEffect();
-            child_request.* = .{ .expr = expr.expr, .expected = statement_expected };
+            child_request.* = .{ .expr = expr.expr, .expected = statement_expected.* };
             return .child;
         },
         .s_expect => |expr_stmt| {
@@ -35162,7 +35162,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
         .s_return => |ret| {
             self.markCurrentHoistObservableEffect();
             // Type check the return expression
-            child_request.* = .{ .expr = ret.expr, .expected = self.returnValueExpected(block_state.expected, ret.lambda) };
+            child_request.* = .{ .expr = ret.expr, .expected = self.returnValueExpected(&block_state.expected, ret.lambda) };
             return .child;
         },
         .s_nominal_decl, .s_alias_decl, .s_where_alias_decl, .s_type_anno => {
@@ -35201,7 +35201,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
     const stmt = statement.stmt;
     const stmt_var = ModuleEnv.varFrom(stmt_idx);
     const stmt_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(stmt_idx));
-    const statement_expected = statement.statement_expected;
+    const statement_expected = &statement.statement_expected;
 
     switch (stmt) {
         .s_decl => |decl_stmt| {
@@ -35385,7 +35385,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             return .done;
         },
         .s_for => {
-            if (try self.resumeForLoop(&statement.kind.for_, statement.statement_expected, env, child_request) == .child) return .child;
+            if (try self.resumeForLoop(&statement.kind.for_, &statement.statement_expected, env, child_request) == .child) return .child;
             self.assertLoopBodyHasNoFinalExpr(statement.kind.for_.body);
             // Every `for!` pulls its items with the effectful `next!`.
             if (statement.kind.for_.kind == .stream) block_state.does_fx = true;
@@ -35579,7 +35579,7 @@ fn assertLoopBodyHasNoFinalExpr(self: *const Self, body: CIR.Expr.Idx) void {
 
 /// `expected` is the expectation the loop was requested with: its statement's,
 /// or a `for` expression's statement expectation.
-fn startForLoop(self: *Self, state: *ForLoopCheck, expected: Expected, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
+fn startForLoop(self: *Self, state: *ForLoopCheck, expected: *const Expected, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     std.debug.assert(state.phase == .start);
     const pattern_ctx: PatternCtx = .{ .row_openness = if (try self.patternNeedsExhaustiveness(state.pattern)) .open else .closed, .failure_owner = state.loop_node };
     state.valid_pattern = try self.checkPattern(state.pattern, pattern_ctx, env);
@@ -35590,7 +35590,7 @@ fn startForLoop(self: *Self, state: *ForLoopCheck, expected: Expected, env: *Env
 
 /// Continue a `for` loop after its iterable or body. Writes the body to
 /// `child_request`; `.done` once the loop is fully checked.
-fn resumeForLoop(self: *Self, state: *ForLoopCheck, expected: Expected, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
+fn resumeForLoop(self: *Self, state: *ForLoopCheck, expected: *const Expected, env: *Env, child_request: *?ExprChildRequest) std.mem.Allocator.Error!ExprStep {
     switch (state.phase) {
         .start => unreachable, // startForLoop advances the phase past .start before any child is checked
         .body => return .done,
@@ -35690,7 +35690,7 @@ fn resumeForExprCheck(self: *Self, task: *ExprTask, state: *ForLoopCheck, env: *
     const frame = &task.frame;
     if (child_does_fx) |does_fx| {
         task.does_fx = does_fx or task.does_fx;
-        if (try self.resumeForLoop(state, frame.nested_expected.forStatement(), env, child_request) == .child) return .child;
+        if (try self.resumeForLoop(state, &frame.nested_expected.forStatement(), env, child_request) == .child) return .child;
         // Every `for!` pulls its items with the effectful `next!`.
         if (state.kind == .stream) task.does_fx = true;
 
@@ -35712,7 +35712,7 @@ fn resumeForExprCheck(self: *Self, task: *ExprTask, state: *ForLoopCheck, env: *
         .body = for_expr.body,
         .loop_region = frame.expr_region,
     };
-    return try self.startForLoop(state, frame.nested_expected.forStatement(), env, child_request);
+    return try self.startForLoop(state, &frame.nested_expected.forStatement(), env, child_request);
 }
 
 // expect //
@@ -35725,7 +35725,7 @@ const ExpectBodyScope = struct {
     saved_slot: ?ExpectEffectSlotId,
 };
 
-fn expectBodyExpected(expected: Expected) Expected {
+fn expectBodyExpected(expected: *const Expected) Expected {
     return expected.suppressComptimeConditionWarnings().guardHoistSelection();
 }
 
@@ -35751,12 +35751,12 @@ fn checkExpectBody(
     self: *Self,
     body: CIR.Expr.Idx,
     env: *Env,
-    expected: Expected,
+    expected: *const Expected,
     expect_region: Region,
 ) std.mem.Allocator.Error!bool {
     const scope = try self.beginExpectBody(expect_region, body);
     errdefer self.abortExpectBody(scope);
-    const does_fx = try self.checkExpr(body, env, expectBodyExpected(expected));
+    const does_fx = try self.checkExpr(body, env, &expectBodyExpected(expected));
     self.finishExpectBody(scope, does_fx);
     return does_fx;
 }
@@ -35785,7 +35785,7 @@ fn resumeExpectCheck(self: *Self, task: *ExprTask, state: *ExpectCheck, env: *En
 
     self.markCurrentHoistObservableEffect();
     state.scope = try self.beginExpectBody(frame.expr_region, expect.body);
-    child_request.* = .{ .expr = expect.body, .expected = expectBodyExpected(frame.nested_expected.forStatement()) };
+    child_request.* = .{ .expr = expect.body, .expected = expectBodyExpected(&frame.nested_expected.forStatement()) };
     return .child;
 }
 
@@ -35808,7 +35808,7 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
     const expr_idx = frame.expr_idx;
     const expr_var = frame.expr_var;
     const expr_region = frame.expr_region;
-    const nested_expected = frame.nested_expected;
+    const nested_expected = &frame.nested_expected;
     const lambda = frame.expr.e_lambda;
     const body_var = ModuleEnv.varFrom(lambda.body);
 
@@ -36362,7 +36362,7 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
                 );
             }
             if (state.shape_result.isEstablished() and call_arg_expr_idxs.len != 0) {
-                try self.seedCallResultFromContext(frame.nested_expected, state.shape_func.ret, env);
+                try self.seedCallResultFromContext(&frame.nested_expected, state.shape_func.ret, env);
             }
             state.phase = .args;
         },
@@ -36741,7 +36741,7 @@ fn resumeInterpolationCheck(self: *Self, task: *ExprTask, state: *InterpolationC
     }
 
     const did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, parts) or state.did_err;
-    if (!did_err and try self.checkConcreteBuiltinInterpolation(expr_idx, expr_var, parts, frame.nested_expected, env)) {
+    if (!did_err and try self.checkConcreteBuiltinInterpolation(expr_idx, expr_var, parts, &frame.nested_expected, env)) {
         return .done;
     }
     const item_var = try self.fresh(env, expr_region);
@@ -36916,7 +36916,7 @@ fn resumeMethodCallCheck(self: *Self, task: *ExprTask, state: *MethodCallCheck, 
                 try self.checkStaticDispatchConstraints(env, false);
                 state.eager_constraint_fn_var = constraint_fn_var;
                 if (arg_expr_idxs.len != 0 and self.cir.store.getExpr(expr_idx) != .e_runtime_error) {
-                    try self.seedCallResultFromContext(frame.nested_expected, state.result_var, env);
+                    try self.seedCallResultFromContext(&frame.nested_expected, state.result_var, env);
                 }
             }
             state.phase = .args;
@@ -37241,7 +37241,7 @@ fn resumeReturnCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env
     if (!state.started) {
         state.started = true;
         self.markCurrentHoistObservableEffect();
-        child_request.* = .{ .expr = ret.expr, .expected = self.returnValueExpected(frame.nested_expected, ret.lambda) };
+        child_request.* = .{ .expr = ret.expr, .expected = self.returnValueExpected(&frame.nested_expected, ret.lambda) };
         return .child;
     }
 
@@ -37345,9 +37345,9 @@ fn abortIfCheck(self: *Self, state: IfCheck) void {
 /// Request one branch condition or body. Conditions are never in call
 /// position; a branch body supplies the conditional's value and so inherits
 /// its call position.
-fn requestIfChild(self: *Self, child_request: *?ExprChildRequest, state: *IfCheck, expr_idx: CIR.Expr.Idx, expected: Expected, is_call_arg: bool, is_immediate_callee: bool, is_forwarded_result: bool) ExprStep {
+fn requestIfChild(self: *Self, child_request: *?ExprChildRequest, state: *IfCheck, expr_idx: CIR.Expr.Idx, expected: *const Expected, is_call_arg: bool, is_immediate_callee: bool, is_forwarded_result: bool) ExprStep {
     state.saved_call_position = self.scopeChildCallPosition(is_call_arg, is_immediate_callee, is_forwarded_result);
-    child_request.* = .{ .expr = expr_idx, .expected = expected };
+    child_request.* = .{ .expr = expr_idx, .expected = expected.* };
     return .child;
 }
 
@@ -37355,7 +37355,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
     const frame = &task.frame;
     const if_ = frame.expr.e_if;
     const if_expr_idx = frame.expr_idx;
-    const expected = frame.nested_expected;
+    const expected = &frame.nested_expected;
     const is_call_arg = frame.is_call_arg;
     const is_immediate_callee = frame.is_immediate_callee;
     const branches = self.cir.store.sliceIfBranches(if_.branches);
@@ -37381,7 +37381,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_first_cond => {
                 state.phase = .after_first_cond;
                 const first_branch = self.cir.store.getIfBranch(branches[0]);
-                return self.requestIfChild(child_request, state, first_branch.cond, expected.forStatement(), false, false, false);
+                return self.requestIfChild(child_request, state, first_branch.cond, &expected.forStatement(), false, false, false);
             },
             .after_first_cond => {
                 const first_branch = self.cir.store.getIfBranch(branches[0]);
@@ -37402,7 +37402,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_first_body => {
                 state.phase = .after_first_body;
                 const first_branch = self.cir.store.getIfBranch(branches[0]);
-                return self.requestIfChild(child_request, state, first_branch.body, expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
+                return self.requestIfChild(child_request, state, first_branch.body, &expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
             },
             .after_first_body => {
                 const first_branch_idx = branches[0];
@@ -37436,7 +37436,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_branch_cond => {
                 state.phase = .after_branch_cond;
                 const branch = self.cir.store.getIfBranch(branches[state.branch_index]);
-                return self.requestIfChild(child_request, state, branch.cond, expected.forStatement().guardHoistSelection(), false, false, false);
+                return self.requestIfChild(child_request, state, branch.cond, &expected.forStatement().guardHoistSelection(), false, false, false);
             },
             .after_branch_cond => {
                 const branch = self.cir.store.getIfBranch(branches[state.branch_index]);
@@ -37451,7 +37451,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_branch_body => {
                 state.phase = .after_branch_body;
                 const branch = self.cir.store.getIfBranch(branches[state.branch_index]);
-                return self.requestIfChild(child_request, state, branch.body, expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
+                return self.requestIfChild(child_request, state, branch.body, &expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
             },
             .after_branch_body => {
                 const branch_idx = branches[state.branch_index];
@@ -37492,7 +37492,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_remaining_cond => {
                 state.phase = .after_remaining_cond;
                 const branch = self.cir.store.getIfBranch(branches[state.remaining_index]);
-                return self.requestIfChild(child_request, state, branch.cond, expected.forStatement().guardHoistSelection(), false, false, false);
+                return self.requestIfChild(child_request, state, branch.cond, &expected.forStatement().guardHoistSelection(), false, false, false);
             },
             .after_remaining_cond => {
                 const branch = self.cir.store.getIfBranch(branches[state.remaining_index]);
@@ -37507,7 +37507,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_remaining_body => {
                 state.phase = .after_remaining_body;
                 const branch = self.cir.store.getIfBranch(branches[state.remaining_index]);
-                return self.requestIfChild(child_request, state, branch.body, expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
+                return self.requestIfChild(child_request, state, branch.body, &expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
             },
             .after_remaining_body => {
                 const branch = self.cir.store.getIfBranch(branches[state.remaining_index]);
@@ -37520,7 +37520,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             },
             .schedule_final_else => {
                 state.phase = .after_final_else;
-                return self.requestIfChild(child_request, state, if_.final_else, expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
+                return self.requestIfChild(child_request, state, if_.final_else, &expected.forBranchBody(), is_call_arg, is_immediate_callee, true);
             },
             .after_final_else => {
                 if (shortCircuitOperator(if_.origin)) |operator| {
@@ -37620,7 +37620,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
     const expr_region = frame.expr_region;
-    const expected = frame.nested_expected;
+    const expected = &frame.nested_expected;
     const child_expected = expected.forStatement();
     const match = frame.expr.e_match;
     const expected_branch_ret = expected.branch_result;
@@ -42163,7 +42163,7 @@ fn relateOwnedTagToExpectedNominal(
     target: Var,
     constructor: ConstructorTag,
     content: Content,
-    expected: Expected,
+    expected: *const Expected,
     env: *Env,
     region: Region,
 ) Allocator.Error!bool {
@@ -44474,7 +44474,7 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
             {},
             DefaultParamVar.rigidVarLessThan,
         );
-        const default_does_fx = try self.checkExpr(pending.default_expr, env, .{
+        const default_does_fx = try self.checkExpr(pending.default_expr, env, &.{
             .expected_type = .{ .var_ = expected_field_type, .context = .none },
         });
         // The LIVE purity judgment (design.md "Defaulted Fields"): a default
@@ -50010,7 +50010,7 @@ fn expectedReturnResultFor(self: *const Self, lambda_idx: CIR.Expr.Idx) ?Var {
     return self.return_constraint_frames.items[self.innermostReturnFrameIndex(lambda_idx)].expected_result;
 }
 
-fn returnValueExpected(self: *const Self, expected: Expected, lambda_idx: CIR.Expr.Idx) Expected {
+fn returnValueExpected(self: *const Self, expected: *const Expected, lambda_idx: CIR.Expr.Idx) Expected {
     const frame = self.return_constraint_frames.items[self.innermostReturnFrameIndex(lambda_idx)];
     const result = expected.forReturnValue(frame.expected_result);
     return if (frame.contextual_result) |context|
