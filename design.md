@@ -2847,6 +2847,9 @@ graph in their LLVM module, including callable and explicit helper relocations.
 They never embed compiler-process addresses: installed generators must survive
 another process. The loaded image outlives copying the generator's result,
 because returned values can borrow its immutable storage.
+A `roc glue --opt=dev` generator object is compiled with no LLVM optimization
+passes, and its functions carry no inlining attributes, so each procedure's
+code is generated once.
 A node whose bytes are all zero and that no relocation writes into is
 declared, not stored: the object writers place it in their format's zero-fill
 section (`.bss` for ELF and COFF, `__DATA,__bss` for Mach-O) by size and
@@ -25608,6 +25611,25 @@ exactly when the site is in a compile-time root's own expression (not in a
 function it calls or defines) and checking left the site a pending diagnostic,
 so the evaluator reports the site's empirical failure whichever strategy
 lowered the root; every other failed test ends in `runtime_error`.
+
+A `str_match_set` tries its arms in order, and a backend may decide any group
+of arms together when the outcome equals trying them in order. The LLVM
+backend does so for each maximal run of exact arms, the arms that match one
+literal and capture nothing: no two of them match the same source, so it
+switches on the source's length and then on the source's bytes a chunk of at
+most eight at a time, and reaches the one candidate literal's arm or the miss
+edge after reading each byte a bounded number of times, however many arms the
+run has. Arms with captures keep their own tests, in arm order relative to the
+runs around them.
+
+A backend may likewise read a `str_is_eq` operand as a literal when the LIR
+says it is one: the operand's local has exactly one definition, and that
+definition assigns a string literal or copies a local that holds one, so
+every read of it reads those bytes. The LLVM backend records those locals in
+its per-procedure value plan and compares the other operand's length and
+bytes against constants, for literals of at most 64 bytes; a longer literal,
+and every comparison of two computed strings, uses the general comparison,
+which stops at the first differing chunk.
 
 Named record-rest binders are derived values, not durable pattern decisions.
 Monotype pattern lowering removes the rest binder from the record pattern,

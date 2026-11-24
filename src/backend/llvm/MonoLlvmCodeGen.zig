@@ -248,6 +248,12 @@ const max_wrapper_inline_stmts: usize = 32;
 /// loops exceeds the work it does.
 const max_leaf_inline_stmts: usize = 400;
 
+/// The longest literal a string equality compares inline against constants,
+/// which reads every byte of a string of the literal's length. A longer
+/// literal is compared by the general loop, which stops at the first
+/// difference.
+const max_inline_literal_eq_bytes: usize = 64;
+
 /// One crash block a function shares among the checked operations that fail
 /// with one message. A framed block reads each site's source frames from
 /// phis whose operands accumulate as sites branch to it.
@@ -521,11 +527,9 @@ pub const MonoLlvmCodeGen = struct {
     /// Synthetic default-platform apps preserve source proc names and local
     /// debug locations for crash and stack-overflow diagnostics.
     enable_default_platform_diagnostics: bool = false,
-    /// Every function this module defines is optimized for size rather than
-    /// speed (`--opt=size`): it carries LLVM's `optsize` and `minsize`, no
-    /// `inlinehint`, and no shape-based `alwaysinline`, so LLVM's size cost
-    /// model is the one measure of every inlining decision.
-    optimize_for_size: bool = false,
+    /// What LLVM optimizes this module's functions for, which decides the
+    /// inlining attributes they carry (`addInliningAttrs`).
+    optimization: Optimization = .speed,
     /// Translates to DW_AT_producer for the compile unit (in DWARF). Users of
     /// this module for codegen should set the value (with the following format)
     /// so that it carries the compiler version:
@@ -4125,20 +4129,31 @@ pub const MonoLlvmCodeGen = struct {
         callees: std.ArrayList(LirProcSpecId) = .empty,
     };
 
-    /// The inlining attributes of a generated procedure. Diagnostics builds
-    /// keep every procedure out of line so crash frames name it. A speed
-    /// build inlines the procedures `computeInlineEverywhere` selects
-    /// everywhere and hints the rest. A size build adds neither: with every
-    /// function in the module marked `minsize` (`builder.zig` marks the
-    /// whole module before optimization), LLVM's size cost model decides
-    /// each call on the callee's expanded size alone.
+    /// What LLVM optimizes a module's functions for.
+    pub const Optimization = enum {
+        /// LLVM runs no optimization passes. No function carries an inlining
+        /// attribute, so every procedure's code is generated exactly once.
+        none,
+        /// Every function carries LLVM's `optsize` and `minsize`
+        /// (`builder.zig` marks the whole module before optimization), no
+        /// `inlinehint`, and no shape-based `alwaysinline`, so LLVM's size
+        /// cost model decides each call on the callee's expanded size alone.
+        size,
+        /// The procedures `computeInlineEverywhere` selects are inlined
+        /// everywhere and the rest carry `inlinehint`.
+        speed,
+    };
+
+    /// The inlining attributes of a generated procedure, which
+    /// `optimization` decides. Diagnostics builds keep every procedure out
+    /// of line so crash frames name it.
     fn addInliningAttrs(self: *MonoLlvmCodeGen, attrs_wip: *LlvmBuilder.FunctionAttributes.Wip, proc_id: LirProcSpecId) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         if (self.enable_default_platform_diagnostics) {
             try attrs_wip.addFnAttr(.@"noinline", builder);
         } else if (self.inlineEverywhere(proc_id)) {
             try attrs_wip.addFnAttr(.alwaysinline, builder);
-        } else if (!self.optimize_for_size) {
+        } else if (self.optimization == .speed) {
             try attrs_wip.addFnAttr(.inlinehint, builder);
         }
     }
@@ -4152,8 +4167,9 @@ pub const MonoLlvmCodeGen = struct {
     /// wrapper (no loop, few statements of its own) and a leaf (moderate
     /// size, no calls). Larger bodies remain ordinary calls, so LLVM can
     /// simplify them before deciding whether to duplicate them into their
-    /// callers. That is a speed policy; a size build selects nothing and
-    /// leaves every decision to LLVM's size cost model.
+    /// callers. That is a speed policy: a size build selects nothing and
+    /// leaves every decision to LLVM's size cost model, and an unoptimized
+    /// build selects nothing because it inlines nothing.
     ///
     /// A leaf is judged by the body it has once its always-inline callees
     /// are expanded into it, which is the body LLVM emits: it calls nothing
@@ -4167,7 +4183,7 @@ pub const MonoLlvmCodeGen = struct {
     fn computeInlineEverywhere(self: *MonoLlvmCodeGen, procs: []const LirProcSpec, entrypoints: []const Entrypoint) Error!void {
         self.inline_everywhere.clearRetainingCapacity();
         try self.inline_everywhere.appendNTimes(self.allocator, false, procs.len);
-        if (self.optimize_for_size) return;
+        if (self.optimization != .speed) return;
         const shapes = try self.allocator.alloc(InlineShape, procs.len);
         defer {
             for (shapes) |*shape| shape.callees.deinit(self.allocator);
@@ -8466,37 +8482,35 @@ pub const MonoLlvmCodeGen = struct {
         const bodies_start = work.items.len;
         try work.append(wa, .{ .str_match_body = .{ .block = final_miss_block, .stmt = str_match_set.on_miss } });
 
+        var segment = std.ArrayList(u32).empty;
+        defer segment.deinit(self.allocator);
+
         var index: usize = 0;
         while (index < arms.len) {
-            const arm = GuardedList.at(arms, index);
-            const prefix = self.store.getStringLiteral(arm.prefix);
-            if (prefix.len == 0) {
-                const next_miss_block = if (index + 1 == arms.len)
-                    final_miss_block
-                else
-                    wip.block(0, "str_match_set_next") catch return error.OutOfMemory;
-                try work.append(wa, .{ .str_match_body = try self.emitStrMatchArmTest(str_match_set.source, source, arm, next_miss_block) });
-                if (index + 1 < arms.len) {
-                    wip.cursor = .{ .block = next_miss_block };
-                }
-                index += 1;
-                continue;
+            var exact_end = index;
+            while (exact_end < arms.len and self.strMatchArmIsExact(GuardedList.at(arms, exact_end))) {
+                exact_end += 1;
             }
-
-            var segment_end = index + 1;
-            while (segment_end < arms.len and self.store.getStringLiteral(GuardedList.at(arms, segment_end).prefix).len > 0) {
-                segment_end += 1;
+            var prefixed_end = index;
+            while (prefixed_end < arms.len and self.store.getStringLiteral(GuardedList.at(arms, prefixed_end).prefix).len > 0) {
+                prefixed_end += 1;
             }
+            // An arm that is neither exact nor prefixed is a segment of its own.
+            const segment_end = @max(exact_end, prefixed_end, index + 1);
 
             const segment_miss_block = if (segment_end == arms.len)
                 final_miss_block
             else
                 wip.block(0, "str_match_set_next") catch return error.OutOfMemory;
 
-            if (self.strMatchSetDistinctFirstByteCount(arms, index, segment_end) > 1) {
+            // Exact arms alone dispatch on the source's length, so only a
+            // segment with other prefixed arms dispatches on its first byte.
+            if (exact_end < segment_end and self.strMatchSetDistinctFirstByteCount(arms, index, segment_end) > 1) {
                 try self.emitStrMatchSetFirstByteDispatch(str_match_set.source, source, arms, index, segment_end, segment_miss_block, wa, work);
             } else {
-                try self.emitStrMatchSetLinearRange(str_match_set.source, source, arms, index, segment_end, segment_miss_block, wa, work);
+                segment.clearRetainingCapacity();
+                for (index..segment_end) |arm_index| try segment.append(self.allocator, @intCast(arm_index));
+                try self.emitStrMatchArmsInOrder(str_match_set.source, source, arms, segment.items, segment_miss_block, wa, work);
             }
 
             if (segment_end < arms.len) {
@@ -8509,6 +8523,11 @@ pub const MonoLlvmCodeGen = struct {
         // emitted.
         const mark = self.valueMark();
         for (work.items[bodies_start..]) |*item| item.str_match_body.mark = mark;
+    }
+
+    /// Whether `arm` matches exactly one string, its prefix.
+    fn strMatchArmIsExact(self: *MonoLlvmCodeGen, arm: anytype) bool {
+        return arm.end == .exact and self.store.getStrMatchSteps(arm.steps).len == 0;
     }
 
     fn strMatchSetDistinctFirstByteCount(self: *MonoLlvmCodeGen, arms: anytype, start: usize, end: usize) usize {
@@ -8527,29 +8546,43 @@ pub const MonoLlvmCodeGen = struct {
         return count;
     }
 
-    fn emitStrMatchSetLinearRange(
+    /// Try the arms `arm_indices` names, in that order, from the cursor;
+    /// `miss_block` is where a source none of them matches continues. Each
+    /// maximal run of exact arms is decided by one dispatch
+    /// (`emitStrMatchExactRun`), and every other arm by its own test.
+    fn emitStrMatchArmsInOrder(
         self: *MonoLlvmCodeGen,
         source_local: LocalId,
         source: StrMatchSource,
         arms: anytype,
-        start: usize,
-        end: usize,
+        arm_indices: []const u32,
         miss_block: LlvmBuilder.Function.Block.Index,
         wa: Allocator,
         work: *std.ArrayList(StmtWork),
     ) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
 
-        for (start..end) |index| {
-            const arm = GuardedList.at(arms, index);
-            const next_miss_block = if (index + 1 == end)
+        var start: usize = 0;
+        while (start < arm_indices.len) {
+            var exact_end = start;
+            while (exact_end < arm_indices.len and self.strMatchArmIsExact(GuardedList.at(arms, arm_indices[exact_end]))) {
+                exact_end += 1;
+            }
+            const end = @max(exact_end, start + 1);
+            const next_miss_block = if (end == arm_indices.len)
                 miss_block
             else
                 wip.block(0, "str_match_set_next") catch return error.OutOfMemory;
-            try work.append(wa, .{ .str_match_body = try self.emitStrMatchArmTest(source_local, source, arm, next_miss_block) });
-            if (index + 1 < end) {
+            if (exact_end > start) {
+                try self.emitStrMatchExactRun(source, arms, arm_indices[start..end], next_miss_block, wa, work);
+            } else {
+                const arm = GuardedList.at(arms, arm_indices[start]);
+                try work.append(wa, .{ .str_match_body = try self.emitStrMatchArmTest(source_local, source, arm, next_miss_block) });
+            }
+            if (end < arm_indices.len) {
                 wip.cursor = .{ .block = next_miss_block };
             }
+            start = end;
         }
     }
 
@@ -8595,30 +8628,181 @@ pub const MonoLlvmCodeGen = struct {
         }
         switch_inst.finish(wip);
 
+        var bucket = std.ArrayList(u32).empty;
+        defer bucket.deinit(self.allocator);
         for (bucket_bytes.items) |byte| {
             const bucket_block = bucket_blocks[byte] orelse return error.CompilationFailed;
             wip.cursor = .{ .block = bucket_block };
-            var remaining_in_bucket: usize = 0;
+            bucket.clearRetainingCapacity();
             for (start..end) |i| {
                 const arm = GuardedList.at(arms, i);
-                if (self.store.getStringLiteral(arm.prefix)[0] == byte) remaining_in_bucket += 1;
+                if (self.store.getStringLiteral(arm.prefix)[0] == byte) try bucket.append(self.allocator, @intCast(i));
+            }
+            try self.emitStrMatchArmsInOrder(source_local, source, arms, bucket.items, miss_block, wa, work);
+        }
+    }
+
+    /// One arm of an exact run while the run is dispatched. `key` is what
+    /// the current dispatch tells the arms apart by: the literal's length
+    /// first, then its bytes a chunk at a time.
+    const StrMatchExactEntry = struct {
+        key: u64,
+        /// The arm's position in the run, which is its place in arm order.
+        position: u32,
+
+        fn lessThan(_: void, a: StrMatchExactEntry, b: StrMatchExactEntry) bool {
+            if (a.key != b.key) return a.key < b.key;
+            return a.position < b.position;
+        }
+    };
+
+    /// The arms of one exact run that agree on everything dispatched so far:
+    /// `entries[start..end]`, whose literals have one length and the same
+    /// first `covered` bytes, tested from `block`.
+    const StrMatchExactGroup = struct {
+        block: LlvmBuilder.Function.Block.Index,
+        start: u32,
+        end: u32,
+        covered: u32,
+    };
+
+    /// Decide a run of exact arms, each of which matches only its own
+    /// literal, from the cursor; `miss_block` is where a source equal to none
+    /// of the literals continues. The source's length selects the literals
+    /// of that length, and its bytes then select among those a chunk at a
+    /// time, so a source is compared with one literal however many arms the
+    /// run has. Arms with equal literals keep arm order: the first matches.
+    fn emitStrMatchExactRun(
+        self: *MonoLlvmCodeGen,
+        source: StrMatchSource,
+        arms: anytype,
+        arm_indices: []const u32,
+        miss_block: LlvmBuilder.Function.Block.Index,
+        wa: Allocator,
+        work: *std.ArrayList(StmtWork),
+    ) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+
+        const literals = try self.allocator.alloc([]const u8, arm_indices.len);
+        defer self.allocator.free(literals);
+        const match_blocks = try self.allocator.alloc(LlvmBuilder.Function.Block.Index, arm_indices.len);
+        defer self.allocator.free(match_blocks);
+        const entries = try self.allocator.alloc(StrMatchExactEntry, arm_indices.len);
+        defer self.allocator.free(entries);
+        for (arm_indices, literals, match_blocks, entries, 0..) |arm_index, *literal, *match_block, *entry, position| {
+            const arm = GuardedList.at(arms, arm_index);
+            literal.* = self.store.getStringLiteral(arm.prefix);
+            match_block.* = wip.block(0, "str_match_success") catch return error.OutOfMemory;
+            try work.append(wa, .{ .str_match_body = .{ .block = match_block.*, .stmt = arm.on_match } });
+            entry.* = .{ .key = literal.len, .position = @intCast(position) };
+        }
+
+        var groups = std.ArrayList(StrMatchExactGroup).empty;
+        defer groups.deinit(self.allocator);
+        var targets = std.ArrayList(LlvmBuilder.Function.Block.Index).empty;
+        defer targets.deinit(self.allocator);
+
+        try self.emitStrMatchExactDispatch(source.len, entries, 0, 0, literals, match_blocks, miss_block, &groups, &targets);
+
+        while (groups.pop()) |group| {
+            wip.cursor = .{ .block = group.block };
+            const group_entries = entries[group.start..group.end];
+            const literal = literals[group_entries[0].position];
+
+            if (group_entries.len == 1) {
+                const rest_ptr = try self.offsetPtr(source.bytes, group.covered);
+                const mismatch = (try self.emitStrMatchLiteralMismatch(rest_ptr, literal[group.covered..])) orelse
+                    unreachable; // a group is pushed only while bytes of its literals remain undecided
+                _ = wip.brCond(mismatch, miss_block, match_blocks[group_entries[0].position], .none) catch return error.OutOfMemory;
+                continue;
             }
 
-            var emitted_in_bucket: usize = 0;
-            for (start..end) |i| {
-                const arm = GuardedList.at(arms, i);
-                if (self.store.getStringLiteral(arm.prefix)[0] != byte) continue;
-                emitted_in_bucket += 1;
-                const next_miss_block = if (emitted_in_bucket == remaining_in_bucket)
-                    miss_block
-                else
-                    wip.block(0, "str_match_set_next") catch return error.OutOfMemory;
-                try work.append(wa, .{ .str_match_body = try self.emitStrMatchArmTest(source_local, source, arm, next_miss_block) });
-                if (emitted_in_bucket < remaining_in_bucket) {
-                    wip.cursor = .{ .block = next_miss_block };
-                }
+            const chunk = strMatchExactChunk(literal.len, group.covered);
+            for (group_entries) |*entry| {
+                entry.key = @intCast(littleEndianInt(literals[entry.position][chunk.offset..][0..chunk.width]));
             }
+            const chunk_ptr = try self.offsetPtr(source.bytes, chunk.offset);
+            const chunk_value = wip.load(.normal, intTypeForBytes(chunk.width), chunk_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+            try self.emitStrMatchExactDispatch(chunk_value, group_entries, group.start, chunk.offset + chunk.width, literals, match_blocks, miss_block, &groups, &targets);
         }
+    }
+
+    /// The bytes one dispatch of an exact run reads from a source whose
+    /// length is `len` and whose first `covered` bytes are already decided:
+    /// `width` bytes at `offset`, which is `covered` unless fewer than
+    /// `width` bytes remain, where the chunk ends at the source's end and
+    /// re-reads decided bytes.
+    fn strMatchExactChunk(len: usize, covered: u32) struct { offset: u32, width: u8 } {
+        std.debug.assert(covered < len);
+        const width: u8 = if (len >= 8) 8 else if (len >= 4) 4 else if (len >= 2) 2 else 1;
+        const remaining = len - covered;
+        return .{
+            .offset = if (remaining >= width) covered else @intCast(len - width),
+            .width = width,
+        };
+    }
+
+    /// Branch from the cursor on `value`, which tells `entries` apart once
+    /// their keys are the values it takes for their literals. Entries with
+    /// one key continue together: at the first one's match block when
+    /// `covered` bytes are its whole literal, and otherwise as a group
+    /// pushed onto `groups`. A value that is no entry's key goes to
+    /// `miss_block`. `first` is the index of `entries[0]` in the run's
+    /// entries, and `targets` is scratch.
+    fn emitStrMatchExactDispatch(
+        self: *MonoLlvmCodeGen,
+        value: LlvmBuilder.Value,
+        entries: []StrMatchExactEntry,
+        first: u32,
+        covered: u32,
+        literals: []const []const u8,
+        match_blocks: []const LlvmBuilder.Function.Block.Index,
+        miss_block: LlvmBuilder.Function.Block.Index,
+        groups: *std.ArrayList(StrMatchExactGroup),
+        targets: *std.ArrayList(LlvmBuilder.Function.Block.Index),
+    ) Error!void {
+        const builder, const wip = try self.builderAndWip();
+        const value_ty = value.typeOfWip(wip);
+
+        std.mem.sortUnstable(StrMatchExactEntry, entries, {}, StrMatchExactEntry.lessThan);
+
+        targets.clearRetainingCapacity();
+        var start: usize = 0;
+        while (start < entries.len) {
+            var end = start + 1;
+            while (end < entries.len and entries[end].key == entries[start].key) end += 1;
+            const position = entries[start].position;
+            if (literals[position].len == covered) {
+                try targets.append(self.allocator, match_blocks[position]);
+            } else {
+                const block = wip.block(0, "str_match_set_bytes") catch return error.OutOfMemory;
+                try targets.append(self.allocator, block);
+                try groups.append(self.allocator, .{
+                    .block = block,
+                    .start = first + @as(u32, @intCast(start)),
+                    .end = first + @as(u32, @intCast(end)),
+                    .covered = covered,
+                });
+            }
+            start = end;
+        }
+
+        if (targets.items.len == 1) {
+            const key = builder.intValue(value_ty, entries[0].key) catch return error.OutOfMemory;
+            const matches = wip.icmp(.eq, value, key, "") catch return error.OutOfMemory;
+            _ = wip.brCond(matches, targets.items[0], miss_block, .none) catch return error.OutOfMemory;
+            return;
+        }
+
+        var switch_inst = wip.@"switch"(value, miss_block, @intCast(targets.items.len), .none) catch return error.OutOfMemory;
+        var target_index: usize = 0;
+        start = 0;
+        while (start < entries.len) : (target_index += 1) {
+            const key = entries[start].key;
+            switch_inst.addCase(builder.intConst(value_ty, key) catch return error.OutOfMemory, targets.items[target_index], wip) catch return error.OutOfMemory;
+            while (start < entries.len and entries[start].key == key) start += 1;
+        }
+        switch_inst.finish(wip);
     }
 
     fn emitStrMatchArmTest(
@@ -8827,7 +9011,19 @@ pub const MonoLlvmCodeGen = struct {
         literal: []const u8,
         fail_block: LlvmBuilder.Function.Block.Index,
     ) Error!void {
-        if (literal.len == 0) return;
+        if (try self.emitStrMatchLiteralMismatch(ptr, literal)) |mismatch| {
+            try self.emitStrMatchFailIf(mismatch, fail_block);
+        }
+    }
+
+    /// Whether the `literal.len` bytes at `ptr` differ from `literal`, or
+    /// null for an empty literal, which no bytes differ from.
+    fn emitStrMatchLiteralMismatch(
+        self: *MonoLlvmCodeGen,
+        ptr: LlvmBuilder.Value,
+        literal: []const u8,
+    ) Error!?LlvmBuilder.Value {
+        if (literal.len == 0) return null;
 
         var mismatch: ?LlvmBuilder.Value = null;
         var offset: usize = 0;
@@ -8858,9 +9054,7 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
 
-        if (mismatch) |value| {
-            try self.emitStrMatchFailIf(value, fail_block);
-        }
+        return mismatch;
     }
 
     fn emitStrMatchAccumulateLiteralMismatch(
@@ -10205,6 +10399,14 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitStrIsEq(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
+        inline for (.{ 1, 0 }) |literal_arg| {
+            if (self.value_plan.strLiteral(GuardedList.at(args, literal_arg))) |literal| {
+                const bytes = self.store.getStringLiteral(literal);
+                if (bytes.len <= max_inline_literal_eq_bytes) {
+                    return self.emitStrIsEqLiteral(target, GuardedList.at(args, 1 - literal_arg), bytes);
+                }
+            }
+        }
         const lhs = try self.emitStrByteSliceForLocal(GuardedList.at(args, 0));
         const rhs = try self.emitStrByteSliceForLocal(GuardedList.at(args, 1));
         const true_block = wip.block(0, "str_eq_true") catch return error.OutOfMemory;
@@ -10222,6 +10424,43 @@ pub const MonoLlvmCodeGen = struct {
 
         wip.cursor = .{ .block = compare_block };
         try self.emitByteSlicesEqualBranch(lhs.bytes, rhs.bytes, lhs.len, true_block, false_block);
+        try self.emitStrBoolJoin(target, true_block, false_block, after_block);
+    }
+
+    /// Whether the string in `local` equals `literal`: its length is the
+    /// literal's and its bytes are the literal's, compared a chunk at a time
+    /// against constants.
+    fn emitStrIsEqLiteral(self: *MonoLlvmCodeGen, target: LocalId, local: LocalId, literal: []const u8) Error!void {
+        const builder, const wip = try self.builderAndWip();
+        const source: StrByteSlice = if (self.deferredStrCapture(local) != null)
+            try self.emitStrByteSliceForLocal(local)
+        else selected: {
+            // Both representations' fields are readable whichever one the
+            // string has, so the bytes and length are selected, not branched to.
+            const str_ptr = self.slot(local).ptr;
+            const raw_len = try self.loadUsize(try self.offsetPtr(str_ptr, self.rocStrLenOffset()));
+            const is_small = try self.emitRocStrLenIsSmall(raw_len);
+            const heap_bytes = try self.loadPointer(str_ptr);
+            break :selected .{
+                .bytes = wip.select(.normal, is_small, str_ptr, heap_bytes, "") catch return error.OutOfMemory,
+                .len = try self.rocStrLenFromWord(str_ptr, raw_len, is_small),
+            };
+        };
+        const true_block = wip.block(0, "str_eq_true") catch return error.OutOfMemory;
+        const false_block = wip.block(0, "str_eq_false") catch return error.OutOfMemory;
+        const after_block = wip.block(0, "str_eq_after") catch return error.OutOfMemory;
+        const literal_len = builder.intValue(self.ptrSizedIntType(), literal.len) catch return error.OutOfMemory;
+        const same_len = wip.icmp(.eq, source.len, literal_len, "") catch return error.OutOfMemory;
+        if (literal.len == 0) {
+            _ = wip.brCond(same_len, true_block, false_block, .none) catch return error.OutOfMemory;
+        } else {
+            const compare_block = wip.block(0, "str_eq_compare") catch return error.OutOfMemory;
+            _ = wip.brCond(same_len, compare_block, false_block, .none) catch return error.OutOfMemory;
+            wip.cursor = .{ .block = compare_block };
+            const mismatch = (try self.emitStrMatchLiteralMismatch(source.bytes, literal)) orelse
+                unreachable; // the literal has at least one byte in this branch
+            _ = wip.brCond(mismatch, false_block, true_block, .none) catch return error.OutOfMemory;
+        }
         try self.emitStrBoolJoin(target, true_block, false_block, after_block);
     }
 
@@ -16945,6 +17184,15 @@ test "a looping helper whose only callees are inlined everywhere is a leaf" {
     codegen.program_kind = .in_process;
     try codegen.computeInlineEverywhere(store.getProcSpecs(), &entrypoints);
     try std.testing.expect(codegen.inlineEverywhere(over_leaf));
+
+    // Only a speed build selects anything.
+    for ([_]MonoLlvmCodeGen.Optimization{ .none, .size }) |optimization| {
+        codegen.optimization = optimization;
+        try codegen.computeInlineEverywhere(store.getProcSpecs(), &.{});
+        for (0..store.getProcSpecs().len) |proc_index| {
+            try std.testing.expect(!codegen.inlineEverywhere(@fromBackingInt(@intCast(proc_index))));
+        }
+    }
 }
 
 test "wasm C-ABI classification follows the target's SIMD support" {
