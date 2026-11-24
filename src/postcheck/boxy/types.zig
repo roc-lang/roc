@@ -760,6 +760,10 @@ pub const Store = struct {
     /// over the module's whole id range; this one keeps its storage across
     /// walks, so a walk pays only for the entries it adds.
     checked_walk: CheckedTypeMap(void) = .empty,
+    /// The work lists of finished `Converter.convert` calls, kept with their
+    /// capacity for later ones. Each conversion takes its own, so one that a
+    /// conversion's step starts never moves the outer one's lists.
+    convert_pool: std.ArrayList(ConvertScratch) = .empty,
     /// The node `intern` gave each primitive, the variable of each low index,
     /// the empty record and the empty tag union, once one was asked for:
     /// these leaves are asked for far more often than they are new, and
@@ -891,7 +895,44 @@ pub const Store = struct {
         self.decl_keys_indexed.deinit(self.allocator);
         self.decl_by_source.deinit(self.allocator);
         self.decl_sources_indexed.deinit(self.allocator);
+        for (self.convert_pool.items) |*scratch| scratch.deinit(self.allocator);
+        self.convert_pool.deinit(self.allocator);
     }
+
+    /// The work lists of one `Converter.convert`.
+    const ConvertScratch = struct {
+        frames: std.ArrayList(Converter.Frame) = .empty,
+        results: std.ArrayList(TypeId) = .empty,
+        pending: std.ArrayList(Converter.Child) = .empty,
+        reaches: std.ArrayList(bool) = .empty,
+        /// The row a `Converter.finish` of a record or tag union builds.
+        fields: std.ArrayList(Field) = .empty,
+        tags: std.ArrayList(TagInput) = .empty,
+
+        fn isEmpty(self: *const ConvertScratch) bool {
+            return self.frames.items.len == 0 and self.results.items.len == 0 and
+                self.pending.items.len == 0 and self.reaches.items.len == 0 and
+                self.fields.items.len == 0 and self.tags.items.len == 0;
+        }
+
+        fn clear(self: *ConvertScratch) void {
+            self.frames.clearRetainingCapacity();
+            self.results.clearRetainingCapacity();
+            self.pending.clearRetainingCapacity();
+            self.reaches.clearRetainingCapacity();
+            self.fields.clearRetainingCapacity();
+            self.tags.clearRetainingCapacity();
+        }
+
+        fn deinit(self: *ConvertScratch, allocator: Allocator) void {
+            self.frames.deinit(allocator);
+            self.results.deinit(allocator);
+            self.pending.deinit(allocator);
+            self.reaches.deinit(allocator);
+            self.fields.deinit(allocator);
+            self.tags.deinit(allocator);
+        }
+    };
 
     /// The declaration with nominal key `key` in `view`'s type store.
     /// The nominal declaration of `view` declared at source statement
@@ -1494,17 +1535,18 @@ pub const Converter = struct {
     pub fn convert(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env) Allocator.Error!TypeId {
         if (env.lazy_substitution != null) return LazySubstitution.convert(self, module, ty, env);
         const allocator = self.store.allocator;
-        var frames: std.ArrayList(Frame) = .empty;
-        defer frames.deinit(allocator);
-        var results: std.ArrayList(TypeId) = .empty;
-        defer results.deinit(allocator);
-        var pending: std.ArrayList(Child) = .empty;
-        defer pending.deinit(allocator);
-
+        var scratch = self.store.convert_pool.pop() orelse Store.ConvertScratch{};
+        std.debug.assert(scratch.isEmpty());
+        defer {
+            scratch.clear();
+            self.store.convert_pool.append(allocator, scratch) catch scratch.deinit(allocator);
+        }
+        const frames = &scratch.frames;
+        const results = &scratch.results;
+        const pending = &scratch.pending;
         // Whether each converted child reaches a record or tag union a scope
         // can name as a closed row node, parallel to `results`.
-        var reaches: std.ArrayList(bool) = .empty;
-        defer reaches.deinit(allocator);
+        const reaches = &scratch.reaches;
 
         // A scope that names closed row nodes converts a type holding one to
         // the node's marked type or to the use's whole value, so a type
@@ -1513,7 +1555,7 @@ pub const Converter = struct {
         var root_reaches = false;
         switch (try self.leaf(module, ty, env, &shared, &root_reaches)) {
             .done => |done| return done,
-            .composite => |composite| try self.pushFrame(&frames, &pending, results.items.len, module, ty, composite),
+            .composite => |composite| try self.pushFrame(frames, pending, results.items.len, module, ty, composite),
         }
         while (frames.items.len > 0) {
             const top = &frames.items[frames.items.len - 1];
@@ -1528,14 +1570,14 @@ pub const Converter = struct {
                     },
                     .composite => |composite| {
                         if (frames.items.len > 1_000_000) invariant("checked type conversion nested past every finite type");
-                        try self.pushFrame(&frames, &pending, results.items.len, child.module, child.ty, composite);
+                        try self.pushFrame(frames, pending, results.items.len, child.module, child.ty, composite);
                     },
                 }
                 continue;
             }
             const frame = frames.pop().?;
             const children = results.items[frame.results_start..];
-            const built = try self.finish(frame.module, frame.ty, frame.payload, children, env);
+            const built = try self.finish(&scratch, frame.module, frame.ty, frame.payload, children, env);
             const built_reaches = frame.ends_in_uncommitted_tail or std.mem.findScalar(bool, reaches.items[frame.results_start..], true) != null;
             results.shrinkRetainingCapacity(frame.results_start);
             reaches.shrinkRetainingCapacity(frame.results_start);
@@ -1844,7 +1886,9 @@ pub const Converter = struct {
         return ends_in_uncommitted_tail;
     }
 
-    fn finish(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, payload: checked.CheckedTypePayload, children: []const TypeId, env: Env) Allocator.Error!TypeId {
+    /// Build `ty` from its converted `children`, its row in the lists of
+    /// `scratch`, the calling conversion's own.
+    fn finish(self: Converter, scratch: *Store.ConvertScratch, module: ModuleIndex, ty: checked.CheckedTypeId, payload: checked.CheckedTypePayload, children: []const TypeId, env: Env) Allocator.Error!TypeId {
         const allocator = self.store.allocator;
         const view = self.modules.get(module);
         const types = view.types();
@@ -1858,8 +1902,8 @@ pub const Converter = struct {
                 .effectful = checked.finalizedFunctionKind(function.kind) == .effectful,
             } }),
             .record => |record| {
-                var fields: std.ArrayList(Field) = .empty;
-                defer fields.deinit(allocator);
+                const fields = &scratch.fields;
+                fields.clearRetainingCapacity();
                 var child_index: usize = 0;
                 var current_fields = record.fields;
                 var current = record.ext;
@@ -1905,8 +1949,8 @@ pub const Converter = struct {
                 return try self.store.intern(.{ .record = .{ .fields = fields.items, .ext = ext, .tail_node = tail_node } });
             },
             .tag_union => |tag_union| {
-                var tags: std.ArrayList(TagInput) = .empty;
-                defer tags.deinit(allocator);
+                const tags = &scratch.tags;
+                tags.clearRetainingCapacity();
                 var child_index: usize = 0;
                 var current_tags = tag_union.tags;
                 var current = tag_union.ext;

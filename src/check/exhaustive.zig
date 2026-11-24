@@ -1365,6 +1365,9 @@ const InhabitedGraph = struct {
     /// Nodes of argument-less applications this query expands, whose settled
     /// values `query` keeps for their declarations.
     argless_nodes: std.ArrayList(struct { nominal: types.NominalType, index: usize }) = .empty,
+    /// The row walk of `rowNode`, kept with its capacity for the next row;
+    /// empty between rows.
+    row_path: std.ArrayList(RowItem) = .empty,
     stats: if (builtin.is_test) Stats else void = if (builtin.is_test) .{} else {},
 
     const Stats = struct { expanded: usize = 0, rows: usize = 0, edges: usize = 0, propagated: usize = 0 };
@@ -1435,6 +1438,7 @@ const InhabitedGraph = struct {
         self.false_nodes.deinit(self.gpa);
         self.settled_false_parents.deinit(self.gpa);
         self.argless_nodes.deinit(self.gpa);
+        self.row_path.deinit(self.gpa);
     }
 
     fn node(self: *InhabitedGraph) Allocator.Error!usize {
@@ -1497,8 +1501,10 @@ const InhabitedGraph = struct {
     /// graph's SCCs before adding payload dependencies: row cycles alone are
     /// not coinductive witnesses, while explicit recursive payloads are.
     fn rowNode(self: *InhabitedGraph, initial: RowKey) Allocator.Error!usize {
-        var path: std.ArrayList(RowItem) = .empty;
-        defer path.deinit(self.gpa);
+        // Nothing below walks another row, so one path serves every row.
+        const path = &self.row_path;
+        std.debug.assert(path.items.len == 0);
+        defer path.clearRetainingCapacity();
         const conjunction = initial.role == .record_row;
         var key = initial;
         var tail: ?usize = null;

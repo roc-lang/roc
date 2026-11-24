@@ -616,9 +616,12 @@ const ColumnBuilder = struct {
 /// Mark every variable reachable from `root` reached, recording the row-tail
 /// positions each is reached through. Each representative this reaches for
 /// the first time is appended to `newly_reached` when one is given.
-pub fn reach(allocator: Allocator, env: *const ModuleEnv, var_facts: []SealedVarFacts, root: Var, newly_reached: ?*std.ArrayList(Var)) Allocator.Error!void {
-    var walker = ReachWalker{ .env = env, .var_facts = var_facts, .newly_reached = newly_reached };
-    defer walker.pending.deinit(allocator);
+/// `pending` is the caller's scratch for the walk's work list, empty on entry
+/// and on return.
+pub fn reach(allocator: Allocator, env: *const ModuleEnv, var_facts: []SealedVarFacts, pending: *std.ArrayList(Var), root: Var, newly_reached: ?*std.ArrayList(Var)) Allocator.Error!void {
+    std.debug.assert(pending.items.len == 0);
+    errdefer pending.clearRetainingCapacity();
+    var walker = ReachWalker{ .env = env, .var_facts = var_facts, .newly_reached = newly_reached, .pending = pending };
     try walker.reach(allocator, root, null);
     while (walker.pending.pop()) |var_| try walker.expand(allocator, var_);
 }
@@ -627,7 +630,7 @@ const ReachWalker = struct {
     env: *const ModuleEnv,
     var_facts: []SealedVarFacts,
     newly_reached: ?*std.ArrayList(Var),
-    pending: std.ArrayList(Var) = .empty,
+    pending: *std.ArrayList(Var),
 
     fn reach(self: *ReachWalker, allocator: Allocator, var_: Var, tail: ?RowDefault) Allocator.Error!void {
         const resolved = self.env.types.resolveVarWord(var_);

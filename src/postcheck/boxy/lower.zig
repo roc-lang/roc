@@ -1048,6 +1048,36 @@ pub const Program = struct {
     omitted_defaults: std.AutoHashMapUnmanaged(OmittedField, checked.CheckedFieldDefault) = .empty,
     /// The generated codec families and their workers.
     codec: Codec.State = .{},
+    /// The work of `rewriteTypeWithRowNodes`, kept with its capacity for the
+    /// next rewrite; empty between rewrites.
+    rewrite_scratch: RewriteScratch = .{},
+
+    const RewriteScratch = struct {
+        const Frame = struct { ty: TypeId, expanded: bool };
+
+        done: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty,
+        stack: std.ArrayList(Frame) = .empty,
+        /// The converted children of the node being rebuilt.
+        ids: std.ArrayList(TypeId) = .empty,
+        fields: std.ArrayList(types.Field) = .empty,
+        tags: std.ArrayList(types.TagInput) = .empty,
+
+        fn clear(self: *RewriteScratch) void {
+            self.done.clearRetainingCapacity();
+            self.stack.clearRetainingCapacity();
+            self.ids.clearRetainingCapacity();
+            self.fields.clearRetainingCapacity();
+            self.tags.clearRetainingCapacity();
+        }
+
+        fn deinit(self: *RewriteScratch, allocator: Allocator) void {
+            self.done.deinit(allocator);
+            self.stack.deinit(allocator);
+            self.ids.deinit(allocator);
+            self.fields.deinit(allocator);
+            self.tags.deinit(allocator);
+        }
+    };
 
     /// Index the checked producer's exact scope, capture, local-procedure and
     /// omitted-default records once when their module is demanded. A missing
@@ -1730,6 +1760,7 @@ pub const Program = struct {
         self.composed_in_body.deinit(self.allocator);
         self.omitted_defaults.deinit(self.allocator);
         self.codec.deinit(self.allocator);
+        self.rewrite_scratch.deinit(self.allocator);
         self.arena.deinit();
     }
 
@@ -2932,12 +2963,16 @@ pub const Program = struct {
 
     /// `rewriteType`, reading each of `row_nodes` as its variable.
     fn rewriteTypeWithRowNodes(self: *Program, allocator: Allocator, root: TypeId, bound: Bindings, function_as: ?TypeId, row_nodes: []const RowNode, tail_nodes: TailNodes) Allocator.Error!TypeId {
-        var done: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty;
-        defer done.deinit(allocator);
-        const Frame = struct { ty: TypeId, expanded: bool };
-        var stack: std.ArrayList(Frame) = .empty;
-        defer stack.deinit(allocator);
-        try stack.append(allocator, .{ .ty = root, .expanded = false });
+        // Nothing below calls back into the program, so one scratch serves
+        // every rewrite.
+        const scratch = &self.rewrite_scratch;
+        std.debug.assert(scratch.done.count() == 0 and scratch.stack.items.len == 0);
+        defer scratch.clear();
+        const done = &scratch.done;
+        const stack = &scratch.stack;
+        const ids = &scratch.ids;
+        const gpa = self.allocator;
+        try stack.append(gpa, .{ .ty = root, .expanded = false });
         while (stack.pop()) |frame| {
             if (done.contains(frame.ty)) continue;
             const node = self.store.get(frame.ty);
@@ -2946,27 +2981,27 @@ pub const Program = struct {
                     if (candidate.ty == frame.ty) break candidate;
                 } else null;
                 if (row_node) |whole| {
-                    try done.put(allocator, frame.ty, try self.store.variable(whole.index));
+                    try done.put(gpa, frame.ty, try self.store.variable(whole.index));
                     continue;
                 }
-                try stack.append(allocator, .{ .ty = frame.ty, .expanded = true });
+                try stack.append(gpa, .{ .ty = frame.ty, .expanded = true });
                 switch (node) {
                     .record => |record| {
-                        for (self.store.fieldSpan(record.fields)) |field| try stack.append(allocator, .{ .ty = field.ty, .expanded = false });
-                        if (record.ext.get()) |ext| try stack.append(allocator, .{ .ty = ext, .expanded = false });
-                        for (self.store.paddingTypes(record)) |padding| try stack.append(allocator, .{ .ty = padding, .expanded = false });
+                        for (self.store.fieldSpan(record.fields)) |field| try stack.append(gpa, .{ .ty = field.ty, .expanded = false });
+                        if (record.ext.get()) |ext| try stack.append(gpa, .{ .ty = ext, .expanded = false });
+                        for (self.store.paddingTypes(record)) |padding| try stack.append(gpa, .{ .ty = padding, .expanded = false });
                     },
-                    .tuple => |items| for (self.store.span(items)) |item| try stack.append(allocator, .{ .ty = item, .expanded = false }),
+                    .tuple => |items| for (self.store.span(items)) |item| try stack.append(gpa, .{ .ty = item, .expanded = false }),
                     .tag_union => |tag_union| {
-                        for (self.store.tagSpan(tag_union.tags)) |tag| for (self.store.span(tag.payloads)) |payload| try stack.append(allocator, .{ .ty = payload, .expanded = false });
-                        if (tag_union.ext) |ext| try stack.append(allocator, .{ .ty = ext, .expanded = false });
+                        for (self.store.tagSpan(tag_union.tags)) |tag| for (self.store.span(tag.payloads)) |payload| try stack.append(gpa, .{ .ty = payload, .expanded = false });
+                        if (tag_union.ext) |ext| try stack.append(gpa, .{ .ty = ext, .expanded = false });
                     },
-                    .list => |elem| try stack.append(allocator, .{ .ty = elem, .expanded = false }),
-                    .box => |payload| try stack.append(allocator, .{ .ty = payload, .expanded = false }),
-                    .nominal => |nominal| for (self.store.nominalArgs(nominal)) |arg| try stack.append(allocator, .{ .ty = arg, .expanded = false }),
+                    .list => |elem| try stack.append(gpa, .{ .ty = elem, .expanded = false }),
+                    .box => |payload| try stack.append(gpa, .{ .ty = payload, .expanded = false }),
+                    .nominal => |nominal| for (self.store.nominalArgs(nominal)) |arg| try stack.append(gpa, .{ .ty = arg, .expanded = false }),
                     .function => |function| if (function_as == null) {
-                        for (self.store.span(function.args)) |arg| try stack.append(allocator, .{ .ty = arg, .expanded = false });
-                        try stack.append(allocator, .{ .ty = function.ret, .expanded = false });
+                        for (self.store.span(function.args)) |arg| try stack.append(gpa, .{ .ty = arg, .expanded = false });
+                        try stack.append(gpa, .{ .ty = function.ret, .expanded = false });
                     },
                     .primitive, .empty_record, .variable => {},
                 }
@@ -2978,37 +3013,34 @@ pub const Program = struct {
                 .list => |elem| try self.store.intern(.{ .list = done.get(elem).? }),
                 .box => |payload| try self.store.intern(.{ .box = done.get(payload).? }),
                 .tuple => |items| blk: {
-                    const out = try allocator.alloc(TypeId, items.len);
-                    defer allocator.free(out);
-                    for (self.store.span(items), out) |item, *slot| slot.* = done.get(item).?;
-                    break :blk try self.store.intern(.{ .tuple = out });
+                    ids.clearRetainingCapacity();
+                    for (self.store.span(items)) |item| try ids.append(gpa, done.get(item).?);
+                    break :blk try self.store.intern(.{ .tuple = ids.items });
                 },
                 .function => |function| function_as orelse blk: {
-                    const args = try allocator.alloc(TypeId, function.args.len);
-                    defer allocator.free(args);
-                    for (self.store.span(function.args), args) |arg, *slot| slot.* = done.get(arg).?;
-                    break :blk try self.store.intern(.{ .function = .{ .args = args, .ret = done.get(function.ret).?, .effectful = function.effectful } });
+                    ids.clearRetainingCapacity();
+                    for (self.store.span(function.args)) |arg| try ids.append(gpa, done.get(arg).?);
+                    break :blk try self.store.intern(.{ .function = .{ .args = ids.items, .ret = done.get(function.ret).?, .effectful = function.effectful } });
                 },
                 .nominal => |nominal| blk: {
-                    const args = try allocator.alloc(TypeId, nominal.args.len);
-                    defer allocator.free(args);
-                    for (self.store.nominalArgs(nominal), args) |arg, *slot| slot.* = done.get(arg).?;
+                    ids.clearRetainingCapacity();
+                    for (self.store.nominalArgs(nominal)) |arg| try ids.append(gpa, done.get(arg).?);
                     var copy = nominal;
                     _ = &copy;
-                    break :blk try self.store.intern(.{ .nominal = .{ .decl = nominal.decl, .args = args, .name = nominal.name, .is_opaque = nominal.is_opaque, .builtin = nominal.builtin, .has_backing = nominal.has_backing } });
+                    break :blk try self.store.intern(.{ .nominal = .{ .decl = nominal.decl, .args = ids.items, .name = nominal.name, .is_opaque = nominal.is_opaque, .builtin = nominal.builtin, .has_backing = nominal.has_backing } });
                 },
                 .record => |record| blk: {
-                    var fields: std.ArrayList(types.Field) = .empty;
-                    defer fields.deinit(allocator);
+                    const fields = &scratch.fields;
+                    fields.clearRetainingCapacity();
                     for (self.store.fieldSpan(record.fields)) |field| {
                         const ty = done.get(field.ty).?;
                         if (field.kind == .variable_slot) {
                             const slot_ty = bound.get(field.slot_variable) orelse invariant("a substituted field kind names a variable past its bindings");
-                            try fields.append(allocator, self.store.instantiatedField(field.name, ty, slot_ty));
+                            try fields.append(gpa, self.store.instantiatedField(field.name, ty, slot_ty));
                         } else {
                             var substituted = field;
                             substituted.ty = ty;
-                            try fields.append(allocator, substituted);
+                            try fields.append(gpa, substituted);
                         }
                     }
                     var ext: ?TypeId = if (record.ext.get()) |ext| done.get(ext).? else null;
@@ -3019,7 +3051,7 @@ pub const Program = struct {
                         .empty_record => ext = null,
                         .record => |ext_record| {
                             const own = fields.items.len;
-                            try fields.appendSlice(allocator, self.store.fieldSpan(ext_record.fields));
+                            try fields.appendSlice(gpa, self.store.fieldSpan(ext_record.fields));
                             try mergeSortedFields(allocator, &self.store, fields.items, own);
                             ext = ext_record.ext.get();
                         },
@@ -3030,13 +3062,12 @@ pub const Program = struct {
                     // entries, so the fields a remainder brings get slots
                     // just as they would had the row been closed already.
                     if (record.declared.get()) |declared| {
-                        const padding = try allocator.alloc(TypeId, declared.padding.len);
-                        defer allocator.free(padding);
-                        for (self.store.span(declared.padding), padding) |ty, *slot| slot.* = done.get(ty).?;
+                        ids.clearRetainingCapacity();
+                        for (self.store.span(declared.padding)) |ty| try ids.append(gpa, done.get(ty).?);
                         break :blk try self.store.intern(.{ .record = .{
                             .fields = fields.items,
                             .ext = ext,
-                            .declared = .{ .padding = padding, .entries = self.store.declaredEntries(declared) },
+                            .declared = .{ .padding = ids.items, .entries = self.store.declaredEntries(declared) },
                         } });
                     }
                     const tail_node: ?u32 = switch (tail_nodes) {
@@ -3047,15 +3078,15 @@ pub const Program = struct {
                     break :blk try self.store.intern(.{ .record = .{ .fields = fields.items, .ext = ext, .tail_node = tail_node } });
                 },
                 .tag_union => |tag_union| blk: {
-                    var tags: std.ArrayList(types.TagInput) = .empty;
-                    defer tags.deinit(allocator);
-                    var payloads: std.ArrayList(TypeId) = .empty;
-                    defer payloads.deinit(allocator);
+                    const tags = &scratch.tags;
+                    tags.clearRetainingCapacity();
+                    const payloads = ids;
+                    payloads.clearRetainingCapacity();
                     const own = self.store.tagSpan(tag_union.tags);
-                    for (own) |tag| for (self.store.span(tag.payloads)) |payload| try payloads.append(allocator, done.get(payload).?);
+                    for (own) |tag| for (self.store.span(tag.payloads)) |payload| try payloads.append(gpa, done.get(payload).?);
                     var at: usize = 0;
                     for (own) |tag| {
-                        try tags.append(allocator, .{ .name = tag.name, .payloads = payloads.items[at..][0..tag.payloads.len] });
+                        try tags.append(gpa, .{ .name = tag.name, .payloads = payloads.items[at..][0..tag.payloads.len] });
                         at += tag.payloads.len;
                     }
                     var ext: ?TypeId = if (tag_union.ext) |ext| done.get(ext).? else null;
@@ -3065,7 +3096,7 @@ pub const Program = struct {
                                 const named = for (own) |known| {
                                     if (known.name == tag.name and known.payloads.len == tag.payloads.len) break true;
                                 } else false;
-                                if (!named) try tags.append(allocator, .{ .name = tag.name, .payloads = self.store.span(tag.payloads) });
+                                if (!named) try tags.append(gpa, .{ .name = tag.name, .payloads = self.store.span(tag.payloads) });
                             }
                             ext = ext_union.ext;
                         },
@@ -3084,7 +3115,7 @@ pub const Program = struct {
                     } } });
                 },
             };
-            try done.put(allocator, frame.ty, result);
+            try done.put(gpa, frame.ty, result);
         }
         return done.get(root).?;
     }

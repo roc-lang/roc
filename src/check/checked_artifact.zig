@@ -4819,7 +4819,7 @@ const CheckedTypePublication = struct {
         var newly_reached: std.ArrayList(Var) = .empty;
         defer newly_reached.deinit(allocator);
         const first_payload = self.store.payloads.items().len;
-        try sealed_type_view.reach(allocator, module.moduleEnvConst(), self.store.sealed_var_facts.items(), var_, &newly_reached);
+        try sealed_type_view.reach(allocator, module.moduleEnvConst(), self.store.sealed_var_facts.items(), &self.store.reach_pending, var_, &newly_reached);
         // Only this request's newly reached types need their imported
         // declarations embedded. Other producers own the completeness of
         // their own types.
@@ -4979,6 +4979,9 @@ pub const CheckedTypeStore = struct {
     /// by importing module and imported id, so an imported type projected
     /// twice names one root.
     projected_imports: std.AutoHashMapUnmanaged(ProjectedImportKey, CheckedTypeId) = .empty,
+    /// Build-only work list of `sealed_type_view.reach`, kept with its
+    /// capacity for the next walk; empty between walks.
+    reach_pending: std.ArrayList(Var) = .empty,
     /// The interning tables of the platform store a pairing overlay extends
     /// (`borrowForPairing`), probed read-only before the overlay's own
     /// tables, so the overlay interns against the platform's types without
@@ -5060,6 +5063,7 @@ pub const CheckedTypeStore = struct {
         "synthesized_keys",
         "key_names",
         "projected_imports",
+        "reach_pending",
         "sealed_env",
         "sealed_keys",
     };
@@ -5969,6 +5973,7 @@ pub const CheckedTypeStore = struct {
         self.identity_origins.deinit(allocator);
         self.synthetic_variable_roots.deinit(allocator);
         self.projected_imports.deinit(allocator);
+        self.reach_pending.deinit(allocator);
         if (self.synthesized_keys) |keys| keys.destroy();
         // A loaded store's columns borrow the relocated buffer, and a borrowed
         // list frees nothing; a pairing overlay's borrowed columns belong to
@@ -9008,7 +9013,7 @@ fn appendCheckedTypeRoot(
     active: *const CheckedSourceTypeRoots,
     var_: Var,
 ) Allocator.Error!CheckedTypeId {
-    try sealed_type_view.reach(allocator, module.moduleEnvConst(), store.sealed_var_facts.items(), var_, null);
+    try sealed_type_view.reach(allocator, module.moduleEnvConst(), store.sealed_var_facts.items(), &store.reach_pending, var_, null);
     return active.get(module, var_);
 }
 

@@ -279,8 +279,15 @@ dispatch_dedup_scratch: ?DispatchDedupScratch = null,
 /// The use positions of the most recently finished static-dispatch drain,
 /// kept like `row_union_scratch`.
 use_positions_scratch: UsePositions = .{},
-/// The storage of the most recently finished hoist selection transaction.
-hoist_transaction_scratch: HoistTransactionStorage = .{},
+/// The storage of finished hoist selection transactions, kept with their
+/// capacity for the next ones. Each transaction takes its own, so one that
+/// starts while another is open never shares the open one's storage.
+hoist_transaction_pool: std.ArrayListUnmanaged(HoistTransactionStorage) = .empty,
+/// The enclosing-variable lists of finished deferred dispatch entries
+/// (`processDeferredDispatchEntry`), kept with their capacity for the next
+/// entries. Each entry takes its own list, so an entry processed inside
+/// another entry's relations never moves the list the outer one fills.
+enclosing_var_ranks_pool: std.ArrayListUnmanaged(std.ArrayList(EnclosingVarRank)) = .empty,
 /// The slot images of the most recently finished `relatePredeclaredUse`, kept
 /// like `row_union_scratch`; null until the first one finishes.
 predeclared_use_images: ?collections.DenseMap(Var, Var) = null,
@@ -1859,7 +1866,8 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .row_union_scratch = .scratch,
     .dispatch_dedup_scratch = .scratch,
     .use_positions_scratch = .scratch,
-    .hoist_transaction_scratch = .scratch,
+    .hoist_transaction_pool = .scratch,
+    .enclosing_var_ranks_pool = .scratch,
     .predeclared_use_images = .scratch,
     .where_constraint_representatives = .scratch,
     .type_decl_rigid_vars = .lexical,
@@ -3814,9 +3822,8 @@ const HoistSelectionAction = enum {
     drop_empty,
 };
 
-/// The storage of the most recently finished `HoistSelectionTransaction`,
-/// kept with its capacity for the next one (`hoist_transaction_scratch`). A
-/// transaction that starts while another is open finds it empty.
+/// The storage of a finished `HoistSelectionTransaction`, kept with its
+/// capacity for a later one (`hoist_transaction_pool`); empty while pooled.
 const HoistTransactionStorage = struct {
     staged_roots: std.ArrayListUnmanaged(hoist_roots.SelectedHoistedRoot) = .empty,
     staged_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, u32) = .empty,
@@ -3857,8 +3864,10 @@ const HoistSelectionTransaction = struct {
     committed: bool = false,
 
     fn init(checker: *Self) HoistSelectionTransaction {
-        const storage = checker.hoist_transaction_scratch;
-        checker.hoist_transaction_scratch = .{};
+        const storage = checker.hoist_transaction_pool.pop() orelse HoistTransactionStorage{};
+        std.debug.assert(storage.staged_roots.items.len == 0 and storage.staged_exprs.count() == 0 and
+            storage.staged_bindings.count() == 0 and storage.staged_pattern_validations.count() == 0 and
+            storage.known_updates.items.len == 0 and storage.run_items.items.len == 0 and storage.run_contexts.items.len == 0);
         return .{
             .checker = checker,
             .staged_roots = storage.staged_roots,
@@ -3884,8 +3893,7 @@ const HoistSelectionTransaction = struct {
         self.staged_pattern_validations.clearRetainingCapacity();
         self.known_updates.clearRetainingCapacity();
         self.resetRun();
-        self.checker.hoist_transaction_scratch.deinit(gpa);
-        self.checker.hoist_transaction_scratch = .{
+        var storage: HoistTransactionStorage = .{
             .staged_roots = self.staged_roots,
             .staged_exprs = self.staged_exprs,
             .staged_bindings = self.staged_bindings,
@@ -3895,6 +3903,7 @@ const HoistSelectionTransaction = struct {
             .run_contexts = self.run.contexts,
             .spare_contexts = self.spare_contexts,
         };
+        self.checker.hoist_transaction_pool.append(gpa, storage) catch storage.deinit(gpa);
     }
 
     /// Empty the staging run, keeping its contexts' storage as spares.
@@ -5104,6 +5113,8 @@ pub fn deinit(self: *Self) void {
     for (self.check_activity_pool.items) |*activities| activities.deinit(self.gpa);
     for (self.pattern_frame_pool.items) |*frames| frames.deinit(self.gpa);
     for (self.group_roots_pool.items) |*roots| roots.deinit(self.gpa);
+    for (self.hoist_transaction_pool.items) |*storage| storage.deinit(self.gpa);
+    for (self.enclosing_var_ranks_pool.items) |*ranks| ranks.deinit(self.gpa);
     const fields = @typeInfo(Self).@"struct";
     inline for (fields.field_names, fields.field_types) |name, T| {
         const info = @typeInfo(T);
@@ -8290,7 +8301,8 @@ const HoistSelectionTestState = struct {
         checker.hoist_promotion_dependencies = .empty;
         checker.hoist_promotion_conjunctions = .empty;
         checker.pending_comptime_conditions = .empty;
-        checker.hoist_transaction_scratch = .{};
+        checker.hoist_transaction_pool = .empty;
+        checker.enclosing_var_ranks_pool = .empty;
         return .{
             .checker = checker,
             .allocator = allocator,
@@ -8325,7 +8337,10 @@ const HoistSelectionTestState = struct {
             hoist_roots.deinitSelectedRoot(self.allocator, root);
         }
         self.checker.selected_hoisted_roots.deinit(self.allocator);
-        self.checker.hoist_transaction_scratch.deinit(self.allocator);
+        for (self.checker.hoist_transaction_pool.items) |*storage| storage.deinit(self.allocator);
+        self.checker.hoist_transaction_pool.deinit(self.allocator);
+        for (self.checker.enclosing_var_ranks_pool.items) |*ranks| ranks.deinit(self.allocator);
+        self.checker.enclosing_var_ranks_pool.deinit(self.allocator);
     }
 
     fn borrowCheckedContext(self: *HoistSelectionTestState, checked: *Self) error{ExpectedHoistSelectionTestExpr}!CIR.Expr.Idx {
@@ -56218,8 +56233,12 @@ inline fn processDeferredDispatchEntry(
     drain: *StaticDispatchDrain,
     entry_index: usize,
 ) std.mem.Allocator.Error!DeferredEntryOutcome {
-    var enclosing: std.ArrayList(EnclosingVarRank) = .empty;
-    defer enclosing.deinit(self.gpa);
+    var enclosing = self.enclosing_var_ranks_pool.pop() orelse std.ArrayList(EnclosingVarRank).empty;
+    std.debug.assert(enclosing.items.len == 0);
+    defer {
+        enclosing.clearRetainingCapacity();
+        self.enclosing_var_ranks_pool.append(self.gpa, enclosing) catch enclosing.deinit(self.gpa);
+    }
     const outcome = try self.processDeferredDispatchEntryRelations(env, drain, entry_index, &enclosing);
     if (enclosing.items.len != 0) try self.restoreEnclosingVarRanks(enclosing.items, env);
     return outcome;
