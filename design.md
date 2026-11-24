@@ -11518,10 +11518,13 @@ and meets a consumer that gains from it on the other side:
   continuation;
 - a part of the result that the callee constructs on every path that returns
   (or passes through from an argument or capture the clone knows) reaches a
-  `match`, a call, a loop entry with a tag or callable, or a field or item
-  read in the caller's continuation. A projected result is read without
-  building the aggregate. A projected argument gains nothing from inlining,
-  since the call-pattern worker already takes a known argument apart.
+  `match`, a call, or a loop entry with a tag or callable in the caller's
+  continuation. A projected argument gains nothing from inlining, since the
+  call-pattern worker already takes a known argument apart, and a projected
+  record or tuple result gains nothing from inlining by itself either: records
+  and tuples are flat value types whose fields the caller reads without heap
+  allocation, while the walk still descends through projected fields to any
+  `match`, call, or loop entry on a known tag or callable inside them.
   Returning a result, or storing it in a constructor, is not such a use: the
   callee already builds it where the caller receives it, and a result the
   caller returns is read by whatever reads the caller's result.
