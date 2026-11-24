@@ -50,11 +50,22 @@ pub fn classifyType(store: *const Store, start: Idx) Class {
             .struct_ => {
                 const struct_idx = lay.getStruct().idx;
                 const field_count = store.getStructData(struct_idx).fields.count;
-                // A single-field struct is passed as its field; any other aggregate is
-                // indirect. A lone unnamed-padding field is not a real newtype member,
-                // so it is never unwrapped.
-                if (field_count != 1 or store.getStructFieldIsPadding(struct_idx, 0)) return .indirect;
-                idx = store.getStructFieldLayout(struct_idx, 0);
+                // A struct with one sized field is passed as that field; any other
+                // aggregate is indirect. A zero-sized field is no member of the C
+                // struct the host declares, so it does not count. A lone
+                // unnamed-padding field is not a real newtype member, so it is never
+                // unwrapped.
+                var only_sized_field: ?u32 = null;
+                var i: u32 = 0;
+                while (i < field_count) : (i += 1) {
+                    if (store.getStructFieldSize(struct_idx, i) == 0) continue;
+                    if (only_sized_field != null) return .indirect;
+                    only_sized_field = i;
+                }
+                // The size assertion above holds, so a struct has a sized field.
+                const field = only_sized_field.?;
+                if (store.getStructFieldIsPadding(struct_idx, field)) return .indirect;
+                idx = store.getStructFieldLayout(struct_idx, field);
             },
             .tag_union => {
                 const info = store.getTagUnionInfo(lay);
@@ -148,6 +159,26 @@ test "wasm classify: aggregates are indirect, single-field structs unwrap" {
         .{ .index = 0, .layout = .u64, .is_padding = true },
     });
     try testing.expectEqual(Class.indirect, classifyType(&store, padding_only));
+}
+
+test "wasm classify: zero-sized fields are not aggregate members" {
+    var store = try Store.init(testing.allocator, .u32);
+    defer store.deinit();
+
+    // The struct a host declares for { a : {}, x : F64 } has one field.
+    const one_sized = try testStruct(&store, &.{ .zst, .f64 });
+    try testing.expectEqual(Class{ .direct = .f64 }, classifyType(&store, one_sized));
+
+    // { x : I64, _ : {} }: the zero-sized `_` only opts the record into
+    // declared order, so the record is still a one-field struct.
+    const declared_order = try store.putNominalStructFields(&.{
+        .{ .index = 0, .layout = .i64 },
+        .{ .index = 1, .layout = .zst, .is_padding = true },
+    });
+    try testing.expectEqual(Class{ .direct = .i64 }, classifyType(&store, declared_order));
+
+    const two_sized = try testStruct(&store, &.{ .i32, .zst, .u32 });
+    try testing.expectEqual(Class.indirect, classifyType(&store, two_sized));
 }
 
 test "wasm classify: enums are direct, Bool included" {

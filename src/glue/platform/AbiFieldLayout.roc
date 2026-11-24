@@ -36,6 +36,11 @@ AbiFieldLayout := {
 			Pointer64 => field.size64
 		}
 
+	## True when the field occupies no storage at either pointer width. A
+	## generated struct has no member for such a field.
+	is_zero_sized : AbiFieldLayout -> Bool
+	is_zero_sized = |field| field.size32 == 0 and field.size64 == 0
+
 	alignment : AbiFieldLayout, AbiWidth -> U64
 	alignment = |field, width|
 		match width {

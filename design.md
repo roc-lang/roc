@@ -12813,6 +12813,23 @@ is unified with every annotation that refers to it; if a mismatch merges any
 of it into an error it is no longer ground, and the next reference
 instantiates a fresh copy.
 
+An instance is shared only among references of the same kind. The annotation
+node that refers to an instance joins its class, and a merged class holds the
+lower of the two ranks. A reference inside a type declaration is generated at
+generalized rank, so its instance is part of that declaration's template: its
+classes carry generalized rank like the rest of the template, and each use of
+the declaration copies them. A reference generated at a scope's own rank is a
+use: its instance is a monotype that settles at `outermost`, like every ground
+type, and is read where it stands. A use never reads a template's instance,
+nor a template a use's. A class at generalized rank is by definition one a
+quantified variable is reachable from (`Check.typeHasGeneralizedVar` stops at
+the first one it meets), so a use that read a template's instance would make
+the binding it annotates a scheme with nothing to quantify. A host-boundary
+annotation closes the declarations it references just as a nominal
+declaration's body does, so the two name the same positions, and a provided
+function whose annotation read such an instance would be rejected as
+polymorphic.
+
 Before a use that decides markers per occurrence (`.preserve_one_sided`,
 `.resolve_by_polarity`, `.defer_open`) copies anything, a pre-walk
 (`Instantiator.collectMarkerChoices`) joins the sides every marker occurs on
@@ -16260,10 +16277,15 @@ Restrictions:
   lifting paths retain the checked representatives of the record relation,
   alongside its original operands, so a polymorphic call's formal slot cannot
   hide the literal that supplies it. Checking registers fresh record expressions
-  as they are checked. At settlement, before default-cycle validation, it groups
-  accepted omission decisions by solved record equality and distributes each
-  decision to every registered construction in that class that did not supply
-  the field. This consumes the unifier's explicit default identity, including
+  as they are checked. An annotated or expected-typed expression checks its
+  body on a fresh variable and relates its own variable to the annotation, so
+  when the annotation names an alias, the expression's root is that alias
+  node, a class of its own; the literal's record class is reached through the
+  alias's backing, which unification related to the body. At settlement, before default-cycle validation, it groups accepted omission
+  decisions by solved record equality and distributes each decision to every
+  registered construction in that class that did not supply the field, then
+  publishes the omissions sorted by construction so each consumer finds one
+  construction's omissions by binary search. This consumes the unifier's explicit default identity, including
   when later value relations normalized the field to required; it never
   reconstructs an omission from a nominal declaration or a solved field kind.
   Equal decisions are coalesced before visiting constructors, and only classes
@@ -32568,6 +32590,27 @@ one instantiation can occupy several rows. Generators emit one declaration per
 shape, give shapes that share a name distinct names derived from the shape id,
 and never emit the shared bare name, as a declaration or as an alias.
 
+A tag union with one variant stores no discriminant, so its host type is its
+payload, which is how the C ABI classification of host-boundary values sees it
+too. With one payload, that is the payload's own type. With several payloads
+that occupy storage, it is a struct of the variant's committed payload fields,
+which generators declare under the union's name like any other declared type,
+with the ownership operations of a record. When no payload occupies storage,
+the union has no host value. A generator never lets one payload stand for the
+others.
+
+A value whose committed size is zero has no host representation. It is not
+passed as an argument and not returned, so a hosted or provided signature
+omits it, and a struct that holds one as a field or tag payload has no member
+for it. Generators declare no type for a zero-sized record or union. Glue
+decides this from the committed size, never from the shape of the type: `{}`,
+a union with one payload-free tag, and a record or union of such values are
+all zero-sized. C ABI classification on every target sees the same struct the
+host declares, the one made of an aggregate's sized members. A zero-sized
+field, including the zero-sized `_` field that opts a nominal record into
+declared order, therefore neither breaks a homogeneous float or vector
+aggregate nor stops a struct with one sized field from passing as that field.
+
 Glue's type table describes values. A function value, wherever it appears
 (boxed, in a record or tag payload, or in a stored signature), is one
 erased-callable pointer whose own layout does not depend on its argument or
@@ -33073,8 +33116,11 @@ symbol the link defines (`__stack_pointer`, `__memory_base` and
 to the host's definitions, else to the embedder; a host import resolves only
 to the names the app gives the host (its provides, exported data and the
 WebAssembly 1.0 stack accessors), then to the link's symbols, else to the
-embedder. An atom walk from the platform's exports, the stack exports, the
-host's retained atoms and the provides decides what is placed. Index spaces
+embedder. An atom walk from the platform's exports, the stack exports and
+the host's retained atoms decides what is placed: a provide nothing among
+them reaches is left out with everything only it reaches, the hosted imports
+it calls included, so a module imports from its embedder only what placed
+code names. Index spaces
 follow placement order (host, support, units by content digest; within an
 image, its order), memory follows `linker.wasmStackLayout` with initialized
 segments first and zero-filled ones after (emitted as zeros only when memory

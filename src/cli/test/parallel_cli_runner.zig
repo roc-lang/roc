@@ -723,6 +723,7 @@ const CustomCase = enum {
     boxy_padded_records_wasm_dev,
     boxy_padded_records_wasm_size,
     issue_10827_private_compiler_support,
+    issue_13195_wasm_unreached_provide,
     issue_11134_wasm_post_llvm_pipeline,
     macos_output_basename_reproducible,
     default_platform_crash_x64musl,
@@ -822,6 +823,8 @@ const CustomCase = enum {
     glue_boxed_iter_stream,
     glue_boxed_app_type,
     glue_generic_nominal_shapes,
+    glue_single_tag_multi_payload,
+    glue_zero_sized_values,
     glue_opaque_ownership,
     glue_application_only_requires,
     glue_c_tests,
@@ -2856,6 +2859,8 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "issue 12887: Box(Iter) and Box(Stream) are boxes of their backing record in every generator", .body = .{ .custom = .glue_boxed_iter_stream } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: a heap payload holding the app's type by value is opaque in every generator", .body = .{ .custom = .glue_boxed_app_type } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: each instantiation of a generic nominal is its own type in every generator", .body = .{ .custom = .glue_generic_nominal_shapes } },
+    .{ .id = 0, .suite = .glue, .name = "issue 13348: a one-tag union with several payloads is a struct of them in every generator", .body = .{ .custom = .glue_single_tag_multi_payload } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: a zero-sized value is no parameter, result, or struct member in any generator", .body = .{ .custom = .glue_zero_sized_values } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: a value holding an opaque Roc value has no host release in any generator", .body = .{ .custom = .glue_opaque_ownership } },
     .{ .id = 0, .suite = .glue, .name = "issue 11504: application requirements are not glue roots", .body = .{ .custom = .glue_application_only_requires } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
@@ -3607,6 +3612,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 13113: roc check rejects the provided variable and suggests its alias", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_13113_platform_type_variables/invalid_provides.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "polymorphic provided function" }, .{ .stream = .stderr, .text = "Use Model instead of model" } }, .not_contains = &no_panic_or_invariant_needles } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 13113: roc build rejects the requires alias", .body = .{ .command = .{ .args = &.{ "build", "--no-cache", "--target=x64musl" }, .roc_file = "test/cli/issue_13113_platform_type_variables/invalid_requires.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "undeclared type" }, .{ .stream = .stderr, .text = "Use the type variable model" } }, .not_contains = &no_panic_or_invariant_needles } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 13113: roc build rejects the provided variable", .body = .{ .command = .{ .args = &.{ "build", "--no-cache", "--target=x64musl" }, .roc_file = "test/cli/issue_13113_platform_type_variables/invalid_provides.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "polymorphic provided function" }, .{ .stream = .stderr, .text = "Use Model instead of model" } }, .not_contains = &no_panic_or_invariant_needles } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13363: roc check accepts a concrete provided function beside a nominal wrapping an imported type", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_13363_provided_nominal_wrapper/platform.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &no_panic_or_invariant_needles } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9826: roc check rejects open rows in hosted signatures", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9826_open_host_boundary/hosted/app.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "host boundary requires closed rows" }, .{ .stream = .stderr, .text = "open record or tag-union rows" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "[ROC CRASHED]" } } } } },
     // Polarity's host-boundary opt-out, positive side: a hosted signature with no
     // extension must stay closed as written. If implicit opening ever leaked across
@@ -5708,6 +5714,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: LLVM size wasm32 links the Boxy runtime", .backend = .size, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=size", "--no-cache", "--output=boxed_closure_size.wasm" }, .roc_file = "test/wasm/boxed_closure_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "UnresolvedBuiltinImport" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: LLVM speed wasm32 links the Boxy runtime", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=speed", "--no-cache", "--output=boxed_closure_speed.wasm" }, .roc_file = "test/wasm/boxed_closure_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "UnresolvedBuiltinImport" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10827: Roc compiler support is private from a strong-intrinsic wasm host", .backend = .dev, .body = .{ .custom = .issue_10827_private_compiler_support } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13195: a wasm32 module leaves out a provide its exports do not reach and the hosted import it calls", .backend = .dev, .body = .{ .custom = .issue_13195_wasm_unreached_provide } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11134: wasm speed uses explicit post-LLVM passes", .backend = .speed, .body = .{ .custom = .issue_11134_wasm_post_llvm_pipeline } },
     // issue 10951: https://github.com/roc-lang/roc/issues/10951
     // The wasm32 linker exports exactly what the platform header's `exports:`
@@ -7436,6 +7443,7 @@ fn runCustomCase(
         .boxy_padded_records_wasm_dev => customBoxyPaddedRecordsWasm(io, allocator, &env, &timer, timeout_ms, "--opt=dev"),
         .boxy_padded_records_wasm_size => customBoxyPaddedRecordsWasm(io, allocator, &env, &timer, timeout_ms, "--opt=size"),
         .issue_10827_private_compiler_support => customIssue10827PrivateCompilerSupport(io, allocator, &env, &timer, timeout_ms),
+        .issue_13195_wasm_unreached_provide => customIssue13195WasmUnreachedProvide(io, allocator, &env, &timer, timeout_ms),
         .issue_11134_wasm_post_llvm_pipeline => customWasmPostLlvmPipeline(io, allocator, &env, &timer, timeout_ms),
         .macos_output_basename_reproducible => customMacosOutputBasenameReproducible(io, allocator, &env, &timer, timeout_ms),
         .default_platform_crash_x64musl => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .x64musl, .crash),
@@ -7545,6 +7553,8 @@ fn runCustomCase(
         .glue_boxed_iter_stream => customGlueBoxedIterStream(io, allocator, &env, &timer, timeout_ms),
         .glue_boxed_app_type => customGlueBoxedAppType(io, allocator, &env, &timer, timeout_ms),
         .glue_generic_nominal_shapes => customGlueGenericNominalShapes(io, allocator, &env, &timer, timeout_ms),
+        .glue_single_tag_multi_payload => customGlueSingleTagMultiPayload(io, allocator, &env, &timer, timeout_ms),
+        .glue_zero_sized_values => customGlueZeroSizedValues(io, allocator, &env, &timer, timeout_ms),
         .glue_opaque_ownership => customGlueOpaqueOwnership(io, allocator, &env, &timer, timeout_ms),
         .glue_application_only_requires => customGlueApplicationOnlyRequires(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
@@ -15903,6 +15913,67 @@ fn customIssue10827PrivateCompilerSupport(
     return null;
 }
 
+/// A platform provides `roc_used` and `roc_unused`, its host's one export
+/// calls only the first, and the second calls a hosted function the host
+/// leaves to the embedder. The module must instantiate with no imports,
+/// under each way a dev build links (LLD without a cache, composed images
+/// with one), and `run` must return the app's 42.
+fn customIssue13195WasmUnreachedProvide(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "issue-13195.wasm" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate issue 13195 output path: {}", .{err});
+    defer allocator.free(output_path);
+    const output_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate issue 13195 output argument: {}", .{err});
+    defer allocator.free(output_arg);
+
+    const links = [_][]const []const u8{
+        &.{ "build", "--target=wasm32", "--opt=dev", "--no-cache", output_arg },
+        &.{ "build", "--target=wasm32", "--opt=dev", "--specialize=no", output_arg },
+    };
+    for (links) |args| {
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = args,
+            .roc_file = "test/wasm/issue_13195_unreached_provide/app.roc",
+            .exit = .success,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+            .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+        })) |failure| return failure;
+
+        const wasm_bytes = std.Io.Dir.cwd().readFileAlloc(io, output_path, allocator, .unlimited) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read issue 13195 wasm output: {}", .{err});
+        defer allocator.free(wasm_bytes);
+        var module_def = bytebox.createModuleDefinition(allocator, .{ .debug_name = "issue_13195" }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to create wasm decoder: {}", .{err});
+        defer module_def.destroy();
+        module_def.decode(wasm_bytes) catch |err|
+            return customFailure(allocator, timer, "generated invalid wasm {s}: {}", .{ output_path, err });
+        if (module_def.imports.functions.items.len != 0) {
+            return customFailure(allocator, timer, "the module imports the function {s}, which only an unreached provide calls", .{module_def.imports.functions.items[0].names.import_name});
+        }
+        var module_instance = bytebox.createModuleInstance(.Stack, module_def, allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to create wasm instance: {}", .{err});
+        defer module_instance.destroy();
+        module_instance.instantiate(.{ .stack_size = 1024 * 256 }) catch |err|
+            return customFailure(allocator, timer, "the module does not instantiate without imports: {}", .{err});
+        const run = module_instance.getFunctionHandle("run") catch |err|
+            return customFailure(allocator, timer, "the module lost its declared run export: {}", .{err});
+        var params: [0]bytebox.Val = undefined;
+        var returns: [1]bytebox.Val = undefined;
+        _ = module_instance.invoke(run, &params, &returns, .{}) catch |err|
+            return customFailure(allocator, timer, "run failed: {}", .{err});
+        if (returns[0].I64 != 42) {
+            return customFailure(allocator, timer, "run returned {d}, expected 42", .{returns[0].I64});
+        }
+    }
+    return null;
+}
+
 fn customMacosOutputBasenameReproducible(
     io: std.Io,
     allocator: Allocator,
@@ -21157,6 +21228,220 @@ fn customGlueGenericNominalShapes(io: std.Io, allocator: Allocator, env: *const 
         }
     }
     return null;
+}
+
+fn customGlueSingleTagMultiPayload(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // Issue 13348: a union with one tag stores no discriminant, so the host
+    // holds exactly its payloads. With several payloads that is a struct of
+    // all of them; describing it by its first payload alone gives every
+    // function that passes one the wrong C signature.
+    if (checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/single-tag-multi-payload/main.roc", .{
+        .zig = &.{},
+        .c = &.{ "    RocList _1;", "struct Wrapped {", "extern uint64_t take_record_first(Wrapped arg0);" },
+        .rust = &.{ "    pub _1: RocListWith<u64, false>,", "pub struct Wrapped {", "pub fn take_record_first(arg0: Wrapped) -> u64;" },
+        .absent = &.{
+            "pub fn roc_step(arg0: u64) -> u64;",
+            "extern uint64_t roc_step(uint64_t arg0);",
+            "pub extern fn roc_step(arg0: u64) callconv(.c) u64;",
+        },
+        .zig_checks =
+        \\fn Param(comptime function: anytype, comptime index: usize) type {
+        \\    return @typeInfo(@TypeOf(function)).@"fn".param_types[index].?;
+        \\}
+        \\fn Result(comptime function: anytype) type {
+        \\    return @typeInfo(@TypeOf(function)).@"fn".return_type.?;
+        \\}
+        \\fn expectSame(comptime A: type, comptime B: type) void {
+        \\    if (A != B) @compileError("expected " ++ @typeName(A) ++ " and " ++ @typeName(B) ++ " to be one type");
+        \\}
+        \\fn expectDistinct(comptime A: type, comptime B: type) void {
+        \\    if (A == B) @compileError("expected two types, found " ++ @typeName(A) ++ " twice");
+        \\}
+        \\const Stepped = Result(abi.roc_step);
+        \\comptime {
+        \\    // Both payloads are fields, and the union stores nothing else.
+        \\    expectSame(@FieldType(Stepped, "_0"), u64);
+        \\    expectSame(@FieldType(Stepped, "_1"), abi.RocListWith(u64, false));
+        \\    if (@sizeOf(Stepped) != @sizeOf(u64) + @sizeOf(abi.RocListWith(u64, false)))
+        \\        @compileError("a one-tag union stores its payloads and nothing else");
+        \\
+        \\    // One union is one type wherever it is reached.
+        \\    expectSame(Param(abi.take_steps, 0), Stepped);
+        \\    expectSame(@FieldType(Param(abi.take_holders, 0), "step"), Stepped);
+        \\    expectSame(Param(abi.take_holders, 1), abi.RocList(Stepped));
+        \\    expectSame(@typeInfo(Param(abi.take_holders, 2)).pointer.child, Stepped);
+        \\    expectSame(Result(Param(abi.take_holders, 3).payload_held), Stepped);
+        \\
+        \\    // Unions that share a tag name and differ in payloads are told apart.
+        \\    const StrStepped = Param(abi.take_steps, 1);
+        \\    expectDistinct(StrStepped, Stepped);
+        \\    expectSame(@FieldType(StrStepped, "_0"), u8);
+        \\    expectSame(@FieldType(StrStepped, "_1"), abi.RocStr);
+        \\
+        \\    // Nominal unions, including each instantiation of a generic one.
+        \\    expectSame(@FieldType(Param(abi.take_nominals, 0), "_1"), abi.RocListWith(u64, false));
+        \\    expectSame(@FieldType(Param(abi.take_nominals, 1), "_0"), u8);
+        \\    expectSame(@FieldType(Param(abi.take_nominals, 1), "_1"), u8);
+        \\    expectSame(@FieldType(Param(abi.take_nominals, 2), "_0"), abi.RocStr);
+        \\    expectSame(@FieldType(Param(abi.take_nominals, 2), "_1"), abi.RocStr);
+        \\
+        \\    // A record in the first payload does not stand for the union.
+        \\    const Wrapped = Param(abi.take_record_first, 0);
+        \\    expectSame(@FieldType(@FieldType(Wrapped, "_0"), "a"), u64);
+        \\    expectSame(@FieldType(Wrapped, "_1"), u8);
+        \\}
+        \\
+        \\// Exported callers force analysis of the ownership methods, including
+        \\// the release of a later payload from inside each kind of holder.
+        \\export fn retain_and_release(roc_host: *abi.RocHost, n: u64) void {
+        \\    const stepped = abi.roc_step(n);
+        \\    stepped.incref(1);
+        \\    stepped.decref(roc_host);
+        \\    stepped.decref(roc_host);
+        \\}
+        \\export fn release_holders(
+        \\    roc_host: *abi.RocHost,
+        \\    record: *const Param(abi.take_holders, 0),
+        \\    list: *const Param(abi.take_holders, 1),
+        \\    held: *const Param(abi.take_holders, 3),
+        \\) void {
+        \\    record.incref(1);
+        \\    record.decref(roc_host);
+        \\    list.deinit(roc_host);
+        \\    held.incref(1);
+        \\    held.decref(roc_host);
+        \\}
+        ,
+    })) |failure| return failure;
+
+    // C would pass a struct of two to four vectors in registers, and the Roc
+    // host ABI passes it in memory, so C glue spells such a struct's members
+    // as vector/byte unions. A one-tag union of vectors is that struct, on its
+    // own and when counted through from a record that holds it. Zig has no
+    // `extern struct` of vectors, so this is checked for C alone.
+    const output_dir = createWorkSubdir(io, allocator, env, "c-vector-glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "--no-cache", GlueLanguage.c.glueSpec(), output_dir, "test/glue/single-tag-vector-payloads/main.roc" },
+        .not_contains = &.{
+            .{ .stream = .stderr, .text = "panic" },
+            .{ .stream = .stderr, .text = "unreachable" },
+            .{ .stream = .stderr, .text = "invariant violated" },
+        },
+    })) |failure| return failure;
+    const generated_path = std.fs.path.join(allocator, &.{ output_dir, GlueLanguage.c.generatedFileName() }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated glue path: {}", .{err});
+    const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
+        return customFailure(allocator, timer, "failed to read generated C header: {}", .{err});
+    for ([_][]const u8{
+        "    union { RocU8x16 value; uint8_t bytes[16]; } _0;",
+        "    union { RocU8x16 value; uint8_t bytes[16]; } _1;",
+        "    union { Lanes value; uint8_t bytes[32]; } inner;",
+        "    RocU8x16 _0;\n    uint64_t _1;",
+        "extern uint64_t take_lanes(Lanes arg0);",
+    }) |needle| {
+        if (std.mem.find(u8, generated, needle) == null) {
+            return customFailure(allocator, timer, "generated C header missing {s}", .{needle});
+        }
+    }
+    const test_c_path = std.fs.path.join(allocator, &.{ output_dir, "test_header.c" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate test C path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_c_path, .data = "#include \"roc_platform_abi.h\"\n" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write test C file: {}", .{err});
+    const test_o_path = std.fs.path.join(allocator, &.{ output_dir, "test_header.o" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate test object path: {}", .{err});
+    const include_flag = std.fmt.allocPrint(allocator, "-I{s}", .{output_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate include flag: {}", .{err});
+    return runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig", "cc", "-c", "-std=c11", "-Wall", "-Werror", include_flag, test_c_path, "-o", test_o_path,
+    }, project_root_path, .{ .args = &.{} });
+}
+
+fn customGlueZeroSizedValues(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // A value whose committed size is zero has no host representation: it is
+    // not a parameter, not a result, and not a struct member. That holds for
+    // every zero-sized type (`{}`, a union with one payload-free tag, a union
+    // whose payloads are all zero-sized, a record of those), not only `{}`.
+    return checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/zero-sized-values/main.roc", .{
+        .zig = &.{},
+        .c = &.{
+            "extern uint64_t take_args(uint8_t arg0, uint16_t arg1, uint32_t arg2);",
+            "extern uint64_t take_only_zero_sized(void);",
+            "extern void make_ready(uint8_t arg0);",
+            "extern void make_hollow(uint8_t arg0);",
+            "extern void host_args(uint8_t arg0, uint16_t arg1);",
+            "extern void host_ready(void);",
+        },
+        .rust = &.{
+            "pub fn take_args(arg0: u8, arg1: u16, arg2: u32) -> u64;",
+            "pub fn take_only_zero_sized() -> u64;",
+            "pub fn make_ready(arg0: u8);",
+            "pub fn make_hollow(arg0: u8);",
+            "pub fn host_args(arg0: u8, arg1: u16);",
+            "pub fn host_ready();",
+        },
+        .absent = &.{ "    void a;", "    void _0;", "void arg", ": (),", ": void,", "HostEmpty" },
+        .zig_checks =
+        \\fn Param(comptime function: anytype, comptime index: usize) type {
+        \\    return @typeInfo(@TypeOf(function)).@"fn".param_types[index].?;
+        \\}
+        \\fn Result(comptime function: anytype) type {
+        \\    return @typeInfo(@TypeOf(function)).@"fn".return_type.?;
+        \\}
+        \\fn expectSignature(comptime function: anytype, comptime params: []const type, comptime result: type) void {
+        \\    const info = @typeInfo(@TypeOf(function)).@"fn";
+        \\    if (info.param_types.len != params.len) @compileError("a zero-sized argument is not a parameter");
+        \\    for (params, 0..) |param, index| {
+        \\        if (info.param_types[index].? != param) @compileError("unexpected parameter type " ++ @typeName(info.param_types[index].?));
+        \\    }
+        \\    if (info.return_type.? != result) @compileError("unexpected result type " ++ @typeName(info.return_type.?));
+        \\}
+        \\fn expectFields(comptime T: type, comptime present: []const []const u8, comptime absent: []const []const u8) void {
+        \\    for (present) |name| {
+        \\        if (!@hasField(T, name)) @compileError(@typeName(T) ++ " is missing its sized field " ++ name);
+        \\    }
+        \\    for (absent) |name| {
+        \\        if (@hasField(T, name)) @compileError(@typeName(T) ++ " has a member for its zero-sized field " ++ name);
+        \\    }
+        \\}
+        \\comptime {
+        \\    expectSignature(abi.take_args, &.{ u8, u16, u32 }, u64);
+        \\    expectSignature(abi.take_only_zero_sized, &.{}, u64);
+        \\    expectSignature(abi.make_ready, &.{u8}, void);
+        \\    expectSignature(abi.make_hollow, &.{u8}, void);
+        \\    expectSignature(abi.host_args, &.{ u8, u16 }, void);
+        \\    expectSignature(abi.host_ready, &.{}, void);
+        \\
+        \\    expectFields(Param(abi.take_fields, 0), &.{"b"}, &.{"a"});
+        \\    expectFields(Result(Param(abi.take_fields, 1).payload_a), &.{"_1"}, &.{"_0"});
+        \\    expectFields(Param(abi.take_fields, 2), &.{"n"}, &.{ "r", "inner" });
+        \\    expectFields(Param(abi.host_record, 0), &.{"s"}, &.{"z"});
+        \\
+        \\    // A one-tag union with a zero-sized payload and a sized one is a
+        \\    // struct of the sized one.
+        \\    const Half = Param(abi.take_half, 0);
+        \\    expectFields(Half, &.{"_1"}, &.{"_0"});
+        \\    if (Result(abi.take_half) != Half or @sizeOf(Half) != @sizeOf(abi.RocStr))
+        \\        @compileError("a zero-sized payload occupies no storage");
+        \\}
+        \\
+        \\// Exported callers force analysis of the ownership methods of types
+        \\// that hold zero-sized values.
+        \\export fn retain_and_release(
+        \\    roc_host: *abi.RocHost,
+        \\    record: *const Param(abi.take_fields, 0),
+        \\    tagged: *const Param(abi.take_fields, 1),
+        \\    half: *const Param(abi.take_half, 0),
+        \\    list: *const Param(abi.take_heap, 2),
+        \\) void {
+        \\    inline for (.{ record, tagged, half }) |value| {
+        \\        value.incref(1);
+        \\        value.decref(roc_host);
+        \\    }
+        \\    list.deinit(roc_host);
+        \\}
+        ,
+    });
 }
 
 fn customGlueApplicationOnlyRequires(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {

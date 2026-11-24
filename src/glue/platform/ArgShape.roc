@@ -55,12 +55,12 @@ ArgShape := { table : TypeTable }.{
 	}
 
 	## Classify hosted-function arguments into the data shape each target renders:
-	## no ABI-visible args, one record wrapper, or positional non-unit args.
+	## no ABI-visible args, one record wrapper, or positional ABI-visible args.
 	hosted_args : ArgShape, HostedFunctionInfo -> HostedArgs
 	hosted_args = |arg_shape, func| args_for_type_ids(arg_shape, func.arg_type_ids)
 
-	## Classify a raw compiler-emitted argument id list. Unit args are not
-	## ABI-visible and are excluded from positional output.
+	## Classify a raw compiler-emitted argument id list. Zero-sized args are
+	## not passed, so they are not ABI-visible and are excluded from the output.
 	args_for_type_ids : ArgShape, List(U64) -> HostedArgs
 	args_for_type_ids = |arg_shape, arg_type_ids| {
 		if List.is_empty(arg_type_ids) {
@@ -70,7 +70,7 @@ ArgShape := { table : TypeTable }.{
 		if List.len(arg_type_ids) == 1 {
 			match List.first(arg_type_ids) {
 				Ok(type_id) =>
-					if arg_shape.table.is_unit(type_id) {
+					if arg_shape.table.is_zero_sized(type_id) {
 						NoMeaningfulArgs
 					} else {
 						match arg_shape.record_lookup(type_id) {
@@ -83,27 +83,28 @@ ArgShape := { table : TypeTable }.{
 				}
 			}
 		} else {
-			non_unit_ids = positional_non_unit_type_ids(arg_shape, arg_type_ids)
-			if List.is_empty(non_unit_ids) {
+			visible_ids = abi_visible_type_ids(arg_shape, arg_type_ids)
+			if List.is_empty(visible_ids) {
 				NoMeaningfulArgs
 			} else {
-				PositionalArgs(non_unit_ids)
+				PositionalArgs(visible_ids)
 			}
 		}
 	}
 
-	## Return only ABI-visible positional argument ids, preserving compiler order.
-	positional_non_unit_type_ids : ArgShape, List(U64) -> List(U64)
-	positional_non_unit_type_ids = |arg_shape, arg_type_ids| {
-		var $non_unit_ids = []
+	## Return only the argument ids that are passed, preserving compiler order.
+	## A zero-sized argument is not passed at all.
+	abi_visible_type_ids : ArgShape, List(U64) -> List(U64)
+	abi_visible_type_ids = |arg_shape, arg_type_ids| {
+		var $visible_ids = []
 
 		for type_id in arg_type_ids {
-			if !(arg_shape.table.is_unit(type_id)) {
-				$non_unit_ids = $non_unit_ids.append(type_id)
+			if !(arg_shape.table.is_zero_sized(type_id)) {
+				$visible_ids = $visible_ids.append(type_id)
 			}
 		}
 
-		$non_unit_ids
+		$visible_ids
 	}
 
 	## Anonymous single-record args are rendered through the generated Args wrapper
