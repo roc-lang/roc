@@ -2830,6 +2830,46 @@ test "excerpt prepared data captures only the reached closure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testPreparedData, .{});
 }
 
+test "a catalog borrowing its exports shares their bytes and keeps them until its last holder goes" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testBorrowedCatalog, .{});
+}
+
+fn testBorrowedCatalog(allocator: Allocator) (ExtractError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+    const Kept = struct {
+        released: bool = false,
+        fn release(context: *anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            self.released = true;
+        }
+    };
+    var kept = Kept{};
+    const constant = testExport("roc__d0", "constant payload bytes", &.{}, false);
+    const keeper = try DataOwner.initKeeper(allocator, .{ .context = &kept, .release = Kept.release });
+    var keeper_live = true;
+    defer if (keeper_live) keeper.release();
+    var prepared = try PreparedData.init(allocator, &.{}, &.{constant}, .{ .borrow = keeper }, &.{});
+    var prepared_live = true;
+    defer if (prepared_live) prepared.deinit();
+    keeper.release();
+    keeper_live = false;
+    // The catalog's item is the export's bytes, which the catalog keeps.
+    try std.testing.expectEqual(constant.bytes.ptr, prepared.items.get("roc__d0").?.item.bytes.ptr);
+    try std.testing.expect(!kept.released);
+    var arena = collections.SingleThreadArena.init(allocator);
+    defer arena.deinit();
+    const refs = [_]NamedRelocation{.{ .offset = 0, .name = "roc__d0", .scope = .program, .kind = .{ .data = .rel32 } }};
+    const items = try captureData(allocator, arena.allocator(), &refs, &prepared);
+    // A copy of the item's metadata still shares its bytes.
+    const renamed = try copyData(arena.allocator(), items[0]);
+    try std.testing.expectEqual(constant.bytes.ptr, renamed.bytes.ptr);
+    const owners = try retainPayloadOwners(arena.allocator(), &.{renamed}, null);
+    prepared.deinit();
+    prepared_live = false;
+    try std.testing.expect(!kept.released);
+    releaseOwners(owners);
+    try std.testing.expect(kept.released);
+}
+
 fn testPreparedData(allocator: Allocator) (ExtractError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     var prepared = try PreparedData.init(allocator, &.{
         testExport("literal", "owned string", &.{}, false),
@@ -3381,8 +3421,11 @@ fn testSharedCatalog(allocator: Allocator) (ExtractError || error{ TestExpectedE
     try std.testing.expectEqualStrings("roc__d0", source.excerpts[0].data[0].name);
     try std.testing.expectEqualStrings("roc__d0", source.excerpts[0].data[0].relocations[4].name);
     try std.testing.expect(std.mem.startsWith(u8, renamed.excerpts[0].data[0].name, content_data_prefix));
+    // Renaming gives the items new metadata over the same payload bytes.
+    try std.testing.expectEqual(source.excerpts[0].data[0].bytes.ptr, renamed.excerpts[0].data[0].bytes.ptr);
     source.deinit();
     source_live = false;
+    try std.testing.expectEqualStrings("0123456701234567012345670123456701234567", renamed.excerpts[0].data[0].bytes);
     try std.testing.expectEqualStrings("leaf value", reachable.excerpts[0].data[1].bytes);
     var arranged = try arrange(allocator, &reachable, &.{});
     defer arranged.deinit();

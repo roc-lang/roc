@@ -3901,3 +3901,21 @@ test "function table entries sort by address" {
     try std.testing.expectEqual(@as(u32, 0x2000), std.mem.readInt(u32, entries[12..16], .little));
     try std.testing.expectEqual(@as(u32, 0x3000), std.mem.readInt(u32, entries[24..28], .little));
 }
+
+test "pieced section contents write each piece in place and zero between them" {
+    const pieces = [_]SectionPiece{
+        .{ .offset = 2, .bytes = "ab" },
+        .{ .offset = 4, .bytes = "cde" },
+        .{ .offset = 9, .bytes = "f" },
+    };
+    const pieced: PiecedBytes = .{ .len = 12, .pieces = &pieces };
+    var written: [12]u8 = @splat(0xaa);
+    pieced.writeTo(&written);
+    try std.testing.expectEqualSlices(u8, "\x00\x00abcde\x00\x00f\x00\x00", &written);
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.testing.allocator);
+    try out.ensureTotalCapacityPrecise(std.testing.allocator, 13);
+    out.appendAssumeCapacity('>');
+    pieced.appendAssumeCapacity(&out);
+    try std.testing.expectEqualSlices(u8, ">\x00\x00abcde\x00\x00f\x00\x00", out.items);
+}
