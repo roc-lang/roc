@@ -11087,7 +11087,20 @@ single-use bodies stay inlined, which keeps a recursion through a lambda a
 self-call; a cycle with no wrapper, including one among the single-use bodies
 a first pass kept, leaves every member a procedure. The components depend on the
 call graph alone, never on the order a program numbers its functions in, so
-every program that contains a procedure makes the same decisions inside it. The
+every program that contains a procedure makes the same decisions inside it.
+Under `.wrappers`, whole-program single-use inlining is also bounded bottom-up
+over the acyclic single-use call-owner forest (`boundSingleUseExpansion`) so
+calling many distinct single-use monomorphizations from one caller cannot
+collapse them into one unbounded mega-procedure. Each function's size is its
+lifted expression count, counting `.static_data_candidate` and `.comptime_value`
+reads as one expression so cache restoration never changes the count. Following
+single-call wrapper owners outward to the enclosing single-use or non-inlined
+procedure, any single-use child whose expanded size exceeds `200` expressions
+remains a procedure, and any caller whose own size plus remaining single-use
+children exceeds `512` expressions demotes its remaining single-use children in
+descending expanded-size tie-groups until within `512`. Because every tie-group
+is demoted together, the bound depends only on body sizes and the call-owner
+graph, never on function numbering order. Wrappers are unaffected. The
 analyzer records the complete decision before LIR generation; direct
 Solved-to-LIR lowering only substitutes arguments and dumbly lowers a selected
 body at its unique call site. An argument that is a plain read of a caller
@@ -11534,7 +11547,14 @@ and meets a consumer that gains from it on the other side:
 - a known part of an argument or capture reaches a `match` on a known tag, a
   call of a known callable, or a loop entered with a known tag or callable,
   inside the callee's extent, or through the callee's result in the caller's
-  continuation;
+  continuation. Outside a loop or callable worker, when no result or capture
+  crosses and every crossing argument is consumed inside the callee through a
+  parameter tracked by call-pattern specialization (`used_args`, which tracks
+  `field_access`, `tuple_access`, `match_`, `loop_`, `call_value`, direct-call
+  argument propagation, and capture operands of `fn_ref` and `call_proc`), the
+  call stays residual so `stepCallProc` specializes it into an out-of-line
+  call-pattern worker rather than merging the callee's body and loops into the
+  caller;
 - a part of the result that the callee constructs on every path that returns
   (or passes through from an argument or capture the clone knows) reaches a
   `match`, a call, a loop entry with a tag or callable, or a field or item

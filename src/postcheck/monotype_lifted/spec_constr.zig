@@ -3154,21 +3154,34 @@ const Pass = struct {
                     .def_ref,
                     .fn_def,
                     => Common.invariant("pre-lift function expression reached call-pattern specialization"),
-                    .call_proc => |call| if (Ast.localDirectCallee(call)) |callee| {
-                        const callee_raw = @backingInt(callee);
-                        if (callee_raw < self.plans.len) {
-                            if (self.arg_use_callers) |callers| {
-                                const list = &callers[callee_raw];
-                                if (list.items.len == 0 or list.items[list.items.len - 1] != fn_id) {
-                                    try list.append(self.allocator, fn_id);
+                    .call_proc => |call| {
+                        const operands = self.program.captureOperandSpan(call.captures);
+                        for (0..operands.len) |index| {
+                            self.markArgUseIfLocal(fn_id, GuardedList.at(operands, index).value, changed);
+                        }
+                        if (Ast.localDirectCallee(call)) |callee| {
+                            const callee_raw = @backingInt(callee);
+                            if (callee_raw < self.plans.len) {
+                                if (self.arg_use_callers) |callers| {
+                                    const list = &callers[callee_raw];
+                                    if (list.items.len == 0 or list.items[list.items.len - 1] != fn_id) {
+                                        try list.append(self.allocator, fn_id);
+                                    }
+                                }
+                                const args = self.program.exprSpan(call.args);
+                                const callee_uses = self.plans[callee_raw].used_args;
+                                if (args.len != callee_uses.len) Common.invariant("direct call arity differed from lifted function arity while propagating argument uses");
+                                for (0..args.len) |index| {
+                                    if (callee_uses[index]) self.markArgUseIfLocal(fn_id, GuardedList.at(args, index), changed);
                                 }
                             }
-                            const args = self.program.exprSpan(call.args);
-                            const callee_uses = self.plans[callee_raw].used_args;
-                            if (args.len != callee_uses.len) Common.invariant("direct call arity differed from lifted function arity while propagating argument uses");
-                            for (0..args.len) |index| {
-                                if (callee_uses[index]) self.markArgUseIfLocal(fn_id, GuardedList.at(args, index), changed);
-                            }
+                        }
+                    },
+                    .call_value => |call| self.markArgUseIfLocal(fn_id, call.callee, changed),
+                    .fn_ref => |ref| {
+                        const operands = self.program.captureOperandSpan(ref.captures);
+                        for (0..operands.len) |index| {
+                            self.markArgUseIfLocal(fn_id, GuardedList.at(operands, index).value, changed);
                         }
                     },
                     .field_access => |field| self.markArgUseIfLocal(fn_id, field.receiver, changed),
@@ -3187,7 +3200,7 @@ const Pass = struct {
                     // selected by operational consumers, but must never cause
                     // argument specialization; the standard child list
                     // excludes them.
-                    .join_point, .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .structural_eq, .structural_hash, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
+                    .join_point, .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .low_level, .structural_eq, .structural_hash, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
                 }
                 try Ast.appendChildren(self.allocator, self.program, id, &stack);
             },
@@ -11830,7 +11843,28 @@ const Cloner = struct {
         // local the context does not have, so the call cannot stay residual
         // and must inline.
         if (self.callCapturesAreForeign(call.captures)) return .required;
-        return if (try self.crossingIsProductive(expr_id, callee, call)) .productive else .residual;
+        return switch (try self.crossingProductivity(expr_id, callee, call)) {
+            .none => .residual,
+            .inline_required => .productive,
+            // Outside a loop or callable worker, an argument-only crossing
+            // consumed inside the callee is specialized by an out-of-line
+            // call-pattern worker (`stepCallProc`) without merging the
+            // callee's body and loops into the caller.
+            .argument_specializable => if (self.loop_stack.items.len != 0 or
+                self.worker_source_fn != null or
+                !self.canSpecializeCallPattern(callee, call))
+                .productive
+            else
+                .residual,
+        };
+    }
+
+    fn canSpecializeCallPattern(self: *const Cloner, callee: Ast.FnId, call: Mono.CallProc) bool {
+        const raw = @backingInt(callee);
+        return self.rewrite_call_patterns and
+            !call.demand_shaped and
+            raw < self.pass.plans.len and
+            self.pass.plans[raw].source.size.admits();
     }
 
     fn crossingIndex(self: *const Cloner) *const InlineCrossing.Index {
@@ -11843,12 +11877,22 @@ const Cloner = struct {
             Common.invariant("a clone that admits only productive inlines ran without a crossing session");
     }
 
+    const CrossingProductivity = enum {
+        none,
+        inline_required,
+        argument_specializable,
+    };
+
     /// Whether inlining `expr_id` lets a known value cross the call and meet
     /// a consumer that simplifies on it: a part of the result the callee
     /// builds on every path that returns, met in the caller's continuation,
     /// or a known part of an argument or capture, met in the callee's extent
     /// or, through its result, in the caller's continuation.
     fn crossingIsProductive(self: *Cloner, expr_id: Ast.ExprId, callee: Ast.FnId, call: Mono.CallProc) Allocator.Error!bool {
+        return (try self.crossingProductivity(expr_id, callee, call)) != .none;
+    }
+
+    fn crossingProductivity(self: *Cloner, expr_id: Ast.ExprId, callee: Ast.FnId, call: Mono.CallProc) Allocator.Error!CrossingProductivity {
         // A query's scratch is its own: only the answer leaves it.
         const position = self.arena.mark();
         defer self.arena.restore(position);
@@ -11860,22 +11904,34 @@ const Cloner = struct {
 
         const root_fn = self.crossing_root_fn;
         var result_seed: ResultSeed = .{ .cloner = self, .callee = callee, .call = call };
-        if (try session.resultCrosses(result_seed.oracle(), root_fn, frames, expr_id)) return true;
+        if (try session.resultCrosses(result_seed.oracle(), root_fn, frames, expr_id)) return .inline_required;
 
         const program = self.pass.program;
-        const args = program.exprSpan(call.args);
-        for (0..args.len) |index| {
-            var seed: ArgumentSeed = .{ .cloner = self, .expr = GuardedList.at(args, index) };
-            if (try session.argumentCrosses(seed.oracle(), root_fn, frames, expr_id, callee, .{ .kind = .arg, .index = @intCast(index) })) return true;
-        }
         const operands = program.captureOperandSpan(call.captures);
         for (0..operands.len) |index| {
             const operand = GuardedList.at(operands, index);
             var seed: ArgumentSeed = .{ .cloner = self, .expr = operand.value };
             const slot = InlineCrossing.captureSlot(program, callee, operand.id);
-            if (try session.argumentCrosses(seed.oracle(), root_fn, frames, expr_id, callee, .{ .kind = .capture, .index = slot })) return true;
+            if (try session.argumentCrosses(seed.oracle(), root_fn, frames, expr_id, callee, .{ .kind = .capture, .index = slot })) return .inline_required;
         }
-        return false;
+
+        const raw = @backingInt(callee);
+        const used_args: ?[]const bool = if (raw < self.pass.plans.len) self.pass.plans[raw].used_args else null;
+        const args = program.exprSpan(call.args);
+        var any_specializable = false;
+        for (0..args.len) |index| {
+            var seed: ArgumentSeed = .{ .cloner = self, .expr = GuardedList.at(args, index) };
+            const slot: InlineCrossing.Slot = .{ .kind = .arg, .index = @intCast(index) };
+            if (!try session.argumentCrosses(seed.oracle(), root_fn, frames, expr_id, callee, slot)) continue;
+            if (used_args) |uses| {
+                if (uses[index] and try session.calleeConsumes(seed.oracle(), callee, slot)) {
+                    any_specializable = true;
+                    continue;
+                }
+            }
+            return .inline_required;
+        }
+        return if (any_specializable) .argument_specializable else .none;
     }
 
     /// The parts of an argument or capture this clone knows.
@@ -19531,4 +19587,90 @@ test "SpecConstr reads a mutable version bound ahead of the operand that assigne
     defer cloner.deinit();
     const result = try cloner.cloneExpr(program.getFn(fn_id).body.roc);
     try std.testing.expectEqualDeep(program.getExpr(seven).data, program.getExpr(result).data);
+}
+
+test "issue 13419: argument-only crossing defers to call-pattern worker outside loops and workers" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const ty = try program.types.add(.zst);
+    const tag_a = try program.names.internTagLabel("A");
+    const unit_expr = try program.addExpr(.{ .ty = ty, .data = .unit });
+    const tag_expr = try program.addExpr(.{ .ty = ty, .data = .{ .tag = .{ .name = tag_a, .payloads = .empty() } } });
+
+    // Callee matches its argument after a preceding statement so it is not a wrapper.
+    const arg_local = try program.addLocal(@fromBackingInt(1), ty);
+    const arg_ref = try program.addExpr(.{ .ty = ty, .data = .{ .local = arg_local } });
+    const a_pat = try program.addPat(.{ .ty = ty, .data = .{ .tag = .{ .name = tag_a, .payloads = .empty() } } });
+    const other_pat = try program.addPat(.{ .ty = ty, .data = .wildcard });
+    const match_expr = try program.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
+        .scrutinee = arg_ref,
+        .branches = try program.addBranchSpan(&.{
+            .{ .pat = a_pat, .body = unit_expr },
+            .{ .pat = other_pat, .body = unit_expr },
+        }),
+    } } });
+    const callee_body = try program.addExpr(.{ .ty = ty, .data = .{ .block = .{
+        .statements = try program.addStmtSpan(&.{try program.addStmt(.{ .expr = unit_expr })}),
+        .final_expr = match_expr,
+    } } });
+    const callee = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(2),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = arg_local, .ty = ty }}),
+        .captures = .empty(),
+        .body = .{ .roc = callee_body },
+        .ret = ty,
+    });
+
+    const call_expr = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = callee },
+        .args = try program.addExprSpan(&.{tag_expr}),
+    } } });
+    const caller = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(3),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = call_expr },
+        .ret = ty,
+    });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    try pass.collectArgUses(program.fnCount());
+    try std.testing.expect(pass.plans[@backingInt(callee)].used_args[0]);
+
+    const index = try pass.buildCrossingIndex();
+    defer index.deinit();
+    var session = try InlineCrossing.Session.init(allocator, index, &program);
+    defer session.deinit();
+    try index.classifyWrappers(&session);
+    pass.crossing_index = index;
+    pass.crossing_session = &session;
+
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    cloner.inline_direct_requires_productivity = true;
+    cloner.crossing_root_fn = caller;
+    const call_data = program.getExpr(call_expr).data.call_proc;
+
+    // Outside a loop or callable worker, the call stays residual so
+    // `stepCallProc` specializes it via an out-of-line call-pattern worker.
+    try std.testing.expectEqual(Cloner.DirectInlineAdmission.residual, try cloner.admitsDirectInline(call_expr, callee, call_data));
+
+    // Inside a loop, direct inlining is still admitted.
+    try cloner.loop_stack.append(allocator, .{ .values = &.{}, .any_demoted = false });
+    try std.testing.expectEqual(Cloner.DirectInlineAdmission.productive, try cloner.admitsDirectInline(call_expr, callee, call_data));
+    _ = cloner.loop_stack.pop();
+
+    // Inside a callable worker, direct inlining is still admitted.
+    cloner.worker_source_fn = caller;
+    try std.testing.expectEqual(Cloner.DirectInlineAdmission.productive, try cloner.admitsDirectInline(call_expr, callee, call_data));
+    cloner.worker_source_fn = null;
+
+    // If the argument is not tracked in `used_args`, direct inlining is still admitted.
+    pass.plans[@backingInt(callee)].used_args[0] = false;
+    try std.testing.expectEqual(Cloner.DirectInlineAdmission.productive, try cloner.admitsDirectInline(call_expr, callee, call_data));
 }
