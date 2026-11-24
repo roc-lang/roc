@@ -43779,7 +43779,7 @@ fn beginProbe(self: *Self, site: SpeculationSite, env: ?*Env) Probe {
         .regions_mark = self.var_regions.mark(),
         .env = env,
         .first_var = @fromBackingInt(@intCast(self.types.len())),
-        .deferred_len = if (env) |probe_env| probe_env.deferred_static_dispatch_constraints.len() else 0,
+        .deferred_len = if (env) |probe_env| probe_env.deferred_static_dispatch_constraints.items().len else 0,
         .side_lists = self.probeSideLists(),
     };
 }
