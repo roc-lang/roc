@@ -25773,7 +25773,7 @@ quad_swap = |items, start, len, swap, compare_items| {
 			v3 = if (sort_after($items, at(4), at(5), compare_items)) 1 else 0
 			v4 = if (sort_after($items, at(6), at(7), compare_items)) 1 else 0
 			pairs = plus_infallible(plus_infallible(v1, v2), plus_infallible(v3, v4))
-			if $reversing and pairs == 4 and sort_after($items, minus_infallible(block, 1), block, compare_items) and sort_after($items, at(1), at(2), compare_items) and sort_after($items, at(3), at(4), compare_items) and sort_after($items, at(5), at(6), compare_items) {
+			if ($reversing and pairs == 4 and sort_after($items, minus_infallible(block, 1), block, compare_items) and sort_after($items, at(1), at(2), compare_items) and sort_after($items, at(3), at(4), compare_items) and sort_after($items, at(5), at(6), compare_items)) {
 				# Still reversed, across the block boundary too.
 			} else {
 				# Any reversed run ends before this block.
