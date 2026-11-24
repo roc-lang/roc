@@ -16590,7 +16590,7 @@ fn rejectStrictValueCycles(
 
         for (scc.defs) |def_idx| {
             const def = self.cir.store.getDef(def_idx);
-            if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) continue;
+            if (isFunctionDef(&self.cir.store, def.expr)) continue;
             // Every name the def binds is computed from the one cyclic
             // value, so each is circular: the single name of a plain def,
             // or each name a destructure binds.
@@ -16653,7 +16653,7 @@ fn rejectUncheckedStrictValueCycles(self: *Self) Allocator.Error!bool {
     for (check_order.sccs, 0..) |scc, group_index| {
         if (!scc.is_recursive) continue;
         for (scc.defs) |def_idx| {
-            if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(self.cir.store.getDef(def_idx).expr))) break;
+            if (!isFunctionDef(&self.cir.store, self.cir.store.getDef(def_idx).expr)) break;
         } else continue;
 
         group_seen.reset();
@@ -17001,7 +17001,7 @@ fn hoistedRootIsIntrinsicallyKept(
 
     root.value_kind = .data_constant;
     if (self.cir.store.exprKind(root.expr) == .e_runtime_error) return true;
-    if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(root.expr))) return false;
+    if (isFunctionDef(&self.cir.store, root.expr)) return false;
     if (!try self.hoistedRootTypeIsConcrete(concreteness, .data_constant, type_var)) return false;
     root.value_kind = .proven_data_constant;
     return true;
@@ -22707,8 +22707,8 @@ fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error
     // hoisted roots inside them would duplicate compile-time work. Top-level
     // functions are not evaluated as data constants, so their bodies may still
     // contain top-level-equivalent local values.
-    const def_expr = self.cir.store.getExpr(def.expr);
-    const def_is_function = isFunctionDef(&self.cir.store, def_expr);
+    const def_closure = self.cir.store.exprAs(def.expr, .e_closure);
+    const def_is_function = isFunctionDef(&self.cir.store, def.expr);
     state.def_is_function = def_is_function;
     const def_expectation = if (def_is_function)
         expectation.withHoistPosition(.eligible)
@@ -22727,8 +22727,8 @@ fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error
     // recursive SCC members continue to use the def expression root captured
     // by their shared group boundary.
     state.saved.?.active_scheme_root = self.active_scheme_root;
-    const scheme_owner = if (!group_prechecked and def_expr == .e_closure)
-        ModuleEnv.varFrom(def_expr.e_closure.lambda_idx)
+    const scheme_owner = if (!group_prechecked and def_closure != null)
+        ModuleEnv.varFrom(def_closure.?.lambda_idx)
     else
         expr_var;
     if (def_is_function or group_prechecked) try self.activateSchemeOwner(scheme_owner);
@@ -22745,12 +22745,12 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
     const def_var = ModuleEnv.varFrom(def_idx);
     const ptrn_var = ModuleEnv.varFrom(def.pattern);
     const expr_var = ModuleEnv.varFrom(def.expr);
-    const def_expr = self.cir.store.getExpr(def.expr);
+    const def_is_function = isFunctionDef(&self.cir.store, def.expr);
     const platform_required = self.platform_required_defs.get(def_idx);
     // A function, a pure signature, and a value alias generalize, so a `..`
     // in their output positions is redundant. Every other value binding is
     // weak (design.md "Value Bindings Generalize By Expression").
-    const binding_generalizes = bindingRhsGeneralizes(&self.cir.store, def_expr);
+    const binding_generalizes = bindingRhsGeneralizes(&self.cir.store, def.expr);
     const applied_annotation = self.appliedAnnotation(def.pattern, def.annotation);
     try self.endBoundedAnnotationRows(state.saved.?.bounding_annotation, applied_annotation, binding_generalizes);
     if (applied_annotation) |annotation_idx| {
@@ -22830,7 +22830,7 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
     // effectful value is rejected instead, and never evaluated at compile time.
     const value_always_crashes = applied_annotation == null and platform_required == null and !def_does_fx and
         self.patternNodeTag(def.pattern) == .pattern_identifier and
-        !isFunctionDef(&self.cir.store, def_expr) and
+        !def_is_function and
         try self.exprAlwaysCrashes(def.expr, .erroneous_values_crash);
     if (value_always_crashes) {
         try self.recordValuelessTopLevelValue(def);
@@ -24528,7 +24528,7 @@ fn beginGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.E
     // the base rank (after checkDef); everything else's boundary is the RHS
     // or shared group frame.
     const group_is_value_def = !scc.is_recursive and
-        !isFunctionDef(&self.cir.store, self.cir.store.getExpr(self.cir.store.getDef(scc.defs[0]).expr));
+        !isFunctionDef(&self.cir.store, self.cir.store.getDef(scc.defs[0]).expr);
 
     self.group_states.items[group_index] = .checking;
     const boundary_rank = if (group_is_value_def) base_rank else base_rank.innerScope();
@@ -24548,7 +24548,7 @@ fn beginGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.E
     for (scc.defs) |member_def_idx| {
         const member_def = self.cir.store.getDef(member_def_idx);
         if (member_def.annotation != null) continue;
-        if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(member_def.expr))) continue;
+        if (!isFunctionDef(&self.cir.store, member_def.expr)) continue;
         try self.addTryRowFixpointLink(state.try_row_fixpoint, ModuleEnv.varFrom(member_def.pattern));
         try self.addTryRowFixpointLink(state.try_row_fixpoint, ModuleEnv.varFrom(member_def.expr));
     }
@@ -24617,7 +24617,7 @@ fn finishRecursiveGroupBoundary(self: *Self, defs: []const CIR.Def.Idx, member_r
     }
     for (defs) |member_def_idx| {
         const member_def = self.cir.store.getDef(member_def_idx);
-        if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(member_def.expr))) {
+        if (isFunctionDef(&self.cir.store, member_def.expr)) {
             try self.checkEffectfulFunctionName(member_def.pattern, member_def.expr);
         }
     }
@@ -27330,7 +27330,7 @@ fn closeTopLevelValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     defer data_vars.deinit();
     for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
         const def = self.cir.store.getDef(def_idx);
-        if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) continue;
+        if (isFunctionDef(&self.cir.store, def.expr)) continue;
         const pattern_var = ModuleEnv.varFrom(def.pattern);
         if (self.isBindingSchemeVar(pattern_var)) continue;
         try self.closeTopLevelValuePayloads(pattern_var, &data_vars, &unions, env);
@@ -32533,7 +32533,7 @@ const ExprCheckFrame = struct {
                 else
                     false;
                 const is_method_callable = !annotation_erroneous and
-                    isFunctionDef(&checker.cir.store, checker.cir.store.getExpr(self.expr_idx)) and
+                    isFunctionDef(&checker.cir.store, self.expr_idx) and
                     checker.varIsFunctionType(anno_vars.anno_var_backup) and
                     checker.exprDefinesMethod(self.expr_idx);
                 if (!is_method_callable) {
@@ -32738,7 +32738,7 @@ fn beginExprCheckFrame(
     if (frame.suppress_group_member_generalize) self.suppress_generalize_expr = null;
 
     frame.should_generalize = !frame.suppress_group_member_generalize and
-        self.shouldGeneralize(expr, frame.is_binding_rhs, frame.is_call_arg, frame.is_forwarded_result);
+        self.shouldGeneralize(expr_idx, frame.is_binding_rhs, frame.is_call_arg, frame.is_forwarded_result);
     if (frame.should_generalize) try self.activateSchemeOwner(expr_var_raw);
 
     if (frame.should_generalize) {
@@ -33476,7 +33476,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                             );
                             break :blk;
                         }
-                        if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(referenced_def.expr))) {
+                        if (!isFunctionDef(&self.cir.store, referenced_def.expr)) {
                             _ = try self.unify(expr_var, ModuleEnv.varFrom(referenced_def.expr), env);
                             break :blk;
                         }
@@ -34981,7 +34981,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                 if (!candidate.found_existing) candidate.value_ptr.* = .{ .expr = decl_stmt.expr };
             }
 
-            const decl_is_fn = isFunctionDef(&self.cir.store, self.cir.store.getExpr(decl_stmt.expr));
+            const decl_is_fn = isFunctionDef(&self.cir.store, decl_stmt.expr);
 
             // An annotated local function's scheme is pre-declared from its
             // annotation so in-flight (recursive) references instantiate
@@ -38916,15 +38916,16 @@ const AnnoVars = struct {
 /// a lambda, a bare lambda, an annotation-only signature, or a hosted lambda.
 /// Used for both generalization (value restriction) and cycle detection (deferred
 /// generalization only applies to function defs).
-fn isFunctionDef(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
-    if (expr == .e_closure) {
-        std.debug.assert(store.exprKind(expr.e_closure.lambda_idx) == .e_lambda);
+fn isFunctionDef(store: *const CIR.NodeStore, expr_idx: CIR.Expr.Idx) bool {
+    const kind = store.exprKind(expr_idx);
+    if (kind == .e_closure) {
+        std.debug.assert(store.exprKind(store.exprView(expr_idx).e_closure.get(.lambda_idx)) == .e_lambda);
         return true;
     }
-    return expr == .e_lambda or
-        expr == .e_anno_only or
-        expr == .e_derived_method or
-        expr == .e_hosted_lambda;
+    return kind == .e_lambda or
+        kind == .e_anno_only or
+        kind == .e_derived_method or
+        kind == .e_hosted_lambda;
 }
 
 fn exprDefinesMethod(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
@@ -38953,30 +38954,31 @@ fn exprDefinesMethod(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
 ///     surrounding context.
 fn shouldGeneralize(
     self: *const Self,
-    expr: CIR.Expr,
+    expr_idx: CIR.Expr.Idx,
     is_binding_rhs: bool,
     is_call_arg: bool,
     is_forwarded_result: bool,
 ) bool {
-    if (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg and !is_forwarded_result) return true;
-    return is_binding_rhs and isValueAlias(expr);
+    const kind = self.cir.store.exprKind(expr_idx);
+    if (isFunctionDef(&self.cir.store, expr_idx) and kind != .e_closure and !is_call_arg and !is_forwarded_result) return true;
+    return is_binding_rhs and isValueAlias(kind);
 }
 
 /// A bare reference to another binding, local, imported, or associated
 /// (`FooBar.myfunc`).
-fn isValueAlias(expr: CIR.Expr) bool {
-    return expr == .e_lookup_local or
-        expr == .e_lookup_external or
-        expr == .e_lookup_associated_local or
-        expr == .e_lookup_associated or
-        expr == .e_lookup_associated_resolved;
+fn isValueAlias(kind: CIR.Expr.Kind) bool {
+    return kind == .e_lookup_local or
+        kind == .e_lookup_external or
+        kind == .e_lookup_associated_local or
+        kind == .e_lookup_associated or
+        kind == .e_lookup_associated_resolved;
 }
 
 /// Whether a binding whose right-hand side is `expr` generalizes: a function
 /// def or a value alias (see `shouldGeneralize`). Every other value binding is
 /// weak, whatever its annotation says.
-fn bindingRhsGeneralizes(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
-    return isFunctionDef(store, expr) or isValueAlias(expr);
+fn bindingRhsGeneralizes(store: *const CIR.NodeStore, expr_idx: CIR.Expr.Idx) bool {
+    return isFunctionDef(store, expr_idx) or isValueAlias(store.exprKind(expr_idx));
 }
 
 /// Whether a binding's annotation writes a type variable the binding cannot
@@ -38985,7 +38987,7 @@ fn bindingRhsGeneralizes(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
 /// type variable the annotation looks up from an enclosing annotation belongs
 /// to that enclosing binding, and an `_` hole is inferred, so neither counts.
 fn valueAnnotationIsRejected(self: *const Self, annotation_idx: CIR.Annotation.Idx, rhs: CIR.Expr.Idx) bool {
-    if (bindingRhsGeneralizes(&self.cir.store, self.cir.store.getExpr(rhs))) return false;
+    if (bindingRhsGeneralizes(&self.cir.store, rhs)) return false;
     return self.cir.store.getAnnotation(annotation_idx).introduces_type_var;
 }
 
