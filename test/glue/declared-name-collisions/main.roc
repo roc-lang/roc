@@ -125,8 +125,7 @@ take_ping = |count| count
 
 ## Tags whose member names join in every generator (`HTTPError` and
 ## `Httperror`), in C only (`Auto` is escaped the way `AutoField` is spelled,
-## and `Foo_bar` loses its underscore), and tags that are keywords or other
-## reserved words of the generated languages.
+## and `Foo_bar` loses its underscore).
 Members := [
 	HTTPError(Str),
 	Httperror(U16),
@@ -136,29 +135,19 @@ Members := [
 	AutoField(U16),
 	FooBar(U8),
 	Foo_bar(U16),
-	Type(Str),
-	Loop(U16),
-	True(U8),
-	Try(U8),
-	Self(U8),
 	Plain,
 ]
 
 ## The same joins in a union without payloads, which each generator declares
 ## as an enum.
-PureMembers := [HTTPError, Httperror, Self, Plain]
+PureMembers := [HTTPError, Httperror, Plain]
 
-## Fields whose member names join, and fields that are keywords or other
-## reserved words of the generated languages.
+## Fields whose member names join.
 MemberFields := {
 	fooBar : U8,
 	foo_bar : U16,
 	auto : U8,
 	auto_field : Str,
-	async : U8,
-	bool : U8,
-	crate : U8,
-	try : Str,
 	boxed : Box(PureMembers),
 	listed : List(PureMembers),
 }

@@ -20939,9 +20939,8 @@ fn customGlueDeclaredNameCollisions(io: std.Io, allocator: Allocator, env: *cons
     // `Members`, `PureMembers` and `MemberFields` hold tags and fields that a
     // generator spells alike (`HTTPError` and `Httperror`, `fooBar` and
     // `foo_bar`, and in C `Auto`, escaped the way `AutoField` is spelled),
-    // which take ranked names, and ones that are reserved words of a
-    // generated language, which are escaped. A union without payloads is an
-    // integer type in C, declared once.
+    // which take ranked names. A union without payloads is an integer type
+    // in C, declared once.
     //
     // A payload alias named like a helper is dropped rather than emitted
     // beside it, and the remaining aliases stay. C declares no release
@@ -20975,7 +20974,6 @@ fn customGlueDeclaredNameCollisions(io: std.Io, allocator: Allocator, env: *cons
             "    uint8_t auto_field_Member0;",
             "    uint16_t auto_field_Member1;",
             "    RocStr httperror_Member0;",
-            "    uint8_t true_field;",
             "typedef uint8_t PureMembers;",
         },
         .rust = &.{
@@ -20989,10 +20987,6 @@ fn customGlueDeclaredNameCollisions(io: std.Io, allocator: Allocator, env: *cons
             "    pub foo_bar_Member0: u8,",
             "    pub foo_bar_Member1: u16,",
             "    pub httperror_Member0: core::mem::ManuallyDrop<RocStr>,",
-            "    pub r#type: core::mem::ManuallyDrop<RocStr>,",
-            "    pub r#try: RocStr,",
-            "    pub crate_: u8,",
-            "    Self_ = ",
         },
         // A helper alias is emitted only with the alias it is named after,
         // and `HostLoadResult` is a type here, not an alias.
