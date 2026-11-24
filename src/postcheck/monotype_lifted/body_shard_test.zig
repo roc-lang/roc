@@ -181,8 +181,8 @@ fn body(p: *Ast.Program, ids: PrefixIds, fn_id: Ast.FnId, symbol: u32, join: u32
     const text = try p.addStringLiteral("private string");
     const scope = try p.addInlineScope(.{
         .source_symbol = @fromBackingInt(@intCast(symbol)),
-        .source_loc = .{ .file = 5, .line = 100, .column = 30 },
-        .call_site = .{ .file = 6, .line = 20, .column = 40 },
+        .source_loc = .{ .file = .some(5), .line = 100, .column = 30 },
+        .call_site = .{ .file = .some(6), .line = 20, .column = 40 },
         .parent = ids.scope,
     });
     const child_scope = try p.addInlineScope(.{
@@ -192,7 +192,7 @@ fn body(p: *Ast.Program, ids: PrefixIds, fn_id: Ast.FnId, symbol: u32, join: u32
         .parent = scope,
     });
     p.current_inline_scope = child_scope;
-    p.current_loc = .{ .file = 7, .line = 100, .column = 20 };
+    p.current_loc = .{ .file = .some(7), .line = 100, .column = 20 };
     p.current_region = base.Region.from_raw_offsets(100, 120);
     const value = try expr(p, ty, .{ .local = local });
     const string = try expr(p, ty, .{ .str_lit = text });

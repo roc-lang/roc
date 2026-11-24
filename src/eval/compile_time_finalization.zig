@@ -4660,7 +4660,7 @@ pub const Timing = struct {
     /// evaluation runs as bursts interleaved with checking, so the progress
     /// reporter cannot window-sample it; the brackets that already time each
     /// burst fold a footprint reading at the same points.
-    mem_min: MemMinCounter = MemMinCounter.init(std.math.maxInt(u64)),
+    mem_min: MemMinCounter = MemMinCounter.init(unsampled_mem_min),
     mem_max: MemMaxCounter = .{},
     native_emission_mutex: std.atomic.Mutex = .unlocked,
     native_emission: NativeProcCompiler.Metrics = .{},
@@ -4836,7 +4836,7 @@ pub const Timing = struct {
         self.roots_declared.add(snapshot_value.roots_declared);
         self.roots_evaluated.add(snapshot_value.roots_evaluated);
         self.roots_completed_directly.add(snapshot_value.roots_completed_directly);
-        if (snapshot_value.mem_min != std.math.maxInt(u64)) self.mem_min.min(snapshot_value.mem_min);
+        self.mem_min.min(snapshot_value.mem_min);
         self.mem_max.max(snapshot_value.mem_max);
         for (&self.steps_ns, snapshot_value.steps_ns) |*counter, value| counter.add(value);
         for (&self.counts, snapshot_value.counts) |*counter, value| counter.add(value);
@@ -4895,6 +4895,10 @@ const MemMinCounter = base.ConcurrentU64;
 const MemMaxCounter = base.ConcurrentU64;
 const TimingCounter = base.ConcurrentU64;
 
+/// The `mem_min` before any footprint sample: above every footprint, so
+/// folding a sample in with `min` keeps the sample.
+pub const unsampled_mem_min: u64 = std.math.maxInt(u64);
+
 /// Immutable compile-time finalization timings for progress reporting.
 pub const TimingSnapshot = struct {
     total_ns: u64 = 0,
@@ -4911,7 +4915,8 @@ pub const TimingSnapshot = struct {
     roots_declared: u64 = 0,
     roots_evaluated: u64 = 0,
     roots_completed_directly: u64 = 0,
-    mem_min: u64 = std.math.maxInt(u64),
+    /// The smallest sampled process footprint, or `unsampled_mem_min`.
+    mem_min: u64 = unsampled_mem_min,
     mem_max: u64 = 0,
     native_emission: NativeProcCompiler.Metrics = .{},
     steps_ns: [Timing.step_count]u64 = @splat(0),
@@ -5399,7 +5404,7 @@ fn testLiteralRootFailureOwnership(allocator: Allocator) (Allocator.Error || err
         .message = &temporary,
         .meaning = .checked_error,
         .region = base.Region.from_raw_offsets(3, 8),
-        .loc = .{ .file = 2, .line = 4, .column = 5 },
+        .loc = .{ .file = .some(2), .line = 4, .column = 5 },
     };
     try failures.record(allocator, root_ids[0], .{ .rejection = .quote }, failure);
     // Deterministically invalidate the evaluator's bytes without reading freed memory.
@@ -7067,9 +7072,9 @@ const DevProgram = struct {
         if (self.image_selection.codeAt(address)) |at| {
             const line = at.locations.lineEntryAt(at.offset) orelse return null;
             if (line.region.isEmpty() or !line.loc.hasLocation()) return null;
-            const identity = at.locations.sourceFile(line.loc.file).module_identity;
+            const identity = at.locations.sourceFile(line.loc.fileIndex()).module_identity;
             var loc = line.loc;
-            loc.file = self.sourceFileOf(identity);
+            loc.file = .some(self.sourceFileOf(identity));
             return .{ .offset = line.offset, .loc = loc, .region = line.region };
         }
         const line = self.codegen.lineEntryAt(address - @intFromPtr(self.executable.codePtr())) orelse return null;
@@ -8219,9 +8224,9 @@ fn comptimeFailureSiteFromLoc(
 ) ComptimeFailureSite {
     const failed_file: ?base.SourceFileEntry = if (failed_loc) |loc|
         (if (loc.hasLocation()) .{
-            .name = lir_store.sourceFileName(loc.file),
-            .qualified_name = lir_store.sourceFileQualifiedName(loc.file),
-            .module_identity = lir_store.sourceFileModuleIdentity(loc.file),
+            .name = lir_store.sourceFileName(loc.fileIndex()),
+            .qualified_name = lir_store.sourceFileQualifiedName(loc.fileIndex()),
+            .module_identity = lir_store.sourceFileModuleIdentity(loc.fileIndex()),
         } else null)
     else
         null;

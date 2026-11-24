@@ -412,8 +412,8 @@ fn applyComposedRelocations(view: *const RunImage.ProgramView) LoadDevProgramErr
 /// The `width` bytes at `offset` from the start of a composed image's code,
 /// which lie in its executable pages or its writable data.
 fn composedField(view: *const RunImage.ProgramView, offset: u64, width: usize) RunImage.ImageError![]u8 {
-    if (offset > std.math.maxInt(usize)) return error.InvalidDevRunImage;
-    const address = @intFromPtr(view.code.ptr) +% @as(usize, @intCast(offset));
+    const native_offset = std.math.cast(usize, offset) orelse return error.InvalidDevRunImage;
+    const address = @intFromPtr(view.code.ptr) +% native_offset;
     for ([_][]u8{ view.executable, view.writable_data }) |region| {
         const start = @intFromPtr(region.ptr);
         if (address >= start and address - start <= region.len and width <= region.len - (address - start)) {
@@ -461,23 +461,16 @@ fn applyDataRelocations(
             .function_pointer => relocation_context.resolveCodeSymbol(name),
         } orelse return unresolvedSymbol(name);
         const value = try relocatedDataAddress(target_addr, record.addend);
-        if (record.data_offset > std.math.maxInt(usize)) return error.InvalidDevRunImage;
-        const offset: usize = @intCast(record.data_offset);
+        const offset = std.math.cast(usize, record.data_offset) orelse return error.InvalidDevRunImage;
         if (offset > view.data.len or @sizeOf(usize) > view.data.len - offset) return error.InvalidDevRunImage;
         std.mem.writeInt(usize, view.data[offset..][0..@sizeOf(usize)], value, .little);
     }
 }
 
 fn relocatedDataAddress(base_addr: usize, addend: i64) RunImage.ImageError!usize {
-    if (addend >= 0) {
-        const positive: usize = @intCast(addend);
-        if (positive > std.math.maxInt(usize) - base_addr) return error.InvalidDevRunImage;
-        return base_addr + positive;
-    }
-    if (addend == std.math.minInt(i64)) return error.InvalidDevRunImage;
-    const negative: usize = @intCast(-addend);
-    if (negative > base_addr) return error.InvalidDevRunImage;
-    return base_addr - negative;
+    const magnitude = std.math.cast(usize, @abs(addend)) orelse return error.InvalidDevRunImage;
+    const address = if (addend >= 0) std.math.add(usize, base_addr, magnitude) else std.math.sub(usize, base_addr, magnitude);
+    return address catch error.InvalidDevRunImage;
 }
 
 fn destroyDevProgram(gpa: Allocator, program: *DevProgram) void {
@@ -786,10 +779,8 @@ fn executeDevEntrypoint(
     const entrypoint = devEntrypointForOrdinal(program.entrypoints, entry_idx) orelse {
         invariant("machine-code shim invariant violated: missing dev entrypoint ordinal {d}", .{entry_idx});
     };
-    if (entrypoint.code_offset > std.math.maxInt(usize)) {
+    const entry_offset = std.math.cast(usize, entrypoint.code_offset) orelse
         ops.crash("Machine-code shim received an invalid dev entrypoint offset");
-    }
-    const entry_offset: usize = @intCast(entrypoint.code_offset);
     if (entry_offset >= program.code.len) {
         ops.crash("Machine-code shim received a dev entrypoint outside the code image");
     }

@@ -29,11 +29,11 @@ pub const Layouts = struct {
     layouts: *layout.Store,
     memo: collections.DenseMapUnmanaged(TypeId, Committed) = .empty,
     /// The recursive component of each open type `recursiveComponent` has
-    /// placed, or `no_component` for one in no cycle.
-    components: collections.DenseMapUnmanaged(TypeId, u32) = .empty,
+    /// placed, absent for one in no cycle.
+    components: collections.DenseMapUnmanaged(TypeId, collections.OptionalU32) = .empty,
     /// The recursive component of each open type over size edges alone
-    /// (`sizeComponent`), or `no_component` for one in no such cycle.
-    size_components: collections.DenseMapUnmanaged(TypeId, u32) = .empty,
+    /// (`sizeComponent`), absent for one in no such cycle.
+    size_components: collections.DenseMapUnmanaged(TypeId, collections.OptionalU32) = .empty,
     /// The members of each recursive component that a pointer slot of the
     /// component points at, by component.
     component_targets: std.ArrayList([]const TypeId) = .empty,
@@ -45,8 +45,6 @@ pub const Layouts = struct {
     bounded_inline: collections.DenseMapUnmanaged(TypeId, bool) = .empty,
 
     const Committed = struct { idx: layout.Idx, digest: ?layout.GraphDigest };
-
-    const no_component = std.math.maxInt(u32);
 
     /// A component a type's descriptor composes from: one stored inline, in
     /// a struct slot (a record field or tuple element), as a tag's payload,
@@ -120,11 +118,10 @@ pub const Layouts = struct {
     /// components, or null when `ty` is in no cycle. Every type of a
     /// component reaches every other, so all are open when one is.
     pub fn recursiveComponent(self: *Layouts, ty: TypeId) Allocator.Error!?u32 {
-        if (self.components.get(ty)) |component| return if (component == no_component) null else component;
+        if (self.components.get(ty)) |component| return component.get();
         if (try self.converter.representationClosed(ty)) return null;
         try self.placeComponents(ty, .all);
-        const component = self.components.get(ty).?;
-        return if (component == no_component) null else component;
+        return self.components.get(ty).?.get();
     }
 
     /// The recursive component of the open type `ty` in the graph of the
@@ -133,11 +130,10 @@ pub const Layouts = struct {
     /// a cycle that would otherwise place a type inside itself, so a type
     /// recursive only through a list or box has no boxed slot.
     fn sizeComponent(self: *Layouts, ty: TypeId) Allocator.Error!?u32 {
-        if (self.size_components.get(ty)) |component| return if (component == no_component) null else component;
+        if (self.size_components.get(ty)) |component| return component.get();
         if (try self.converter.representationClosed(ty)) return null;
         try self.placeComponents(ty, .size);
-        const component = self.size_components.get(ty).?;
-        return if (component == no_component) null else component;
+        return self.size_components.get(ty).?.get();
     }
 
     /// Whether the closed type `ty` stores itself inline, through its
@@ -221,7 +217,7 @@ pub const Layouts = struct {
     /// component, which the shared layout store boxes.
     pub fn boxedEdge(self: *Layouts, parent: TypeId, edge: InlineEdge) Allocator.Error!bool {
         const component = try self.sizeComponent(parent) orelse return false;
-        if (self.size_components.get(edge.child) != component) return false;
+        if ((self.size_components.get(edge.child) orelse .none) != collections.OptionalU32.some(component)) return false;
         return switch (edge.slot) {
             .field => true,
             .payload => switch (self.store.get(edge.child)) {
@@ -239,7 +235,7 @@ pub const Layouts = struct {
     pub fn pointerEdge(self: *Layouts, parent: TypeId, edge: InlineEdge) Allocator.Error!bool {
         if (edge.placesInline()) return try self.boxedEdge(parent, edge);
         const component = try self.recursiveComponent(parent) orelse return false;
-        return self.components.get(edge.child) == component;
+        return (self.components.get(edge.child) orelse .none) == collections.OptionalU32.some(component);
     }
 
     /// Tarjan's strongly connected components over the open types reachable
@@ -326,9 +322,9 @@ pub const Layouts = struct {
             if (!cyclic) for (frame.edges) |edge| {
                 if (edge.child == frame.ty) cyclic = true;
             };
-            const component: u32 = switch (edges_followed) {
-                .all => if (cyclic) @intCast(self.component_targets.items.len) else no_component,
-                .size => if (cyclic) counter else no_component,
+            const component: collections.OptionalU32 = if (!cyclic) .none else switch (edges_followed) {
+                .all => .some(@intCast(self.component_targets.items.len)),
+                .size => .some(counter),
             };
             for (members) |member| {
                 _ = on_stack.remove(member);

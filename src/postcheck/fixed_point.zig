@@ -1,19 +1,21 @@
 //! Finite monotone equations, solved iteratively from their least element.
 //! Completion uses 0/1/2; emptiness uses 0/1. No provisional value escapes.
 const std = @import("std");
+const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const Self = @This();
 
 /// How a child outcome contributes to its parent equation.
 pub const Transform = enum { identity, unchanged, backing };
-const none = std.math.maxInt(usize);
+/// An optional `edges` index; edges of one child form a list through `next`.
+const EdgeLink = collections.OptionalU32;
 const Node = struct {
     value: u2 = 0,
     all: bool = false,
     remaining: usize = 0,
-    first: usize = none,
+    first: EdgeLink = .none,
 };
-const Edge = struct { parent: usize, next: usize, transform: Transform };
+const Edge = struct { parent: usize, next: EdgeLink, transform: Transform };
 nodes: std.ArrayList(Node) = .empty,
 edges: std.ArrayList(Edge) = .empty,
 work: std.ArrayList(usize) = .empty,
@@ -37,9 +39,9 @@ pub fn add(self: *Self, gpa: Allocator) Allocator.Error!usize {
 }
 /// Add an exact dependency from a parent equation to a child.
 pub fn edge(self: *Self, gpa: Allocator, parent: usize, child: usize, transform: Transform) Allocator.Error!void {
-    const index = self.edges.items.len;
+    const index = try collections.nextBiasedId(self.edges.items.len);
     try self.edges.append(gpa, .{ .parent = parent, .next = self.nodes.items[child].first, .transform = transform });
-    self.nodes.items[child].first = index;
+    self.nodes.items[child].first = .some(index);
     self.nodes.items[parent].remaining += 1;
     if (transform == .backing) self.nodes.items[parent].value = @max(1, self.nodes.items[parent].value);
 }
@@ -68,8 +70,8 @@ pub fn solve(self: *Self, gpa: Allocator) Allocator.Error!void {
     while (cursor < self.work.items.len) : (cursor += 1) {
         const child = self.nodes.items[self.work.items[cursor]];
         var link = child.first;
-        while (link != none) {
-            const item = self.edges.items[link];
+        while (link.get()) |edge_index| {
+            const item = self.edges.items[edge_index];
             link = item.next;
             const parent = &self.nodes.items[item.parent];
             const result: u2 = switch (item.transform) {

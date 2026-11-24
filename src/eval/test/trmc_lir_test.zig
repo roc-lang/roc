@@ -1664,7 +1664,7 @@ test "tce emits an identity loop directly into the original call" {
     defer builder.deinit();
     store.tail_call_builder = &builder;
     const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
-    const loc: base.SourceLoc = .{ .file = 0, .line = 7, .column = 3 };
+    const loc: base.SourceLoc = .{ .file = .some(0), .line = 7, .column = 3 };
     var call_origin = LIR.StmtOrigin.test_fixture;
     call_origin.loc = loc;
     const call = try store.addCFStmt(.{ .assign_call = .{

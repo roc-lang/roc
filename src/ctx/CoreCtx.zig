@@ -758,7 +758,7 @@ fn fileWriteRequestLimit(comptime os_tag: std.Target.Os.Tag, page_size: usize) u
         .linux => @as(usize, std.math.maxInt(i32)) & ~(page_size - 1),
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => std.math.maxInt(i32),
         // NtWriteFile takes ULONG.
-        .windows => std.math.maxInt(u32),
+        .windows => std.math.maxInt(std.os.windows.ULONG),
         // Direct fd_write returns u32, but wasi-libc's writev exposes that
         // count through ssize_t. Respect both limits when linking libc.
         .wasi => if (builtin.link_libc) @min(std.math.maxInt(u32), std.math.maxInt(isize)) else std.math.maxInt(u32),

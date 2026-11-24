@@ -98,7 +98,7 @@ fn expectPublishedPatterns(body: []const u8, expected_error: ?[]const u8) Patter
     const bodies = artifact.bodies();
     try bodies.demandIndex();
     const store = &artifact.moduleEnvConst().store;
-    for (0..bodies.nodeCount()) |i| {
+    for (check.CheckedBodies.first_node..bodies.nodeCount()) |i| {
         if (bodies.index().nodeKind(@intCast(i)) != .expr) continue;
         const expr: check.CheckedBodies.ExprId = @fromBackingInt(@intCast(i));
         const region = store.getExprRegion(expr);

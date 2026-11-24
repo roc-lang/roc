@@ -185,7 +185,7 @@ NO CHANGE
 									(p-assign (ident "#interp_1"))
 									(e-lookup-local
 										(p-assign (ident "name"))))
-								(e-interpolation (constraint-fn-var 341) (dispatcher-var 38)
+								(e-interpolation (constraint-fn-var 342) (dispatcher-var 39)
 									(first
 										(e-literal (string "")))
 									(parts
@@ -212,7 +212,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 383)
+								(e-call (constraint-fn-var 384)
 									(e-lookup-local
 										(p-assign (ident "repro_issue_12942_unused_str_statement_not_interpolation_tie.Main.served")))
 									(e-lookup-local

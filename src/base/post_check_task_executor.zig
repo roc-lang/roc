@@ -407,8 +407,6 @@ fn OrderedRun(comptime Ctx: type) type {
             err: Ctx.Error = undefined,
         };
 
-        const none: usize = std.math.maxInt(usize);
-
         ctx: *Ctx,
         executor: Executor,
         timing: ?*OrderedTiming,
@@ -418,10 +416,10 @@ fn OrderedRun(comptime Ctx: type) type {
         next_claim: std.atomic.Value(usize) = .init(0),
         /// Chunks committed so far; lanes claim only below this plus `window`.
         committed: std.atomic.Value(usize) = .init(0),
-        /// The chunk whose completion the owner is blocked on, or `none`. The
-        /// lane finishing it returns from its drain task, so its completion
-        /// wakes the owner.
-        awaited: std.atomic.Value(usize) = .init(none),
+        /// The index plus one of the chunk whose completion the owner is
+        /// blocked on, or zero when it awaits none. The lane finishing it
+        /// returns from its drain task, so its completion wakes the owner.
+        awaited: std.atomic.Value(usize) = .init(0),
         stop: std.atomic.Value(bool) = .init(false),
         lane_ns: []OrderedTiming.Lane = &.{},
         commit_ns: u64 = 0,
@@ -518,7 +516,7 @@ fn OrderedRun(comptime Ctx: type) type {
                     };
                 }
                 self.finish(index, failure);
-                if (inline_owner or self.awaited.load(.seq_cst) == index) break;
+                if (inline_owner or self.awaited.load(.seq_cst) == index + 1) break;
             }
             return self;
         }
@@ -579,7 +577,7 @@ fn OrderedRun(comptime Ctx: type) type {
                     session.submit(.{ .id = @intCast(self.tasks), .context = self, .run = drainTask }) catch |err| return err;
                     self.tasks += 1;
                 }
-                self.awaited.store(committed, .seq_cst);
+                self.awaited.store(committed + 1, .seq_cst);
                 if (self.chunks[committed].state.load(.seq_cst) == .pending) {
                     // The awaited chunk is claimed by a running task, which
                     // returns once it finishes the chunk, or is claimable by
@@ -587,7 +585,7 @@ fn OrderedRun(comptime Ctx: type) type {
                     std.debug.assert(session.outstanding != 0);
                     _ = self.receive(session);
                 }
-                self.awaited.store(none, .monotonic);
+                self.awaited.store(0, .monotonic);
             }
         }
     };
@@ -824,9 +822,13 @@ pub const ThreadedTestExecutor = struct {
     threads: []std.Thread = &.{},
     lanes: []LaneState = &.{},
     closing: bool = false,
-    /// Submissions accepted before every further one fails.
-    submit_limit: usize = std.math.maxInt(usize),
+    /// Submissions accepted before every further one fails; `unlimited`
+    /// accepts every submission.
+    submit_limit: usize = unlimited,
     submitted: usize = 0,
+
+    /// A `submit_limit` above every submission count.
+    const unlimited: usize = std.math.maxInt(usize);
 
     pub fn start(self: *ThreadedTestExecutor, thread_count: usize) (std.mem.Allocator.Error || std.Thread.SpawnError)!void {
         self.lanes = try std.testing.allocator.alloc(LaneState, thread_count + 1);
@@ -896,7 +898,7 @@ pub const ThreadedTestExecutor = struct {
         const self: *ThreadedTestExecutor = @ptrCast(@alignCast(context));
         self.mutex.lockUncancelable(io);
         defer self.mutex.unlock(io);
-        if (self.submitted == self.submit_limit) return error.OutOfMemory;
+        if (self.submitted >= self.submit_limit) return error.OutOfMemory;
         self.submitted += 1;
         try self.tasks.append(std.testing.allocator, task);
         self.task_ready.signal(io);

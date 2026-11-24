@@ -17,8 +17,10 @@ pub fn ZeroSentinelId(comptime Id: type) type {
 fn IndexValue(comptime Id: type, comptime reserved_zero: bool) type {
     comptime {
         const info = @typeInfo(Id);
-        if (info != .@"enum" or info.@"enum".tag_type != u32)
-            @compileError("optional IDs require a typed u32 index");
+        if (info != .@"enum") @compileError("optional IDs require a typed index");
+        const tag_info = @typeInfo(info.@"enum".tag_type);
+        if (tag_info.int.signedness != .unsigned or tag_info.int.bits > 32)
+            @compileError("optional IDs require a typed unsigned index of at most 32 bits");
     }
     return enum(u32) {
         none = 0,
@@ -31,8 +33,7 @@ fn IndexValue(comptime Id: type, comptime reserved_zero: bool) type {
 
         /// Wrap an ID within the owning store's bounded index domain.
         pub inline fn some(id: Id) Self {
-            const raw = @backingInt(id);
-            std.debug.assert(raw < std.math.maxInt(u32));
+            const raw: u32 = @backingInt(id);
             if (reserved_zero) std.debug.assert(raw != 0);
             return @fromBackingInt(if (reserved_zero) raw else raw + 1);
         }
@@ -46,9 +47,18 @@ fn IndexValue(comptime Id: type, comptime reserved_zero: bool) type {
         pub inline fn get(self: Self) ?Id {
             if (self == .none) return null;
             const raw = @backingInt(self);
-            return @fromBackingInt(if (reserved_zero) raw else raw - 1);
+            return @fromBackingInt(@intCast(if (reserved_zero) raw else raw - 1));
         }
     };
+}
+
+/// The zero-based `u32` id a table holding `len` rows gives its next row, when
+/// that id plus one (its biased optional form, `OptionalId` or `OptionalU32`)
+/// also fits a `u32`. A table past that range has exhausted the
+/// representable ids, which is `error.OutOfMemory`.
+pub inline fn nextBiasedId(len: usize) error{OutOfMemory}!u32 {
+    const biased = std.math.cast(u32, len + 1) orelse return error.OutOfMemory;
+    return biased - 1;
 }
 
 /// The payload of a compact optional form from this file, or null for any
@@ -72,7 +82,6 @@ pub const OptionalU32 = enum(u32) {
 
     /// Wrap a value below `maxInt(u32)`.
     pub inline fn some(value: u32) OptionalU32 {
-        std.debug.assert(value < std.math.maxInt(u32));
         return @fromBackingInt(value + 1);
     }
 
@@ -83,6 +92,32 @@ pub const OptionalU32 = enum(u32) {
 
     /// Read the original value, or null for absence.
     pub inline fn get(self: OptionalU32) ?u32 {
+        if (self == .none) return null;
+        return @backingInt(self) - 1;
+    }
+};
+
+/// An optional raw `u8` (a small position or count) in one byte: zero means
+/// absent, other bytes store the value plus one.
+pub const OptionalU8 = enum(u8) {
+    none = 0,
+    _,
+
+    /// The type this form stores optionally.
+    pub const CompactPayload = u8;
+
+    /// Wrap a value below `maxInt(u8)`.
+    pub inline fn some(value: u8) OptionalU8 {
+        return @fromBackingInt(value + 1);
+    }
+
+    /// Wrap an optional value: null is absence.
+    pub inline fn of(value: ?u8) OptionalU8 {
+        return if (value) |present| some(present) else .none;
+    }
+
+    /// Read the original value, or null for absence.
+    pub inline fn get(self: OptionalU8) ?u8 {
         if (self == .none) return null;
         return @backingInt(self) - 1;
     }
@@ -151,7 +186,6 @@ pub fn OptionalStruct(comptime T: type, comptime key: []const u8) type {
         pub fn some(value: T) Self {
             var biased = value;
             const raw = keyRaw(@field(value, key));
-            std.debug.assert(raw < std.math.maxInt(u32));
             @field(biased, key) = keyFromRaw(raw + 1);
             return .{ .biased = biased };
         }
@@ -204,11 +238,24 @@ test "optional IDs use one word and preserve both numbering policies" {
     try std.testing.expectEqual(last, Biased.of(last).get().?);
 }
 
+test "nextBiasedId leaves room for the biased form" {
+    try std.testing.expectEqual(@as(u32, 0), try nextBiasedId(0));
+    try std.testing.expectEqual(std.math.maxInt(u32) - 1, try nextBiasedId(std.math.maxInt(u32) - 1));
+    try std.testing.expectError(error.OutOfMemory, nextBiasedId(std.math.maxInt(u32)));
+    try std.testing.expectError(error.OutOfMemory, nextBiasedId(@as(usize, std.math.maxInt(u32)) + 5));
+}
+
 test "optional raw values, enums and structs fit their payload width" {
     try std.testing.expectEqual(@as(usize, 4), @sizeOf(OptionalU32));
     try std.testing.expect(OptionalU32.none.get() == null);
     try std.testing.expectEqual(@as(u32, 0), OptionalU32.some(0).get().?);
     try std.testing.expectEqual(std.math.maxInt(u32) - 1, OptionalU32.of(std.math.maxInt(u32) - 1).get().?);
+
+    try std.testing.expectEqual(@as(usize, 1), @sizeOf(OptionalU8));
+    try std.testing.expect(OptionalU8.none.get() == null);
+    try std.testing.expectEqual(@as(u8, 0), OptionalU8.some(0).get().?);
+    try std.testing.expectEqual(std.math.maxInt(u8) - 1, OptionalU8.of(std.math.maxInt(u8) - 1).get().?);
+    try std.testing.expect(CompactOptionalPayload(OptionalU8).? == u8);
 
     const Small = enum { a, b };
     const OptSmall = OptionalEnum(Small);

@@ -41,6 +41,7 @@ pub fn writeProc(
         try writer.print(" transform={s}", .{@tagName(proc.tail_transform)});
     }
     if (proc.tail_group.get()) |group| try writer.print(" tail_group={d}", .{@backingInt(group)});
+    if (proc.tail_carry) try writer.writeAll(" tail_carry");
     try writer.writeAll("\n");
 
     if (proc.body.get()) |body| {
@@ -142,7 +143,7 @@ const Printer = struct {
                     try self.writeLocals(s.args, writer);
                     try writer.writeByte(')');
                     if (s.reuse_closure) try writer.writeAll(" reuse_closure");
-                    if (s.reuse_source) |reuse_source| {
+                    if (s.reuse_source.get()) |reuse_source| {
                         try writer.print(" reuse_source=l{d}", .{@backingInt(reuse_source)});
                     }
                     if (s.result_reuse) try writer.writeAll(" result_reuse");
@@ -155,15 +156,15 @@ const Printer = struct {
                     const s = self.store.stmtRow(s_stmt.data);
                     try self.writeTarget(s_stmt.target, indent, writer);
                     try writer.print("packed_erased_fn p{d}", .{@backingInt(s.proc)});
-                    if (s.capture) |capture| {
+                    if (s.capture.get()) |capture| {
                         try writer.print(" capture=l{d}", .{@backingInt(capture)});
                     }
-                    if (s.capture_layout) |capture_layout| {
+                    if (s.capture_layout.get()) |capture_layout| {
                         try writer.writeAll(" capture_layout=");
                         try writeLayout(self.layouts, capture_layout, writer);
                     }
                     try writer.print(" on_drop={s}", .{@tagName(s.on_drop)});
-                    if (s.reuse) |reuse| {
+                    if (s.reuse.get()) |reuse| {
                         try writer.print(" reuse=l{d}", .{@backingInt(reuse)});
                         if (s.reuse_unique) try writer.writeAll(" unique");
                     }
@@ -676,7 +677,7 @@ test "proc fingerprint ignores program numbering but not content" {
             for (0..padding) |_| _ = try store.addLocal(.{ .layout_idx = .u64 });
             for (0..padding) |index| {
                 _ = try store.addProcSpec(.{
-                    .name = .none,
+                    .name = .fromRaw(1),
                     .identity = LIR.ProcIdentity.forTest(@intCast(100 + index)),
                     .args = .empty(),
                     .body = .none,
@@ -684,7 +685,7 @@ test "proc fingerprint ignores program numbering but not content" {
                 }, .none);
             }
             const callee = try store.addProcSpec(.{
-                .name = .none,
+                .name = .fromRaw(1),
                 .identity = LIR.ProcIdentity.forTest(callee_identity),
                 .args = .empty(),
                 .body = .none,
@@ -699,7 +700,7 @@ test "proc fingerprint ignores program numbering but not content" {
                 .next = ret,
             } }, .test_fixture);
             return try store.addProcSpec(.{
-                .name = .none,
+                .name = .fromRaw(1),
                 .identity = LIR.ProcIdentity.forTest(1),
                 .args = .empty(),
                 .body = .some(call),

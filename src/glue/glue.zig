@@ -1837,9 +1837,10 @@ const TypeTable = struct {
     ) Allocator.Error!void {
         const name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name));
         try buf.appendSlice(self.gpa, name);
-        if (nominal.args.len == 0) return;
+        const args = artifact.checked_types.nominalDeclaredArgs(nominal);
+        if (args.len == 0) return;
         try buf.append(self.gpa, '(');
-        for (nominal.args, 0..) |arg, i| {
+        for (args, 0..) |arg, i| {
             if (i > 0) try buf.appendSlice(self.gpa, ", ");
             try self.writeTypeStringBound(artifact, arg, buf, active);
         }
@@ -3886,12 +3887,11 @@ const GlueRocValueWriter = struct {
         }
 
         const elem_alignment = self.alignmentOf(elem_layout);
-        if (elem_alignment > std.math.maxInt(u32)) {
+        const elem_alignment32 = std.math.cast(u32, elem_alignment) orelse
             glueInvariant("glue list element alignment {d} exceeds Roc allocation ABI", .{elem_alignment});
-        }
         const bytes = builtins.utils.allocateWithRefcount(
             len * elem_size,
-            @intCast(elem_alignment),
+            elem_alignment32,
             elements_refcounted,
             self.roc_ops,
         );
@@ -4688,9 +4688,10 @@ fn writeNominalTypeString(
 ) Allocator.Error!void {
     const name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name));
     try buf.appendSlice(gpa, name);
-    if (nominal.args.len == 0) return;
+    const args = artifact.checked_types.nominalDeclaredArgs(nominal);
+    if (args.len == 0) return;
     try buf.append(gpa, '(');
-    for (nominal.args, 0..) |arg, i| {
+    for (args, 0..) |arg, i| {
         if (i > 0) try buf.appendSlice(gpa, ", ");
         try writeTypeString(gpa, artifact, arg, buf, active);
     }

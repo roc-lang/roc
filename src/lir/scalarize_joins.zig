@@ -143,7 +143,8 @@ fn LocalRuns(comptime V: type) type {
         }
 
         fn note(self: *Self, local: LIR.LocalId, value: V) ScalarizeError!void {
-            if (self.pending.items.len >= std.math.maxInt(u32)) return error.OutOfMemory;
+            // Run starts and lengths count pending values in a `u32`.
+            if (std.math.cast(u32, self.pending.items.len + 1) == null) return error.OutOfMemory;
             try self.pending.ensureUnusedCapacity(self.runs.allocator, 1);
             const entry = try self.runs.getOrPut(local);
             if (!entry.found_existing) entry.value_ptr.* = .{ .start = 0, .len = 0 };
@@ -2068,15 +2069,15 @@ const Pass = struct {
                 .assign_call_erased => |assign_stmt| {
                     const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.closure);
-                    if (assign.reuse_source) |reuse_source| try self.noteUse(reuse_source);
+                    if (assign.reuse_source.get()) |reuse_source| try self.noteUse(reuse_source);
                     const args = self.store.getLocalSpan(assign.args);
                     for (0..args.len) |index| try self.noteUse(GuardedList.at(args, index));
                     try self.noteWrite(assign_stmt.target);
                 },
                 .assign_packed_erased_fn => |assign_stmt| {
                     const assign = self.store.stmtRow(assign_stmt.data);
-                    if (assign.capture) |capture| try self.noteUse(capture);
-                    if (assign.reuse) |reuse| try self.noteUse(reuse);
+                    if (assign.capture.get()) |capture| try self.noteUse(capture);
+                    if (assign.reuse.get()) |reuse| try self.noteUse(reuse);
                     try self.noteWrite(assign_stmt.target);
                 },
                 .assign_low_level => |assign| {

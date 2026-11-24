@@ -11,7 +11,7 @@ const LirStore = core.LirStore;
 const LocalId = LIR.LocalId;
 const CFStmtId = LIR.CFStmtId;
 const Allocator = std.mem.Allocator;
-const none = std.math.maxInt(u32);
+const OptionalU32 = collections.OptionalU32;
 const Self = @This();
 
 allocator: Allocator,
@@ -115,32 +115,42 @@ pub const Value = struct {
     definitions: u32 = 0,
     mutable: bool = false,
     size: u32 = 0,
-    /// The value's physical slot, or `none`.
-    slot: u32 = none,
+    /// The value's physical slot, once placement assigns one.
+    slot: OptionalU32 = .none,
     /// The value's run in `ranges`.
     range_start: u32 = 0,
     range_len: u32 = 0,
 
     /// The value's physical slot.
     pub fn slotIndex(self: Value) ?u32 {
-        return if (self.slot == none) null else self.slot;
+        return self.slot.get();
     }
 };
 const Node = struct {
-    succ: u32 = none,
-    pred: u32 = none,
+    /// The head of the node's successor edge chain.
+    succ: OptionalU32 = .none,
+    /// The head of the node's predecessor edge chain.
+    pred: OptionalU32 = .none,
     succ_count: u32 = 0,
     pred_count: u32 = 0,
-    block: u32 = none,
-    position: u32 = none,
+    /// The node's block, once lifetime solving lays out blocks.
+    block: OptionalU32 = .none,
+    /// The node's position; block layout writes it before any read.
+    position: u32 = undefined,
+
+    /// The node's block, which block layout has assigned.
+    fn blockIndex(self: Node) u32 {
+        return self.block.get().?;
+    }
 };
-const Edge = struct { from: u32, to: u32, next_succ: u32, next_pred: u32 };
+const Edge = struct { from: u32, to: u32, next_succ: OptionalU32, next_pred: OptionalU32 };
 /// One explicit read and/or write of a value at a node.
 pub const Access = struct { node: u32, value: u32, read: bool, write: bool };
 const Block = struct { first: u32, start: u32, end: u32 };
 /// A half-open span of solved positions.
 pub const Range = struct { start: u32, end: u32 };
-const BlockState = struct { epoch: u32 = none, last_write: ?u32 = null, propagated: bool = false };
+/// `epoch` is the value whose solving last wrote the state.
+const BlockState = struct { epoch: OptionalU32 = .none, last_write: OptionalU32 = .none, propagated: bool = false };
 /// A unit of propagation: a block, or a loop that writes the value nowhere
 /// and so holds it at every position or at none.
 const Unit = struct { loop: bool, index: u32 };
@@ -222,9 +232,9 @@ pub fn node(self: *Self) Allocator.Error!u32 {
 pub fn edge(self: *Self, from: u32, to: u32) Allocator.Error!void {
     const index: u32 = @intCast(self.edges.items.len);
     try self.edges.append(self.allocator, .{ .from = from, .to = to, .next_succ = self.nodes.items[from].succ, .next_pred = self.nodes.items[to].pred });
-    self.nodes.items[from].succ = index;
+    self.nodes.items[from].succ = .some(index);
     self.nodes.items[from].succ_count += 1;
-    self.nodes.items[to].pred = index;
+    self.nodes.items[to].pred = .some(index);
     self.nodes.items[to].pred_count += 1;
 }
 /// Record an explicit local access. A write kills only that local's old value.
@@ -436,12 +446,12 @@ fn appendBlock(self: *Self, blocks: *std.ArrayList(Block), first: u32, position:
     var current = first;
     while (true) {
         const n = &self.nodes.items[current];
-        n.block = index;
+        n.block = .some(index);
         n.position = position.*;
         position.* += 1;
         if (n.succ_count != 1) break;
-        const next = self.edges.items[n.succ].to;
-        if (self.nodes.items[next].pred_count != 1 or self.nodes.items[next].block != none) break;
+        const next = self.edges.items[n.succ.get().?].to;
+        if (self.nodes.items[next].pred_count != 1 or self.nodes.items[next].block != .none) break;
         current = next;
     }
     try blocks.append(self.allocator, .{ .first = first, .start = start, .end = position.* });
@@ -497,9 +507,9 @@ const BlockStructure = struct {
         @memset(pred_starts, 0);
         for (blocks, 0..) |block, index| {
             const last_node = plan.lastNodeOf(block);
-            var edge_index = plan.nodes.items[last_node].succ;
-            while (edge_index != none) : (edge_index = plan.edges.items[edge_index].next_succ) {
-                const target = plan.nodes.items[plan.edges.items[edge_index].to].block;
+            var next_edge = plan.nodes.items[last_node].succ.get();
+            while (next_edge) |edge_index| : (next_edge = plan.edges.items[edge_index].next_succ.get()) {
+                const target = plan.nodes.items[plan.edges.items[edge_index].to].blockIndex();
                 succ_starts[index + 1] += 1;
                 pred_starts[target + 1] += 1;
             }
@@ -515,9 +525,9 @@ const BlockStructure = struct {
             const pred_fill = try allocator.dupe(u32, pred_starts[0..count]);
             for (blocks, 0..) |block, index| {
                 const last_node = plan.lastNodeOf(block);
-                var edge_index = plan.nodes.items[last_node].succ;
-                while (edge_index != none) : (edge_index = plan.edges.items[edge_index].next_succ) {
-                    const target = plan.nodes.items[plan.edges.items[edge_index].to].block;
+                var next_edge = plan.nodes.items[last_node].succ.get();
+                while (next_edge) |edge_index| : (next_edge = plan.edges.items[edge_index].next_succ.get()) {
+                    const target = plan.nodes.items[plan.edges.items[edge_index].to].blockIndex();
                     succs[succ_fill[index]] = target;
                     succ_fill[index] += 1;
                     preds[pred_fill[target]] = @intCast(index);
@@ -533,8 +543,9 @@ const BlockStructure = struct {
         var side: std.ArrayList(SideEntry) = .empty;
         for (0..count) |target_index| {
             for (preds[pred_starts[target_index]..pred_starts[target_index + 1]]) |pred| {
-                var loop = forest.innermostOf(target_index);
-                while (loop != LoopForest.none and !forest.containsNode(loop, pred)) : (loop = forest.loops[loop].parent) {
+                var cursor = forest.innermostOf(target_index);
+                while (cursor) |loop| : (cursor = forest.loops[loop].parent.get()) {
+                    if (forest.containsNode(loop, pred)) break;
                     if (forest.loops[loop].header != target_index) try side.append(allocator, .{ .loop = loop, .pred = pred });
                 }
             }
@@ -568,8 +579,8 @@ const BlockStructure = struct {
         const LoopOrder = struct {
             forest: *const LoopForest,
             fn key(ctx: @This(), block: u32) u64 {
-                const loop = ctx.forest.innermostOf(block);
-                const position: u64 = if (loop == LoopForest.none) std.math.maxInt(u32) else ctx.forest.loops[loop].enter;
+                // A block in no loop sorts after every loop's blocks.
+                const position: u64 = if (ctx.forest.innermostOf(block)) |loop| ctx.forest.loops[loop].enter else std.math.maxInt(u32);
                 return (position << 32) | block;
             }
             fn lessThan(ctx: @This(), lhs: u32, rhs: u32) bool {
@@ -590,7 +601,7 @@ const BlockStructure = struct {
                 while (true) {
                     const n = &plan.nodes.items[current];
                     const next_in_block: ?u32 = if (n.succ_count == 1) blk: {
-                        const next = plan.edges.items[n.succ].to;
+                        const next = plan.edges.items[n.succ.get().?].to;
                         const next_node = plan.nodes.items[next];
                         break :blk if (next_node.block == n.block and next_node.position == n.position + 1) next else null;
                     } else null;
@@ -611,8 +622,7 @@ const BlockStructure = struct {
             @memset(end_position, 0);
             @memset(covered, 0);
             for (blocks, 0..) |block, index| {
-                const loop = forest.innermostOf(index);
-                if (loop == LoopForest.none) continue;
+                const loop = forest.innermostOf(index) orelse continue;
                 first_position[loop] = @min(first_position[loop], block.start);
                 end_position[loop] = @max(end_position[loop], block.end);
                 covered[loop] += block.end - block.start;
@@ -621,8 +631,7 @@ const BlockStructure = struct {
             while (order > 0) {
                 order -= 1;
                 const loop = forest.preorder[order];
-                const parent = forest.loops[loop].parent;
-                if (parent == LoopForest.none) continue;
+                const parent = forest.loops[loop].parent.get() orelse continue;
                 first_position[parent] = @min(first_position[parent], first_position[loop]);
                 end_position[parent] = @max(end_position[parent], end_position[loop]);
                 covered[parent] += covered[loop];
@@ -660,8 +669,7 @@ const BlockStructure = struct {
         var high: usize = self.blocks_by_loop.len;
         while (low < high) {
             const mid = low + (high - low) / 2;
-            const loop = self.forest.innermostOf(self.blocks_by_loop[mid]);
-            const position = if (loop == LoopForest.none) std.math.maxInt(u32) else self.forest.loops[loop].enter;
+            const position = if (self.forest.innermostOf(self.blocks_by_loop[mid])) |loop| self.forest.loops[loop].enter else std.math.maxInt(u32);
             if (position < order) low = mid + 1 else high = mid;
         }
         return low;
@@ -706,8 +714,9 @@ const Transparency = struct {
 
     /// The largest loop around `innermost` (a block's innermost loop) that
     /// holds none of the value's writes, or none.
-    fn outermost(self: Transparency, innermost: u32) ?u32 {
-        if (innermost == LoopForest.none or self.holdsWrite(innermost)) return null;
+    fn outermost(self: Transparency, innermost_or_null: ?u32) ?u32 {
+        const innermost = innermost_or_null orelse return null;
+        if (self.holdsWrite(innermost)) return null;
         return self.forest.outermostWhile(innermost, self, transparent);
     }
 };
@@ -717,7 +726,7 @@ fn lastNodeOf(self: *const Self, block: Block) u32 {
     while (true) {
         const n = self.nodes.items[current];
         if (n.succ_count != 1) return current;
-        const next = self.edges.items[n.succ].to;
+        const next = self.edges.items[n.succ.get().?].to;
         if (self.nodes.items[next].block != n.block or self.nodes.items[next].position != n.position + 1) return current;
         current = next;
     }
@@ -887,12 +896,12 @@ pub fn solveLifetimes(self: *Self) Allocator.Error!void {
     blocks.clearRetainingCapacity();
     var position: u32 = 0;
     for (self.nodes.items, 0..) |n, i| {
-        if (n.block != none) continue;
-        if (n.pred_count == 1 and self.nodes.items[self.edges.items[n.pred].from].succ_count == 1) continue;
+        if (n.block != .none) continue;
+        if (n.pred_count == 1 and self.nodes.items[self.edges.items[n.pred.get().?].from].succ_count == 1) continue;
         try self.appendBlock(blocks, @intCast(i), &position);
     }
     // A component consisting entirely of a cycle has no distinguished entry.
-    for (self.nodes.items, 0..) |n, i| if (n.block == none) {
+    for (self.nodes.items, 0..) |n, i| if (n.block == .none) {
         try self.appendBlock(blocks, @intCast(i), &position);
     };
     self.resolveAliasAccesses();
@@ -932,19 +941,18 @@ pub fn solveLifetimes(self: *Self) Allocator.Error!void {
         write_loops.clearRetainingCapacity();
         for (self.accesses.items[begin..end]) |a| {
             if (!a.write) continue;
-            const loop = structure.forest.innermostOf(self.nodes.items[a.node].block);
-            if (loop != LoopForest.none) try write_loops.append(self.allocator, structure.forest.loops[loop].enter);
+            if (structure.forest.innermostOf(self.nodes.items[a.node].blockIndex())) |loop| try write_loops.append(self.allocator, structure.forest.loops[loop].enter);
         }
         std.mem.sort(u32, write_loops.items, {}, std.sort.asc(u32));
         const transparency = Transparency{ .forest = &structure.forest, .write_enters = write_loops.items };
 
         var b = begin;
         while (b < end) {
-            const block = self.nodes.items[self.accesses.items[b].node].block;
+            const block = self.nodes.items[self.accesses.items[b].node].blockIndex();
             var e = b;
-            while (e < end and self.nodes.items[self.accesses.items[e].node].block == block) : (e += 1) {}
+            while (e < end and self.nodes.items[self.accesses.items[e].node].blockIndex() == block) : (e += 1) {}
             const scan = try self.scanBlockAccesses(self.accesses.items[b..e]);
-            states[block] = .{ .epoch = value, .last_write = scan.last_write };
+            states[block] = .{ .epoch = .some(value), .last_write = .of(scan.last_write) };
             if (scan.needed_until) |limit| {
                 try ranges.append(self.allocator, .{ .start = blocks.items[block].start, .end = limit });
                 if (transparency.outermost(structure.forest.innermostOf(block))) |loop| {
@@ -970,11 +978,11 @@ pub fn solveLifetimes(self: *Self) Allocator.Error!void {
                     continue;
                 }
                 const state = &states[pred];
-                if (state.epoch != value) state.* = .{ .epoch = value };
+                if (state.epoch != OptionalU32.some(value)) state.* = .{ .epoch = .some(value) };
                 if (state.propagated) continue;
                 state.propagated = true;
-                try ranges.append(self.allocator, .{ .start = state.last_write orelse blocks.items[pred].start, .end = blocks.items[pred].end });
-                if (state.last_write == null) try work.append(self.allocator, .{ .loop = false, .index = pred });
+                try ranges.append(self.allocator, .{ .start = state.last_write.get() orelse blocks.items[pred].start, .end = blocks.items[pred].end });
+                if (state.last_write == .none) try work.append(self.allocator, .{ .loop = false, .index = pred });
             }
         }
         const range_len = compactRanges(ranges.items[range_start..]);
@@ -1173,11 +1181,10 @@ pub fn nodeSuccessors(self: *const Self, at: u32) SuccessorIterator {
 /// Walks one node's runtime successors.
 pub const SuccessorIterator = struct {
     plan: *const Self,
-    edge: u32,
+    edge: OptionalU32,
 
     pub fn next(self: *SuccessorIterator) ?u32 {
-        if (self.edge == none) return null;
-        const e = self.plan.edges.items[self.edge];
+        const e = self.plan.edges.items[self.edge.get() orelse return null];
         self.edge = e.next_succ;
         return e.to;
     }
@@ -1205,7 +1212,7 @@ fn valueLess(self: *Self, a: u32, b: u32) bool {
 pub fn resetSlots(self: *Self) void {
     self.slots.clearRetainingCapacity();
     self.class_of_size.clearRetainingCapacity();
-    for (self.values.items) |*value| value.slot = none;
+    for (self.values.items) |*value| value.slot = .none;
 }
 
 /// Assign physical storage to the already solved nonzero-sized values.
@@ -1271,7 +1278,7 @@ pub fn assignSlots(self: *Self) Allocator.Error!void {
                 slot_entry.set(reservation);
             }
         }
-        value.slot = slot_index;
+        value.slot = .some(slot_index);
         // The value's own first range is the slot's earliest live reservation:
         // an earlier one would have overlapped `start`.
         try class.busy.push(self.allocator, .{ .end = ranges[0].end, .slot = slot_index });

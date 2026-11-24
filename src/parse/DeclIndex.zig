@@ -160,14 +160,11 @@ pub const NameBucket = struct {
 /// `DeclIndex.bucket_overflow`. Most keys have one declaration.
 const StoredBucket = struct {
     first: DeclIdx,
-    overflow: OverflowIdx = .none,
+    overflow: collections.OptionalId(OverflowIdx) = .none,
 };
 
 /// A list in `DeclIndex.bucket_overflow`.
-const OverflowIdx = enum(u32) {
-    none = std.math.maxInt(u32),
-    _,
-};
+const OverflowIdx = enum(u32) { _ };
 
 /// Parser-owned type path such as `Parent.Nested`.
 pub const TypePath = struct {
@@ -381,7 +378,7 @@ pub fn deinit(self: *DeclIndex) void {
 fn bucketDecls(self: *const DeclIndex, stored: StoredBucket) NameBucket {
     return .{
         .first = stored.first,
-        .rest = if (stored.overflow == .none) &.{} else self.bucket_overflow.items[@backingInt(stored.overflow)].items,
+        .rest = if (stored.overflow.get()) |overflow| self.bucket_overflow.items[@backingInt(overflow)].items else &.{},
     };
 }
 
@@ -453,8 +450,8 @@ fn closeScopeNames(self: *DeclIndex) std.mem.Allocator.Error!std.EnumArray(Names
     var spans = std.EnumArray(Namespace, Span).initFill(Span.empty());
     try self.scope_names.ensureUnusedCapacity(self.gpa, run.len);
     try self.scope_name_decl_ids.ensureUnusedCapacity(self.gpa, run.len);
-    if (self.scope_name_decl_ids.items.len + run.len > std.math.maxInt(u32) or
-        self.scope_names.items.len + run.len > std.math.maxInt(u32)) return error.OutOfMemory;
+    if (std.math.cast(u32, self.scope_name_decl_ids.items.len + run.len) == null or
+        std.math.cast(u32, self.scope_names.items.len + run.len) == null) return error.OutOfMemory;
 
     var i: usize = 0;
     while (i < run.len) {
@@ -589,13 +586,14 @@ fn addDeclToBucket(
         return;
     }
     const bucket = gop.value_ptr;
-    if (bucket.overflow == .none) {
-        const overflow: OverflowIdx = @fromBackingInt(std.math.cast(u32, self.bucket_overflow.items.len) orelse return error.OutOfMemory);
-        if (overflow == .none) return error.OutOfMemory;
+    const overflow = bucket.overflow.get() orelse blk: {
+        const len = try collections.nextBiasedId(self.bucket_overflow.items.len);
+        const overflow: OverflowIdx = @fromBackingInt(len);
         try self.bucket_overflow.append(self.gpa, .empty);
-        bucket.overflow = overflow;
-    }
-    try self.bucket_overflow.items[@backingInt(bucket.overflow)].append(self.gpa, decl_idx);
+        bucket.overflow = .some(overflow);
+        break :blk overflow;
+    };
+    try self.bucket_overflow.items[@backingInt(overflow)].append(self.gpa, decl_idx);
 }
 
 fn declKindMayBindValue(kind: DeclKind) bool {
@@ -640,12 +638,6 @@ pub fn scopeValueDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident
 /// Record the module alias introduced by an import declaration.
 pub fn addImportAliasDecl(self: *DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx, decl_idx: DeclIdx) std.mem.Allocator.Error!void {
     try self.addOpenName(scope_idx, .import_alias, ident, decl_idx, false);
-}
-
-/// Whether any value-binding declaration (a definition, or an annotation with
-/// or without a body) of `item` is associated with `owner`.
-pub fn hasAssocValueDecl(self: *const DeclIndex, owner: TypePathIdx, item: Ident.Idx) bool {
-    return self.assoc_value_decls.contains(.{ .owner = owner, .item = item });
 }
 
 /// Return all associated value declarations for an owner type path and item name.

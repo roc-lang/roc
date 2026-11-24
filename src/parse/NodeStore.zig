@@ -6,6 +6,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
+const collections = @import("collections");
 
 const AST = @import("AST.zig");
 const Node = @import("Node.zig");
@@ -267,10 +268,10 @@ fn decodeSlotWord(store: *const NodeStore, comptime T: type, word: u32) T {
     return word;
 }
 
-/// Packed optional indices store null as 0 and non-null values as value + 1.
-/// All producers must use the fallible helpers below so maxInt(u32) overflows
-/// become OutOfMemory in every build mode.
-const OPTIONAL_VALUE_OFFSET: u32 = 1;
+/// Packed optional indices are `OptionalU32` words: zero means absent. All
+/// producers must use the fallible helpers below so a `maxInt(u32)` value
+/// becomes OutOfMemory in every build mode.
+const OptionalU32 = collections.OptionalU32;
 
 /// The root node is always stored at index 0 in the node list.
 pub const root_node_idx: Node.List.Idx = .first;
@@ -327,7 +328,7 @@ fn reserveExtraDataStart(store: *NodeStore, count: usize) std.mem.Allocator.Erro
     const start = std.math.cast(u32, store.extra_data.items.len) orelse return error.OutOfMemory;
     if (count != 0) {
         const last_offset = std.math.cast(u32, count - 1) orelse return error.OutOfMemory;
-        if (start > std.math.maxInt(u32) - last_offset) return error.OutOfMemory;
+        _ = std.math.add(u32, start, last_offset) catch return error.OutOfMemory;
     }
     try store.extra_data.ensureUnusedCapacity(store.gpa, count);
     return start;
@@ -344,8 +345,7 @@ fn extraDataStart(token: u32) u32 {
 }
 
 fn packNonNullOptionalU32(value: u32) std.mem.Allocator.Error!u32 {
-    if (value == std.math.maxInt(u32)) return error.OutOfMemory;
-    return value + OPTIONAL_VALUE_OFFSET;
+    return @backingInt(OptionalU32.some(try collections.nextBiasedId(value)));
 }
 
 fn packOptionalIndex(value: anytype) std.mem.Allocator.Error!u32 {
@@ -363,8 +363,7 @@ fn packOptionalToken(value: ?Token.Idx) std.mem.Allocator.Error!u32 {
 }
 
 fn unpackNonNullOptionalU32(value: u32) u32 {
-    std.debug.assert(value != 0);
-    return value - OPTIONAL_VALUE_OFFSET;
+    return @as(OptionalU32, @fromBackingInt(value)).get().?;
 }
 
 fn unpackOptionalIndex(comptime Idx: type, value: u32) ?Idx {
@@ -373,8 +372,7 @@ fn unpackOptionalIndex(comptime Idx: type, value: u32) ?Idx {
 }
 
 fn unpackOptionalToken(value: u32) ?Token.Idx {
-    if (value == 0) return null;
-    return unpackNonNullOptionalU32(value);
+    return @as(OptionalU32, @fromBackingInt(value)).get();
 }
 
 const TypeDeclExtra = struct {
@@ -531,11 +529,41 @@ pub fn addNumericLiteral(
     const digits_start = std.math.cast(u32, store.numeric_literal_bytes.items.len) orelse return error.OutOfMemory;
     try store.numeric_literals.ensureUnusedCapacity(store.gpa, 1);
     const parsed = try NumericLiteral.parseInto(parse_state.allocator(), &store.numeric_literal_bytes, store.gpa, split.number_text, kind);
-    if (store.numeric_literal_bytes.items.len > std.math.maxInt(u32)) {
+    if (std.math.cast(u32, store.numeric_literal_bytes.items.len) == null) {
         store.numeric_literal_bytes.shrinkRetainingCapacity(digits_start);
         return error.OutOfMemory;
     }
 
+    store.numeric_literals.appendAssumeCapacity(.{
+        .kind = parsed.kind,
+        .compact = parsed.compact,
+        .digits_start = digits_start,
+        .before_len = @intCast(parsed.before_len),
+        .after_len = @intCast(parsed.after_len),
+        .after_decimal_digit_count = parsed.after_decimal_digit_count,
+        .flags = .{
+            .is_negative = parsed.is_negative,
+            .had_decimal_point = parsed.had_decimal_point,
+            .is_materialized = parsed.is_materialized,
+        },
+    });
+    return idx;
+}
+
+/// Records the numeric literal facts of an exact tokenizer record and
+/// returns the id stored on the AST node.
+pub fn addScannedNumericLiteral(
+    store: *NodeStore,
+    scanned: NumericLiteral.Scanned,
+    kind: NumericLiteral.Kind,
+) std.mem.Allocator.Error!NumericLiteral.Idx {
+    const idx: NumericLiteral.Idx = @fromBackingInt(std.math.cast(u32, store.numeric_literals.items.len) orelse return error.OutOfMemory);
+    const digits_start = std.math.cast(u32, store.numeric_literal_bytes.items.len) orelse return error.OutOfMemory;
+    var digits: NumericLiteral.ScannedDigits = .{};
+    const parsed = NumericLiteral.parseScanned(scanned, kind, &digits);
+    if (std.math.cast(u32, @as(usize, digits_start) + digits.all().len) == null) return error.OutOfMemory;
+    try store.numeric_literals.ensureUnusedCapacity(store.gpa, 1);
+    try store.numeric_literal_bytes.appendSlice(store.gpa, digits.all());
     store.numeric_literals.appendAssumeCapacity(.{
         .kind = parsed.kind,
         .compact = parsed.compact,
@@ -690,12 +718,11 @@ pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) std.mem.Allocato
                 const extra_start = @as(u32, @intCast(store.extra_data.items.len));
                 try store.extra_data.append(store.gpa, i.qualifiers.span.start);
                 try store.extra_data.append(store.gpa, i.qualifiers.span.len);
-                try store.extra_data.append(store.gpa, if (i.as) |a| a else 0);
+                try store.extra_data.append(store.gpa, try packOptionalToken(i.as));
                 node.data.lhs = extra_start;
                 node.data.rhs = 2;
             } else if (i.as) |a| {
-                std.debug.assert(a > 0);
-                node.data.lhs = a;
+                node.data.lhs = try packOptionalToken(a);
                 node.data.rhs = 1;
             }
             node.region = i.region;
@@ -930,9 +957,7 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
         .list_rest => |r| {
             node.tag = .list_rest_patt;
             node.region = r.region;
-            if (r.name) |n| {
-                node.data.lhs = n;
-            }
+            node.data.lhs = try packOptionalToken(r.name);
         },
         .alternatives => |a| {
             std.debug.assert(a.patterns.span.len > 1);
@@ -1101,7 +1126,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
 pub fn addPatternRecordField(store: *NodeStore, field: AST.PatternRecordField) std.mem.Allocator.Error!AST.PatternRecordField.Idx {
     var node = Node{
         .tag = .record_field_patt,
-        .main_token = field.name orelse 0,
+        .main_token = try packOptionalToken(field.name),
         .data = .{
             .lhs = @intFromBool(field.rest),
             .rhs = 0,
@@ -1119,7 +1144,7 @@ pub fn addPatternRecordField(store: *NodeStore, field: AST.PatternRecordField) s
 pub fn getPatternRecordField(store: *const NodeStore, field: AST.PatternRecordField.Idx) AST.PatternRecordField {
     const node = store.nodes.get(@fromBackingInt(@intCast(@backingInt(field))));
     return .{
-        .name = if (node.main_token == 0) null else node.main_token,
+        .name = unpackOptionalToken(node.main_token),
         .value = if (node.data.rhs == 0) null else @fromBackingInt(@intCast(node.data.rhs)),
         .rest = node.data.lhs == 1,
         .region = node.region,
@@ -1393,9 +1418,8 @@ pub fn addFieldAccessSegment(
     store: *NodeStore,
     segment: AST.FieldAccessSegment,
 ) std.mem.Allocator.Error!u32 {
-    const start = std.math.cast(u32, store.field_access_segments.items.len) orelse return error.OutOfMemory;
     // Keep `start + len` representable for every non-empty DataSpan consumer.
-    if (start == std.math.maxInt(u32)) return error.OutOfMemory;
+    const start = try collections.nextBiasedId(store.field_access_segments.items.len);
     try store.field_access_segments.append(store.gpa, segment);
     return start;
 }
@@ -1431,9 +1455,9 @@ pub fn addOrExtendFieldAccess(
             regions[node_index].start == region.start;
 
         if (path_is_open_tail) {
-            if (main_tokens[node_index] == std.math.maxInt(u32)) return error.OutOfMemory;
+            const extended_len = std.math.add(u32, main_tokens[node_index], 1) catch return error.OutOfMemory;
             try store.field_access_segments.append(store.gpa, segment);
-            main_tokens[node_index] += 1;
+            main_tokens[node_index] = extended_len;
             regions[node_index].end = region.end;
             return receiver;
         }
@@ -1538,10 +1562,9 @@ pub fn getExposedItem(store: *const NodeStore, exposed_item_idx: AST.ExposedItem
             if (node.data.rhs == 2) {
                 const extra_start = node.data.lhs;
                 qualifiers = .{ .start = store.extra_data.items[extra_start], .len = store.extra_data.items[extra_start + 1] };
-                const as_tok = store.extra_data.items[extra_start + 2];
-                as = if (as_tok != 0) as_tok else null;
+                as = unpackOptionalToken(store.extra_data.items[extra_start + 2]);
             } else if (node.data.rhs == 1) {
-                as = node.data.lhs;
+                as = unpackOptionalToken(node.data.lhs).?;
             }
             return @unionInit(AST.ExposedItem, if (t == .exposed_item_lower) "lower_ident" else "upper_ident", .{
                 .region = node.region,
@@ -1791,7 +1814,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
         .list_rest_patt => {
             return .{ .list_rest = .{
                 .region = node.region,
-                .name = if (node.data.lhs == 0) null else node.data.lhs,
+                .name = unpackOptionalToken(node.data.lhs),
             } };
         },
     }
@@ -2225,7 +2248,7 @@ pub fn whereClauseSlice(store: *const NodeStore, span: AST.WhereClause.Span) []A
 pub fn addTargetsSection(store: *NodeStore, section: AST.TargetsSection) std.mem.Allocator.Error!AST.TargetsSection.Idx {
     const node = Node{
         .tag = .targets_section,
-        .main_token = section.inputs_dir orelse 0,
+        .main_token = try packOptionalToken(section.inputs_dir),
         .data = .{
             .lhs = section.entries.span.start,
             .rhs = section.entries.span.len,
@@ -2385,7 +2408,7 @@ pub fn getTargetsSection(store: *const NodeStore, idx: AST.TargetsSection.Idx) A
     const node = store.nodes.get(@fromBackingInt(@intCast(@backingInt(idx))));
     std.debug.assert(node.tag == .targets_section);
 
-    const inputs_dir: ?Token.Idx = if (node.main_token == 0) null else node.main_token;
+    const inputs_dir = unpackOptionalToken(node.main_token);
 
     return .{
         .inputs_dir = inputs_dir,

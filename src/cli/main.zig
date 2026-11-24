@@ -935,11 +935,8 @@ else
     2 * 1024 * 1024 * 1024 * 1024; // 2TB for 64-bit Linux
 
 fn configuredSharedMemorySize() usize {
-    if (comptime build_options.shared_memory_size > std.math.maxInt(usize)) {
+    return comptime std.math.cast(usize, build_options.shared_memory_size) orelse
         @compileError("-Dshared-memory-size does not fit in usize for this target");
-    }
-
-    return @intCast(build_options.shared_memory_size);
 }
 
 /// Floor for the retry loop in `createSharedMemory`. Set to the
@@ -10497,10 +10494,12 @@ const BoxyUnitTests = struct {
 /// filing each object in the per-module Boxy object cache under the
 /// module's extended checked key and restoring the ones already there
 /// (design.md "Caching Under `.boxy`"). A module's unit starts once its
-/// imports' units are done, since its calls compile against their export
-/// interfaces, and units with no such wait run in parallel on the
-/// post-check executor. A module with platform requirements has no object
-/// of its own: the root unit lowers its workers at the app's types.
+/// dependencies' units are done (`Coordinator.unitDependencyKeys`: its
+/// imports, and every module its lowering sees outside its import closure),
+/// since its calls compile against their export interfaces, and units with
+/// no such wait run in parallel on the post-check executor. A module with
+/// platform requirements has no object of its own: the root unit lowers its
+/// workers at the app's types.
 fn buildBoxyLibraryObjects(
     ctx: *CliCtx,
     policy: BoxyUnitPolicy,
@@ -10534,9 +10533,11 @@ fn buildBoxyLibraryObjects(
         if (artifact.platform_type_inputs.requirements.items().len != 0) continue;
         try units.append(ctx.gpa, artifact);
     }
-    // A module's body calls imports its root never sees, and a unit is keyed
-    // on its imports' exports, so every import has a unit in the link. The
-    // link drops the code nothing reaches.
+    // A module's body calls imports its root never sees, a unit is keyed
+    // on its imports' exports, and its calls compile against the exports of
+    // every module its lowering sees, so each of its dependencies has a
+    // unit in the link (`Coordinator.unitDependencyKeys`). The link drops
+    // the code nothing reaches.
     var seen_units = std.AutoHashMap([32]u8, void).init(ctx.gpa);
     defer seen_units.deinit();
     var distinct: usize = 0;
@@ -10549,10 +10550,12 @@ fn buildBoxyLibraryObjects(
     var next_unit: usize = 0;
     while (next_unit < units.items.len) : (next_unit += 1) {
         const importer = units.items[next_unit];
-        for (importer.direct_import_module_keys.items()) |key| {
-            const imported = digests.artifacts.get(key.bytes) orelse continue;
+        const dependency_keys = try build_env.unitDependencyKeys(ctx.gpa, importer);
+        defer ctx.gpa.free(dependency_keys);
+        for (dependency_keys) |key| {
+            const imported = digests.artifacts.get(key) orelse continue;
             if (imported.platform_type_inputs.requirements.items().len != 0) continue;
-            if ((try seen_units.getOrPut(key.bytes)).found_existing) continue;
+            if ((try seen_units.getOrPut(key)).found_existing) continue;
             try units.append(ctx.gpa, imported);
         }
     }
@@ -10595,7 +10598,8 @@ fn buildBoxyLibraryObjects(
     defer index_by_key.deinit();
     for (units.items, 0..) |artifact, index| try index_by_key.put(artifact.key.bytes, @intCast(index));
 
-    // Each unit's imports among the units, and the units importing it.
+    // Each unit's dependencies among the units, and the units depending on
+    // it.
     const remaining = try ctx.gpa.alloc(u32, units.items.len);
     defer ctx.gpa.free(remaining);
     @memset(remaining, 0);
@@ -10606,8 +10610,10 @@ fn buildBoxyLibraryObjects(
     }
     for (dependents) |*list| list.* = .empty;
     for (units.items, 0..) |artifact, index| {
-        for (artifact.direct_import_module_keys.items()) |import_key| {
-            const imported = index_by_key.get(import_key.bytes) orelse continue;
+        const dependency_keys = try build_env.unitDependencyKeys(ctx.gpa, artifact);
+        defer ctx.gpa.free(dependency_keys);
+        for (dependency_keys) |dependency_key| {
+            const imported = index_by_key.get(dependency_key) orelse continue;
             remaining[index] += 1;
             try dependents[imported].append(ctx.gpa, @intCast(index));
         }
@@ -10671,12 +10677,12 @@ fn buildBoxyLibraryObjects(
     var restored: u32 = 0;
     var built: u32 = 0;
     var done: usize = 0;
-    // A unit runs once its imports' units are done: its task keys it from
-    // what they recorded, then restores or builds it. A unit left to run
-    // holds back its importers. Lanes no unit is ready for hash the
-    // waiting units' own parts of their digests meanwhile, so a unit whose
-    // turn comes keys itself from what is already hashed; the digest tasks
-    // take ids past the units'.
+    // A unit runs once its dependencies' units are done: its task keys it
+    // from what its imports recorded, then restores or builds it. A unit
+    // left to run holds back its dependents. Lanes no unit is ready for
+    // hash the waiting units' own parts of their digests meanwhile, so a
+    // unit whose turn comes keys itself from what is already hashed; the
+    // digest tasks take ids past the units'.
     var ready: std.ArrayList(u32) = .empty;
     defer ready.deinit(ctx.gpa);
     for (remaining, 0..) |count, index| if (count == 0) try ready.append(ctx.gpa, @intCast(index));
@@ -14653,7 +14659,7 @@ const LirExpectSites = struct {
     fn lessThan(self: LirExpectSites, lhs: u32, rhs: u32) bool {
         const a = self.sites[lhs];
         const b = self.sites[rhs];
-        if (a.loc.file != b.loc.file) return a.loc.file < b.loc.file;
+        if (a.loc.file != b.loc.file) return @backingInt(a.loc.file) < @backingInt(b.loc.file);
         if (a.region.start.offset != b.region.start.offset) return a.region.start.offset < b.region.start.offset;
         return a.region.end.offset < b.region.end.offset;
     }
@@ -14661,7 +14667,7 @@ const LirExpectSites = struct {
     fn module(self: LirExpectSites, index: u32) [32]u8 {
         const site = self.sites[index];
         if (!site.loc.hasLocation()) base.invariant("test expect site has no source location", .{});
-        return self.store.sourceFileModuleIdentity(site.loc.file);
+        return self.store.sourceFileModuleIdentity(site.loc.fileIndex());
     }
 
     fn region(self: LirExpectSites, index: u32) base.Region {
@@ -15779,12 +15785,16 @@ fn prepareUnitImageTests(
         }
         try test_modules.append(ctx.gpa, planned.artifact);
     }
-    // The root unit calls into its modules' imports and the app.
+    // The root unit calls into its modules' dependencies and the app.
     if (paired_roots) {
-        for (paired.items) |artifact| for (artifact.direct_import_module_keys.items()) |key| {
-            const imported = program.tables.digests.artifacts.get(key.bytes) orelse continue;
-            try test_modules.append(ctx.gpa, imported);
-        };
+        for (paired.items) |artifact| {
+            const dependency_keys = try build_env.unitDependencyKeys(ctx.gpa, artifact);
+            defer ctx.gpa.free(dependency_keys);
+            for (dependency_keys) |key| {
+                const dependency = program.tables.digests.artifacts.get(key) orelse continue;
+                try test_modules.append(ctx.gpa, dependency);
+            }
+        }
         if (unit_root != root_artifact) try test_modules.append(ctx.gpa, root_artifact);
     }
 
@@ -15801,9 +15811,9 @@ fn prepareUnitImageTests(
     for (library.hosted_symbols) |name| if (!(try seen_hosted.getOrPut(name)).found_existing) try hosted_names.append(ctx.arena, name);
     if (root_unit) |unit| for (unit.hosted_symbols) |name| if (!(try seen_hosted.getOrPut(name)).found_existing) try hosted_names.append(ctx.arena, name);
     try program.bindHostedStubs(ctx.arena, hosted_names.items);
-    // Every unit's imports are loaded before it: the builtins, then the
-    // rest after everything they import, then the root unit.
-    const order = try unitLoadOrder(ctx.gpa, library.artifacts);
+    // Every unit's dependencies are loaded before it: the builtins, then
+    // the rest after everything they depend on, then the root unit.
+    const order = try unitLoadOrder(ctx.gpa, build_env, library.artifacts);
     defer ctx.gpa.free(order);
     for (order) |index| try program.load(.{ .bytes = library.images[index], .tests = library.tests[index], .hosted_symbols = &.{} });
     if (root_unit) |unit| try program.load(unit);
@@ -15817,8 +15827,9 @@ fn prepareUnitImageTests(
 }
 
 /// The order to load `artifacts`' units in: the first (the builtins), then
-/// each other one after every one of `artifacts` it imports.
-fn unitLoadOrder(gpa: Allocator, artifacts: []const *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error![]u32 {
+/// each other one after every one of `artifacts` it depends on
+/// (`Coordinator.unitDependencyKeys`), whose symbols its image imports.
+fn unitLoadOrder(gpa: Allocator, build_env: *BuildEnv, artifacts: []const *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error![]u32 {
     var index_by_key = std.AutoHashMap([32]u8, u32).init(gpa);
     defer index_by_key.deinit();
     for (artifacts, 0..) |artifact, index| try index_by_key.put(artifact.key.bytes, @intCast(index));
@@ -15832,23 +15843,27 @@ fn unitLoadOrder(gpa: Allocator, artifacts: []const *const check.CheckedArtifact
     order[0] = 0;
     placed[0] = true;
     count = 1;
-    const Frame = struct { index: u32, next_import: usize };
+    const Frame = struct { index: u32, dependencies: []const [32]u8, next_dependency: usize };
     var stack: std.ArrayList(Frame) = .empty;
-    defer stack.deinit(gpa);
+    defer {
+        for (stack.items) |frame| gpa.free(frame.dependencies);
+        stack.deinit(gpa);
+    }
     for (1..artifacts.len) |start| {
         if (placed[start]) continue;
-        try stack.append(gpa, .{ .index = @intCast(start), .next_import = 0 });
+        try stack.ensureUnusedCapacity(gpa, 1);
+        stack.appendAssumeCapacity(.{ .index = @intCast(start), .dependencies = try build_env.unitDependencyKeys(gpa, artifacts[start]), .next_dependency = 0 });
         while (stack.items.len != 0) {
             const frame = &stack.items[stack.items.len - 1];
-            const imports = artifacts[frame.index].direct_import_module_keys.items();
-            if (frame.next_import < imports.len) {
-                const key = imports[frame.next_import];
-                frame.next_import += 1;
-                const imported = index_by_key.get(key.bytes) orelse continue;
-                if (placed[imported]) continue;
-                // Module imports are acyclic, so an import on the stack is
-                // never met again before it is placed.
-                try stack.append(gpa, .{ .index = imported, .next_import = 0 });
+            if (frame.next_dependency < frame.dependencies.len) {
+                const key = frame.dependencies[frame.next_dependency];
+                frame.next_dependency += 1;
+                const dependency = index_by_key.get(key) orelse continue;
+                if (placed[dependency]) continue;
+                // Unit dependencies are acyclic, so a dependency on the
+                // stack is never met again before it is placed.
+                try stack.ensureUnusedCapacity(gpa, 1);
+                stack.appendAssumeCapacity(.{ .index = dependency, .dependencies = try build_env.unitDependencyKeys(gpa, artifacts[dependency]), .next_dependency = 0 });
                 continue;
             }
             if (!placed[frame.index]) {
@@ -15856,7 +15871,7 @@ fn unitLoadOrder(gpa: Allocator, artifacts: []const *const check.CheckedArtifact
                 order[count] = frame.index;
                 count += 1;
             }
-            _ = stack.pop();
+            gpa.free(stack.pop().?.dependencies);
         }
     }
     std.debug.assert(count == artifacts.len);

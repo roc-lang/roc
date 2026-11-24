@@ -140,7 +140,7 @@ fn moduleContainsExpectErr(source: []const u8) TrySuffixTestError!bool {
 
     try can.canonicalizeFile();
 
-    var raw_node_idx: u32 = 0;
+    var raw_node_idx: u32 = CIR.Node.first_idx;
     while (raw_node_idx < env.store.nodes.len()) : (raw_node_idx += 1) {
         const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         if (env.store.nodes.get(node_idx).tag == .expr_expect_err) return true;

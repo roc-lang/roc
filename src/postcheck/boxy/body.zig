@@ -6996,7 +6996,14 @@ pub const Builder = struct {
         const ty = try self.structuralType(raw_ty);
         const key: lower.Program.StoredValueKey = .{ .module = source.module, .node = node, .ty = raw_ty };
         if (self.program.stored_value_slots.get(key)) |slot| return try self.static_parts.append(self.allocator, slot);
-        switch (const_store.get(node)) {
+        const data = const_store.get(node);
+        // A value that is data alone is one slot, frozen from the store
+        // through its type's const plan, however many values it holds.
+        switch (data) {
+            .nominal, .box, .tuple, .record, .tag, .list => if (try self.program.storedDataAlone(source, node)) return try self.pushStoredDataPart(source, node, raw_ty),
+            .pending, .scalar, .zst, .str, .crash, .checked_error, .boxy_fn, .fn_value => {},
+        }
+        switch (data) {
             .pending => invariant("a stored constant was never filled"),
             .scalar, .zst, .str => try self.pushStoredDataPart(source, node, raw_ty),
             // A function value is built by its own restore, and a failed
@@ -7077,7 +7084,7 @@ pub const Builder = struct {
                             self.tasks.appendAssumeCapacity(.{ .restore_part = .{ .source = source, .node = nodes[index], .ty = elem } });
                         }
                     },
-                    .empty, .packed_bytes => try self.pushStoredDataPart(source, node, raw_ty),
+                    .empty, .packed_bytes => invariant("a stored list without item nodes is not data alone"),
                 }
             },
         }
@@ -9049,7 +9056,7 @@ pub const Builder = struct {
                 try writer.writeAll("]");
             },
             .nominal => |nominal| {
-                try writer.print("{s}#{d}.{d}{s}{s}(", .{ store.nameText(nominal.name), @backingInt(nominal.decl.module), @backingInt(nominal.decl.decl), if (nominal.is_opaque) "!" else "", if (nominal.has_backing) "" else "?" });
+                try writer.print("{s}#{d}.{?d}{s}{s}(", .{ store.nameText(nominal.name), @backingInt(nominal.decl.module), if (nominal.decl.decl.get()) |decl| @backingInt(decl) else null, if (nominal.is_opaque) "!" else "", if (nominal.has_backing) "" else "?" });
                 for (store.nominalArgs(nominal), 0..) |arg, index| {
                     if (index != 0) try writer.writeAll(", ");
                     try self.debugTypeText(arg, writer, depth + 1);
@@ -9502,7 +9509,7 @@ pub const Builder = struct {
             .rc_effect = try self.store.addRcEffect(LIR.LowLevel.list_map_can_reuse.rcEffect()),
             .extra = try self.store.addStmtRow(LIR.LowLevelExtra, .{
                 .interchangeable = decision.widths,
-                .map_output_elem = decision.output_elem.?,
+                .map_output_elem = .some(decision.output_elem.?),
             }),
             .args = try self.store.addLocalSpan(args),
             .next = undefined,
@@ -9729,15 +9736,15 @@ pub const Builder = struct {
             .target = target,
             .data = try self.store.addStmtRow(LIR.PackedErasedFnData, .{
                 .proc = self.program.worker(callee).proc,
-                .capture = capture,
-                .capture_layout = capture_layout,
+                .capture = .of(capture),
+                .capture_layout = .of(capture_layout),
                 .on_drop = on_drop,
                 .on_copy = on_drop.copyCallback(),
                 .frozen_capture_layout = switch (on_drop) {
-                    .none => null,
-                    .rc_helper => |helper| try self.program.result.layouts.putPrefixedCaptureLayout(helper.layout_idx, self.program.result.erased_capture_prefix),
+                    .none => .none,
+                    .rc_helper => |helper| .some(try self.program.result.layouts.putPrefixedCaptureLayout(helper.layout_idx, self.program.result.erased_capture_prefix)),
                 },
-                .reuse = reuse,
+                .reuse = .of(reuse),
             }),
             .next = undefined,
         } });
@@ -9860,7 +9867,7 @@ pub const Builder = struct {
         try self.emitDyn(target, .{ .call_erased = .{
             .closure = closure,
             .args = record,
-            .reuse_source = closure,
+            .reuse_source = .some(closure),
             .result_reuse = try self.program.converter().erasedResultSlots(result_ty) == .single,
         } });
         return target;

@@ -350,8 +350,8 @@ stores those IDs unchanged, and every iteration over entries excludes the unused
 slot. This choice never silently renumbers IDs crossing a compiler boundary.
 Borrowed column views own no allocation.
 
-Internally counted epochs start at one. Before an advance would reach
-`maxInt(u32)`, the stamps are cleared and the epoch restarts at one. Natural
+Internally counted epochs start at one. When an advance would overflow the
+epoch's width, the stamps are cleared and the epoch restarts at one. Natural
 epochs are increasing producer-owned IDs; restarting their domain requires
 clearing the stamps. Data are read only under a matching stamp.
 
@@ -2552,10 +2552,10 @@ takes its modules in dependency order). A read records no root read
 (`CompileTimeRootReadTable`), as no `.boxy` evaluation of a root does: the
 read root is complete whenever the reader is. The checked artifact still carries each such root's
 request, entry wrapper template, and const template: the root graph walks no
-wrapper of a completed root, but a module's object defines each completed
-root's wrapper for the other objects of a link, and runtime reads restore
-the stored value through the const template, exactly as for an evaluated
-root.
+wrapper of a completed root, but a module's object defines the wrapper of a
+completed root whose value holds a function (Per-Module Output), and
+runtime reads restore the stored value through the const template, exactly
+as for an evaluated root.
 
 #### Value-Form Expressions Stay In Their Bodies
 
@@ -2806,9 +2806,22 @@ it never emits runtime initialization code. Static reachability and compaction
 retain and remap both child slots and referenced procedures. Identical frozen
 nodes can share storage by their contents and relocations.
 
-A body that reads a stored value built from parts holds one statement, the
-read of the value's own slot. `.boxy` lowering resolves a list's items, a
-product's fields, a tag's payloads, and a box's payload to their child slots
+A stored value that is data alone, holding no function value and no failed
+value anywhere inside it, is one slot naming its ConstStore node
+(`Program.storedDataAlone`), whatever it holds: the data encoder writes it
+from the store through its type's plan, so the work of every pass and backend
+is independent of how many values it holds, and only the encoder's is
+proportional to them. The encoder writes each stored value straight into
+the bytes of the value holding it, and shares among its readers the frozen
+descriptor of every value that owns an allocation (a stored list, a box, an
+allocated string, and a product or tag a recursive type keeps behind a box),
+so each allocation is frozen once however many values hold it; any other
+scalar, product or tag is written for each holder.
+
+A body that reads any other stored value, built from parts, holds one
+statement, the read of the value's own slot. `.boxy` lowering resolves a
+list's items, a product's fields, a tag's payloads, and a box's payload to
+their child slots
 without reading any of them (`Task.restore_part`), and a completed callable's
 type table and capture record are parts of its slot the same way. A stored
 function value is the one part restored as a value, because its restore
@@ -3734,6 +3747,14 @@ the parser, and the parser walks that token buffer directly. The parser does not
 use recursive grammar functions, and it does not keep source substrings as an
 implicit parsing cursor. Source text may be consulted only through token
 metadata, for diagnostics, literal decoding, and identifier interning.
+
+Tokenization decodes each number token's value while it scans the digits: the
+token carries a record (`NumericLiteral.Scanned`) holding up to 19 significant
+digits as an integer, a decimal exponent, the sign and the deprecated suffix.
+When that record is exact the parser derives the literal's facts from it
+alone; a literal outside its form (more digits, a larger exponent, or a
+spelling the text decoder reads differently) is marked inexact by the
+tokenizer and decoded from its text. Both derivations produce identical facts.
 
 ### Redundant explicit returns
 
@@ -6683,6 +6704,16 @@ costs nothing. One that no scheme quantifies commits when the module
 finishes checking. Committing only clears the mark; the empty tag union
 stays.
 
+A tail a match closes also records that closing in the type store
+(`Store.tag_tail_closings`, by tail class): which match closed it and, when
+the match closed it because a row leaves the tail's open alternative
+uncovered, that row. Like the mark, a merge keeps the record and a copy
+carries it, so a use of the binding has it on its own copy of the tail.
+When a relation fails on a tag row ending in such a tail, the type mismatch
+carries the closing (`TypeMismatch.tag_tail_closing`) and its report shows
+the match and the row; the record is diagnostic-only and sealing releases
+it.
+
 Post-check stages read an uncommitted tag tail as the empty tag union it
 is (`CheckedTypeStoreView.payload`); the checked read form exposes the mark
 separately (`CheckedTypeStoreView.uncommittedTagTail`), and type keys ignore
@@ -6869,7 +6900,12 @@ for a function-typed value such as `id = mk({})` too. It quotes the
 annotation, suggests writing `_` in place of each type variable (or removing
 each `..`) or a concrete type, and, for a named binding, the thunk built from
 the program's own text (`empty : {} -> List(a)` / `empty = |{}| []`) to call
-as `empty({})` where the binding must be used at many types.
+as `empty({})` where the binding must be used at many types. The thunk's
+annotation opens its result's output rows (Polarity), so its signature drops
+each anonymous `..` in an output position, which would otherwise be reported
+as redundant: `color : [Red, ..]` suggests `color : {} -> [Red]`
+(`Check.thunkResultText`). A `..` in an input position is a rigid there and
+stays.
 
 A placeholder for a function that is not implemented yet is not a function
 either: `parse : Str -> Try(a, [Bad])` / `parse = ...`, or `= crash "todo"`,
@@ -6936,6 +6972,25 @@ Checked CIR is the last source-level representation. It owns:
 Checked CIR may contain source-level forms such as static-dispatch calls,
 method equality, type-dispatch calls, and source `for` loops because those are
 part of the checked source module.
+
+Index zero of a module's `NodeStore` is a reserved node (`Node.Tag.reserved`,
+the tag whose value is zero, with an empty region) that a fresh store writes
+before issuing any other node. No statement, expression, pattern, annotation
+or diagnostic is ever stored there, and node indices are otherwise unbiased
+(Optional-index columns, above). A zero in a field holding a node index
+therefore means "absent": `TypeAnno.Idx.placeholder` for a type declaration
+whose annotation a forward reference has not filled yet, a record's missing
+extension, a match branch's missing guard, a definition's missing annotation,
+and the node of a scheme use that no source node introduced. Such fields
+encode and decode through `collections.ZeroSentinelId` where the in-memory
+form is an optional, which asserts that a present index is nonzero. A walk
+over a store's nodes starts at `Node.first_idx`. Source-reference relocation
+is the one walk that reads the reserved node: it visits `nodes` and
+`replaced_source_nodes` alike, the second of which reserves nothing, and the
+reserved tag has nothing to relocate. Columns indexed by node, such as type
+variables and the body index's node kinds, keep slot zero, which describes
+no node. Clones and deserialized stores carry the reserved node with the
+rest of their nodes.
 
 Rejected code is replaced in place with a runtime error node: an expression,
 statement, or literal pattern checking rejects, and a read of a `var` before it
@@ -7693,6 +7748,13 @@ requirement signatures themselves can refer to those templates and are checked
 afterward. App checking substitutes one fresh,
 outermost-rank inference variable per binder, shared across all requirements,
 so definition generalization cannot give sibling requirements different types.
+An annotated required definition is related to its
+requirement after its boundary has generalized it, so that relation uses an
+instance of its scheme, as a caller's use does: a binder never joins a
+scheme's quantified classes, and no monomorphic definition a binder reaches
+shares a generalized variable. The source-free invocation that names the
+solved requirement (above) is a further instance of that scheme, and it is
+related to the requirement the same way.
 Each platform alias's explicit `(origin module, source declaration)` key and
 backing identity root select that same substitution during requirement copying.
 The solved identity slots carry the inferred types into the pairing; no copied
@@ -8443,6 +8505,50 @@ templates reachable from exported templates, static-dispatch targets, and
 compile-time checked callable leaves. Privacy affects source
 name lookup and diagnostics. It must not hide checked bodies from whole-program
 post-check specialization.
+
+### Platform Abstract Types In Type Contexts
+
+A platform's requires clause binds abstract types (`[Model : model]`) that
+are in scope in the whole platform module and stand for whatever the app
+provides. A type declaration whose backing names one therefore depends on
+it exactly as a body-local declaration depends on an enclosing function's
+type variable: `S := { model : Model }` has different contents for every app
+the platform is paired with. So the same context rule applies, with the
+module in the place of the enclosing function.
+
+In a module with at least one for-clause alias, `decideLocalTypeContexts`
+decides a context for module-level declarations too. A module-level
+declaration's only part is its annotation. A reference to a for-clause alias
+in a declaration's parts is a lookup of the alias's rigid binder, and a
+reference to another declaration contributes that declaration's context by
+the same least fixpoint, so `T := [T(S)]` depends on `Model` through `S`, and
+so does a declaration that reaches it through an alias. This holds for
+body-local declarations of the platform as well. In every other module no
+module-level declaration has a context and nothing here does any work.
+
+From there the declaration is an ordinary declaration with a context. Its
+formals are its header's variables followed by the binders
+(`NominalDecl.flags.context_len`), the shell reserved for it before type
+bodies are generated already lists them, every application of it lists the
+platform's shared rigid identities after its declared arguments, and checked
+output publishes those arguments and the matching
+`CheckedNominalDeclaration.context_len`. A type that mentions `S` therefore
+reaches the requirement's identity variable: it is a scheme variable of every
+template whose type mentions `S`, a pairing gives `S` an image at the app's
+solved type, the type's key differs between apps, and binding the
+declaration's formals to an application's arguments substitutes the app's
+type into the backing like any other formal. Source types never write the
+argument and printed types never show it.
+
+A platform abstract type is a variable of the module rather than of a
+binding, so the rules that tie a body-local context to its enclosing
+functions do not apply to it: it makes no local function contextual, no
+binding owns it, and the escape rule below never rejects a type on its
+account, because no binding of the module is outside its scope.
+
+This is declaration analysis over canonical IR that runs before any type is
+generated. It reads no solved type and rewrites none, so it is no
+solver-mutating rewrite.
 
 ### Body-Local Types Stay In Their Context
 
@@ -9249,6 +9355,12 @@ placeholder whose instantiated callable is valid. Its arguments consume
 its message's `Str` demand the same way: an erroneous message retires the
 crash, and a message whose own type is not `Str` is rejected by an owned
 relation that retires the crash while the message keeps its solved type.
+A record field access and a tuple access consume their receiver the same way.
+An erroneous receiver retires the access before the access relates a row or a
+tuple shape to it, so the access never takes an error-free type from a field
+or item of an erroneous value: in `{ bad: nope, n: 5 }.n` the record is
+erroneous, and the access is the runtime error that evaluates it. A retired
+field access checks none of its segments and records no `.?` judgment.
 Statement-owned iterator loops have no parent expression to mark; they consume
 the same operand record and leave the erroneous iterable expression in
 `erroneous_value_exprs`. Checked for-nodes require a topology plan even on
@@ -9274,8 +9386,8 @@ checker records, in `retired_operand_sequences`, its operands in evaluation
 order up to and including the first erroneous one: a call's callee then its
 arguments, a method call's receiver then its arguments, a binary operator's
 two operands, an interpolation's parts, a tuple's, list's, or tag's items, a
-record's update base then its fields in source order, and a `for` loop's
-iterable. The erroneous-value sweep records that sequence as the runtime
+record's update base then its fields in source order, a field or tuple
+access's receiver, and a `for` loop's iterable. The erroneous-value sweep records that sequence as the runtime
 error's `evaluated` operands (`CIR.Expr.e_runtime_error.evaluated`, checked
 `CheckedRuntimeError.evaluated`) and keeps those operands' subtrees live;
 only the operands after the erroneous one are invalidated. An operand whose
@@ -19250,6 +19362,16 @@ Nothing a module emits depends on a module that imports it:
   program whose roots may name modules no unit lowers; exact procedure aliases
   likewise emit no evaluator wrapper, because their checked forwarding metadata
   directs every use to the referenced procedure rather than an evaluated value;
+  the wrappers of its numeral, quote and interpolation conversion roots are
+  not, since every use of a converted literal restores the root's stored
+  value or converts the literal in place, and neither is a validation root's,
+  which has no value for any body to read;
+  nor is the wrapper of a constant whose stored value is data alone
+  (`Program.storedDataAlone`) and whose template no longer names an entry
+  procedure, because every read of such a constant restores the stored value
+  into the reading body, so a constant no body reads puts no data in any
+  object; a stored function value's wrapper is emitted, since its restore
+  lowers the workers the value names, which other objects link against;
 - its conversion workers are its own and memoized within it alone;
 - ARC solves each of its procedures' ownership signatures from the procedure's
   body and its callees, and a call from another module demands no ownership
@@ -19262,11 +19384,36 @@ Nothing a module emits depends on a module that imports it:
 - each exported worker's non-escaping and capture-reusing function
   parameters (`nonescaping_fn_params`, `capture_reuse_fn_params`, Frame
   Callables) are functions of its body and its callees' published masks, and whether a caller in another module
-  passes it a frame callable changes nothing in the worker's object.
+  passes it a frame callable changes nothing in the worker's object;
+- whether an exported worker takes a tail carry (`tail_carry`,
+  Frame-Replacing Calls) is a function of its signature and of the same-SCC
+  tail calls among its own module's bodies, none of which another module can
+  make.
 
 This is the invariant the per-module Boxy cache (Caching Under `.boxy`) rests
 on, and it is the reason modules can be lowered independently and in
 parallel.
+
+A unit's calls compile against the export interfaces other units recorded, so
+a unit lowers only after the unit of every module its lowering sees (its
+checked module's lowering visibility, the modules of
+`collectImportedArtifactViews`): a lowering names workers only of modules it
+sees. Its dependencies (`Coordinator.unitDependencyKeys`) are its direct
+imports and every seen module outside its import closure; a seen module inside
+the closure is a dependency of a dependency, whose unit is done before the
+dependency's. A module sees a module outside its import closure when a type
+reaches it without an import. An app's entrypoint takes its platform's
+requirement types, so the app's descriptor of such a type names the method
+workers of the module declaring it (`Program.nominalOverrides`), a platform
+module the app need not import: an app whose `main!` takes `List(OsStr)` and
+calls `len` on it compiles against `OsStr`'s export records. Everything that
+orders units takes its edges from that one set: the coordinator's
+`BoxyObjects`, the link's `buildBoxyLibraryObjects`, the set of objects a
+compile-time program links against, and the order a test program loads its
+unit images in (`unitLoadOrder`). So no unit lowers while a unit it can call
+is still running, and no image loads before one whose symbols it imports.
+Dependencies are acyclic: imports are, and a module outside the app's import
+closure that the app sees is a platform module, which does not see the app.
 
 Unit lowering finishes the closure of those module-definition workers and
 records their export inventory in `seedUnitWorkers`, with which of them are
@@ -19362,9 +19509,14 @@ and Per-Module Output is the invariant that makes it possible:
   edit to a private function's body, a new private definition, or a new
   expression inside an exposed function's body that leaves its ownership
   signature and needs alone rebuilds the edited module only, because no
-  worker's name is a position in its module (NAMES, below). A unit's task
+  worker's name is a position in its module (NAMES, below). An app sees the
+  module declaring a platform requirement type without importing it
+  (Per-Module Output); the app's checking policy digest covers its platform
+  requirement context, the platform root's content identity over its whole
+  import closure, so the app's key covers that module's export records as
+  well. A unit's task
   computes its key on its lane, once its
-  imports' units are done: the module's own part of its digests (its stored
+  dependencies' units are done: the module's own part of its digests (its stored
   values and public surface, the bulk of the hashing) is hashed there, or
   earlier by a lane no unit was ready for, and the imports' parts come from
   the digest table their units recorded into, which the lanes share under a
@@ -19417,7 +19569,8 @@ and Per-Module Output is the invariant that makes it possible:
   lowered for the module, through the object's machine code, and the few
   words of ARC interface a downstream module compiles against (each exported
   procedure's solved ownership signature and uniqueness data, its
-  non-escaping and capture-reusing function parameters, and the outcome table of the
+  non-escaping and capture-reusing function parameters, whether it may leave
+  a call pending and whether it takes a tail carry, and the outcome table of the
   outcome-restitution variant it publishes, which is an exported procedure
   with a record of its own; Per-Module Output makes all of it a function of
   the module and its imports), with
@@ -19769,10 +19922,9 @@ evaluation (`BoxyLinkedImages`), by symbol. A module with no object yet is
 compiled whole and filed by the compilation that first needs it, whichever
 command that is; the root module's own constant code is compiled for the
 evaluation and discarded. A module can have an object only once every
-compile-time root of its own is complete: in its object, an evaluated root's
-entry wrapper restores the stored value, which the other objects of a link read
-through it, so an object lowered while a root was still pending would compute
-the root's body at every read instead. The coordinator's unit scheduler
+compile-time root of its own is complete: a body that reads an evaluated root
+restores its stored value where it reads, so an object lowered while a root was
+still pending would compute the root's body at every read instead. The coordinator's unit scheduler
 (`compile.coordinator.BoxyObjects`) therefore builds each module's object as
 soon as the module can have one and the compilation needs it, and no sooner: a
 module restored from the checked cache with its roots complete, or one with no
@@ -19782,15 +19934,16 @@ says whether its evaluation will run a program against its imports' objects
 (`CompileTimeFinalization.evaluationLinksImportObjects`: a root still to
 evaluate under `.boxy` that the checked-value writer does not complete, and no
 platform requirements), so every compilation, `roc check` included, asks for
-the objects of such a module's import closure the moment the module is
-type-checked, and the units of those that can have an object build while
+the objects of such a module's dependencies (its imports and the modules its
+lowering sees outside its import closure, Per-Module Output) the moment the
+module is type-checked, and the units of those that can have an object build while
 checking continues. The evaluation asks for them again, for every such module,
 before it completes the value-form roots and builds the root graph, which
 matters after the scheduler starts over under the link's names. Each unit lowers
-only once its imports have standalone objects, since its calls compile against
-their export interfaces. If an import cannot have an object in this compilation
-(for example, a hosted declaration without its platform), neither can its
-importers. Programs evaluating roots against such imports use shared lowering;
+only once its dependencies have standalone objects, since its calls compile
+against their export interfaces. If a dependency cannot have an object in this
+compilation (for example, a hosted declaration without its platform), neither
+can its dependents. Programs evaluating roots against such imports use shared lowering;
 they still wait for every checked value they read. Independent units
 run on the post-check executor alongside checking, the other units, and the
 evaluations of other modules. The evaluations run the same way: a module's
@@ -19813,7 +19966,7 @@ function-value stages finish. On cancellation or preparation failure, evaluation
 discards unsubmitted programs and joins submitted work before freeing the graph,
 module lists, or image set any worker borrowed; its bookkeeping needs no new
 allocation and it stores no additional results. A module's evaluation thus waits only for
-the values its roots read and the objects of its own import closure. The link
+the values its roots read and the objects of its own dependency closure. The link
 waits for every unit after program evaluation. Platform-only evaluation before
 pairing joins running object tasks before storing its values, but retains
 queued app units: their imports can still have roots that program evaluation
@@ -27069,7 +27222,14 @@ descriptor with it. Emission checks that the statement after such a call is
 the return of its target with no ownership statement between them. Every
 procedure that makes or receives a same-SCC tail call also carries a
 `tail_group`: the connected component of those calls, which ownership variants
-inherit from their source procedure.
+inherit from their source procedure. ARC also commits `LirProcSpec.tail_carry`
+on every Roc-ABI member of a group with a dynamic parameter: a frame-replacing
+call can enter exactly those, so each takes a tail carry
+(`LirProcSpec.takesTailCarry`, Frame-Replacing Calls). The carry is a hidden
+parameter, so it is part of the procedure's calling contract. Variants inherit
+it, a module unit publishes it in each exported worker's export record, and an
+importer binds it onto the worker's body-less procedure, whose group only the
+defining unit's bodies show. Backends read the fact and never derive it.
 
 ### Frame-Replacing Calls
 
@@ -27099,10 +27259,11 @@ caller's frame is gone.
   A `.boxy` procedure's dynamic parameters are addresses whose bytes have
   sizes only descriptors know, so they cannot sit in the block. A procedure
   with a dynamic parameter and a `tail_group` takes a hidden carry after its
-  other parameters: a frame-replacing call copies every argument of a
-  dynamic parameter into one fresh carry allocation and passes those
-  addresses, an ordinary call passes none, and the callee releases its carry
-  when it returns or replaces its own frame.
+  other parameters (`LirProcSpec.takesTailCarry`): a frame-replacing call
+  copies every argument of a dynamic parameter into one fresh carry
+  allocation and passes those addresses, an ordinary call passes none, from
+  another unit included, and the callee releases its carry when it returns or
+  replaces its own frame.
 - The LLVM backend emits `musttail` calls between `tailcc` functions. An
   argument passed in memory cannot point into the caller's frame, so each tail
   group whose members take such arguments shares one block of storage for
@@ -27120,7 +27281,14 @@ caller's frame is gone.
   tail area and calls it. The chain therefore runs in the frame of whoever
   entered the group. A member copies its aggregate arguments into its own
   frame on entry, because they may sit in the tail area and the next
-  frame-replacing call overwrites it.
+  frame-replacing call overwrites it. The tail area and the drivers are the
+  defining unit's own. A member other units call (`LirProcSpec.exported`)
+  is defined under a local name, and its exported name belongs to its tail
+  entry: a function with the member's signature that calls the member and
+  then the group's driver. A call from another unit is an ordinary call to
+  that entry, which returns the group's result, so an importer drives
+  nothing and needs no fact about the callee's group, and a change to which
+  of a module's functions form a group never reaches its importers' code.
 - The interpreter ends the activation that made the call and starts the
   callee's in the same native frame.
 
@@ -27684,9 +27852,14 @@ field-take variant exactly as a direct call written in the module does. A functi
 with the ownership a direct call would. A module's object therefore
 carries only its published outcome variants and the variants its own calls
 demanded, and a procedure's solved base signature, uniqueness data,
-published outcome table and function parameter masks (Frame
-Callables)—functions of its body and its callees—are the whole of what
-another module compiles against (Per-Module Output). Imports are acyclic, so no same-SCC tail call crosses a unit.
+published outcome table, function parameter masks (Frame
+Callables), tail-drive summary and tail carry—functions of its body and its
+callees—are the whole of what another module compiles against (Per-Module
+Output). Imports are acyclic, so no same-SCC tail call crosses a unit: a
+worker's tail group lies within its module, and an importer's ordinary call
+passes a carry-taking worker no carry. On WebAssembly that call reaches the
+worker's tail entry, which finishes the chain in the defining unit
+(Frame-Replacing Calls).
 Variants inherit their source's unit.
 
 Ownership solving and field-take analysis finish before parallel emission
@@ -30962,8 +31135,8 @@ can call a test unit whose inline expects are observed. Paired platform root
 units retain their explicit test mode because they also lower the paired
 modules' bodies. Reusing an object already prepared by compile-time evaluation
 also transfers its exported calling contracts into the consumer's interface
-table before lowering importers: ownership conditions and `may_leave_pending`
-must match the reused machine code. Consumers already sharing the producer's
+table before lowering importers: ownership conditions, `may_leave_pending`
+and `tail_carry` must match the reused machine code. Consumers already sharing the producer's
 table need no copy. A test unit records its own replacement contracts before
 its importers start. Beside the image, the
 entry files the unit's expect-site table (each site's module digest and

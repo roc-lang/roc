@@ -145,10 +145,9 @@ pub const PieceKind = enum(u8) {
     field_names_step,
 };
 
-/// One generated codec worker: its family, kind, and kind-specific operands.
-pub const Piece = struct { family: u32, kind: PieceKind, a: u32 = 0, b: u32 = 0 };
-
-const no_family = std.math.maxInt(u32);
+/// One generated codec worker: its family (absent for a piece of none),
+/// kind, and kind-specific operands.
+pub const Piece = struct { family: collections.OptionalU32, kind: PieceKind, a: u32 = 0, b: u32 = 0 };
 
 /// What a piece's `a` and `b` hold, for a stored function naming it.
 pub const PieceOperands = enum { none, types, type_and_name, type_and_word };
@@ -164,16 +163,16 @@ pub fn pieceOperands(kind: PieceKind) PieceOperands {
 }
 
 /// The derivation of `piece`'s family, by which a stored function names the
-/// family, or `no_family` for a piece of none.
-pub fn pieceFamilyRoot(program: *const Program, piece: Piece) u32 {
-    if (piece.family == no_family) return no_family;
-    return @backingInt(program.codec.families.items[piece.family].root);
+/// family, absent for a piece of none.
+pub fn pieceFamilyRoot(program: *const Program, piece: Piece) collections.OptionalU32 {
+    const family = piece.family.get() orelse return .none;
+    return .some(@backingInt(program.codec.families.items[family].root));
 }
 
 /// The worker of a piece a stored function names: `root` is its family's
 /// derivation in `module`'s plans (`pieceFamilyRoot`).
-pub fn restorePiece(program: *Program, module: ModuleIndex, root: u32, kind: PieceKind, a: u32, b: u32, params: []const TypeId, ret: TypeId, captures: []const TypeId) Allocator.Error!WorkerId {
-    const family = if (root == no_family) no_family else try familyFor(program, module, @fromBackingInt(root));
+pub fn restorePiece(program: *Program, module: ModuleIndex, root: collections.OptionalU32, kind: PieceKind, a: u32, b: u32, params: []const TypeId, ret: TypeId, captures: []const TypeId) Allocator.Error!WorkerId {
+    const family: collections.OptionalU32 = if (root.get()) |derivation| .some(try familyFor(program, module, @fromBackingInt(derivation))) else .none;
     const erased = switch (kind) {
         .encode_helper, .parse_helper => false,
         .constructor, .runtime, .record_body, .tuple_body, .list_body, .dict_body, .tag_body, .value_thunk, .key_thunk, .tag_spec, .field_names_step => true,
@@ -755,7 +754,7 @@ pub fn hashPieceContent(program: *Program, hasher: *base.TypeDigestHasher, index
 
 /// The worker of `piece`, created on first request.
 fn pieceWorker(program: *Program, module: ModuleIndex, piece: Piece, params: []const TypeId, ret: TypeId, captures: []const TypeId, erased: bool) Allocator.Error!WorkerId {
-    const scheme_vars: []const checked.CheckedTypeId = if (piece.family == no_family) &.{} else program.codec.families.items[piece.family].env.vars;
+    const scheme_vars: []const checked.CheckedTypeId = if (piece.family.get()) |family| program.codec.families.items[family].env.vars else &.{};
     const state = &program.codec;
     if (state.piece_ids.get(piece)) |existing| return existing;
     const arena = program.arena.allocator();
@@ -798,7 +797,7 @@ fn localTypes(program: *Program, family_index: u32) Allocator.Error![]const Type
 /// The constructor captures the family's local procedure values.
 fn constructorWorker(program: *Program, family_index: u32) Allocator.Error!WorkerId {
     const family = program.codec.families.items[family_index];
-    return pieceWorker(program, family.module, .{ .family = family_index, .kind = .constructor }, fnArgs(program, family.constructor_fn), family.runtime_fn, try localTypes(program, family_index), true);
+    return pieceWorker(program, family.module, .{ .family = .some(family_index), .kind = .constructor }, fnArgs(program, family.constructor_fn), family.runtime_fn, try localTypes(program, family_index), true);
 }
 
 fn runtimeCaptures(program: *Program, family_index: u32) Allocator.Error![]const TypeId {
@@ -813,7 +812,7 @@ fn runtimeCaptures(program: *Program, family_index: u32) Allocator.Error![]const
 fn runtimeWorker(program: *Program, family_index: u32) Allocator.Error!WorkerId {
     const family = program.codec.families.items[family_index];
     const runtime = functionOf(program, family.runtime_fn);
-    return pieceWorker(program, family.module, .{ .family = family_index, .kind = .runtime }, program.store.span(runtime.args), runtime.ret, try runtimeCaptures(program, family_index), true);
+    return pieceWorker(program, family.module, .{ .family = .some(family_index), .kind = .runtime }, program.store.span(runtime.args), runtime.ret, try runtimeCaptures(program, family_index), true);
 }
 
 fn helperWorker(program: *Program, family_index: u32, kind: Kind, value_ty: TypeId, ret: TypeId) Allocator.Error!WorkerId {
@@ -826,7 +825,7 @@ fn helperWorker(program: *Program, family_index: u32, kind: Kind, value_ty: Type
         .encoder => .encode_helper,
         .parser => .parse_helper,
     };
-    return pieceWorker(program, family.module, .{ .family = family_index, .kind = piece_kind, .a = @backingInt(value_ty), .b = @backingInt(ret) }, params, ret, &.{}, false);
+    return pieceWorker(program, family.module, .{ .family = .some(family_index), .kind = piece_kind, .a = @backingInt(value_ty), .b = @backingInt(ret) }, params, ret, &.{}, false);
 }
 
 /// An erased callback of the family: `captures` are the captured value's
@@ -959,16 +958,15 @@ const StoredValueClosure = struct {
 /// content: the stored function was lowered from bodies that closure
 /// reaches, so one of its modules recorded the derivation. A piece of no
 /// family is named by the storing module.
-pub fn storedPieceHome(program: *Program, allocator: Allocator, store_module: ModuleIndex, piece: Piece) Allocator.Error!struct { ModuleIndex, u32 } {
-    if (piece.family == no_family) return .{ store_module, no_family };
-    const family = program.codec.families.items[piece.family];
+pub fn storedPieceHome(program: *Program, allocator: Allocator, store_module: ModuleIndex, piece: Piece) Allocator.Error!struct { ModuleIndex, collections.OptionalU32 } {
+    const family = program.codec.families.items[piece.family.get() orelse return .{ store_module, .none }];
     const owner = program.module(family.module).view.static_dispatch_plans.generated_codec_derivations.items()[@backingInt(family.root)];
     var closure = StoredValueClosure{ .program = program, .allocator = allocator };
     defer closure.deinit();
     try closure.start(store_module);
     while (try closure.next()) |module| {
         for (program.module(module).view.static_dispatch_plans.generated_codec_derivations.items(), 0..) |derivation, index| {
-            if (derivation.kind == owner.kind and std.mem.eql(u8, &derivation.content.bytes, &owner.content.bytes)) return .{ module, @intCast(index) };
+            if (derivation.kind == owner.kind and std.mem.eql(u8, &derivation.content.bytes, &owner.content.bytes)) return .{ module, .some(@intCast(index)) };
         }
     }
     invariant("a stored codec piece's derivation was not held by its storing module's stored-value closure");
@@ -980,7 +978,7 @@ pub fn storedPieceHome(program: *Program, allocator: Allocator, store_module: Mo
 /// inspection and equality.
 pub fn lowerIntrinsic(b: *Builder, intrinsic: checked.IntrinsicId, params: []const LocalId) Allocator.Error!void {
     const worker = b.currentWorker().*;
-    var gen: Gen = .{ .b = b, .family = no_family, .piece = no_family };
+    var gen: Gen = .{ .b = b, .family = .none, .piece = .none };
     const result = switch (intrinsic) {
         // A spec is the erased callable that parses its union's tags.
         .parse_tag_union => try b.emitErasedCall(params[0], try b.program.store.intern(.{ .function = .{ .args = worker.params[1..2], .ret = worker.ret, .effectful = false } }), params[1..2], worker.ret),
@@ -1009,7 +1007,7 @@ pub fn lowerIntrinsic(b: *Builder, intrinsic: checked.IntrinsicId, params: []con
 /// Lower piece `index` into the worker `b` builds.
 pub fn lowerPiece(b: *Builder, index: u32) Allocator.Error!void {
     const piece = b.program.codec.pieces.items[index];
-    var gen: Gen = .{ .b = b, .family = piece.family, .piece = index };
+    var gen: Gen = .{ .b = b, .family = piece.family, .piece = .some(index) };
     switch (piece.kind) {
         .constructor => try gen.lowerConstructor(),
         .runtime => try gen.lowerRuntime(),
@@ -1040,8 +1038,9 @@ const Typed = struct { value: LocalId, ty: TypeId };
 
 const Gen = struct {
     b: *Builder,
-    family: u32,
-    piece: u32,
+    /// The family and piece being lowered; both absent for an intrinsic.
+    family: collections.OptionalU32,
+    piece: collections.OptionalU32,
     /// The encoding and names of the worker being lowered.
     encoding: LocalId = undefined,
     names: LocalId = undefined,
@@ -1058,8 +1057,13 @@ const Gen = struct {
         return &self.b.program.store;
     }
 
+    /// The family of the piece being lowered.
+    fn familyIndex(self: *const Gen) u32 {
+        return self.family.get().?;
+    }
+
     fn fam(self: *Gen) *Family {
-        return &self.b.program.codec.families.items[self.family];
+        return &self.b.program.codec.families.items[self.familyIndex()];
     }
 
     fn name(self: *Gen, text: []const u8) Allocator.Error!NameId {
@@ -1325,7 +1329,7 @@ const Gen = struct {
 
     /// Call the contract's `method` for `subject` with `args`.
     fn callFormat(self: *Gen, method: []const u8, subject: ?TypeId, args: []const LocalId) Allocator.Error!Typed {
-        const resolved = try lookupCall(self.program(), self.family, method, subject);
+        const resolved = try lookupCall(self.program(), self.familyIndex(), method, subject);
         return self.callResolved(resolved, args);
     }
 
@@ -1401,7 +1405,7 @@ const Gen = struct {
 
     /// Call the family helper for `value_ty` at result type `ret_ty`.
     fn callHelper(self: *Gen, kind: Kind, value_ty: TypeId, ret_ty: TypeId, explicit: []const LocalId) Allocator.Error!LocalId {
-        const worker = try helperWorker(self.program(), self.family, kind, value_ty, ret_ty);
+        const worker = try helperWorker(self.program(), self.familyIndex(), kind, value_ty, ret_ty);
         const explicit_all = try std.mem.concat(self.b.allocator, LocalId, &.{ explicit, &.{ self.encoding, self.names } });
         defer self.b.allocator.free(explicit_all);
         const all = try self.b.callArgs(explicit_all, worker, try self.familyInputs());
@@ -1602,7 +1606,7 @@ const Gen = struct {
             const label = try self.b.strLiteral(self.store().nameText(entry.label));
             slot.* = (try self.callFormat("rename_field", null, &.{ encoding, label })).value;
         }
-        const runtime = try runtimeWorker(program_, self.family);
+        const runtime = try runtimeWorker(program_, self.familyIndex());
         const closure = try self.packFamilyClosure(runtime, captured, program_.worker(runtime).capture_types);
         try self.ret(closure);
         try self.finishErased(frame);
@@ -1636,7 +1640,7 @@ const Gen = struct {
     /// Write `value` of `value_ty` into `state`, producing `ret_ty`.
     fn encodeShape(self: *Gen, value_ty: TypeId, value: LocalId, state: LocalId, ret_ty: TypeId) Allocator.Error!LocalId {
         const program_ = self.program();
-        switch (try classify(program_, self.family, value_ty)) {
+        switch (try classify(program_, self.familyIndex(), value_ty)) {
             .null_try => |null_try| {
                 const merged = try self.merge(ret_ty);
                 const err_hole = try self.branchTag(value, value_ty, "Ok");
@@ -1709,7 +1713,7 @@ const Gen = struct {
         ret_ty: TypeId,
     ) Allocator.Error!LocalId {
         const program_ = self.program();
-        const resolved = try lookupCall(program_, self.family, method, subject);
+        const resolved = try lookupCall(program_, self.familyIndex(), method, subject);
         const method_fn = switch (resolved) {
             .callable => |callable| callable.fn_ty,
             .checked_error => |fn_ty| fn_ty,
@@ -1718,7 +1722,7 @@ const Gen = struct {
         };
         const method_args = fnArgs(program_, method_fn);
         const body_ty = method_args[method_args.len - 1];
-        const body_worker = try callbackWorker(program_, self.family, .{ .family = self.family, .kind = body_kind, .a = a, .b = b_arg }, body_ty, captured_types);
+        const body_worker = try callbackWorker(program_, self.familyIndex(), .{ .family = self.family, .kind = body_kind, .a = a, .b = b_arg }, body_ty, captured_types);
         const body = try self.packCallback(body_worker, captured, captured_types);
         const all = try std.mem.concat(self.b.allocator, LocalId, &.{ leading, &.{body} });
         defer self.b.allocator.free(all);
@@ -1778,7 +1782,7 @@ const Gen = struct {
         const program_ = self.program();
         const writer_args = fnArgs(program_, body.writer_ty);
         const thunk_ty = writer_args[writer_args.len - 1];
-        const thunk_worker = try callbackWorker(program_, self.family, .{ .family = self.family, .kind = .value_thunk, .a = @backingInt(value_ty), .b = @backingInt(thunk_ty) }, thunk_ty, &.{value_ty});
+        const thunk_worker = try callbackWorker(program_, self.familyIndex(), .{ .family = self.family, .kind = .value_thunk, .a = @backingInt(value_ty), .b = @backingInt(thunk_ty) }, thunk_ty, &.{value_ty});
         const thunk = try self.packCallback(thunk_worker, &.{value}, &.{value_ty});
         const args = try std.mem.concat(self.b.allocator, LocalId, &.{ &.{state}, leading, &.{thunk} });
         defer self.b.allocator.free(args);
@@ -1884,7 +1888,7 @@ const Gen = struct {
                 const item_value = try self.b.readField(elem_ty, elem, 1, value_ty);
                 const writer_args = fnArgs(program_, body.writer_ty);
                 const key_writer_ty = writer_args[1];
-                const key_worker = try callbackWorker(program_, self.family, .{ .family = self.family, .kind = .key_thunk, .a = @backingInt(key_ty), .b = @backingInt(key_writer_ty) }, key_writer_ty, &.{key_ty});
+                const key_worker = try callbackWorker(program_, self.familyIndex(), .{ .family = self.family, .kind = .key_thunk, .a = @backingInt(key_ty), .b = @backingInt(key_writer_ty) }, key_writer_ty, &.{key_ty});
                 const key_thunk = try self.packCallback(key_worker, &.{key}, &.{key_ty});
                 break :blk try self.writeItem(body, state, &.{key_thunk}, item_value, value_ty);
             },
@@ -2031,7 +2035,7 @@ const Gen = struct {
     fn parseShape(self: *Gen, value_ty: TypeId, state: LocalId, ret_ty: TypeId) Allocator.Error!void {
         const program_ = self.program();
         const on_err: OnErr = .{ .ret = ret_ty };
-        switch (try classify(program_, self.family, value_ty)) {
+        switch (try classify(program_, self.familyIndex(), value_ty)) {
             .null_try => |null_try| {
                 const parts = (try tryParts(program_, value_ty)).?;
                 const nulled = try self.callFormat("parse_null", null, &.{ self.encoding, state });
@@ -2069,14 +2073,14 @@ const Gen = struct {
             },
             .record => |record_ty| try self.parseRecord(record_ty, value_ty, state, ret_ty),
             .tag_union => |union_ty| {
-                const resolved = try lookupCall(program_, self.family, "parse_tag_union", union_ty);
+                const resolved = try lookupCall(program_, self.familyIndex(), "parse_tag_union", union_ty);
                 const method_fn = switch (resolved) {
                     .callable => |callable| callable.fn_ty,
                     .checked_error => |fn_ty| fn_ty,
                     .structural => invariant("parse_tag_union resolved to a structural derivation"),
                     .forwarded => invariant("a generated codec format method was forwarded"),
                 };
-                const worker = try callbackWorker(program_, self.family, .{ .family = self.family, .kind = .tag_spec, .a = @backingInt(union_ty), .b = @backingInt(method_fn) }, try self.specType(method_fn), &.{});
+                const worker = try callbackWorker(program_, self.familyIndex(), .{ .family = self.family, .kind = .tag_spec, .a = @backingInt(union_ty), .b = @backingInt(method_fn) }, try self.specType(method_fn), &.{});
                 const spec = try self.packCallback(worker, &.{}, &.{});
                 const result = try self.callResolved(resolved, &.{ self.encoding, spec, state });
                 try self.ret(try self.injectTry(result.value, result.ty, ret_ty));
@@ -2307,7 +2311,7 @@ const Gen = struct {
         const base_index = self.recordNameBase(record_ty);
 
         // The field set the format matches names against.
-        const field_call = try lookupCall(program_, self.family, "parse_record_field", record_ty);
+        const field_call = try lookupCall(program_, self.familyIndex(), "parse_record_field", record_ty);
         const field_fn = switch (field_call) {
             .callable => |callable| callable.fn_ty,
             .checked_error => |fn_ty| fn_ty,
@@ -2770,14 +2774,14 @@ const Gen = struct {
     fn nameBound(self: *Gen, fields: LocalId, fields_ty: TypeId, bound: Bound) Allocator.Error!LocalId {
         const u64_ty = try self.u64Ty();
         const Context = struct { bound: Bound, fields_ty: TypeId };
-        // The accumulator is the bound so far, `none` before the first.
-        const none = try self.u64Value(std.math.maxInt(u64));
-        const folded = try self.foldList(fields, fields_ty, u64_ty, none, Context{ .bound = bound, .fields_ty = fields_ty }, struct {
-            fn each(ctx: Context, gen: *Gen, handle: LocalId, acc: LocalId, _: LocalId) Allocator.Error!LocalId {
+        // The accumulator is the bound so far. The first field's length
+        // starts it, so an empty set keeps the initial 0.
+        return self.foldList(fields, fields_ty, u64_ty, try self.u64Value(0), Context{ .bound = bound, .fields_ty = fields_ty }, struct {
+            fn each(ctx: Context, gen: *Gen, handle: LocalId, acc: LocalId, index: LocalId) Allocator.Error!LocalId {
                 const handle_ty = gen.store().get(ctx.fields_ty).list;
                 const len = (try gen.field(handle, handle_ty, "name_len")).value;
                 const merged = try gen.merge(try gen.u64Ty());
-                const first = try gen.isEq(acc, try gen.u64Value(std.math.maxInt(u64)));
+                const first = try gen.isEq(index, try gen.u64Value(0));
                 const later = try gen.branchIf(first);
                 try gen.jump(merged.id, &.{merged.param}, &.{len});
                 gen.b.hole = later;
@@ -2793,13 +2797,6 @@ const Gen = struct {
                 return merged.param;
             }
         }.each);
-        const merged = try self.merge(u64_ty);
-        const nonempty = try self.branchIf(try self.isEq(folded, none));
-        try self.jump(merged.id, &.{merged.param}, &.{try self.u64Value(0)});
-        self.b.hole = nonempty;
-        try self.jump(merged.id, &.{merged.param}, &.{folded});
-        self.b.hole = merged.after;
-        return merged.param;
     }
 
     /// The iterator over a field set's handles from `position`: all of them
@@ -2820,7 +2817,7 @@ const Gen = struct {
         }
         const fields_ty = try self.fieldsTypeOf(iter_ty);
         const u64_ty = try self.u64Ty();
-        const worker = try pieceWorker(program_, self.b.module, .{ .family = no_family, .kind = .field_names_step, .a = @backingInt(iter_ty), .b = @intFromBool(filtered) }, &.{}, fnRet(program_, step_fn), &.{ fields_ty, u64_ty, u64_ty }, true);
+        const worker = try pieceWorker(program_, self.b.module, .{ .family = .none, .kind = .field_names_step, .a = @backingInt(iter_ty), .b = @intFromBool(filtered) }, &.{}, fnRet(program_, step_fn), &.{ fields_ty, u64_ty, u64_ty }, true);
         const step = try self.b.packClosure(worker, &.{ fields, position, size }, &.{ fields_ty, u64_ty, u64_ty }, &.{});
         // `len_if_known : Try(U64, [Unknown])`.
         const len = if (filtered) blk: {
@@ -2844,7 +2841,7 @@ const Gen = struct {
     }
 
     fn lowerFieldNamesStep(self: *Gen, iter_ty: TypeId) Allocator.Error!void {
-        const filtered = self.b.program.codec.pieces.items[self.piece].b != 0;
+        const filtered = self.b.program.codec.pieces.items[self.piece.get().?].b != 0;
         const frame = try self.beginErased();
         const worker = self.b.currentWorker().*;
         const fields = frame.captures[0];

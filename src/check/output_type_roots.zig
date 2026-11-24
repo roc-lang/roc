@@ -129,8 +129,8 @@ pub fn forEachRecordedTypeRoot(module_env: *const ModuleEnv, visitor: anytype) A
             inline for (.{ call.dispatcher_var, call.callable_var, call.evidence_var }) |raw_var| {
                 try visitor.visit(@fromBackingInt(@intCast(raw_var)));
             }
-            if (call.subject_var != ModuleEnv.GeneratedCodecCall.no_subject_var) {
-                try visitor.visit(@fromBackingInt(@intCast(call.subject_var)));
+            if (call.subject_var.get()) |subject_var| {
+                try visitor.visit(@fromBackingInt(@intCast(subject_var)));
             }
         }
         const renamings = module_env.generated_codec_renamings.items()[derivation.renamings_start..][0..derivation.renamings_len];
@@ -193,8 +193,7 @@ pub fn forEachLiteralDispatchTypeRoot(module_env: *const ModuleEnv, visitor: any
         try visitor.visit(@fromBackingInt(@intCast(plan.target_var)));
         try visitor.visit(plan.fnVar().?);
         if (plan.patternContext(&module_env.store)) |context| {
-            std.debug.assert(context.equality_fn_var_plus_one != 0);
-            try visitor.visit(@fromBackingInt(@intCast(context.equality_fn_var_plus_one - 1)));
+            try visitor.visit(context.equality_fn_var.get().?);
         }
     }
 }

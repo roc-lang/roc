@@ -1643,6 +1643,11 @@ pub const ConstStore = struct {
         return self.node_pool.items()[range.start .. range.start + range.len];
     }
 
+    /// How many nodes the store holds; every node id is below it.
+    pub fn nodeCount(self: *const ConstStore) usize {
+        return self.values.items().len;
+    }
+
     pub fn get(self: *const ConstStore, id: ConstNodeId) ConstValue {
         return switch (self.values.items()[@backingInt(id)]) {
             .pending => .pending,

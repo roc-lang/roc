@@ -703,10 +703,9 @@ test "adapting follows a re-tag plan between a row holding False and True and Bo
         .{ .name = &name_maybe, .payloads = &.{} },
         .{ .name = &name_true, .payloads = &.{} },
     });
-    const absent = desc_mod.AdaptVariant.absent;
-    const to_false = [_]desc_mod.AdaptVariant{.{ .discriminant = 0, .plan = null }};
-    const to_true = [_]desc_mod.AdaptVariant{.{ .discriminant = 1, .plan = null }};
-    const wider_to_bool = [_]desc_mod.AdaptVariant{ .{ .discriminant = 0, .plan = null }, .{ .discriminant = absent, .plan = null }, .{ .discriminant = 1, .plan = null } };
+    const to_false = [_]desc_mod.AdaptVariant{.{ .discriminant = .of(0), .plan = null }};
+    const to_true = [_]desc_mod.AdaptVariant{.{ .discriminant = .of(1), .plan = null }};
+    const wider_to_bool = [_]desc_mod.AdaptVariant{ .{ .discriminant = .of(0), .plan = null }, .{ .discriminant = .absent, .plan = null }, .{ .discriminant = .of(1), .plan = null } };
     const from_false = retagPlan(just_false, desc_mod.boolDesc(), &to_false);
     const from_true = retagPlan(just_true, desc_mod.boolDesc(), &to_true);
     const from_wider = retagPlan(wider, desc_mod.boolDesc(), &wider_to_bool);
@@ -726,7 +725,7 @@ test "adapting follows a re-tag plan between a row holding False and True and Bo
         try testing.expectEqual(case.byte, target.bytes[0]);
     }
 
-    const bool_to_wider = [_]desc_mod.AdaptVariant{ .{ .discriminant = 0, .plan = null }, .{ .discriminant = 2, .plan = null } };
+    const bool_to_wider = [_]desc_mod.AdaptVariant{ .{ .discriminant = .of(0), .plan = null }, .{ .discriminant = .of(2), .plan = null } };
     const to_wider = retagPlan(desc_mod.boolDesc(), wider, &bool_to_wider);
     for ([_]struct { discriminant: u32, byte: u8 }{
         .{ .discriminant = 0, .byte = 0 },

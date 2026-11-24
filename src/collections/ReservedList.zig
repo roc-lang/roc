@@ -41,8 +41,7 @@ pub const reserve_threshold_bytes: usize = 256 * 1024;
 /// one, holds this many times the bytes the column needs.
 const reservation_growth_factor: usize = 4;
 
-/// The most entries a column holds: indices and range counts are `u32`, and
-/// `maxInt(u32)` is the empty-range start.
+/// The most entries a column holds: indices and range counts are `u32`.
 const max_len: usize = std.math.maxInt(u32);
 
 const Storage = enum {

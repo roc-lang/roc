@@ -44,7 +44,6 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
         /// A list that takes ownership of `backing`'s allocation.
         pub fn fromArrayList(backing: std.ArrayList(T)) Self {
             if (backing.capacity == 0) return .empty;
-            std.debug.assert(backing.capacity <= std.math.maxInt(u32));
             return .{ .__guarded_backing = .{
                 .ptr = backing.items.ptr,
                 .length = @intCast(backing.items.len),

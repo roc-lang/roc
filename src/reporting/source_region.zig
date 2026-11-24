@@ -101,7 +101,10 @@ pub const Snippet = struct {
         const rows = try gpa.alloc(Row, row_count);
         errdefer gpa.free(rows);
 
-        var common: usize = std.math.maxInt(usize);
+        // The narrowest indent of a row with text. A row with text is wider
+        // than its indent and no wider than `total_len`, so the seed survives
+        // only when every row is blank.
+        var common: usize = total_len;
         var offset: usize = 0;
         var iter = std.mem.splitScalar(u8, text, '\n');
         var row_index: usize = 0;
@@ -118,8 +121,7 @@ pub const Snippet = struct {
             offset += row.len;
         }
         std.debug.assert(row_index == row_count and offset == total_len);
-        if (common == std.math.maxInt(usize)) common = 0;
-        return .{ .allocator = gpa, .bytes = bytes, .rows = rows, .common = common };
+        return .{ .allocator = gpa, .bytes = bytes, .rows = rows, .common = if (common < total_len) common else 0 };
     }
     /// A row's leading whitespace: its length in the source, and its width
     /// once each tab is expanded to four spaces.

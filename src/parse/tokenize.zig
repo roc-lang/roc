@@ -26,6 +26,8 @@ pub const Token = struct {
 
     pub const Extra = union {
         interned: base.Ident.Idx,
+        /// An `Int` or `Float` token's index in `TokenizedBuffer.numbers`.
+        number: u32,
         none: u32,
     };
 
@@ -633,22 +635,24 @@ pub const Token = struct {
     pub const valid_number_suffixes = blk: {
         const Suffix = NumericLiteral.DeprecatedSuffix;
         const fields = @typeInfo(Suffix).@"enum".field_values;
-        var kvs: [fields.len - 1]struct { []const u8, void } = undefined;
+        var kvs: [fields.len - 1]struct { []const u8, Suffix } = undefined;
         var i: usize = 0;
         for (fields) |field| {
             const suffix: Suffix = @fromBackingInt(@intCast(field));
             if (suffix.oldText()) |text| {
-                kvs[i] = .{ text, {} };
+                kvs[i] = .{ text, suffix };
                 i += 1;
             }
         }
-        break :blk std.StaticStringMap(void).initComptime(kvs);
+        break :blk std.StaticStringMap(Suffix).initComptime(kvs);
     };
 };
 
 /// The buffer that accumulates tokens.
 pub const TokenizedBuffer = struct {
     tokens: Token.List,
+    /// The value facts of each `Int` and `Float` token, in token order.
+    numbers: std.ArrayList(NumericLiteral.Scanned) = .empty,
     env: *CommonEnv,
 
     pub fn initCapacity(env: *CommonEnv, gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.Error!TokenizedBuffer {
@@ -662,6 +666,14 @@ pub const TokenizedBuffer = struct {
 
     pub fn deinit(self: *TokenizedBuffer, gpa: std.mem.Allocator) void {
         self.tokens.deinit(gpa);
+        self.numbers.deinit(gpa);
+    }
+
+    /// The value facts the tokenizer recorded for an `Int` or `Float` token.
+    pub fn scannedNumber(self: *const TokenizedBuffer, token: Token.Idx) NumericLiteral.Scanned {
+        const tag = self.tokens.items(.tag)[@intCast(token)];
+        std.debug.assert(tag == .Int or tag == .Float);
+        return self.numbers.items[self.tokens.items(.extra)[@intCast(token)].number];
     }
 
     pub fn resolve(self: *const TokenizedBuffer, idx: usize) base.Region {
@@ -712,6 +724,56 @@ pub const Diagnostic = struct {
     };
 };
 
+/// Accumulates a number token's `NumericLiteral.Scanned` record as the
+/// cursor consumes the token's digits.
+pub const NumberScanner = struct {
+    scanned: NumericLiteral.Scanned = .{ .significand = 0, .exponent10 = 0, .suffix = .none, .flags = .{} },
+    /// Decimal digits in `scanned.significand`, counted from the first
+    /// nonzero one.
+    significant_digits: u8 = 0,
+    /// Mantissa digits written after the decimal point.
+    fraction_digits: u32 = 0,
+    /// The written exponent, applied by `finish`.
+    written_exponent: i64 = 0,
+
+    fn decimalDigit(self: *NumberScanner, digit: u8) void {
+        if (self.significant_digits == 0 and digit == 0) return;
+        if (self.significant_digits == NumericLiteral.Scanned.max_significant_digits) {
+            self.scanned.flags.exact = false;
+            return;
+        }
+        self.scanned.significand = self.scanned.significand * 10 + digit;
+        self.significant_digits += 1;
+    }
+
+    fn radixDigit(self: *NumberScanner, comptime radix: u8, digit: u8) void {
+        const shifted = @mulWithOverflow(self.scanned.significand, radix);
+        const added = @addWithOverflow(shifted[0], digit);
+        if (shifted[1] != 0 or added[1] != 0) {
+            self.scanned.flags.exact = false;
+            return;
+        }
+        self.scanned.significand = added[0];
+    }
+
+    fn exponent(self: *NumberScanner, magnitude: u32, negative: bool) void {
+        if (magnitude > NumericLiteral.Scanned.max_written_exponent) {
+            self.scanned.flags.exact = false;
+            return;
+        }
+        self.written_exponent = if (negative) -@as(i64, magnitude) else magnitude;
+    }
+
+    fn finish(self: *NumberScanner) void {
+        const exponent10 = self.written_exponent - self.fraction_digits;
+        if (exponent10 > NumericLiteral.Scanned.max_exponent10 or exponent10 < std.math.minInt(i32)) {
+            self.scanned.flags.exact = false;
+            return;
+        }
+        self.scanned.exponent10 = @intCast(exponent10);
+    }
+};
+
 /// The cursor is our current position in the input text, and it collects messages.
 /// Note that instead of allocating its own message list, the caller must pass in a pre-allocated
 /// slice of Message. The field `message_count` tracks how many messages have been written.
@@ -725,6 +787,8 @@ pub const Cursor = struct {
     message_count: u32,
     has_non_carriage_return_errors: bool = false,
     tab_width: u8 = 4, // TODO: make this configurable
+    /// The value facts of the number token `chompNumber` scanned last.
+    number: NumberScanner = .{},
 
     /// Initialize a Cursor with the given input buffer and a pre-allocated messages slice.
     pub fn init(buf: []const u8, messages: []Diagnostic) Cursor {
@@ -807,15 +871,24 @@ pub const Cursor = struct {
         }
     }
 
+    /// Chomp a number token starting at its first digit, recording its value
+    /// facts in `self.number`.
     pub fn chompNumber(self: *Cursor) Token.Tag {
         const initialDigit = self.buf[self.pos];
         self.pos += 1;
+        self.number = .{};
+        self.number.decimalDigit(initialDigit - '0');
 
         var tok = Token.Tag.Int;
         if (initialDigit == '0') {
+            var saw_separator = false;
             while (true) {
                 const c = self.peek() orelse 0;
                 if (self.chompBasePrefixedInteger(c)) |prefixed| {
+                    // `parseInto` reads a base prefix only right after the
+                    // leading `0`, so a separator before it spells a
+                    // different number there.
+                    if (saw_separator) self.number.scanned.flags.exact = false;
                     tok = prefixed;
                     break;
                 }
@@ -827,6 +900,7 @@ pub const Cursor = struct {
                         break;
                     },
                     NumericLiteral.digit_separator => {
+                        saw_separator = true;
                         self.pos += 1;
                         continue;
                     },
@@ -846,6 +920,7 @@ pub const Cursor = struct {
             tok = self.chompNumberBase10();
             tok = self.chompNumberSuffix(tok);
         }
+        self.number.finish();
         return tok;
     }
 
@@ -859,7 +934,7 @@ pub const Cursor = struct {
                 }
                 self.pos += 1;
                 var tok = Token.Tag.Int;
-                self.chompDigits(prefix.radix) catch {
+                self.chompRadixDigits(prefix.radix) catch {
                     tok = .MalformedNumberNoDigits;
                 };
                 return self.chompNumberSuffix(tok);
@@ -875,12 +950,30 @@ pub const Cursor = struct {
         if (NumericLiteral.isExponentMarker(self.peek() orelse 0)) {
             self.pos += 1;
             // Optional sign
+            var negative = false;
             if (self.peek() orelse 0 == '+' or self.peek() orelse 0 == '-') {
+                negative = self.buf[self.pos] == '-';
                 self.pos += 1;
             }
-            self.chompDigits(10) catch {
-                return error.EmptyExponent;
-            };
+            var magnitude: u32 = 0;
+            var contains_digits = false;
+            while (self.peek()) |c| {
+                if (c >= '0' and c <= '9') {
+                    contains_digits = true;
+                    if (magnitude <= NumericLiteral.Scanned.max_written_exponent / 10) {
+                        magnitude = magnitude * 10 + (c - '0');
+                    } else {
+                        magnitude = NumericLiteral.Scanned.max_written_exponent + 1;
+                    }
+                    self.pos += 1;
+                } else if (c == NumericLiteral.digit_separator) {
+                    self.pos += 1;
+                } else {
+                    break;
+                }
+            }
+            if (!contains_digits) return error.EmptyExponent;
+            self.number.exponent(magnitude, negative);
             return true;
         }
         return false;
@@ -902,10 +995,11 @@ pub const Cursor = struct {
             return hypothesis.updateIfNotMalformed(.MalformedNumberUnicodeSuffix);
         }
         const suffix = self.buf[start..self.pos];
-        if (Token.valid_number_suffixes.get(suffix) == null) {
-            return hypothesis.updateIfNotMalformed(.MalformedNumberBadSuffix);
-        } else {
+        if (Token.valid_number_suffixes.get(suffix)) |deprecated_suffix| {
+            self.number.scanned.suffix = deprecated_suffix;
             return hypothesis;
+        } else {
+            return hypothesis.updateIfNotMalformed(.MalformedNumberBadSuffix);
         }
     }
 
@@ -915,10 +1009,11 @@ pub const Cursor = struct {
     /// Before calling this method, a valid leading digit must have been parsed.
     pub fn chompNumberBase10(self: *Cursor) Token.Tag {
         var token_type: Token.Tag = .Int;
-        self.chompDigits(10) catch {}; // This is not an issue, have leading digit.
+        self.chompDecimalDigits(.before_point);
         if (self.peek() orelse 0 == '.' and (self.isPeekedCharInRange(1, '0', '9') or NumericLiteral.isExponentMarker(self.peekAt(1) orelse 0))) {
             self.pos += 1;
-            self.chompDigits(10) catch {}; // This is not an issue, guaranteed to have digits before the decimal point.
+            self.number.scanned.flags.had_decimal_point = true;
+            self.chompDecimalDigits(.after_point);
             token_type = .Float;
         }
         const has_exponent = self.chompExponent() catch {
@@ -930,13 +1025,32 @@ pub const Cursor = struct {
         return token_type;
     }
 
+    /// Chomp a run of decimal mantissa digits, with any digit separators
+    /// among them, recording them in `self.number`.
+    fn chompDecimalDigits(self: *Cursor, comptime position: enum { before_point, after_point }) void {
+        while (self.pos < self.buf.len) {
+            const c = self.buf[self.pos];
+            if (c >= '0' and c <= '9') {
+                self.number.decimalDigit(c - '0');
+                if (position == .after_point) self.number.fraction_digits += 1;
+                self.pos += 1;
+            } else if (c == NumericLiteral.digit_separator) {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
     /// Chomp the digits of an integer in `radix`, with any digit separators
-    /// among them. Will error if the integer has no digits.
-    pub fn chompDigits(self: *Cursor, comptime radix: u8) error{EmptyInteger}!void {
+    /// among them, recording their value in `self.number`. Will error if the
+    /// integer has no digits.
+    fn chompRadixDigits(self: *Cursor, comptime radix: u8) error{EmptyInteger}!void {
         var contains_digits = false;
         while (self.peek()) |c| {
-            if (NumericLiteral.isDigitInRadix(c, radix)) {
+            if (NumericLiteral.digitInRadix(c, radix)) |digit| {
                 contains_digits = true;
+                self.number.radixDigit(radix, digit);
                 self.pos += 1;
             } else if (c == NumericLiteral.digit_separator) {
                 self.pos += 1;
@@ -1288,6 +1402,20 @@ pub const Tokenizer = struct {
         });
     }
 
+    /// Pushes a number token `chompNumber` just scanned. An `Int` or `Float`
+    /// token carries the index of its `NumericLiteral.Scanned` record.
+    fn pushNumberTokenHere(self: *Tokenizer, gpa: std.mem.Allocator, tag: Token.Tag, tok_offset: Token.Idx) std.mem.Allocator.Error!void {
+        if (tag != .Int and tag != .Float) return self.pushTokenNormalHere(gpa, tag, tok_offset);
+        const number_idx = std.math.cast(u32, self.output.numbers.items.len) orelse return error.OutOfMemory;
+        try self.output.numbers.append(gpa, self.cursor.number.scanned);
+        errdefer _ = self.output.numbers.pop();
+        try self.output.tokens.append(gpa, .{
+            .tag = tag,
+            .region = base.Region.from_raw_offsets(tok_offset, self.cursor.pos),
+            .extra = .{ .number = number_idx },
+        });
+    }
+
     fn pushTokenInternedHere(
         self: *Tokenizer,
         gpa: std.mem.Allocator,
@@ -1456,7 +1584,8 @@ pub const Tokenizer = struct {
                             } else {
                                 self.cursor.pos += 1;
                                 const tag = self.cursor.chompNumber();
-                                try self.pushTokenNormalHere(gpa, tag, start);
+                                self.cursor.number.scanned.flags.is_negative = true;
+                                try self.pushNumberTokenHere(gpa, tag, start);
                             }
                         } else {
                             // A minus is unary when an expression starts right after it and
@@ -1743,7 +1872,7 @@ pub const Tokenizer = struct {
                 // Numbers starting with 0-9
                 '0'...'9' => {
                     const tag = self.cursor.chompNumber();
-                    try self.pushTokenNormalHere(gpa, tag, start);
+                    try self.pushNumberTokenHere(gpa, tag, start);
                 },
 
                 // Lowercase identifiers
@@ -2568,6 +2697,192 @@ test "number tokens the tokenizer accepts are numbers to the value parser" {
     }
     try std.testing.expect(accepted > 30);
     try std.testing.expect(malformed > 10);
+}
+
+/// Append a random run of `radix` digits, with random digit separators among
+/// them, to `text`. Zeros are drawn often so leading and trailing zeros and
+/// all-zero runs are common.
+fn appendRandomDigits(gpa: std.mem.Allocator, text: *std.ArrayList(u8), random: std.Random, radix: u8, max_len: usize) std.mem.Allocator.Error!void {
+    const digit_chars = "0123456789abcdefABCDEF";
+    const len = random.uintAtMost(usize, max_len);
+    for (0..len) |_| {
+        if (random.uintLessThan(u8, 8) == 0) try text.append(gpa, NumericLiteral.digit_separator);
+        const char = if (random.boolean()) '0' else switch (radix) {
+            16 => digit_chars[random.uintLessThan(usize, digit_chars.len)],
+            else => '0' + random.uintLessThan(u8, radix),
+        };
+        try text.append(gpa, char);
+    }
+}
+
+/// Compose a random number token spelling from small pieces: a sign, a
+/// leading digit, separators, a base prefix, a fraction, an exponent and a
+/// suffix, each present or absent at random.
+fn appendRandomNumberText(gpa: std.mem.Allocator, text: *std.ArrayList(u8), random: std.Random) std.mem.Allocator.Error!void {
+    if (random.boolean()) try text.append(gpa, '-');
+    if (random.uintLessThan(u8, 4) == 0) {
+        try text.append(gpa, '0');
+        if (random.uintLessThan(u8, 4) == 0) try text.append(gpa, NumericLiteral.digit_separator);
+        const prefix = NumericLiteral.base_prefixes[random.uintLessThan(usize, NumericLiteral.base_prefixes.len)];
+        try text.append(gpa, if (random.boolean()) prefix.lower else prefix.upper);
+        try appendRandomDigits(gpa, text, random, prefix.radix, if (random.boolean()) 20 else 40);
+    } else {
+        try text.append(gpa, '0' + random.uintLessThan(u8, 10));
+        try appendRandomDigits(gpa, text, random, 10, if (random.boolean()) 12 else 30);
+        if (random.boolean()) {
+            try text.append(gpa, '.');
+            try appendRandomDigits(gpa, text, random, 10, if (random.boolean()) 12 else 30);
+        }
+        if (random.uintLessThan(u8, 3) == 0) {
+            try text.append(gpa, if (random.boolean()) 'e' else 'E');
+            switch (random.uintLessThan(u8, 3)) {
+                0 => try text.append(gpa, '-'),
+                1 => try text.append(gpa, '+'),
+                else => {},
+            }
+            try appendRandomDigits(gpa, text, random, 10, if (random.uintLessThan(u8, 8) == 0) 12 else 3);
+        }
+    }
+    if (random.uintLessThan(u8, 4) == 0) {
+        const suffixes = [_][]const u8{ "u8", "i16", "u64", "i128", "f32", "f64", "dec", "x" };
+        try text.appendSlice(gpa, suffixes[random.uintLessThan(usize, suffixes.len)]);
+    }
+}
+
+/// How a number token's facts were derived in `expectScannedMatchesText`.
+const ScannedOutcome = enum { not_a_number, exact, inexact };
+
+/// Tokenize `text` as one number token and, when the tokenizer's record is
+/// exact, require it to give the facts, digits and deprecated suffix that
+/// `parseInto` derives from the token's text.
+fn expectScannedMatchesText(gpa: std.mem.Allocator, text: []const u8) (std.mem.Allocator.Error || error{TestExpectedEqual})!ScannedOutcome {
+    errdefer std.debug.print("number text: '{s}'\n", .{text});
+    var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+    defer env.deinit(gpa);
+    var messages: [8]Diagnostic = undefined;
+    var tokenizer = try Tokenizer.init(&env, gpa, text, &messages);
+    defer tokenizer.deinit(gpa);
+    try tokenizer.tokenize(gpa);
+
+    const tokens = &tokenizer.output;
+    const tag = tokens.tokens.items(.tag)[0];
+    const kind: NumericLiteral.Kind = if (tag == .Int) .int else if (tag == .Float) .frac else return .not_a_number;
+    const region = tokens.resolve(0);
+    const scanned = tokens.scannedNumber(0);
+    if (!scanned.flags.exact) return .inexact;
+
+    const split = NumericLiteral.splitSource(text[region.start.offset..region.end.offset], kind);
+    try std.testing.expectEqual(split.deprecated_suffix, scanned.suffix);
+    var old_digits: std.ArrayList(u8) = .empty;
+    defer old_digits.deinit(gpa);
+    const old = try NumericLiteral.parseInto(gpa, &old_digits, gpa, split.number_text, kind);
+    var new_digits: NumericLiteral.ScannedDigits = .{};
+    const new = NumericLiteral.parseScanned(scanned, kind, &new_digits);
+    try std.testing.expectEqualDeep(old, new);
+    try std.testing.expectEqualSlices(u8, old_digits.items, new_digits.all());
+    return .exact;
+}
+
+test "tokenizer number records give the facts the text parser derives" {
+    const gpa = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x5eed_0f_d161_7500);
+    const random = prng.random();
+
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(gpa);
+    var exact_count: usize = 0;
+    var inexact_count: usize = 0;
+    for (0..20_000) |_| {
+        text.clearRetainingCapacity();
+        try appendRandomNumberText(gpa, &text, random);
+        switch (try expectScannedMatchesText(gpa, text.items)) {
+            .not_a_number => {},
+            .exact => exact_count += 1,
+            .inexact => inexact_count += 1,
+        }
+    }
+    try std.testing.expect(exact_count > 8_000);
+    try std.testing.expect(inexact_count > 500);
+}
+
+test "tokenizer number records at the edges of the exact form" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { text: []const u8, outcome: ScannedOutcome }{
+        // Signs, zeros and separators.
+        .{ .text = "0", .outcome = .exact },
+        .{ .text = "-0", .outcome = .exact },
+        .{ .text = "-0.0", .outcome = .exact },
+        .{ .text = "000.000", .outcome = .exact },
+        .{ .text = "1_000_000", .outcome = .exact },
+        .{ .text = "0_1", .outcome = .exact },
+        .{ .text = "1_.5_0", .outcome = .exact },
+        // A separator before a base prefix: the text parser reads `0_`.
+        .{ .text = "0_x10", .outcome = .inexact },
+        .{ .text = "0_b1", .outcome = .inexact },
+        // Base prefixes up to and past 64 bits.
+        .{ .text = "0xFFFF_FFFF_FFFF_FFFF", .outcome = .exact },
+        .{ .text = "0x1_0000_0000_0000_0000", .outcome = .inexact },
+        .{ .text = "-0b1010", .outcome = .exact },
+        .{ .text = "0o777", .outcome = .exact },
+        .{ .text = "0XFFu8", .outcome = .exact },
+        // Nineteen significant digits fit; twenty do not.
+        .{ .text = "9999999999999999999", .outcome = .exact },
+        .{ .text = "10000000000000000000", .outcome = .inexact },
+        .{ .text = "0.0000001234567890123456789", .outcome = .exact },
+        .{ .text = "0.12345678901234567890", .outcome = .inexact },
+        .{ .text = "18446744073709551615", .outcome = .inexact },
+        // i8..i64 and u8..u64 extremes.
+        .{ .text = "127", .outcome = .exact },
+        .{ .text = "-128", .outcome = .exact },
+        .{ .text = "255", .outcome = .exact },
+        .{ .text = "-9223372036854775808", .outcome = .exact },
+        .{ .text = "9223372036854775807", .outcome = .exact },
+        // Small decimals and Dec's 18 fractional digits.
+        .{ .text = "3.2767", .outcome = .exact },
+        .{ .text = "-3.2768", .outcome = .exact },
+        .{ .text = "3.2768", .outcome = .exact },
+        .{ .text = "0.000000000000000001", .outcome = .exact },
+        .{ .text = "0.0000000000000000001", .outcome = .exact },
+        .{ .text = "0.0000000000000000010", .outcome = .exact },
+        .{ .text = "1.500", .outcome = .exact },
+        .{ .text = "170141183460469231731.6", .outcome = .inexact },
+        .{ .text = "17014118346046923.17", .outcome = .exact },
+        .{ .text = "1.701411834604692317e20", .outcome = .exact },
+        .{ .text = "1.701411834604692318e20", .outcome = .exact },
+        .{ .text = "-1.701411834604692318e20", .outcome = .exact },
+        // Exponents: integer-valued, fractional, big and small.
+        .{ .text = "1e19", .outcome = .exact },
+        .{ .text = "1e20", .outcome = .inexact },
+        .{ .text = "1.5e19", .outcome = .exact },
+        .{ .text = "9999999999999999999e19", .outcome = .exact },
+        .{ .text = "1.5E+1_0", .outcome = .exact },
+        .{ .text = "2.5e-3", .outcome = .exact },
+        .{ .text = "1.e5", .outcome = .exact },
+        .{ .text = "0.0e0", .outcome = .exact },
+        .{ .text = "0.0e999999", .outcome = .inexact },
+        .{ .text = "1e-0", .outcome = .exact },
+        .{ .text = "4e-100000", .outcome = .exact },
+        .{ .text = "4e-999999999", .outcome = .exact },
+        .{ .text = "4e-1000000000", .outcome = .inexact },
+        .{ .text = "4e-9223372036854775808", .outcome = .inexact },
+        .{ .text = "3e6000000000", .outcome = .inexact },
+        .{ .text = "1e00000000000000000005", .outcome = .exact },
+        // Deprecated suffixes.
+        .{ .text = "12u8", .outcome = .exact },
+        .{ .text = "1.5f64", .outcome = .exact },
+        .{ .text = "1e3f32", .outcome = .exact },
+        .{ .text = "10dec", .outcome = .exact },
+        .{ .text = "0x1f32", .outcome = .exact },
+        // Malformed numbers are not number literals.
+        .{ .text = "1e", .outcome = .not_a_number },
+        .{ .text = "0e0", .outcome = .not_a_number },
+        .{ .text = "0x", .outcome = .not_a_number },
+        .{ .text = "12abc", .outcome = .not_a_number },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("number text: '{s}'\n", .{case.text});
+        try std.testing.expectEqual(case.outcome, try expectScannedMatchesText(gpa, case.text));
+    }
 }
 
 test "tokenizer" {

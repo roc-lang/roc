@@ -1031,10 +1031,11 @@ fn appendFuncBody(self: *Self, body: []const u8) Allocator.Error!void {
 }
 
 fn storeFuncBodyBytes(self: *Self, body: []const u8) Allocator.Error!FuncBody {
-    const start = self.func_body_bytes.items.len;
-    if (body.len > std.math.maxInt(u32) - start) return error.OutOfMemory;
+    const start = std.math.cast(u32, self.func_body_bytes.items.len) orelse return error.OutOfMemory;
+    const len = std.math.cast(u32, body.len) orelse return error.OutOfMemory;
+    _ = std.math.add(u32, start, len) catch return error.OutOfMemory;
     try self.func_body_bytes.appendSlice(self.allocator, body);
-    return .{ .start = @intCast(start), .len = @intCast(body.len) };
+    return .{ .start = start, .len = len };
 }
 
 /// The bytes of the function body at `index` in `func_bodies`.
@@ -1305,13 +1306,13 @@ pub fn addStaticDataExports(self: *Self, exports: []const StaticDataExport) Stat
                     .offset = @intCast(relocation.offset),
                     .symbol_index = symbol_index.raw(),
                     .addend = @intCast(relocation.addend),
-                    .data_segment_index = segment_index,
+                    .data_segment_index = .some(segment_index),
                 } }),
                 .function_pointer => try self.reloc_data.entries.append(self.allocator, .{ .index = .{
                     .type_id = .table_index_i32,
                     .offset = @intCast(relocation.offset),
                     .symbol_index = symbol_index.raw(),
-                    .data_segment_index = segment_index,
+                    .data_segment_index = .some(segment_index),
                 } }),
             }
         }
@@ -1982,10 +1983,7 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
     for (source.reloc_data.entries.items) |src_entry| {
         switch (src_entry) {
             .index => |idx| {
-                const remapped_segment_idx = if (idx.data_segment_index < data_segment_remap.len)
-                    data_segment_remap[idx.data_segment_index]
-                else
-                    idx.data_segment_index;
+                const remapped_segment_idx = remapDataSegment(idx.data_segment_index, data_segment_remap);
                 try self.reloc_data.entries.append(gpa, .{
                     .index = .{
                         .type_id = idx.type_id,
@@ -1996,10 +1994,7 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
                 });
             },
             .offset => |off| {
-                const remapped_segment_idx = if (off.data_segment_index < data_segment_remap.len)
-                    data_segment_remap[off.data_segment_index]
-                else
-                    off.data_segment_index;
+                const remapped_segment_idx = remapDataSegment(off.data_segment_index, data_segment_remap);
                 try self.reloc_data.entries.append(gpa, .{ .offset = .{
                     .type_id = off.type_id,
                     .offset = off.offset,
@@ -2353,14 +2348,17 @@ pub fn resolveCodeRelocations(self: *Self) RelocationError!void {
     }
 }
 
+/// A data relocation's segment after a merge moved segments by `remap`; a
+/// segment index outside `remap` is kept as it is.
+fn remapDataSegment(segment: collections.OptionalU32, remap: []const u32) collections.OptionalU32 {
+    const index = segment.get() orelse return .none;
+    return if (index < remap.len) .some(remap[index]) else segment;
+}
+
 /// Resolve all data relocations in place.
 pub fn resolveDataRelocations(self: *Self) RelocationError!void {
     for (self.reloc_data.entries.items) |entry| {
-        const segment_idx = switch (entry) {
-            .index => |idx| idx.data_segment_index,
-            .offset => |off| off.data_segment_index,
-        };
-        std.debug.assert(segment_idx != std.math.maxInt(u32));
+        const segment_idx = entry.dataSegmentIndex().?;
         std.debug.assert(segment_idx < self.data_segments.items.len);
 
         const segment = &self.data_segments.items[segment_idx];
@@ -2839,7 +2837,7 @@ fn eliminateDeadData(self: *Self, live_flags: []const bool, fn_index_min: u32, f
     while (changed) {
         changed = false;
         for (self.reloc_data.entries.items) |entry| {
-            const source_segment = relocationDataSegment(entry);
+            const source_segment = entry.dataSegmentIndex().?;
             std.debug.assert(source_segment < live_segments.len);
             if (!live_segments[source_segment]) continue;
 
@@ -2862,13 +2860,6 @@ fn eliminateDeadData(self: *Self, live_flags: []const bool, fn_index_min: u32, f
 fn relocationOffsetInRange(entry: WasmLinking.RelocationEntry, code_start: u32, code_end: u32) bool {
     const offset = entry.getOffset();
     return offset > code_start and offset < code_end;
-}
-
-fn relocationDataSegment(entry: WasmLinking.RelocationEntry) u32 {
-    return switch (entry) {
-        .index => |idx| idx.data_segment_index,
-        .offset => |off| off.data_segment_index,
-    };
 }
 
 fn markRelocationDataTarget(self: *const Self, live_segments: []bool, entry: WasmLinking.RelocationEntry) bool {
@@ -2905,11 +2896,12 @@ fn traceLiveFunctions(
 ) Allocator.Error![]bool {
     const gpa = self.allocator;
 
-    // Build symbol_index → function_index lookup.
-    const sym_fn_indices = try gpa.alloc(u32, self.linking.symbol_table.items.len);
+    // Build symbol_index → function_index lookup; absent for a symbol that
+    // names no function, which a direct call site never reaches.
+    const sym_fn_indices = try gpa.alloc(collections.OptionalU32, self.linking.symbol_table.items.len);
     defer gpa.free(sym_fn_indices);
     for (self.linking.symbol_table.items, 0..) |sym, i| {
-        sym_fn_indices[i] = if (sym.isFunction()) sym.index else std.math.maxInt(u32);
+        sym_fn_indices[i] = if (sym.isFunction()) .some(sym.index) else .none;
     }
 
     // Each direct call and indirect call site, by its offset in the code
@@ -2999,7 +2991,7 @@ fn traceLiveFunctions(
         while (site_index < call_sites.items.len and call_sites.items[site_index].offset < code_end) : (site_index += 1) {
             const site = call_sites.items[site_index];
             switch (site.kind) {
-                .direct => try tracer.mark(gpa, sym_fn_indices[site.target]),
+                .direct => if (sym_fn_indices[site.target].get()) |callee| try tracer.mark(gpa, callee),
                 .indirect => {
                     const type_idx = site.target;
                     if ((try traced_indirect_types.getOrPut(type_idx)).found_existing) continue;
@@ -3209,11 +3201,11 @@ fn normalizeDataRelocations(self: *Self) ParseError!void {
             switch (entry.*) {
                 .index => |*idx| {
                     idx.offset = in_segment_offset;
-                    idx.data_segment_index = @intCast(seg_idx);
+                    idx.data_segment_index = .some(@intCast(seg_idx));
                 },
                 .offset => |*off| {
                     off.offset = in_segment_offset;
-                    off.data_segment_index = @intCast(seg_idx);
+                    off.data_segment_index = .some(@intCast(seg_idx));
                 },
             }
             matched = true;
@@ -3965,11 +3957,8 @@ fn encodeSymbol(gpa: Allocator, output: *std.ArrayList(u8), sym: WasmLinking.Sym
 /// for an entry that names no segment (every `reloc.CODE` entry, whose offset is
 /// already a position in the code section).
 fn relocationSegmentDelta(self: *const Self, entry: WasmLinking.RelocationEntry) u32 {
-    const segment_index = switch (entry) {
-        .index => |idx| idx.data_segment_index,
-        .offset => |off| off.data_segment_index,
-    };
-    if (segment_index == std.math.maxInt(u32) or segment_index >= self.data_segments.items.len) return 0;
+    const segment_index = entry.dataSegmentIndex() orelse return 0;
+    if (segment_index >= self.data_segments.items.len) return 0;
     return self.data_segments.items[segment_index].section_offset;
 }
 
@@ -5693,7 +5682,7 @@ fn buildMergeDataRelocModule(allocator: Allocator) Allocator.Error!Self {
         .offset = 0,
         .symbol_index = 0,
         .addend = 0,
-        .data_segment_index = 0,
+        .data_segment_index = .some(0),
     } });
 
     return module;
@@ -6485,7 +6474,7 @@ test "resolveDataRelocations—function_offset_i32 writes raw function body offs
         .offset = 0,
         .symbol_index = 0,
         .addend = 3,
-        .data_segment_index = 0,
+        .data_segment_index = .some(0),
     } });
 
     try module.resolveDataRelocations();
@@ -7211,7 +7200,7 @@ test "encodeRelocatable roundtrip - preserves data symbols and data relocations"
         .offset = 0,
         .symbol_index = data_symbol.raw(),
         .addend = 7,
-        .data_segment_index = segment_index,
+        .data_segment_index = .some(segment_index),
     } });
 
     const encoded = try module.encodeRelocatable(allocator);
@@ -7242,7 +7231,7 @@ test "encodeRelocatable roundtrip - preserves data symbols and data relocations"
     try std.testing.expectEqual(@as(u32, 0), parsed_reloc.offset);
     try std.testing.expectEqual(parsed_data_symbol_index, parsed_reloc.symbol_index);
     try std.testing.expectEqual(@as(i32, 7), parsed_reloc.addend);
-    try std.testing.expectEqual(@as(u32, 0), parsed_reloc.data_segment_index);
+    try std.testing.expectEqual(@as(?u32, 0), parsed_reloc.data_segment_index.get());
 
     try std.testing.expectEqual(@as(usize, 1), parsed.reloc_code.entries.items.len);
     const parsed_code_reloc = parsed.reloc_code.entries.items[0].index;

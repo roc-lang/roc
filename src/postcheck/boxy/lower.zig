@@ -169,9 +169,10 @@ pub const ModuleUnit = struct {
     expect_sites: bool = false,
 };
 
-/// The ownership signature and tail-drive summary a unit's ARC solved for
-/// one exported worker: what a call to it from another object compiles
-/// against (`LIR.LirProcSpec` `rc_*` fields and `may_leave_pending`).
+/// The ownership signature, tail-drive summary and tail carry a unit's ARC
+/// solved for one exported worker: what a call to it from another object
+/// compiles against (`LIR.LirProcSpec` `rc_*` fields, `may_leave_pending`
+/// and `tail_carry`).
 pub const ExportInterface = struct {
     rc_borrowed_params: u64 = 0,
     rc_ret_borrowed: bool = false,
@@ -181,6 +182,7 @@ pub const ExportInterface = struct {
     rc_ret_unique_fields: u64 = 0,
     rc_ret_conditions: []const u32 = &.{},
     may_leave_pending: bool = false,
+    tail_carry: bool = false,
     /// The outcome table of the outcome-restitution variant the worker's
     /// object outputs (`LIR.LirProcSpec.rc_outcomes`); empty when it
     /// outputs none. That variant has an interface of its own, under the
@@ -199,7 +201,7 @@ pub const ExportInterface = struct {
     /// For a template's worker: its template's position in its module's
     /// checked table, which a needs list naming the worker by identity
     /// resolves it to (`LirProgram.BoxyExport.template`).
-    template: u32 = LirProgram.BoxyExport.no_template,
+    template: collections.OptionalU32 = .none,
     /// Whether another unit may read this interface: the module's export
     /// digest covers only these (`LirProgram.BoxyExport.visible`).
     visible: bool = false,
@@ -294,6 +296,7 @@ pub const ExportInterfaces = struct {
             .rc_ret_unique_fields = spec.rc_ret_unique_fields,
             .rc_ret_conditions = conditions,
             .may_leave_pending = spec.may_leave_pending,
+            .tail_carry = spec.tail_carry,
             .rc_outcomes = outcomes,
             .nonescaping_fn_params = spec.nonescaping_fn_params,
             .capture_reuse_fn_params = spec.capture_reuse_fn_params,
@@ -328,11 +331,12 @@ test "export interface snapshot owns the complete calling contract" {
         .rc_ret_unique_fields = 4,
         .rc_ret_conditions = &.{ 7, 8, 9 },
         .may_leave_pending = true,
+        .tail_carry = true,
         .rc_outcomes = &.{ 0, 0, 1, 2 },
         .nonescaping_fn_params = 5,
         .capture_reuse_fn_params = 4,
         .table_needs = "producer needs",
-        .template = 4,
+        .template = .some(4),
         .visible = true,
     };
     try producer.put(identity, expected);
@@ -883,11 +887,6 @@ pub const DictionaryNode = struct {
     /// The requirement this entry resolves; null for a tree's root target.
     requirement: ?DictRequirement,
     kind: Kind,
-    /// The shallowest target on this entry's path that some back edge below
-    /// it returns to, or `no_reach`.
-    reaches: u32 = no_reach,
-
-    pub const no_reach = std.math.maxInt(u32);
 
     pub const Kind = union(enum) {
         /// A requirement no method target resolves.
@@ -903,8 +902,6 @@ pub const DictionaryNode = struct {
         instance: TargetInstance,
         /// The node of each of `instance.requirements`.
         children: []const u32,
-        /// How many targets are above this one on its path.
-        depth: u32,
         /// Whether a back edge returns to this target.
         recursive: bool = false,
     };
@@ -1003,6 +1000,9 @@ pub const Program = struct {
     /// evaluates later from (`rootValueSlot`), by root.
     root_value_slots: std.AutoHashMapUnmanaged(RootSlotKey, LIR.StaticDataId) = .empty,
     stored_value_slots: std.AutoHashMapUnmanaged(StoredValueKey, LIR.StaticDataId) = .empty,
+    /// Whether each stored node of a module is data alone
+    /// (`storedDataAlone`), by node, for the modules asked about.
+    stored_data_alone: std.AutoHashMapUnmanaged(ModuleIndex, std.ArrayList(DataAlone)) = .empty,
     /// The static data slot each value-form expression a body keeps reads
     /// (`inlineLiteralSlot`), by the expression's initializer worker.
     inline_literal_slots: collections.DenseMapUnmanaged(WorkerId, LIR.StaticDataId) = .empty,
@@ -1569,6 +1569,7 @@ pub const Program = struct {
         proc.rc_ret_unique = interface.rc_ret_unique;
         proc.rc_ret_unique_fields = interface.rc_ret_unique_fields;
         proc.may_leave_pending = interface.may_leave_pending;
+        proc.tail_carry = interface.tail_carry;
         proc.nonescaping_fn_params = interface.nonescaping_fn_params;
         proc.capture_reuse_fn_params = interface.capture_reuse_fn_params;
         proc.rc_ret_conditions = self.result.store.addU32Span(interface.rc_ret_conditions) catch |err| switch (err) {
@@ -1710,6 +1711,9 @@ pub const Program = struct {
         self.platform_identities.deinit(self.allocator);
         self.root_value_slots.deinit(self.allocator);
         self.stored_value_slots.deinit(self.allocator);
+        var data_alone_tables = self.stored_data_alone.valueIterator();
+        while (data_alone_tables.next()) |table| table.deinit(self.allocator);
+        self.stored_data_alone.deinit(self.allocator);
         self.inline_literal_slots.deinit(self.allocator);
         self.requested_roots.deinit(self.allocator);
         self.const_schema.deinit(self.allocator);
@@ -1734,6 +1738,81 @@ pub const Program = struct {
         return switch (source) {
             .module => |index| self.module(index).view.const_store,
         };
+    }
+
+    /// What is known of a stored node (`storedDataAlone`).
+    pub const DataAlone = enum(u8) { unknown, yes, no };
+
+    /// Whether stored constant `node` of `source` is data alone: neither it
+    /// nor any value it holds is a function value or a failed value. Static
+    /// data freezes such a value from the store through its type's const
+    /// plan (`LirProgram.StoredStaticValue`), so it is one slot whatever it
+    /// holds. Every node the question visits is answered once per lowering.
+    pub fn storedDataAlone(self: *Program, source: ConstSource, node: checked.ConstNodeId) Allocator.Error!bool {
+        const const_store = self.constStore(source);
+        const entry = try self.stored_data_alone.getOrPut(self.allocator, switch (source) {
+            .module => |index| index,
+        });
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        const table = entry.value_ptr;
+        const known = table.items.len;
+        if (known < const_store.nodeCount()) {
+            try table.resize(self.allocator, const_store.nodeCount());
+            @memset(table.items[known..], .unknown);
+        }
+        const answers = table.items;
+        if (answers[@backingInt(node)] != .unknown) return answers[@backingInt(node)] == .yes;
+
+        const Frame = struct { node: checked.ConstNodeId, next: usize = 0 };
+        var frames: std.ArrayList(Frame) = .empty;
+        defer frames.deinit(self.allocator);
+        try frames.append(self.allocator, .{ .node = node });
+        while (frames.items.len != 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            var single: [1]checked.ConstNodeId = undefined;
+            const children: ?[]const checked.ConstNodeId = switch (const_store.get(frame.node)) {
+                .pending => invariant("a stored constant was never filled"),
+                .crash, .checked_error, .fn_value, .boxy_fn => null,
+                .zst, .scalar, .str => &.{},
+                .box => |child| blk: {
+                    single[0] = child;
+                    break :blk &single;
+                },
+                .nominal => |nominal| blk: {
+                    single[0] = nominal.backing;
+                    break :blk &single;
+                },
+                .tuple, .record => |items| items,
+                .tag => |tag| tag.payloads,
+                .list => |list| switch (list.items) {
+                    .nodes => |items| items,
+                    .empty, .packed_bytes => &.{},
+                },
+            };
+            var answer: DataAlone = if (children == null) .no else .yes;
+            var unanswered: ?checked.ConstNodeId = null;
+            if (children) |items| while (frame.next < items.len) {
+                const child = items[frame.next];
+                switch (answers[@backingInt(child)]) {
+                    .yes => frame.next += 1,
+                    .no => {
+                        answer = .no;
+                        break;
+                    },
+                    .unknown => {
+                        unanswered = child;
+                        break;
+                    },
+                }
+            };
+            if (unanswered) |child| {
+                try frames.append(self.allocator, .{ .node = child });
+                continue;
+            }
+            answers[@backingInt(frame.node)] = answer;
+            _ = frames.pop();
+        }
+        return answers[@backingInt(node)] == .yes;
     }
 
     /// The names `source`'s stored types intern.
@@ -1787,7 +1866,7 @@ pub const Program = struct {
             map.userLineIdx(line, offset) orelse return base.SourceLoc.none
         else
             line;
-        return .{ .file = self.source_files[@backingInt(index)], .line = user_line + 1, .column = column + 1 };
+        return .{ .file = .some(self.source_files[@backingInt(index)]), .line = user_line + 1, .column = column + 1 };
     }
 
     /// The source location a procedure template's worker reports: where the
@@ -3046,7 +3125,7 @@ pub const Program = struct {
         var result: NominalOverrides = .{ null, null, null };
         if (nominal.has_backing) {
             const view = self.module(nominal.decl.module);
-            const declaration = view.types().nominalDeclarationById(nominal.decl.decl);
+            const declaration = view.types().nominalDeclarationById(nominal.decl.decl.get().?);
             const owner: static_dispatch.MethodOwner = if (nominal.builtin) |builtin| (if (builtin == .try_)
                 .{ .nominal = declaration.nominal }
             else
@@ -3239,8 +3318,6 @@ pub const Program = struct {
             const done = walk.frames.pop().?;
             const entry = &walk.nodes.items[done.node];
             entry.kind.target.children = done.children.items;
-            entry.reaches = done.reaches;
-            if (walk.frames.items.len > 0) walk.reach(done.reaches);
         }
         return walk.nodes.items;
     }
@@ -3264,7 +3341,6 @@ pub const Program = struct {
         const Frame = struct {
             node: u32,
             next: usize = 0,
-            reaches: u32 = DictionaryNode.no_reach,
             children: std.ArrayList(u32) = .empty,
         };
 
@@ -3280,11 +3356,6 @@ pub const Program = struct {
             return index;
         }
 
-        fn reach(self: *DictionaryWalk, depth: u32) void {
-            const top = &self.frames.items[self.frames.items.len - 1];
-            top.reaches = @min(top.reaches, depth);
-        }
-
         fn visit(self: *DictionaryWalk, requirement: DictRequirement) Allocator.Error!void {
             const resolution = try self.program.resolveRequirement(requirement);
             switch (resolution) {
@@ -3298,16 +3369,13 @@ pub const Program = struct {
                 const on_path = &self.nodes.items[frame.node].kind.target;
                 if (on_path.target != target or !std.mem.eql(TypeId, on_path.instance.bound, instance.bound)) continue;
                 on_path.recursive = true;
-                const depth = on_path.depth;
-                _ = try self.add(.{ .requirement = requirement, .kind = .{ .back_edge = frame.node }, .reaches = depth });
-                return self.reach(depth);
+                _ = try self.add(.{ .requirement = requirement, .kind = .{ .back_edge = frame.node } });
+                return;
             }
-            const depth: u32 = @intCast(self.frames.items.len);
             const node = try self.add(.{ .requirement = requirement, .kind = .{ .target = .{
                 .target = target,
                 .instance = instance,
                 .children = &.{},
-                .depth = depth,
             } } });
             try self.frames.append(self.program.allocator, .{ .node = node });
         }
@@ -3526,7 +3594,7 @@ pub const Program = struct {
             .box => .{ .module = null, .owner = .{ .builtin = .box } },
             .nominal => |nominal| blk: {
                 const view = self.module(nominal.decl.module);
-                const declaration = view.types().nominalDeclarationById(nominal.decl.decl);
+                const declaration = view.types().nominalDeclarationById(nominal.decl.decl.get().?);
                 break :blk .{ .module = nominal.decl.module, .owner = if (nominal.builtin) |builtin| (if (builtin == .try_)
                     .{ .nominal = declaration.nominal }
                 else
@@ -4997,8 +5065,20 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
         for (view.view.callable_eval_templates.templates) |callable| {
             if (callable.forwarded_lookup.get() != null) forwarded_roots[@backingInt(callable.root)] = true;
         }
-        for (view.view.checked_procedure_templates.templates.items(), 0..) |template, index| {
-            if (!unitEmitsTemplate(view, template, forwarded_roots)) continue;
+        // A constant's entry procedure is called only where a read finds
+        // the constant's template still names it (`ConstTemplateState.eval_template`).
+        const templates = view.view.checked_procedure_templates.templates.items();
+        const const_entries = try program.allocator.alloc(bool, templates.len);
+        defer program.allocator.free(const_entries);
+        @memset(const_entries, false);
+        for (view.view.const_templates.templates.items()) |const_template| switch (const_template.state) {
+            .eval_template => |eval| if (program.moduleByKey(.{ .bytes = eval.entry_template.artifact.bytes }).index == view.index) {
+                const_entries[@backingInt(eval.entry_template.template)] = true;
+            },
+            .reserved, .stored_const, .unimplemented => {},
+        };
+        for (templates, 0..) |template, index| {
+            if (!try unitEmitsTemplate(program, view, template, forwarded_roots, const_entries[index])) continue;
             if (try templateRejected(program, view, template)) continue;
             const worker = try program.templateWorker(view.index, @fromBackingInt(@intCast(index)));
             _ = try program.methodEntryWorker(worker);
@@ -5191,9 +5271,9 @@ fn recordExports(program: *Program) Allocator.Error!void {
     try program.result.boxy_exports.ensureTotalCapacity(result_allocator, @intCast(program.result.exported_procs.items.len));
     for (program.workers.items, visible) |worker, is_visible| {
         if (worker.imported or !Program.exportableKind(worker.key)) continue;
-        const template: u32 = switch (worker.key) {
-            .template => |key| @backingInt(key.template),
-            .lambda, .method_entry, .default, .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => LirProgram.BoxyExport.no_template,
+        const template: collections.OptionalU32 = switch (worker.key) {
+            .template => |key| .some(@backingInt(key.template)),
+            .lambda, .method_entry, .default, .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => .none,
         };
         program.result.boxy_exports.putAssumeCapacity(program.result.store.getProcSpec(worker.proc).identity, .{ .template = template, .visible = is_visible });
     }
@@ -5207,21 +5287,34 @@ fn templateRejected(program: *Program, view: *const types.ModuleView, template: 
 
 /// Whether a module unit emits `template` (design.md "Per-Module Output"):
 /// every template another object may call or compose, which leaves out the
-/// wrappers of `expect` and REPL roots and of interpolation conversion roots.
-/// Nothing reaches the first two but a test plan's or a REPL's own roots, and
-/// each of those lowers as one program; nothing calls an interpolation
-/// conversion root's wrapper at all, since every use converts its literal in
-/// place (design.md "Literal Arguments").
+/// wrappers of `expect` and REPL roots, of literal conversion roots, and of
+/// validation roots. Nothing reaches the first two but a test plan's or a
+/// REPL's own roots, and each of those lowers as one program; nothing calls
+/// a conversion root's wrapper at all, since every use restores the root's
+/// stored value or converts its literal in place (`restoreConversionRoot`;
+/// design.md "Literal Arguments"); and a validation root has no value for
+/// any body to read.
 /// Exact procedure aliases forward to their targets without evaluator wrappers.
-fn unitEmitsTemplate(view: *const types.ModuleView, template: checked.CheckedProcedureTemplate, forwarded_roots: []const bool) bool {
+/// A constant whose stored value is data alone has no caller of its wrapper
+/// either: every read restores the stored value where it reads, so the
+/// wrapper is emitted only while a constant's template names it as its entry
+/// procedure (`const_entry`). A stored function value's wrapper stays: its
+/// restore is what lowers the workers the value names, which other objects
+/// link against.
+fn unitEmitsTemplate(program: *Program, view: *const types.ModuleView, template: checked.CheckedProcedureTemplate, forwarded_roots: []const bool, const_entry: bool) Allocator.Error!bool {
     return switch (template.body) {
         .checked_body, .intrinsic_wrapper, .unimplemented => true,
         .entry_wrapper => |wrapper_id| blk: {
             const root_id = view.view.entry_wrappers.get(wrapper_id).root;
             if (forwarded_roots[@backingInt(root_id)]) break :blk false;
-            break :blk switch (view.view.compile_time_roots.root(root_id).kind) {
-                .expect, .repl_expr, .interpolation_conversion => false,
-                .callable_binding, .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => true,
+            const root = view.view.compile_time_roots.root(root_id);
+            break :blk switch (root.kind) {
+                .expect, .repl_expr, .interpolation_conversion, .hoisted_validation, .numeral_conversion, .quote_conversion => false,
+                .constant, .hoisted_constant => const_entry or switch (root.payloadFor(.boxy)) {
+                    .const_node => |node| !try program.storedDataAlone(.{ .module = view.index }, node),
+                    .fn_value, .pending, .unevaluated, .discarded, .expect, .runtime => true,
+                },
+                .callable_binding, .literal_argument => true,
             };
         },
     };

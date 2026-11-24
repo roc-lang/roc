@@ -64,7 +64,6 @@ pub fn publish(
     env: *ModuleEnv,
     scope: *const dependencies.Scope,
     classify: *const fn (*const ModuleEnv, CIR.Def) Definition,
-    binding_owner: *const fn (*const ModuleEnv, CIR.Node.Idx) Allocator.Error!?CIR.Def.Idx,
 ) Allocator.Error!void {
     var owners = try scope.copyOwners(env.gpa);
     errdefer owners.deinit(env.gpa);
@@ -76,7 +75,7 @@ pub fn publish(
     const digest = if (env.module_role == .builtin) env.contentIdentityHash().?.* else blk: {
         var publication = try Publication.init(env, scope);
         defer publication.deinit();
-        try publication.writeInterface(classify, binding_owner);
+        try publication.writeInterface(classify);
         const result = try publication.finish();
         references = publication.references;
         publication.references = .{};
@@ -410,7 +409,6 @@ const Publication = struct {
     fn writeInterface(
         self: *Publication,
         classify: *const fn (*const ModuleEnv, CIR.Def) Definition,
-        binding_owner: *const fn (*const ModuleEnv, CIR.Node.Idx) Allocator.Error!?CIR.Def.Idx,
     ) Allocator.Error!void {
         const env = self.env;
         try self.bytes(env.module_name);
@@ -452,7 +450,7 @@ const Publication = struct {
                         try self.definition(@fromBackingInt(entry.value.node_idx), classify);
                     } else {
                         try self.scheme(node_id);
-                        const owner = try binding_owner(env, node_id);
+                        const owner = env.topLevelDefOwner(node_id);
                         try self.value(owner != null);
                         if (owner) |def| try self.definition(def, classify);
                     }

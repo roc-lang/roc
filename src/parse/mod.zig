@@ -1395,3 +1395,307 @@ test "fileHeaderIsUsable ignores syntax errors after the header" {
         try std.testing.expectEqual(case.usable, try fileHeaderIsUsable(gpa, ast));
     }
 }
+
+/// A header whose source is `before ++ stopped_at ++ after`, where
+/// `stopped_at` is the token the parser cannot accept.
+const HeaderDiagnosticCase = struct {
+    before: []const u8,
+    stopped_at: []const u8,
+    after: []const u8,
+    tag: AST.Diagnostic.Tag,
+};
+
+/// Parse each case as a header and check that its only diagnostic has the
+/// expected tag and covers exactly the token the parser stopped at.
+fn expectHeaderDiagnosticsAtStoppingToken(
+    cases: []const HeaderDiagnosticCase,
+) (Allocator.Error || error{TestExpectedEqual})!void {
+    const gpa = std.testing.allocator;
+    for (cases) |case| {
+        const source = try std.mem.concat(gpa, u8, &.{ case.before, case.stopped_at, case.after });
+        defer gpa.free(source);
+        errdefer std.debug.print("\nheader source:\n{s}\n", .{source});
+
+        var env = try CommonEnv.init(gpa, source);
+        defer env.deinit(gpa);
+        const ast = try header(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 1), ast.parse_diagnostics.items.len);
+        const diagnostic = ast.parse_diagnostics.items[0];
+        try std.testing.expectEqual(case.tag, diagnostic.tag);
+
+        const region = ast.tokenizedRegionToRegion(diagnostic.region);
+        try std.testing.expectEqualStrings(case.stopped_at, source[region.start.offset..region.end.offset]);
+        try std.testing.expectEqual(case.before.len, @as(usize, region.start.offset));
+    }
+}
+
+test "issue 13335: a platform `requires` parse error is reported at the token where parsing stopped" {
+    const rest = " exposes [] packages {} provides { \"roc_main\": main_for_host }";
+    try expectHeaderDiagnosticsAtStoppingToken(&.{
+        // The reproduction from the issue: `for` left out of the entry.
+        .{
+            .before = "platform \"\"\n\trequires {\n\t\t[Model : model] ",
+            .stopped_at = "main",
+            .after = " : model\n\t}\n\texposes []\n\tpackages {}\n\tprovides { \"roc_main\": main_for_host }\n",
+            .tag = .expected_for_keyword,
+        },
+        .{
+            .before = "platform \"\" requires ",
+            .stopped_at = "[",
+            .after = "Model : model] for main : model" ++ rest,
+            .tag = .expected_requires_rigids_open_curly,
+        },
+        .{
+            .before = "platform \"\" requires { [",
+            .stopped_at = "alias",
+            .after = " : model] for main : model }" ++ rest,
+            .tag = .expected_for_clause_alias_name,
+        },
+        .{
+            .before = "platform \"\" requires { [Model ",
+            .stopped_at = "model",
+            .after = "] for main : model }" ++ rest,
+            .tag = .expected_for_clause_colon,
+        },
+        .{
+            .before = "platform \"\" requires { [Model : ",
+            .stopped_at = "Rigid",
+            .after = "] for main : I64 }" ++ rest,
+            .tag = .expected_for_clause_rigid_name,
+        },
+        .{
+            .before = "platform \"\" requires { [Model : model ",
+            .stopped_at = "for",
+            .after = " main : model }" ++ rest,
+            .tag = .expected_for_clause_close_square,
+        },
+        .{
+            .before = "platform \"\" requires { [Model : model] for ",
+            .stopped_at = "Main",
+            .after = " : model }" ++ rest,
+            .tag = .expected_for_clause_entrypoint_name,
+        },
+        .{
+            .before = "platform \"\" requires { main ",
+            .stopped_at = "I64",
+            .after = " }" ++ rest,
+            .tag = .expected_for_clause_type_colon,
+        },
+        .{
+            .before = "platform \"\" requires { main : I64 ",
+            .stopped_at = "exposes",
+            .after = " [] packages {} provides { \"roc_main\": main_for_host }",
+            .tag = .expected_requires_signatures_close_curly,
+        },
+    });
+}
+
+test "issue 13335: an app dependency record parse error is reported at the token where parsing stopped" {
+    try expectHeaderDiagnosticsAtStoppingToken(&.{
+        // The reproduction from the issue: no `:` after `pf`.
+        .{
+            .before = "app [Model, main] {\n\tpf ",
+            .stopped_at = "platform",
+            .after = " \"platform/main.roc\",\n}\n",
+            .tag = .expected_package_or_platform_colon,
+        },
+        .{
+            .before = "app [main] ",
+            .stopped_at = "pf",
+            .after = ": platform \"pf.roc\"",
+            .tag = .expected_app_open_curly,
+        },
+        .{
+            .before = "app [main] { ",
+            .stopped_at = "Pf",
+            .after = ": platform \"pf.roc\" }",
+            .tag = .expected_package_or_platform_name,
+        },
+        .{
+            .before = "app [main] { pf: platform ",
+            .stopped_at = "42",
+            .after = " }",
+            .tag = .expected_platform_string,
+        },
+        .{
+            .before = "app [main] { pf: platform \"pf.roc\", json: ",
+            .stopped_at = "42",
+            .after = " }",
+            .tag = .expected_package_or_platform_string,
+        },
+        .{
+            .before = "app [main] { pf: platform \"pf.roc\" ",
+            .stopped_at = "json",
+            .after = ": \"json.roc\" }",
+            .tag = .expected_package_platform_close_curly,
+        },
+    });
+}
+
+test "issue 13335: a package dependency record parse error is reported at the token where parsing stopped" {
+    try expectHeaderDiagnosticsAtStoppingToken(&.{
+        .{
+            .before = "package [Foo] { ",
+            .stopped_at = "Json",
+            .after = ": \"json.roc\" }",
+            .tag = .expected_package_or_platform_name,
+        },
+        .{
+            .before = "package [Foo] { json: \"json.roc\" ",
+            .stopped_at = "other",
+            .after = ": \"other.roc\" }",
+            .tag = .expected_package_platform_close_curly,
+        },
+    });
+}
+
+test "a platform `targets` section parse error is reported at the token where parsing stopped" {
+    const platform = "platform \"\" requires {} exposes [] packages {} provides { \"roc_main\": main_for_host } targets: { inputs_dir: \"targets/\", ";
+    try expectHeaderDiagnosticsAtStoppingToken(&.{
+        .{
+            .before = platform,
+            .stopped_at = "Wasm32",
+            .after = ": { inputs: [app] } }",
+            .tag = .expected_targets_field_name,
+        },
+        .{
+            .before = platform ++ "wasm32 ",
+            .stopped_at = "{",
+            .after = " inputs: [app] } }",
+            .tag = .expected_targets_field_colon,
+        },
+        // Only `inputs_dir` takes a string, so the field name is the error.
+        .{
+            .before = platform,
+            .stopped_at = "inputs",
+            .after = ": \"other/\" }",
+            .tag = .expected_targets_field_name,
+        },
+        .{
+            .before = platform ++ "wasm32: ",
+            .stopped_at = "42",
+            .after = " }",
+            .tag = .expected_targets_field_name,
+        },
+    });
+}
+
+test "a host symbol map entry parse error is reported at the token where parsing stopped" {
+    const platform = "platform \"\" requires {} exposes [] packages {} ";
+    try expectHeaderDiagnosticsAtStoppingToken(&.{
+        .{
+            .before = platform ++ "provides { \"roc_main\" ",
+            .stopped_at = "main_for_host",
+            .after = " }",
+            .tag = .expected_symbol_map_colon,
+        },
+        .{
+            .before = platform ++ "provides { \"roc_main\": ",
+            .stopped_at = "42",
+            .after = " }",
+            .tag = .expected_symbol_map_function,
+        },
+        .{
+            .before = platform ++ "provides { \"roc_main\": main_for_host } hosted { \"roc_line\": Stdout.Line ",
+            .stopped_at = "42",
+            .after = " }",
+            .tag = .expected_symbol_map_function,
+        },
+    });
+}
+
+test "a second platform entry in a dependency record is reported at its `platform` keyword" {
+    try expectHeaderDiagnosticsAtStoppingToken(&.{.{
+        .before = "app [main] { pf: \"pf.roc\", a: platform \"a.roc\", b: ",
+        .stopped_at = "platform",
+        .after = " \"b.roc\" }",
+        .tag = .multiple_platforms,
+    }});
+}
+
+test "a header's exposed list parse error is reported at the token that cannot continue the list" {
+    try expectHeaderDiagnosticsAtStoppingToken(&.{
+        .{
+            .before = "module ",
+            .stopped_at = "foo",
+            .after = " [bar]",
+            .tag = .header_expected_open_square,
+        },
+        // The list is skipped to its `]`, and the error stays on the item.
+        .{
+            .before = "module [foo ",
+            .stopped_at = "bar",
+            .after = " baz]",
+            .tag = .import_exposing_no_close,
+        },
+        // The list is skipped to the end of the file, and the error stays on the item.
+        .{
+            .before = "module [foo ",
+            .stopped_at = "bar",
+            .after = "",
+            .tag = .header_expected_close_square,
+        },
+        .{
+            .before = "platform \"\" requires {} exposes [foo ",
+            .stopped_at = "bar",
+            .after = "",
+            .tag = .expected_exposes_close_square,
+        },
+    });
+}
+
+test "a malformed header node spans from the header keyword through the token where parsing stopped" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { source: []const u8, tokens_through_error: u32 }{
+        // app [ main ] { pf platform
+        .{ .source = "app [main] { pf platform \"pf.roc\" }", .tokens_through_error = 7 },
+        // platform " (empty string part) " requires { [ Model : model ] main
+        .{ .source = "platform \"\" requires { [Model : model] main : model }", .tokens_through_error = 12 },
+        // module [ foo bar ]
+        .{ .source = "module [foo bar]\n\nfoo = 1\n", .tokens_through_error = 6 },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("\nheader source:\n{s}\n", .{case.source});
+
+        var env = try CommonEnv.init(gpa, case.source);
+        defer env.deinit(gpa);
+        const ast = try header(gpa, &env);
+        defer ast.deinit();
+
+        const malformed = ast.store.getHeader(@fromBackingInt(@intCast(ast.root_node_idx))).malformed;
+        try std.testing.expectEqual(@as(u32, 0), malformed.region.start);
+        try std.testing.expectEqual(case.tokens_through_error, malformed.region.end);
+    }
+}
+
+test "a header that fails at end of file spans its tokens, so tokenizer errors inside it are header errors" {
+    const gpa = std.testing.allocator;
+    // Each header runs into the end of the file after a tokenizer problem
+    // inside it: an ASCII control character, or an invalid string escape.
+    const sources = [_][]const u8{
+        "module [foo,\x07 bar",
+        "app [main!] { pf: platform \"pf\\q.roc\"",
+        "platform \"\" requires {\x07} exposes [foo",
+    };
+    for (sources) |source| {
+        errdefer std.debug.print("\nheader source:\n{s}\n", .{source});
+
+        var env = try CommonEnv.init(gpa, source);
+        defer env.deinit(gpa);
+        const ast = try header(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 1), ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 1), ast.parse_diagnostics.items.len);
+        const parse_region = ast.tokenizedRegionToRegion(ast.parse_diagnostics.items[0].region);
+        try std.testing.expectEqual(source.len, @as(usize, parse_region.start.offset));
+
+        const file_header = ast.store.getHeader(@fromBackingInt(@intCast(ast.root_node_idx)));
+        try std.testing.expect(file_header == .malformed);
+        try std.testing.expect(ast.tokenize_diagnostics.items[0].region.start.offset < ast.headerEndOffset(file_header));
+        try std.testing.expect(ast.headerHasTokenizeErrors(file_header));
+    }
+}

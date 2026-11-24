@@ -615,12 +615,12 @@ pub const CanonicalNameStore = struct {
     pub fn internProcBase(self: *CanonicalNameStore, key: ProcBaseKey) Allocator.Error!ProcBaseKeyRef {
         self.assertMutable();
         self.scratch_key.clearRetainingCapacity();
-        try self.scratch_key.print(self.allocator, "proc:{d}:{s}:{d}:{d}:{d}|", .{
+        try self.scratch_key.print(self.allocator, "proc:{d}:{s}:{?d}:{d}:{?d}|", .{
             @backingInt(key.module_name),
             @tagName(key.kind),
-            if (key.export_name.get()) |name| @backingInt(name) else std.math.maxInt(u32),
+            if (key.export_name.get()) |name| @as(?u32, @backingInt(name)) else null,
             key.ordinal,
-            key.source_def_idx.get() orelse std.math.maxInt(u32),
+            key.source_def_idx.get(),
         });
         try appendOptionalNestedProcSiteKey(&self.scratch_key, key.nested_proc_site.get(), self.allocator);
         try appendOptionalMonoSpecializationKey(&self.scratch_key, key.owner_mono_specialization, self.allocator);

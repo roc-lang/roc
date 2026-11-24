@@ -1,7 +1,6 @@
 //! Composite dictionary key gates have one shape-independent role per derivation.
 
 const std = @import("std");
-const ModuleEnv = @import("can").ModuleEnv;
 const TestEnv = @import("TestEnv.zig");
 
 const format =
@@ -45,7 +44,7 @@ test "issue 12919 - distinct composite key shapes share one subject-free gate" {
         var boundary_gates: usize = 0;
         for (calls[derivation.calls_start..][0..derivation.calls_len]) |call| {
             if (!std.mem.eql(u8, env.module_env.getIdentText(@bitCast(call.method_ident)), "encode_key_start")) continue;
-            try std.testing.expectEqual(ModuleEnv.GeneratedCodecCall.no_subject_var, call.subject_var);
+            try std.testing.expect(call.subject_var == .none);
             boundary_gates += 1;
         }
         try std.testing.expect(boundary_gates <= 1);

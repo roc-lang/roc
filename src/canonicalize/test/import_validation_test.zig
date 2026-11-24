@@ -22,7 +22,7 @@ const testing = std.testing;
 const expectEqual = testing.expectEqual;
 
 fn expectNoZeroTargetExternalLookup(env: *const ModuleEnv) error{TestUnexpectedResult}!void {
-    var raw_node_idx: u32 = 0;
+    var raw_node_idx: u32 = CIR.Node.first_idx;
     while (raw_node_idx < env.store.nodes.len()) : (raw_node_idx += 1) {
         const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         if (env.store.nodes.get(node_idx).tag != .expr_external_lookup) continue;
@@ -665,7 +665,7 @@ test "aliased package-qualified import resolves before the import statement" {
 
     const make_ident = try app_env.insertIdent(base.Ident.for_text("make"));
     var found_make_lookup = false;
-    var raw_node_idx: u32 = 0;
+    var raw_node_idx: u32 = CIR.Node.first_idx;
     while (raw_node_idx < app_env.store.nodes.len()) : (raw_node_idx += 1) {
         const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         if (app_env.store.nodes.get(node_idx).tag != .expr_external_lookup) continue;

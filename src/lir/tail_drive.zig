@@ -255,24 +255,23 @@ const Walk = struct {
         // A caller hands up what its callee leaves pending when it returns
         // the call's value unchanged. Propagate from each procedure that may
         // pend to the callers of it that hand up, each procedure once.
-        const no_call = std.math.maxInt(u32);
-        const first_caller = try allocator.alloc(u32, proc_count);
+        const first_caller = try allocator.alloc(collections.OptionalU32, proc_count);
         defer allocator.free(first_caller);
-        @memset(first_caller, no_call);
-        const next_caller = try allocator.alloc(u32, self.direct_calls.items.len);
+        @memset(first_caller, .none);
+        const next_caller = try allocator.alloc(collections.OptionalU32, self.direct_calls.items.len);
         defer allocator.free(next_caller);
         for (self.direct_calls.items, 0..) |call, index| {
             if (call.returns == .no) continue;
             next_caller[index] = first_caller[call.callee];
-            first_caller[call.callee] = @intCast(index);
+            first_caller[call.callee] = .some(@intCast(index));
         }
         var pending = std.ArrayList(u32).empty;
         defer pending.deinit(allocator);
         var pending_iter = may_pend.iterator(.{});
         while (pending_iter.next()) |index| try pending.append(allocator, @intCast(index));
         while (pending.pop()) |callee| {
-            var call_index = first_caller[callee];
-            while (call_index != no_call) : (call_index = next_caller[call_index]) {
+            var next_call = first_caller[callee].get();
+            while (next_call) |call_index| : (next_call = next_caller[call_index].get()) {
                 const caller = self.direct_calls.items[call_index].caller;
                 if (may_pend.isSet(caller)) continue;
                 if (handsUp(store, &self.outside, caller) == .never) continue;

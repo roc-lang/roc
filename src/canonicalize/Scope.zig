@@ -62,11 +62,11 @@ pub const TypeVarAliasBinding = struct {
 };
 
 /// The first of this scope's identifier bindings in the canonicalizer's
-/// identifier `Bindings`, or `no_binding`.
-ident_head: u32,
+/// identifier `Bindings`, absent when it has none.
+ident_head: BindingSlot,
 /// The first of this scope's alias bindings in the canonicalizer's alias
-/// `Bindings`, or `no_binding`.
-alias_head: u32,
+/// `Bindings`, absent when it has none.
+alias_head: BindingSlot,
 /// Canonical bindings for type names (local, auto-imported, and imported types)
 type_bindings: std.AutoHashMapUnmanaged(Ident.Idx, TypeBinding),
 /// Import names rejected by source policy. Uses become silent error nodes,
@@ -89,8 +89,8 @@ associated_type_name: ?Ident.Idx,
 /// Initialize the scope
 pub fn init(is_function_boundary: bool) Scope {
     return Scope{
-        .ident_head = no_binding,
-        .alias_head = no_binding,
+        .ident_head = .none,
+        .alias_head = .none,
         .type_bindings = std.AutoHashMapUnmanaged(Ident.Idx, TypeBinding){},
         .rejected_import_names = .{},
         .type_var_aliases = std.AutoHashMapUnmanaged(Ident.Idx, TypeVarAliasBinding){},
@@ -234,8 +234,9 @@ pub const ImportedModuleIntroduceResult = union(enum) {
 /// The namespaces whose bindings live in a `Bindings` across the scope stack.
 pub const ItemKind = enum { ident, alias };
 
-/// The end of a binding list or chain.
-pub const no_binding: u32 = std.math.maxInt(u32);
+/// A binding's slot in a `Bindings`, absent at the end of a binding list or
+/// chain.
+pub const BindingSlot = collections.OptionalU32;
 
 /// One namespace's bindings across the whole scope stack. A name's innermost
 /// binding is direct-indexed by identifier, and the bindings it shadows in
@@ -251,9 +252,9 @@ pub fn Bindings(comptime V: type) type {
             /// Index of the scope that binds the name.
             scope: u32,
             /// The name's binding in the nearest enclosing scope that binds it.
-            shadowed: u32,
+            shadowed: BindingSlot,
             /// The scope's next older binding.
-            next_in_scope: u32,
+            next_in_scope: BindingSlot,
         };
 
         slots: std.ArrayList(Binding) = .empty,
@@ -280,32 +281,31 @@ pub fn Bindings(comptime V: type) type {
         /// The binding `binding` shadows: its name's binding in the nearest
         /// enclosing scope that binds it, if any.
         pub fn shadowedBinding(self: *const Self, binding: Binding) ?Binding {
-            if (binding.shadowed == no_binding) return null;
-            return self.slots.items[binding.shadowed];
+            return self.slots.items[binding.shadowed.get() orelse return null];
         }
 
         /// The value `scope` itself binds `name` to, if it binds it.
         pub fn getInScope(self: *const Self, name: Ident.Idx, scope: u32) ?V {
-            var slot = self.innermost.get(name) orelse return null;
-            while (slot != no_binding) {
+            var next: BindingSlot = .some(self.innermost.get(name) orelse return null);
+            while (next.get()) |slot| {
                 const binding = self.slots.items[slot];
                 if (binding.scope == scope) return binding.value;
                 if (binding.scope < scope) return null;
-                slot = binding.shadowed;
+                next = binding.shadowed;
             }
             return null;
         }
 
         /// Bind `name` to `value` in `scope`, replacing the value of a binding
         /// `scope` already has for it. `head` is `scope`'s list head.
-        pub fn put(self: *Self, gpa: Allocator, head: *u32, scope: u32, name: Ident.Idx, value: V) Allocator.Error!void {
+        pub fn put(self: *Self, gpa: Allocator, head: *BindingSlot, scope: u32, name: Ident.Idx, value: V) Allocator.Error!void {
             const gop = try self.innermost.getOrPut(name);
             // Find where the scope's binding goes in the name's chain, which
             // runs from inner scopes to outer ones.
-            var newer: u32 = no_binding;
-            var older: u32 = if (gop.found_existing) gop.value_ptr.* else no_binding;
-            while (older != no_binding) {
-                const binding = &self.slots.items[older];
+            var newer: BindingSlot = .none;
+            var older: BindingSlot = if (gop.found_existing) .some(gop.value_ptr.*) else .none;
+            while (older.get()) |older_slot| {
+                const binding = &self.slots.items[older_slot];
                 if (binding.scope == scope) {
                     binding.value = value;
                     return;
@@ -320,8 +320,7 @@ pub fn Bindings(comptime V: type) type {
             };
             try self.free_slots.ensureTotalCapacity(gpa, self.slots.items.len + 1);
             const slot = self.free_slots.pop() orelse slot: {
-                const fresh = std.math.cast(u32, self.slots.items.len) orelse return error.OutOfMemory;
-                if (fresh == no_binding) return error.OutOfMemory;
+                const fresh = try collections.nextBiasedId(self.slots.items.len);
                 _ = try self.slots.addOne(gpa);
                 break :slot fresh;
             };
@@ -332,48 +331,47 @@ pub fn Bindings(comptime V: type) type {
                 .shadowed = older,
                 .next_in_scope = head.*,
             };
-            head.* = slot;
-            if (newer == no_binding) {
-                gop.value_ptr.* = slot;
+            head.* = .some(slot);
+            if (newer.get()) |newer_slot| {
+                self.slots.items[newer_slot].shadowed = .some(slot);
             } else {
-                self.slots.items[newer].shadowed = slot;
+                gop.value_ptr.* = slot;
             }
         }
 
         /// Walks one scope's bindings, newest first.
         pub const Iterator = struct {
             bindings: *const Self,
-            slot: u32,
+            slot: BindingSlot,
 
             pub fn next(self: *Iterator) ?Binding {
-                if (self.slot == no_binding) return null;
-                const binding = self.bindings.slots.items[self.slot];
+                const binding = self.bindings.slots.items[self.slot.get() orelse return null];
                 self.slot = binding.next_in_scope;
                 return binding;
             }
         };
 
         /// The bindings of the scope whose list head is `head`.
-        pub fn scopeIterator(self: *const Self, head: u32) Iterator {
+        pub fn scopeIterator(self: *const Self, head: BindingSlot) Iterator {
             return .{ .bindings = self, .slot = head };
         }
 
         /// Drop the bindings of the innermost open scope, whose list head is
         /// `head`, uncovering the bindings they shadowed.
-        pub fn exitScope(self: *Self, head: u32) void {
-            var slot = head;
-            while (slot != no_binding) {
+        pub fn exitScope(self: *Self, head: BindingSlot) void {
+            var next = head;
+            while (next.get()) |slot| {
                 const binding = self.slots.items[slot];
                 // Nothing is open inside the innermost scope, so each of its
                 // bindings is its name's innermost.
                 std.debug.assert(self.innermost.get(binding.name).? == slot);
-                if (binding.shadowed == no_binding) {
-                    _ = self.innermost.remove(binding.name);
+                if (binding.shadowed.get()) |shadowed| {
+                    self.innermost.getPtr(binding.name).?.* = shadowed;
                 } else {
-                    self.innermost.getPtr(binding.name).?.* = binding.shadowed;
+                    _ = self.innermost.remove(binding.name);
                 }
                 self.free_slots.appendAssumeCapacity(slot);
-                slot = binding.next_in_scope;
+                next = binding.next_in_scope;
             }
         }
     };

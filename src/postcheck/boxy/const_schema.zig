@@ -370,7 +370,7 @@ const TypeWalk = struct {
             .nominal => |nominal| {
                 if (!nominal.has_backing) invariant("an opaque type without a backing reached a stored type");
                 const view = program.module(nominal.decl.module);
-                const declaration = view.types().nominalDeclarationById(nominal.decl.decl);
+                const declaration = view.types().nominalDeclarationById(nominal.decl.decl.get().?);
                 // The declaration's own arguments; a block-local declaration's
                 // context arguments follow them and are not stored.
                 const formal_count = declaration.declaredFormalArgs(view.types()).len;

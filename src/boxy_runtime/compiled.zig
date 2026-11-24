@@ -295,9 +295,9 @@ pub fn adapt(plan: *const AdaptPlan, dst: [*]u8, src: [*]const u8, ops: *RocOps)
                 const source = node.from.?.readDiscriminant(work.src);
                 if (source >= node.count) invariant(ops, "a re-tagged value's discriminant is past its plan's variants");
                 const target = node.variants()[source];
-                if (target.discriminant == desc_mod.AdaptVariant.absent) invariant(ops, "a re-tagged variant is not in its destination's row");
+                const discriminant = target.discriminant.get() orelse invariant(ops, "a re-tagged variant is not in its destination's row");
                 @memset(work.dst[0..t.size], 0);
-                writeDiscriminant(t, work.dst, target.discriminant);
+                writeDiscriminant(t, work.dst, discriminant);
                 if (target.plan) |payload| stack.push(.{ .plan = payload, .src = work.src, .dst = work.dst }, ops);
             },
             .record => {

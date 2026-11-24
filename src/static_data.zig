@@ -189,8 +189,11 @@ const StaticInitializerMachine = struct {
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     /// The checked modules whose `ConstStore`s stored static values name.
     modules: ModuleViews,
-    /// The value frozen from each stored node through a plan at a layout,
-    /// which every reader of that node there shares.
+    /// The value frozen from each stored node that owns an allocation
+    /// (`sharesStored`) through a plan at a layout, which every reader of
+    /// that node there shares, so the allocation is frozen once. Every other
+    /// stored value lives in the value that holds it, and is written again
+    /// for each holder.
     stored_values: std.AutoHashMapUnmanaged(StoredValueKey, *SymbolicValue),
     /// The packed-data copy plan of each element layout a stored packed list
     /// is frozen at.
@@ -499,33 +502,23 @@ const StaticInitializerMachine = struct {
         return view.const_store;
     }
 
-    /// The value of a stored list frozen at `value_layout`
+    /// The value of a stored node frozen at `value_layout`
     /// (`lir.Program.StoredStaticValue`). Its nodes are data alone, so every
     /// one has one representation at a layout, which this writes through the
     /// const plan of its type: what the type's constructions build, which
     /// is what `ConstStore` recorded from an evaluated value through that
-    /// plan. Nodes wait on an explicit stack, so nesting never becomes native
-    /// call depth.
+    /// plan. Each node is written straight into the bytes of the value that
+    /// holds it: its own value's, or the allocation's of the list or box it
+    /// is in. Nodes wait on an explicit stack, so nesting never becomes
+    /// native call depth.
     fn freezeStored(self: *StaticInitializerMachine, stored: lir.Program.StoredStaticValue, value_layout: layout.Idx) MaterializationError!*SymbolicValue {
         const store_ = self.constStoreOf(stored.module);
-        var frames: std.ArrayList(StoredFrame) = .empty;
-        defer frames.deinit(self.allocator());
-        var delivered = try self.enterStored(&frames, store_, .{ .node = stored.node, .plan = stored.plan, .layout_idx = value_layout });
-        while (frames.items.len != 0) {
-            const frame = &frames.items[frames.items.len - 1];
-            if (delivered) |value| {
-                frame.values[frame.next] = value;
-                frame.next += 1;
-                delivered = null;
-            }
-            if (frame.next < frame.children.len) {
-                delivered = try self.enterStored(&frames, store_, frame.children[frame.next]);
-                continue;
-            }
-            const finished = frames.pop().?;
-            delivered = try self.finishStored(finished);
-        }
-        return delivered.?;
+        const root = try self.newValue(value_layout);
+        var pending: std.ArrayList(StoredWrite) = .empty;
+        defer pending.deinit(self.allocator());
+        try pending.append(self.allocator(), .{ .dest = root, .offset = 0, .request = .{ .node = stored.node, .plan = stored.plan, .layout_idx = value_layout } });
+        while (pending.pop()) |write| try self.writeStored(&pending, store_, write);
+        return root;
     }
 
     const StoredRequest = struct {
@@ -534,64 +527,120 @@ const StaticInitializerMachine = struct {
         layout_idx: layout.Idx,
     };
 
-    const StoredFrame = struct {
-        key: StoredValueKey,
+    /// A stored node still to write: where its bytes go, at its layout.
+    const StoredWrite = struct {
+        dest: *SymbolicValue,
+        offset: u32,
         request: StoredRequest,
-        shape: union(enum) {
-            list: struct { elem_layout: layout.Idx, capacity: u64 },
-            box: layout.Idx,
-            product,
-            tag: struct { variant: u32, payload_layout: layout.Idx },
-        },
-        children: []const StoredRequest,
-        values: []*SymbolicValue,
-        next: usize = 0,
     };
 
-    /// A stored node's frozen value when it is already frozen or has no
-    /// children; otherwise its frame, pushed to wait for its children.
-    fn enterStored(self: *StaticInitializerMachine, frames: *std.ArrayList(StoredFrame), store_: *const Checked.ConstStore, start: StoredRequest) MaterializationError!?*SymbolicValue {
-        const request = self.unwrapStoredNominal(store_, start);
+    /// How `assembleStored` builds a value from its parts' values.
+    const StoredShape = union(enum) {
+        list: struct { elem_layout: layout.Idx, capacity: u64 },
+        box: layout.Idx,
+        product,
+        tag: struct { variant: u32, payload_layout: layout.Idx },
+    };
+
+    /// Where a stored product's or tag's own bytes go: the destination it
+    /// was asked to write, or the allocation a recursive type's box keeps it
+    /// in, which the destination then points at.
+    const StoredBase = struct {
+        dest: *SymbolicValue,
+        offset: u32,
+        layout_idx: layout.Idx,
+    };
+
+    /// Write one stored node into its destination, and push its parts to be
+    /// written into theirs. A node that owns an allocation (`sharesStored`)
+    /// is frozen once: its descriptor is remembered when its allocation is
+    /// made, and every later reader copies that descriptor.
+    fn writeStored(self: *StaticInitializerMachine, pending: *std.ArrayList(StoredWrite), store_: *const Checked.ConstStore, write: StoredWrite) MaterializationError!void {
+        const request = self.unwrapStoredNominal(store_, write.request);
+        const value_layout = self.layoutValue(request.layout_idx);
+        if (value_layout.tag == .zst) return;
+        const size = self.layouts().layoutSize(value_layout);
+        if (write.offset > write.dest.bytes.len or size > write.dest.bytes.len - write.offset) staticDataInvariant("a stored value was written past its destination");
         const key = StoredValueKey.of(store_, request);
-        if (self.stored_values.get(key)) |existing| return existing;
-        if (self.layoutValue(request.layout_idx).tag == .zst) return try self.rememberStored(key, try self.newValue(request.layout_idx));
+        const node = store_.get(request.node);
+        const shared = self.sharesStored(node, request.layout_idx);
+        if (shared) if (self.stored_values.get(key)) |existing| return try self.copyInto(write.dest, write.offset, existing, size);
         const a = self.allocator();
         const plans = self.lowered.lir_result.const_plans.items;
-        switch (store_.get(request.node)) {
+        switch (node) {
             .pending => staticDataInvariant("stored static data reached a pending ConstStore node"),
             .fn_value, .boxy_fn, .crash, .checked_error => staticDataInvariant("stored static data reached a node that is not data"),
             .nominal => unreachable, // unwrapStoredNominal stepped past every nominal layer
-            .zst => return try self.rememberStored(key, try self.newValue(request.layout_idx)),
-            .scalar => |scalar| return try self.rememberStored(key, try self.storedScalar(scalar, request.layout_idx)),
-            .str => |str| return try self.rememberStored(key, try self.storedStr(store_.strBytes(str.bytes), str.capacity, request.layout_idx)),
+            .zst => {},
+            .scalar => |scalar| {
+                if (size > 16) staticDataInvariant("stored scalar layout was wider than any scalar");
+                var encoded: [16]u8 = undefined;
+                std.mem.writeInt(u128, &encoded, scalarBits(scalar), .little);
+                @memcpy(write.dest.bytes[write.offset..][0..size], encoded[0..size]);
+            },
+            .str => |str| {
+                const bytes = store_.strBytes(str.bytes);
+                if (!shared) {
+                    if (str.capacity < bytes.len) staticDataInvariant("stored string capacity was below its length");
+                    const descriptor = write.dest.bytes[write.offset..][0..size];
+                    @memcpy(descriptor[0..bytes.len], bytes);
+                    descriptor[size - 1] = builtins.str.RocStr.smallStrFlagByte(bytes.len);
+                    return;
+                }
+                const value = try self.rememberStored(key, try self.storedStr(bytes, str.capacity, request.layout_idx));
+                try self.copyInto(write.dest, write.offset, value, size);
+            },
             .list => |list| {
                 const elem_plan = switch (plans[@backingInt(request.plan)]) {
                     .list => |elem| elem,
                     .pending, .layout_only, .zst, .scalar, .str, .box, .tuple, .record, .tag_union, .named, .fn_value, .erased_fn, .boxy_fn => staticDataInvariant("stored list had a non-list const plan"),
                 };
-                switch (list.items) {
-                    .empty => return try self.rememberStored(key, try self.storedListValue(request.layout_idx, 0, list.capacity, null)),
-                    .packed_bytes => |packed_list| return try self.rememberStored(key, try self.storedPackedList(store_, packed_list, list.capacity, request.layout_idx)),
-                    .nodes => |items| {
+                const value = switch (list.items) {
+                    .empty => try self.storedListValue(request.layout_idx, 0, list.capacity, null),
+                    .packed_bytes => |packed_list| try self.storedPackedList(store_, packed_list, list.capacity, request.layout_idx),
+                    .nodes => |items| nodes: {
+                        const descriptor = try self.storedListValue(request.layout_idx, items.len, list.capacity, null);
                         const abi = self.layouts().builtinListAbi(request.layout_idx);
-                        const elem_layout = abi.elem_layout_idx orelse layout.Idx.zst;
-                        const children = try a.alloc(StoredRequest, items.len);
-                        for (items, children) |item, *child| child.* = .{ .node = item, .plan = elem_plan, .layout_idx = elem_layout };
-                        return try self.pushStored(frames, key, request, .{ .list = .{ .elem_layout = elem_layout, .capacity = list.capacity } }, children);
+                        if (items.len == 0 or abi.elem_size == 0) break :nodes descriptor;
+                        const elem_layout = abi.elem_layout_idx orelse staticDataInvariant("non-ZST stored list had no element layout");
+                        const allocation = try self.addAllocation(
+                            elem_layout,
+                            @as(usize, abi.elem_size) * items.len,
+                            abi.elem_alignment,
+                            abi.contains_refcounted,
+                            if (abi.contains_refcounted) items.len else null,
+                        );
+                        try descriptor.relocations.append(a, .{ .offset = 0, .target = .{ .allocation = allocation.id } });
+                        try pending.ensureUnusedCapacity(a, items.len);
+                        var index = items.len;
+                        while (index > 0) {
+                            index -= 1;
+                            pending.appendAssumeCapacity(.{
+                                .dest = allocation.payload,
+                                .offset = @intCast(index * abi.elem_size),
+                                .request = .{ .node = items[index], .plan = elem_plan, .layout_idx = elem_layout },
+                            });
+                        }
+                        break :nodes descriptor;
                     },
-                }
+                };
+                try self.copyInto(write.dest, write.offset, try self.rememberStored(key, value), size);
             },
             .box => |payload| {
                 const payload_plan = switch (plans[@backingInt(request.plan)]) {
                     .box => |boxed| boxed,
                     .pending, .layout_only, .zst, .scalar, .str, .list, .tuple, .record, .tag_union, .named, .fn_value, .erased_fn, .boxy_fn => staticDataInvariant("stored box had a non-box const plan"),
                 };
-                if (self.layoutValue(request.layout_idx).tag == .box_of_zst) return try self.rememberStored(key, try self.newValue(request.layout_idx));
+                if (value_layout.tag == .box_of_zst) {
+                    _ = try self.rememberStored(key, try self.newValue(request.layout_idx));
+                    return;
+                }
                 const abi = self.layouts().builtinBoxAbi(request.layout_idx);
                 const payload_layout = abi.elem_layout_idx orelse layout.Idx.zst;
-                const children = try a.alloc(StoredRequest, 1);
-                children[0] = .{ .node = payload, .plan = payload_plan, .layout_idx = payload_layout };
-                return try self.pushStored(frames, key, request, .{ .box = payload_layout }, children);
+                const allocation = try self.addAllocation(payload_layout, abi.elem_size, abi.elem_alignment, abi.contains_refcounted, null);
+                const value = try self.rememberStored(key, try self.pointerValue(request.layout_idx, allocation.id, 0));
+                try self.copyInto(write.dest, write.offset, value, size);
+                try pending.append(a, .{ .dest = allocation.payload, .offset = 0, .request = .{ .node = payload, .plan = payload_plan, .layout_idx = payload_layout } });
             },
             .tuple, .record => |items| {
                 const item_plans = switch (plans[@backingInt(request.plan)]) {
@@ -599,14 +648,15 @@ const StaticInitializerMachine = struct {
                     .pending, .layout_only, .zst, .scalar, .str, .list, .box, .tag_union, .named, .fn_value, .erased_fn, .boxy_fn => staticDataInvariant("stored product had a non-product const plan"),
                 };
                 if (item_plans.len != items.len) staticDataInvariant("stored product arity differed from its const plan");
-                const base_layout = self.aggregateBaseLayout(request.layout_idx);
-                const children = try a.alloc(StoredRequest, items.len);
-                for (items, item_plans, children, 0..) |item, item_plan, *child, index| child.* = .{
-                    .node = item,
-                    .plan = item_plan,
-                    .layout_idx = self.productFieldLayout(base_layout, index),
-                };
-                return try self.pushStored(frames, key, request, .product, children);
+                const base = try self.storedBase(write, key, request.layout_idx, size);
+                const base_layout = self.layoutValue(base.layout_idx);
+                switch (base_layout.tag) {
+                    .struct_ => try self.pushStoredFields(pending, base, base_layout, items, item_plans),
+                    .zst, .box_of_zst => {},
+                    .box, .scalar, .list, .list_of_zst, .closure, .erased_callable, .ptr, .tag_union => staticDataInvariant("stored product had a non-struct layout"),
+                    .hole => staticDataInvariant("a demand hole reached static data"),
+                    .dynamic => staticDataInvariant("a dynamic value reached static data"),
+                }
             },
             .tag => |tag| {
                 const variants = switch (plans[@backingInt(request.plan)]) {
@@ -618,20 +668,61 @@ const StaticInitializerMachine = struct {
                 } else staticDataInvariant("stored tag named a variant its const plan lacks");
                 if (variant.payloads.len != tag.payloads.len) staticDataInvariant("stored tag payload count differed from its const plan");
                 const payload_layout = self.tagPayloadLayout(request.layout_idx, variant.discriminant);
+                const base = try self.storedBase(write, key, request.layout_idx, size);
+                const base_layout = self.layoutValue(base.layout_idx);
+                if (base_layout.tag == .tag_union) {
+                    const tag_data = self.layouts().getTagUnionData(base_layout.getTagUnion().idx);
+                    tag_data.writeDiscriminant(base.dest.bytes.ptr + base.offset, variant.discriminant, self.target_usize);
+                } else if (variant.discriminant != 0 and self.layouts().layoutSize(base_layout) == 0) {
+                    staticDataInvariant("nonzero stored tag discriminant had a ZST layout");
+                }
                 const payload_base = self.layoutValue(payload_layout);
-                const children = try a.alloc(StoredRequest, tag.payloads.len);
-                for (tag.payloads, variant.payloads, children, 0..) |payload, payload_plan, *child, index| child.* = .{
-                    .node = payload,
-                    .plan = payload_plan,
-                    .layout_idx = if (tag.payloads.len == 1)
-                        payload_layout
-                    else if (payload_base.tag == .struct_)
-                        self.layouts().getStructFieldLayoutByOriginalIndex(payload_base.getStruct().idx, @intCast(index))
-                    else
-                        layout.Idx.zst,
-                };
-                return try self.pushStored(frames, key, request, .{ .tag = .{ .variant = variant.discriminant, .payload_layout = payload_layout } }, children);
+                if (tag.payloads.len == 0 or self.layouts().layoutSize(payload_base) == 0) return;
+                if (tag.payloads.len == 1) {
+                    return try pending.append(a, .{ .dest = base.dest, .offset = base.offset, .request = .{ .node = tag.payloads[0], .plan = variant.payloads[0], .layout_idx = payload_layout } });
+                }
+                if (payload_base.tag != .struct_) staticDataInvariant("multi-payload stored tag did not use a struct payload layout");
+                try self.pushStoredFields(pending, .{ .dest = base.dest, .offset = base.offset, .layout_idx = payload_layout }, payload_base, tag.payloads, variant.payloads);
             },
+        }
+    }
+
+    /// Where the bytes of a stored product or tag at `layout_idx` go. Behind
+    /// a recursive type's box they go in an allocation of their own, whose
+    /// pointer is written to the destination and remembered for the node's
+    /// other readers.
+    fn storedBase(self: *StaticInitializerMachine, write: StoredWrite, key: StoredValueKey, layout_idx: layout.Idx, size: u32) MaterializationError!StoredBase {
+        if (self.layoutValue(layout_idx).tag != .box) return .{ .dest = write.dest, .offset = write.offset, .layout_idx = layout_idx };
+        const abi = self.layouts().builtinBoxAbi(layout_idx);
+        const elem_layout = abi.elem_layout_idx orelse layout.Idx.zst;
+        const allocation = try self.addAllocation(elem_layout, abi.elem_size, abi.elem_alignment, abi.contains_refcounted, null);
+        const pointer = try self.rememberStored(key, try self.pointerValue(layout_idx, allocation.id, 0));
+        try self.copyInto(write.dest, write.offset, pointer, size);
+        return .{ .dest = allocation.payload, .offset = 0, .layout_idx = elem_layout };
+    }
+
+    /// Push the fields `items` of the struct `struct_layout` at `base`, each
+    /// to be written at its own offset and layout, first field on top.
+    fn pushStoredFields(
+        self: *StaticInitializerMachine,
+        pending: *std.ArrayList(StoredWrite),
+        base: StoredBase,
+        struct_layout: layout.Layout,
+        items: []const Checked.ConstNodeId,
+        item_plans: []const lir.Program.ConstPlanId,
+    ) Allocator.Error!void {
+        const struct_idx = struct_layout.getStruct().idx;
+        try pending.ensureUnusedCapacity(self.allocator(), items.len);
+        var index = items.len;
+        while (index > 0) {
+            index -= 1;
+            const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(index));
+            if (self.layouts().layoutSize(self.layoutValue(field_layout)) == 0) continue;
+            pending.appendAssumeCapacity(.{
+                .dest = base.dest,
+                .offset = base.offset + self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, @intCast(index)),
+                .request = .{ .node = items[index], .plan = item_plans[index], .layout_idx = field_layout },
+            });
         }
     }
 
@@ -661,27 +752,20 @@ const StaticInitializerMachine = struct {
         }
     }
 
-    fn pushStored(
-        self: *StaticInitializerMachine,
-        frames: *std.ArrayList(StoredFrame),
-        key: StoredValueKey,
-        request: StoredRequest,
-        shape: @FieldType(StoredFrame, "shape"),
-        children: []const StoredRequest,
-    ) MaterializationError!?*SymbolicValue {
-        const values = try self.allocator().alloc(*SymbolicValue, children.len);
-        const frame = StoredFrame{ .key = key, .request = request, .shape = shape, .children = children, .values = values };
-        if (children.len == 0) return try self.finishStored(frame);
-        try frames.append(self.allocator(), frame);
-        return null;
+    /// Whether the frozen value of stored `node` at `layout_idx` owns an
+    /// allocation, which its readers share: a list, a box, a string too long
+    /// for its descriptor, and a product or tag a recursive type keeps
+    /// behind a box. Sharing them keeps freezing a value proportional to its
+    /// stored nodes however many of them hold the same node.
+    fn sharesStored(self: *const StaticInitializerMachine, node: check.ConstStore.ConstValue, layout_idx: layout.Idx) bool {
+        return switch (node) {
+            .list, .box => true,
+            .str => |str| str.capacity >= self.word_size * builtins.str.RocStr.word_count,
+            .pending, .zst, .scalar, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => self.layoutValue(layout_idx).tag == .box,
+        };
     }
 
-    /// Build a stored node's value from its children's values.
-    fn finishStored(self: *StaticInitializerMachine, frame: StoredFrame) MaterializationError!*SymbolicValue {
-        return self.rememberStored(frame.key, try self.assembleStored(frame.request.layout_idx, frame.shape, frame.values));
-    }
-
-    fn assembleStored(self: *StaticInitializerMachine, value_layout: layout.Idx, shape: @FieldType(StoredFrame, "shape"), values: []const *SymbolicValue) MaterializationError!*SymbolicValue {
+    fn assembleStored(self: *StaticInitializerMachine, value_layout: layout.Idx, shape: StoredShape, values: []const *SymbolicValue) MaterializationError!*SymbolicValue {
         return switch (shape) {
             .list => |list| try self.storedListValue(value_layout, values.len, list.capacity, .{ .elem_layout = list.elem_layout, .items = values }),
             .box => |payload_layout| blk: {
@@ -757,42 +841,15 @@ const StaticInitializerMachine = struct {
         return value;
     }
 
-    /// The layout a product's fields are laid out in: its own, or, for a
-    /// recursive product behind a box, its payload's.
-    fn aggregateBaseLayout(self: *const StaticInitializerMachine, layout_idx: layout.Idx) layout.Layout {
-        const value = self.layoutValue(layout_idx);
-        return switch (value.tag) {
-            .box => self.layoutValue(self.layouts().builtinBoxAbi(layout_idx).elem_layout_idx orelse .zst),
-            .zst, .box_of_zst, .struct_, .scalar, .list, .list_of_zst, .closure, .erased_callable, .ptr, .tag_union => value,
-            .hole => staticDataInvariant("a demand hole reached static data"),
-            .dynamic => staticDataInvariant("a dynamic value reached static data"),
-        };
-    }
-
-    fn productFieldLayout(self: *const StaticInitializerMachine, base_layout: layout.Layout, index: usize) layout.Idx {
-        return switch (base_layout.tag) {
-            .struct_ => self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.getStruct().idx, @intCast(index)),
-            .zst, .box_of_zst => .zst,
-            .box, .scalar, .list, .list_of_zst, .closure, .erased_callable, .ptr, .tag_union => staticDataInvariant("stored product had a non-struct layout"),
-            .hole => staticDataInvariant("a demand hole reached static data"),
-            .dynamic => staticDataInvariant("a dynamic value reached static data"),
-        };
-    }
-
-    fn storedScalar(self: *StaticInitializerMachine, scalar: check.ConstStore.ConstScalar, layout_idx: layout.Idx) Allocator.Error!*SymbolicValue {
-        const value = try self.newValue(layout_idx);
-        const bits: u128 = switch (scalar) {
+    /// The bits of a stored scalar, low byte first in a little-endian word.
+    fn scalarBits(scalar: check.ConstStore.ConstScalar) u128 {
+        return switch (scalar) {
             inline .i8, .i16, .i32, .i64, .i128 => |int| @bitCast(@as(i128, int)),
             inline .u8, .u16, .u32, .u64, .u128 => |int| int,
             .f32_bits => |bits| bits,
             .f64_bits => |bits| bits,
             .dec_bits => |bits| @bitCast(bits),
         };
-        if (value.bytes.len > 16) staticDataInvariant("stored scalar layout was wider than any scalar");
-        var encoded: [16]u8 = undefined;
-        std.mem.writeInt(u128, &encoded, bits, .little);
-        @memcpy(value.bytes, encoded[0..value.bytes.len]);
-        return value;
     }
 
     /// A string holding `bytes` with room for `capacity`: in its descriptor
@@ -1608,15 +1665,15 @@ const StaticInitializerMachine = struct {
         assign: anytype,
         target_layout: layout.Idx,
     ) MaterializationError!*SymbolicValue {
-        if (assign.reuse != null) {
+        if (assign.reuse != .none) {
             staticDataInvariant("erased callable allocation reuse reached closed static initializer");
         }
-        const capture = if (assign.capture) |capture_local|
-            try self.cloneValueAs(local(locals, capture_local), assign.capture_layout orelse staticDataInvariant("static callable capture has no layout"))
+        const capture = if (assign.capture.get()) |capture_local|
+            try self.cloneValueAs(local(locals, capture_local), assign.capture_layout.get() orelse staticDataInvariant("static callable capture has no layout"))
         else
             null;
         var on_drop = assign.on_drop;
-        if (assign.frozen_capture_layout) |frozen_layout| {
+        if (assign.frozen_capture_layout.get()) |frozen_layout| {
             if (on_drop == .rc_helper) on_drop.rc_helper.layout_idx = frozen_layout;
         }
         return self.freezeCallable(assign.proc, capture, on_drop, target_layout);

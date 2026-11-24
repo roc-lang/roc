@@ -139,8 +139,8 @@ const UnifyPairSet = std.HashMap(UnifyPair, void, UnifyPairContext, std.hash_map
 /// first var heads a chain of the active pairs it begins; retiring pops the
 /// stack and restores that head, so no retired pair leaves anything behind.
 const ActivePairs = struct {
-    const end: u32 = std.math.maxInt(u32);
-    const Node = struct { pair: UnifyPair, next: u32 };
+    /// `next` is the chain's next active pair, absent at the chain's end.
+    const Node = struct { pair: UnifyPair, next: collections.OptionalU32 };
 
     heads: collections.DenseMapUnmanaged(Type.TypeVarId, u32) = .empty,
     nodes: std.ArrayList(Node) = .empty,
@@ -152,15 +152,14 @@ const ActivePairs = struct {
 
     /// Begin `pair`; false when it is already active.
     fn begin(self: *ActivePairs, allocator: Allocator, pair: UnifyPair) Allocator.Error!bool {
-        var cursor = self.heads.get(pair.first) orelse end;
-        const head = cursor;
-        while (cursor != end) {
-            const node = self.nodes.items[cursor];
+        const head: collections.OptionalU32 = .of(self.heads.get(pair.first));
+        var cursor = head;
+        while (cursor.get()) |node_index| {
+            const node = self.nodes.items[node_index];
             if (node.pair.second == pair.second) return false;
             cursor = node.next;
         }
-        const index = std.math.cast(u32, self.nodes.items.len) orelse return error.OutOfMemory;
-        if (index == end) return error.OutOfMemory;
+        const index = try collections.nextBiasedId(self.nodes.items.len);
         try self.nodes.ensureUnusedCapacity(allocator, 1);
         try self.heads.put(allocator, pair.first, index);
         self.nodes.appendAssumeCapacity(.{ .pair = pair, .next = head });
@@ -171,10 +170,10 @@ const ActivePairs = struct {
     fn retire(self: *ActivePairs, pair: UnifyPair) void {
         const node = self.nodes.pop() orelse unreachable; // pair is the most recently begun active pair, so its node is on top
         std.debug.assert(node.pair.first == pair.first and node.pair.second == pair.second);
-        if (node.next == end) {
-            _ = self.heads.remove(pair.first);
+        if (node.next.get()) |next| {
+            self.heads.getPtr(pair.first).?.* = next;
         } else {
-            self.heads.getPtr(pair.first).?.* = node.next;
+            _ = self.heads.remove(pair.first);
         }
     }
 };
@@ -568,10 +567,10 @@ const Solver = struct {
     leaf_arg_scopes: collections.DenseMap(Type.TypeVarId, u32),
     /// Per lifted Monotype: whether a cycle is reachable from it.
     reaches_cycle: std.DynamicBitSetUnmanaged,
-    /// Per lifted Monotype: the cycle it lies on, or `no_cycle_component`.
+    /// Per lifted Monotype: the cycle it lies on, if any.
     /// One clone context instantiates one cycle: a leaf joins its parent's
     /// context only when both lie on the same cycle (`TypeCloner.existingClone`).
-    cycle_components: []u32,
+    cycle_components: []collections.OptionalU32,
     /// Pools for the short-lived maps the solver creates per work item (clone
     /// memos, visited sets). Their sparse chunks span the large type ID
     /// domains, so per-item fresh maps would spend most of their time
@@ -1210,7 +1209,7 @@ const Solver = struct {
         for (fns) |fn_id| {
             if (self.mono_root_fns.isSet(@backingInt(fn_id))) return self.countWork(.root_groups, 1);
             // A function type an older class holds is that class's.
-            if (types.ownerOf(self.program.fn_tys.items[@backingInt(fn_id)]) < owner) return self.countWork(.environment_groups, 1);
+            if (Type.ownerOlder(types.ownerOf(self.program.fn_tys.items[@backingInt(fn_id)]), owner)) return self.countWork(.environment_groups, 1);
         }
 
         // The environment: every class this group owns that an older class
@@ -1225,7 +1224,7 @@ const Solver = struct {
         }
         while (self.gen_stack.pop()) |next| {
             const root = types.rootCompressed(next);
-            if (types.owners.items[@backingInt(root)] < owner) continue;
+            if (Type.ownerOlder(types.owners.items[@backingInt(root)], owner)) continue;
             if ((try self.gen_env.getOrPut(self.allocator, root)).found_existing) continue;
             if (self.namesOwnLambda(root, group)) return self.countWork(.environment_groups, 1);
             for (fns) |fn_id| if (types.rootCompressed(self.program.fn_tys.items[@backingInt(fn_id)]) == root) return self.countWork(.environment_groups, 1);
@@ -1243,13 +1242,14 @@ const Solver = struct {
         self.gen_stack.clearRetainingCapacity();
         for (fns) |fn_id| try self.gen_stack.append(self.allocator, self.program.fn_tys.items[@backingInt(fn_id)]);
         // Each stack entry is a child; its parent is pushed as an edge.
-        var parents: std.ArrayList(u32) = .empty;
+        // A root entry has no parent.
+        var parents: std.ArrayList(collections.OptionalU32) = .empty;
         defer parents.deinit(self.allocator);
-        try parents.appendNTimes(self.allocator, std.math.maxInt(u32), fns.len);
+        try parents.appendNTimes(self.allocator, .none, fns.len);
         while (self.gen_stack.pop()) |next| {
-            const parent = parents.pop().?;
+            const parent = parents.pop().?.get();
             const root = types.rootCompressed(next);
-            if (types.owners.items[@backingInt(root)] < owner) continue;
+            if (Type.ownerOlder(types.owners.items[@backingInt(root)], owner)) continue;
             if (self.gen_env.contains(root)) continue;
             const content = types.get(root);
             // `prepareGroupSignatures` left only callable-free leaves.
@@ -1257,24 +1257,24 @@ const Solver = struct {
                 std.debug.assert(self.isCallableFree(content.mono.id));
                 continue;
             }
-            if (types.owners.items[@backingInt(root)] < owner or self.gen_env.contains(root)) continue;
+            if (Type.ownerOlder(types.owners.items[@backingInt(root)], owner) or self.gen_env.contains(root)) continue;
             const entry = try self.gen_index.getOrPut(self.allocator, root);
             if (entry.found_existing) {
-                if (parent != std.math.maxInt(u32)) try self.gen_edges.append(self.allocator, .{ parent, entry.value_ptr.* });
+                if (parent) |parent_index| try self.gen_edges.append(self.allocator, .{ parent_index, entry.value_ptr.* });
                 continue;
             }
             const index: u32 = @intCast(self.gen_nodes.items.len);
             entry.value_ptr.* = index;
             try self.gen_nodes.append(self.allocator, root);
             types.owners.items[@backingInt(root)] = owner;
-            if (parent != std.math.maxInt(u32)) try self.gen_edges.append(self.allocator, .{ parent, index });
+            if (parent) |parent_index| try self.gen_edges.append(self.allocator, .{ parent_index, index });
             const seed = content == .unbound or content == .lambda_set or content == .erased;
             try self.gen_seed.append(self.allocator, seed);
             self.gen_children.clearRetainingCapacity();
             try self.appendGeneralizationChildren(root);
             for (self.gen_children.items) |child| {
                 try self.gen_stack.append(self.allocator, child);
-                try parents.append(self.allocator, index);
+                try parents.append(self.allocator, .some(index));
             }
         }
 
@@ -2846,28 +2846,28 @@ const Solver = struct {
         self.program.types.current_owner = self.program.types.ownerOf(root);
         defer self.program.types.current_owner = outer_owner;
         const sharing = self.leafSharing(leaf.id);
-        const ctx: u32 = if (leaf.ctx != Type.no_leaf_context) leaf.ctx else switch (sharing) {
-            .shared => try self.sharedLeafContext(),
-            .positional => Type.no_leaf_context,
-            .context => if (self.cycle_components[@backingInt(leaf.id)] != no_cycle_component)
-                try self.newLeafContext()
+        const ctx: collections.OptionalU32 = if (leaf.ctx != .none) leaf.ctx else switch (sharing) {
+            .shared => .some(try self.sharedLeafContext()),
+            .positional => .none,
+            .context => if (self.cycle_components[@backingInt(leaf.id)] != .none)
+                .some(try self.newLeafContext())
             else
-                Type.no_leaf_context,
+                .none,
         };
-        if (sharing != .positional and ctx != Type.no_leaf_context) {
-            if (self.leaf_contexts.items[ctx].get(leaf.id)) |existing| {
+        if (sharing != .positional) if (ctx.get()) |context| {
+            if (self.leaf_contexts.items[context].get(leaf.id)) |existing| {
                 const existing_root = self.program.types.rootCompressed(existing);
                 if (existing_root != root) {
                     try self.program.types.setLink(root, existing_root);
                     return try self.resolvedContentAt(existing_root);
                 }
             } else {
-                try self.leaf_contexts.items[ctx].put(leaf.id, root);
+                try self.leaf_contexts.items[context].put(leaf.id, root);
             }
-        }
+        };
         var cloner = TypeCloner.init(self);
         cloner.lazy_ctx = ctx;
-        cloner.lazy_parent = leaf.id;
+        cloner.lazy_parent = .some(leaf.id);
         defer cloner.deinit();
         const mono_content = self.lifted.types.get(leaf.id);
         // Only type arguments need ties to occurrences in the backing. A
@@ -4068,7 +4068,7 @@ const Solver = struct {
             const shared = self.program.types.rootCompressed(entry.value_ptr.*);
             if (read_root == shared) return;
             const raw = self.program.types.get(read_root);
-            if (raw == .mono and raw.mono.id == read_mono and raw.mono.ctx == Type.no_leaf_context and !self.leaf_arg_scopes.contains(read_root)) {
+            if (raw == .mono and raw.mono.id == read_mono and raw.mono.ctx == .none and !self.leaf_arg_scopes.contains(read_root)) {
                 try self.program.types.setLink(read_root, shared);
                 return;
             }
@@ -4262,7 +4262,7 @@ const Solver = struct {
         if (!self.leafOriginIs(other, id) and !self.leafOriginIs(other_root, id)) return false;
         if (self.joinedStructuralOriginIntoNominal(id, other_root)) return false;
         if (self.reaches_cycle.isSet(@backingInt(id)) and
-            leaf.ctx == Type.no_leaf_context and !self.leaf_arg_scopes.contains(leaf_root) and
+            leaf.ctx == .none and !self.leaf_arg_scopes.contains(leaf_root) and
             !try self.monoProvenUninhabited(id))
         {
             if (try self.exactMonoClone(id, other_root)) return true;
@@ -5257,8 +5257,12 @@ const Solver = struct {
             const Entry = struct { name: Name, position: u32 };
 
             len: u32,
+            /// The index's run in the pool; an index with no entries owns no
+            /// run.
             entries_start: u32,
             entries_len: u32,
+
+            const fresh: Self = .{ .len = 0, .entries_start = 0, .entries_len = 0 };
 
             fn lessThan(_: void, lhs: Entry, rhs: Entry) bool {
                 const lhs_key = @backingInt(lhs.name);
@@ -5269,9 +5273,9 @@ const Solver = struct {
             /// Index the row `span` of `types` into `pool`, reusing this
             /// index's run when it ends the pool.
             fn rebuild(self: *Self, allocator: Allocator, pool: *std.ArrayList(Entry), types: *const Type.Store, span: Type.Span) Allocator.Error!void {
-                if (@as(usize, self.entries_start) + self.entries_len == pool.items.len) pool.shrinkRetainingCapacity(self.entries_start);
+                if (self.entries_len != 0 and @as(usize, self.entries_start) + self.entries_len == pool.items.len) pool.shrinkRetainingCapacity(self.entries_start);
                 const start = std.math.cast(u32, pool.items.len) orelse return error.OutOfMemory;
-                if (std.math.maxInt(u32) - start < span.len) return error.OutOfMemory;
+                _ = std.math.add(u32, start, span.len) catch return error.OutOfMemory;
                 try pool.ensureUnusedCapacity(allocator, span.count());
                 for (0..span.count()) |position| pool.appendAssumeCapacity(.{ .name = labelAt(Name, types, span, position), .position = @intCast(position) });
                 std.sort.pdq(Entry, pool.items[start..], {}, lessThan);
@@ -5372,7 +5376,7 @@ const Solver = struct {
         const gop = try indexes.getOrPut(self.allocator, span.start);
         // A fresh index owns no run, so filling it never reuses the pool's
         // last run.
-        if (!gop.found_existing) gop.value_ptr.* = .{ .len = 0, .entries_start = std.math.maxInt(u32), .entries_len = 0 };
+        if (!gop.found_existing) gop.value_ptr.* = Index.fresh;
         if (gop.value_ptr.len != span.len) try gop.value_ptr.rebuild(self.allocator, pool, &self.program.types, span);
         return pool.items[gop.value_ptr.entries_start..][0..gop.value_ptr.entries_len];
     }
@@ -5761,9 +5765,8 @@ const ReachabilityMasks = struct {
     contains_callable: std.DynamicBitSetUnmanaged,
     contains_tag_row: std.DynamicBitSetUnmanaged,
     reaches_cycle: std.DynamicBitSetUnmanaged,
-    /// Per lifted Monotype: the cycle it lies on (`markCycleMembers`), or
-    /// `no_cycle_component`.
-    cycle_components: []u32,
+    /// Per lifted Monotype: the cycle it lies on (`markCycleMembers`), if any.
+    cycle_components: []collections.OptionalU32,
 
     fn deinit(self: *ReachabilityMasks, allocator: Allocator) void {
         allocator.free(self.cycle_components);
@@ -5899,7 +5902,7 @@ fn computeReachabilityMasks(allocator: Allocator, types: MonoType.Store.View) Al
 
     var cycle = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
     errdefer cycle.deinit(allocator);
-    const components = try allocator.alloc(u32, count);
+    const components = try allocator.alloc(collections.OptionalU32, count);
     errdefer allocator.free(components);
     try markCycleMembers(allocator, index_.parents, index_.starts, &cycle, components);
     try index_.markAncestors(allocator, &cycle);
@@ -5912,12 +5915,10 @@ fn computeReachabilityMasks(allocator: Allocator, types: MonoType.Store.View) Al
 }
 
 /// A Monotype that lies on no cycle.
-const no_cycle_component: u32 = std.math.maxInt(u32);
-
 /// Mark every lifted Monotype that lies on a cycle: a member of a strongly
 /// connected component with more than one type, or a type that is its own
 /// child. Each such component gets its own id in `components`; every other
-/// type gets `no_cycle_component`. Two types share an id exactly when each
+/// type's entry is absent. Two types share an id exactly when each
 /// reaches the other. Tarjan's algorithm over child edges, on an explicit
 /// stack.
 fn markCycleMembers(
@@ -5925,11 +5926,11 @@ fn markCycleMembers(
     parents: []const u32,
     parent_starts: []const u32,
     cycle: *std.DynamicBitSetUnmanaged,
-    components: []u32,
+    components: []collections.OptionalU32,
 ) Allocator.Error!void {
     const count = cycle.bit_length;
     cycle.unsetAll();
-    @memset(components, no_cycle_component);
+    @memset(components, .none);
     var next_component: u32 = 0;
     // Child edges are the parent edges reversed.
     const child_starts = try allocator.alloc(u32, count + 1);
@@ -6008,7 +6009,7 @@ fn markCycleMembers(
             // A one-type component lies on a cycle only through its own child
             // edge, which marked it above.
             if (cycle.isSet(node)) {
-                for (members) |member| components[member] = next_component;
+                for (members) |member| components[member] = .some(next_component);
                 next_component += 1;
             }
             component.items.len = component_start;
@@ -6176,11 +6177,13 @@ const TypeCloner = struct {
     /// One-level mode: children lower to lazy leaves instead of eager clones,
     /// clone-invariant ones in the shared context and the rest as
     /// `existingClone` decides, reusing a context's existing var when the
-    /// Monotype already occurs in it. `Type.no_leaf_context` when the
-    /// expanding leaf has no context. Used by `expandMonoRoot`.
-    lazy_ctx: ?u32 = null,
-    /// The Monotype of the leaf a lazy expansion materializes.
-    lazy_parent: MonoType.TypeId = undefined,
+    /// Monotype already occurs in it. Absent when the expanding leaf has no
+    /// context. Read only in lazy mode (`lazy_parent` present). Used by
+    /// `expandMonoRoot`.
+    lazy_ctx: collections.OptionalU32 = .none,
+    /// The Monotype of the leaf a lazy expansion materializes; present
+    /// exactly in one-level mode.
+    lazy_parent: MonoType.MaybeTypeId = .none,
     /// The argument scope (`Solver.arg_scopes`) of the lazy expansion: a
     /// named type's own, which registers its positional components, or the
     /// one the expanding leaf was created under, which only reads it.
@@ -6266,7 +6269,8 @@ const TypeCloner = struct {
     /// fields of one record, or a callback's argument and result, never
     /// share callable slots merely because their Monotypes are equal.
     fn existingClone(self: *TypeCloner, ty: MonoType.TypeId) Allocator.Error!?Type.TypeVarId {
-        if (self.lazy_ctx) |parent_ctx| {
+        if (self.lazy_parent != .none) {
+            const parent_ctx = self.lazy_ctx;
             // A clone-invariant child is the same shared clone wherever it
             // occurs, exactly as a clone-invariant root is: it has nothing to
             // solve, so unifying two of its occurrences reaches one var
@@ -6278,7 +6282,7 @@ const TypeCloner = struct {
                 if (self.arg_scope) |scope| {
                     if (self.solver.arg_scopes.items[scope.id].get(ty)) |existing| return existing;
                 }
-                const created = try self.solver.program.types.add(.{ .mono = .{ .id = ty, .ctx = Type.no_leaf_context } });
+                const created = try self.solver.program.types.add(.{ .mono = .{ .id = ty, .ctx = .none } });
                 try self.solver.leaf_origins.put(created, ty);
                 if (self.arg_scope) |scope| {
                     try self.solver.leaf_arg_scopes.put(created, scope.id);
@@ -6293,19 +6297,19 @@ const TypeCloner = struct {
                 if (!self.sameInstance(parent_ctx, ty)) {
                     // A child on no cycle with its parent begins a tree of its
                     // own: nothing beneath it leads back into this context.
-                    const created = try self.solver.program.types.add(.{ .mono = .{ .id = ty, .ctx = Type.no_leaf_context } });
+                    const created = try self.solver.program.types.add(.{ .mono = .{ .id = ty, .ctx = .none } });
                     try self.solver.leaf_origins.put(created, ty);
                     try self.bindInArgScope(ty, created);
                     return created;
                 }
             }
-            const ctx = if (sharing == .shared) try self.solver.sharedLeafContext() else parent_ctx;
+            const ctx: u32 = if (sharing == .shared) try self.solver.sharedLeafContext() else parent_ctx.get().?;
             const map = &self.solver.leaf_contexts.items[ctx];
             if (map.get(ty)) |existing| {
                 if (sharing == .context) try self.registerInArgScope(ty, existing);
                 return existing;
             }
-            const created = try self.solver.program.types.add(.{ .mono = .{ .id = ty, .ctx = ctx } });
+            const created = try self.solver.program.types.add(.{ .mono = .{ .id = ty, .ctx = .some(ctx) } });
             try self.solver.leaf_origins.put(created, ty);
             try map.put(ty, created);
             if (sharing == .context) {
@@ -6333,10 +6337,10 @@ const TypeCloner = struct {
     /// Whether a callable-bearing or cyclic child `ty` of this expansion
     /// joins the expanding leaf's context: when the child lies on the same
     /// cycle as its parent, so both are parts of one instance of that cycle.
-    fn sameInstance(self: *const TypeCloner, parent_ctx: u32, ty: MonoType.TypeId) bool {
-        if (parent_ctx == Type.no_leaf_context) return false;
+    fn sameInstance(self: *const TypeCloner, parent_ctx: collections.OptionalU32, ty: MonoType.TypeId) bool {
+        if (parent_ctx == .none) return false;
         const component = self.solver.cycle_components[@backingInt(ty)];
-        return component != no_cycle_component and component == self.solver.cycle_components[@backingInt(self.lazy_parent)];
+        return component != .none and component == self.solver.cycle_components[@backingInt(self.lazy_parent.get().?)];
     }
 
     /// Record that `created` reads this expansion's argument scope, and bind
@@ -6412,7 +6416,7 @@ const TypeCloner = struct {
     /// Lower one Monotype content whose components are cloned already or,
     /// in lazy mode, become lazy leaves.
     fn lowerContent(self: *TypeCloner, content: MonoType.Content) Allocator.Error!Type.Content {
-        std.debug.assert(self.lazy_ctx != null);
+        std.debug.assert(self.lazy_parent != .none);
         const allocator = self.solver.allocator;
         var build = CloneBuild{ .content = content };
         self.solver.acquireCloneLists(&build);

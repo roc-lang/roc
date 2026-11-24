@@ -3736,12 +3736,12 @@ test "content identity: deep hash covers transitive imports (byte-identical modu
     // not share identity: their field layouts could differ.
     var over_v1 = try DeclaringModule.init(gpa, "Api", "T := { x : Dep.X }");
     defer over_v1.deinit();
-    over_v1.env.self_module_identity = base.ModuleIdentity.Idx.NONE;
+    over_v1.env.self_module_identity = .none;
     try over_v1.env.ensureContentIdentity(&.{@as(*const ModuleEnv, dep_v1.env)});
 
     var over_v2 = try DeclaringModule.init(gpa, "Api", "T := { x : Dep.X }");
     defer over_v2.deinit();
-    over_v2.env.self_module_identity = base.ModuleIdentity.Idx.NONE;
+    over_v2.env.self_module_identity = .none;
     try over_v2.env.ensureContentIdentity(&.{@as(*const ModuleEnv, dep_v2.env)});
 
     try std.testing.expect(!std.mem.eql(

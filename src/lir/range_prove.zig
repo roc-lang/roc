@@ -309,8 +309,7 @@ const FieldValue = struct { node: NodeId, int: bool };
 fn PairMap(comptime Primary: type, comptime V: type) type {
     return struct {
         const Self = @This();
-        const end: u32 = std.math.maxInt(u32);
-        const Entry = struct { primary: Primary, second: u32, value: V, next: u32 };
+        const Entry = struct { primary: Primary, second: u32, value: V, next: collections.OptionalU32 };
 
         heads: collections.DenseMap(Primary, u32),
         nodes: std.ArrayList(Entry) = .empty,
@@ -332,11 +331,11 @@ fn PairMap(comptime Primary: type, comptime V: type) type {
         }
 
         fn find(self: *const Self, primary: Primary, second: u32) ?u32 {
-            var index = self.heads.get(primary) orelse return null;
-            while (index != end) {
+            var next = self.heads.get(primary);
+            while (next) |index| {
                 const node = &self.nodes.items[index];
                 if (node.second == second) return index;
-                index = node.next;
+                next = node.next.get();
             }
             return null;
         }
@@ -359,7 +358,8 @@ fn PairMap(comptime Primary: type, comptime V: type) type {
         /// when absent. The pointer is valid until the next insertion.
         fn getOrPut(self: *Self, primary: Primary, second: u32) ResourceError!GetOrPutResult {
             if (self.find(primary, second)) |index| return .{ .value_ptr = &self.nodes.items[index].value, .found_existing = true };
-            if (self.nodes.items.len >= end) return error.OutOfMemory;
+            // A later entry's `next` stores this index plus one.
+            if (std.math.cast(u32, self.nodes.items.len + 1) == null) return error.OutOfMemory;
             try self.nodes.ensureUnusedCapacity(self.heads.allocator, 1);
             const head = try self.heads.getOrPut(primary);
             const index: u32 = @intCast(self.nodes.items.len);
@@ -367,7 +367,7 @@ fn PairMap(comptime Primary: type, comptime V: type) type {
                 .primary = primary,
                 .second = second,
                 .value = undefined,
-                .next = if (head.found_existing) head.value_ptr.* else end,
+                .next = if (head.found_existing) .some(head.value_ptr.*) else .none,
             });
             head.value_ptr.* = index;
             return .{ .value_ptr = &self.nodes.items[index].value, .found_existing = false };
@@ -6681,7 +6681,7 @@ const Pass = struct {
         if (demand.against == .limit) {
             // A limit below zero admits nothing, and the base is compared
             // as a `U64`.
-            if (demand.c < 0 or demand.c > std.math.maxInt(u64)) return false;
+            if (std.math.cast(u64, demand.c) == null) return false;
             switch (demand.base) {
                 .constant => return false,
                 .local => |local| switch (self.localLayout(local)) {

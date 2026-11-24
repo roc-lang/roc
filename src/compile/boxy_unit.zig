@@ -396,6 +396,7 @@ fn recordInterfaces(interfaces: *ExportInterfaces, entry: object_cache.Entry) Al
         .rc_ret_unique_fields = record.rc_ret_unique_fields,
         .rc_ret_conditions = record.rc_ret_conditions,
         .may_leave_pending = record.may_leave_pending,
+        .tail_carry = record.tail_carry,
         .rc_outcomes = record.rc_outcomes,
         .nonescaping_fn_params = record.nonescaping_fn_params,
         .capture_reuse_fn_params = record.capture_reuse_fn_params,
@@ -425,6 +426,7 @@ pub fn exportRecords(gpa: Allocator, lowered: *const lir.CheckedPipeline.Lowered
             .rc_ret_borrowed = interface.rc_ret_borrowed,
             .rc_ret_unique = interface.rc_ret_unique,
             .may_leave_pending = interface.may_leave_pending,
+            .tail_carry = interface.tail_carry,
             .rc_ret_conditions = interface.rc_ret_conditions,
             .rc_outcomes = interface.rc_outcomes,
             .nonescaping_fn_params = interface.nonescaping_fn_params,
@@ -1024,7 +1026,7 @@ pub fn expectSiteRecords(gpa: Allocator, lowered: *const lir.CheckedPipeline.Low
     for (sites, records) |site, *record| {
         if (!site.loc.hasLocation()) base.invariant("a test unit's expect site has no source location", .{});
         record.* = .{
-            .module = lowered.lir_result.store.sourceFileModuleIdentity(site.loc.file),
+            .module = lowered.lir_result.store.sourceFileModuleIdentity(site.loc.fileIndex()),
             .region_start = site.region.start.offset,
             .region_end = site.region.end.offset,
         };
@@ -1085,6 +1087,7 @@ fn testRestoredMetadata(gpa: Allocator) (object_cache.DecodeError || error{ Test
                 .rc_ret_borrowed = false,
                 .rc_ret_unique = false,
                 .may_leave_pending = false,
+                .tail_carry = false,
                 .rc_ret_conditions = &.{ 7, 9 },
                 .rc_outcomes = &.{ 0, 1 },
                 .nonescaping_fn_params = 2,

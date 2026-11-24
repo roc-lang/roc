@@ -107,11 +107,21 @@ const RawMethodConflict = struct {
     methods: RawTypePair,
 };
 
+/// The empty tag union ending each side's row that refused a tag the other
+/// side's row has. `a` is the expected side.
+pub const RefusedTagTails = struct {
+    a: ?Var = null,
+    b: ?Var = null,
+};
+
 const RawMismatchEvidence = struct {
     record: ?RawTypePair = null,
     /// The pair whose relation failed when the mismatch left the unifier,
     /// when that failure came from relating a pair of variables.
     leaf: ?RawTypePair = null,
+    /// The empty tag unions that refused the other side's tags in the leaf's
+    /// relation, when that is how the leaf failed.
+    refused_tag_tails: RefusedTagTails = .{},
     /// The first same-method requirement pair that failed to agree.
     method_conflict: ?RawMethodConflict = null,
     /// The row whose own repeated label failed to relate to its other
@@ -963,6 +973,7 @@ const Unifier = struct {
     fn runWorkLoop(self: *Self) Error!void {
         var frame: WorkFrame = undefined;
         while (self.popWorkFrame(&frame)) {
+            self.scratch.frame_refused_tag_tails = .{};
             self.processFrame(frame) catch |err| switch (err) {
                 error.ErroneousType => return error.ErroneousType,
                 error.TypeMismatch => {
@@ -970,9 +981,13 @@ const Unifier = struct {
                     // handler flags is raised again by its parent's frame,
                     // which relates no pair of its own.
                     const leaf_was_set = self.scratch.mismatch_evidence.leaf != null;
-                    if (!leaf_was_set) self.scratch.mismatch_evidence.leaf = framePair(frame);
+                    if (!leaf_was_set) {
+                        self.scratch.mismatch_evidence.leaf = framePair(frame);
+                        self.scratch.mismatch_evidence.refused_tag_tails = self.scratch.frame_refused_tag_tails;
+                    }
                     if (try self.handleTypeMismatch() == .ignored and !leaf_was_set) {
                         self.scratch.mismatch_evidence.leaf = null;
+                        self.scratch.mismatch_evidence.refused_tag_tails = .{};
                     }
                 },
                 error.OutOfMemory => return error.OutOfMemory,
@@ -2145,6 +2160,7 @@ const Unifier = struct {
                         if (a_tag_union.tags.len() == 0) {
                             try self.unifyGuarded(a_tag_union.ext, vars.b.var_);
                         } else {
+                            self.scratch.frame_refused_tag_tails.b = vars.b.var_;
                             return error.TypeMismatch;
                         }
                     },
@@ -2177,6 +2193,7 @@ const Unifier = struct {
                         if (b_tag_union.tags.len() == 0) {
                             try self.unifyGuarded(vars.a.var_, b_tag_union.ext);
                         } else {
+                            self.scratch.frame_refused_tag_tails.a = vars.a.var_;
                             return error.TypeMismatch;
                         }
                     },
@@ -4331,14 +4348,18 @@ const Unifier = struct {
         if (tags_ext == .both_extend and (a_ext_is_closed or b_ext_is_closed)) {
             // If we have unique tags on both sides AND either side is closed,
             // unification cannot succeed - fail immediately
+            if (a_ext_is_closed) self.scratch.frame_refused_tag_tails.a = a_ext_resolved.var_;
+            if (b_ext_is_closed) self.scratch.frame_refused_tag_tails.b = b_ext_resolved.var_;
             return error.TypeMismatch;
         }
         if (tags_ext == .a_extends_b and b_ext_is_closed) {
             // a has unique tags but b is closed - can't extend
+            self.scratch.frame_refused_tag_tails.b = b_ext_resolved.var_;
             return error.TypeMismatch;
         }
         if (tags_ext == .b_extends_a and a_ext_is_closed) {
             // b has unique tags but a is closed - can't extend
+            self.scratch.frame_refused_tag_tails.a = a_ext_resolved.var_;
             return error.TypeMismatch;
         }
         // A bounded annotation row refuses unlisted tags exactly as a closed
@@ -5029,7 +5050,7 @@ fn mergeStaticDispatchConstraintMetadata(
     if (merged.provenance.intro_expr == .none) {
         merged.provenance.intro_expr = other.provenance.intro_expr;
     }
-    if (!merged.interpolation.isPresent()) {
+    if (merged.interpolation == .none) {
         merged.interpolation = other.interpolation;
     }
     return merged;
@@ -5417,6 +5438,8 @@ pub const Scratch = struct {
     unify_work_stack: WorkFrame.SafeList,
     mismatch_flags: MkSafeList(bool),
     mismatch_evidence: RawMismatchEvidence,
+    /// The empty tag unions that refused a tag in the frame being processed.
+    frame_refused_tag_tails: RefusedTagTails,
 
     // records - used internal by unification
     gathered_fields: RecordFieldSafeList,
@@ -5622,6 +5645,7 @@ pub const Scratch = struct {
             .unify_work_stack = try WorkFrame.SafeList.initCapacity(gpa, 32),
             .mismatch_flags = try MkSafeList(bool).initCapacity(gpa, 8),
             .mismatch_evidence = .{},
+            .frame_refused_tag_tails = .{},
             .gathered_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
             .only_in_a_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
             .only_in_b_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
@@ -5707,6 +5731,7 @@ pub const Scratch = struct {
         self.unify_work_stack.clearRetainingCapacity();
         self.mismatch_flags.clearRetainingCapacity();
         self.mismatch_evidence = .{};
+        self.frame_refused_tag_tails = .{};
         self.gathered_fields.clearRetainingCapacity();
         self.only_in_a_fields.clearRetainingCapacity();
         self.only_in_b_fields.clearRetainingCapacity();

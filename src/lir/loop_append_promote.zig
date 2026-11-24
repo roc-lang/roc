@@ -364,14 +364,13 @@ const Edge = struct {
 /// on discovery, so cycles and reverse-ordered definitions cost one visit per
 /// reachable edge, rather than one whole-graph pass per propagation step.
 const EdgeIndex = struct {
-    heads: collections.DenseMap(LocalId, usize),
+    heads: collections.DenseMap(LocalId, u32),
     /// Storage for the chains; the live prefix covers the indexed edges.
-    next: []usize,
-    const end = std.math.maxInt(usize);
+    next: []collections.OptionalU32,
 
     fn init(allocator: Allocator, edges: []const Edge) ResourceError!EdgeIndex {
         var self = EdgeIndex{
-            .heads = collections.DenseMap(LocalId, usize).init(allocator),
+            .heads = collections.DenseMap(LocalId, u32).init(allocator),
             .next = &.{},
         };
         errdefer self.deinit(allocator);
@@ -382,15 +381,17 @@ const EdgeIndex = struct {
     /// Index another edge list, keeping the storage already held.
     fn rebuild(self: *EdgeIndex, allocator: Allocator, edges: []const Edge) ResourceError!void {
         self.heads.clearRetainingCapacity();
+        // Every edge index, plus one in its biased form, fits a `u32`.
+        _ = try collections.nextBiasedId(edges.len);
         if (self.next.len < edges.len) {
             allocator.free(self.next);
             self.next = &.{};
-            self.next = try allocator.alloc(usize, edges.len);
+            self.next = try allocator.alloc(collections.OptionalU32, edges.len);
         }
         for (edges, 0..) |edge, i| {
             const entry = try self.heads.getOrPut(edge.source);
-            self.next[i] = if (entry.found_existing) entry.value_ptr.* else end;
-            entry.value_ptr.* = i;
+            self.next[i] = if (entry.found_existing) .some(entry.value_ptr.*) else .none;
+            entry.value_ptr.* = @intCast(i);
         }
     }
 
@@ -408,8 +409,8 @@ const EdgeIndex = struct {
         var cursor: usize = 0;
         var edge_visits: usize = 0;
         while (cursor < queue.items.len) : (cursor += 1) {
-            var index = self.heads.get(queue.items[cursor]) orelse end;
-            while (index != end) : (index = self.next[index]) {
+            var next = self.heads.get(queue.items[cursor]);
+            while (next) |index| : (next = self.next[index].get()) {
                 edge_visits += 1;
                 const target = edges[index].target;
                 const entry = try carriers.getOrPut(target);
@@ -515,7 +516,7 @@ const Pass = struct {
                 .dirty_targets = collections.DenseMap(LocalId, void).init(allocator),
                 .assigned_targets = collections.DenseMap(LocalId, u32).init(allocator),
             },
-            .edge_index = .{ .heads = collections.DenseMap(LocalId, usize).init(allocator), .next = &.{} },
+            .edge_index = .{ .heads = collections.DenseMap(LocalId, u32).init(allocator), .next = &.{} },
             .proc_args = collections.DenseMap(LocalId, void).init(allocator),
             .attempted = collections.DenseMap(LocalId, void).init(allocator),
             .candidate_carriers = collections.DenseMap(LocalId, void).init(allocator),
@@ -741,7 +742,7 @@ const Pass = struct {
                             .i64_literal => |lit| if (lit.value >= 0) .{ .literal = @intCast(lit.value) } else Abstract.other,
                             .i128_literal => |lit_id| blk_lit: {
                                 const lit = self.store.stmtRow(lit_id);
-                                break :blk_lit if (lit.value >= 0 and lit.value <= std.math.maxInt(u64)) .{ .literal = @intCast(lit.value) } else Abstract.other;
+                                break :blk_lit if (std.math.cast(u64, lit.value)) |value| .{ .literal = value } else Abstract.other;
                             },
                             .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref => .other,
                         };
@@ -1163,7 +1164,7 @@ const Pass = struct {
                         .i64_literal => |lit| if (lit.value >= 0) @intCast(lit.value) else null,
                         .i128_literal => |lit_id| blk_lit: {
                             const lit = self.store.stmtRow(lit_id);
-                            break :blk_lit if (lit.value >= 0 and lit.value <= std.math.maxInt(u64)) @intCast(lit.value) else null;
+                            break :blk_lit std.math.cast(u64, lit.value);
                         },
                         .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref => null,
                     };

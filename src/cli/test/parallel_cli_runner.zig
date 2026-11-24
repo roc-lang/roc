@@ -713,6 +713,7 @@ const CustomCase = enum {
     issue_12741_wasm_generic_tail_calls_dev,
     issue_12741_wasm_generic_tail_calls_size,
     issue_12741_wasm_generic_tail_calls_speed,
+    issue_13356_wasm_cross_module_tail_group_dev,
     issue_12848_wasm_shared_helper_emitted_once_size,
     issue_13028_wasm_size_small_copy_is_memory_copy,
     issue_13028_wasm_speed_small_copy_is_scalar,
@@ -736,6 +737,7 @@ const CustomCase = enum {
     default_platform_stack_overflow_arm64mac,
     default_platform_stack_overflow_x64win,
     default_platform_stack_overflow_arm64win,
+    issue_13338_coff_host_dwarf_sections_contiguous,
     bidi_source_security,
     fmt_reformats_file,
     fmt_does_not_change_file,
@@ -2813,6 +2815,9 @@ const echo_cases = [_]CliCase{
     // anchor on the shallowest unit-carrying lender, which a join body can
     // release); re-enable the dev entry when that lands.
 
+    .{ .id = 0, .suite = .echo, .name = "issue 13340: a call from another module to a generic function in a cycle of tail calls passes every parameter it reads (dev, --specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=no" }, .roc_file = "test/echo/issue_13340_imported_tail_group_call.roc", .stdout_exact = "even 36 0\n", .not_contains = &no_panic_or_invariant_needles } } },
+    .{ .id = 0, .suite = .echo, .name = "issue 13340: a call from another module to a generic function in a cycle of tail calls passes every parameter it reads (dev, --specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=yes" }, .roc_file = "test/echo/issue_13340_imported_tail_group_call.roc", .stdout_exact = "even 36 0\n", .not_contains = &no_panic_or_invariant_needles } } },
+    .{ .id = 0, .suite = .echo, .name = "issue 13340: a call from another module to a generic function in a cycle of tail calls passes every parameter it reads (interpreter, --specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache", "--specialize=no" }, .roc_file = "test/echo/issue_13340_imported_tail_group_call.roc", .stdout_exact = "even 36 0\n", .not_contains = &no_panic_or_invariant_needles } } },
 };
 
 // Glue suite cases
@@ -2993,6 +2998,10 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12436: fields of a dying record read again after a take (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/FieldReadAgainAfterTake.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12436: fields of a dying record read again after a take (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/FieldReadAgainAfterTake.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12436: fields of a dying record read again after a take (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/FieldReadAgainAfterTake.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13344: nominal record field read twice, then matched and its payloads moved (test units)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev" }, .roc_file = "test/cli/issue_13344_twice_read_nominal_field/Output.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13344: nominal record field read twice, then matched and its payloads moved (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/issue_13344_twice_read_nominal_field/Output.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13344: nominal record field read twice, then matched and its payloads moved (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue_13344_twice_read_nominal_field/Output.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13344: nominal record field read twice, then matched and its payloads moved (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/issue_13344_twice_read_nominal_field/Output.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12471: a scalar read through a Try payload whose list fields were moved out (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/ScalarReadThroughSpentPayload.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12471: a scalar read through a Try payload whose list fields were moved out (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/ScalarReadThroughSpentPayload.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12471: a scalar read through a Try payload whose list fields were moved out (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/ScalarReadThroughSpentPayload.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -4238,6 +4247,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 13215: uncached module tests retain hosted dependency workers", .body = .{ .command = .{ .args = &.{ "test", "--main=test/cli/issue_13215_cached_module_tests/main.roc", "--specialize=no", "--jobs=1", "--no-cache" }, .roc_file = "test/cli/issue_13215_cached_module_tests/Probe.roc", .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 13215: cached module tests schedule the hosted import closure", .body = .{ .command = .{ .args = &.{ "test", "--main=test/cli/issue_13215_cached_module_tests/main.roc", "--specialize=no", "--jobs=1" }, .roc_file = "test/cli/issue_13215_cached_module_tests/HostedDependency.roc", .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 13215: uncached module tests schedule the hosted import closure", .body = .{ .command = .{ .args = &.{ "test", "--main=test/cli/issue_13215_cached_module_tests/main.roc", "--specialize=no", "--jobs=1", "--no-cache" }, .roc_file = "test/cli/issue_13215_cached_module_tests/HostedDependency.roc", .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy: an app's test unit follows the unit of a platform requirement type's module it does not import", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-color" }, .roc_file = "test/cli/boxy_requirement_type_unit/app.roc", .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy: an app's test unit follows the unit of a platform requirement type's module it does not import (one job)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-color", "--jobs=1" }, .roc_file = "test/cli/boxy_requirement_type_unit/app.roc", .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no caches nothing after checking", .timeout_ms = 600_000, .body = .{ .custom = .boxy_caches_nothing_after_checking } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test reuses each module's test outcome file across edits (dev)", .backend = .dev, .timeout_ms = 600_000, .body = .{ .custom = .boxy_test_outcome_files } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test reuses each module's test outcome file across edits (interpreter)", .backend = .interpreter, .timeout_ms = 600_000, .body = .{ .custom = .boxy_test_outcome_files } },
@@ -4286,6 +4297,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on arm64mac", .body = .{ .custom = .default_platform_crash_arm64mac } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on x64win", .body = .{ .custom = .default_platform_crash_x64win } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on arm64win", .body = .{ .custom = .default_platform_crash_arm64win } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13338: a fast dev link of a Windows host with DWARF keeps section addresses contiguous", .body = .{ .custom = .issue_13338_coff_host_dwarf_sections_contiguous } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform stack overflow prints debug backtrace on x64musl", .body = .{ .custom = .default_platform_stack_overflow_x64musl } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform stack overflow prints debug backtrace on arm64musl", .body = .{ .custom = .default_platform_stack_overflow_arm64musl } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform stack overflow prints debug backtrace on x64mac", .body = .{ .custom = .default_platform_stack_overflow_x64mac } },
@@ -5676,6 +5688,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 object packs offer no entry past the parameter limit (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_12769_wasm_object_entry_parameter_limit } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_dev } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_size } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13356: a call from another module into a cycle of tail calls returns the cycle's result on wasm32 (dev, --specialize=no)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_13356_wasm_cross_module_tail_group_dev } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12848: a helper with many callers is emitted once on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_12848_wasm_shared_helper_emitted_once_size } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 13028: a twelve-byte copy is one memory.copy on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_13028_wasm_size_small_copy_is_memory_copy } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 13028: a twelve-byte copy stays loads and stores on wasm32 (speed)", .timeout_ms = 600_000, .backend = .speed, .body = .{ .custom = .issue_13028_wasm_speed_small_copy_is_scalar } },
@@ -7405,6 +7418,7 @@ fn runCustomCase(
         .issue_12769_wasm_object_entry_parameter_limit => customIssue12769WasmObjectEntryParameterLimit(io, allocator, &env, &timer, timeout_ms),
         .issue_12741_wasm_generic_tail_calls_dev => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=dev"),
         .issue_12741_wasm_generic_tail_calls_size => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=size"),
+        .issue_13356_wasm_cross_module_tail_group_dev => customIssue13356WasmCrossModuleTailGroup(io, allocator, &env, &timer, timeout_ms),
         .issue_12848_wasm_shared_helper_emitted_once_size => customIssue12848WasmSharedHelperEmittedOnce(io, allocator, &env, &timer, timeout_ms),
         .issue_13028_wasm_size_small_copy_is_memory_copy => customIssue13028WasmSizeSmallCopyIsMemoryCopy(io, allocator, &env, &timer, timeout_ms),
         .issue_13028_wasm_speed_small_copy_is_scalar => customIssue13028WasmSpeedSmallCopyIsScalar(io, allocator, &env, &timer, timeout_ms),
@@ -7423,6 +7437,7 @@ fn runCustomCase(
         .default_platform_crash_arm64mac => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .arm64mac, .crash),
         .default_platform_crash_x64win => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .x64win, .crash),
         .default_platform_crash_arm64win => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .arm64win, .crash),
+        .issue_13338_coff_host_dwarf_sections_contiguous => customIssue13338CoffHostDwarfSectionsContiguous(io, allocator, &env, &timer, timeout_ms),
         .default_platform_stack_overflow_x64musl => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .x64musl, .stack_overflow),
         .default_platform_stack_overflow_arm64musl => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .arm64musl, .stack_overflow),
         .default_platform_stack_overflow_x64mac => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .x64mac, .stack_overflow),
@@ -10124,6 +10139,138 @@ fn customHotReloadDefaultApp(
         },
     })) |message| return failureFromRun(allocator, timer, result, message);
 
+    return null;
+}
+
+const issue_13338_host_c_source =
+    \\typedef unsigned long long U64;
+    \\extern U64 roc_debug_probe(void);
+    \\
+    \\int mainCRTStartup(void) { return roc_debug_probe() == 42 ? 0 : 1; }
+    \\void roc_alloc(void) {}
+    \\void roc_crashed(void) {}
+    \\void roc_dbg(void) {}
+    \\void roc_dealloc(void) {}
+    \\void roc_expect_failed(void) {}
+    \\void roc_realloc(void) {}
+    \\
+;
+
+const issue_13338_platform_source =
+    \\platform ""
+    \\    requires { main : U64 }
+    \\    exposes []
+    \\    packages {}
+    \\    provides { "roc_debug_probe": main_for_host }
+    \\    targets: { inputs_dir: "targets/", x64mingw: { inputs: ["host.obj", app] } }
+    \\
+    \\main_for_host : U64
+    \\main_for_host = main
+    \\
+;
+
+const issue_13338_app_source =
+    \\app [main] { pf: platform "platform/main.roc" }
+    \\
+    \\main : U64
+    \\main = 42
+    \\
+;
+
+/// A host compiled with DWARF has more debug sections than the three the
+/// app's fragments extend; the fast dev link must move all of them after
+/// the app, or the loaded sections are no longer adjacent and Windows
+/// refuses to load the executable.
+fn customIssue13338CoffHostDwarfSectionsContiguous(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const platform_dir = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "platform" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform dir: {}", .{err});
+    const target_dir = std.fs.path.join(allocator, &.{ platform_dir, "targets", "x64mingw" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform target dir: {}", .{err});
+    const platform_path = std.fs.path.join(allocator, &.{ platform_dir, "main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform path: {}", .{err});
+    const host_c_path = std.fs.path.join(allocator, &.{ platform_dir, "host.c" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate host C path: {}", .{err});
+    const host_obj_path = std.fs.path.join(allocator, &.{ target_dir, "host.obj" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate host object path: {}", .{err});
+    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
+    const exe_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "probe.exe" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate executable path: {}", .{err});
+    const output_arg = std.fmt.allocPrint(allocator, "--output={s}", .{exe_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
+    std.Io.Dir.cwd().createDirPath(io, target_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create platform target dir: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = platform_path, .data = issue_13338_platform_source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write platform source: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = host_c_path, .data = issue_13338_host_c_source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write host C source: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = issue_13338_app_source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write app source: {}", .{err});
+
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig",
+        "cc",
+        "-target",
+        "x86_64-windows-gnu",
+        "-gdwarf-4",
+        "-g",
+        "-c",
+        host_c_path,
+        "-o",
+        host_obj_path,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        roc_binary_path,
+        "build",
+        "--no-cache",
+        "--opt=dev",
+        "--specialize=no",
+        "--target=x64mingw",
+        output_arg,
+        app_path,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+
+    const exe = std.Io.Dir.cwd().readFileAlloc(io, exe_path, allocator, .limited(64 * 1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read linked executable: {}", .{err});
+    if (issue13338SectionGap(allocator, exe)) |message| return customFailure(allocator, timer, "{s}", .{message});
+    return null;
+}
+
+/// A description of the first pair of adjacent section headers whose
+/// addresses leave a hole, or of a malformed header, if any.
+fn issue13338SectionGap(allocator: Allocator, exe: []const u8) ?[]const u8 {
+    if (exe.len < 0x40) return "linked executable is too short";
+    const pe = std.mem.readInt(u32, exe[0x3c..0x40], .little);
+    const coff = @as(usize, pe) + 4;
+    if (coff + 20 + 240 > exe.len) return "linked executable has no optional header";
+    const section_count = std.mem.readInt(u16, exe[coff + 2 ..][0..2], .little);
+    const optional_size = std.mem.readInt(u16, exe[coff + 16 ..][0..2], .little);
+    const optional = exe[coff + 20 ..][0..240];
+    const section_alignment = std.mem.readInt(u32, optional[32..36], .little);
+    const size_of_image = std.mem.readInt(u32, optional[56..60], .little);
+    const headers = coff + 20 + optional_size;
+    if (headers + @as(usize, section_count) * 40 > exe.len) return "linked executable's section headers run past its end";
+    var expected: u64 = 0;
+    for (0..section_count) |index| {
+        const header = exe[headers + index * 40 ..][0..40];
+        const virtual_size = std.mem.readInt(u32, header[8..12], .little);
+        const rva = std.mem.readInt(u32, header[12..16], .little);
+        if (index != 0 and rva != expected) {
+            return std.fmt.allocPrint(allocator, "section {d} ({s}) starts at RVA 0x{x}, but the previous section ends at 0x{x}", .{ index, std.mem.sliceTo(header[0..8], 0), rva, expected }) catch "section addresses leave a hole";
+        }
+        expected = std.mem.alignForward(u64, @as(u64, rva) + virtual_size, section_alignment);
+    }
+    if (expected != size_of_image) {
+        return std.fmt.allocPrint(allocator, "the sections end at 0x{x}, but SizeOfImage is 0x{x}", .{ expected, size_of_image }) catch "SizeOfImage does not match the sections";
+    }
     return null;
 }
 
@@ -14751,6 +14898,7 @@ const wasm_parity_apps = [_]WasmParityApp{
     .{ .app = "test/wasm/issue_12560_boxed_bool_not_static_lib_app.roc" },
     .{ .app = "test/wasm/issue_12569_specialized_callables.roc" },
     .{ .app = "test/wasm/issue_12741_generic_tail_calls_app.roc" },
+    .{ .app = "test/wasm/issue_13356_cross_module_tail_group_app.roc" },
     .{ .app = "test/wasm/issue_12769_many_wasm_parameters_app.roc" },
     .{ .app = "test/wasm/issue_12778_wide_record_static_lib_app.roc" },
     .{ .app = "test/wasm/issue_12782_i128_narrow_static_lib_app.roc" },
@@ -15422,6 +15570,45 @@ fn customIssue12741WasmGenericTailCalls(
         return customFailure(allocator, timer, "failed to read the generic tail call module's allocation counts: {}", .{err});
     if (outstanding != 1) {
         return customFailure(allocator, timer, "generic tail call wasm left {d} allocations outstanding, not just its result", .{outstanding});
+    }
+    return null;
+}
+
+/// A wasm32 dev build without specialization compiles each module to its
+/// own unit, so the app's calls to `Issue13356Parity.even` (closed types) and
+/// `Issue13356Loop.ping` (a generic parameter, so a tail carry) and
+/// `Issue13356SelfTail.nt` (a function that tail-calls itself) cross units
+/// into cycles of tail calls, and must return each cycle's final result.
+fn customIssue13356WasmCrossModuleTailGroup(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "cross-module-tail-group.wasm" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output path: {}", .{err});
+    defer allocator.free(output_path);
+    const output_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output argument: {}", .{err});
+    defer allocator.free(output_arg);
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--target=wasm32", "--opt=dev", "--specialize=no", "--no-cache", output_arg },
+        .roc_file = "test/wasm/issue_13356_cross_module_tail_group_app.roc",
+        .exit = .success,
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+    })) |failure| return failure;
+    if (validateWasmOutput(io, allocator, timer, output_path)) |failure| return failure;
+
+    var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
+        return customFailure(allocator, timer, "failed to load the cross-module tail group wasm module: {}", .{err});
+    defer wasm.deinit();
+    const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+        return customFailure(allocator, timer, "cross-module tail group wasm execution failed: {}", .{err});
+    if (!std.mem.eql(u8, result, "81 >ioioi 5")) {
+        return customFailure(allocator, timer, "cross-module tail group wasm returned \"{s}\", not \"81 >ioioi 5\"", .{result});
     }
     return null;
 }

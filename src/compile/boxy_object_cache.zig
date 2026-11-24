@@ -18,12 +18,13 @@
 
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 const build_options = @import("build_options");
 
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 26;
+pub const format_version: u32 = 29;
 
 const magic = "RBXO";
 
@@ -135,6 +136,9 @@ pub const ExportRecord = struct {
     rc_ret_borrowed: bool,
     rc_ret_unique: bool,
     may_leave_pending: bool,
+    /// Whether the worker takes a tail carry
+    /// (`LIR.LirProcSpec.takesTailCarry`): an importer's calls pass it one.
+    tail_carry: bool,
     rc_ret_conditions: []const u32,
     /// The outcome table of the outcome-restitution variant the object
     /// publishes for the worker, as discriminant and mask word pairs
@@ -155,15 +159,12 @@ pub const ExportRecord = struct {
     /// checked table, which a needs list naming the worker by identity
     /// resolves it to (`LirProgram.BoxyExport.template`). It locates the
     /// worker in the module the entry was built from, so it is no part of
-    /// the export digest.
-    template: u32 = no_template,
+    /// the export digest. Absent for a worker that is no template's.
+    template: collections.OptionalU32 = .none,
     /// Whether another unit can read this record
     /// (`LirProgram.BoxyExport.visible`): the export digest covers exactly
     /// these records.
     visible: bool = false,
-
-    /// `template` of a worker that is no template's.
-    pub const no_template = std.math.maxInt(u32);
 };
 
 /// The digest of the importer-visible ones of `records` in identity order,
@@ -186,11 +187,11 @@ pub fn exportRecordsDigest(allocator: Allocator, records: []const ExportRecord) 
         }
     }.lessThan);
     var hasher = base.Sha256.init(.{});
-    hasher.update("roc.boxy.export_records.v4");
+    hasher.update("roc.boxy.export_records.v5");
     for (sorted) |record| {
         hasher.update(&record.identity);
         inline for (.{ record.rc_borrowed_params, record.rc_ret_lenders, record.rc_read_only_params, record.rc_ret_unique_fields }) |word| hasher.update(std.mem.asBytes(&word));
-        hasher.update(&[_]u8{ @intFromBool(record.rc_ret_borrowed), @intFromBool(record.rc_ret_unique), @intFromBool(record.may_leave_pending) });
+        hasher.update(&[_]u8{ @intFromBool(record.rc_ret_borrowed), @intFromBool(record.rc_ret_unique), @intFromBool(record.may_leave_pending), @intFromBool(record.tail_carry) });
         hasher.update(std.mem.asBytes(&@as(u32, @intCast(record.rc_ret_conditions.len))));
         hasher.update(std.mem.sliceAsBytes(record.rc_ret_conditions));
         // An importer's calls may demand the published outcome variant.
@@ -316,6 +317,7 @@ pub fn encodeParts(allocator: Allocator, entry: Entry) Allocator.Error!Encoded {
         try bytes.append(allocator, @intFromBool(record.rc_ret_borrowed));
         try bytes.append(allocator, @intFromBool(record.rc_ret_unique));
         try bytes.append(allocator, @intFromBool(record.may_leave_pending));
+        try bytes.append(allocator, @intFromBool(record.tail_carry));
         try appendU32(&bytes, allocator, @intCast(record.rc_ret_conditions.len));
         for (record.rc_ret_conditions) |word| try appendU32(&bytes, allocator, word);
         try appendU32(&bytes, allocator, @intCast(record.rc_outcomes.len));
@@ -324,7 +326,7 @@ pub fn encodeParts(allocator: Allocator, entry: Entry) Allocator.Error!Encoded {
         try appendU64(&bytes, allocator, record.capture_reuse_fn_params);
         try appendU32(&bytes, allocator, @intCast(record.table_needs.len));
         try bytes.appendSlice(allocator, record.table_needs);
-        try appendU32(&bytes, allocator, record.template);
+        try appendU32(&bytes, allocator, @backingInt(record.template));
         try bytes.append(allocator, @intFromBool(record.visible));
     }
     for ([_][]const []const u8{ entry.hosted_symbols, entry.link_root_symbols, entry.app_export_symbols }) |symbols| {
@@ -447,6 +449,7 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
             .rc_ret_borrowed = try reader.flag(),
             .rc_ret_unique = try reader.flag(),
             .may_leave_pending = try reader.flag(),
+            .tail_carry = try reader.flag(),
             .rc_ret_conditions = &.{},
         };
         const condition_count = try reader.word32();
@@ -466,7 +469,7 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
         record.rc_ret_conditions = conditions;
         record.rc_outcomes = outcomes;
         record.table_needs = needs;
-        record.template = try reader.word32();
+        record.template = @fromBackingInt(try reader.word32());
         record.visible = try reader.flag();
         decoded_exports += 1;
     }
@@ -500,18 +503,15 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
         .symbol = try reader.word32(),
     };
     const pieces_len = try reader.word64();
-    if (pieces_len > std.math.maxInt(usize)) return error.InvalidEntry;
-    const pieces = try reader.take(@intCast(pieces_len));
+    const pieces = try reader.take(std.math.cast(usize, pieces_len) orelse return error.InvalidEntry);
     const code_locations_len = try reader.word64();
-    if (code_locations_len > std.math.maxInt(usize)) return error.InvalidEntry;
-    const code_locations = try reader.take(@intCast(code_locations_len));
+    const code_locations = try reader.take(std.math.cast(usize, code_locations_len) orelse return error.InvalidEntry);
     const metadata_len = try reader.word64();
-    if (metadata_len > std.math.maxInt(usize)) return error.InvalidEntry;
-    const function_metadata = try reader.take(@intCast(metadata_len));
+    const function_metadata = try reader.take(std.math.cast(usize, metadata_len) orelse return error.InvalidEntry);
     const image_len = try reader.word64();
-    if (image_len > std.math.maxInt(usize)) return error.InvalidEntry;
-    if (image_len != 0) _ = try reader.take(imagePadding(reader.at));
-    const image = try reader.take(@intCast(image_len));
+    const image_size = std.math.cast(usize, image_len) orelse return error.InvalidEntry;
+    if (image_size != 0) _ = try reader.take(imagePadding(reader.at));
+    const image = try reader.take(image_size);
     return .{
         .exports = exports,
         .exports_digest = exports_digest,
@@ -684,8 +684,8 @@ test "a Boxy object entry round-trips through its bytes" {
     const conditions = [_]u32{ 3, 9 };
     var entry: Entry = .{
         .exports = &.{
-            .{ .identity = @splat(1), .rc_borrowed_params = 5, .rc_ret_lenders = 1, .rc_read_only_params = 4, .rc_ret_unique_fields = 0, .rc_ret_borrowed = true, .rc_ret_unique = false, .may_leave_pending = true, .rc_ret_conditions = &conditions, .rc_outcomes = &.{ 0, 0, 1, 1 }, .nonescaping_fn_params = 6, .capture_reuse_fn_params = 2, .template = 6, .visible = true },
-            .{ .identity = @splat(2), .rc_borrowed_params = 0, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 2, .rc_ret_borrowed = false, .rc_ret_unique = true, .may_leave_pending = false, .rc_ret_conditions = &.{} },
+            .{ .identity = @splat(1), .rc_borrowed_params = 5, .rc_ret_lenders = 1, .rc_read_only_params = 4, .rc_ret_unique_fields = 0, .rc_ret_borrowed = true, .rc_ret_unique = false, .may_leave_pending = true, .tail_carry = false, .rc_ret_conditions = &conditions, .rc_outcomes = &.{ 0, 0, 1, 1 }, .nonescaping_fn_params = 6, .capture_reuse_fn_params = 2, .template = .some(6), .visible = true },
+            .{ .identity = @splat(2), .rc_borrowed_params = 0, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 2, .rc_ret_borrowed = false, .rc_ret_unique = true, .may_leave_pending = false, .tail_carry = true, .rc_ret_conditions = &.{} },
         },
         .exports_digest = undefined,
         .hosted_symbols = &.{ "roc_fx_stdout_line", "roc_fx_stdin_line" },
@@ -729,7 +729,7 @@ test "a Boxy object entry round-trips through its bytes" {
     try std.testing.expectError(error.InvalidEntry, decode(allocator, altered));
 
     // Needs lists round-trip with the rest of their export record.
-    const needs_records: []const ExportRecord = &.{.{ .identity = @splat(3), .rc_borrowed_params = 0, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 0, .rc_ret_borrowed = false, .rc_ret_unique = false, .may_leave_pending = false, .rc_ret_conditions = &.{}, .table_needs = "a needs list" }};
+    const needs_records: []const ExportRecord = &.{.{ .identity = @splat(3), .rc_borrowed_params = 0, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 0, .rc_ret_borrowed = false, .rc_ret_unique = false, .may_leave_pending = false, .tail_carry = false, .rc_ret_conditions = &.{}, .table_needs = "a needs list" }};
     const needs_entry: Entry = .{
         .exports = needs_records,
         .exports_digest = try exportRecordsDigest(allocator, needs_records),
@@ -745,7 +745,7 @@ test "a Boxy object entry round-trips through its bytes" {
 
 test "an export records digest is a function of the records in identity order" {
     const allocator = std.testing.allocator;
-    const first: ExportRecord = .{ .identity = @splat(1), .rc_borrowed_params = 1, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 0, .rc_ret_borrowed = false, .rc_ret_unique = false, .may_leave_pending = false, .rc_ret_conditions = &.{}, .visible = true };
+    const first: ExportRecord = .{ .identity = @splat(1), .rc_borrowed_params = 1, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 0, .rc_ret_borrowed = false, .rc_ret_unique = false, .may_leave_pending = false, .tail_carry = false, .rc_ret_conditions = &.{}, .visible = true };
     var second = first;
     second.identity = @splat(2);
     const baseline = try exportRecordsDigest(allocator, &.{ first, second });
@@ -755,7 +755,7 @@ test "an export records digest is a function of the records in identity order" {
         @field(changed, field) ^= 1;
         try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{ first, changed })));
     }
-    inline for (.{ "rc_ret_borrowed", "rc_ret_unique", "may_leave_pending" }) |field| {
+    inline for (.{ "rc_ret_borrowed", "rc_ret_unique", "may_leave_pending", "tail_carry" }) |field| {
         var changed = second;
         @field(changed, field) = !@field(changed, field);
         try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{ first, changed })));
@@ -782,7 +782,7 @@ test "an export records digest is a function of the records in identity order" {
     // Where a template lies in its module, and any record no other unit
     // reads, are no part of the digest.
     changed = second;
-    changed.template = 9;
+    changed.template = .some(9);
     try std.testing.expectEqual(baseline, try exportRecordsDigest(allocator, &.{ first, changed }));
     var private = second;
     private.identity = @splat(4);
@@ -887,6 +887,7 @@ test "a Boxy object export digest round-trip releases every failed allocation" {
                 .rc_ret_borrowed = true,
                 .rc_ret_unique = false,
                 .may_leave_pending = true,
+                .tail_carry = true,
                 .rc_ret_conditions = &.{ 3, 9 },
                 .rc_outcomes = &.{ 0, 2 },
                 .nonescaping_fn_params = 3,

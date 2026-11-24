@@ -49,6 +49,7 @@ pub const VarMap = types.VarMap;
 pub const StaticDispatchConstraint = types.StaticDispatchConstraint;
 pub const InterpolationPartMetadata = types.InterpolationPartMetadata;
 pub const DerivedMapPlan = types.DerivedMapPlan;
+pub const TagTailClosing = types.TagTailClosing;
 pub const TwoStaticDispatchConstraints = types.TwoStaticDispatchConstraints;
 pub const Int = types.Int;
 pub const Frac = types.Frac;

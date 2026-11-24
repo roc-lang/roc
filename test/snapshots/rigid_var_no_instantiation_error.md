@@ -251,7 +251,7 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "result1"))
-					(e-call (constraint-fn-var 282)
+					(e-call (constraint-fn-var 283)
 						(e-lookup-local
 							(p-assign (ident "swap")))
 						(e-tuple
@@ -266,7 +266,7 @@ main! = |_| {
 						(e-runtime-error (tag "erroneous_value_expr"))))
 				(s-let
 					(p-assign (ident "result3"))
-					(e-call (constraint-fn-var 307)
+					(e-call (constraint-fn-var 308)
 						(e-lookup-local
 							(p-assign (ident "swap")))
 						(e-tuple

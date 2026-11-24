@@ -9,6 +9,7 @@
 //! symbol is referenced so we can patch those sites in-place.
 
 const std = @import("std");
+const collections = @import("collections");
 const WasmModule = @import("WasmModule.zig");
 const Import = WasmModule.Import;
 
@@ -61,9 +62,9 @@ pub const RelocationEntry = union(enum) {
         type_id: IndexRelocType,
         offset: u32, // byte offset within the target section body
         symbol_index: u32, // index into the linking section's symbol table
-        /// For reloc.DATA entries, the data segment this site belongs to after normalization.
-        /// `maxInt(u32)` means "not normalized / not applicable".
-        data_segment_index: u32 = std.math.maxInt(u32),
+        /// For reloc.DATA entries, the data segment this site belongs to after
+        /// normalization; absent before normalization and where not applicable.
+        data_segment_index: collections.OptionalU32 = .none,
     },
 
     /// Offset relocations: the value at `offset` is a memory address.
@@ -73,9 +74,9 @@ pub const RelocationEntry = union(enum) {
         offset: u32,
         symbol_index: u32,
         addend: i32,
-        /// For reloc.DATA entries, the data segment this site belongs to after normalization.
-        /// `maxInt(u32)` means "not normalized / not applicable".
-        data_segment_index: u32 = std.math.maxInt(u32),
+        /// For reloc.DATA entries, the data segment this site belongs to after
+        /// normalization; absent before normalization and where not applicable.
+        data_segment_index: collections.OptionalU32 = .none,
     },
 
     pub fn getSymbolIndex(self: RelocationEntry) u32 {
@@ -90,6 +91,32 @@ pub const RelocationEntry = union(enum) {
             .index => |i| i.offset,
             .offset => |o| o.offset,
         };
+    }
+
+    /// The data segment a normalized reloc.DATA entry belongs to, if any.
+    pub fn dataSegmentIndex(self: RelocationEntry) ?u32 {
+        return switch (self) {
+            .index => |i| i.data_segment_index.get(),
+            .offset => |o| o.data_segment_index.get(),
+        };
+    }
+
+    /// Whether this entry is normalized into data segment `segment`.
+    pub fn belongsToDataSegment(self: RelocationEntry, segment: usize) bool {
+        const own = self.dataSegmentIndex() orelse return false;
+        return own == segment;
+    }
+
+    /// Order by data segment, entries with none last, then by offset.
+    pub fn dataSegmentLessThan(_: void, a: RelocationEntry, b: RelocationEntry) bool {
+        const a_segment = a.dataSegmentIndex();
+        const b_segment = b.dataSegmentIndex();
+        if (a_segment != b_segment) {
+            const a_index = a_segment orelse return false;
+            const b_index = b_segment orelse return true;
+            return a_index < b_index;
+        }
+        return a.getOffset() < b.getOffset();
     }
 
     /// Parse a single relocation entry from bytes at cursor position.

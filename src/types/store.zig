@@ -60,6 +60,7 @@ const InterpolationMetadata = StaticDispatchConstraint.InterpolationMetadata;
 const NumeralInfo = types.NumeralInfo;
 const SourceDecl = types.SourceDecl;
 const DerivedMapPlan = types.DerivedMapPlan;
+const TagTailClosing = types.TagTailClosing;
 const NominalIdentity = types.NominalIdentity;
 const AliasIdentity = types.AliasIdentity;
 
@@ -125,6 +126,12 @@ const DerivedMapPlanEntry = struct {
     plan: DerivedMapPlan,
 
     const SafeList = collections.SafeList(@This());
+};
+
+/// One class's entry in `Store.tag_tail_closings`.
+const TagTailClosingEntry = struct {
+    class: DescStore.Idx,
+    closing: TagTailClosing,
 };
 
 /// Watched class descriptors. A write to one advances `generation` and drops
@@ -412,6 +419,17 @@ pub const Store = struct {
     /// valid while `derived_map_plans_journaled`; rollback restores it.
     derived_map_plans_undo: std.ArrayListUnmanaged(DerivedMapPlanEntry) = .empty,
     derived_map_plans_journaled: bool = false,
+    /// The checking step that closed each uncommitted tag tail class a match
+    /// closed (`TagTailClosing`), sorted by class descriptor so lookups
+    /// binary-search. Like the tail's mark, a merge keeps it, a member
+    /// detached from the class keeps it, and a copy of the tail carries it.
+    /// Only a type mismatch's report reads it. Runtime-only: never
+    /// serialized or cloned; sealing releases it.
+    tag_tail_closings: std.ArrayListUnmanaged(TagTailClosingEntry) = .empty,
+    /// `tag_tail_closings` as it stood when the open probe first changed
+    /// it, valid while `tag_tail_closings_journaled`; rollback restores it.
+    tag_tail_closings_undo: std.ArrayListUnmanaged(TagTailClosingEntry) = .empty,
+    tag_tail_closings_journaled: bool = false,
 
     /// Descriptors no slot names any more: a class merge keeps one side's
     /// descriptor and orphans the other's. The next class created takes the
@@ -569,6 +587,9 @@ pub const Store = struct {
     /// Canonicalize the solved store (`canonicalizeForSeal`), then seal it.
     /// Checking calls this once, when it finishes a module.
     pub fn canonicalizeAndSeal(self: *Self, idents: *const base.Ident.Store) Allocator.Error!void {
+        // Canonicalization renumbers classes, and no report reads a closing
+        // once checking has finished.
+        self.tag_tail_closings.clearRetainingCapacity();
         try self.canonicalizeForSeal(idents);
         self.seal();
     }
@@ -606,7 +627,7 @@ pub const Store = struct {
         for (0..self.record_fields.len()) |index| {
             var field = self.record_fields.get(@fromBackingInt(@intCast(index)));
             field.presence.var_ = self.representativeVar(field.presence.var_);
-            if (field.presence.presenceVar()) |presence| field.presence.presence_var = self.representativeVar(presence);
+            if (field.presence.presenceVar()) |presence| field.presence.presence_var = .some(self.representativeVar(presence));
             self.record_fields.set(@fromBackingInt(@intCast(index)), field);
         }
         for (self.nominal_decls.items()) |*decl| decl.backing = self.representativeVar(decl.backing);
@@ -780,6 +801,10 @@ pub const Store = struct {
         self.union_rank_trail = .empty;
         self.derived_map_plans_undo.deinit(self.gpa);
         self.derived_map_plans_undo = .empty;
+        self.tag_tail_closings.deinit(self.gpa);
+        self.tag_tail_closings = .empty;
+        self.tag_tail_closings_undo.deinit(self.gpa);
+        self.tag_tail_closings_undo = .empty;
         self.free_descs.deinit(self.gpa);
         self.free_descs = .empty;
         self.pending_free_descs.deinit(self.gpa);
@@ -1001,6 +1026,7 @@ pub const Store = struct {
         std.debug.assert(self.pending_free_descs.items.len == 0);
         std.debug.assert(self.probe_taken_descs == 0);
         std.debug.assert(!self.derived_map_plans_journaled);
+        std.debug.assert(!self.tag_tail_closings_journaled);
         self.savepoint_active = true;
         self.savepoint_baseline_slots = @intCast(self.slots.len());
         self.savepoint_baseline_descs = @intCast(self.descs.backing.len());
@@ -1022,6 +1048,7 @@ pub const Store = struct {
         self.root_meta_trail.shrinkRetainingCapacity(savepoint.root_meta_trail_len);
         self.union_rank_trail.shrinkRetainingCapacity(savepoint.union_rank_trail_len);
         self.derived_map_plans_journaled = false;
+        self.tag_tail_closings_journaled = false;
         self.savepoint_active = false;
         // The descriptors the probe reissued stay reissued, and its merges
         // are kept, so the descriptors they orphaned are dead for good.
@@ -1116,6 +1143,12 @@ pub const Store = struct {
             self.derived_map_plans.shrinkRetainingCapacity(restored.len);
             @memcpy(self.derived_map_plans.items(), restored);
             self.derived_map_plans_journaled = false;
+        }
+        if (self.tag_tail_closings_journaled) {
+            // The list held the journaled rows, so its capacity holds them.
+            self.tag_tail_closings.clearRetainingCapacity();
+            self.tag_tail_closings.appendSliceAssumeCapacity(self.tag_tail_closings_undo.items);
+            self.tag_tail_closings_journaled = false;
         }
 
         // The probe's merges are undone, so nothing they orphaned is dead,
@@ -1386,7 +1419,7 @@ pub const Store = struct {
 
     /// Put a dead descriptor on the free list, forgetting everything the
     /// store itself remembers about it by index: a settled mark, a watch,
-    /// a frozen anchor, and a derived map plan. The caller has reserved the
+    /// a frozen anchor, a derived map plan, and a tag tail closing. The caller has reserved the
     /// list's room.
     fn recycleDesc(self: *Self, desc_idx: DescStore.Idx) void {
         std.debug.assert(!self.savepoint_active);
@@ -1397,6 +1430,8 @@ pub const Store = struct {
         if (self.descs.getWord(desc_idx).flags().frozen) _ = self.frozen_anchors.remove(desc_idx);
         const plan_slot = self.derivedMapPlanSlot(desc_idx);
         if (plan_slot.found) _ = self.derived_map_plans.orderedRemove(plan_slot.index);
+        const closing_slot = self.tagTailClosingSlot(desc_idx);
+        if (closing_slot.found) _ = self.tag_tail_closings.orderedRemove(closing_slot.index);
         self.free_descs.appendAssumeCapacity(desc_idx);
     }
 
@@ -1488,6 +1523,107 @@ pub const Store = struct {
     /// class of its callable `fn_var`.
     pub fn setDerivedMapPlan(self: *Self, fn_var: Var, plan: DerivedMapPlan) Allocator.Error!void {
         try self.putClassDerivedMapPlan(self.resolveVar(fn_var).desc_idx, plan);
+    }
+
+    // tag tail closings //
+
+    const TagTailClosingSlot = struct { index: usize, found: bool };
+
+    /// Where `class`'s row in `tag_tail_closings` is, or would be inserted.
+    fn tagTailClosingSlot(self: *const Self, class: DescStore.Idx) TagTailClosingSlot {
+        const entries = self.tag_tail_closings.items;
+        const key: u32 = @backingInt(class);
+        var lo: usize = 0;
+        var hi: usize = entries.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            const mid_key: u32 = @backingInt(entries[mid].class);
+            if (key < mid_key) {
+                hi = mid;
+            } else if (key > mid_key) {
+                lo = mid + 1;
+            } else {
+                return .{ .index = mid, .found = true };
+            }
+        }
+        return .{ .index = lo, .found = false };
+    }
+
+    fn classTagTailClosing(self: *const Self, class: DescStore.Idx) ?TagTailClosing {
+        const slot = self.tagTailClosingSlot(class);
+        if (!slot.found) return null;
+        return self.tag_tail_closings.items[slot.index].closing;
+    }
+
+    /// Before the open probe first changes the closing rows, keep a copy for
+    /// rollback.
+    fn journalTagTailClosings(self: *Self) Allocator.Error!void {
+        if (!self.savepoint_active or self.tag_tail_closings_journaled) return;
+        self.tag_tail_closings_undo.clearRetainingCapacity();
+        try self.tag_tail_closings_undo.appendSlice(self.gpa, self.tag_tail_closings.items);
+        self.tag_tail_closings_journaled = true;
+    }
+
+    fn putClassTagTailClosing(self: *Self, class: DescStore.Idx, closing: TagTailClosing) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        const slot = self.tagTailClosingSlot(class);
+        if (slot.found and self.tag_tail_closings.items[slot.index].closing == closing) return;
+        try self.journalTagTailClosings();
+        if (slot.found) {
+            self.tag_tail_closings.items[slot.index].closing = closing;
+        } else {
+            try self.tag_tail_closings.insert(self.gpa, slot.index, .{ .class = class, .closing = closing });
+        }
+    }
+
+    fn removeClassTagTailClosing(self: *Self, class: DescStore.Idx) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        const slot = self.tagTailClosingSlot(class);
+        if (!slot.found) return;
+        try self.journalTagTailClosings();
+        _ = self.tag_tail_closings.orderedRemove(slot.index);
+    }
+
+    /// Give the class `to` the closing of the class `from`, when it has one.
+    fn inheritClassTagTailClosing(self: *Self, from: DescStore.Idx, to: DescStore.Idx) Allocator.Error!void {
+        const closing = self.classTagTailClosing(from) orelse return;
+        try self.putClassTagTailClosing(to, closing);
+    }
+
+    /// Two classes merge into `destination`, one of them: the merged class
+    /// keeps `b`'s closing, or else `a`'s.
+    fn mergeClassTagTailClosings(self: *Self, a: DescStore.Idx, b: DescStore.Idx, destination: DescStore.Idx) Allocator.Error!void {
+        std.debug.assert(destination == a or destination == b);
+        if (a == b) return;
+        const merged = self.classTagTailClosing(b) orelse self.classTagTailClosing(a) orelse return;
+        try self.removeClassTagTailClosing(if (destination == a) b else a);
+        try self.putClassTagTailClosing(destination, merged);
+    }
+
+    /// The checking step that closed the uncommitted tag tail `tail_var` is,
+    /// when a match closed it and it is still uncommitted: a merge with a
+    /// committed empty tag union takes the mark away, and with it the
+    /// match's say over the row.
+    pub fn tagTailClosing(self: *const Self, tail_var: Var) ?TagTailClosing {
+        if (self.tag_tail_closings.items.len == 0) return null;
+        const resolved = self.resolveVar(tail_var);
+        if (!resolved.desc.flags.uncommitted_tag_tail) return null;
+        return self.classTagTailClosing(resolved.desc_idx);
+    }
+
+    /// Record which checking step closed the uncommitted tag tail class of
+    /// `tail_var`.
+    pub fn setTagTailClosing(self: *Self, tail_var: Var, closing: TagTailClosing) Allocator.Error!void {
+        const resolved = self.resolveVar(tail_var);
+        std.debug.assert(resolved.desc.flags.uncommitted_tag_tail);
+        try self.putClassTagTailClosing(resolved.desc_idx, closing);
+    }
+
+    /// A copy of the uncommitted tag tail `source` carries its closing.
+    pub fn carryTagTailClosing(self: *Self, source: Var, copy: Var) Allocator.Error!void {
+        if (self.tag_tail_closings.items.len == 0) return;
+        const closing = self.classTagTailClosing(self.resolveVar(source).desc_idx) orelse return;
+        try self.putClassTagTailClosing(self.resolveVar(copy).desc_idx, closing);
     }
 
     fn getRootMeta(self: *const Self, desc_idx: DescStore.Idx) RootMeta {
@@ -1643,8 +1779,8 @@ pub const Store = struct {
             const entry_count = 64;
             const Entry = struct {
                 identity: Identity = undefined,
-                /// The row plus one; zero for an empty entry.
-                row_plus_one: u32 = 0,
+                /// The row, absent for an empty entry.
+                row: collections.OptionalU32 = .none,
             };
 
             inline fn slot(identity: Identity) usize {
@@ -1653,12 +1789,13 @@ pub const Store = struct {
 
             inline fn get(self: *const @This(), identity: Identity) ?u32 {
                 const entry = &self.entries[slot(identity)];
-                if (entry.row_plus_one == 0 or !std.mem.eql(u8, std.mem.asBytes(&entry.identity), std.mem.asBytes(&identity))) return null;
-                return entry.row_plus_one - 1;
+                const row = entry.row.get() orelse return null;
+                if (!std.mem.eql(u8, std.mem.asBytes(&entry.identity), std.mem.asBytes(&identity))) return null;
+                return row;
             }
 
             fn put(self: *@This(), identity: Identity, row: u32) void {
-                self.entries[slot(identity)] = .{ .identity = identity, .row_plus_one = row + 1 };
+                self.entries[slot(identity)] = .{ .identity = identity, .row = .some(row) };
             }
         };
     }
@@ -1866,6 +2003,7 @@ pub const Store = struct {
         desc.flags.frozen = false;
         const desc_idx = try self.appendClass(desc, target_var);
         try self.inheritClassDerivedMapPlan(class.desc_idx, desc_idx);
+        try self.inheritClassTagTailClosing(class.desc_idx, desc_idx);
         try self.setSlot(Self.varToSlotIdx(target_var), .{ .root = desc_idx });
         return true;
     }
@@ -2589,14 +2727,19 @@ pub const Store = struct {
         return @intCast(self.vars.items.len);
     }
 
+    /// What a stored descriptor keeps of `Range.empty()`. Every range
+    /// `appendVars` makes starts after its length slot, so no such range
+    /// starts at zero.
+    pub const stored_empty_var_range: u32 = 0;
+
     /// What a stored descriptor keeps of the vars range `range`: its start,
-    /// or the empty range's start for `Range.empty()`. Every other range of
+    /// or `stored_empty_var_range` for `Range.empty()`. Every other range of
     /// a stored descriptor came from `appendVars`, so its length is in the
     /// slot before its start.
     pub inline fn storedVarRange(self: *const Self, range: VarSafeList.Range) u32 {
-        if (range.start == VarSafeList.Range.empty_start) {
+        if (@backingInt(range.start) == stored_empty_var_range) {
             std.debug.assert(range.count == 0);
-            return @backingInt(range.start);
+            return stored_empty_var_range;
         }
         const start: u32 = @backingInt(range.start);
         if (std.debug.runtime_safety) {
@@ -2609,7 +2752,7 @@ pub const Store = struct {
 
     /// The vars range a stored descriptor keeps as `stored` (`storedVarRange`).
     pub inline fn varRange(self: *const Self, stored: u32) VarSafeList.Range {
-        if (stored == @backingInt(VarSafeList.Range.empty_start)) return .empty();
+        if (stored == stored_empty_var_range) return .empty();
         return .{ .start = @fromBackingInt(stored), .count = @backingInt(self.vars.items[stored - 1]) & ~range_length_bit };
     }
 
@@ -2758,20 +2901,19 @@ pub const Store = struct {
     pub fn appendInterpolationMetadata(self: *Self, metadata: InterpolationMetadata) std.mem.Allocator.Error!InterpolationMetadata.OptIdx {
         self.debugAssertUnsealed();
         std.debug.assert(metadata.isPresent());
-        return .from(try self.interpolation_metadata.append(self.gpa, metadata));
+        return .some(try self.interpolation_metadata.append(self.gpa, metadata));
     }
 
-    /// A constraint's interpolation metadata, or `.none` when it has none.
+    /// The interpolation metadata of a constraint that has some.
     pub fn getInterpolationMetadata(self: *const Self, idx: InterpolationMetadata.OptIdx) InterpolationMetadata {
-        const pooled = idx.get() orelse return .none;
-        return self.interpolation_metadata.get(pooled).*;
+        return self.interpolation_metadata.get(idx.get().?).*;
     }
 
     /// Record a numeric literal conversion's facts, for a constraint's
     /// `numeral`.
     pub fn appendNumeralInfo(self: *Self, info: NumeralInfo) std.mem.Allocator.Error!NumeralInfo.OptIdx {
         self.debugAssertUnsealed();
-        return .from(try self.numeral_infos.append(self.gpa, info));
+        return .some(try self.numeral_infos.append(self.gpa, info));
     }
 
     /// The facts of `constraint`'s numeric literal conversion, when its
@@ -3342,6 +3484,9 @@ pub const Store = struct {
 
         if (self.derived_map_plans.items().len != 0) {
             try self.mergeClassDerivedMapPlans(a.desc_idx, b.desc_idx, destination_desc_idx);
+        }
+        if (self.tag_tail_closings.items.len != 0) {
+            try self.mergeClassTagTailClosings(a.desc_idx, b.desc_idx, destination_desc_idx);
         }
         try self.setRootMeta(destination_desc_idx, .{
             .checked_var = checked_var,
@@ -5397,7 +5542,7 @@ test "Store comprehensive CompactWriter roundtrip" {
     const str_var = try original.freshFromContent(Content{ .structure = .empty_record });
     const list_elem = try original.fresh();
     const list_ident_idx = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reserved = false }, .idx = 999 };
-    const builtin_module_idx = base.ModuleIdentity.Idx.NONE;
+    const builtin_module_idx = @as(base.ModuleIdentity.Idx, @fromBackingInt(1));
     const list_content = try original.mkNominal(
         .{ .ident_idx = list_ident_idx },
         &[_]Var{list_elem},
@@ -5969,7 +6114,7 @@ test "source declaration overflow is rejected before mutating type store" {
             .{ .ident_idx = base.Ident.Idx.NONE },
             unread_backing_var,
             &.{},
-            base.ModuleIdentity.Idx.NONE,
+            @as(base.ModuleIdentity.Idx, @fromBackingInt(1)),
             SourceDecl.max_statement + 1,
         ),
     );
@@ -5982,7 +6127,7 @@ test "source declaration overflow is rejected before mutating type store" {
         store.mkNominalWithSourceDecl(
             .{ .ident_idx = base.Ident.Idx.NONE },
             &.{},
-            base.ModuleIdentity.Idx.NONE,
+            @as(base.ModuleIdentity.Idx, @fromBackingInt(1)),
             NominalType.Source.max_statement + 1,
             false,
         ),

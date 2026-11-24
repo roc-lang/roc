@@ -9,7 +9,7 @@ const Io = std.Io;
 const assert = std.debug.assert;
 const macho = std.macho;
 const mem = std.mem;
-const Sha256 = std.crypto.hash.sha2.Sha256;
+const Sha256 = @import("base").Sha256;
 const Allocator = std.mem.Allocator;
 
 const trace = @import("tracy").trace;

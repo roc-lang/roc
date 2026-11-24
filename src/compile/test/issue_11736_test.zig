@@ -184,7 +184,7 @@ fn expectBlockRequirement(value: []const u8, expected_mismatches: usize, compile
             try std.testing.expect(!try bodies.exprEvaluationMayBeElidedForInspect(ref.expr));
         }
         var divergent_statements: usize = 0;
-        for (0..bodies.nodeCount()) |raw| {
+        for (can.CIR.Node.first_idx..bodies.nodeCount()) |raw| {
             if (bodies.index().nodeKind(@intCast(raw)) != .statement) continue;
             const statement: can.CIR.Statement.Idx = @fromBackingInt(@intCast(raw));
             if (try bodies.statementDiverges(statement, .run)) {

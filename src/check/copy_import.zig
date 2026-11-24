@@ -609,7 +609,7 @@ fn stepIdentity(ctx: *CopyContext, frame: *IdentityFrame) std.mem.Allocator.Erro
             },
             .await_fn => {
                 frame.pending.fn_var = machine.values.pop().?;
-                if (!frame.source_constraints[frame.idx].interpolation.isPresent()) {
+                if (frame.source_constraints[frame.idx].interpolation == .none) {
                     frame.stage = .finish_constraint;
                     continue;
                 }

@@ -4247,8 +4247,8 @@ const Subst = struct {
     changes: std.ArrayList(BindingChange),
     allocator: Allocator,
 
-    const no_slot: u32 = std.math.maxInt(u32);
-    const SlotNode = struct { identity: BinderIdentity, next: u32 };
+    /// `next` is the chain's next slot, absent at the chain's end.
+    const SlotNode = struct { identity: BinderIdentity, next: collections.OptionalU32 };
 
     fn init(allocator: Allocator) Subst {
         return .{
@@ -4303,22 +4303,21 @@ const Subst = struct {
     /// The slot of `identity`, or null when this substitution has never
     /// written under it.
     fn slotOf(self: *const Subst, identity: BinderIdentity) ?BinderSlot {
-        var cursor = self.binder_heads.get(identity.binder) orelse return null;
-        while (cursor != no_slot) {
+        var link: collections.OptionalU32 = .some(self.binder_heads.get(identity.binder) orelse return null);
+        while (link.get()) |cursor| {
             const node = self.binder_slots.items[cursor];
             if (std.mem.eql(u8, &node.identity.digest.bytes, &identity.digest.bytes)) return @fromBackingInt(cursor);
-            cursor = node.next;
+            link = node.next;
         }
         return null;
     }
 
     fn internSlot(self: *Subst, identity: BinderIdentity) Allocator.Error!BinderSlot {
         if (self.slotOf(identity)) |slot| return slot;
-        const index = std.math.cast(u32, self.binder_slots.items.len) orelse return error.OutOfMemory;
-        if (index == no_slot) return error.OutOfMemory;
+        const index = try collections.nextBiasedId(self.binder_slots.items.len);
         try self.binder_slots.ensureUnusedCapacity(self.allocator, 1);
         const head = try self.binder_heads.getOrPut(identity.binder);
-        const next = if (head.found_existing) head.value_ptr.* else no_slot;
+        const next: collections.OptionalU32 = if (head.found_existing) .some(head.value_ptr.*) else .none;
         head.value_ptr.* = index;
         self.binder_slots.appendAssumeCapacity(.{ .identity = identity, .next = next });
         return @fromBackingInt(index);
@@ -8046,13 +8045,13 @@ const Cloner = struct {
     };
 
     /// Cursor states of a loop-value clone.
-    const LoopValueCursor = struct {
-        const start = 0;
-        const initial_value = 1;
-        const split_initials = 2;
-        const split_body = 3;
-        const whole_initial = 4;
-        const whole_body = 5;
+    const LoopValueCursor = enum(u8) {
+        start,
+        initial_value,
+        split_initials,
+        split_body,
+        whole_initial,
+        whole_body,
     };
 
     fn finishLoopValue(self: *Cloner, task: *LoopValueTask, value: Value) CloneStep {
@@ -8065,7 +8064,7 @@ const Cloner = struct {
 
     fn stepLoopValue(self: *Cloner, frame: *CloneFrame, task: *LoopValueTask, input: ?CloneResult) Common.LowerError!CloneStep {
         const arena = self.arena.allocator();
-        switch (frame.cursor) {
+        switch (@as(LoopValueCursor, @fromBackingInt(frame.cursor))) {
             LoopValueCursor.start => {
                 task.params = try walkRows(self.pass.program, arena, Ast.TypedLocal, task.loop.params);
                 task.initial_values = try walkRows(self.pass.program, arena, Ast.ExprId, task.loop.initial_values);
@@ -8088,7 +8087,7 @@ const Cloner = struct {
                 // the loop, which is what `putLoopCarried` installs below.
                 task.forward_start = self.subst.watermark();
                 for (task.params) |param| try self.pinSourceLocal(param.local);
-                frame.cursor = LoopValueCursor.initial_value;
+                frame.cursor = @backingInt(LoopValueCursor.initial_value);
             },
             LoopValueCursor.initial_value => {
                 const index = frame.index;
@@ -8153,7 +8152,6 @@ const Cloner = struct {
                     .body = body,
                 } } }) });
             },
-            LoopValueCursor.whole_body + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to a LoopValueCursor constant
         }
         if (frame.index < task.initial_values.len) {
             const initial = task.initial_values[frame.index];
@@ -8263,7 +8261,7 @@ const Cloner = struct {
                 .values = task.shapes,
                 .any_demoted = false,
             });
-            frame.cursor = LoopValueCursor.split_body;
+            frame.cursor = @backingInt(LoopValueCursor.split_body);
             return .{ .call = .{ .loop_body = .{ .body = task.loop.body, .selection = task.exit_selection } } };
         }
         const index = frame.index;
@@ -8279,7 +8277,7 @@ const Cloner = struct {
             try task.forward_sources.append(arena, param.local);
             try task.forward_finals.append(arena, task.new_params.items[leaf_start].local);
         }
-        frame.cursor = LoopValueCursor.split_initials;
+        frame.cursor = @backingInt(LoopValueCursor.split_initials);
         return .{ .call = .{ .append_exprs_from_value = .{ .shape = shape, .value = task.values[index], .out = task.new_initials } } };
     }
 
@@ -8290,7 +8288,7 @@ const Cloner = struct {
     fn nextLoopWholeInitial(self: *Cloner, frame: *CloneFrame, task: *LoopValueTask) Common.LowerError!CloneStep {
         const arena = self.arena.allocator();
         if (frame.index < task.values.len) {
-            frame.cursor = LoopValueCursor.whole_initial;
+            frame.cursor = @backingInt(LoopValueCursor.whole_initial);
             return .{ .call = .{ .materialize = .{ .value = task.values[frame.index] } } };
         }
         task.whole_params = try arena.alloc(Ast.TypedLocal, task.params.len);
@@ -8316,7 +8314,7 @@ const Cloner = struct {
             .values = task.shapes,
             .any_demoted = false,
         });
-        frame.cursor = LoopValueCursor.whole_body;
+        frame.cursor = @backingInt(LoopValueCursor.whole_body);
         return .{ .call = .{ .loop_body = .{ .body = task.loop.body, .selection = task.exit_selection } } };
     }
 
@@ -8339,18 +8337,18 @@ const Cloner = struct {
     };
 
     /// Cursor states of a block-value clone.
-    const BlockValueCursor = struct {
-        const start = 0;
-        const let_value = 1;
-        const let_bound = 2;
-        const let_residual = 3;
-        const let_continuation = 4;
-        const recursive_stmt = 5;
-        const expr_value = 6;
-        const expr_reusable = 7;
-        const stmt = 8;
-        const final = 9;
-        const finish = 10;
+    const BlockValueCursor = enum(u8) {
+        start,
+        let_value,
+        let_bound,
+        let_residual,
+        let_continuation,
+        recursive_stmt,
+        expr_value,
+        expr_reusable,
+        stmt,
+        final,
+        finish,
     };
 
     fn finishBlockValueTask(self: *Cloner, task: *BlockValueTask, value: Value) CloneStep {
@@ -8370,7 +8368,7 @@ const Cloner = struct {
 
     fn stepBlockValue(self: *Cloner, frame: *CloneFrame, task: *BlockValueTask, input: ?CloneResult) Common.LowerError!CloneStep {
         const block = task.block;
-        switch (frame.cursor) {
+        switch (@as(BlockValueCursor, @fromBackingInt(frame.cursor))) {
             BlockValueCursor.start => {
                 if (self.purpose == .loop_exit_selection) {
                     return .{ .tail = .{ .exit_block_value = .{ .ty = task.ty, .block = block, .bindings = task.bindings } } };
@@ -8387,7 +8385,7 @@ const Cloner = struct {
                 const let_ = self.pass.program.getStmt(GuardedList.at(self.pass.program.stmtSpan(block.statements), frame.index)).let_;
                 if (self.caseExprFromValue(value) == null) {
                     task.value = value;
-                    frame.cursor = BlockValueCursor.let_bound;
+                    frame.cursor = @backingInt(BlockValueCursor.let_bound);
                     return .{ .call = .{ .bind_let_value = .{ .pat = let_.pat, .source_value = let_.value, .value = value, .bindings = task.block_bindings } } };
                 }
                 task.case_value = value;
@@ -8402,7 +8400,7 @@ const Cloner = struct {
                     // statement span into nested let expressions.
                     const let_ = self.pass.program.getStmt(GuardedList.at(self.pass.program.stmtSpan(block.statements), frame.index)).let_;
                     task.pattern = try self.clonePat(let_.pat, .bind_runtime);
-                    frame.cursor = BlockValueCursor.let_residual;
+                    frame.cursor = @backingInt(BlockValueCursor.let_residual);
                     return .{ .call = .{ .materialize = .{ .value = task.value } } };
                 }
             },
@@ -8430,7 +8428,7 @@ const Cloner = struct {
                 // keeps it as its recorded tail so a case over this
                 // block reads the arms' structure instead of one
                 // opaque value.
-                frame.cursor = BlockValueCursor.finish;
+                frame.cursor = @backingInt(BlockValueCursor.finish);
                 return .{ .call = .{ .emit_block_with_tail = .{ .ty = task.ty, .statements = task.statements, .tail = .{
                     .reused = null,
                     .bindings = task.block_bindings.*,
@@ -8446,7 +8444,7 @@ const Cloner = struct {
                 self.nextBlockStatement(frame, task);
             },
             BlockValueCursor.expr_value => {
-                frame.cursor = BlockValueCursor.expr_reusable;
+                frame.cursor = @backingInt(BlockValueCursor.expr_reusable);
                 return .{ .call = try self.makeReusableTask(input.?.get(.value), task.block_bindings) };
             },
             BlockValueCursor.expr_reusable => self.nextBlockStatement(frame, task),
@@ -8466,7 +8464,7 @@ const Cloner = struct {
                     task.bindings.appendChain(task.block_bindings.*);
                     return self.finishBlockValueTask(task, value);
                 }
-                frame.cursor = BlockValueCursor.finish;
+                frame.cursor = @backingInt(BlockValueCursor.finish);
                 return .{ .call = .{ .emit_block_with_tail = .{ .ty = task.ty, .statements = task.statements, .tail = .{
                     .reused = null,
                     .bindings = task.block_bindings.*,
@@ -8479,7 +8477,6 @@ const Cloner = struct {
                 task.stmt_context = null;
                 return self.finishBlockValueTask(task, .{ .expr = input.?.get(.expr) });
             },
-            BlockValueCursor.finish + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to a BlockValueCursor constant
         }
         return try self.nextBlockStatementStep(frame, task);
     }
@@ -8487,7 +8484,7 @@ const Cloner = struct {
     fn nextBlockStatementStep(self: *Cloner, frame: *CloneFrame, task: *BlockValueTask) Common.LowerError!CloneStep {
         const block = task.block;
         if (frame.index >= block.statements.len) {
-            frame.cursor = BlockValueCursor.final;
+            frame.cursor = @backingInt(BlockValueCursor.final);
             return .{ .call = .{ .expr_value = .{ .expr = block.final_expr, .bindings = task.block_bindings } } };
         }
         const stmt_id = GuardedList.at(self.pass.program.stmtSpan(block.statements), frame.index);
@@ -8497,7 +8494,7 @@ const Cloner = struct {
         switch (stmt) {
             .let_ => |let_| {
                 if (!let_.recursive and !task.terminated) {
-                    frame.cursor = BlockValueCursor.let_value;
+                    frame.cursor = @backingInt(BlockValueCursor.let_value);
                     return .{ .call = .{ .expr_value = .{ .expr = let_.value, .bindings = task.block_bindings } } };
                 }
                 if (try self.blockLetTakesContinuation(task, let_, frame.index)) {
@@ -8506,17 +8503,17 @@ const Cloner = struct {
                 if (let_.recursive and task.statements.items.len == 0 and !task.terminated) {
                     // Recursive bindings remain runtime anchors even
                     // when the surrounding block exposes its tail value.
-                    frame.cursor = BlockValueCursor.recursive_stmt;
+                    frame.cursor = @backingInt(BlockValueCursor.recursive_stmt);
                     return .{ .call = .{ .stmt = .{ .stmt = stmt_id } } };
                 }
             },
             .expr => |stmt_expr| if (task.statements.items.len == 0 and !task.terminated) {
-                frame.cursor = BlockValueCursor.expr_value;
+                frame.cursor = @backingInt(BlockValueCursor.expr_value);
                 return .{ .call = .{ .expr_value = .{ .expr = stmt_expr, .bindings = task.block_bindings } } };
             },
             .uninitialized, .expect, .dbg, .return_, .crash, .checked_error => {},
         }
-        frame.cursor = BlockValueCursor.stmt;
+        frame.cursor = @backingInt(BlockValueCursor.stmt);
         return .{ .call = .{ .stmt = .{ .stmt = stmt_id } } };
     }
 
@@ -8564,7 +8561,7 @@ const Cloner = struct {
             .rest = tail,
             .comptime_site = let_.comptime_site.get(),
         };
-        frame.cursor = BlockValueCursor.let_continuation;
+        frame.cursor = @backingInt(BlockValueCursor.let_continuation);
         if (task.case_value) |cloned| {
             return .{ .call = .{ .let_with_value = .{ .let_ = continuation, .value = cloned, .bindings = task.block_bindings } } };
         }
@@ -8807,40 +8804,40 @@ const Cloner = struct {
     };
 
     /// Cursor states of a direct call clone.
-    const CallProcCursor = struct {
-        const start = 0;
-        const plain_args = 1;
-        const plain_captures = 2;
-        const analyzed_arg = 3;
-        const specialized_arg = 4;
-        const specialized_captures = 5;
-        const residual_arg = 6;
-        const residual_captures = 7;
-        const specialized_pinned = 8;
-        const residual_pinned = 9;
+    const CallProcCursor = enum(u8) {
+        start,
+        plain_args,
+        plain_captures,
+        analyzed_arg,
+        specialized_arg,
+        specialized_captures,
+        residual_arg,
+        residual_captures,
+        specialized_pinned,
+        residual_pinned,
     };
 
     fn stepCallProc(self: *Cloner, frame: *CloneFrame, task: *CallProcTask, input: ?CloneResult) Common.LowerError!CloneStep {
         const call = task.call;
         const arena = self.arena.allocator();
-        switch (frame.cursor) {
+        switch (@as(CallProcCursor, @fromBackingInt(frame.cursor))) {
             CallProcCursor.start => {
                 const rewrites = if (Ast.localDirectCallee(call)) |callee|
                     !call.is_cold and !call.demand_shaped and self.rewrite_call_patterns and @backingInt(callee) < self.pass.plans.len
                 else
                     false;
                 if (!rewrites) {
-                    frame.cursor = CallProcCursor.plain_args;
+                    frame.cursor = @backingInt(CallProcCursor.plain_args);
                     return .{ .call = .{ .expr_span = .{ .span = call.args } } };
                 }
                 task.args = try walkRows(self.pass.program, arena, Ast.ExprId, call.args);
                 task.values = try arena.alloc(Value, task.args.len);
                 task.analyzed = try arena.alloc(ClonedValue, task.args.len);
-                frame.cursor = CallProcCursor.analyzed_arg;
+                frame.cursor = @backingInt(CallProcCursor.analyzed_arg);
             },
             CallProcCursor.plain_args => {
                 task.expr_span = input.?.get(.expr_span);
-                frame.cursor = CallProcCursor.plain_captures;
+                frame.cursor = @backingInt(CallProcCursor.plain_captures);
                 return .{ .call = .{ .capture_span = .{ .span = call.captures } } };
             },
             CallProcCursor.plain_captures => return retExpr(try self.addExpr(.{ .ty = task.ty, .data = .{ .call_proc = .{
@@ -8885,15 +8882,14 @@ const Cloner = struct {
             },
             CallProcCursor.specialized_pinned => {
                 task.values[frame.index] = input.?.get(.value);
-                frame.cursor = CallProcCursor.specialized_arg;
+                frame.cursor = @backingInt(CallProcCursor.specialized_arg);
                 return .{ .call = .{ .append_exprs_from_value = .{ .shape = task.spec_pattern.?.args[frame.index], .value = task.values[frame.index], .out = task.out } } };
             },
             CallProcCursor.residual_pinned => {
                 task.values[frame.index] = input.?.get(.value);
-                frame.cursor = CallProcCursor.residual_arg;
+                frame.cursor = @backingInt(CallProcCursor.residual_arg);
                 return .{ .call = .{ .materialize = .{ .value = task.values[frame.index] } } };
             },
-            CallProcCursor.residual_pinned + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to a CallProcCursor constant
         }
         const raw = @backingInt(Ast.localDirectCallee(call).?);
         if (frame.index < task.args.len) {
@@ -8937,16 +8933,16 @@ const Cloner = struct {
         if (frame.index < pattern.args.len) {
             task.chain.appendChain(task.analyzed[frame.index].bindings);
             if (frame.index < task.strict_before) {
-                frame.cursor = CallProcCursor.specialized_pinned;
+                frame.cursor = @backingInt(CallProcCursor.specialized_pinned);
                 return .{ .call = try self.pinCallArgTask(task, frame.index) };
             }
-            frame.cursor = CallProcCursor.specialized_arg;
+            frame.cursor = @backingInt(CallProcCursor.specialized_arg);
             return .{ .call = .{ .append_exprs_from_value = .{ .shape = pattern.args[frame.index], .value = task.values[frame.index], .out = task.out } } };
         }
         task.expr_span = try self.pass.program.addExprSpan(task.out.items);
         self.spare_lists.exprs.give(self.pass.allocator, task.out);
         task.out_owned = false;
-        frame.cursor = CallProcCursor.specialized_captures;
+        frame.cursor = @backingInt(CallProcCursor.specialized_captures);
         return .{ .call = .{ .capture_span = .{ .span = task.call.captures } } };
     }
 
@@ -8965,16 +8961,16 @@ const Cloner = struct {
         if (frame.index < task.values.len) {
             task.chain.appendChain(task.analyzed[frame.index].bindings);
             if (frame.index < task.strict_before) {
-                frame.cursor = CallProcCursor.residual_pinned;
+                frame.cursor = @backingInt(CallProcCursor.residual_pinned);
                 return .{ .call = try self.pinCallArgTask(task, frame.index) };
             }
-            frame.cursor = CallProcCursor.residual_arg;
+            frame.cursor = @backingInt(CallProcCursor.residual_arg);
             return .{ .call = .{ .materialize = .{ .value = task.values[frame.index] } } };
         }
         task.expr_span = try self.pass.program.addExprSpan(task.out.items);
         self.spare_lists.exprs.give(self.pass.allocator, task.out);
         task.out_owned = false;
-        frame.cursor = CallProcCursor.residual_captures;
+        frame.cursor = @backingInt(CallProcCursor.residual_captures);
         return .{ .call = .{ .capture_span = .{ .span = task.call.captures } } };
     }
 
@@ -10244,21 +10240,21 @@ const Cloner = struct {
     };
 
     /// Cursor states of an inlined callable call.
-    const InlineCallableCursor = struct {
-        const start = 0;
-        const residual_callee = 1;
-        const residual_args = 2;
-        const capture = 3;
-        const arg = 4;
-        const prepared_arg = 5;
-        const body = 6;
-        const boundary = 7;
+    const InlineCallableCursor = enum(u8) {
+        start,
+        residual_callee,
+        residual_args,
+        capture,
+        arg,
+        prepared_arg,
+        body,
+        boundary,
     };
 
     /// Keep a callable call residual: its callee materialized and its
     /// arguments cloned.
     fn residualCallableCall(frame: *CloneFrame, task: *InlineCallableTask) CloneStep {
-        frame.cursor = InlineCallableCursor.residual_callee;
+        frame.cursor = @backingInt(InlineCallableCursor.residual_callee);
         return .{ .call = .{ .materialize = .{ .value = .{ .callable = task.callable } } } };
     }
 
@@ -10273,7 +10269,7 @@ const Cloner = struct {
     fn stepInlineCallable(self: *Cloner, frame: *CloneFrame, task: *InlineCallableTask, input: ?CloneResult) Common.LowerError!CloneStep {
         const arena = self.arena.allocator();
         const callable = task.callable;
-        switch (frame.cursor) {
+        switch (@as(InlineCallableCursor, @fromBackingInt(frame.cursor))) {
             InlineCallableCursor.start => {
                 const source_fn = self.pass.program.getFn(callable.fn_id);
                 const source = try self.pass.inlineSourceBody(callable.fn_id) orelse return residualCallableCall(frame, task);
@@ -10314,11 +10310,11 @@ const Cloner = struct {
                 task.prepared_captures = try arena.alloc(Value, task.source_captures.len);
                 task.arg_values = try arena.alloc(Value, task.args.len);
                 task.prepared_args = try arena.alloc(Value, task.args.len);
-                frame.cursor = InlineCallableCursor.capture;
+                frame.cursor = @backingInt(InlineCallableCursor.capture);
             },
             InlineCallableCursor.residual_callee => {
                 task.callee_expr = input.?.get(.expr);
-                frame.cursor = InlineCallableCursor.residual_args;
+                frame.cursor = @backingInt(InlineCallableCursor.residual_args);
                 return .{ .call = .{ .expr_span = .{ .span = task.args_span } } };
             },
             InlineCallableCursor.residual_args => return retValue(.{ .expr = try self.addExpr(.{ .ty = task.ty, .data = .{ .call_value = .{
@@ -10340,15 +10336,14 @@ const Cloner = struct {
             InlineCallableCursor.body => {
                 const inlined = input.?.get(.value);
                 if (task.needs_typed_boundary) {
-                    frame.cursor = InlineCallableCursor.boundary;
+                    frame.cursor = @backingInt(InlineCallableCursor.boundary);
                     return .{ .call = .{ .wrap_typed_boundary = .{ .target_ty = task.ty, .structure = inlined } } };
                 }
                 return self.finishInlinedCall(task, inlined, callable.fn_id);
             },
             InlineCallableCursor.boundary => return self.finishInlinedCall(task, input.?.get(.value), callable.fn_id),
-            InlineCallableCursor.boundary + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to an InlineCallableCursor constant
         }
-        if (frame.cursor == InlineCallableCursor.capture) {
+        if (frame.cursor == @backingInt(InlineCallableCursor.capture)) {
             if (frame.index < task.source_captures.len) {
                 const id = self.pass.program.captureIdOfLocal(task.source_captures[frame.index].local);
                 const capture_value = callableCaptureValueForId(callable.captures, id) orelse
@@ -10356,9 +10351,9 @@ const Cloner = struct {
                 return .{ .call = try self.makeReusableTask(capture_value, task.bindings) };
             }
             frame.index = 0;
-            frame.cursor = InlineCallableCursor.arg;
+            frame.cursor = @backingInt(InlineCallableCursor.arg);
         }
-        if (frame.cursor == InlineCallableCursor.arg) {
+        if (frame.cursor == @backingInt(InlineCallableCursor.arg)) {
             if (frame.index < task.args.len) {
                 const callee_raw = @backingInt(callable.fn_id);
                 const demand_arg_shape = task.result_shape_demanded and
@@ -10367,7 +10362,7 @@ const Cloner = struct {
                 return .{ .call = .{ .inline_value = .{ .expr = task.args[frame.index], .demand_shape = demand_arg_shape, .bindings = task.bindings } } };
             }
             frame.index = 0;
-            frame.cursor = InlineCallableCursor.prepared_arg;
+            frame.cursor = @backingInt(InlineCallableCursor.prepared_arg);
         }
         if (frame.index < task.arg_values.len) {
             return .{ .call = .{ .local_value = .{ .value = task.arg_values[frame.index], .bindings = task.bindings } } };
@@ -10390,7 +10385,7 @@ const Cloner = struct {
         }
         task.saved_inline_scope = self.current_inline_scope;
         try self.enterInlineScope(callable.fn_id, self.pass.program.exprLoc(task.original_expr));
-        frame.cursor = InlineCallableCursor.body;
+        frame.cursor = @backingInt(InlineCallableCursor.body);
         return .{ .call = try self.withoutReuseTask(.{ .expr_value = .{ .expr = task.source_expr, .bindings = task.bindings } }) };
     }
 
@@ -10421,26 +10416,26 @@ const Cloner = struct {
     };
 
     /// Cursor states of an inlined direct call.
-    const InlineDirectCursor = struct {
-        const start = 0;
-        const plain = 1;
-        const capture_value = 2;
-        const arg_value = 3;
-        const prepared_capture = 4;
-        const prepared_arg = 5;
-        const body = 6;
-        const boundary = 7;
+    const InlineDirectCursor = enum(u8) {
+        start,
+        plain,
+        capture_value,
+        arg_value,
+        prepared_capture,
+        prepared_arg,
+        body,
+        boundary,
     };
 
     fn plainDirectCall(frame: *CloneFrame, task: *InlineDirectTask) CloneStep {
-        frame.cursor = InlineDirectCursor.plain;
+        frame.cursor = @backingInt(InlineDirectCursor.plain);
         return .{ .call = .{ .plain = .{ .expr = task.original_expr } } };
     }
 
     fn stepInlineDirect(self: *Cloner, frame: *CloneFrame, task: *InlineDirectTask, input: ?CloneResult) Common.LowerError!CloneStep {
         const arena = self.arena.allocator();
         const callee = task.callee;
-        switch (frame.cursor) {
+        switch (@as(InlineDirectCursor, @fromBackingInt(frame.cursor))) {
             InlineDirectCursor.start => {
                 const source_fn = self.pass.program.getFn(callee);
                 const original = self.pass.program.getExpr(task.original_expr);
@@ -10493,7 +10488,7 @@ const Cloner = struct {
                 task.arg_values = try arena.alloc(Value, task.args.len);
                 task.prepared_captures = try arena.alloc(Value, task.captures.len);
                 task.prepared_args = try arena.alloc(Value, task.args.len);
-                frame.cursor = InlineDirectCursor.capture_value;
+                frame.cursor = @backingInt(InlineDirectCursor.capture_value);
             },
             InlineDirectCursor.plain => return retValue(.{ .expr = input.?.get(.expr) }),
             InlineDirectCursor.capture_value => {
@@ -10515,22 +10510,21 @@ const Cloner = struct {
             InlineDirectCursor.body => {
                 const inlined = input.?.get(.value);
                 if (task.needs_typed_boundary) {
-                    frame.cursor = InlineDirectCursor.boundary;
+                    frame.cursor = @backingInt(InlineDirectCursor.boundary);
                     return .{ .call = .{ .wrap_typed_boundary = .{ .target_ty = task.result_ty, .structure = inlined } } };
                 }
                 return self.finishInlinedCall(task, inlined, callee);
             },
             InlineDirectCursor.boundary => return self.finishInlinedCall(task, input.?.get(.value), callee),
-            InlineDirectCursor.boundary + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to an InlineDirectCursor constant
         }
-        if (frame.cursor == InlineDirectCursor.capture_value) {
+        if (frame.cursor == @backingInt(InlineDirectCursor.capture_value)) {
             if (frame.index < task.operands.len) {
                 return .{ .call = .{ .inline_value = .{ .expr = task.operands[frame.index].value, .demand_shape = false, .bindings = task.bindings } } };
             }
             frame.index = 0;
-            frame.cursor = InlineDirectCursor.arg_value;
+            frame.cursor = @backingInt(InlineDirectCursor.arg_value);
         }
-        if (frame.cursor == InlineDirectCursor.arg_value) {
+        if (frame.cursor == @backingInt(InlineDirectCursor.arg_value)) {
             if (frame.index < task.args.len) {
                 const demand_arg_shape = task.result_shape_demanded and
                     @backingInt(callee) < self.pass.plans.len and
@@ -10538,9 +10532,9 @@ const Cloner = struct {
                 return .{ .call = .{ .inline_value = .{ .expr = task.args[frame.index], .demand_shape = demand_arg_shape, .bindings = task.bindings } } };
             }
             frame.index = 0;
-            frame.cursor = InlineDirectCursor.prepared_capture;
+            frame.cursor = @backingInt(InlineDirectCursor.prepared_capture);
         }
-        if (frame.cursor == InlineDirectCursor.prepared_capture) {
+        if (frame.cursor == @backingInt(InlineDirectCursor.prepared_capture)) {
             if (frame.index < task.captures.len) {
                 const id = self.pass.program.captureIdOfLocal(task.captures[frame.index].local);
                 const capture_value = callableCaptureValueForId(task.capture_values, id) orelse
@@ -10548,7 +10542,7 @@ const Cloner = struct {
                 return .{ .call = .{ .local_value = .{ .value = capture_value, .bindings = task.bindings } } };
             }
             frame.index = 0;
-            frame.cursor = InlineDirectCursor.prepared_arg;
+            frame.cursor = @backingInt(InlineDirectCursor.prepared_arg);
         }
         if (frame.index < task.arg_values.len) {
             return .{ .call = .{ .local_value = .{ .value = task.arg_values[frame.index], .bindings = task.bindings } } };
@@ -10567,7 +10561,7 @@ const Cloner = struct {
         }
         task.saved_inline_scope = self.current_inline_scope;
         try self.enterInlineScope(callee, self.pass.program.exprLoc(task.original_expr));
-        frame.cursor = InlineDirectCursor.body;
+        frame.cursor = @backingInt(InlineDirectCursor.body);
         return .{ .call = try self.withoutReuseTask(.{ .expr_value = .{ .expr = task.source_expr, .bindings = task.bindings } }) };
     }
 
@@ -16689,14 +16683,14 @@ test "SpecConstr residual block destructures preserve statement source context" 
         .name = present,
         .payloads = try program.addPatSpan(&.{payload_pat}),
     } } });
-    const stmt_loc: SourceLoc = .{ .file = 1, .line = 3, .column = 5 };
+    const stmt_loc: SourceLoc = .{ .file = .some(1), .line = 3, .column = 5 };
     const stmt_region = Region.from_raw_offsets(20, 40);
     const site: Ast.ComptimeSiteId = @fromBackingInt(@intCast(program.comptime_sites.len()));
     try program.comptime_sites.append(allocator, .{ .kind = .destructure, .owner = .first, .region = stmt_region });
     program.current_loc = stmt_loc;
     program.current_region = stmt_region;
     const binding = try program.addStmt(.{ .let_ = .{ .pat = pattern, .value = input_expr, .comptime_site = .some(site) } });
-    program.current_loc = .{ .file = 1, .line = 1, .column = 1 };
+    program.current_loc = .{ .file = .some(1), .line = 1, .column = 1 };
     program.current_region = Region.from_raw_offsets(0, 80);
     const body = try program.addExpr(.{ .ty = str_ty, .data = .{ .block = .{
         .statements = try program.addStmtSpan(&.{binding}),

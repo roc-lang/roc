@@ -120,6 +120,64 @@ test "value binding generalization: the report quotes the annotation and suggest
     );
 }
 
+fn expectThunkSuggestion(comptime source: []const u8, comptime suggestion: []const u8) TestEnv.TestEnvError!void {
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeProblemMsgContains(rejected_title, suggestion);
+}
+
+test "value binding generalization: the suggested thunk drops an output-position `..`" {
+    try expectThunkSuggestion(
+        \\color : [Red, Green, ..]
+        \\color = Red
+    ,
+        \\    color : {} -> [Red, Green]
+        \\    color = |{}| Red
+    );
+}
+
+test "value binding generalization: the suggested thunk drops a `..` in a covariant type argument" {
+    try expectThunkSuggestion(
+        \\colors : List([Red, Green, ..])
+        \\colors = [Red]
+    ,
+        \\    colors : {} -> List([Red, Green])
+    );
+}
+
+test "value binding generalization: the suggested thunk drops every output-position `..`" {
+    try expectThunkSuggestion(
+        \\pair : ([A([X, ..]), B, ..], { c : [C, ..] })
+        \\pair = (A(X), { c: C })
+    ,
+        \\    pair : {} -> ([A([X]), B], { c : [C] })
+    );
+}
+
+test "value binding generalization: the suggested thunk keeps an input-position `..`" {
+    try expectThunkSuggestion(
+        \\mk = |{}| |_| Done
+        \\
+        \\show : [A, ..] -> [Done, ..]
+        \\show = mk({})
+    ,
+        \\    show : {} -> ([A, ..] -> [Done])
+    );
+}
+
+test "value binding generalization: the suggested thunk keeps a `..` in a contravariant type argument" {
+    try expectThunkSuggestion(
+        \\Handler(e) : e -> Str
+        \\
+        \\mk = |{}| |_| "x"
+        \\
+        \\handle : Handler([A, ..])
+        \\handle = mk({})
+    ,
+        \\    handle : {} -> Handler([A, ..])
+    );
+}
+
 test "value binding generalization: a rejected list used at two types reports one error" {
     try expectRejected(
         \\empty : List(a)
