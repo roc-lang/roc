@@ -643,7 +643,6 @@ binding_scheme_nodes: std.DynamicBitSetUnmanaged,
 synthetic_binding_schemes: collections.DenseMapUnmanaged(Var, void) = .empty,
 /// Reused exact graph walk for classifying a freshly generalized binding.
 /// Classification happens once at the producer boundary, never on lookup.
-binding_scheme_classification_seen: collections.DenseMapUnmanaged(Var, void) = .empty,
 binding_scheme_classification_stack: std.ArrayListUnmanaged(Var) = .empty,
 /// Constraint function vars whose deferred relation was actually consumed by
 /// static-dispatch checking (success or rejection). Receiver shape alone is not
@@ -1355,7 +1354,11 @@ scratch_use_owned: std.ArrayListUnmanaged(Var) = .empty,
 /// appends above that suffix and truncates back before it returns.
 instantiated_requirements_stack: std.ArrayListUnmanaged(InstantiatedSchemeDispatchRequirement) = .empty,
 scratch_ground_vars: std.ArrayListUnmanaged(Var) = .empty,
-scratch_ground_seen: collections.DenseMapUnmanaged(Var, void) = .empty,
+/// The visited roots of one closed walk over the type graph: a walk that
+/// reads the store and calls nothing that walks types itself
+/// (`typeHasGeneralizedVar`, `varIsGround`, `varIsGroundWith`). Each such walk
+/// holds the set from `beginTraversal` to `endTraversal`, so two never overlap.
+closed_walk_seen: collections.EpochSet(Var, .stamps, .internal) = .{},
 scratch_replay_sources: std.ArrayListUnmanaged(u32) = .empty,
 scratch_replay_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
 scratch_replay_nodes: collections.DenseMapUnmanaged(Var, Var) = .empty,
@@ -1958,7 +1961,6 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .type_scheme_by_var = .keyed,
     .binding_scheme_nodes = .keyed,
     .synthetic_binding_schemes = .keyed,
-    .binding_scheme_classification_seen = .scratch,
     .binding_scheme_classification_stack = .scratch,
     .settled_static_dispatch_constraint_fns = .keyed,
     .waiting_obligations = .keyed,
@@ -2148,7 +2150,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .scratch_use_owned = .scratch,
     .instantiated_requirements_stack = .scratch,
     .scratch_ground_vars = .scratch,
-    .scratch_ground_seen = .scratch,
+    .closed_walk_seen = .scratch,
     .scratch_replay_sources = .scratch,
     .scratch_replay_pairs = .scratch,
     .scratch_replay_nodes = .scratch,
@@ -12126,7 +12128,8 @@ fn bindBindingSchemeVar(self: *Self, scheme_var: Var, alias_var: Var) Allocator.
 /// quantified variable.
 fn typeHasGeneralizedVar(self: *Self, root_var: Var) Allocator.Error!bool {
     if (self.types.resolveVar(root_var).desc.rank == .generalized) return true;
-    self.binding_scheme_classification_seen.clearRetainingCapacity();
+    try self.closed_walk_seen.beginTraversal(self.gpa, @intCast(self.types.len()));
+    defer self.closed_walk_seen.endTraversal();
     self.binding_scheme_classification_stack.clearRetainingCapacity();
     defer self.binding_scheme_classification_stack.clearRetainingCapacity();
 
@@ -12134,8 +12137,7 @@ fn typeHasGeneralizedVar(self: *Self, root_var: Var) Allocator.Error!bool {
     while (self.binding_scheme_classification_stack.pop()) |pending_var| {
         const resolved = self.types.resolveVar(pending_var);
         if (resolved.desc.rank == .generalized) return true;
-        const seen = try self.binding_scheme_classification_seen.getOrPut(self.gpa, resolved.var_);
-        if (seen.found_existing) continue;
+        if (self.closed_walk_seen.testAndInsert(resolved.var_)) continue;
 
         switch (resolved.desc.content) {
             .err, .field_presence => {},
@@ -40936,9 +40938,9 @@ fn methodCallArgContext(
 /// Whether a type contains no type variables at all: no flex, rigid, or
 /// presence vars, and no error content.
 fn varIsGround(self: *Self, root_var: Var) std.mem.Allocator.Error!bool {
-    self.var_set.clearRetainingCapacity();
-    defer self.var_set.clearRetainingCapacity();
-    const visited = &self.var_set;
+    const visited = &self.closed_walk_seen;
+    try visited.beginTraversal(self.gpa, @intCast(self.types.len()));
+    defer visited.endTraversal();
     const stack = &self.type_visit_stack;
     const stack_base = stack.items.len;
     defer stack.items.len = stack_base;
@@ -40947,8 +40949,7 @@ fn varIsGround(self: *Self, root_var: Var) std.mem.Allocator.Error!bool {
     while (stack.items.len > stack_base) {
         const var_ = stack.pop().?;
         const resolved = self.types.resolveVar(var_);
-        if (visited.contains(resolved.var_)) continue;
-        try visited.put(resolved.var_, {});
+        if (visited.testAndInsert(resolved.var_)) continue;
 
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => return false,
@@ -53428,7 +53429,7 @@ fn findDispatchReplaySource(self: *const Self, hash: u64, shape: []const u8) ?u3
 /// Whether `var_`'s type contains no variable of any kind, so no later
 /// relation can refine it: no flex or rigid, no unbound effect (a later
 /// relation can still fix it), no error, and no invalid declaration. The
-/// roots it visits stay in `scratch_ground_seen` until the next call.
+/// roots it visits stay in `closed_walk_seen` until the next walk.
 fn varIsReplayGround(self: *Self, var_: Var) Allocator.Error!bool {
     return self.varIsGroundWith(var_, .ground);
 }
@@ -53459,11 +53460,12 @@ fn useRootSettledGround(self: *Self, root: Var) Allocator.Error!bool {
 
 fn varIsGroundWith(self: *Self, var_: Var, functions: FreezeFunctions) Allocator.Error!bool {
     self.scratch_ground_vars.clearRetainingCapacity();
-    self.scratch_ground_seen.clearRetainingCapacity();
+    try self.closed_walk_seen.beginTraversal(self.gpa, @intCast(self.types.len()));
+    defer self.closed_walk_seen.endTraversal();
     try self.scratch_ground_vars.append(self.gpa, var_);
     while (self.scratch_ground_vars.pop()) |next| {
         const resolved = self.types.resolveVar(next);
-        if ((try self.scratch_ground_seen.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+        if (self.closed_walk_seen.testAndInsert(resolved.var_)) continue;
         switch (resolved.desc.content) {
             .flex, .rigid, .err => return false,
             .field_presence => {},
