@@ -833,6 +833,8 @@ const CustomCase = enum {
     glue_application_only_requires,
     glue_rust_include,
     glue_keyword_names,
+    glue_unit_image_cache,
+    glue_non_glue_spec_errors,
     glue_c_tests,
     glue_type_name_plan_tests,
     glue_rust_tests,
@@ -2877,6 +2879,8 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "issue 11504: application requirements are not glue roots", .body = .{ .custom = .glue_application_only_requires } },
     .{ .id = 0, .suite = .glue, .name = "issue 13349: RustGlue output works through include! and is lint-clean in every edition", .body = .{ .custom = .glue_rust_include } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: fields and tags named after host-language keywords compile in every generator", .body = .{ .custom = .glue_keyword_names } },
+    .{ .id = 0, .suite = .glue, .name = "glue spec runs from cached unit images and rebuilds only what an edit changes", .body = .{ .custom = .glue_unit_image_cache } },
+    .{ .id = 0, .suite = .glue, .name = "glue reports an app on another platform as not a glue spec", .body = .{ .custom = .glue_non_glue_spec_errors } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
     .{ .id = 0, .suite = .glue, .name = "TypeNamePlan.roc expect tests pass", .body = .{ .custom = .glue_type_name_plan_tests } },
     .{ .id = 0, .suite = .glue, .name = "RustGlue.roc expect tests pass", .body = .{ .custom = .glue_rust_tests } },
@@ -7595,6 +7599,8 @@ fn runCustomCase(
         .glue_application_only_requires => customGlueApplicationOnlyRequires(io, allocator, &env, &timer, timeout_ms),
         .glue_rust_include => customGlueRustInclude(io, allocator, &env, &timer, timeout_ms),
         .glue_keyword_names => customGlueKeywordNames(io, allocator, &env, &timer, timeout_ms),
+        .glue_unit_image_cache => customGlueUnitImageCache(io, allocator, &env, &timer, timeout_ms),
+        .glue_non_glue_spec_errors => customGlueNonGlueSpecErrors(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
         .glue_type_name_plan_tests => customGlueTypeNamePlanTests(io, allocator, &env, &timer, timeout_ms),
         .glue_rust_tests => customGlueRustTests(io, allocator, &env, &timer, timeout_ms),
@@ -19361,6 +19367,19 @@ fn customInstallGlueRoundtrip(io: std.Io, allocator: Allocator, env: *const Case
     })) |failure| return failure;
     if (checkFrozenGlueOutput(io, allocator, timer, glue_out)) |failure| return failure;
 
+    // The plugin is loaded whatever `--opt` says, and compiling the
+    // installed source instead takes an explicit `--specialize=no`.
+    for ([_][]const u8{ "--opt=dev", "--specialize=no" }, [_][]const u8{ "glue-out-dev", "glue-out-source" }) |flag, name| {
+        const flag_out = createWorkSubdir(io, allocator, env, name) catch |err|
+            return customInfraFailure(allocator, timer, "failed to create glue out dir: {}", .{err});
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "glue", "--verbose", flag, "glue_tool", flag_out, "test/fx/platform/main.roc" },
+            .contains = &.{.{ .stream = .stdout, .text = "callable.txt" }},
+            .occurrences = &.{.{ .stream = .stdout, .text = "Boxy objects:", .count = if (std.mem.eql(u8, flag, "--specialize=no")) 1 else 0 }},
+        })) |failure| return failure;
+        if (checkFrozenGlueOutput(io, allocator, timer, flag_out)) |failure| return failure;
+    }
+
     // 3. Desert island: delete the cache; the installed spec source and
     //    prebuilt object must still work (the glue platform is embedded, and
     //    the server is gone).
@@ -21814,6 +21833,183 @@ fn customGlueRustInclude(io: std.Io, allocator: Allocator, env: *const CaseEnv, 
         if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
             "clippy-driver", edition, "-D", "warnings", "--check-cfg", "cfg()", "--crate-type", "lib", "--emit=metadata", host_path, "-o", metadata_path,
         }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+    }
+    return null;
+}
+
+/// The units a `roc glue --verbose` run restored and built, from its
+/// "Boxy objects: N cached, M built" line.
+const GlueUnitWork = struct { cached: u32, built: u32 };
+
+fn parseGlueUnitWork(stdout: []const u8) ?GlueUnitWork {
+    const label = "Boxy objects: ";
+    const start = (std.mem.find(u8, stdout, label) orelse return null) + label.len;
+    const line = stdout[start .. std.mem.findScalarPos(u8, stdout, start, '\n') orelse stdout.len];
+    var words = std.mem.tokenizeAny(u8, line, " ,");
+    const cached = std.fmt.parseInt(u32, words.next() orelse return null, 10) catch return null;
+    if (!std.mem.eql(u8, words.next() orelse return null, "cached")) return null;
+    const built = std.fmt.parseInt(u32, words.next() orelse return null, 10) catch return null;
+    return .{ .cached = cached, .built = built };
+}
+
+/// A default glue run builds its spec as unit images filed in the per-module
+/// cache (design.md "Unit-Image Glue Execution"). A second run of the same
+/// spec restores every unit and generates the same files; an edit to the
+/// spec, to a module the spec imports, or to a module of its glue platform
+/// rebuilds some units, restores the rest, and generates what the edited
+/// sources say; the platform being described is in no unit's key.
+fn customGlueUnitImageCache(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const source_dir = createWorkSubdir(io, allocator, env, "glue_unit_cache") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create the source dir: {}", .{err});
+    const platform_dir = createWorkSubdir(io, allocator, env, "glue_unit_cache/platform") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create the glue platform dir: {}", .{err});
+    const glue_platform_source = std.fs.path.join(allocator, &.{ project_root_path, "src/glue/platform" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the glue platform path: {}", .{err});
+    {
+        var glue_platform = std.Io.Dir.cwd().openDir(io, glue_platform_source, .{ .iterate = true }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to open the glue platform: {}", .{err});
+        defer glue_platform.close(io);
+        var destination = std.Io.Dir.cwd().openDir(io, platform_dir, .{}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to open the glue platform copy: {}", .{err});
+        defer destination.close(io);
+        var entries = glue_platform.iterate();
+        while (entries.next(io) catch |err| return customInfraFailure(allocator, timer, "failed to list the glue platform: {}", .{err})) |entry| {
+            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".roc")) continue;
+            glue_platform.copyFile(entry.name, destination, entry.name, io, .{}) catch |err|
+                return customInfraFailure(allocator, timer, "failed to copy {s}: {}", .{ entry.name, err });
+        }
+    }
+    const Paths = struct { spec: []const u8, label: []const u8, glue_input: []const u8 };
+    const paths: Paths = .{
+        .spec = std.fs.path.join(allocator, &.{ source_dir, "Spec.roc" }) catch |err| return customInfraFailure(allocator, timer, "spec path: {}", .{err}),
+        .label = std.fs.path.join(allocator, &.{ source_dir, "Label.roc" }) catch |err| return customInfraFailure(allocator, timer, "module path: {}", .{err}),
+        .glue_input = std.fs.path.join(allocator, &.{ platform_dir, "GlueInput.roc" }) catch |err| return customInfraFailure(allocator, timer, "platform module path: {}", .{err}),
+    };
+    const spec_template =
+        \\app [make_glue] { pf: platform "platform/main.roc" }
+        \\
+        \\import pf.Types
+        \\import pf.File
+        \\import pf.GlueInput
+        \\import Label
+        \\
+        \\make_glue : List(Types) -> Try(List(File), Str)
+        \\make_glue = |types_list| {
+        \\    input = GlueInput.from_types(types_list)
+        \\    var $names = ""
+        \\    for func in input.hosted_functions {
+        \\        $names = "${$names} ${func.name}"
+        \\    }
+        \\    Ok([{ name: "out.txt", content: Label.wrap("SPEC${$names}") }])
+        \\}
+        \\
+    ;
+    const label_template =
+        \\Label := [].{
+        \\    wrap : Str -> Str
+        \\    wrap = |text| "LABEL ${text}"
+        \\}
+        \\
+    ;
+    const writeVersion = struct {
+        fn write(std_io: std.Io, gpa: Allocator, path: []const u8, template: []const u8, placeholder: []const u8, version: []const u8) (Allocator.Error || std.Io.Dir.WriteFileError)!void {
+            const source = try std.mem.replaceOwned(u8, gpa, template, placeholder, version);
+            defer gpa.free(source);
+            try std.Io.Dir.cwd().writeFile(std_io, .{ .sub_path = path, .data = source });
+        }
+    }.write;
+    writeVersion(io, allocator, paths.spec, spec_template, "SPEC", "spec-v1") catch |err| return customInfraFailure(allocator, timer, "failed to write the spec: {}", .{err});
+    writeVersion(io, allocator, paths.label, label_template, "LABEL", "label-v1") catch |err| return customInfraFailure(allocator, timer, "failed to write the spec's module: {}", .{err});
+
+    var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err| return customInfraFailure(allocator, timer, "clone environment: {}", .{err}) };
+    defer isolated.env_map.deinit();
+    const cache_root = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "glue_unit_cache_root" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the cache root: {}", .{err});
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        isolated.env_map.put(key, cache_root) catch |err| return customInfraFailure(allocator, timer, "failed to set the cache root: {}", .{err});
+    }
+    const output_dir = createWorkSubdir(io, allocator, env, "glue_unit_cache_out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create the output dir: {}", .{err});
+    const output_path = std.fs.path.join(allocator, &.{ output_dir, "out.txt" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the output path: {}", .{err});
+
+    const Edit = enum { none, spec, imported_module, glue_platform_module };
+    const Work = enum { builds_all, restores_all, rebuilds_some };
+    const Run = struct { name: []const u8, edit: Edit, platform: []const u8, work: Work, expected: []const u8 };
+    const scopes = "test/glue/payload-free-tag-union/main.roc";
+    const runs = [_]Run{
+        .{ .name = "cold", .edit = .none, .platform = scopes, .work = .builds_all, .expected = "label-v1 spec-v1 Effects.first_scope! Effects.second_scope!" },
+        .{ .name = "warm", .edit = .none, .platform = scopes, .work = .restores_all, .expected = "label-v1 spec-v1 Effects.first_scope! Effects.second_scope!" },
+        .{ .name = "spec edit", .edit = .spec, .platform = scopes, .work = .rebuilds_some, .expected = "label-v1 spec-v2 Effects.first_scope! Effects.second_scope!" },
+        .{ .name = "imported module edit", .edit = .imported_module, .platform = scopes, .work = .rebuilds_some, .expected = "label-v2 spec-v2 Effects.first_scope! Effects.second_scope!" },
+        .{ .name = "glue platform module edit", .edit = .glue_platform_module, .platform = scopes, .work = .rebuilds_some, .expected = "label-v2 spec-v2 Effects::first_scope! Effects::second_scope!" },
+        .{ .name = "warm after edits", .edit = .none, .platform = scopes, .work = .restores_all, .expected = "label-v2 spec-v2 Effects::first_scope! Effects::second_scope!" },
+        .{ .name = "another platform", .edit = .none, .platform = "test/glue/keyword-names/main.roc", .work = .restores_all, .expected = "label-v2 spec-v2 Keywords::fields! Keywords::tags!" },
+    };
+    for (runs) |run| {
+        switch (run.edit) {
+            .none => {},
+            .spec => writeVersion(io, allocator, paths.spec, spec_template, "SPEC", "spec-v2") catch |err| return customInfraFailure(allocator, timer, "failed to edit the spec: {}", .{err}),
+            .imported_module => writeVersion(io, allocator, paths.label, label_template, "LABEL", "label-v2") catch |err| return customInfraFailure(allocator, timer, "failed to edit the spec's module: {}", .{err}),
+            .glue_platform_module => {
+                const original = std.Io.Dir.cwd().readFileAlloc(io, paths.glue_input, allocator, .limited(1024 * 1024)) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to read the glue platform module: {}", .{err});
+                const needle = "\"${mod.name}.${func.name}\"";
+                if (std.mem.find(u8, original, needle) == null) return customInfraFailure(allocator, timer, "the glue platform no longer qualifies hosted names with `{s}`", .{needle});
+                writeVersion(io, allocator, paths.glue_input, original, needle, "\"${mod.name}::${func.name}\"") catch |err|
+                    return customInfraFailure(allocator, timer, "failed to edit the glue platform module: {}", .{err});
+            },
+        }
+        const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "glue unit image cache test timed out");
+        const platform_path = std.fs.path.join(allocator, &.{ project_root_path, run.platform }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate the platform path: {}", .{err});
+        const result = runRocInEnv(io, allocator, &isolated, &.{ "glue", "--verbose", paths.spec, output_dir, platform_path }, null, .absolute, &.{}, null, remaining) catch |err|
+            return customInfraFailure(allocator, timer, "glue ({s}): {}", .{ run.name, err });
+        if (!processSucceeded(result.term)) return failureFromRun(allocator, timer, result, "the glue run failed");
+        const work = parseGlueUnitWork(result.stdout) orelse return failureFromRun(allocator, timer, result, "the glue run reported no unit cache work");
+        const as_expected = switch (run.work) {
+            .builds_all => work.built != 0,
+            .restores_all => work.built == 0 and work.cached != 0,
+            .rebuilds_some => work.built != 0 and work.cached != 0,
+        };
+        if (!as_expected) return customFailure(allocator, timer, "the {s} run restored {d} units and built {d}", .{ run.name, work.cached, work.built });
+        const generated = std.Io.Dir.cwd().readFileAlloc(io, output_path, allocator, .limited(1024 * 1024)) catch |err|
+            return customFailure(allocator, timer, "the {s} run wrote no readable out.txt: {}", .{ run.name, err });
+        if (!std.mem.eql(u8, generated, run.expected)) return customFailure(allocator, timer, "the {s} run generated `{s}`, expected `{s}`", .{ run.name, generated, run.expected });
+    }
+
+    // Completed constants live in the units' images: a spec that reads frozen
+    // strings, lists and stored functions generates the same files from
+    // units it built and from units it restored.
+    for ([_][]const u8{ "frozen-built", "frozen-restored" }) |name| {
+        const frozen_out = createWorkSubdir(io, allocator, env, name) catch |err|
+            return customInfraFailure(allocator, timer, "failed to create output dir: {}", .{err});
+        if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
+            .args = &.{ "glue", "test/glue/frozen-generator/main.roc", frozen_out, "test/glue/payload-free-tag-union/main.roc" },
+            .contains = &.{.{ .stream = .stdout, .text = "callable.txt" }},
+        })) |failure| return failure;
+        if (checkFrozenGlueOutput(io, allocator, timer, frozen_out)) |failure| return failure;
+    }
+    return null;
+}
+
+/// Any app checks and lowers, but only one whose platform provides
+/// `roc_make_glue` is a glue spec. Naming another app as the spec is a
+/// reported error whether the spec would run from unit images or from a
+/// plugin object.
+fn customGlueNonGlueSpecErrors(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    for ([_][]const []const u8{
+        &.{ "glue", "test/fx/hello_world.roc", output_dir, "test/fx/platform/main.roc" },
+        &.{ "glue", "--no-cache", "test/fx/hello_world.roc", output_dir, "test/fx/platform/main.roc" },
+    }) |args| {
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = args,
+            .exit = .failure,
+            .contains = &.{.{ .stream = .stderr, .text = "is not a glue spec: its platform does not provide `roc_make_glue`." }},
+            .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "unreachable" }, .{ .stream = .stderr, .text = "invariant violated" } },
+        })) |failure| return failure;
     }
     return null;
 }

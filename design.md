@@ -19607,6 +19607,8 @@ With `--specialize=no`, every command writes what `roc check` writes, and
 `roc build` adds its remaining module objects, as does a dev run whose run
 image is composed from unit images (Hot Loading For Default Dev-Shim Runs),
 which also files its root unit and the host executable binary it launches.
+A dev glue run whose spec runs from unit images (Unit-Image Glue Execution)
+adds the same units for its spec, root unit included, and no executable.
 Checked module and pairing entries, the canonicalized
 module cache, and the evaluation output `roc check` produces
 (`ConstStore` constants) are written exactly as `roc check` writes them.
@@ -31355,6 +31357,69 @@ in-process test does. It then calls the planned roots' wrappers, found by module
 and source root index through the test-root tables, with the existing
 bool-root runner.
 
+### Unit-Image Glue Execution
+
+A `roc glue --opt=dev --specialize=no` with a cache, on a compiler whose host
+loads unit images, runs its glue spec from unit images loaded into the
+compiler's own process, not from a plugin object compiled for the run. The
+choice is the same switch on optimization, strategy, cache presence and host
+as a composed dev run (`unitImageGlueApplies`, `unitImageRunApplies`), never a
+reaction to a failure, and it is what `roc glue` does by default. Every other
+glue run that compiles its spec lowers the whole spec and persists nothing it
+compiled. A dev run
+(`--opt=dev` with `--no-cache` or `--specialize=yes`) compiles that program
+with the dev backend into the compiler's own executable memory, beside its
+frozen data (`DevGlueCode`); `--opt=dev` never reaches LLVM. `--opt=size` and
+`--opt=speed` compile it through LLVM into a plugin object and load that
+object. An installed shorthand names a spec that is already compiled: its
+plugin object, built specialized with `--opt=speed` at install time, is
+loaded whatever `--opt` says, and only an explicit `--specialize=no` compiles
+the installed source instead, as any other spec. Loading it lowers nothing:
+the spec is checked, the plugin's stamp is verified against the checked
+root's identity, and the marshaller reads the entrypoint's host boundary
+(below), which is the host ABI the plugin's wrapper was compiled against
+under either strategy (`InstalledGlueSpec`).
+
+A glue spec is an app on the glue platform, so its program is rooted and
+divided exactly as a composed dev run's is: the spec and every module it
+imports, the glue platform's modules among them, are library units, and the
+platform's main module, which has the `make_glue` requirement, lowers with
+the spec's types in the root unit, whose image exports the `roc_make_glue`
+wrapper in the `(ret_ptr, args_ptr)` convention. The command builds those
+units as a composed dev run does (`lowerRunUnits`), each restored from the
+per-module cache or lowered, compiled by the dev backend and filed there
+under the key a run or build of the same program would use, so the three
+commands serve one another's units. The units run in the compiler's process,
+so they are compiled for the CPU level this machine executes
+(`host_cpu.nativeTarget`), the one target of every unit the compiler runs
+in its own process: compile-time evaluation's objects, `roc test`'s test
+units and these (`inProcessUnitTarget`). It then loads the builtins' unit, every other library unit after
+everything it imports, and the root unit, binding imports as a test unit's
+are bound (`LoadedUnitImages`), and calls the wrapper under the in-process
+host. The loaded images outlive the copying of the generator's result, which
+can borrow their immutable data.
+
+A unit's key covers everything its code is a function of (Caching Under
+`.boxy`): the module's source and stored values, its imports' interfaces and
+export records, the compiler, the target and the optimization level. An
+unchanged spec therefore costs a glue run its checked-module cache reads and
+the loading of its images, with no lowering and no code generation; an edit
+to the spec, to a module it imports or to a glue platform module rebuilds the
+units whose keys the edit changes and no others. The platform being described
+is input data to the generator and is in no unit's key.
+
+With every unit restored, no program lowered by the run names the layouts
+`roc_make_glue` takes and returns. The marshaller reads them from the
+entrypoint's host boundary instead (`postcheck.Boxy.EntrypointSchema`,
+`CheckedPipeline.BoxyEntrypointBoundary`): a `.boxy` program over the root
+unit's module set that lowers nothing, converts the entrypoint's checked type
+and commits the layout of each argument and of the result, and collects the
+named record and tag union schemas they reach. A layout is a function of its
+type alone (Per-Module Output), so these are the layouts the root unit's
+wrapper was compiled against, whichever run compiled it. The boundary is
+computed the same way whether the root unit was restored or built, so the
+marshaller has one source for it.
+
 ### Command-level execution
 
 `roc test --opt=size` and `roc test --opt=speed` use one command-level test
@@ -32747,7 +32812,9 @@ signatures; template-local numeric assertions alone do not establish agreement
 with builtins.
 
 The glue script input and output are written using checked runtime record
-schemas and committed LIR layouts. No handwritten Zig extern record mirrors
+schemas and committed LIR layouts: those of the whole program a run lowered,
+or the entrypoint's host boundary when the spec runs from unit images
+(Unit-Image Glue Execution). No handwritten Zig extern record mirrors
 stand between `src/glue/platform/*.roc` and the glue runner. Named fields select
 schema logical indices; the layout store supplies their byte offsets and
 layouts. A checked-source schema regression test locks the remaining marshaller
@@ -32756,7 +32823,8 @@ field names and leaf types.
 The compiled glue script retains its readonly data image alongside its code.
 Code-to-data and data-to-function relocations are resolved together, and both
 images outlive extraction of the returned files; returned static strings must
-not become dangling pointers when the entrypoint returns.
+not become dangling pointers when the entrypoint returns. A spec run from unit
+images holds its data in those images, which stay loaded for as long.
 
 Glue's type table gives every row a shape id, the id of the first row that
 describes the same host type. Two rows have the same shape id exactly when

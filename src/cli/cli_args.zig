@@ -349,6 +349,7 @@ pub const GlueArgs = struct {
     opt: OptLevel = default_dev_opt,
     specialization_strategy: ?SpecializationStrategy = null,
     no_cache: bool = false, // disable compilation caching
+    verbose: bool = false, // enable verbose output including cache statistics
 };
 
 /// How a flag is written on the command line, which is also the comparison
@@ -1038,6 +1039,7 @@ const commands = [_]Command{
             .{ .name = "--opt", .form = .attached, .field = "opt", .value_name = "<opt>", .levels = &.{ .dev, .size, .speed }, .help = "Compile and run the glue spec with" },
             specialize_flag,
             .{ .name = "--no-cache", .field = "no_cache", .help = "Disable compilation caching" },
+            .{ .name = "--verbose", .field = "verbose", .help = "Enable verbose output including cache statistics" },
         },
         .positionals = &.{
             .{ .field = "glue_spec", .missing = "Error: Missing required argument <GLUE_SPEC>\n\n" },
@@ -3424,6 +3426,7 @@ test "golden help: roc glue --help" {
         \\      --opt=<opt>            Compile and run the glue spec with dev (native dev backend, fast compilation), size (LLVM, optimized for binary size), or speed (LLVM, optimized for execution speed) [default: dev]
         \\      --specialize=<yes|no>  Use lambda-set specialization (yes, the --opt=speed default) or boxy lowering (no, the default otherwise)
         \\      --no-cache             Disable compilation caching
+        \\      --verbose              Enable verbose output including cache statistics
         \\  -h, --help                 Print help
         \\
     );

@@ -11,6 +11,21 @@ allocations and callable pointers. They must remain self-contained when installe
 and loaded by another process, rather than borrowing the compiler's addresses or
 assuming a platform link will supply their data.
 
+By default (`--opt=dev` with a cache) `roc glue` compiles no plugin. It builds
+the glue spec as per-module unit images with the dev backend, exactly as a dev
+run of an app builds them, restores from the module cache every unit whose
+inputs are unchanged, and loads the images into the compiler's own process. A
+second run of an unchanged spec therefore does no code generation at all, and
+an edit rebuilds only the modules it touches. `--opt=dev` with `--no-cache` or
+`--specialize=yes` compiles the whole spec with the dev backend on every run,
+and `--opt=size` and `--opt=speed` compile it through LLVM into a plugin
+object on every run. `--verbose` prints how many modules and units the cache
+served.
+
+An installed glue spec (`roc glue <shorthand> ...`) is already compiled, so
+`--opt` does not apply to it: its plugin is loaded as installed. Passing
+`--specialize=no` compiles the installed source instead.
+
 ## Why Glue Code Generates the Interface
 
 The Roc platform ABI is not just a collection of structs that can be copied by
