@@ -285,7 +285,7 @@ pub fn appendSuccessorsInOrder(
         }
     };
     var appender: Appender = .{ .work = work, .allocator = allocator };
-    forEachSuccessor(store, store.getCFStmt(stmt_id), order, &appender, Appender.push);
+    forEachSuccessor(store, store.getCFStmtImmediate(stmt_id), order, &appender, Appender.push);
     if (appender.failure) |err| return err;
 }
 
@@ -293,15 +293,16 @@ pub fn appendSuccessorsInOrder(
 /// `order`: a straight-line `next`, switch branches, default and
 /// continuation, both payload-initialization arms, match hits before misses,
 /// and a join's body and remainder. A jump's target is not a structural
-/// successor; callers resolve it through their own join index.
+/// successor; callers resolve it through their own join index. `stmt` may
+/// point into `store`, so `visit` must not add statements to it.
 pub fn forEachSuccessor(
     store: *const LirStore,
-    stmt: LIR.CFStmt,
+    stmt: *const LIR.CFStmt,
     comptime order: EdgeOrder,
     ctx: anytype,
     comptime visit: fn (@TypeOf(ctx), CFStmtId) void,
 ) void {
-    switch (stmt) {
+    switch (stmt.*) {
         inline .assign_ref,
         .assign_literal,
         .init_uninitialized,
@@ -825,7 +826,7 @@ pub fn forEachFlowSuccessor(
         }
     };
     var visitor: Visitor = .{ .ctx = ctx };
-    forEachSuccessor(store, stmt, .{ .switch_edges = .arms_only, .join_body = false }, &visitor, Visitor.call);
+    forEachSuccessor(store, &stmt, .{ .switch_edges = .arms_only, .join_body = false }, &visitor, Visitor.call);
     if (visitor.failure) |err| return err;
 }
 
@@ -2001,7 +2002,7 @@ pub fn CallResultFusion(comptime Spec: type) type {
             const proc_count = store.procSpecCount();
             for (0..proc_count) |proc_index| {
                 const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(proc_index));
-                const admitted = @field(store.getProcSpec(proc_id).shapes, Spec.shape);
+                const admitted = @field(store.getProcSpecImmediate(proc_id).shapes, Spec.shape);
                 if (!admitted and builtin.mode != .debug) continue;
                 const rewrote = try pass.transformProc(proc_id);
                 if (rewrote and !admitted) base.invariant("{s}", .{Spec.name ++ " pass rewrote a procedure whose shapes excluded it"});

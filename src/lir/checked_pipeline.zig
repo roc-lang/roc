@@ -2413,9 +2413,9 @@ fn finishLoweredOutput(
         try result.boxy_exports.ensureUnusedCapacity(result.store.allocator, @intCast(published_variants.items.len));
         for (published_variants.items) |published| {
             try result.exported_procs.append(result.store.allocator, published.variant);
-            const worker_export = result.boxy_exports.get(result.store.getProcSpec(published.worker).identity) orelse
+            const worker_export = result.boxy_exports.get(result.store.getProcSpecImmediate(published.worker).identity) orelse
                 checkedPipelineInvariant("an exported worker publishing an outcome variant has no export record of its unit");
-            result.boxy_exports.putAssumeCapacity(result.store.getProcSpec(published.variant).identity, .{ .visible = worker_export.visible });
+            result.boxy_exports.putAssumeCapacity(result.store.getProcSpecImmediate(published.variant).identity, .{ .visible = worker_export.visible });
         }
     }
     if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);

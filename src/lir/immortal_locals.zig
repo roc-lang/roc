@@ -306,7 +306,7 @@ fn verifyNothingToElide(gpa: Allocator, store: *LirStore, literals: Literals) Al
     var immortal = try compute(gpa, store, literals);
     defer immortal.deinit(gpa);
     for (0..store.procSpecCount()) |index| {
-        const body = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index))))).body.get() orelse continue;
+        const body = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(index))))).body.get() orelse continue;
         var walk = try Body.ReachableStmts.initWithAllocator(store, body, gpa);
         defer walk.deinit();
         while (try walk.next()) |stmt_id| {

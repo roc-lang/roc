@@ -565,7 +565,7 @@ test "str append keeps the source's own join when rooting a direct join return" 
     var ops: [4]LowLevelOp = undefined;
     const variant_ops = try testLowLevelOps(&store, store.getProcSpec(rewritten.proc).body.get().?, &ops);
     try std.testing.expectEqualSlices(LowLevelOp, &.{ .str_append, .str_concat }, variant_ops);
-    const variant_body = store.getCFStmtImmediate(store.getProcSpec(rewritten.proc).body.get().?).assign_low_level;
+    const variant_body = store.getCFStmtImmediate(store.getProcSpecImmediate(rewritten.proc).body.get().?).assign_low_level;
     const variant_args = store.getLocalSpan(store.getProcSpec(rewritten.proc).args);
     try std.testing.expectEqual(GuardedList.at(variant_args, 0), GuardedList.at(store.getLocalSpan(variant_body.args), 0));
 }

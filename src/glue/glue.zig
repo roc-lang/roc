@@ -637,7 +637,7 @@ fn runGlueSpecPlugin(
             return error.CompilationFailed;
         },
     }
-    return try extractGlueResult(gpa, writer, result_ptr, lowered.lir_result.store.getProcSpec(glue_proc).ret_layout);
+    return try extractGlueResult(gpa, writer, result_ptr, lowered.lir_result.store.getProcSpecImmediate(glue_proc).ret_layout);
 }
 
 fn getOrBuildGluePlugin(

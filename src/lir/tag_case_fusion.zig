@@ -2668,7 +2668,7 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
     // The continuation is now the outermost declaration, and every jump to it
     // sits inside its remainder.
     const proc_body = store.getProcSpecImmediate(proc).body.get().?;
-    const root = store.getCFStmtImmediate(if (shared_continuation) store.getCFStmt(proc_body).join.remainder else proc_body);
+    const root = store.getCFStmtImmediate(if (shared_continuation) store.getCFStmtImmediate(proc_body).join.remainder else proc_body);
     try testing.expect(root.* == .join);
     if (shared_continuation) {
         try testing.expect(root.join.id != cont_id);

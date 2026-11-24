@@ -685,7 +685,7 @@ pub const Worker = struct {
 
     /// The bytes of the worker's procedure identity.
     pub fn identityBytes(self: *const Worker, program: *const Program) [32]u8 {
-        return program.result.store.getProcSpec(self.proc).identity.bytes;
+        return program.result.store.getProcSpecImmediate(self.proc).identity.bytes;
     }
 
     /// The dictionaries a lambda worker captures: every scope's but its own.
@@ -4501,7 +4501,7 @@ pub const Program = struct {
         // exports.
         if (target.imported and target.needs == null) {
             const unit = self.moduleUnit() orelse invariant("an imported worker outside a module unit");
-            const interface = unit.imports.get(self.result.store.getProcSpec(target.proc).identity) orelse
+            const interface = unit.imports.get(self.result.store.getProcSpecImmediate(target.proc).identity) orelse
                 invariant("a type table names a worker of an imported module whose object exports no such worker");
             if (interface.table_needs.len == 0) invariant("an imported worker with inputs exports no needs");
             if (std.debug.runtime_safety and !interface.visible) invariant("a type table names a worker its module's export digest leaves out (`recordExports`)");
@@ -4678,7 +4678,7 @@ fn recordPerfNames(program: *Program) Allocator.Error!void {
     var symbol: [LIR.ProcIdentity.symbol_name_len]u8 = undefined;
     for (program.workers.items, 0..) |worker, index| {
         const name = try perfNameOf(program, arena.allocator(), names, @fromBackingInt(@intCast(index)));
-        const identity = program.result.store.getProcSpec(worker.proc).identity;
+        const identity = program.result.store.getProcSpecImmediate(worker.proc).identity;
         base.dev_diagnostics.notePerfName(identity.writeSymbolName(&symbol), name);
     }
 }
@@ -5025,13 +5025,13 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     }
     if (program.moduleUnit() != null and !input.compile_time) {
         for (program.workers.items) |worker| {
-            if (worker.imported or !program.result.store.getProcSpec(worker.proc).exported) continue;
+            if (worker.imported or !program.result.store.getProcSpecImmediate(worker.proc).exported) continue;
             // An importer fills the worker's tables from its needs.
             if (worker.needs) |needs| {
                 const result_allocator = program.result.store.allocator;
                 const bytes = try StoredFn.encodeNeeds(result_allocator, program, needs);
                 errdefer result_allocator.free(bytes);
-                try program.result.boxy_table_needs.put(result_allocator, program.result.store.getProcSpec(worker.proc).identity, bytes);
+                try program.result.boxy_table_needs.put(result_allocator, program.result.store.getProcSpecImmediate(worker.proc).identity, bytes);
             }
         }
     }
@@ -5307,7 +5307,7 @@ fn recordExports(program: *Program) Allocator.Error!void {
             .template => |key| .some(@backingInt(key.template)),
             .lambda, .method_entry, .default, .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => .none,
         };
-        program.result.boxy_exports.putAssumeCapacity(program.result.store.getProcSpec(worker.proc).identity, .{ .template = template, .visible = is_visible });
+        program.result.boxy_exports.putAssumeCapacity(program.result.store.getProcSpecImmediate(worker.proc).identity, .{ .template = template, .visible = is_visible });
     }
 }
 

@@ -1232,7 +1232,7 @@ pub fn devEvalTopLevelExpects(
             .symbol_name = symbol_name,
             .proc = root_proc,
             .arg_layouts = arg_layouts,
-            .ret_layout = lowered.lir_result.store.getProcSpec(root_proc).ret_layout,
+            .ret_layout = lowered.lir_result.store.getProcSpecImmediate(root_proc).ret_layout,
         };
         roots_len += 1;
     }

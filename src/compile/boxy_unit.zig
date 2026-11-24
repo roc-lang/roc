@@ -413,12 +413,12 @@ pub fn exportRecords(gpa: Allocator, lowered: *const lir.CheckedPipeline.Lowered
     const records = try gpa.alloc(object_cache.ExportRecord, lowered.lir_result.exported_procs.items.len);
     errdefer gpa.free(records);
     for (lowered.lir_result.exported_procs.items, records) |proc, *record| {
-        const identity = procs.getProcSpec(proc).identity;
+        const identity = procs.getProcSpecImmediate(proc).identity;
         const boxy_export = lowered.lir_result.boxy_exports.get(identity) orelse
             base.invariant("an exported procedure has no export record of its unit", .{});
         const interface = try interfaces.putProc(procs, proc, lowered.lir_result.boxy_table_needs.get(identity) orelse &.{}, boxy_export);
         record.* = .{
-            .identity = procs.getProcSpec(proc).identity.bytes,
+            .identity = procs.getProcSpecImmediate(proc).identity.bytes,
             .rc_borrowed_params = interface.rc_borrowed_params,
             .rc_ret_lenders = interface.rc_ret_lenders,
             .rc_read_only_params = interface.rc_read_only_params,
