@@ -28081,7 +28081,15 @@ its plan requests no variant. A variant reads its base procedure's prepared
 source, so a wave holds base owners or variants, never both, and every base
 wave precedes every variant wave. The wave then reserves its variants in owner
 order, emits the owners whose plans requested any in a second run, and
-appends every shard in owner order. A shard emitted before the wave's
+appends every shard in owner order. A source's prepared data and an owner's
+plan live only as long as an emission reads them: an owner frees its plan as
+soon as its shard is emitted, a base owner's task frees its source once the
+owner is emitted, a variant wave first prepares, in one ordered run, each
+source its variants read that is not prepared, and after the wave frees every
+source no queued variant names, and each shard is freed once it is appended.
+Preparation reads only the ownership-neutral body and the frozen solution and
+dismantle results, so a source prepared again for a variant wave is the one
+its base wave prepared. A shard emitted before the wave's
 reservations names the shorter procedure prefix it was cloned from; appending
 relocates it exactly like one emitted after them. Proving uniqueness settles
 against every source's prepared projections, so that schedule prepares every

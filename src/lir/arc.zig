@@ -779,7 +779,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
                 base_index += 1;
                 break :blk .{ .variant = proc, .source = proc, .sig = solution.sigOf(proc) };
             } else if (!variants_wait and variant_index < variants.queue.items.len) blk: {
-                const queued = variants.queue.items[variant_index];
+                const queued = variants.dequeue(variant_index);
                 variant_index += 1;
                 break :blk queued;
             } else break;
@@ -799,6 +799,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         if (count == 0) continue;
         if (options.metrics_out) |metrics| metrics.waves += 1;
         if (fused) {
+            try prepareVariantSources(owners[0..count], &inline_tasks, options);
             try runFusedWave(store, owners[0..count], &variants, &inline_tasks, options);
         } else {
             try runPhasedWave(store, owners[0..count], &variants, &inline_tasks, options);
@@ -823,7 +824,15 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             if (options.post_check_executor != null) if (options.metrics_out) |metrics| {
                 metrics.emission_tasks_committed += 1;
             };
+            shard.deinit();
+            owner.shard = null;
         }
+        // A fused wave's base owners released their sources as they
+        // finished; a variant's source stays prepared while a queued
+        // variant still names it.
+        if (fused) for (owners[0..count]) |owner| {
+            if (owner.source.queued_variants == 0) owner.source.release();
+        };
         step_started = timingLap(timing, step_started, .shard_append);
     }
     step_started = timingNow(timing);
@@ -967,6 +976,57 @@ fn runFusedWave(store: *LirStore, owners: []EmissionOwner, variants: *VariantTab
     };
 }
 
+/// Prepare, in one ordered run, the sources the variants of a fused wave
+/// read that no earlier wave left prepared, each once however many of the
+/// wave's variants share it. A wave of base owners prepares each owner's
+/// source in the owner's own task instead.
+fn prepareVariantSources(owners: []EmissionOwner, inline_tasks: *InlineArcTasks, options: InsertOptions) ResourceError!void {
+    var pending = std.ArrayList(*SourceCache).empty;
+    defer pending.deinit(inline_tasks.allocator);
+    for (owners) |*owner| {
+        if (FusedWave.isBaseOwner(owner) or owner.source.prepared != null or owner.source.body == null) continue;
+        if (std.mem.indexOfScalar(*SourceCache, pending.items, owner.source) != null) continue;
+        try pending.append(inline_tasks.allocator, owner.source);
+    }
+    if (pending.items.len == 0) return;
+    const timing = options.timing;
+    const executor: ?TaskExecutor.Executor = if (options.post_check_executor) |value| value.* else null;
+    var preparation: SourcePreparation = .{ .sources = pending.items };
+    var ordered: ?TaskExecutor.OrderedTiming = if (timing) |active| .{ .std_io = active.std_io } else null;
+    const started = timingNow(timing);
+    try TaskExecutor.runOrdered(SourcePreparation, inline_tasks.allocator, &preparation, pending.items.len, executor, &inline_tasks.ordered_lane, .{
+        .min_chunk_weight = fused_min_chunk_locals,
+        .timing = if (ordered) |*active| active else null,
+    });
+    if (timing) |active| {
+        _ = active.lap(started, .source_prep);
+        active.add(.source_prep_workers, ordered.?.worker_ns);
+        if (executor != null) active.add(.parallel_capacity, ordered.?.capacity_ns);
+    }
+}
+
+/// The sources `prepareVariantSources` prepares, as the items of an ordered
+/// run.
+const SourcePreparation = struct {
+    pub const Error = ResourceError;
+
+    sources: []const *SourceCache,
+
+    pub fn weight(self: *const SourcePreparation, index: usize) u64 {
+        return 1 + @as(u64, self.sources[index].frame.len);
+    }
+
+    pub fn runItem(self: *SourcePreparation, index: usize, worker: TaskExecutor.Worker) Error!void {
+        try self.sources[index].execute(.{
+            .allocator = worker.allocator,
+            .scratch = worker.scratch,
+            .lane = try ArcLaneScratch.forLane(worker.lane_state),
+        });
+    }
+
+    pub fn commitItem(_: *SourcePreparation, _: usize) Error!void {}
+};
+
 /// The smallest summed frame size of the procedures one lane claims at a
 /// time in a fused wave.
 const fused_min_chunk_locals = 64;
@@ -994,18 +1054,26 @@ const FusedWave = struct {
             .scratch = worker.scratch,
             .lane = try ArcLaneScratch.forLane(worker.lane_state),
         };
-        if (self.emit_after_reservation.len != 0) {
-            emission_owner.phase = .emission;
-            return emission_owner.execute(env);
+        if (self.emit_after_reservation.len == 0) {
+            // A base owner's source is its own procedure, prepared here; a
+            // variant's source was prepared before its wave
+            // (`prepareVariantSources`).
+            if (isBaseOwner(emission_owner)) try emission_owner.source.execute(env);
+            emission_owner.phase = .planning;
+            try emission_owner.execute(env);
+            if (emission_owner.inserter.variant_requests.items.len != 0) return;
         }
-        // A base owner's source is its own procedure, prepared here; a
-        // variant's source was prepared in the base wave that holds it.
-        if (emission_owner.job.variant == emission_owner.job.source) try emission_owner.source.execute(env);
-        emission_owner.phase = .planning;
-        try emission_owner.execute(env);
-        if (emission_owner.inserter.variant_requests.items.len != 0) return;
         emission_owner.phase = .emission;
         try emission_owner.execute(env);
+        emission_owner.releasePlan();
+        // No other owner reads a base owner's source: a wave of base owners
+        // holds each procedure once. A variant's source may serve several
+        // owners of its wave, so its wave releases it.
+        if (isBaseOwner(emission_owner)) emission_owner.source.release();
+    }
+
+    fn isBaseOwner(emission_owner: *const EmissionOwner) bool {
+        return emission_owner.job.variant == emission_owner.job.source;
     }
 
     pub fn commitItem(_: *FusedWave, _: usize) Error!void {}
@@ -1262,48 +1330,98 @@ const ArcLaneScratch = struct {
     }
 };
 
-/// Stable source storage is initialized in place: domains point at the embedded
-/// sparse map, while retained graph rows contain only source-frame ordinals.
+/// Prepared source storage is initialized in place: domains point at the
+/// sparse map beside them, while retained graph rows contain only
+/// source-frame ordinals.
+///
+/// The prepared data is present exactly while `prepared` is. The phased schedule prepares every source before any wave and keeps
+/// it until insertion returns. The fused schedule prepares a source when an
+/// emission is about to read it and releases it once no emission of the
+/// running or of a queued wave still does (`FusedWave`): a base procedure's
+/// source when its own emission finishes, a variant's after its wave when no
+/// queued variant names it. Preparation reads only the ownership-neutral
+/// body and the frozen solution and dismantle results, so preparing a
+/// source again produces the same data.
 const SourceCache = struct {
     template: *const Inserter,
     proc: LIR.LirProcSpecId,
     /// Ownership-neutral roots and frames never follow emitted proc metadata.
     body: ?LIR.CFStmtId,
     frame: LIR.LocalSpan,
-    arena: ?collections.SingleThreadArena = null,
-    local_index: collections.DenseMap(LIR.LocalId, u32) = undefined,
-    domain: ProcArcDomain = undefined,
-    liveness: SourceLiveness = undefined,
-    /// The procedure's complete projection reads whose target every emission
-    /// binds owned, decided against the frozen liveness.
-    projection_decisions: []const CompleteProjectionDecision = &.{},
+    /// Variants of this procedure reserved and not yet taken into a wave.
+    queued_variants: u32 = 0,
+    /// The prepared data, which lives in its own arena, or null while the
+    /// source is not prepared. Only prepared sources pay for it.
+    prepared: ?*Prepared = null,
     failed: bool = false,
     completed: bool = false,
     phase: ArcTaskPhase = .source,
 
+    const Prepared = struct {
+        /// Holds this struct and everything it points to.
+        arena: collections.SingleThreadArena,
+        local_index: collections.DenseMap(LIR.LocalId, u32),
+        domain: ProcArcDomain,
+        liveness: SourceLiveness,
+        /// The procedure's complete projection reads whose target every
+        /// emission binds owned, decided against the frozen liveness.
+        projection_decisions: []const CompleteProjectionDecision,
+    };
+
     fn deinit(self: *SourceCache) void {
-        if (self.arena) |*arena| arena.deinit();
+        self.release();
+    }
+
+    fn data(self: *const SourceCache) *Prepared {
+        return self.prepared orelse arcInvariant("ARC read a source that was not prepared");
+    }
+
+    /// The procedure's complete projection decisions; empty while the source
+    /// is not prepared.
+    fn projectionDecisions(self: *const SourceCache) []const CompleteProjectionDecision {
+        const prepared = self.prepared orelse return &.{};
+        return prepared.projection_decisions;
+    }
+
+    /// Free the prepared data; `execute` prepares it again.
+    fn release(self: *SourceCache) void {
+        const prepared = self.prepared orelse return;
+        self.prepared = null;
+        // The arena holds the struct it is read from, so it is copied out
+        // before it frees its chunks.
+        const arena = prepared.arena;
+        arena.deinit();
     }
 
     fn execute(self: *SourceCache, env: ArcTaskEnv) ResourceError!void {
         const body = self.body orelse return;
-        self.arena = collections.SingleThreadArena.init(env.allocator);
-        const arena = self.arena.?.allocator();
-        self.local_index = collections.DenseMap(LIR.LocalId, u32).init(arena);
-        self.domain = try ProcArcDomain.init(arena, self.template.store, self.template.solution, self.template.local_contains_refcounted, &self.local_index, self.frame);
-        self.domain.installResidualDomains(self.template.solution, self.template.dismantles);
-        self.liveness = SourceLiveness.init(arena, env.scratch);
+        if (self.prepared != null) arcInvariant("ARC prepared a source that was already prepared");
+        var building = collections.SingleThreadArena.init(env.allocator);
+        const prepared = building.allocator().create(Prepared) catch |err| {
+            building.deinit();
+            return err;
+        };
+        // From here on the arena is the copy inside the struct it holds.
+        prepared.arena = building;
+        self.prepared = prepared;
+        errdefer self.release();
+        const arena = prepared.arena.allocator();
+        prepared.local_index = collections.DenseMap(LIR.LocalId, u32).init(arena);
+        prepared.projection_decisions = &.{};
+        prepared.domain = try ProcArcDomain.init(arena, self.template.store, self.template.solution, self.template.local_contains_refcounted, &prepared.local_index, self.frame);
+        prepared.domain.installResidualDomains(self.template.solution, self.template.dismantles);
+        prepared.liveness = SourceLiveness.init(arena, env.scratch);
         var preparer = self.template.*;
-        preparer.current_domain = &self.domain;
+        preparer.current_domain = &prepared.domain;
         preparer.current_proc = self.proc;
         preparer.current_source_proc = self.proc;
         preparer.current_sig = preparer.solution.sigOf(self.proc);
         preparer.current_proc_body = body;
-        preparer.source_liveness = &self.liveness;
+        preparer.source_liveness = &prepared.liveness;
         preparer.join_bodies = preparer.solution.joinBodiesOf(self.proc);
         try preparer.prepareSourceLiveness();
-        self.liveness.freeze();
-        self.projection_decisions = try preparer.decideCompleteProjections(arena, env.scratch);
+        prepared.liveness.freeze();
+        prepared.projection_decisions = try preparer.decideCompleteProjections(arena, env.scratch);
     }
 };
 
@@ -1360,7 +1478,7 @@ const CompleteProjectionDecisions = struct {
         self.retains = try .initEmpty(allocator, stmt_count);
         self.retains_restituting = try .initEmpty(allocator, stmt_count);
         self.retaining = try .initEmpty(allocator, stmt_count);
-        for (sources) |source| for (source.projection_decisions) |decision| {
+        for (sources) |*source| for (source.projectionDecisions()) |decision| {
             const index = @backingInt(decision.stmt);
             self.decided.set(index);
             self.retains.setValue(index, decision.retains);
@@ -1485,7 +1603,19 @@ const EmissionOwner = struct {
 
     fn deinit(self: *EmissionOwner) void {
         if (self.shard) |*shard| shard.deinit();
+        self.releasePlan();
+    }
+
+    /// Free the plan and every other emission state once the shard is
+    /// emitted: appending the shard reads only the shard and the owner's
+    /// own fields.
+    fn releasePlan(self: *EmissionOwner) void {
         if (self.arena) |*arena| arena.deinit();
+        self.arena = null;
+        self.arc_plans = .{};
+        self.restitution_switches = .empty;
+        self.inserter.variant_requests = .empty;
+        self.inserter.resolved_variants = &.{};
     }
 
     fn execute(self: *EmissionOwner, env: ArcTaskEnv) ResourceError!void {
@@ -1513,11 +1643,12 @@ const EmissionOwner = struct {
         inserter.current_proc = self.job.variant;
         inserter.current_source_proc = source_proc;
         inserter.current_sig = emit_sig;
-        inserter.source_liveness = &self.source.liveness;
-        inserter.source_projections = self.source.projection_decisions;
+        const source = self.source.data();
+        inserter.source_liveness = &source.liveness;
+        inserter.source_projections = source.projection_decisions;
         inserter.emission_allocator = self.arena.?.allocator();
-        self.domain = self.source.domain;
-        self.domain.resource_full_masks = try inserter.emission_allocator.dupe(u64, self.source.domain.resource_full_masks);
+        self.domain = source.domain;
+        self.domain.resource_full_masks = try inserter.emission_allocator.dupe(u64, source.domain.resource_full_masks);
         self.domain.set_allocator = inserter.emission_allocator;
         const domain = &self.domain;
         inserter.current_domain = domain;
@@ -1650,7 +1781,7 @@ const VariantTable = struct {
     queue: std.ArrayList(QueuedVariant),
     /// Variants inherit only the source's ownership-neutral body and frame,
     /// never temporaries introduced by an earlier base emission.
-    sources: []const SourceCache,
+    sources: []SourceCache,
 
     fn intern(self: *VariantTable, store: *LirStore, request: VariantRequest) ResourceError!LIR.LirProcSpecId {
         const entry = try self.map.getOrPut(request.selector());
@@ -1663,7 +1794,7 @@ const VariantTable = struct {
             const variant = try self.addPublishedVariant(store, callee, source_spec, identity, request.demanded);
             entry.value_ptr.* = variant;
             try self.sigs.append(store.allocator, request.demanded);
-            try self.queue.append(store.allocator, .{ .variant = variant, .source = callee, .sig = request.demanded });
+            try self.enqueue(store, .{ .variant = variant, .source = callee, .sig = request.demanded });
             return variant;
         }
         const variant = try store.addProcSpec(.{
@@ -1694,8 +1825,20 @@ const VariantTable = struct {
         try store.copyProcDebugInfo(variant, callee);
         entry.value_ptr.* = variant;
         try self.sigs.append(store.allocator, request.demanded);
-        try self.queue.append(store.allocator, .{ .variant = variant, .source = callee, .sig = request.demanded });
+        try self.enqueue(store, .{ .variant = variant, .source = callee, .sig = request.demanded });
         return variant;
+    }
+
+    fn enqueue(self: *VariantTable, store: *const LirStore, job: QueuedVariant) ResourceError!void {
+        try self.queue.append(store.allocator, job);
+        self.sources[@backingInt(job.source)].queued_variants += 1;
+    }
+
+    /// The next queued variant, which leaves the queue for a wave.
+    fn dequeue(self: *VariantTable, index: usize) QueuedVariant {
+        const job = self.queue.items[index];
+        self.sources[@backingInt(job.source)].queued_variants -= 1;
+        return job;
     }
 
     /// The body-less procedure of the outcome-restitution variant another
