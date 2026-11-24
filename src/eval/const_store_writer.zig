@@ -985,7 +985,15 @@ pub const Writer = struct {
             // A literal has no capacity beyond its bytes (design.md "Static
             // Lists And Strings Keep Their Capacity").
             .checked => |expr| blk: {
-                const text = try self.checkedStrText(expr);
+                const bodies = self.checkedValues().bodies;
+                const segments = checkedStrSegments(bodies, expr);
+                // One segment's bytes are a literal of the module's string
+                // literal store, which the store borrows.
+                if (segments.len == 1) {
+                    const text = checkedSegmentText(bodies, segments[0]);
+                    break :blk .{ .str = .{ .bytes = try self.store.addBorrowedBlobData(text), .capacity = text.len } };
+                }
+                const text = try self.checkedStrText(segments);
                 break :blk .{ .str = .{ .bytes = try self.storeBytes(text), .capacity = text.len } };
             },
             // A read of a constant is the constant's value, capacity
@@ -1047,13 +1055,9 @@ pub const Writer = struct {
             writerInvariant("a value-form numeral does not fit its type");
     }
 
-    /// A value-form string's bytes: its segments in order. A string of one
-    /// segment borrows that segment's bytes from the module's string
-    /// literal store.
-    fn checkedStrText(self: *Writer, expr: CIR.Expr.Idx) Allocator.Error![]const u8 {
+    /// A value-form string's bytes: `segments` in order.
+    fn checkedStrText(self: *Writer, segments: []const CIR.Expr.Idx) Allocator.Error![]const u8 {
         const bodies = self.checkedValues().bodies;
-        const segments = checkedStrSegments(bodies, expr);
-        if (segments.len == 1) return checkedSegmentText(bodies, segments[0]);
         self.checked_text.clearRetainingCapacity();
         for (segments) |segment| try self.checked_text.appendSlice(self.allocator, checkedSegmentText(bodies, segment));
         return self.checked_text.items;
@@ -1700,7 +1704,7 @@ pub const Writer = struct {
                 if (self.checkedListBytes(expr)) |bytes| {
                     if (builtin.mode == .debug) std.debug.assert(element.byteWidth() == 1);
                     self.store.fill(target_node, .{ .list = .{ .items = .{ .packed_bytes = .{
-                        .bytes = try self.storeBytes(bytes),
+                        .bytes = try self.store.addBorrowedBlobData(bytes),
                         .len = try checkedU32(bytes.len),
                         .element = element,
                     } }, .capacity = capacity } });

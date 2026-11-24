@@ -2544,9 +2544,9 @@ checked expression's parts, or the stored value of a constant the expression
 reads. A numeral's bytes are the bytes lowering gives the literal
 (`exact_numeral.encodeBits`), and a literal list or string has no capacity
 beyond its items (Static Lists And Strings Keep Their Capacity). A string of
-one segment and a bytes literal are stored straight from the module's string
-literal store, whose bytes are the stored blob's, with no intermediate copy;
-a bytes literal is the packed items of its `List(U8)`. A read of a
+one segment and a bytes literal are stored as blobs borrowed from the
+module's string literal store, with no copy ("Constant Storage"); a bytes
+literal is the packed items of its `List(U8)`. A read of a
 constant is the constant's stored value, capacity included: the writer
 copies the read root's nodes into the reading root's store under the
 reading root's own plan, choosing each tag's variant by name, so a read at a
@@ -12109,7 +12109,15 @@ allocation.
 
 Strings and flat scalar or fixed-product lists use one shared content-interned blob store.
 `List(U8)` therefore has the same constant-storage cost as a `Str` containing
-the same bytes, and equal string/list contents reuse one blob. A packed list
+the same bytes, and equal string/list contents reuse one blob. A blob the
+checked-value writer stores from a literal of the store's own module (a string
+of one segment, or a file imported as bytes) is borrowed from the module's
+string literal store rather than copied (`ConstStore.BlobBacking`): those
+bytes never change once the module is canonicalized and live as long as the
+store, so the literal's bytes are resident once. A borrowed blob occupies its
+offsets in the blob bytes as if it were stored there, so serialization writes
+it in place and a serialized store is the same whichever of its blobs are
+borrowed; a loaded store owns all of them. A packed list
 view records its scalar encoding or fixed-product width and item count separately
 from its byte view. Fixed products are records, tuples, and nominal wrappers
 composed entirely of scalars, discriminant-only tag unions and zero-sized
