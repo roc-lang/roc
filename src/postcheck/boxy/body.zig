@@ -5594,7 +5594,7 @@ pub const Builder = struct {
         // variable no use relates.
         const subst = self.siteSubstitution(expr_id);
         for (bound[0..scheme.scheme_vars.len], related[outer_count..], scheme.scheme_vars, 0..) |*slot, ty, variable, index| slot.* = ty.get() orelse
-            if (index < subst.len and self.view.types().payload(subst[index]) != .err)
+            if (index < subst.len and self.view.types().payloadTag(subst[index]) != .err)
                 try self.convert(subst[index])
             else
                 try self.program.converter().sealedScheme(self.module, variable);
@@ -5847,7 +5847,7 @@ pub const Builder = struct {
         const declaring_module = self.module;
         const declaring_view = self.view;
         for (own_types, own_related, scheme.scheme_vars, 0..) |*own_ty, ty, variable, index| {
-            own_ty.* = ty.get() orelse if (index < subst.len and (site orelse declaring_view).types().payload(subst[index]) != .err) blk: {
+            own_ty.* = ty.get() orelse if (index < subst.len and (site orelse declaring_view).types().payloadTag(subst[index]) != .err) blk: {
                 self.enterSiteView(site);
                 defer self.leaveSiteView(declaring_module, declaring_view);
                 break :blk try self.convert(subst[index]);
@@ -6621,7 +6621,7 @@ pub const Builder = struct {
         // seals as a variable no use relates.
         const subst = self.siteSubstitution(call.func);
         for (own_types, related[outer_count..], scheme.scheme_vars, 0..) |*slot, ty, variable, index| slot.* = ty.get() orelse
-            if (index < subst.len and self.view.types().payload(subst[index]) != .err)
+            if (index < subst.len and self.view.types().payloadTag(subst[index]) != .err)
                 try self.convert(subst[index])
             else
                 try self.program.converter().sealedScheme(self.module, variable);
@@ -7633,7 +7633,7 @@ pub const Builder = struct {
                 slot.* = try self.program.store.emptyRecord();
                 continue;
             }
-            if (recorded and self.view.types().payload(subst[index]) != .err) {
+            if (recorded and self.view.types().payloadTag(subst[index]) != .err) {
                 slot.* = try self.convert(subst[index]);
                 continue;
             }
@@ -8169,7 +8169,7 @@ pub const Builder = struct {
         if (subst.len != 0 and subst.len != alias_step.vars.len) invariant("a use's substitution differs from its alias's scope");
         const bound = try self.program.arena.allocator().alloc(TypeId, alias_step.vars.len);
         var unrecorded = subst.len != alias_step.vars.len;
-        for (subst) |checked_ty| unrecorded = unrecorded or self.view.types().payload(checked_ty) == .err;
+        for (subst) |checked_ty| unrecorded = unrecorded or self.view.types().payloadTag(checked_ty) == .err;
         if (!unrecorded) {
             for (subst, bound) |checked_ty, *ty| ty.* = try self.convert(checked_ty);
             return bound;
@@ -8182,7 +8182,7 @@ pub const Builder = struct {
         const related = try self.relateVariablesPartial(&.{.{ generic_fn, call_fn }}, alias_step.vars.len);
         defer self.allocator.free(related);
         for (bound, related, alias_step.vars, 0..) |*slot, ty, variable, index| {
-            slot.* = if (index < subst.len and self.view.types().payload(subst[index]) != .err)
+            slot.* = if (index < subst.len and self.view.types().payloadTag(subst[index]) != .err)
                 try self.convert(subst[index])
             else
                 ty.get() orelse try self.program.converter().sealedScheme(alias_step.module, variable);
@@ -9617,7 +9617,7 @@ pub const Builder = struct {
             const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
             defer self.allocator.free(own_types);
             for (own_types, scheme.scheme_vars, 0..) |*own_ty, variable, index| {
-                own_ty.* = if (index < subst.len and self.view.types().payload(subst[index]) != .err)
+                own_ty.* = if (index < subst.len and self.view.types().payloadTag(subst[index]) != .err)
                     try self.convert(subst[index])
                 else
                     try self.program.converter().sealedScheme(self.module, variable);

@@ -587,7 +587,7 @@ pub const LazySubstitution = struct {
                 try bindings.append(allocator, .{ .variable = ty, .source = resolved.source });
                 if (!resolved.descend) continue;
             }
-            switch (store.payload(ty)) {
+            switch (store.payloadTag(ty)) {
                 // Use precisely the converter's row flattening and alias
                 // traversal, with the field-kind reads finish performs too.
                 .alias, .record, .tag_union, .tuple, .function, .nominal => {
@@ -1871,7 +1871,7 @@ pub const Converter = struct {
                         .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => break,
                     }
                 }
-                switch (types.payload(current)) {
+                switch (types.payloadTag(current)) {
                     .empty_tag_union => ends_in_uncommitted_tail = types.uncommittedTagTail(current),
                     .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union => try pending.append(allocator, .{ .module = module, .ty = current }),
                 }
@@ -1924,7 +1924,7 @@ pub const Converter = struct {
                         .pending, .field_kind, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => break,
                     }
                 }
-                var ext: ?TypeId = switch (types.payload(current)) {
+                var ext: ?TypeId = switch (types.payloadTag(current)) {
                     .empty_record => null,
                     .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .tag_union, .empty_tag_union => children[child_index],
                 };
@@ -1974,7 +1974,7 @@ pub const Converter = struct {
                         .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => break,
                     }
                 }
-                var ext: ?TypeId = switch (types.payload(current)) {
+                var ext: ?TypeId = switch (types.payloadTag(current)) {
                     .empty_tag_union => null,
                     .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union => children[child_index],
                 };

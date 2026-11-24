@@ -3809,6 +3809,25 @@ pub const StoredTagUnion = struct {
     ext: CheckedTypeId,
 };
 
+/// The tag `reconstructTypeData` gives the read form of a stored payload.
+fn storedPayloadTag(stored: *const StoredCheckedTypePayload) std.meta.Tag(CheckedTypePayload) {
+    return switch (stored.*) {
+        .pending => .pending,
+        .err => .err,
+        .flex => .flex,
+        .rigid => .rigid,
+        .alias => .alias,
+        .record => .record,
+        .tuple => .tuple,
+        .nominal => .nominal,
+        .function => .function,
+        .empty_record => .empty_record,
+        .tag_union => .tag_union,
+        .empty_tag_union => .empty_tag_union,
+        .field_kind => .field_kind,
+    };
+}
+
 /// Internal, relocation-invariant (POD) form of `CheckedTypePayload`: variant
 /// slices are replaced by ranges into the store's flat pools. The public
 /// `CheckedTypePayload` (with slices) is reconstructed on demand by `payload`.
@@ -4034,9 +4053,16 @@ pub const CheckedTypeStoreView = struct {
         return reconstructTypeData(CheckedTypePayload, self, &self.stored_payloads[self.synthesizedIndex(id)]);
     }
 
+    /// The kind of `id`'s checked type: the tag `payload` returns, read
+    /// without decoding the payload.
+    pub fn payloadTag(self: *const CheckedTypeStoreView, id: CheckedTypeId) std.meta.Tag(CheckedTypePayload) {
+        if (!type_ids.isSynthesized(id)) return self.sealedView().payloadTag(type_ids.asVar(id));
+        return storedPayloadTag(&self.stored_payloads[self.synthesizedIndex(id)]);
+    }
+
     /// Whether `id` is a nominal or alias type.
     pub fn isNamed(self: *const CheckedTypeStoreView, id: CheckedTypeId) bool {
-        return switch (self.payload(id)) {
+        return switch (self.payloadTag(id)) {
             .alias, .nominal => true,
             .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => false,
         };
@@ -5091,21 +5117,7 @@ pub const CheckedTypeStore = struct {
     /// without decoding the payload.
     pub fn payloadTag(self: *const CheckedTypeStore, id: CheckedTypeId) std.meta.Tag(CheckedTypePayload) {
         if (!type_ids.isSynthesized(id)) return self.sealedSourceView().payloadTag(type_ids.asVar(id));
-        return switch (self.payloads.items()[self.synthesizedIndex(id)]) {
-            .pending => .pending,
-            .err => .err,
-            .flex => .flex,
-            .rigid => .rigid,
-            .alias => .alias,
-            .record => .record,
-            .tuple => .tuple,
-            .nominal => .nominal,
-            .function => .function,
-            .empty_record => .empty_record,
-            .tag_union => .tag_union,
-            .empty_tag_union => .empty_tag_union,
-            .field_kind => .field_kind,
-        };
+        return storedPayloadTag(&self.payloads.items()[self.synthesizedIndex(id)]);
     }
 
     /// The entry a synthesized id names.
@@ -6348,7 +6360,7 @@ fn cloneCheckedTypeBuildPayload(
             // label. Keep the shared suffix intact and omit the outer copy.
             const ext: CheckedTypeId = @fromBackingInt(cloned.items[cloned.items.len - 1]);
             const suffix = if (substitution.boundActual(store, tag_union.ext)) |actual|
-                if (store.payload(actual) == .tag_union) actual else null
+                if (store.payloadTag(actual) == .tag_union) actual else null
             else
                 substitution.added_suffixes.get(ext);
             if (suffix) |actual| {
@@ -7138,7 +7150,7 @@ const DeclarationAnnoWalk = struct {
                 };
                 const ext = results.typeId();
                 // A row with no tags over the closed empty row is that row.
-                if (tags.len == 0 and self.store.payload(ext) == .empty_tag_union) return ext;
+                if (tags.len == 0 and self.store.payloadTag(ext) == .empty_tag_union) return ext;
                 // The payload owns `tags` and releases it on failure.
                 return try appendExplicitCheckedTypePayload(gpa, self.store, .{ .tag_union = .{
                     .tags = tags,
@@ -7186,7 +7198,7 @@ const DeclarationAnnoWalk = struct {
                 };
                 const ext = results.typeId();
                 // A row with no fields over the closed empty row is that row.
-                if (fields.len == 0 and self.store.payload(ext) == .empty_record) return ext;
+                if (fields.len == 0 and self.store.payloadTag(ext) == .empty_record) return ext;
                 // The payload owns `fields` and releases it on failure.
                 return try appendExplicitCheckedTypePayload(gpa, self.store, .{ .record = .{
                     .fields = fields,
@@ -10448,7 +10460,7 @@ test "nominal declaration backing closes a referenced alias's tag union row" {
             const row = store.payload(method.alias.backing);
             try testing.expect(row == .tag_union);
             try testing.expectEqual(@as(usize, 1), row.tag_union.tags.len());
-            try testing.expectEqual(std.meta.Tag(CheckedTypePayload).empty_tag_union, std.meta.activeTag(store.payload(row.tag_union.ext)));
+            try testing.expectEqual(std.meta.Tag(CheckedTypePayload).empty_tag_union, store.payloadTag(row.tag_union.ext));
         }
     }.check);
 }
@@ -10481,7 +10493,7 @@ test "nominal declaration backing publishes each alias expansion once" {
                 current = store.payload(elems[0]);
             }
             try testing.expect(current == .alias);
-            try testing.expectEqual(std.meta.Tag(CheckedTypePayload).empty_tag_union, std.meta.activeTag(store.payload(store.payload(current.alias.backing).tag_union.ext)));
+            try testing.expectEqual(std.meta.Tag(CheckedTypePayload).empty_tag_union, store.payloadTag(store.payload(current.alias.backing).tag_union.ext));
         }
     }.check);
 }
@@ -22982,7 +22994,7 @@ fn publishLiteralArgumentRoots(
                 // nothing converts the literal. Otherwise the variable seals:
                 // the edge converts the literal at the sealed type.
                 const unfixed = !closed and instance.? == .unbound;
-                if (unfixed and store.payload(instantiated) == .flex) {
+                if (unfixed and store.payloadTag(instantiated) == .flex) {
                     try args.append(allocator, .unbound);
                     continue;
                 }
@@ -26990,7 +27002,7 @@ const TypeVarMentions = struct {
     }
 
     fn expandRowExtension(checked_types: *const CheckedTypeStore, ext: CheckedTypeId, flags: TypeVarMentionFlags, sink: anytype) Allocator.Error!void {
-        switch (checked_types.payload(ext)) {
+        switch (checked_types.payloadTag(ext)) {
             .flex, .rigid => {
                 var ext_flags = flags;
                 ext_flags.row_extension = true;
@@ -34608,8 +34620,8 @@ pub const CheckedModuleArtifact = struct {
                         .method = call.method,
                     };
                 }
-                const callable = self.checked_types.payload(call.callable_ty);
-                if (callable != .function) {
+                const callable_kind = self.checked_types.payloadTag(call.callable_ty);
+                if (callable_kind != .function) {
                     return .{
                         .kind = .iterator_plan_callable_not_function,
                         .index = @intCast(i),
@@ -40617,9 +40629,9 @@ test "sealing decided variables replaces each with its one instantiation" {
     try std.testing.expect(!try store.rootContainsIdentityVariables(sealed));
     const function = checkedFunctionPayload(&store, sealed, "test callable");
     const sealed_record = store.payload(function.args[0]).record;
-    try std.testing.expect(store.payload(sealed_record.fields.get(0).ty) == .empty_tag_union);
-    try std.testing.expect(store.payload(sealed_record.ext) == .empty_record);
-    try std.testing.expect(store.payload(store.payload(function.ret).tag_union.ext) == .empty_tag_union);
+    try std.testing.expect(store.payloadTag(sealed_record.fields.get(0).ty) == .empty_tag_union);
+    try std.testing.expect(store.payloadTag(sealed_record.ext) == .empty_record);
+    try std.testing.expect(store.payloadTag(store.payload(function.ret).tag_union.ext) == .empty_tag_union);
 
     // The sealed type is closed, so sealing it again changes nothing, and
     // the source type keeps its variables.
@@ -40806,7 +40818,7 @@ test "direct dispatch classification follows instantiation clones to the scheme 
         .empty_tag_union,
         => return error.TestUnexpectedResult,
     };
-    try std.testing.expect(store.payload(instantiated_tail) == .flex);
+    try std.testing.expect(store.payloadTag(instantiated_tail) == .flex);
     try std.testing.expectEqual(tail, store.identityOrigin(instantiated_tail));
 
     const template_site = [_]EnclosingDispatchSite{.{ .template_root = template_root, .scope = .root }};
@@ -40969,14 +40981,14 @@ test "pairing type columns borrow frozen storage until written" {
     const new_root = try paired.appendSyntheticPayloadRoot(allocator, .empty_tag_union);
     try std.testing.expectEqual(@as(usize, 2), frozen.roots.items().len);
     try std.testing.expect(paired.roots.items().ptr != frozen.roots.items().ptr);
-    try std.testing.expect(paired.payload(new_root) == .empty_tag_union);
+    try std.testing.expect(paired.payloadTag(new_root) == .empty_tag_union);
     try std.testing.expectEqual(root, (try paired.rootForKey(root_key)).?);
     try attachTestSynthesizedKeys(allocator, &frozen, &names);
     try std.testing.expect((try frozen.rootForKey(try paired.rootKey(new_root))) == null);
     try std.testing.expect(paired.borrowed_columns.contains(.record_field_pool));
     try paired.replaceTypeRootPayload(allocator, root, .err);
-    try std.testing.expect(paired.payload(root) == .err);
-    try std.testing.expect(frozen.payload(root) == .empty_record);
+    try std.testing.expect(paired.payloadTag(root) == .err);
+    try std.testing.expect(frozen.payloadTag(root) == .empty_record);
 }
 
 test "a loaded type store keeps its interned ids and a pairing interns against it without writing" {
@@ -41106,7 +41118,7 @@ test "checked polarity alias publication erases hidden arguments and preserves b
     const alias = store.payload(root).alias;
     try std.testing.expectEqual(@as(usize, 1), alias.args.len);
     const row = store.payload(alias.backing).tag_union;
-    try std.testing.expect(store.payload(row.ext) == .flex);
+    try std.testing.expect(store.payloadTag(row.ext) == .flex);
     const source_key = try canonical_type_keys.fromVar(allocator, module.typeStoreConst(), module.moduleEnvConst(), function.ret);
     try std.testing.expectEqualSlices(u8, &source_key.bytes, &(try store.rootKey(root)).bytes);
 

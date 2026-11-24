@@ -10224,8 +10224,8 @@ test "app artifact records platform requirement solutions from checking" {
     try std.testing.expectEqualStrings("prog", app_artifact.canonical_names.exportNameText(top_level.source_name));
 
     // The solved requirement type is the record the app provided.
-    const solved_payload = app_artifact.checked_types.payload(solution.solved_root);
-    try std.testing.expect(solved_payload == .record);
+    const solved_payload_kind = app_artifact.checked_types.payloadTag(solution.solved_root);
+    try std.testing.expect(solved_payload_kind == .record);
 
     // Exactly one identity variable (the for-clause `model`), solved to the
     // app's `Model` alias.
@@ -10538,8 +10538,8 @@ test "platform requirement relation specializes identity reached through app ali
     try std.testing.expectEqual(@as(usize, 1), relations.len);
 
     const relation = relations[0];
-    const payload = platform_artifact.checked_types.payload(relation.requested_source_ty_payload);
-    try std.testing.expect(payload != .pending);
+    const payload_kind = platform_artifact.checked_types.payloadTag(relation.requested_source_ty_payload);
+    try std.testing.expect(payload_kind != .pending);
 }
 
 test "diagnostic-only mode publishes the platform root during checking" {

@@ -34021,7 +34021,7 @@ const BodyContext = struct {
         // retains its checked result variable as an unobservable continuation
         // cell; asking for expression value evidence here would instantiate a
         // rejected dispatch.
-        if (expr.data == .runtime_error or self.view.types.payload(expr.ty) == .err) {
+        if (expr.data == .runtime_error or self.view.types.payloadTag(expr.ty) == .err) {
             return divergentStep(self, expr_id, .{ .at_type = try self.unitType() });
         }
         return divergentStep(self, expr_id, .{ .at_cell = DraftTypeCell.fromGraphNode(try self.instNode(expr.ty)) });
@@ -75145,7 +75145,7 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
     try std.testing.expectEqual(pair_ty, try builder.lowerType(view, pair));
     for (aliases) |alias| {
         try std.testing.expectEqual(pair_ty, try builder.lowerType(view, alias));
-        try std.testing.expect(view.types.payload(alias) == .alias);
+        try std.testing.expect(view.types.payloadTag(alias) == .alias);
     }
     try std.testing.expectEqual(@as(usize, 3), program.types.typeCount());
     const opaque_ty = try builder.lowerType(view, nominal_alias);
