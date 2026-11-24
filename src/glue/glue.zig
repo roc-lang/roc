@@ -38,6 +38,7 @@ const layout = @import("layout");
 const lir = @import("lir");
 const GuardedList = lir.LirStore.GuardedList;
 const llvm_compile = @import("llvm_compile");
+const backend = @import("backend");
 
 const ModuleEnv = can.ModuleEnv;
 const BuildEnv = compile.BuildEnv;
@@ -72,6 +73,40 @@ pub const GlueArgs = struct {
     /// is the only plugin considered: its stamp must verify, and a mismatch
     /// is an explicit error (reinstall), never a rebuild.
     installed_plugin_path: ?[]const u8 = null,
+    /// The caller builds and loads the glue spec itself, from unit images
+    /// (design.md "Unit-Image Glue Execution"), instead of this module
+    /// compiling a plugin object. Asked for the generator only once the
+    /// platform has been checked and its types collected.
+    generator: ?GeneratorSource = null,
+};
+
+/// `roc_make_glue` in the `(ret_ptr, args_ptr)` convention: the result buffer,
+/// then the address of the one `List(Types)` argument.
+pub const GlueEntryFn = *const fn ([*]u8, ?*anyopaque) callconv(.c) void;
+
+/// The host boundary of `roc_make_glue`: the committed layouts values cross
+/// it at, and the named schemas that locate their fields and tags.
+pub const GlueBoundary = struct {
+    layouts: *const layout.Store,
+    schemas: *const lir.CheckedPipeline.RuntimeValueSchemaStore,
+    types_layout: layout.Idx,
+    ret_layout: layout.Idx,
+};
+
+/// A glue spec loaded into this process, ready to call. Whatever `entry`
+/// points into, and everything `boundary` borrows, outlives the copying of
+/// the generator's result: returned values can borrow the generator's
+/// immutable data.
+pub const LoadedGenerator = struct {
+    entry: GlueEntryFn,
+    boundary: GlueBoundary,
+};
+
+/// A caller-owned glue spec, built and loaded when `load` is called. `load`
+/// reports its own diagnostics.
+pub const GeneratorSource = struct {
+    context: *anyopaque,
+    load: *const fn (context: *anyopaque) GlueError!LoadedGenerator,
 };
 
 /// Error types for glue generation operations.
@@ -268,54 +303,42 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         error.HostedFunctionNotBound => return error.CompilationFailed,
     };
 
-    // 5. Compile glue spec through checked artifacts and lower to LIR.
-    var spec = try compileGlueSpec(gpa, stderr, args.glue_spec, args.no_cache, args.report_config, args.specialization_strategy, std_io);
-    defer spec.deinit(gpa);
-    const lowered = &spec.lowered;
-    const root_artifact = spec.root_artifact;
-    const glue_proc = spec.glue_proc;
-    const arg_layouts = spec.arg_layouts;
-
-    // 6. Construct List(Types) using the exact committed LIR layout and invoke the requested backend.
+    // 5. Take the caller's loaded glue spec, or compile it through checked
+    // artifacts, lower it to LIR and load its plugin object.
     var runtime_env = eval_mod.RuntimeHostEnv.init(gpa);
     defer runtime_env.deinit();
-    const glue_writer = GlueRocValueWriter{
-        .layouts = &lowered.lir_result.layouts,
-        .schemas = &lowered.runtime_value_schemas,
-        .roc_ops = runtime_env.get_ops(),
+    var spec: ?CompiledGlueSpec = null;
+    defer if (spec) |*compiled| compiled.deinit(gpa);
+    var plugin: ?BuiltGluePlugin = null;
+    defer if (plugin) |built| built.deinit(gpa);
+    var plugin_image: ?eval_mod.object_image.Image = null;
+    defer if (plugin_image) |*image| image.deinit();
+    var dev_code: ?*DevGlueCode = null;
+    defer if (dev_code) |code| code.destroy();
+    const generator: LoadedGenerator = if (args.generator) |source|
+        try source.load(source.context)
+    else loaded: {
+        if (builtin.target.os.tag == .freestanding) return error.GluePluginUnavailable;
+        spec = try compileGlueSpec(gpa, stderr, args.glue_spec, args.no_cache, args.report_config, args.specialization_strategy, std_io);
+        const compiled = &spec.?;
+        // An installed plugin is already compiled; otherwise `--opt=dev`
+        // means the dev backend, and the optimized levels mean LLVM.
+        if (args.installed_plugin_path == null and args.opt == .dev) {
+            dev_code = try DevGlueCode.create(gpa, compiled);
+            break :loaded .{ .entry = dev_code.?.entry(), .boundary = compiled.boundary() };
+        }
+        const stamp = gluePluginStamp(compiled.root_artifact.executableIdentity(), args.specialization_strategy);
+        plugin = try getOrBuildGluePlugin(gpa, &compiled.lowered, .{
+            .root = CheckedArtifact.loweringViewWithRelations(compiled.root_artifact, compiled.relation_artifacts),
+            .imports = compiled.imported_artifacts,
+        }, compiled.glue_proc, compiled.arg_layouts, stamp, args, std_io);
+        plugin_image = try loadVerifiedGluePlugin(gpa, stderr, plugin.?, &stamp, true);
+        const entry = plugin_image.?.lookup(GlueEntryFn, builtins.shim_symbols.roc_make_glue) orelse return error.GluePluginUnavailable;
+        break :loaded .{ .entry = entry, .boundary = compiled.boundary() };
     };
-    var types_list = constructTypesRocList(&glue_writer, collected_modules.items, provides_entries.items, &type_table, arg_layouts[0]);
 
-    const proc = lowered.lir_result.store.getProcSpec(glue_proc);
-    const ret_size_align = lowered.lir_result.layouts.layoutSizeAlign(lowered.lir_result.layouts.getLayout(proc.ret_layout));
-    const ret_alignment = std.mem.Alignment.fromByteUnits(ret_size_align.alignment.toByteUnits());
-    const result_ptr = gpa.rawAlloc(ret_size_align.size, ret_alignment, @returnAddress()) orelse {
-        return error.OutOfMemory;
-    };
-    const result_buf = result_ptr[0..ret_size_align.size];
-    defer gpa.rawFree(result_buf, ret_alignment, @returnAddress());
-    if (result_buf.len > 0) @memset(result_buf, 0);
-
-    const glue_result = switch (args.opt) {
-        .dev, .size, .speed => try runGlueSpecPlugin(
-            gpa,
-            stderr,
-            lowered,
-            .{
-                .root = CheckedArtifact.loweringViewWithRelations(root_artifact, spec.relation_artifacts),
-                .imports = spec.imported_artifacts,
-            },
-            glue_proc,
-            arg_layouts,
-            &types_list,
-            result_buf.ptr,
-            &glue_writer,
-            &runtime_env,
-            root_artifact.executableIdentity(),
-            args,
-            std_io,
-        ),
-    };
+    // 6. Construct List(Types) at the boundary's committed layout and call the generator.
+    const glue_result = try runGenerator(gpa, stderr, generator, &runtime_env, collected_modules.items, provides_entries.items, &type_table);
     defer glue_result.deinit();
     try writeHostEvents(stderr, &runtime_env);
 
@@ -368,6 +391,16 @@ const CompiledGlueSpec = struct {
     glue_proc: lir.LirProcSpecId,
     arg_layouts: []const layout.Idx,
     root_artifact: *const CheckedArtifact.CheckedModuleArtifact,
+
+    /// The boundary this lowering committed for `roc_make_glue`.
+    fn boundary(self: *const CompiledGlueSpec) GlueBoundary {
+        return .{
+            .layouts = &self.lowered.lir_result.layouts,
+            .schemas = &self.lowered.runtime_value_schemas,
+            .types_layout = self.arg_layouts[0],
+            .ret_layout = self.lowered.lir_result.store.getProcSpec(self.glue_proc).ret_layout,
+        };
+    }
 
     fn deinit(self: *CompiledGlueSpec, gpa: Allocator) void {
         gpa.free(self.arg_layouts);
@@ -460,15 +493,20 @@ fn compileGlueSpec(
     };
     errdefer lowered.deinit();
 
-    const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue) orelse
-        glueInvariant("glue spec produced no published make_glue platform root", .{});
+    // Any app is a well-formed program, but only one whose platform provides
+    // `roc_make_glue` over one argument is a glue spec.
+    const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue) orelse {
+        printPath(gpa, stderr, "Error: '{s}' is not a glue spec: its platform does not provide `" ++ builtins.shim_symbols.roc_make_glue ++ "`.\n", glue_spec, report_config) catch {};
+        return error.CompilationFailed;
+    };
 
     const arg_layouts = argLayoutsForProc(gpa, &lowered.lir_result.store, glue_proc) catch {
         return error.OutOfMemory;
     };
     errdefer gpa.free(arg_layouts);
     if (arg_layouts.len != 1) {
-        glueInvariant("make_glue expected one List(Types) argument, got {d}", .{arg_layouts.len});
+        printPath(gpa, stderr, "Error: '{s}' is not a glue spec: `" ++ builtins.shim_symbols.roc_make_glue ++ "` must take exactly one argument.\n", glue_spec, report_config) catch {};
+        return error.CompilationFailed;
     }
 
     return .{
@@ -583,33 +621,34 @@ const BuiltGluePlugin = struct {
     }
 };
 
-/// Copy the returned files before unloading the plugin: Roc results can borrow
-/// immutable bytes from its image, whereas the caller owns the extracted files.
-fn runGlueSpecPlugin(
+/// Marshal the collected platform types across `generator`'s boundary, call
+/// it, and copy the files it returns: Roc results can borrow immutable bytes
+/// from the generator's image, whereas the caller owns the extracted files.
+fn runGenerator(
     gpa: Allocator,
     stderr: *std.Io.Writer,
-    lowered: *lir.CheckedPipeline.LoweredProgram,
-    modules: compile.static_data_exports.ModuleViews,
-    glue_proc: lir.LirProcSpecId,
-    arg_layouts: []const layout.Idx,
-    types_list: *RocList,
-    result_ptr: [*]u8,
-    writer: *const GlueRocValueWriter,
+    generator: LoadedGenerator,
     runtime_env: *eval_mod.RuntimeHostEnv,
-    executable_identity: [32]u8,
-    args: GlueArgs,
-    std_io: std.Io,
+    collected_modules: []const CollectedModuleTypeInfo,
+    provides_entries: []const CollectedProvidesEntry,
+    type_table: *const TypeTable,
 ) GlueError!GlueResultFiles {
-    if (builtin.target.os.tag == .freestanding) return error.GluePluginUnavailable;
+    const boundary = generator.boundary;
+    const writer = GlueRocValueWriter{
+        .layouts = boundary.layouts,
+        .schemas = boundary.schemas,
+        .roc_ops = runtime_env.get_ops(),
+    };
+    var types_list = constructTypesRocList(&writer, collected_modules, provides_entries, type_table, boundary.types_layout);
 
-    const stamp = gluePluginStamp(executable_identity, args.specialization_strategy);
-    const plugin = try getOrBuildGluePlugin(gpa, lowered, modules, glue_proc, arg_layouts, stamp, args, std_io);
-    defer plugin.deinit(gpa);
-    var lib = try loadVerifiedGluePlugin(gpa, stderr, plugin, &stamp, true);
-    defer lib.deinit();
-
-    const GlueEntryFn = *const fn ([*]u8, ?*anyopaque) callconv(.c) void;
-    const entry = lib.lookup(GlueEntryFn, builtins.shim_symbols.roc_make_glue) orelse return error.GluePluginUnavailable;
+    const ret_size_align = boundary.layouts.layoutSizeAlign(boundary.layouts.getLayout(boundary.ret_layout));
+    const ret_alignment = std.mem.Alignment.fromByteUnits(ret_size_align.alignment.toByteUnits());
+    const result_ptr = gpa.rawAlloc(ret_size_align.size, ret_alignment, @returnAddress()) orelse {
+        return error.OutOfMemory;
+    };
+    const result_buf = result_ptr[0..ret_size_align.size];
+    defer gpa.rawFree(result_buf, ret_alignment, @returnAddress());
+    if (result_buf.len > 0) @memset(result_buf, 0);
 
     runtime_env.resetObservation();
     var crash_boundary = runtime_env.enterCrashBoundary();
@@ -627,7 +666,7 @@ fn runGlueSpecPlugin(
             self.entry(self.result, self.types);
         }
     };
-    var glue_call: GlueCall = .{ .entry = entry, .result = result_ptr, .types = @ptrCast(types_list) };
+    var glue_call: GlueCall = .{ .entry = generator.entry, .result = result_buf.ptr, .types = @ptrCast(&types_list) };
     _ = try crash_boundary.run(GlueCall, &glue_call, GlueCall.call);
 
     switch (runtime_env.crashState()) {
@@ -637,8 +676,134 @@ fn runGlueSpecPlugin(
             return error.CompilationFailed;
         },
     }
-    return try extractGlueResult(gpa, writer, result_ptr, lowered.lir_result.store.getProcSpec(glue_proc).ret_layout);
+    return try extractGlueResult(gpa, &writer, result_buf.ptr, boundary.ret_layout);
 }
+
+/// A glue spec's whole lowered program compiled by the dev backend into this
+/// process's executable memory, with its frozen data beside it: what a
+/// `--opt=dev` glue run executes when its spec does not run from unit images.
+/// Nothing here is persisted. It outlives the copying of the generator's
+/// result, which can borrow the frozen data and static strings.
+const DevGlueCode = if (backend.host_lir_codegen_available) struct {
+    gpa: Allocator,
+    static_data: []compile.static_data_exports.StaticDataExport,
+    static_strings: backend.StaticStringData.Table,
+    static_image: backend.StaticDataImage,
+    executable: backend.ExecutableMemory,
+
+    const Self = @This();
+
+    fn create(gpa: Allocator, spec: *CompiledGlueSpec) GlueError!*Self {
+        const lowered = &spec.lowered;
+        const store = &lowered.lir_result.store;
+        const static_data = compile.static_data_exports.buildStaticDataForWidth(gpa, .{
+            .root = CheckedArtifact.loweringViewWithRelations(spec.root_artifact, spec.relation_artifacts),
+            .imports = spec.imported_artifacts,
+        }, lowered, base.target.TargetUsize.native, .{}) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.UnsupportedTarget => unreachable, // Glue executes at the supported native pointer width.
+        };
+        errdefer compile.static_data_exports.deinitStaticData(gpa, static_data);
+
+        var static_strings = try backend.StaticStringData.build(gpa, store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
+        errdefer static_strings.deinit();
+        var static_image = backend.StaticDataImage.init(gpa, static_data) catch |err| return frozenDataError(err);
+        errdefer static_image.deinit();
+        const addresses = static_image.lirValueAddresses(gpa, lowered.lir_result.static_data_values.items.len) catch |err| return frozenDataError(err);
+        defer gpa.free(addresses);
+
+        var codegen = try backend.HostLirCodeGen.initWithCapturePrefix(
+            gpa,
+            store,
+            &lowered.lir_result.layouts,
+            static_strings.view(),
+            lowered.lir_result.erased_capture_prefix,
+            roc_target.host_cpu.level(),
+        );
+        defer codegen.deinit();
+        codegen.setNativeStaticData(addresses);
+        try codegen.compileAllProcSpecs(store.getProcSpecs());
+        const helpers = try backend.collectRequiredRcHelpers(gpa, static_data);
+        defer gpa.free(helpers);
+        try codegen.compileStaticDataRcHelpers(helpers);
+        const wrapper = try codegen.generateEntrypointWrapper(
+            builtins.shim_symbols.roc_make_glue,
+            spec.glue_proc,
+            spec.arg_layouts,
+            store.getProcSpec(spec.glue_proc).ret_layout,
+        );
+        try codegen.finishImage();
+        var executable = backend.ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
+            codegen.getGeneratedCode(),
+            wrapper.offset,
+            codegen.getUnwindFunctions(),
+        ) catch return error.OutOfMemory;
+        errdefer executable.deinit();
+
+        const Resolver = struct {
+            codegen: *const backend.HostLirCodeGen,
+            executable: *const backend.ExecutableMemory,
+
+            fn resolve(raw: ?*anyopaque, relocation: backend.StaticDataRelocation) ?usize {
+                const self: *@This() = @ptrCast(@alignCast(raw.?));
+                const address = @intFromPtr(self.executable.codePtr());
+                if (relocation.rc_helper) |helper| return address + (self.codegen.compiledStaticDataRcHelperOffset(helper) orelse return null);
+                const proc_id = relocation.procedure.get() orelse return null;
+                return address + (self.codegen.compiledProcSymbol(proc_id) orelse return null).code_start;
+            }
+        };
+        var resolver = Resolver{ .codegen = &codegen, .executable = &executable };
+        static_image.resolveFunctionRelocations(.{ .context = &resolver, .resolve = Resolver.resolve }) catch |err| return frozenDataError(err);
+
+        const self = try gpa.create(Self);
+        self.* = .{
+            .gpa = gpa,
+            .static_data = static_data,
+            .static_strings = static_strings,
+            .static_image = static_image,
+            .executable = executable,
+        };
+        return self;
+    }
+
+    /// The frozen graph is compiler output, so only allocation can fail.
+    fn frozenDataError(err: backend.StaticDataImageError) Allocator.Error {
+        return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.DuplicateStaticDataSymbol,
+            error.InvalidStaticDataAlignment,
+            error.InvalidStaticDataRelocation,
+            error.MissingStaticDataSymbol,
+            error.UnresolvedStaticFunction,
+            => glueInvariant("invalid frozen data graph for a glue spec: {s}", .{@errorName(err)}),
+        };
+    }
+
+    fn entry(self: *const Self) GlueEntryFn {
+        return @ptrCast(@alignCast(self.executable.entryPtr()));
+    }
+
+    fn destroy(self: *Self) void {
+        const gpa = self.gpa;
+        self.executable.deinit();
+        self.static_image.deinit();
+        self.static_strings.deinit();
+        compile.static_data_exports.deinitStaticData(gpa, self.static_data);
+        gpa.destroy(self);
+    }
+} else struct {
+    const Self = @This();
+
+    fn create(_: Allocator, _: *CompiledGlueSpec) GlueError!*Self {
+        return error.DevBackendUnavailable;
+    }
+
+    fn entry(_: *const Self) GlueEntryFn {
+        unreachable; // `create` never returns one on a host without the dev backend
+    }
+
+    fn destroy(_: *Self) void {}
+};
 
 fn getOrBuildGluePlugin(
     gpa: Allocator,
@@ -5167,7 +5332,71 @@ test "glue platform marshalling schema matches checked Roc records" {
             return err;
         };
         defer spec.deinit(gpa);
-        try checkGluePlatformMarshallingSchema(&spec);
+        try checkGluePlatformMarshallingSchema(spec.boundary());
+    }
+}
+
+/// The host boundary of `spec`'s `roc_make_glue` entrypoint, which a glue
+/// run from unit images marshals under instead of a lowered program's layouts.
+fn testEntrypointBoundary(gpa: Allocator, spec: *const CompiledGlueSpec) Allocator.Error!lir.CheckedPipeline.BoxyEntrypointBoundary {
+    const request = for (spec.lir_roots) |root| {
+        const symbol = spec.root_artifact.providedEntrypointName(root) orelse continue;
+        if (std.mem.eql(u8, symbol, builtins.shim_symbols.roc_make_glue)) break root;
+    } else unreachable; // compileGlueSpec selected a `roc_make_glue` root from these requests
+    return lir.CheckedPipeline.BoxyEntrypointBoundary.init(
+        gpa,
+        .{ .root = CheckedArtifact.loweringViewWithRelations(spec.root_artifact, spec.relation_artifacts), .imports = spec.imported_artifacts },
+        request,
+        base.target.TargetUsize.native,
+    );
+}
+
+fn glueBoundaryOf(boundary: *const lir.CheckedPipeline.BoxyEntrypointBoundary) GlueBoundary {
+    return .{
+        .layouts = boundary.layouts(),
+        .schemas = &boundary.runtime_value_schemas,
+        .types_layout = boundary.argLayouts()[0],
+        .ret_layout = boundary.retLayout(),
+    };
+}
+
+// A glue run from unit images lowers no program, so the entrypoint boundary
+// is its only source of layouts. It must pass the same lock as the program a
+// `.boxy` lowering commits, and commit the same storage for both values.
+test "glue entrypoint boundary matches the lowered Boxy program" {
+    const gpa = std.testing.allocator;
+    var diagnostics = std.Io.Writer.Allocating.init(gpa);
+    defer diagnostics.deinit();
+    var spec = compileGlueSpec(gpa, &diagnostics.writer, "src/glue/src/DebugGlue.roc", true, reporting.ReportingConfig.initMarkdown(), .boxy, std.testing.io) catch |err| {
+        std.debug.print("{s}", .{diagnostics.written()});
+        return err;
+    };
+    defer spec.deinit(gpa);
+    var boundary = try testEntrypointBoundary(gpa, &spec);
+    defer boundary.deinit();
+    try std.testing.expectEqual(@as(usize, 1), boundary.argLayouts().len);
+    const from_boundary = glueBoundaryOf(&boundary);
+    try checkGluePlatformMarshallingSchema(from_boundary);
+
+    const lowered = spec.boundary();
+    for ([_][2]layout.Idx{ .{ from_boundary.types_layout, lowered.types_layout }, .{ from_boundary.ret_layout, lowered.ret_layout } }) |pair| {
+        const boundary_size_align = from_boundary.layouts.layoutSizeAlign(from_boundary.layouts.getLayout(pair[0]));
+        const lowered_size_align = lowered.layouts.layoutSizeAlign(lowered.layouts.getLayout(pair[1]));
+        try std.testing.expectEqual(lowered_size_align.size, boundary_size_align.size);
+        try std.testing.expectEqual(lowered_size_align.alignment, boundary_size_align.alignment);
+    }
+    var runtime_env = eval_mod.RuntimeHostEnv.init(gpa);
+    defer runtime_env.deinit();
+    const boundary_writer = GlueRocValueWriter{ .layouts = from_boundary.layouts, .schemas = from_boundary.schemas, .roc_ops = runtime_env.get_ops() };
+    const lowered_writer = GlueRocValueWriter{ .layouts = lowered.layouts, .schemas = lowered.schemas, .roc_ops = runtime_env.get_ops() };
+    const boundary_types = boundary_writer.listElementLayout(from_boundary.types_layout);
+    const lowered_types = lowered_writer.listElementLayout(lowered.types_layout);
+    try std.testing.expectEqual(lowered_writer.sizeOf(lowered_types), boundary_writer.sizeOf(boundary_types));
+    for ([_][]const u8{ "modules", "provides_entries", "types" }) |field| {
+        const base_address: [*]u8 = @ptrFromInt(0x1000);
+        const boundary_slot = boundary_writer.recordField(base_address, boundary_types, "Types", field);
+        const lowered_slot = lowered_writer.recordField(base_address, lowered_types, "Types", field);
+        try std.testing.expectEqual(@intFromPtr(lowered_slot.ptr), @intFromPtr(boundary_slot.ptr));
     }
 }
 
@@ -5348,12 +5577,10 @@ const GlueProtocolLock = struct {
     }
 };
 
-fn checkGluePlatformMarshallingSchema(spec: *const CompiledGlueSpec) GlueSchemaLockError!void {
-    const lock = GlueProtocolLock{ .schemas = &spec.lowered.runtime_value_schemas, .layouts = &spec.lowered.lir_result.layouts };
-    try expectGlueSchemaEqual(@as(usize, 1), spec.arg_layouts.len);
-    try lock.check(spec.arg_layouts[0], .list_types);
-    const proc = spec.lowered.lir_result.store.getProcSpec(spec.glue_proc);
-    try lock.tagUnion(proc.ret_layout, "Builtin.Try", &.{ .{ .name = "Err", .type = .str_ }, .{ .name = "Ok", .type = .list_file } });
+fn checkGluePlatformMarshallingSchema(boundary: GlueBoundary) GlueSchemaLockError!void {
+    const lock = GlueProtocolLock{ .schemas = boundary.schemas, .layouts = boundary.layouts };
+    try lock.check(boundary.types_layout, .list_types);
+    try lock.tagUnion(boundary.ret_layout, "Builtin.Try", &.{ .{ .name = "Err", .type = .str_ }, .{ .name = "Ok", .type = .list_file } });
 }
 
 // Deliberately mutate checked Roc declarations, not a handwritten layout table.
@@ -5409,6 +5636,9 @@ test "glue platform schema lock rejects field rename addition and type mutation"
             return err;
         };
         defer spec.deinit(gpa);
-        try std.testing.expectError(error.GlueSchemaMismatch, checkGluePlatformMarshallingSchema(&spec));
+        try std.testing.expectError(error.GlueSchemaMismatch, checkGluePlatformMarshallingSchema(spec.boundary()));
+        var boundary = try testEntrypointBoundary(gpa, &spec);
+        defer boundary.deinit();
+        try std.testing.expectError(error.GlueSchemaMismatch, checkGluePlatformMarshallingSchema(glueBoundaryOf(&boundary)));
     }
 }
