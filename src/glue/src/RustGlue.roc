@@ -58,24 +58,57 @@ type_id_to_rust = |type_table, duplicate_names, preferred_names, type_id| {
 ## Render one struct field declaration for a record field. Unnamed
 ## nominal-record padding fields become fixed-size byte arrays (`[u8; size]`);
 ## named fields use their resolved Rust type.
-rust_record_field_decl : TypeTable, List(Str), TypeNamePlan.PreferredNames, AbiFieldLayout, AbiWidth -> Str
-rust_record_field_decl = |type_table, duplicate_names, preferred_names, field, width| {
-	field_name = name_to_rust_field_ident(field.name)
-	rust_type = if field.is_padding {
-		"[u8; ${U64.to_str(AbiFieldLayout.size(field, width))}]"
-	} else {
-		type_id_to_rust(type_table, duplicate_names, preferred_names, field.type_id)
+## The named fields of a record, whose names settle each one's member name.
+field_names_rust : List(AbiFieldLayout) -> List(Str)
+field_names_rust = |fields| {
+	var $names = []
+
+	for field in fields {
+		if !field.is_padding {
+			$names = $names.append(field.name)
+		}
 	}
-	"    pub ${field_name}: ${rust_type},\n"
+
+	$names
+}
+
+## The member name of the field or tag `name` among `sibling_names`. Every
+## identifier `name_to_rust_field_ident` gives is lowercase, so a ranked one is
+## no other member's own.
+field_ident_among_rust : List(Str), Str -> Str
+field_ident_among_rust = |sibling_names, name|
+	TypeNamePlan.member_ident(sibling_names, name, name_to_rust_field_ident, "_Member")
+
+## The name of a tag's variant in its union's enum, among the tags of that
+## union. A tag is spelled as Roc spells it, except `Self`, which Rust keeps
+## for itself.
+variant_ident_among_rust : List(Str), Str -> Str
+variant_ident_among_rust = |tag_names, name|
+	TypeNamePlan.member_ident(
+		tag_names,
+		name,
+		|tag_name| if tag_name == "Self" "Self_" else capitalize_first(tag_name),
+		"_",
+	)
+
+rust_record_field_decl : TypeTable, List(Str), TypeNamePlan.PreferredNames, List(Str), AbiFieldLayout, AbiWidth -> Str
+rust_record_field_decl = |type_table, duplicate_names, preferred_names, sibling_names, field, width| {
+	if field.is_padding {
+		"    pub ${name_to_rust_field_ident(field.name)}: [u8; ${U64.to_str(AbiFieldLayout.size(field, width))}],\n"
+	} else {
+		rust_type = type_id_to_rust(type_table, duplicate_names, preferred_names, field.type_id)
+		"    pub ${field_ident_among_rust(sibling_names, field.name)}: ${rust_type},\n"
+	}
 }
 
 ## Fields arrive in committed layout order (valid at both pointer widths);
 ## only per-width padding byte counts differ between the two renderings.
 rust_record_fields_decl : TypeTable, List(Str), TypeNamePlan.PreferredNames, List(AbiFieldLayout), AbiWidth -> Str
 rust_record_fields_decl = |type_table, duplicate_names, preferred_names, fields, width| {
+	sibling_names = field_names_rust(fields)
 	var $field_strs = ""
 	for field in fields {
-		$field_strs = Str.concat($field_strs, rust_record_field_decl(type_table, duplicate_names, preferred_names, field, width))
+		$field_strs = Str.concat($field_strs, rust_record_field_decl(type_table, duplicate_names, preferred_names, sibling_names, field, width))
 	}
 	$field_strs
 }
@@ -1056,26 +1089,38 @@ name_to_rust_field_ident = |name| {
 	match sanitized {
 		"" => "_field"
 		"_" => "_field"
+		"abstract" => "r#abstract"
 		"as" => "r#as"
+		"async" => "r#async"
+		"await" => "r#await"
+		"become" => "r#become"
+		"box" => "r#box"
 		"break" => "r#break"
 		"const" => "r#const"
 		"continue" => "r#continue"
-		"crate" => "r#crate"
+		"crate" => "crate_"
+		"do" => "r#do"
+		"dyn" => "r#dyn"
 		"else" => "r#else"
 		"enum" => "r#enum"
 		"extern" => "r#extern"
 		"false" => "r#false"
+		"final" => "r#final"
 		"fn" => "r#fn"
 		"for" => "r#for"
+		"gen" => "r#gen"
 		"if" => "r#if"
 		"impl" => "r#impl"
 		"in" => "r#in"
 		"let" => "r#let"
 		"loop" => "r#loop"
+		"macro" => "r#macro"
 		"match" => "r#match"
 		"mod" => "r#mod"
 		"move" => "r#move"
 		"mut" => "r#mut"
+		"override" => "r#override"
+		"priv" => "r#priv"
 		"pub" => "r#pub"
 		"ref" => "r#ref"
 		"return" => "r#return"
@@ -1086,11 +1131,16 @@ name_to_rust_field_ident = |name| {
 		"super" => "super_"
 		"trait" => "r#trait"
 		"true" => "r#true"
+		"try" => "r#try"
 		"type" => "r#type"
+		"typeof" => "r#typeof"
 		"unsafe" => "r#unsafe"
+		"unsized" => "r#unsized"
 		"use" => "r#use"
+		"virtual" => "r#virtual"
 		"where" => "r#where"
 		"while" => "r#while"
+		"yield" => "r#yield"
 		_ => sanitized
 	}
 }
@@ -1302,6 +1352,8 @@ generate_rust_file_header =
 	\\
 	\\#![cfg_attr(rustfmt, rustfmt_skip)]
 	\\#![allow(dead_code)]
+	\\#![allow(non_snake_case)]
+	\\#![allow(non_camel_case_types)]
 	\\#![allow(improper_ctypes)]
 	\\#![allow(improper_ctypes_definitions)]
 	\\// `no_roc_std_helpers` is supplied by host build tooling and cannot be registered from source.
@@ -2607,6 +2659,7 @@ generate_tag_union_structs_rust = |type_table, duplicate_names, preferred_names|
 ## Generate Rust code for a single multi-variant tag union.
 generate_single_tag_union_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, TagUnionRepr, AbiLayout -> Str
 generate_single_tag_union_rust = |type_table, duplicate_names, preferred_names, type_id, tu, abi_layout| {
+	tag_names = List.map(tu.tags, |tag| tag.name)
 	struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)
 	disc_type = disc_type_for_size(abi_discriminant_size(abi_layout))
 	abi_tags = abi_tag_layouts(abi_layout)
@@ -2619,7 +2672,7 @@ generate_single_tag_union_rust = |type_table, duplicate_names, preferred_names, 
 		var $variants = ""
 		var $idx = 0
 		for tag in tu.tags {
-			$variants = Str.concat($variants, "    ${capitalize_first(tag.name)} = ${U64.to_str($idx)},\n")
+			$variants = Str.concat($variants, "    ${variant_ident_among_rust(tag_names, tag.name)} = ${U64.to_str($idx)},\n")
 			$idx = $idx + 1
 		}
 
@@ -2643,7 +2696,7 @@ generate_single_tag_union_rust = |type_table, duplicate_names, preferred_names, 
 		var $enum_variants = ""
 		var $idx = 0
 		for enum_tag in tu.tags {
-			$enum_variants = Str.concat($enum_variants, "    ${capitalize_first(enum_tag.name)} = ${U64.to_str($idx)},\n")
+			$enum_variants = Str.concat($enum_variants, "    ${variant_ident_among_rust(tag_names, enum_tag.name)} = ${U64.to_str($idx)},\n")
 			$idx = $idx + 1
 		}
 
@@ -2653,10 +2706,11 @@ generate_single_tag_union_rust = |type_table, duplicate_names, preferred_names, 
 		var $union_tag_idx = 0
 		for union_tag in tu.tags {
 			tag_layout = abi_tag_at(abi_tags, $union_tag_idx)
-			snake = to_lower_snake_case(union_tag.name)
+			member = field_ident_among_rust(tag_names, union_tag.name)
+			snake = Str.drop_prefix(member, "r#")
 			if !(abi_tag_has_payload(tag_layout)) {
 				# No-payload variant: use [u8; 0]
-				$union_fields = Str.concat($union_fields, "    pub ${snake}: [u8; 0],\n")
+				$union_fields = Str.concat($union_fields, "    pub ${member}: [u8; 0],\n")
 			} else if List.len(union_tag.payload) == 1 {
 				rust_type = match List.first(union_tag.payload) {
 					Ok(pid) => type_id_to_rust(type_table, duplicate_names, preferred_names, pid)
@@ -2665,17 +2719,17 @@ generate_single_tag_union_rust = |type_table, duplicate_names, preferred_names, 
 					}
 				}
 				# Wrap in ManuallyDrop since union fields must be Copy or ManuallyDrop
-				$union_fields = Str.concat($union_fields, "    pub ${snake}: core::mem::ManuallyDrop<${rust_type}>,\n")
+				$union_fields = Str.concat($union_fields, "    pub ${member}: core::mem::ManuallyDrop<${rust_type}>,\n")
 				$payload_accessors = Str.concat(
 					$payload_accessors,
-					"    /// Borrow the `${union_tag.name}` payload without creating another owner.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${capitalize_first(union_tag.name)}` and the payload must still be initialized.\n    #[cfg(target_pointer_width = \"32\")]\n    pub unsafe fn borrow_payload_${snake}_unchecked(&self) -> &${rust_type} {\n        unsafe { &*(self.payload.as_ptr() as *const ${rust_type}) }\n    }\n\n    /// Borrow the `${union_tag.name}` payload without creating another owner.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${capitalize_first(union_tag.name)}` and the payload must still be initialized.\n    #[cfg(not(target_pointer_width = \"32\"))]\n    pub unsafe fn borrow_payload_${snake}_unchecked(&self) -> &${rust_type} {\n        unsafe { &*(&self.payload.${snake} as *const core::mem::ManuallyDrop<${rust_type}> as *const ${rust_type}) }\n    }\n\n    /// Move the `${union_tag.name}` payload out of one owned tag-union shell.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${capitalize_first(union_tag.name)}`. After this call, `self` is logically uninitialized and must not be read or destroyed.\n    #[cfg(target_pointer_width = \"32\")]\n    pub unsafe fn take_payload_${snake}_unchecked(&mut self) -> ${rust_type} {\n        unsafe { core::ptr::read(self.payload.as_ptr() as *const ${rust_type}) }\n    }\n\n    /// Move the `${union_tag.name}` payload out of one owned tag-union shell.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${capitalize_first(union_tag.name)}`. After this call, `self` is logically uninitialized and must not be read or destroyed.\n    #[cfg(not(target_pointer_width = \"32\"))]\n    pub unsafe fn take_payload_${snake}_unchecked(&mut self) -> ${rust_type} {\n        unsafe { core::mem::ManuallyDrop::take(&mut self.payload.${snake}) }\n    }\n\n",
+					"    /// Borrow the `${union_tag.name}` payload without creating another owner.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${variant_ident_among_rust(tag_names, union_tag.name)}` and the payload must still be initialized.\n    #[cfg(target_pointer_width = \"32\")]\n    pub unsafe fn borrow_payload_${snake}_unchecked(&self) -> &${rust_type} {\n        unsafe { &*(self.payload.as_ptr() as *const ${rust_type}) }\n    }\n\n    /// Borrow the `${union_tag.name}` payload without creating another owner.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${variant_ident_among_rust(tag_names, union_tag.name)}` and the payload must still be initialized.\n    #[cfg(not(target_pointer_width = \"32\"))]\n    pub unsafe fn borrow_payload_${snake}_unchecked(&self) -> &${rust_type} {\n        unsafe { &*(&self.payload.${member} as *const core::mem::ManuallyDrop<${rust_type}> as *const ${rust_type}) }\n    }\n\n    /// Move the `${union_tag.name}` payload out of one owned tag-union shell.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${variant_ident_among_rust(tag_names, union_tag.name)}`. After this call, `self` is logically uninitialized and must not be read or destroyed.\n    #[cfg(target_pointer_width = \"32\")]\n    pub unsafe fn take_payload_${snake}_unchecked(&mut self) -> ${rust_type} {\n        unsafe { core::ptr::read(self.payload.as_ptr() as *const ${rust_type}) }\n    }\n\n    /// Move the `${union_tag.name}` payload out of one owned tag-union shell.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${variant_ident_among_rust(tag_names, union_tag.name)}`. After this call, `self` is logically uninitialized and must not be read or destroyed.\n    #[cfg(not(target_pointer_width = \"32\"))]\n    pub unsafe fn take_payload_${snake}_unchecked(&mut self) -> ${rust_type} {\n        unsafe { core::mem::ManuallyDrop::take(&mut self.payload.${member}) }\n    }\n\n",
 				)
 			} else {
 				tuple_name = "${struct_name}${capitalize_first(union_tag.name)}Payload"
-				$union_fields = Str.concat($union_fields, "    pub ${snake}: core::mem::ManuallyDrop<${tuple_name}>,\n")
+				$union_fields = Str.concat($union_fields, "    pub ${member}: core::mem::ManuallyDrop<${tuple_name}>,\n")
 				$payload_accessors = Str.concat(
 					$payload_accessors,
-					"    /// Borrow the `${union_tag.name}` payload without creating another owner.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${capitalize_first(union_tag.name)}` and the payload must still be initialized.\n    #[cfg(target_pointer_width = \"32\")]\n    pub unsafe fn borrow_payload_${snake}_unchecked(&self) -> &${tuple_name} {\n        unsafe { &*(self.payload.as_ptr() as *const ${tuple_name}) }\n    }\n\n    /// Borrow the `${union_tag.name}` payload without creating another owner.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${capitalize_first(union_tag.name)}` and the payload must still be initialized.\n    #[cfg(not(target_pointer_width = \"32\"))]\n    pub unsafe fn borrow_payload_${snake}_unchecked(&self) -> &${tuple_name} {\n        unsafe { &*(&self.payload.${snake} as *const core::mem::ManuallyDrop<${tuple_name}> as *const ${tuple_name}) }\n    }\n\n    /// Move the `${union_tag.name}` payload out of one owned tag-union shell.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${capitalize_first(union_tag.name)}`. After this call, `self` is logically uninitialized and must not be read or destroyed.\n    #[cfg(target_pointer_width = \"32\")]\n    pub unsafe fn take_payload_${snake}_unchecked(&mut self) -> ${tuple_name} {\n        unsafe { core::ptr::read(self.payload.as_ptr() as *const ${tuple_name}) }\n    }\n\n    /// Move the `${union_tag.name}` payload out of one owned tag-union shell.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${capitalize_first(union_tag.name)}`. After this call, `self` is logically uninitialized and must not be read or destroyed.\n    #[cfg(not(target_pointer_width = \"32\"))]\n    pub unsafe fn take_payload_${snake}_unchecked(&mut self) -> ${tuple_name} {\n        unsafe { core::mem::ManuallyDrop::take(&mut self.payload.${snake}) }\n    }\n\n",
+					"    /// Borrow the `${union_tag.name}` payload without creating another owner.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${variant_ident_among_rust(tag_names, union_tag.name)}` and the payload must still be initialized.\n    #[cfg(target_pointer_width = \"32\")]\n    pub unsafe fn borrow_payload_${snake}_unchecked(&self) -> &${tuple_name} {\n        unsafe { &*(self.payload.as_ptr() as *const ${tuple_name}) }\n    }\n\n    /// Borrow the `${union_tag.name}` payload without creating another owner.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${variant_ident_among_rust(tag_names, union_tag.name)}` and the payload must still be initialized.\n    #[cfg(not(target_pointer_width = \"32\"))]\n    pub unsafe fn borrow_payload_${snake}_unchecked(&self) -> &${tuple_name} {\n        unsafe { &*(&self.payload.${member} as *const core::mem::ManuallyDrop<${tuple_name}> as *const ${tuple_name}) }\n    }\n\n    /// Move the `${union_tag.name}` payload out of one owned tag-union shell.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${variant_ident_among_rust(tag_names, union_tag.name)}`. After this call, `self` is logically uninitialized and must not be read or destroyed.\n    #[cfg(target_pointer_width = \"32\")]\n    pub unsafe fn take_payload_${snake}_unchecked(&mut self) -> ${tuple_name} {\n        unsafe { core::ptr::read(self.payload.as_ptr() as *const ${tuple_name}) }\n    }\n\n    /// Move the `${union_tag.name}` payload out of one owned tag-union shell.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${variant_ident_among_rust(tag_names, union_tag.name)}`. After this call, `self` is logically uninitialized and must not be read or destroyed.\n    #[cfg(not(target_pointer_width = \"32\"))]\n    pub unsafe fn take_payload_${snake}_unchecked(&mut self) -> ${tuple_name} {\n        unsafe { core::mem::ManuallyDrop::take(&mut self.payload.${member}) }\n    }\n\n",
 				)
 			}
 			$union_tag_idx = $union_tag_idx + 1
@@ -3025,12 +3079,19 @@ incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 
 generate_record_refcount_helpers_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, Str, RecordRepr -> Str
 generate_record_refcount_helpers_rust = |type_table, duplicate_names, preferred_names, struct_name, rec| {
+	var $sibling_names = []
+	for field in rec.fields {
+		if !field.is_padding {
+			$sibling_names = $sibling_names.append(field.name)
+		}
+	}
+
 	var $fields = []
 	for field in rec.fields {
 		# Padding fields are raw bytes with no Roc type, so they are never
 		# refcounted and contribute no incref/decref statements.
 		if !field.is_padding {
-			$fields = $fields.append({ ident: name_to_rust_field_ident(field.name), type_id: field.type_id })
+			$fields = $fields.append({ ident: field_ident_among_rust($sibling_names, field.name), type_id: field.type_id })
 		}
 	}
 
@@ -3041,10 +3102,11 @@ generate_record_refcount_helpers_rust = |type_table, duplicate_names, preferred_
 ## which is how a hosted function's argument record is described.
 generate_abi_refcount_helpers_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, Str, List(AbiFieldLayout) -> Str
 generate_abi_refcount_helpers_rust = |type_table, duplicate_names, preferred_names, struct_name, abi_fields| {
+	sibling_names = field_names_rust(abi_fields)
 	var $fields = []
 	for field in abi_fields {
 		if !field.is_padding {
-			$fields = $fields.append({ ident: name_to_rust_field_ident(field.name), type_id: field.type_id })
+			$fields = $fields.append({ ident: field_ident_among_rust(sibling_names, field.name), type_id: field.type_id })
 		}
 	}
 
@@ -3085,10 +3147,10 @@ generate_refcount_impl_rust = |type_table, duplicate_names, preferred_names, str
 	}
 }
 
-generate_tag_payload_refcount_branch_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, Str, TagVariant, AbiTagLayout, Str -> Str
-generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, preferred_names, struct_name, tag, abi_tag, mode| {
-	snake = to_lower_snake_case(tag.name)
-	variant = capitalize_first(tag.name)
+generate_tag_payload_refcount_branch_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, Str, List(Str), TagVariant, AbiTagLayout, Str -> Str
+generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, preferred_names, struct_name, tag_names, tag, abi_tag, mode| {
+	snake = Str.drop_prefix(field_ident_among_rust(tag_names, tag.name), "r#")
+	variant = variant_ident_among_rust(tag_names, tag.name)
 	if !abi_tag_has_payload(abi_tag) {
 		return "        ${struct_name}Tag::${variant} => {},\n"
 	}
@@ -3148,6 +3210,7 @@ generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, prefer
 
 generate_tag_union_refcount_helpers_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, TagUnionRepr -> Str
 generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, preferred_names, type_id, tu| {
+	tag_names = List.map(tu.tags, |tag| tag.name)
 	struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)
 	if !(type_table.layout(type_id)).tag_union_has_payload() {
 		return "impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted payload.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n        let _ = self;\n        let _ = roc_host;\n    }\n\n    /// Increment Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let _ = self;\n        let _ = amount;\n    }\n}\n\npub struct ${struct_name}Release;\n\nunsafe impl RocRelease<${struct_name}> for ${struct_name}Release {\n    unsafe fn release(value: ${struct_name}, roc_host: &RocHost) {\n        unsafe { value.decref(roc_host); }\n    }\n}\n\n"
@@ -3161,9 +3224,9 @@ generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, preferr
 	var $tag_index = 0
 	for tag in tu.tags {
 		abi_tag = abi_tag_at(abi_tags, $tag_index)
-		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag, abi_tag, "incref"))
+		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag_names, tag, abi_tag, "incref"))
 		if !roc_released {
-			$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag, abi_tag, "decref"))
+			$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag_names, tag, abi_tag, "decref"))
 		}
 		if !roc_released and abi_tag_has_payload(abi_tag) {
 			$decref_moves_payload = $decref_moves_payload or List.any(

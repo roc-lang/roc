@@ -32608,6 +32608,13 @@ If two declarations still collide under their id-derived names, the glue run
 fails with an error naming both. A generator never emits two declarations
 under one name, and never lets one declaration stand for another.
 
+The members of one record or tag union have a namespace of their own, and a
+generator can spell two of them alike after converting case or escaping a
+reserved word. A spelling two members share denotes neither: each takes it
+followed by a marker and its rank among the members that share it, ordered by
+Roc name, so every place that names a member derives the same name from the
+member names alone.
+
 The platform header maps linker symbols explicitly, symbol-string first, in
 both directions:
 

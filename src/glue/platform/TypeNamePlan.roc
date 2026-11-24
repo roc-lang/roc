@@ -125,6 +125,87 @@ TypeNamePlan := { table : TypeTable }.{
 			""
 		}
 
+	## The identifier of the member `name` of a record or a tag union whose
+	## named members are `sibling_names`. A declaration's members have a
+	## namespace of their own, and `to_ident` can give two of them one
+	## identifier (`fooBar` and `foo_bar`, or a keyword's escaped spelling and
+	## a member spelled that way). An identifier two members share denotes
+	## neither, so each takes it followed by `marker` and its rank among the
+	## members that share it, ordered by Roc name, and by `marker` again for as
+	## long as that is another member's identifier.
+	##
+	## The result depends on the Roc names alone, so every place that names a
+	## member agrees on it whatever order it lists the members in. `marker` is
+	## not empty.
+	member_ident : List(Str), Str, (Str -> Str), Str -> Str
+	member_ident = |sibling_names, name, to_ident, marker| {
+		member_names = if List.contains(sibling_names, name) {
+			sibling_names
+		} else {
+			sibling_names.append(name)
+		}
+		idents = List.map(member_names, to_ident)
+		ident = to_ident(name)
+		if List.count_if(idents, |other| other == ident) < 2 {
+			return ident
+		}
+
+		sharing_names = List.sort_with(
+			List.keep_if(member_names, |member| List.count_if(idents, |other| other == to_ident(member)) > 1),
+			|left, right| if (sorts_before(left, right)) Before else if (sorts_before(right, left)) After else Same,
+		)
+		var $taken = Set.from_list(idents)
+		var $settled = ident
+
+		for sharing in sharing_names {
+			sharing_ident = to_ident(sharing)
+			rank = List.count_if(sharing_names, |other| to_ident(other) == sharing_ident and sorts_before(other, sharing))
+			ranked = first_free($taken, "${sharing_ident}${marker}${U64.to_str(rank)}", marker)
+			$taken = $taken.insert(ranked)
+			if sharing == name {
+				$settled = ranked
+			}
+		}
+
+		$settled
+	}
+
+	## `candidate`, followed by `marker` for as long as it is in `taken`.
+	first_free : Set(Str), Str, Str -> Str
+	first_free = |taken, candidate, marker|
+		if taken.contains(candidate) {
+			first_free(taken, Str.concat(candidate, marker), marker)
+		} else {
+			candidate
+		}
+
+	## True when `left` comes before `right` in byte order.
+	sorts_before : Str, Str -> Bool
+	sorts_before = |left, right| {
+		left_bytes = Str.to_utf8(left)
+		right_bytes = Str.to_utf8(right)
+		var $index = 0
+
+		for byte in left_bytes {
+			match List.get(right_bytes, $index) {
+				Ok(other) => {
+					if byte < other {
+						return Bool.True
+					}
+					if byte > other {
+						return Bool.False
+					}
+				}
+				Err(_) => {
+					return Bool.False
+				}
+			}
+			$index = $index + 1
+		}
+
+		List.len(left_bytes) < List.len(right_bytes)
+	}
+
 	## The Roc names emitted under names derived from their ids (a shape id,
 	## see `TypeTable.shape_suffix`, or a hosted index, see
 	## `index_suffix`): `shared_names`, each of which names several
@@ -476,3 +557,30 @@ expect TypeNamePlan.index_suffix(["Host.send_it!"], "Host.send_it!", 3, "Hosted"
 
 ## Only a renamed function takes its index-derived suffix.
 expect TypeNamePlan.index_suffix(["Host.send_it!"], "Host.load!", 1, "Hosted") == ""
+
+## A member whose identifier no sibling shares keeps it.
+expect TypeNamePlan.member_ident(["fooBar", "other"], "fooBar", RocName.lower_snake_ascii, "_Member") == "foo_bar"
+
+## Members that share an identifier are ranked by Roc name, in any order.
+expect TypeNamePlan.member_ident(["foo_bar", "other", "fooBar"], "fooBar", RocName.lower_snake_ascii, "_Member") == "foo_bar_Member0"
+
+## Members that share an identifier are ranked by Roc name, in any order.
+expect TypeNamePlan.member_ident(["fooBar", "foo_bar"], "foo_bar", RocName.lower_snake_ascii, "_Member") == "foo_bar_Member1"
+
+## A name that another name extends sorts first.
+expect TypeNamePlan.sorts_before("foo", "foo_bar")
+
+## A name that another name extends sorts first.
+expect !TypeNamePlan.sorts_before("foo_bar", "foo")
+
+## A name does not sort before itself.
+expect !TypeNamePlan.sorts_before("foo", "foo")
+
+## A ranked identifier that is another member's own takes the marker again.
+expect TypeNamePlan.member_ident(["Self", "Self_", "Self__0"], "Self", |tag| if (tag == "Self") "Self_" else tag, "_") == "Self__0_"
+
+## A ranked identifier that is another member's own takes the marker again.
+expect TypeNamePlan.member_ident(["Self", "Self_", "Self__0"], "Self_", |tag| if (tag == "Self") "Self_" else tag, "_") == "Self__1"
+
+## A member whose identifier is its own keeps it beside ranked ones.
+expect TypeNamePlan.member_ident(["Self", "Self_", "Self__0"], "Self__0", |tag| if (tag == "Self") "Self_" else tag, "_") == "Self__0"

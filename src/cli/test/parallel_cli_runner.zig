@@ -20935,6 +20935,14 @@ fn customGlueDeclaredNameCollisions(io: std.Io, allocator: Allocator, env: *cons
     // the name to the symbol. ZigGlue keeps the underscore of `send_it!`, so
     // only the other two generators see that collision.
     //
+    // The members of one record or union have a namespace of their own.
+    // `Members`, `PureMembers` and `MemberFields` hold tags and fields that a
+    // generator spells alike (`HTTPError` and `Httperror`, `fooBar` and
+    // `foo_bar`, and in C `Auto`, escaped the way `AutoField` is spelled),
+    // which take ranked names, and ones that are reserved words of a
+    // generated language, which are escaped. A union without payloads is an
+    // integer type in C, declared once.
+    //
     // A payload alias named like a helper is dropped rather than emitted
     // beside it, and the remaining aliases stay. C declares no release
     // helper, so there `EventRelease` is free for the alias.
@@ -20947,6 +20955,9 @@ fn customGlueDeclaredNameCollisions(io: std.Io, allocator: Allocator, env: *cons
             "pub const HostPingHosted2Args = extern struct {",
             "pub extern fn Slot(arg0: SlotType",
             "pub extern fn HostPingArgs(arg0: u64) callconv(.c) u64;",
+            "        @\"httperror_Member0\": RocStr,",
+            "        @\"httperror_Member1\": u16,",
+            "    @\"httperror_Member0\" = 0,",
         },
         .c = &.{
             "typedef Key EventPress;",
@@ -20959,6 +20970,13 @@ fn customGlueDeclaredNameCollisions(io: std.Io, allocator: Allocator, env: *cons
             "    HostedFn host_send_it_bang_hosted5;",
             "} HostPingHosted2Args;",
             "extern uint64_t HostPingArgs(uint64_t arg0);",
+            "    MembersTag_FooBar_0 = ",
+            "    MembersTag_FooBar_1 = ",
+            "    uint8_t auto_field_Member0;",
+            "    uint16_t auto_field_Member1;",
+            "    RocStr httperror_Member0;",
+            "    uint8_t true_field;",
+            "typedef uint8_t PureMembers;",
         },
         .rust = &.{
             "pub struct EventRelease;",
@@ -20968,10 +20986,17 @@ fn customGlueDeclaredNameCollisions(io: std.Io, allocator: Allocator, env: *cons
             "pub struct HostPingHosted2Args {",
             "    pub fn HostPingArgs(arg0: u64) -> u64;",
             "    pub fn Slot(arg0: SlotType",
+            "    pub foo_bar_Member0: u8,",
+            "    pub foo_bar_Member1: u16,",
+            "    pub httperror_Member0: core::mem::ManuallyDrop<RocStr>,",
+            "    pub r#type: core::mem::ManuallyDrop<RocStr>,",
+            "    pub r#try: RocStr,",
+            "    pub crate_: u8,",
+            "    Self_ = ",
         },
         // A helper alias is emitted only with the alias it is named after,
         // and `HostLoadResult` is a type here, not an alias.
-        .absent = &.{ "pub type EventRelease", "pub const EventRelease = Key;", "HostLoadResultPayload", "pub struct HostSendItArgs", "} HostSendItArgs;", "HOSTED_IDX_HOST_SEND_IT ", "pub struct Slot {", "struct Slot {", "pub const Slot = " },
+        .absent = &.{ "pub type EventRelease", "pub const EventRelease = Key;", "HostLoadResultPayload", "pub struct HostSendItArgs", "} HostSendItArgs;", "HOSTED_IDX_HOST_SEND_IT ", "pub struct Slot {", "struct Slot {", "pub const Slot = ", "typedef struct PureMembers PureMembers;" },
         // Each Roc type is still its own host type, with its own fields,
         // under whichever name it was declared.
         .zig_checks =

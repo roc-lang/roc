@@ -200,13 +200,47 @@ c_vector_union_comment =
 	\\   from classifying the aggregate as homogeneous: the Roc host ABI passes
 	\\   multi-vector aggregates in memory, matching Zig and Rust hosts. */
 
-c_record_field_decl : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, AbiFieldLayout, AbiWidth, Bool -> Str
-c_record_field_decl = |type_table, duplicate_record_names, duplicate_tag_names, preferred_names, field, width, wrap_vector_members| {
-	field_name = name_to_c_field_ident(field.name)
+## The named fields of a record, whose names settle each one's member name.
+field_names_c : List(AbiFieldLayout) -> List(Str)
+field_names_c = |fields| {
+	var $names = []
+
+	for field in fields {
+		if !field.is_padding {
+			$names = $names.append(field.name)
+		}
+	}
+
+	$names
+}
+
+## The tags of a union, whose names settle each one's member names.
+tag_names_c : TagUnionRepr -> List(Str)
+tag_names_c = |tu| List.map(tu.tags, |tag| tag.name)
+
+## The member name of the field or tag `name` among `sibling_names`. Every
+## identifier `name_to_c_field_ident` gives is lowercase, so a ranked one is no
+## other member's own.
+field_ident_among_c : List(Str), Str -> Str
+field_ident_among_c = |sibling_names, name|
+	TypeNamePlan.member_ident(sibling_names, name, name_to_c_field_ident, "_Member")
+
+## The part of a tag's constant and payload struct names that comes from the
+## tag. No name `name_to_struct_name` gives holds an underscore, so a ranked
+## one is no other tag's own.
+tag_constant_among_c : List(Str), Str -> Str
+tag_constant_among_c = |tag_names, name|
+	TypeNamePlan.member_ident(tag_names, name, name_to_struct_name, "_")
+
+c_record_field_decl : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, List(Str), AbiFieldLayout, AbiWidth, Bool -> Str
+c_record_field_decl = |type_table, duplicate_record_names, duplicate_tag_names, preferred_names, sibling_names, field, width, wrap_vector_members| {
 	if field.is_padding {
+		field_name = name_to_c_field_ident(field.name)
+
 		# Padding fields are nonzero at both widths (asserted by the compiler).
 		"    uint8_t ${field_name}[${U64.to_str(AbiFieldLayout.size(field, width))}];\n"
 	} else {
+		field_name = field_ident_among_c(sibling_names, field.name)
 		c_type = type_id_to_c(type_table, duplicate_record_names, duplicate_tag_names, preferred_names, field.type_id)
 		if wrap_vector_members {
 			"    union { ${c_type} value; uint8_t bytes[${U64.to_str(AbiFieldLayout.size(field, width))}]; } ${field_name};\n"
@@ -220,9 +254,10 @@ c_record_field_decl = |type_table, duplicate_record_names, duplicate_tag_names, 
 ## only per-width padding byte counts differ between the two renderings.
 c_record_fields_decl : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, List(AbiFieldLayout), AbiWidth, Bool -> Str
 c_record_fields_decl = |type_table, duplicate_record_names, duplicate_tag_names, preferred_names, fields, width, wrap_vector_members| {
+	sibling_names = field_names_c(fields)
 	var $field_strs = ""
 	for field in fields {
-		$field_strs = Str.concat($field_strs, c_record_field_decl(type_table, duplicate_record_names, duplicate_tag_names, preferred_names, field, width, wrap_vector_members))
+		$field_strs = Str.concat($field_strs, c_record_field_decl(type_table, duplicate_record_names, duplicate_tag_names, preferred_names, sibling_names, field, width, wrap_vector_members))
 	}
 	$field_strs
 }
@@ -547,15 +582,17 @@ type_names_declared_as_c = |type_table, type_id, struct_name|
 					[struct_name]
 				}
 				var $tag_idx = 0
+				tag_names = tag_names_c(tu)
 				for tag in tu.tags {
-					$names = $names.append("${struct_name}Tag_${name_to_struct_name(tag.name)}")
+					constant_name = tag_constant_among_c(tag_names, tag.name)
+					$names = $names.append("${struct_name}Tag_${constant_name}")
 					if has_payload {
-						field_name = name_to_c_field_ident(tag.name)
+						field_name = field_ident_among_c(tag_names, tag.name)
 						$names = $names.append("${struct_name}_make_${field_name}")
 						if abi_tag_has_payload_c(abi_tag_at_c(abi_tags, $tag_idx)) {
 							$names = $names.append("${struct_name}_payload_${field_name}")
 							if List.len(tag.payload) != 1 {
-								$names = $names.append("${struct_name}${name_to_struct_name(tag.name)}Payload")
+								$names = $names.append("${struct_name}${constant_name}Payload")
 							}
 						}
 					}
@@ -869,6 +906,7 @@ name_to_c_field_ident = |name| {
 		"" => "field"
 		"_" => "field"
 		"auto" => "auto_field"
+		"bool" => "bool_field"
 		"break" => "break_field"
 		"case" => "case_field"
 		"char" => "char_field"
@@ -880,6 +918,7 @@ name_to_c_field_ident = |name| {
 		"else" => "else_field"
 		"enum" => "enum_field"
 		"extern" => "extern_field"
+		"false" => "false_field"
 		"float" => "float_field"
 		"for" => "for_field"
 		"goto" => "goto_field"
@@ -896,6 +935,7 @@ name_to_c_field_ident = |name| {
 		"static" => "static_field"
 		"struct" => "struct_field"
 		"switch" => "switch_field"
+		"true" => "true_field"
 		"typedef" => "typedef_field"
 		"union" => "union_field"
 		"unsigned" => "unsigned_field"
@@ -1001,7 +1041,9 @@ generate_opaque_type_decls = |type_table, duplicate_records, duplicate_tags, pre
 					}
 				}
 			RocTagUnion(tu) =>
-				if List.len(tu.tags) >= 2 and tu.name != "" {
+				# A union without payloads is declared as its discriminant's integer
+				# type, which is complete where it is declared and is no struct.
+				if List.len(tu.tags) >= 2 and tu.name != "" and type_info.layout.tag_union_has_payload() {
 					type_name = tag_union_struct_name(type_table, preferred_names, duplicate_tags, $type_id, tu)
 					if !(List.contains($seen_names, type_name)) {
 						$seen_names = $seen_names.append(type_name)
@@ -1154,6 +1196,7 @@ c_tag_union_layout_assertions = |type_name, abi_layout, width| {
 
 generate_tag_union_type_decl : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, U64, TagUnionRepr, AbiLayout -> Str
 generate_tag_union_type_decl = |type_table, duplicate_records, duplicate_tags, preferred_names, type_id, tu, abi_layout| {
+	tag_names = tag_names_c(tu)
 	struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_tags, type_id, tu)
 	disc_type = c_discriminant_type(abi_layout.discriminant_size())
 	abi_tags = abi_tag_layouts_c(abi_layout)
@@ -1167,7 +1210,7 @@ generate_tag_union_type_decl = |type_table, duplicate_records, duplicate_tags, p
 		} else {
 			","
 		}
-		constant_name = name_to_struct_name(tag.name)
+		constant_name = tag_constant_among_c(tag_names, tag.name)
 		$tag_constants = Str.concat($tag_constants, "${separator}\n    ${struct_name}Tag_${constant_name} = ${U64.to_str($tag_index)}")
 		$tag_index = $tag_index + 1
 	}
@@ -1187,8 +1230,8 @@ generate_tag_union_type_decl = |type_table, duplicate_records, duplicate_tags, p
 		var $variant_index = 0
 		for tag in tu.tags {
 			tag_layout = abi_tag_at_c(abi_tags, $variant_index)
-			field_name = name_to_c_field_ident(tag.name)
-			constant_name = name_to_struct_name(tag.name)
+			field_name = field_ident_among_c(tag_names, tag.name)
+			constant_name = tag_constant_among_c(tag_names, tag.name)
 			has_payload = abi_tag_has_payload_c(tag_layout)
 			if !has_payload {
 				$union_fields = Str.concat($union_fields, "    uint8_t ${field_name};\n")
@@ -1262,10 +1305,11 @@ abi_record_fields_c = |abi_layout| abi_layout.record_fields()
 
 c_record_offset_assertions : Str, List(AbiFieldLayout), AbiWidth -> Str
 c_record_offset_assertions = |type_name, fields, width| {
+	sibling_names = field_names_c(fields)
 	var $assertions = ""
 	for field in fields {
 		if !field.is_padding {
-			field_name = name_to_c_field_ident(field.name)
+			field_name = field_ident_among_c(sibling_names, field.name)
 			offset = AbiFieldLayout.offset(field, width)
 			$assertions = Str.concat($assertions, "ROC_STATIC_ASSERT(offsetof(${type_name}, ${field_name}) == ${U64.to_str(offset)}, \"${type_name}.${field_name} offset mismatch\");\n")
 		}

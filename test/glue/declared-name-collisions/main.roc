@@ -11,6 +11,7 @@ platform "glue-declared-name-collisions"
 		"take_helpers": take_helpers,
 		"take_host_named": take_host_named,
 		"take_joined": take_joined,
+		"take_members": take_members,
 		"take_runtime_named": take_runtime_named,
 		"take_signal": take_signal,
 		"take_signal_named": take_signal_named,
@@ -121,3 +122,46 @@ make_slot = |slot| slot
 
 take_ping : U64 -> U64
 take_ping = |count| count
+
+## Tags whose member names join in every generator (`HTTPError` and
+## `Httperror`), in C only (`Auto` is escaped the way `AutoField` is spelled,
+## and `Foo_bar` loses its underscore), and tags that are keywords or other
+## reserved words of the generated languages.
+Members := [
+	HTTPError(Str),
+	Httperror(U16),
+	HTTPPair(Str, U8),
+	Httppair(U8, Str),
+	Auto(U8),
+	AutoField(U16),
+	FooBar(U8),
+	Foo_bar(U16),
+	Type(Str),
+	Loop(U16),
+	True(U8),
+	Try(U8),
+	Self(U8),
+	Plain,
+]
+
+## The same joins in a union without payloads, which each generator declares
+## as an enum.
+PureMembers := [HTTPError, Httperror, Self, Plain]
+
+## Fields whose member names join, and fields that are keywords or other
+## reserved words of the generated languages.
+MemberFields := {
+	fooBar : U8,
+	foo_bar : U16,
+	auto : U8,
+	auto_field : Str,
+	async : U8,
+	bool : U8,
+	crate : U8,
+	try : Str,
+	boxed : Box(PureMembers),
+	listed : List(PureMembers),
+}
+
+take_members : Members, PureMembers, MemberFields -> U64
+take_members = |_, _, _| 0
