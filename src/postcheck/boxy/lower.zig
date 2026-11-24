@@ -1093,8 +1093,8 @@ pub const Program = struct {
         for (view.view.checked_procedure_templates.dispatch_scopes.items(), 0..) |scope, index| {
             const id: checked.DispatchScopeId = @fromBackingInt(@intCast(index));
             try program.local_scopes.put(allocator, .{ .module = view.index, .expr = scope.checked_expr }, id);
-            switch (bodies.exprData(scope.checked_expr)) {
-                .closure => |closure| try program.local_scopes.put(allocator, .{ .module = view.index, .expr = closure.lambda }, id),
+            switch (bodies.exprDataKind(scope.checked_expr)) {
+                .closure => try program.local_scopes.put(allocator, .{ .module = view.index, .expr = bodies.exprDataOf(scope.checked_expr, .closure).lambda }, id),
                 .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
             }
         }
@@ -1127,8 +1127,9 @@ pub const Program = struct {
                     try program.local_proc_bindings.put(allocator, .{ .module = view.index, .binder = local.binder }, .{ .binder = local.binder, .expr = local.expr, .dispatch_scope = local.dispatch_scope });
                     const binding: checked.LocalProcedureBinding = .{ .binder = local.binder, .expr = local.expr, .dispatch_scope = local.dispatch_scope };
                     try program.local_method_bindings.put(allocator, .{ .module = view.index, .expr = local.expr }, binding);
-                    switch (bodies.exprData(local.expr)) {
-                        .closure => |closure| {
+                    switch (bodies.exprDataKind(local.expr)) {
+                        .closure => {
+                            const closure = bodies.exprDataOf(local.expr, .closure);
                             try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {});
                             try program.local_method_bindings.put(allocator, .{ .module = view.index, .expr = closure.lambda }, binding);
                         },
@@ -1147,8 +1148,8 @@ pub const Program = struct {
             };
             try program.local_procs.put(allocator, .{ .module = view.index, .expr = local.expr }, {});
             try program.local_proc_bindings.put(allocator, .{ .module = view.index, .binder = local.binder }, local);
-            switch (bodies.exprData(local.expr)) {
-                .closure => |closure| try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {}),
+            switch (bodies.exprDataKind(local.expr)) {
+                .closure => try program.local_procs.put(allocator, .{ .module = view.index, .expr = bodies.exprDataOf(local.expr, .closure).lambda }, {}),
                 .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
             }
         }
@@ -1382,8 +1383,8 @@ pub const Program = struct {
         const view = self.module(module_index);
         const site = view.view.nested_proc_sites.sites.items()[site_index];
         const site_expr = site.checked_expr.get() orelse invariant("a lambda's site has no checked expression");
-        return switch (view.bodies().exprData(site_expr)) {
-            .closure => |closure| closure.lambda,
+        return switch (view.bodies().exprDataKind(site_expr)) {
+            .closure => view.bodies().exprDataOf(site_expr, .closure).lambda,
             .lambda => site_expr,
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a lambda's site is not a lambda or closure"),
         };

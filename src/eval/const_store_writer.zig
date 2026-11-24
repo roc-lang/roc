@@ -1042,7 +1042,7 @@ pub const Writer = struct {
     fn checkedNumeralBytes(self: *Writer, target: exact_numeral.Target, expr: CIR.Expr.Idx) Allocator.Error![16]u8 {
         const bodies = &self.checkedValues().bodies;
         const value_expr = checked.valueFormValueExpr(bodies, expr);
-        if (bodies.exprData(value_expr) != .numeral) writerInvariant("a value-form scalar is not a numeral");
+        if (bodies.exprDataKind(value_expr) != .numeral) writerInvariant("a value-form scalar is not a numeral");
         const exact = bodies.env.exactNumeral(bodies.numeralLiteral(@backingInt(value_expr)));
         return (try exact_numeral.encodeBits(self.allocator, exact, target, builtin.cpu.arch.endian())) orelse
             writerInvariant("a value-form numeral does not fit its type");
@@ -1370,7 +1370,7 @@ pub const Writer = struct {
         if (!self.checked_reads_constants) return part;
         const values = self.checkedValues();
         const value_expr = checked.valueFormValueExpr(&values.bodies, expr);
-        switch (values.bodies.exprData(value_expr)) {
+        switch (values.bodies.exprDataKind(value_expr)) {
             .lookup_local, .lookup_external => {},
             .numeral, .str, .str_segment, .bytes_literal, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return part,
         }

@@ -2367,8 +2367,8 @@ fn compileTimeCallableRootIsProcedureReference(
 ) bool {
     if (root.kind != .callable_binding) return false;
     const evaluated = root.evaluatedExpr() orelse return false;
-    const root_expr = bodies.exprData(evaluated);
-    if (root_expr != .lookup_local and root_expr != .lookup_external and root_expr != .lookup_required) return false;
+    const root_expr_kind = bodies.exprDataKind(evaluated);
+    if (root_expr_kind != .lookup_local and root_expr_kind != .lookup_external and root_expr_kind != .lookup_required) return false;
     const ref_id = resolved_value_refs.lookupIdByExpr(evaluated) orelse
         checkedArtifactInvariant("checked callable lookup root had no resolved value reference", .{});
     const raw = @backingInt(ref_id);
@@ -10026,7 +10026,7 @@ test "body analyses read state merges, divergence and inspect elision from the c
     for (bodies.index().node_kinds, 0..) |kind, raw| switch (kind) {
         .expr => {
             const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw));
-            switch (bodies.exprData(expr)) {
+            switch (bodies.exprDataKind(expr)) {
                 .match_ => {
                     const binders = try bodies.stateMergeBinders(expr);
                     try testing.expectEqual(@as(usize, 1), binders.len);
@@ -17834,7 +17834,7 @@ const CheckedTemplateRefCollector = struct {
         expr_id: CIR.Expr.Idx,
     ) Allocator.Error!void {
         if (self.diagnostics.isSet(@backingInt(expr_id))) return;
-        const call = self.bodies.exprData(expr_id).call;
+        const call = self.bodies.exprDataOf(expr_id, .call);
         const start: u32 = @intCast(self.specialization_types.items.len);
         try self.specialization_types.ensureUnusedCapacity(self.allocator, call.args.len);
         for (call.args) |arg| {
@@ -18238,25 +18238,30 @@ const CheckedTemplateRefCollector = struct {
 
         const bodies = &self.bodies;
         const children = self.beginChildren();
-        switch (bodies.patternData(pattern_id)) {
-            .as => |as| try self.pushChild(.{ .pattern = as.pattern }),
-            .applied_tag => |tag| {
+        switch (bodies.patternDataKind(pattern_id)) {
+            .as => try self.pushChild(.{ .pattern = bodies.patternDataOf(pattern_id, .as).pattern }),
+            .applied_tag => {
+                const tag = bodies.patternDataOf(pattern_id, .applied_tag);
                 for (tag.args) |arg| try self.pushChild(.{ .pattern = arg });
             },
-            .nominal => |nominal| try self.pushChild(.{ .pattern = nominal.backing_pattern }),
-            .record_destructure => |destructs| {
+            .nominal => try self.pushChild(.{ .pattern = bodies.patternDataOf(pattern_id, .nominal).backing_pattern }),
+            .record_destructure => {
+                const destructs = bodies.patternDataOf(pattern_id, .record_destructure);
                 for (destructs) |destruct| try self.pushChild(.{ .pattern = bodies.recordDestructPattern(destruct) });
             },
-            .list => |list| {
+            .list => {
+                const list = bodies.patternDataOf(pattern_id, .list);
                 for (list.patterns) |child| try self.pushChild(.{ .pattern = child });
                 if (list.rest) |rest| {
                     if (rest.pattern) |child| try self.pushChild(.{ .pattern = child });
                 }
             },
-            .tuple => |items| {
+            .tuple => {
+                const items = bodies.patternDataOf(pattern_id, .tuple);
                 for (items) |child| try self.pushChild(.{ .pattern = child });
             },
-            .str_interpolation => |str| {
+            .str_interpolation => {
+                const str = bodies.patternDataOf(pattern_id, .str_interpolation);
                 var offset: u32 = 0;
                 while (offset < str.steps.span.len) : (offset += 1) {
                     if (bodies.strPatternStep(str.steps, offset).capture) |capture| try self.pushChild(.{ .pattern = capture });
@@ -19524,7 +19529,7 @@ const NestedProcSiteBuilder = struct {
                 try self.pushExpr(if_.final_else, owner);
             },
             .call => |call| {
-                if (bodies.exprData(call.func) == .lookup_local) try self.callee_lookups.put(self.allocator, call.func, {});
+                if (bodies.exprDataKind(call.func) == .lookup_local) try self.callee_lookups.put(self.allocator, call.func, {});
                 try self.pushExpr(call.func, owner);
                 for (call.args) |arg| try self.pushExpr(arg, owner);
             },
@@ -21827,7 +21832,7 @@ fn publishLiteralConversionRoots(
         }
         const node = literal.node_idx;
         const literal_node: LiteralNode = switch (bodies.index().nodeKind(node)) {
-            .expr => switch (bodies.exprData(@fromBackingInt(@intCast(node)))) {
+            .expr => switch (bodies.exprDataKind(@fromBackingInt(@intCast(node)))) {
                 .numeral => .{ .expr = @fromBackingInt(@intCast(node)) },
                 .str => if (bodies.quoteIsCustom(node)) .{ .expr = @fromBackingInt(@intCast(node)) } else continue,
                 // Diagnostic recovery retired the conversion.
@@ -21878,7 +21883,7 @@ fn publishLiteralConversionRoots(
             .pattern, .statement, .unreached => continue,
         }
         const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(node));
-        if (bodies.exprData(expr) != .interpolation) continue;
+        if (bodies.exprDataKind(expr) != .interpolation) continue;
         // The builtin `Str` concatenates its parts and rejects no segments.
         if (bodies.interpolationIsBuiltinStr(expr)) continue;
         if (roots.literalConversionRootForNode(node) != null) checkedArtifactInvariant("interpolation received a second conversion root", .{});
@@ -22285,7 +22290,7 @@ fn publishLiteralArgumentRoots(
             const ty = switch (kind) {
                 .interpolation => blk: {
                     const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(plan.node));
-                    if (bodies.exprData(expr) != .interpolation) checkedArtifactInvariant("a literal conversion plan's expression is not a literal", .{});
+                    if (bodies.exprDataKind(expr) != .interpolation) checkedArtifactInvariant("a literal conversion plan's expression is not a literal", .{});
                     break :blk bodies.interpolationAssemblerType(expr);
                 },
                 .numeral, .quote => bodies.literalConversion(plan.node).ty,
@@ -26199,14 +26204,14 @@ pub fn appendValueFormConstReads(allocator: Allocator, bodies: *const CheckedBod
     stack.clearRetainingCapacity();
     try stack.append(allocator, expr);
     while (stack.pop()) |id| {
-        switch (bodies.exprData(id)) {
+        switch (bodies.exprDataKind(id)) {
             .lookup_local, .lookup_external => try out.append(allocator, id),
-            .list => |items| try stack.appendSlice(allocator, items),
-            .tuple => |items| try stack.appendSlice(allocator, items),
-            .tag => |tag| try stack.appendSlice(allocator, tag.args),
-            .record => |record| for (record.fields) |field| try stack.append(allocator, bodies.recordFieldValue(field)),
-            .nominal => |nominal| try stack.append(allocator, nominal.backing_expr),
-            .block => |block| try stack.append(allocator, block.final_expr),
+            .list => try stack.appendSlice(allocator, bodies.exprDataOf(id, .list)),
+            .tuple => try stack.appendSlice(allocator, bodies.exprDataOf(id, .tuple)),
+            .tag => try stack.appendSlice(allocator, bodies.exprDataOf(id, .tag).args),
+            .record => for (bodies.exprDataOf(id, .record).fields) |field| try stack.append(allocator, bodies.recordFieldValue(field)),
+            .nominal => try stack.append(allocator, bodies.exprDataOf(id, .nominal).backing_expr),
+            .block => try stack.append(allocator, bodies.exprDataOf(id, .block).final_expr),
             .numeral, .str, .empty_list, .zero_argument_tag, .empty_record => {},
             .str_segment, .bytes_literal, .lookup_required, .match_, .if_, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => checkedArtifactInvariant("a value-form expression has a part that is not in value form", .{}),
         }
@@ -28623,33 +28628,39 @@ const TemplateDemandPass = struct {
     fn visitPattern(self: *TemplateDemandPass, id: CIR.Pattern.Idx, role: PatternRole) Allocator.Error!void {
         const bodies = &self.bodies;
         const pattern_ty = bodies.patternType(id);
-        switch (bodies.patternData(id)) {
+        switch (bodies.patternDataKind(id)) {
             .assign, .underscore => switch (role) {
                 .parameter => try self.raiseFunctionMentions(pattern_ty),
                 .binding => try self.raiseMentions(pattern_ty, .layout),
             },
-            .as => |as| {
+            .as => {
+                const as = bodies.patternDataOf(id, .as);
                 try self.raiseMentions(pattern_ty, .layout);
                 try self.pushPattern(as.pattern, .binding);
             },
-            .applied_tag => |tag| {
+            .applied_tag => {
+                const tag = bodies.patternDataOf(id, .applied_tag);
                 try self.raiseMentions(pattern_ty, .layout);
                 for (tag.args) |arg| try self.pushPattern(arg, .binding);
             },
-            .nominal => |nominal| {
+            .nominal => {
+                const nominal = bodies.patternDataOf(id, .nominal);
                 try self.raiseMentions(pattern_ty, .layout);
                 try self.pushPattern(nominal.backing_pattern, .binding);
             },
-            .record_destructure => |destructs| {
+            .record_destructure => {
+                const destructs = bodies.patternDataOf(id, .record_destructure);
                 try self.raiseMentions(pattern_ty, .layout);
                 for (destructs) |destruct| try self.pushPattern(bodies.recordDestructPattern(destruct), .binding);
             },
-            .list => |list| {
+            .list => {
+                const list = bodies.patternDataOf(id, .list);
                 try self.raiseMentions(pattern_ty, .layout);
                 for (list.patterns) |child| try self.pushPattern(child, .binding);
                 if (list.rest) |rest| if (rest.pattern) |child| try self.pushPattern(child, .binding);
             },
-            .tuple => |items| {
+            .tuple => {
+                const items = bodies.patternDataOf(id, .tuple);
                 try self.raiseMentions(pattern_ty, .layout);
                 for (items) |child| try self.pushPattern(child, .binding);
             },
@@ -28657,7 +28668,8 @@ const TemplateDemandPass = struct {
                 try self.raiseMentions(pattern_ty, .full);
                 if (bodies.literalPatternGuard(id)) |guard| try self.visitLiteralPatternGuard(guard);
             },
-            .str_interpolation => |str| {
+            .str_interpolation => {
+                const str = bodies.patternDataOf(id, .str_interpolation);
                 try self.raiseMentions(pattern_ty, .full);
                 var offset: u32 = 0;
                 while (offset < str.steps.span.len) : (offset += 1) {
@@ -29474,10 +29486,11 @@ const CheckedTreeOwners = struct {
         while (self.pending.pop()) |node| switch (node) {
             .expr => |expr_id| {
                 if (!self.enter(@backingInt(expr_id), claimant, function_bodies)) continue;
-                switch (bodies.exprData(expr_id)) {
-                    .str => |segments| if (!bodies.quoteIsCustom(@backingInt(expr_id))) for (segments) |segment| try self.pending.append(allocator, .{ .expr = segment }),
-                    .list, .tuple => |items| for (items) |item| try self.pending.append(allocator, .{ .expr = item }),
-                    .match_ => |match| {
+                switch (bodies.exprDataKind(expr_id)) {
+                    .str => if (!bodies.quoteIsCustom(@backingInt(expr_id))) for (bodies.exprDataOf(expr_id, .str)) |segment| try self.pending.append(allocator, .{ .expr = segment }),
+                    inline .list, .tuple => |kind| for (bodies.exprDataOf(expr_id, kind)) |item| try self.pending.append(allocator, .{ .expr = item }),
+                    .match_ => {
+                        const match = bodies.exprDataOf(expr_id, .match_);
                         try self.pending.append(allocator, .{ .expr = match.cond });
                         for (match.branches) |branch_idx| {
                             const branch = bodies.matchBranch(branch_idx);
@@ -29486,7 +29499,8 @@ const CheckedTreeOwners = struct {
                             try self.pending.append(allocator, .{ .expr = branch.value });
                         }
                     },
-                    .if_ => |if_| {
+                    .if_ => {
+                        const if_ = bodies.exprDataOf(expr_id, .if_);
                         for (if_.branches) |branch_idx| {
                             const branch = bodies.ifBranch(branch_idx);
                             try self.pending.append(allocator, .{ .expr = branch.cond });
@@ -29494,57 +29508,68 @@ const CheckedTreeOwners = struct {
                         }
                         try self.pending.append(allocator, .{ .expr = if_.final_else });
                     },
-                    .call => |call| {
+                    .call => {
+                        const call = bodies.exprDataOf(expr_id, .call);
                         try self.pending.append(allocator, .{ .expr = call.func });
                         for (call.args) |arg| try self.pending.append(allocator, .{ .expr = arg });
                     },
-                    .record => |record| {
+                    .record => {
+                        const record = bodies.exprDataOf(expr_id, .record);
                         if (record.ext) |ext| try self.pending.append(allocator, .{ .expr = ext });
                         for (record.fields) |field| try self.pending.append(allocator, .{ .expr = bodies.recordFieldValue(field) });
                     },
-                    .block => |block| {
+                    .block => {
+                        const block = bodies.exprDataOf(expr_id, .block);
                         for (block.statements) |statement| try self.pending.append(allocator, .{ .statement = statement });
                         try self.pending.append(allocator, .{ .expr = block.final_expr });
                     },
-                    .tag => |tag| for (tag.args) |arg| try self.pending.append(allocator, .{ .expr = arg }),
-                    .nominal => |nominal| try self.pending.append(allocator, .{ .expr = nominal.backing_expr }),
-                    .closure => |closure| try self.pending.append(allocator, .{ .expr = closure.lambda }),
-                    .lambda => |lambda| switch (function_bodies) {
-                        .enter => {
-                            if (self.patterns) for (lambda.args) |arg| try self.pending.append(allocator, .{ .pattern = arg });
-                            try self.pending.append(allocator, .{ .expr = lambda.body });
-                        },
-                        .skip => {},
+                    .tag => for (bodies.exprDataOf(expr_id, .tag).args) |arg| try self.pending.append(allocator, .{ .expr = arg }),
+                    .nominal => try self.pending.append(allocator, .{ .expr = bodies.exprDataOf(expr_id, .nominal).backing_expr }),
+                    .closure => try self.pending.append(allocator, .{ .expr = bodies.exprDataOf(expr_id, .closure).lambda }),
+                    .lambda => lambda_blk: {
+                        const lambda = bodies.exprDataOf(expr_id, .lambda);
+                        break :lambda_blk switch (function_bodies) {
+                            .enter => {
+                                if (self.patterns) for (lambda.args) |arg| try self.pending.append(allocator, .{ .pattern = arg });
+                                try self.pending.append(allocator, .{ .expr = lambda.body });
+                            },
+                            .skip => {},
+                        };
                     },
-                    .binop => |binop| {
+                    .binop => {
+                        const binop = bodies.exprDataOf(expr_id, .binop);
                         try self.pending.append(allocator, .{ .expr = binop.lhs });
                         try self.pending.append(allocator, .{ .expr = binop.rhs });
                     },
-                    .unary_minus, .dbg, .expect => |child| try self.pending.append(allocator, .{ .expr = child }),
-                    .tuple_access => |access| try self.pending.append(allocator, .{ .expr = access.tuple }),
-                    .field_access => |field| try self.pending.append(allocator, .{ .expr = field.receiver }),
-                    .interpolation => |interpolation| {
+                    inline .unary_minus, .dbg, .expect => |kind| try self.pending.append(allocator, .{ .expr = bodies.exprDataOf(expr_id, kind) }),
+                    .tuple_access => try self.pending.append(allocator, .{ .expr = bodies.exprDataOf(expr_id, .tuple_access).tuple }),
+                    .field_access => try self.pending.append(allocator, .{ .expr = bodies.exprDataOf(expr_id, .field_access).receiver }),
+                    .interpolation => {
+                        const interpolation = bodies.exprDataOf(expr_id, .interpolation);
                         try self.pending.append(allocator, .{ .expr = interpolation.first });
                         for (interpolation.parts) |part| try self.pending.append(allocator, .{ .expr = part });
                     },
-                    .structural_eq => |eq| {
+                    .structural_eq => {
+                        const eq = bodies.exprDataOf(expr_id, .structural_eq);
                         try self.pending.append(allocator, .{ .expr = eq.lhs });
                         try self.pending.append(allocator, .{ .expr = eq.rhs });
                     },
-                    .structural_hash => |h| {
+                    .structural_hash => {
+                        const h = bodies.exprDataOf(expr_id, .structural_hash);
                         try self.pending.append(allocator, .{ .expr = h.value });
                         try self.pending.append(allocator, .{ .expr = h.hasher });
                     },
-                    .expect_err => |expect_err| try self.pending.append(allocator, .{ .expr = expect_err.expr }),
-                    .return_ => |ret| try self.pending.append(allocator, .{ .expr = ret.expr }),
-                    .for_ => |for_| {
+                    .expect_err => try self.pending.append(allocator, .{ .expr = bodies.exprDataOf(expr_id, .expect_err).expr }),
+                    .return_ => try self.pending.append(allocator, .{ .expr = bodies.exprDataOf(expr_id, .return_).expr }),
+                    .for_ => {
+                        const for_ = bodies.exprDataOf(expr_id, .for_);
                         if (self.patterns) try self.pending.append(allocator, .{ .pattern = for_.pattern });
                         try self.pending.append(allocator, .{ .expr = for_.expr });
                         try self.pending.append(allocator, .{ .expr = for_.body });
                     },
-                    .run_low_level => |run| for (run.args) |arg| try self.pending.append(allocator, .{ .expr = arg }),
-                    .hosted_lambda => |hosted| switch (function_bodies) {
-                        .enter => if (self.patterns) for (hosted.args) |arg| try self.pending.append(allocator, .{ .pattern = arg }),
+                    .run_low_level => for (bodies.exprDataOf(expr_id, .run_low_level).args) |arg| try self.pending.append(allocator, .{ .expr = arg }),
+                    .hosted_lambda => switch (function_bodies) {
+                        .enter => if (self.patterns) for (bodies.exprDataOf(expr_id, .hosted_lambda).args) |arg| try self.pending.append(allocator, .{ .pattern = arg }),
                         .skip => {},
                     },
                     .numeral,
@@ -29608,19 +29633,21 @@ const CheckedTreeOwners = struct {
             },
             .pattern => |pattern_id| {
                 if (!self.enter(@backingInt(pattern_id), claimant, function_bodies)) continue;
-                switch (bodies.patternData(pattern_id)) {
-                    .as => |as| try self.pending.append(allocator, .{ .pattern = as.pattern }),
-                    .applied_tag => |tag| for (tag.args) |arg| try self.pending.append(allocator, .{ .pattern = arg }),
-                    .nominal => |nominal| try self.pending.append(allocator, .{ .pattern = nominal.backing_pattern }),
-                    .record_destructure => |destructs| for (destructs) |destruct| {
+                switch (bodies.patternDataKind(pattern_id)) {
+                    .as => try self.pending.append(allocator, .{ .pattern = bodies.patternDataOf(pattern_id, .as).pattern }),
+                    .applied_tag => for (bodies.patternDataOf(pattern_id, .applied_tag).args) |arg| try self.pending.append(allocator, .{ .pattern = arg }),
+                    .nominal => try self.pending.append(allocator, .{ .pattern = bodies.patternDataOf(pattern_id, .nominal).backing_pattern }),
+                    .record_destructure => for (bodies.patternDataOf(pattern_id, .record_destructure)) |destruct| {
                         try self.pending.append(allocator, .{ .pattern = bodies.recordDestructPattern(destruct) });
                     },
-                    .list => |list| {
+                    .list => {
+                        const list = bodies.patternDataOf(pattern_id, .list);
                         for (list.patterns) |child| try self.pending.append(allocator, .{ .pattern = child });
                         if (list.rest) |rest| if (rest.pattern) |rest_pattern| try self.pending.append(allocator, .{ .pattern = rest_pattern });
                     },
-                    .tuple => |items| for (items) |item| try self.pending.append(allocator, .{ .pattern = item }),
-                    .str_interpolation => |str| {
+                    .tuple => for (bodies.patternDataOf(pattern_id, .tuple)) |item| try self.pending.append(allocator, .{ .pattern = item }),
+                    .str_interpolation => {
+                        const str = bodies.patternDataOf(pattern_id, .str_interpolation);
                         var offset: u32 = 0;
                         while (offset < str.steps.span.len) : (offset += 1) {
                             if (bodies.strPatternStep(str.steps, offset).capture) |capture| try self.pending.append(allocator, .{ .pattern = capture });
@@ -34330,7 +34357,7 @@ pub const CheckedModuleArtifact = struct {
             switch (kind) {
                 .expr => {
                     const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(node));
-                    const expr_failure: ?DispatchEvidenceFailure = switch (checked.exprData(expr)) {
+                    const expr_failure: ?DispatchEvidenceFailure = switch (checked.exprDataKind(expr)) {
                         .dispatch_call, .type_dispatch_call, .method_eq => dispatchPlanFailure(table, checked.dispatchPlan(node), node, true),
                         .interpolation => if (checked.interpolationIsBuiltinStr(expr))
                             null
@@ -35299,7 +35326,7 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(closure.interface_capabilities.len > 0);
                 },
                 .checked_error => |expr| {
-                    std.debug.assert(self.bodies().exprData(expr) == .runtime_error);
+                    std.debug.assert(self.bodies().exprDataKind(expr) == .runtime_error);
                     std.debug.assert(closure.checked_procedure_templates.len == 0);
                     std.debug.assert(closure.callable_eval_templates.len == 0);
                 },
@@ -35467,7 +35494,7 @@ pub const CheckedModuleArtifact = struct {
                                 ),
                             }
                         },
-                        .checked_error => |expr| std.debug.assert(self.bodies().exprData(expr) == .runtime_error),
+                        .checked_error => |expr| std.debug.assert(self.bodies().exprDataKind(expr) == .runtime_error),
                         .callable_eval_template => |template| {
                             std.debug.assert(@backingInt(template) < self.callable_eval_templates.templates.items().len);
                         },

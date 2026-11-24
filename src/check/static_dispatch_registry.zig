@@ -2543,7 +2543,7 @@ const StaticDispatchConstraintIndex = struct {
             if (constraint_fn_var) |fn_var| {
                 if (!bodies.index().reachesExpr(expr_idx)) continue;
                 if (module.nodeTag(@fromBackingInt(@intCast(node_idx))) == .expr_interpolation and
-                    std.meta.activeTag(bodies.exprData(expr_idx)) != .interpolation) continue;
+                    bodies.exprDataKind(expr_idx) != .interpolation) continue;
                 try live_fn_vars.put(allocator, fn_var, {});
             }
         }
@@ -2928,10 +2928,10 @@ const LiteralConversionKind = enum { numeral, quote };
 fn literalNodeConverts(bodies: anytype, node: u32, kind: LiteralConversionKind) bool {
     switch (bodies.index().nodeKind(node)) {
         .expr => {
-            const data = bodies.exprData(@fromBackingInt(@intCast(node)));
+            const data_kind = bodies.exprDataKind(@fromBackingInt(@intCast(node)));
             return switch (kind) {
-                .numeral => data == .numeral,
-                .quote => data == .str and bodies.quoteIsCustom(node),
+                .numeral => data_kind == .numeral,
+                .quote => data_kind == .str and bodies.quoteIsCustom(node),
             };
         },
         .pattern => return bodies.literalPatternGuard(@fromBackingInt(@intCast(node))) != null,

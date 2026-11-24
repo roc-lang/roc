@@ -626,7 +626,7 @@ const Builder = struct {
                     .quote => .{ conversion.conversion_root, .{ .dependent_quote = true } },
                 };
             },
-            .expr => switch (bodies.exprData(@fromBackingInt(plan.node))) {
+            .expr => switch (bodies.exprDataKind(@fromBackingInt(plan.node))) {
                 .numeral => .{ bodies.literalConversionRoot(plan.node), .{ .dependent_numeral = true } },
                 .str => if (bodies.quoteIsCustom(plan.node)) .{ bodies.literalConversionRoot(plan.node), .{ .dependent_quote = true } } else return .{},
                 // A custom interpolation is validated by its own conversion

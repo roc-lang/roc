@@ -1532,7 +1532,7 @@ const DivergenceScan = struct {
         if (raw < self.evidence_crashes.len and self.evidence_crashes[raw]) return .{ .value = diverges_both };
         if (self.crashes.isSet(raw)) return .{ .value = diverges_both };
         const bodies = self.bodies;
-        return switch (bodies.exprData(id)) {
+        return switch (bodies.exprDataKind(id)) {
             .crash,
             .ellipsis,
             .break_,
@@ -1540,14 +1540,16 @@ const DivergenceScan = struct {
             .runtime_error,
             .expect_err,
             => .{ .value = diverges_both },
-            .str, .list, .tuple => |elems| try self.anyOf(elems),
-            .interpolation => |interpolation| blk: {
+            inline .str, .list, .tuple => |kind| try self.anyOf(bodies.exprDataOf(id, kind)),
+            .interpolation => blk: {
+                const interpolation = bodies.exprDataOf(id, .interpolation);
                 try self.add(interpolation.first);
                 break :blk try self.anyOf(interpolation.parts);
             },
             // Diverges when its condition does, or when it has branches, none
             // guarded, that all diverge.
-            .match_ => |match| blk: {
+            .match_ => blk: {
+                const match = bodies.exprDataOf(id, .match_);
                 try self.add(match.cond);
                 const any_end: u32 = @intCast(self.children.items.len);
                 if (match.branches.len == 0) break :blk .{ .group = .{ .any_end = any_end } };
@@ -1563,38 +1565,54 @@ const DivergenceScan = struct {
             },
             // Diverges when its first condition does, or when every branch
             // body and the final else do.
-            .if_ => |if_| blk: {
+            .if_ => blk: {
+                const if_ = bodies.exprDataOf(id, .if_);
                 if (if_.branches.len > 0) try self.add(bodies.ifBranch(if_.branches[0]).cond);
                 const any_end: u32 = @intCast(self.children.items.len);
                 for (if_.branches) |branch| try self.add(bodies.ifBranch(branch).body);
                 try self.add(if_.final_else);
                 break :blk .{ .group = .{ .any_end = any_end, .all = .all } };
             },
-            .call => |call| blk: {
+            .call => blk: {
+                const call = bodies.exprDataOf(id, .call);
                 try self.add(call.func);
                 break :blk try self.anyOf(call.args);
             },
-            .record => |record| blk: {
+            .record => blk: {
+                const record = bodies.exprDataOf(id, .record);
                 if (record.ext) |ext| try self.add(ext);
                 for (record.fields) |field| try self.add(bodies.recordFieldValue(field));
                 break :blk self.any();
             },
-            .block => |block| blk: {
+            .block => blk: {
+                const block = bodies.exprDataOf(id, .block);
                 for (block.statements) |child| try self.children.append(self.allocator, @backingInt(child));
                 break :blk try self.one(block.final_expr);
             },
-            .tag => |tag| try self.anyOf(tag.args),
-            .nominal => |nominal| try self.one(nominal.backing_expr),
+            .tag => try self.anyOf(bodies.exprDataOf(id, .tag).args),
+            .nominal => try self.one(bodies.exprDataOf(id, .nominal).backing_expr),
             .closure, .lambda, .hosted_lambda => .{ .value = 0 },
-            .binop => |binop| try self.anyOf(&.{ binop.lhs, binop.rhs }),
-            .unary_minus, .dbg => |child| try self.one(child),
-            .expect => |child| try self.expectBody(child),
-            .field_access => |field| try self.one(field.receiver),
-            .structural_eq => |eq| try self.anyOf(&.{ eq.lhs, eq.rhs }),
-            .structural_hash => |hash| try self.anyOf(&.{ hash.value, hash.hasher }),
-            .tuple_access => |access| try self.one(access.tuple),
-            .for_ => |for_| try self.one(for_.expr),
-            .run_low_level => |run_op| if (run_op.op == .crash) .{ .value = diverges_both } else try self.anyOf(run_op.args),
+            .binop => binop_blk: {
+                const binop = bodies.exprDataOf(id, .binop);
+                break :binop_blk try self.anyOf(&.{ binop.lhs, binop.rhs });
+            },
+            inline .unary_minus, .dbg => |kind| try self.one(bodies.exprDataOf(id, kind)),
+            .expect => try self.expectBody(bodies.exprDataOf(id, .expect)),
+            .field_access => try self.one(bodies.exprDataOf(id, .field_access).receiver),
+            .structural_eq => eq_blk: {
+                const eq = bodies.exprDataOf(id, .structural_eq);
+                break :eq_blk try self.anyOf(&.{ eq.lhs, eq.rhs });
+            },
+            .structural_hash => hash_blk: {
+                const hash = bodies.exprDataOf(id, .structural_hash);
+                break :hash_blk try self.anyOf(&.{ hash.value, hash.hasher });
+            },
+            .tuple_access => try self.one(bodies.exprDataOf(id, .tuple_access).tuple),
+            .for_ => try self.one(bodies.exprDataOf(id, .for_).expr),
+            .run_low_level => run_op_blk: {
+                const run_op = bodies.exprDataOf(id, .run_low_level);
+                break :run_op_blk if (run_op.op == .crash) .{ .value = diverges_both } else try self.anyOf(run_op.args);
+            },
             .dispatch_call,
             .method_eq,
             .type_dispatch_call,
@@ -1915,7 +1933,7 @@ const ReassignmentPublisher = struct {
         const index = self.bodies.index();
         return switch (index.nodeKind(raw)) {
             .expr => blk: {
-                const for_ = self.bodies.exprData(@fromBackingInt(@intCast(raw))).for_;
+                const for_ = self.bodies.exprDataOf(@fromBackingInt(@intCast(raw)), .for_);
                 break :blk .{ .cond = null, .body = for_.body, .iterable = for_.expr };
             },
             .statement => switch (self.bodies.statementData(@fromBackingInt(@intCast(raw)))) {
@@ -2080,13 +2098,15 @@ const ReassignmentPublisher = struct {
         const bodies = self.bodies;
         const children = self.beginChildren();
         defer self.endChildren(children);
-        switch (bodies.exprData(id)) {
-            .str, .list, .tuple => |items| for (items) |item| try self.pushExpr(item),
-            .interpolation => |interpolation| {
+        switch (bodies.exprDataKind(id)) {
+            inline .str, .list, .tuple => |kind| for (bodies.exprDataOf(id, kind)) |item| try self.pushExpr(item),
+            .interpolation => {
+                const interpolation = bodies.exprDataOf(id, .interpolation);
                 try self.pushExpr(interpolation.first);
                 for (interpolation.parts) |part| try self.pushExpr(part);
             },
-            .match_ => |match| {
+            .match_ => {
+                const match = bodies.exprDataOf(id, .match_);
                 try self.pushExpr(match.cond);
                 for (match.branches) |branch_idx| {
                     const branch = bodies.matchBranch(branch_idx);
@@ -2094,7 +2114,8 @@ const ReassignmentPublisher = struct {
                     try self.pushExpr(branch.value);
                 }
             },
-            .if_ => |if_| {
+            .if_ => {
+                const if_ = bodies.exprDataOf(id, .if_);
                 for (if_.branches) |branch_idx| {
                     const branch = bodies.ifBranch(branch_idx);
                     try self.pushExpr(branch.cond);
@@ -2102,44 +2123,50 @@ const ReassignmentPublisher = struct {
                 }
                 try self.pushExpr(if_.final_else);
             },
-            .call => |call| {
+            .call => {
+                const call = bodies.exprDataOf(id, .call);
                 try self.pushExpr(call.func);
                 for (call.args) |arg| try self.pushExpr(arg);
             },
-            .record => |record| {
+            .record => {
+                const record = bodies.exprDataOf(id, .record);
                 if (record.ext) |ext| try self.pushExpr(ext);
                 for (record.fields) |field| try self.pushExpr(bodies.recordFieldValue(field));
             },
-            .block => |block| {
+            .block => {
+                const block = bodies.exprDataOf(id, .block);
                 for (block.statements) |statement| try self.push(.{ .statement = statement });
                 try self.pushExpr(block.final_expr);
             },
-            .tag => |tag| for (tag.args) |arg| try self.pushExpr(arg),
-            .nominal => |nominal| try self.pushExpr(nominal.backing_expr),
-            .binop => |binop| {
+            .tag => for (bodies.exprDataOf(id, .tag).args) |arg| try self.pushExpr(arg),
+            .nominal => try self.pushExpr(bodies.exprDataOf(id, .nominal).backing_expr),
+            .binop => {
+                const binop = bodies.exprDataOf(id, .binop);
                 try self.pushExpr(binop.lhs);
                 try self.pushExpr(binop.rhs);
             },
-            .unary_minus, .dbg => |child| try self.pushExpr(child),
+            inline .unary_minus, .dbg => |kind| try self.pushExpr(bodies.exprDataOf(id, kind)),
             // An expect body can only reassign vars declared inside it
             // (canonicalization rejects the rest), so it carries no state
             // through an enclosing construct.
             .expect => {},
-            .expect_err => |child| try self.pushExpr(child.expr),
-            .field_access => |field| try self.pushExpr(field.receiver),
-            .structural_eq => |eq| {
+            .expect_err => try self.pushExpr(bodies.exprDataOf(id, .expect_err).expr),
+            .field_access => try self.pushExpr(bodies.exprDataOf(id, .field_access).receiver),
+            .structural_eq => {
+                const eq = bodies.exprDataOf(id, .structural_eq);
                 try self.pushExpr(eq.lhs);
                 try self.pushExpr(eq.rhs);
             },
-            .structural_hash => |hash| {
+            .structural_hash => {
+                const hash = bodies.exprDataOf(id, .structural_hash);
                 try self.pushExpr(hash.value);
                 try self.pushExpr(hash.hasher);
             },
-            .tuple_access => |access| try self.pushExpr(access.tuple),
-            .return_ => |ret| try self.pushExpr(ret.expr),
+            .tuple_access => try self.pushExpr(bodies.exprDataOf(id, .tuple_access).tuple),
+            .return_ => try self.pushExpr(bodies.exprDataOf(id, .return_).expr),
             // A `for` expression's iterable, then its loop's mutations.
             .for_ => try self.push(.{ .nested = .{ .loop = @backingInt(id) } }),
-            .run_low_level => |low| for (low.args) |arg| try self.pushExpr(arg),
+            .run_low_level => for (bodies.exprDataOf(id, .run_low_level).args) |arg| try self.pushExpr(arg),
             // A lambda's body executes at invocation, not at this expression.
             .lambda,
             .closure,
@@ -2477,10 +2504,11 @@ const DiagnosticScan = struct {
 
     fn pushExprItems(self: *DiagnosticScan, id: ExprId) Allocator.Error!void {
         const bodies = self.bodies;
-        switch (bodies.exprData(id)) {
+        switch (bodies.exprDataKind(id)) {
             .runtime_error => try self.pushItem(.diagnostic_error),
-            .str, .list, .tuple => |items| try self.pushExprs(items),
-            .match_ => |match| {
+            inline .str, .list, .tuple => |kind| try self.pushExprs(bodies.exprDataOf(id, kind)),
+            .match_ => {
+                const match = bodies.exprDataOf(id, .match_);
                 try self.pushExpr(match.cond);
                 for (match.branches) |branch_idx| {
                     const branch = bodies.matchBranch(branch_idx);
@@ -2489,7 +2517,8 @@ const DiagnosticScan = struct {
                     try self.pushExpr(branch.value);
                 }
             },
-            .if_ => |if_| {
+            .if_ => {
+                const if_ = bodies.exprDataOf(id, .if_);
                 for (if_.branches) |branch_idx| {
                     const branch = bodies.ifBranch(branch_idx);
                     try self.pushExpr(branch.cond);
@@ -2497,57 +2526,67 @@ const DiagnosticScan = struct {
                 }
                 try self.pushExpr(if_.final_else);
             },
-            .call => |call| {
+            .call => {
+                const call = bodies.exprDataOf(id, .call);
                 try self.pushExpr(call.func);
                 try self.pushExprs(call.args);
             },
-            .record => |record| {
+            .record => {
+                const record = bodies.exprDataOf(id, .record);
                 if (record.ext) |ext| try self.pushExpr(ext);
                 for (record.fields) |field| try self.pushExpr(bodies.recordFieldValue(field));
             },
-            .block => |block| {
+            .block => {
+                const block = bodies.exprDataOf(id, .block);
                 for (block.statements) |statement| try self.pushNode(@backingInt(statement));
                 try self.pushExpr(block.final_expr);
             },
-            .tag => |tag| try self.pushExprs(tag.args),
-            .nominal => |nominal| try self.pushExpr(nominal.backing_expr),
-            .closure => |closure| {
+            .tag => try self.pushExprs(bodies.exprDataOf(id, .tag).args),
+            .nominal => try self.pushExpr(bodies.exprDataOf(id, .nominal).backing_expr),
+            .closure => {
+                const closure = bodies.exprDataOf(id, .closure);
                 try self.pushExpr(closure.lambda);
                 for (closure.captures) |capture| try self.pushPattern(bodies.capture(capture).pattern);
             },
-            .lambda => |lambda| {
+            .lambda => {
+                const lambda = bodies.exprDataOf(id, .lambda);
                 try self.pushPatterns(lambda.args);
                 try self.pushExpr(lambda.body);
             },
-            .binop => |binop| {
+            .binop => {
+                const binop = bodies.exprDataOf(id, .binop);
                 try self.pushExpr(binop.lhs);
                 try self.pushExpr(binop.rhs);
             },
-            .unary_minus, .dbg, .expect => |child| try self.pushExpr(child),
-            .field_access => |field| try self.pushExpr(field.receiver),
+            inline .unary_minus, .dbg, .expect => |kind| try self.pushExpr(bodies.exprDataOf(id, kind)),
+            .field_access => try self.pushExpr(bodies.exprDataOf(id, .field_access).receiver),
             .dispatch_call, .method_eq, .type_dispatch_call => try appendDispatchOperands(bodies, @backingInt(id), self),
-            .interpolation => |interpolation| {
+            .interpolation => {
+                const interpolation = bodies.exprDataOf(id, .interpolation);
                 try self.pushExpr(interpolation.first);
                 try self.pushExprs(interpolation.parts);
             },
-            .structural_eq => |eq| {
+            .structural_eq => {
+                const eq = bodies.exprDataOf(id, .structural_eq);
                 try self.pushExpr(eq.lhs);
                 try self.pushExpr(eq.rhs);
             },
-            .structural_hash => |hash| {
+            .structural_hash => {
+                const hash = bodies.exprDataOf(id, .structural_hash);
                 try self.pushExpr(hash.value);
                 try self.pushExpr(hash.hasher);
             },
-            .tuple_access => |access| try self.pushExpr(access.tuple),
-            .expect_err => |expect_err| try self.pushExpr(expect_err.expr),
-            .return_ => |ret| try self.pushExpr(ret.expr),
-            .for_ => |for_| {
+            .tuple_access => try self.pushExpr(bodies.exprDataOf(id, .tuple_access).tuple),
+            .expect_err => try self.pushExpr(bodies.exprDataOf(id, .expect_err).expr),
+            .return_ => try self.pushExpr(bodies.exprDataOf(id, .return_).expr),
+            .for_ => {
+                const for_ = bodies.exprDataOf(id, .for_);
                 try self.pushPattern(for_.pattern);
                 try self.pushExpr(for_.expr);
                 try self.pushExpr(for_.body);
             },
-            .hosted_lambda => |hosted| try self.pushPatterns(hosted.args),
-            .run_low_level => |run| try self.pushExprs(run.args),
+            .hosted_lambda => try self.pushPatterns(bodies.exprDataOf(id, .hosted_lambda).args),
+            .run_low_level => try self.pushExprs(bodies.exprDataOf(id, .run_low_level).args),
             .numeral,
             .str_segment,
             .bytes_literal,
@@ -2570,18 +2609,20 @@ const DiagnosticScan = struct {
 
     fn pushPatternItems(self: *DiagnosticScan, id: PatternId) Allocator.Error!void {
         const bodies = self.bodies;
-        switch (bodies.patternData(id)) {
+        switch (bodies.patternDataKind(id)) {
             .runtime_error => try self.pushItem(.diagnostic_error),
-            .as => |as| try self.pushPattern(as.pattern),
-            .applied_tag => |tag| try self.pushPatterns(tag.args),
-            .nominal => |nominal| try self.pushPattern(nominal.backing_pattern),
-            .record_destructure => |destructs| for (destructs) |destruct| try self.pushPattern(bodies.recordDestructPattern(destruct)),
-            .list => |list| {
+            .as => try self.pushPattern(bodies.patternDataOf(id, .as).pattern),
+            .applied_tag => try self.pushPatterns(bodies.patternDataOf(id, .applied_tag).args),
+            .nominal => try self.pushPattern(bodies.patternDataOf(id, .nominal).backing_pattern),
+            .record_destructure => for (bodies.patternDataOf(id, .record_destructure)) |destruct| try self.pushPattern(bodies.recordDestructPattern(destruct)),
+            .list => {
+                const list = bodies.patternDataOf(id, .list);
                 try self.pushPatterns(list.patterns);
                 if (list.rest) |rest| if (rest.pattern) |rest_pattern| try self.pushPattern(rest_pattern);
             },
-            .tuple => |items| try self.pushPatterns(items),
-            .str_interpolation => |str| {
+            .tuple => try self.pushPatterns(bodies.patternDataOf(id, .tuple)),
+            .str_interpolation => {
+                const str = bodies.patternDataOf(id, .str_interpolation);
                 var offset: u32 = 0;
                 while (offset < str.steps.span.len) : (offset += 1) {
                     if (bodies.strPatternStep(str.steps, offset).capture) |capture| try self.pushPattern(capture);
@@ -2792,11 +2833,11 @@ const SourceCallShapes = struct {
                     const id: ExprId = @fromBackingInt(raw);
                     // A retired call or lookup evaluates as a runtime error.
                     if (bodies.exprIsRetired(id)) continue;
-                    const data = store.getExpr(id);
-                    if (data == .e_call) {
-                        shapes.callees.set(@backingInt(data.e_call.func));
-                    } else if (data == .e_lookup_local) {
-                        try shapes.local_lookups.append(allocator, .{ .expr = raw, .pattern = @backingInt(data.e_lookup_local.pattern_idx) });
+                    const data_kind = store.exprKind(id);
+                    if (data_kind == .e_call) {
+                        shapes.callees.set(@backingInt(store.exprView(id).e_call.get(.func)));
+                    } else if (data_kind == .e_lookup_local) {
+                        try shapes.local_lookups.append(allocator, .{ .expr = raw, .pattern = @backingInt(store.exprView(id).e_lookup_local.get(.pattern_idx)) });
                     }
                 },
                 .statement => {
@@ -2805,7 +2846,7 @@ const SourceCallShapes = struct {
                     switch (bodies.statementData(id)) {
                         .decl => |decl| {
                             if (bodies.declIsRecursive(id)) continue;
-                            if (bodies.patternData(decl.pattern) != .assign) continue;
+                            if (bodies.patternDataKind(decl.pattern) != .assign) continue;
                             try shapes.bound_by.put(@backingInt(decl.expr), @backingInt(decl.pattern));
                         },
                         .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .rejected_method_decl, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},

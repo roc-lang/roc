@@ -5869,9 +5869,9 @@ fn constStaticDataStorage(view: ModuleView, node: checked.ConstNodeId) Common.St
 /// folding and range proofs see it; every other value is a candidate.
 fn inlineLiteralUsesStaticData(view: ModuleView, expr: CIR.Expr.Idx) bool {
     var current = expr;
-    while (true) switch (view.bodies.exprData(current)) {
-        .nominal => |nominal| current = nominal.backing_expr,
-        .block => |block| current = block.final_expr,
+    while (true) switch (view.bodies.exprDataKind(current)) {
+        .nominal => current = view.bodies.exprDataOf(current, .nominal).backing_expr,
+        .block => current = view.bodies.exprDataOf(current, .block).final_expr,
         .numeral, .str, .str_segment, .zero_argument_tag, .empty_record => return false,
         .list, .empty_list, .tuple, .record, .tag => return true,
         .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .match_, .if_, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("a value-form expression a body keeps is not a literal or construction"),
@@ -5883,12 +5883,13 @@ fn inlineLiteralUsesStaticData(view: ModuleView, expr: CIR.Expr.Idx) bool {
 /// aggregate otherwise.
 fn inlineLiteralStorage(view: ModuleView, expr: CIR.Expr.Idx) Common.StaticDataStorage {
     var current = expr;
-    while (true) switch (view.bodies.exprData(current)) {
-        .nominal => |nominal| current = nominal.backing_expr,
-        .block => |block| current = block.final_expr,
-        .str => |segments| {
+    while (true) switch (view.bodies.exprDataKind(current)) {
+        .nominal => current = view.bodies.exprDataOf(current, .nominal).backing_expr,
+        .block => current = view.bodies.exprDataOf(current, .block).final_expr,
+        .str => {
+            const segments = view.bodies.exprDataOf(current, .str);
             var len: u64 = 0;
-            for (segments) |segment| len += view.bodies.text(view.bodies.exprData(segment).str_segment).len;
+            for (segments) |segment| len += view.bodies.text(view.bodies.exprDataOf(segment, .str_segment)).len;
             return .{ .string_backing = len };
         },
         .numeral, .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return .aggregate,
@@ -32011,7 +32012,7 @@ const BodyContext = struct {
             const arg_cell = DraftTypeCell.fromGraphNode(arg_node);
             try relateRequestComponent(
                 self.graph,
-                try self.instNode(self.view.bodies.pattern(pattern_id).ty),
+                try self.instNode(self.view.bodies.patternType(pattern_id)),
                 arg_node,
             );
             if (self.patternIsShapeFree(pattern_id)) {
@@ -34854,7 +34855,7 @@ const BodyContext = struct {
                 try relateRequestComponent(
                     self.graph,
                     task.scrutinee_node,
-                    try branch_ctx.instNode(branch_ctx.view.bodies.pattern(pattern.pattern).ty),
+                    try branch_ctx.instNode(branch_ctx.view.bodies.patternType(pattern.pattern)),
                 );
             }
         }
@@ -35920,7 +35921,7 @@ const BodyContext = struct {
     /// closure.
     fn operandEvaluationHasNoEffect(self: *BodyContext, operand: ExprSite) bool {
         return switch (operand.kind()) {
-            .read => checked.exprEvaluationHasNoEffect(std.meta.activeTag(self.view.bodies.expr(operand.node()).data)),
+            .read => checked.exprEvaluationHasNoEffect(self.view.bodies.exprDataKind(operand.node())),
             .coerced_value, .hoisted_root, .hoisted_result, .literal_guard, .literal_value, .literal_conversion => false,
         };
     }
@@ -36292,7 +36293,7 @@ const BodyContext = struct {
         task.one_scope_entered = true;
 
         const item_cell = DraftTypeCell.fromGraphNode(step.one_item.node);
-        try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(for_.pattern).ty, item_cell);
+        try self.constrainCheckedInterfaceToCell(self.view.bodies.patternType(for_.pattern), item_cell);
         self.runtime_demand_guard_frames = try self.withIteratorOneRuntimeDemandGuardFrame(for_.pattern, step);
 
         const rest_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), task.iterator_cell, null);
@@ -39651,7 +39652,7 @@ const BodyContext = struct {
 
     fn hoistedConstSourceRegion(self: *const BodyContext, entry: checked.HoistedConstEntry) base.Region {
         if (entry.pattern.get()) |pattern| {
-            return self.view.bodies.pattern(pattern).source_region;
+            return self.view.bodies.patternRegion(pattern);
         }
         return checkedExpr(self.view, ExprSite.own(self.view, entry.expr)).source_region;
     }
@@ -40457,7 +40458,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftLocalId {
         const root = view.compile_time_roots.root(root_id);
         const pattern = root.pattern.get() orelse Common.invariant("callable eval binding omitted its checked pattern");
-        const binder = switch (view.bodies.pattern(pattern).data) {
+        const binder = switch (view.bodies.patternDataKind(pattern)) {
             .assign => pattern,
             .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("callable eval binding pattern was not a binder"),
         };
@@ -47632,7 +47633,7 @@ const BodyContext = struct {
         if (pattern != owner.pattern) {
             Common.invariant("top-level const template root had a mismatched checked pattern");
         }
-        return switch (store_view.bodies.pattern(pattern).data) {
+        return switch (store_view.bodies.patternDataKind(pattern)) {
             .assign => .{ .binder = pattern, .root = root_id },
             .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("top-level const root pattern was not a binder"),
         };
@@ -48100,7 +48101,7 @@ const BodyContext = struct {
         }
         const declaration = self.destructuredAliasDecl(task.binder) orelse
             Common.invariant("a destructured alias use named a binder no destructuring scheme alias binds");
-        const decl = switch (self.view.bodies.statement(declaration).data) {
+        const decl = switch (self.view.bodies.statementData(declaration)) {
             .decl => |decl| decl,
             .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .rejected_method_decl, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => Common.invariant("a destructured alias binder's declaration is not a declaration"),
         };
@@ -52642,7 +52643,7 @@ const BodyContext = struct {
         std.debug.assert(fn_nodes.args.len == lambda.args.len);
         for (lambda.args, fn_nodes.args) |pattern_id, arg_node| {
             try self.constrainCheckedInterfaceToCell(
-                self.view.bodies.pattern(pattern_id).ty,
+                self.view.bodies.patternType(pattern_id),
                 DraftTypeCell.fromGraphNode(arg_node),
             );
         }
@@ -64481,18 +64482,18 @@ const BodyContext = struct {
         pattern_id: CIR.Pattern.Idx,
         children: *std.ArrayListUnmanaged(CIR.Pattern.Idx),
     ) Allocator.Error!void {
-        switch (self.view.bodies.pattern(pattern_id).data) {
-            .record_destructure => |destructs| for (destructs) |destruct_idx| {
+        switch (self.view.bodies.patternDataKind(pattern_id)) {
+            .record_destructure => for (self.view.bodies.patternDataOf(pattern_id, .record_destructure)) |destruct_idx| {
                 const destruct = self.view.bodies.recordDestruct(destruct_idx);
                 try children.append(self.allocator, switch (destruct.kind) {
                     .required, .sub_pattern => |child| child,
                     .rest => |rest| rest,
                 });
             },
-            .as => |as| try children.append(self.allocator, as.pattern),
-            .applied_tag => |tag| try children.appendSlice(self.allocator, tag.args),
-            .nominal => |nominal| try children.append(self.allocator, nominal.backing_pattern),
-            .tuple => |items| try children.appendSlice(self.allocator, items),
+            .as => try children.append(self.allocator, self.view.bodies.patternDataOf(pattern_id, .as).pattern),
+            .applied_tag => try children.appendSlice(self.allocator, self.view.bodies.patternDataOf(pattern_id, .applied_tag).args),
+            .nominal => try children.append(self.allocator, self.view.bodies.patternDataOf(pattern_id, .nominal).backing_pattern),
+            .tuple => try children.appendSlice(self.allocator, self.view.bodies.patternDataOf(pattern_id, .tuple)),
             .list,
             .assign,
             .numeral_literal,
@@ -64898,7 +64899,7 @@ const BodyContext = struct {
                         continue;
                     },
                     .list_cond => |list_cond| {
-                        const list = self.view.bodies.pattern(list_cond.pattern).data.list;
+                        const list = self.view.bodies.patternDataOf(list_cond.pattern, .list);
                         const cond = try self.listPatternCondition(list_cond.value, list);
                         const branches = [_]DraftIfBranch{.{ .cond = cond, .body = frame.continuation }};
                         materialize_run.frames.items[index].continuation = try self.addExprWithTypeCell(frame.result_cell, .{ .if_ = .{
@@ -65042,7 +65043,7 @@ const BodyContext = struct {
         switch (request.mode) {
             .value_then => {
                 const value_node = try request.value_cell.toGraphNode(self.graph);
-                try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(request.pattern).ty, request.value_cell);
+                try self.constrainCheckedInterfaceToCell(self.view.bodies.patternType(request.pattern), request.value_cell);
                 if (!try self.patternNeedsExplicitBinding(request.pattern)) {
                     try self.pushMaterializedPatternValueLeaf(materialize_run, request, value_node, null);
                     return null;
@@ -65069,7 +65070,7 @@ const BodyContext = struct {
                 return null;
             },
             .then_root => {
-                try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(request.pattern).ty, request.value_cell);
+                try self.constrainCheckedInterfaceToCell(self.view.bodies.patternType(request.pattern), request.value_cell);
                 request.success_guard = .{
                     .root_pattern = request.pattern,
                     .root_node = try request.value_cell.toGraphNode(self.graph),
@@ -65079,7 +65080,7 @@ const BodyContext = struct {
             .inner => {},
         }
 
-        try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(request.pattern).ty, request.value_cell);
+        try self.constrainCheckedInterfaceToCell(self.view.bodies.patternType(request.pattern), request.value_cell);
         const value_node = try request.value_cell.toGraphNode(self.graph);
         // A descendant plan's binders were registered with its root's.
         if (!request.registered) try self.preRegisterPatternBindersAtNode(request.pattern, value_node);
@@ -65193,7 +65194,7 @@ const BodyContext = struct {
         request: MaterializeRequest,
         value_node: NodeId,
     ) Allocator.Error!void {
-        const list = self.view.bodies.pattern(request.pattern).data.list;
+        const list = self.view.bodies.patternDataOf(request.pattern, .list);
         const value_cell = request.value_cell;
         // The list is read by its length check and by each item and rest
         // read, so a list that is not already a local read binds to one.
@@ -65331,7 +65332,7 @@ const BodyContext = struct {
                         // that slot materialized as the binder's checked
                         // `Try(v, [MissingField])` (design.md "Field
                         // Kinds"), against which the sub-pattern matches.
-                        const try_node = try self.instNode(self.view.bodies.pattern(child).ty);
+                        const try_node = try self.instNode(self.view.bodies.patternType(child));
                         const try_value = try self.optionalDestructTryExprAtNode(field_value, field_node, try_node);
                         prepared[index] = .{
                             .value = try_value,
@@ -65486,7 +65487,7 @@ const BodyContext = struct {
                 .ext = try self.graph.newNode(.empty_record),
             } });
         try self.graph.unify(
-            try self.lowerTypeNode(self.view.bodies.pattern(rest_pattern).ty),
+            try self.lowerTypeNode(self.view.bodies.patternType(rest_pattern)),
             rest_node,
         );
         return rest_node;
@@ -65753,7 +65754,7 @@ const BodyContext = struct {
                     // record's tagged slot node—mirror the walk the
                     // binder registration and pattern lowering use.
                     if ((try self.recordDestructFieldKind(pattern.ty, destruct)) == .optional) {
-                        try self.queuePatternBinderVisit(pending, child, try self.instNode(self.view.bodies.pattern(child).ty));
+                        try self.queuePatternBinderVisit(pending, child, try self.instNode(self.view.bodies.patternType(child)));
                         continue;
                     }
                     const name = try recordFieldName(self.nameStoreMut(), self.view, destruct.label);
@@ -65825,15 +65826,17 @@ const BodyContext = struct {
                 .pattern => |next| next,
             };
             const start = pending.items.len;
-            switch (self.view.bodies.pattern(next_pattern).data) {
+            switch (self.view.bodies.patternDataKind(next_pattern)) {
                 .assign => try self.saveBinder(next_pattern, saved),
-                .as => |as| {
+                .as => {
+                    const as = self.view.bodies.patternDataOf(next_pattern, .as);
                     try pending.append(self.allocator, .{ .pattern = as.pattern });
                     try pending.append(self.allocator, .{ .binder = next_pattern });
                 },
-                .applied_tag => |tag| for (tag.args) |arg| try pending.append(self.allocator, .{ .pattern = arg }),
-                .nominal => |nominal| try pending.append(self.allocator, .{ .pattern = nominal.backing_pattern }),
-                .record_destructure => |destructs| {
+                .applied_tag => for (self.view.bodies.patternDataOf(next_pattern, .applied_tag).args) |arg| try pending.append(self.allocator, .{ .pattern = arg }),
+                .nominal => try pending.append(self.allocator, .{ .pattern = self.view.bodies.patternDataOf(next_pattern, .nominal).backing_pattern }),
+                .record_destructure => {
+                    const destructs = self.view.bodies.patternDataOf(next_pattern, .record_destructure);
                     for (destructs) |destruct_idx| {
                         const destruct = self.view.bodies.recordDestruct(destruct_idx);
                         const child = switch (destruct.kind) {
@@ -65842,12 +65845,14 @@ const BodyContext = struct {
                         try pending.append(self.allocator, .{ .pattern = child });
                     }
                 },
-                .list => |list| {
+                .list => {
+                    const list = self.view.bodies.patternDataOf(next_pattern, .list);
                     for (list.patterns) |child| try pending.append(self.allocator, .{ .pattern = child });
                     if (list.rest) |rest| if (rest.pattern) |rest_pattern| try pending.append(self.allocator, .{ .pattern = rest_pattern });
                 },
-                .tuple => |items| for (items) |child| try pending.append(self.allocator, .{ .pattern = child }),
-                .str_interpolation => |str| {
+                .tuple => for (self.view.bodies.patternDataOf(next_pattern, .tuple)) |child| try pending.append(self.allocator, .{ .pattern = child }),
+                .str_interpolation => {
+                    const str = self.view.bodies.patternDataOf(next_pattern, .str_interpolation);
                     for (0..str.steps.span.len) |offset| {
                         if (self.view.bodies.strPatternStep(str.steps, @intCast(offset)).capture) |capture| try pending.append(self.allocator, .{ .pattern = capture });
                     }
@@ -66308,7 +66313,7 @@ const BodyContext = struct {
                 defer self.builder.current_loc = saved_loc;
                 const saved_region = self.builder.current_region;
                 defer self.builder.current_region = saved_region;
-                const region = self.view.bodies.statement(task.statement).source_region;
+                const region = self.view.bodies.statementRegion(task.statement);
                 self.builder.current_loc = try self.sourceLocFor(region);
                 self.builder.current_region = region;
                 const value = input.?.exprValue();
@@ -66653,7 +66658,7 @@ const BodyContext = struct {
             .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level, .row_coerce => try self.allocator.alloc(MergeBinder, 0),
         };
         defer self.allocator.free(merge_binders);
-        if (merge_binders.len == 0 and self.view.bodies.pattern(decl.pattern).data == .assign) {
+        if (merge_binders.len == 0 and self.view.bodies.patternDataKind(decl.pattern) == .assign) {
             const pattern = decl.pattern;
             const expr = decl.expr;
             const requested_cell: DraftTypeCell = if (try self.graphFreeResultTypeForExpr(ExprSite.read(expr))) |ty|
@@ -66661,7 +66666,7 @@ const BodyContext = struct {
             else
                 DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(ExprSite.read(expr)));
             if (requested_cell == .graph_node) {
-                try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern).ty, requested_cell);
+                try self.constrainCheckedInterfaceToCell(self.view.bodies.patternType(pattern), requested_cell);
             }
             const pat = try self.lowerShapeFreePatternAtCell(pattern, requested_cell);
             task.recursive_direct_pat = pat;
@@ -66701,7 +66706,7 @@ const BodyContext = struct {
         defer self.builder.current_loc = saved_loc;
         const saved_region = self.builder.current_region;
         defer self.builder.current_region = saved_region;
-        const region = self.view.bodies.statement(task.statement).source_region;
+        const region = self.view.bodies.statementRegion(task.statement);
         self.builder.current_loc = try self.sourceLocFor(region);
         self.builder.current_region = region;
         const binders = task.recursive_binders;
@@ -66760,8 +66765,8 @@ const BodyContext = struct {
 
         if (try self.beginStatefulControlPatternStatement(task, pattern, ExprSite.read(expr))) |step| return step;
 
-        const destructs = switch (self.view.bodies.pattern(pattern).data) {
-            .record_destructure => |destructs| destructs,
+        const destructs = switch (self.view.bodies.patternDataKind(pattern)) {
+            .record_destructure => self.view.bodies.patternDataOf(pattern, .record_destructure),
             .assign, .as, .applied_tag, .nominal, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => {
                 self.restoreSourceLocation(&task.statement_saved);
                 return null;
@@ -66780,7 +66785,7 @@ const BodyContext = struct {
 
         const value_node = try self.lowerExprTypeNode(ExprSite.read(expr));
         const value_cell = DraftTypeCell.fromGraphNode(value_node);
-        try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern).ty, value_cell);
+        try self.constrainCheckedInterfaceToCell(self.view.bodies.patternType(pattern), value_cell);
         task.expanded = .{ .record = .{
             .pattern = pattern,
             .destructs = destructs,
@@ -66816,7 +66821,7 @@ const BodyContext = struct {
         }
 
         const value_cell = DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr_id));
-        try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern).ty, value_cell);
+        try self.constrainCheckedInterfaceToCell(self.view.bodies.patternType(pattern), value_cell);
         const state_cell = try self.stateResultTypeCell(merge_binders, value_cell);
         task.expanded = .{ .stateful = .{
             .pattern = pattern,
@@ -66860,7 +66865,7 @@ const BodyContext = struct {
                 try self.appendRecordRestPatternStatements(
                     source_expr,
                     record.value_node,
-                    self.view.bodies.pattern(pattern).ty,
+                    self.view.bodies.patternType(pattern),
                     record.destructs,
                     lowered,
                     comptime_site,
@@ -67011,7 +67016,7 @@ const BodyContext = struct {
                         // A destructured OPTIONAL field binds its slot
                         // materialized as `Try(v, [MissingField])` (design.md
                         // "Field Kinds").
-                        const try_node = try self.instNode(self.view.bodies.pattern(child).ty);
+                        const try_node = try self.instNode(self.view.bodies.patternType(child));
                         const try_value = try self.optionalDestructTryExprAtNode(field_value, field_node, try_node);
                         try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
                             .pat = try self.lowerPatternAtNode(child, try_node),
@@ -67073,7 +67078,7 @@ const BodyContext = struct {
     fn checkedStatementHasRuntimeEffect(self: *BodyContext, statement_id: CIR.Statement.Idx) bool {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
         defer timing_scope.end();
-        return switch (self.view.bodies.statement(statement_id).data) {
+        return switch (self.view.bodies.statementData(statement_id)) {
             .decl => |decl| switch (checkedExpr(self.view, ExprSite.read(decl.expr)).data) {
                 // A dangling annotation carries diagnostics and checked type
                 // information but has no runtime value to bind.
@@ -67674,8 +67679,8 @@ const BodyContext = struct {
         // Apply that relation before either the value or a shape-dependent
         // pattern asks for a concrete view of the graph-backed value type.
         switch (requested_cell) {
-            .sealed => |ty| try self.requireClosedCheckedType(self.view.bodies.pattern(pattern).ty, ty),
-            .graph_node => try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern).ty, requested_cell),
+            .sealed => |ty| try self.requireClosedCheckedType(self.view.bodies.patternType(pattern), ty),
+            .graph_node => try self.constrainCheckedInterfaceToCell(self.view.bodies.patternType(pattern), requested_cell),
         }
         return requested_cell;
     }
@@ -67746,9 +67751,9 @@ const BodyContext = struct {
 
     fn patternIsShapeFree(self: *BodyContext, pattern_id: CIR.Pattern.Idx) bool {
         var current = pattern_id;
-        while (true) switch (self.view.bodies.pattern(current).data) {
+        while (true) switch (self.view.bodies.patternDataKind(current)) {
             .assign, .underscore => return true,
-            .as => |as| current = as.pattern,
+            .as => current = self.view.bodies.patternDataOf(current, .as).pattern,
             .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .runtime_error => return false,
         };
     }
@@ -68309,7 +68314,7 @@ const BodyContext = struct {
             try self.pushPatTypeFrame(pat_run, .{ .nominal = .{ .ty = layer.named } });
             current = layer.backing;
         }
-        switch (self.view.bodies.pattern(pattern_id).data) {
+        switch (self.view.bodies.patternDataKind(pattern_id)) {
             .applied_tag, .record_destructure, .tuple => {},
             .assign, .as, .nominal, .list, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("nominal constructor pattern lowering reached a non-constructor checked pattern"),
         }
@@ -68528,7 +68533,7 @@ const BodyContext = struct {
                                 // the record's tagged slot node (design.md
                                 // "Field Kinds").
                                 if ((try self.recordDestructFieldKind(pattern.ty, destruct)) == .optional) {
-                                    try self.queuePatternBinderVisit(pending, child, try self.instNode(self.view.bodies.pattern(child).ty));
+                                    try self.queuePatternBinderVisit(pending, child, try self.instNode(self.view.bodies.patternType(child)));
                                     continue;
                                 }
                                 const name = try recordFieldName(self.nameStoreMut(), self.view, destruct.label);
@@ -68991,7 +68996,7 @@ const BodyContext = struct {
                                 try pat_run.ops.append(self.allocator, .{ .optional_slot = .{
                                     .pattern = child,
                                     .slot_node = try self.graph.recordFieldNode(representation_node, name),
-                                    .result_node = try self.instNode(self.view.bodies.pattern(child).ty),
+                                    .result_node = try self.instNode(self.view.bodies.patternType(child)),
                                 } });
                                 continue;
                             }
@@ -69130,8 +69135,8 @@ const BodyContext = struct {
         const record = &pat_run.frames.items[index].kind.record;
         const lowering = pat_run.match_lowering orelse
             Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
-        const rest_data = self.view.bodies.pattern(rest).data;
-        if (rest_data != .assign) Common.invariant("named record rest was not an assignment pattern");
+        const rest_kind = self.view.bodies.patternDataKind(rest);
+        if (rest_kind != .assign) Common.invariant("named record rest was not an assignment pattern");
         const rest_local = self.currentOwnerPatternBinderLocal(rest) orelse
             Common.invariant("record rest binder was not pre-registered at its exact graph node");
         const needed_by_guard = if (lowering.guard) |guard|
@@ -69269,7 +69274,7 @@ const BodyContext = struct {
     }
 
     fn patternIsIgnored(self: *BodyContext, pattern_id: CIR.Pattern.Idx) bool {
-        return switch (self.view.bodies.pattern(pattern_id).data) {
+        return switch (self.view.bodies.patternDataKind(pattern_id)) {
             .underscore => true,
             .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .runtime_error => false,
         };

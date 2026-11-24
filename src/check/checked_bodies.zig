@@ -135,6 +135,9 @@ pub const TagDiscriminantEquality = struct {
 /// The shape of an expression node, read from CIR. Facts checking and
 /// publication attached to the node are separate accessors of the reader.
 pub const ExprData = union(enum) {
+    /// Which variant an expression's shape is, without its fields.
+    pub const Kind = std.meta.Tag(@This());
+
     /// Any numeric literal (`numeralLiteral`, `numeralPlan`,
     /// `literalConversionRoot`).
     numeral,
@@ -273,6 +276,9 @@ pub const ForData = struct {
 
 /// The shape of a pattern node, read from CIR.
 pub const PatternData = union(enum) {
+    /// Which variant a pattern's shape is, without its fields.
+    pub const Kind = std.meta.Tag(@This());
+
     assign,
     as: struct { pattern: PatternId },
     /// A tag pattern (`tagLabel` of `name`).
@@ -312,6 +318,9 @@ pub const ConditionLoop = struct {
 
 /// The shape of a statement node, read from CIR.
 pub const StatementData = union(enum) {
+    /// Which variant a statement's shape is, without its fields.
+    pub const Kind = std.meta.Tag(@This());
+
     /// A declaration (`declIsRecursive`).
     decl: struct { pattern: PatternId, expr: ExprId },
     /// A local function binding promoted to a procedure of its own.
@@ -599,6 +608,21 @@ pub const CheckedBodies = struct {
         }
     }
 
+    /// The source region of an expression, without reading its shape.
+    pub fn exprRegion(self: *const CheckedBodies, id: ExprId) Region {
+        return self.regionOf(@backingInt(id));
+    }
+
+    /// The source region of a pattern, without reading its shape.
+    pub fn patternRegion(self: *const CheckedBodies, id: PatternId) Region {
+        return self.regionOf(@backingInt(id));
+    }
+
+    /// The source region of a statement, without reading its shape.
+    pub fn statementRegion(self: *const CheckedBodies, id: StatementId) Region {
+        return self.regionOf(@backingInt(id));
+    }
+
     pub fn expr(self: *const CheckedBodies, id: ExprId) Expr {
         return .{
             .id = id,
@@ -723,83 +747,200 @@ pub const CheckedBodies = struct {
         // Rejected binding uses and calls of retired callees evaluate as
         // runtime errors (`ResolvedValueRefTable.retired_exprs`).
         if (self.exprIsRetired(id)) return .{ .runtime_error = .{} };
-        const node_store = self.store();
-        return switch (node_store.getExpr(id)) {
+        const cir_kind = self.store().exprKind(id);
+        inline for (comptime std.enums.values(CIR.Expr.Kind)) |k| {
+            if (cir_kind == k) return if (comptime exprDataKindOf(k)) |kind|
+                @unionInit(ExprData, @tagName(kind), self.exprDataPayload(id, k))
+            else
+                unreachedExpr(k);
+        }
+        unreachable; // the loop visits every kind
+    }
+
+    /// The kind of `exprData(id)`, read from the node's tag alone.
+    pub fn exprDataKind(self: *const CheckedBodies, id: ExprId) ExprData.Kind {
+        if (self.exprIsRetired(id)) return .runtime_error;
+        const cir_kind = self.store().exprKind(id);
+        inline for (comptime std.enums.values(CIR.Expr.Kind)) |k| {
+            if (cir_kind == k) return (comptime exprDataKindOf(k)) orelse unreachedExpr(k);
+        }
+        unreachable; // the loop visits every kind
+    }
+
+    /// The fields of `exprData(id)`, whose kind is `kind`, decoding only
+    /// what that kind reads from the node.
+    pub fn exprDataOf(self: *const CheckedBodies, id: ExprId, comptime kind: ExprData.Kind) @FieldType(ExprData, @tagName(kind)) {
+        if (kind == .runtime_error) {
+            if (self.exprIsRetired(id)) return .{};
+        } else if (builtin.mode == .debug and self.exprIsRetired(id)) {
+            invariant("a retired expression's shape was read as a kind other than a runtime error");
+        }
+        const cir_kind = self.store().exprKind(id);
+        inline for (comptime std.enums.values(CIR.Expr.Kind)) |k| {
+            if (comptime exprDataKindOf(k) == kind) {
+                if (cir_kind == k) return self.exprDataPayload(id, k);
+            }
+        }
+        invariant("an expression's shape was read as a kind it does not have");
+    }
+
+    /// The kind of checked shape a CIR expression kind has, or null for a
+    /// kind that never reaches a checked body.
+    fn exprDataKindOf(comptime cir_kind: CIR.Expr.Kind) ?ExprData.Kind {
+        return switch (cir_kind) {
             .e_num, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral => .numeral,
-            .e_frac_f32, .e_frac_f64 => invariant("a float-valued literal without exact digits reached a checked body"),
-            .e_str_segment => |segment| .{ .str_segment = segment.literal },
-            .e_str => |str| .{ .str = node_store.sliceExpr(str.span) },
-            .e_bytes_literal => |bytes| .{ .bytes_literal = bytes.literal },
-            .e_lookup_local => |lookup| .{ .lookup_local = lookup.pattern_idx },
+            .e_frac_f32, .e_frac_f64 => null,
+            .e_str_segment => .str_segment,
+            .e_str => .str,
+            .e_bytes_literal => .bytes_literal,
+            .e_lookup_local => .lookup_local,
             .e_lookup_external, .e_lookup_associated_resolved => .lookup_external,
             .e_lookup_required => .lookup_required,
-            .e_lookup_associated_local, .e_lookup_associated => invariant("an unresolved associated lookup reached a checked body"),
-            .e_list => |list| .{ .list = node_store.sliceExpr(list.elems) },
+            .e_lookup_associated_local, .e_lookup_associated => null,
+            .e_list => .list,
             .e_empty_list => .empty_list,
-            .e_tuple => |tuple| .{ .tuple = node_store.sliceExpr(tuple.elems) },
-            .e_match => |match| .{ .match_ = .{
-                .cond = match.cond,
-                .branches = node_store.sliceMatchBranches(match.branches),
-                .is_try_suffix = match.is_try_suffix,
-                .skip_exhaustiveness = match.skip_exhaustiveness,
-            } },
-            .e_if => |if_| .{ .if_ = .{ .branches = node_store.sliceIfBranches(if_.branches), .final_else = if_.final_else } },
-            .e_call => |call| .{ .call = .{
-                .func = call.func,
-                .args = node_store.sliceExpr(call.args),
-                .called_via = call.called_via,
-            } },
-            .e_record => |record| .{ .record = .{
-                .fields = node_store.sliceRecordFields(record.fields),
-                .unsets = node_store.sliceUnsetFields(record.unsets),
-                .ext = record.ext,
-            } },
+            .e_tuple => .tuple,
+            .e_match => .match_,
+            .e_if => .if_,
+            .e_call => .call,
+            .e_record => .record,
             .e_empty_record => .empty_record,
-            .e_block => |block| .{ .block = .{ .statements = node_store.sliceStatements(block.stmts), .final_expr = block.final_expr } },
-            .e_tag => |tag| .{ .tag = .{ .name = tag.name, .args = node_store.sliceExpr(tag.args) } },
-            .e_nominal => |nominal| .{ .nominal = .{ .backing_expr = nominal.backing_expr, .backing_type = nominal.backing_type } },
-            .e_nominal_external => |nominal| .{ .nominal = .{ .backing_expr = nominal.backing_expr, .backing_type = nominal.backing_type } },
-            .e_zero_argument_tag => |tag| .{ .zero_argument_tag = .{ .closure_name = tag.closure_name, .name = tag.name } },
-            .e_closure => |closure| .{ .closure = .{
-                .lambda = closure.lambda_idx,
-                .captures = node_store.sliceCaptures(closure.captures),
-                .tag_name = closure.tag_name,
-            } },
-            .e_lambda => |lambda| .{ .lambda = .{ .args = node_store.slicePatterns(lambda.args), .body = lambda.body } },
-            .e_binop => |binop| .{ .binop = .{ .op = binop.op, .lhs = binop.lhs, .rhs = binop.rhs } },
-            .e_unary_minus => |unary| .{ .unary_minus = unary.expr },
-            .e_field_access => |access| .{ .field_access = .{ .receiver = access.receiver, .segments = access.segments } },
-            .e_method_call, .e_type_method_call => invariant("an ordinary method call reached a checked body"),
+            .e_block => .block,
+            .e_tag => .tag,
+            .e_nominal, .e_nominal_external => .nominal,
+            .e_zero_argument_tag => .zero_argument_tag,
+            .e_closure => .closure,
+            .e_lambda => .lambda,
+            .e_binop => .binop,
+            .e_unary_minus => .unary_minus,
+            .e_field_access => .field_access,
+            .e_method_call, .e_type_method_call => null,
             .e_dispatch_call => .dispatch_call,
-            .e_interpolation => |interpolation| .{ .interpolation = .{
-                .first = interpolation.first,
-                .parts = node_store.sliceExpr(interpolation.parts),
-            } },
-            .e_structural_eq => |eq| .{ .structural_eq = .{ .lhs = eq.lhs, .rhs = eq.rhs, .negated = eq.negated } },
-            .e_structural_hash => |hash| .{ .structural_hash = .{ .value = hash.value, .hasher = hash.hasher } },
+            .e_interpolation => .interpolation,
+            .e_structural_eq => .structural_eq,
+            .e_structural_hash => .structural_hash,
             .e_method_eq => .method_eq,
             .e_type_dispatch_call => .type_dispatch_call,
-            .e_tuple_access => |access| .{ .tuple_access = .{ .tuple = access.tuple, .elem_index = access.elem_index } },
-            .e_runtime_error => |runtime_error| .{ .runtime_error = .{ .evaluated = node_store.sliceExpr(runtime_error.evaluated) } },
-            .e_crash => |crash| .{ .crash = crash.msg },
-            .e_dbg => |dbg| .{ .dbg = dbg.expr },
-            .e_expect_err => |expect_err| .{ .expect_err = .{ .expr = expect_err.expr, .snippet = expect_err.snippet } },
-            .e_expect => |expect| .{ .expect = expect.body },
+            .e_tuple_access => .tuple_access,
+            .e_runtime_error => .runtime_error,
+            .e_crash => .crash,
+            .e_dbg => .dbg,
+            .e_expect_err => .expect_err,
+            .e_expect => .expect,
             .e_ellipsis => .ellipsis,
             .e_anno_only, .e_derived_method => .anno_only,
             .e_break => .break_,
-            .e_return => |ret| .{ .return_ = .{
-                .expr = ret.expr,
-                .lambda = ret.lambda,
-                .context = switch (ret.context) {
+            .e_return => .return_,
+            .e_for => .for_,
+            .e_hosted_lambda => .hosted_lambda,
+            .e_run_low_level => .run_low_level,
+            .e_deferred_import_ref => null,
+        };
+    }
+
+    /// The invariant a CIR expression kind with no checked shape violates.
+    fn unreachedExpr(comptime cir_kind: CIR.Expr.Kind) noreturn {
+        switch (cir_kind) {
+            .e_frac_f32, .e_frac_f64 => invariant("a float-valued literal without exact digits reached a checked body"),
+            .e_lookup_associated_local, .e_lookup_associated => invariant("an unresolved associated lookup reached a checked body"),
+            .e_method_call, .e_type_method_call => invariant("an ordinary method call reached a checked body"),
+            .e_deferred_import_ref => invariant("a deferred import reference reached a checked body"),
+            .e_num, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_lookup_associated_resolved, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_break, .e_return, .e_for, .e_hosted_lambda, .e_run_low_level => @compileError("." ++ @tagName(cir_kind) ++ " has a checked shape"),
+        }
+    }
+
+    /// The fields of the checked shape of `id`, whose CIR kind is
+    /// `cir_kind`, reading only the node fields that shape uses.
+    inline fn exprDataPayload(self: *const CheckedBodies, id: ExprId, comptime cir_kind: CIR.Expr.Kind) @FieldType(ExprData, @tagName(exprDataKindOf(cir_kind).?)) {
+        const node_store = self.store();
+        const view = @field(node_store.exprView(id), @tagName(cir_kind));
+        return switch (cir_kind) {
+            .e_num, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral => {},
+            .e_str_segment => view.get(.literal),
+            .e_str => node_store.sliceExpr(view.get(.span)),
+            .e_bytes_literal => view.get(.literal),
+            .e_lookup_local => view.get(.pattern_idx),
+            .e_lookup_external, .e_lookup_associated_resolved => {},
+            .e_lookup_required => {},
+            .e_list => node_store.sliceExpr(view.get(.elems)),
+            .e_empty_list => {},
+            .e_tuple => node_store.sliceExpr(view.get(.elems)),
+            .e_match => blk: {
+                const match = view.decode();
+                break :blk .{
+                    .cond = match.cond,
+                    .branches = node_store.sliceMatchBranches(match.branches),
+                    .is_try_suffix = match.is_try_suffix,
+                    .skip_exhaustiveness = match.skip_exhaustiveness,
+                };
+            },
+            .e_if => blk: {
+                const if_ = view.decode();
+                break :blk .{ .branches = node_store.sliceIfBranches(if_.branches), .final_else = if_.final_else };
+            },
+            .e_call => blk: {
+                const call = view.decode();
+                break :blk .{
+                    .func = call.func,
+                    .args = node_store.sliceExpr(call.args),
+                    .called_via = call.called_via,
+                };
+            },
+            .e_record => blk: {
+                const record = view.decode();
+                break :blk .{
+                    .fields = node_store.sliceRecordFields(record.fields),
+                    .unsets = node_store.sliceUnsetFields(record.unsets),
+                    .ext = record.ext,
+                };
+            },
+            .e_empty_record => {},
+            .e_block => .{ .statements = node_store.sliceStatements(view.get(.stmts)), .final_expr = view.get(.final_expr) },
+            .e_tag => .{ .name = view.get(.name), .args = node_store.sliceExpr(view.get(.args)) },
+            .e_nominal, .e_nominal_external => .{ .backing_expr = view.get(.backing_expr), .backing_type = view.get(.backing_type) },
+            .e_zero_argument_tag => .{ .closure_name = view.get(.closure_name), .name = view.get(.name) },
+            .e_closure => blk: {
+                const closure = view.decode();
+                break :blk .{
+                    .lambda = closure.lambda_idx,
+                    .captures = node_store.sliceCaptures(closure.captures),
+                    .tag_name = closure.tag_name,
+                };
+            },
+            .e_lambda => .{ .args = node_store.slicePatterns(view.get(.args)), .body = view.get(.body) },
+            .e_binop => .{ .op = view.get(.op), .lhs = view.get(.lhs), .rhs = view.get(.rhs) },
+            .e_unary_minus => view.get(.expr),
+            .e_field_access => .{ .receiver = view.get(.receiver), .segments = view.get(.segments) },
+            .e_dispatch_call => {},
+            .e_interpolation => .{
+                .first = view.get(.first),
+                .parts = node_store.sliceExpr(view.get(.parts)),
+            },
+            .e_structural_eq => .{ .lhs = view.get(.lhs), .rhs = view.get(.rhs), .negated = view.get(.negated) },
+            .e_structural_hash => .{ .value = view.get(.value), .hasher = view.get(.hasher) },
+            .e_method_eq => {},
+            .e_type_dispatch_call => {},
+            .e_tuple_access => .{ .tuple = view.get(.tuple), .elem_index = view.get(.elem_index) },
+            .e_runtime_error => .{ .evaluated = node_store.sliceExpr(view.get(.evaluated)) },
+            .e_crash => view.get(.msg),
+            .e_dbg => view.get(.expr),
+            .e_expect_err => .{ .expr = view.get(.expr), .snippet = view.get(.snippet) },
+            .e_expect => view.get(.body),
+            .e_ellipsis => {},
+            .e_anno_only, .e_derived_method => {},
+            .e_break => {},
+            .e_return => .{
+                .expr = view.get(.expr),
+                .lambda = view.get(.lambda),
+                .context = switch (view.get(.context)) {
                     .return_expr => .return_expr,
                     .try_suffix => .try_suffix,
                 },
-            } },
-            .e_for => |for_| .{ .for_ = .{ .pattern = for_.patt, .expr = for_.expr, .body = for_.body } },
-            .e_hosted_lambda => |hosted| .{ .hosted_lambda = .{ .symbol_name = hosted.symbol_name, .args = node_store.slicePatterns(hosted.args) } },
-            .e_run_low_level => |run| .{ .run_low_level = .{ .op = run.op, .args = node_store.sliceExpr(run.args) } },
-            .e_deferred_import_ref => invariant("a deferred import reference reached a checked body"),
+            },
+            .e_for => .{ .pattern = view.get(.patt), .expr = view.get(.expr), .body = view.get(.body) },
+            .e_hosted_lambda => .{ .symbol_name = view.get(.symbol_name), .args = node_store.slicePatterns(view.get(.args)) },
+            .e_run_low_level => .{ .op = view.get(.op), .args = node_store.sliceExpr(view.get(.args)) },
+            .e_frac_f32, .e_frac_f64, .e_lookup_associated_local, .e_lookup_associated, .e_method_call, .e_type_method_call, .e_deferred_import_ref => comptime unreachable,
         };
     }
 
@@ -856,33 +997,102 @@ pub const CheckedBodies = struct {
     }
 
     pub fn patternData(self: *const CheckedBodies, id: PatternId) PatternData {
-        const node_store = self.store();
-        return switch (node_store.getPattern(id)) {
+        const cir_kind = self.store().patternKind(id);
+        inline for (comptime std.enums.values(CIR.Pattern.Kind)) |k| {
+            if (cir_kind == k) return if (comptime patternDataKindOf(k)) |kind|
+                @unionInit(PatternData, @tagName(kind), self.patternDataPayload(id, k))
+            else
+                unreachedPattern(k);
+        }
+        unreachable; // the loop visits every kind
+    }
+
+    /// The kind of `patternData(id)`, read from the node's tag alone.
+    pub fn patternDataKind(self: *const CheckedBodies, id: PatternId) PatternData.Kind {
+        const cir_kind = self.store().patternKind(id);
+        inline for (comptime std.enums.values(CIR.Pattern.Kind)) |k| {
+            if (cir_kind == k) return (comptime patternDataKindOf(k)) orelse unreachedPattern(k);
+        }
+        unreachable; // the loop visits every kind
+    }
+
+    /// The fields of `patternData(id)`, whose kind is `kind`, decoding only
+    /// what that kind reads from the node.
+    pub fn patternDataOf(self: *const CheckedBodies, id: PatternId, comptime kind: PatternData.Kind) @FieldType(PatternData, @tagName(kind)) {
+        const cir_kind = self.store().patternKind(id);
+        inline for (comptime std.enums.values(CIR.Pattern.Kind)) |k| {
+            if (comptime patternDataKindOf(k) == kind) {
+                if (cir_kind == k) return self.patternDataPayload(id, k);
+            }
+        }
+        invariant("a pattern's shape was read as a kind it does not have");
+    }
+
+    /// The kind of checked shape a CIR pattern kind has, or null for a kind
+    /// that never reaches a checked body.
+    fn patternDataKindOf(comptime cir_kind: CIR.Pattern.Kind) ?PatternData.Kind {
+        return switch (cir_kind) {
             .assign, .var_assign => .assign,
-            .as => |as| .{ .as = .{ .pattern = as.pattern } },
-            .applied_tag => |tag| .{ .applied_tag = .{ .name = tag.name, .args = node_store.slicePatterns(tag.args) } },
-            .nominal => |nominal| .{ .nominal = .{ .backing_pattern = nominal.backing_pattern, .backing_type = nominal.backing_type } },
-            .nominal_external => |nominal| .{ .nominal = .{ .backing_pattern = nominal.backing_pattern, .backing_type = nominal.backing_type } },
-            .record_destructure => |record| .{ .record_destructure = node_store.sliceRecordDestructs(record.destructs) },
-            .list => |list| .{ .list = .{
-                .patterns = node_store.slicePatterns(list.patterns),
-                .rest = if (list.rest_info) |rest| .{ .index = rest.index, .pattern = rest.pattern } else null,
-            } },
-            .tuple => |tuple| .{ .tuple = node_store.slicePatterns(tuple.patterns) },
+            .as => .as,
+            .applied_tag => .applied_tag,
+            .nominal, .nominal_external => .nominal,
+            .record_destructure => .record_destructure,
+            .list => .list,
+            .tuple => .tuple,
             .num_literal, .num_from_numeral_literal, .small_dec_literal, .dec_literal => .numeral_literal,
-            .frac_f32_literal, .frac_f64_literal => invariant("a float-valued literal pattern without exact digits reached a checked body"),
-            .str_literal => |str| .{ .str_literal = str.literal },
-            .str_interpolation => |str| .{ .str_interpolation = .{
-                .prefix = str.prefix,
-                .steps = str.steps,
-                .end = switch (str.end) {
-                    .exact => .exact,
-                    .tail => .tail,
-                },
-            } },
+            .frac_f32_literal, .frac_f64_literal => null,
+            .str_literal => .str_literal,
+            .str_interpolation => .str_interpolation,
             .underscore => .underscore,
             .runtime_error => .runtime_error,
+            .deferred_import_ref => null,
+        };
+    }
+
+    /// The invariant a CIR pattern kind with no checked shape violates.
+    fn unreachedPattern(comptime cir_kind: CIR.Pattern.Kind) noreturn {
+        switch (cir_kind) {
+            .frac_f32_literal, .frac_f64_literal => invariant("a float-valued literal pattern without exact digits reached a checked body"),
             .deferred_import_ref => invariant("a deferred import reference pattern reached a checked body"),
+            .assign, .var_assign, .as, .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .num_from_numeral_literal, .small_dec_literal, .dec_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => @compileError("." ++ @tagName(cir_kind) ++ " has a checked shape"),
+        }
+    }
+
+    /// The fields of the checked shape of `id`, whose CIR kind is
+    /// `cir_kind`, reading only the node fields that shape uses.
+    inline fn patternDataPayload(self: *const CheckedBodies, id: PatternId, comptime cir_kind: CIR.Pattern.Kind) @FieldType(PatternData, @tagName(patternDataKindOf(cir_kind).?)) {
+        const node_store = self.store();
+        const view = @field(node_store.patternView(id), @tagName(cir_kind));
+        return switch (cir_kind) {
+            .assign, .var_assign => {},
+            .as => .{ .pattern = view.get(.pattern) },
+            .applied_tag => .{ .name = view.get(.name), .args = node_store.slicePatterns(view.get(.args)) },
+            .nominal, .nominal_external => .{ .backing_pattern = view.get(.backing_pattern), .backing_type = view.get(.backing_type) },
+            .record_destructure => node_store.sliceRecordDestructs(view.get(.destructs)),
+            .list => blk: {
+                const list = view.decode();
+                break :blk .{
+                    .patterns = node_store.slicePatterns(list.patterns),
+                    .rest = if (list.rest_info) |rest| .{ .index = rest.index, .pattern = rest.pattern } else null,
+                };
+            },
+            .tuple => node_store.slicePatterns(view.get(.patterns)),
+            .num_literal, .num_from_numeral_literal, .small_dec_literal, .dec_literal => {},
+            .str_literal => view.get(.literal),
+            .str_interpolation => blk: {
+                const str = view.decode();
+                break :blk .{
+                    .prefix = str.prefix,
+                    .steps = str.steps,
+                    .end = switch (str.end) {
+                        .exact => .exact,
+                        .tail => .tail,
+                    },
+                };
+            },
+            .underscore => {},
+            .runtime_error => {},
+            .frac_f32_literal, .frac_f64_literal, .deferred_import_ref => comptime unreachable,
         };
     }
 
