@@ -14,6 +14,7 @@ None of this runs in CI or `minici`. Each model is run by hand, from its own dir
 | [exhaustive](exhaustive/) | match exhaustiveness and redundancy in the checker | generator, differential against `roc check` | Python | none |
 | [infer](infer/) | type inference and the type printer | generator, differential against `roc check` | Python | none |
 | [specconstr](specconstr/) | SpecConstr termination and growth | Maude model, generator | Maude, Python | none |
+| [match-compile](match-compile/) | compiled `match`: arm choice and bindings at run time | generator, differential across all paths against a reference | Python, Node | none |
 
 Every hook is a developer diagnostic (`base.dev_diagnostics`), so the models need a Debug `roc` (`zig build roc`) or one built
 with `-Ddev-diagnostics`.
