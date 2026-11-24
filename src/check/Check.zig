@@ -187,10 +187,10 @@ var_map: collections.DenseMap(Var, Var),
 ground_expected_backups: std.AutoHashMapUnmanaged(u64, Var) = .empty,
 /// Ground instances of type declarations referenced from annotations. See
 /// `instantiateVarPolarized`.
-ground_polarized_instances: std.AutoHashMapUnmanaged(PolarizedInstanceKey, Var) = .empty,
+ground_polarized_instances: std.AutoHashMapUnmanaged(SharedInstanceKey, Var) = .empty,
 /// Ground subtrees of the latest instance of a type declaration at each
 /// position whose instance is not ground. See `instantiateVarPolarized`.
-polarized_instance_subtrees: std.AutoHashMapUnmanaged(PolarizedInstanceKey, std.ArrayListUnmanaged(Instantiator.SharedSubtree)) = .empty,
+polarized_instance_subtrees: std.AutoHashMapUnmanaged(SharedInstanceKey, std.ArrayListUnmanaged(Instantiator.SharedSubtree)) = .empty,
 /// The marker pre-walk outcome of a type declaration at each position it was
 /// instantiated at with a behavior that decides markers per occurrence. See
 /// `polarizedMarkerChoices`.
@@ -12441,14 +12441,22 @@ fn instantiateVarPolarized(
     // with every annotation that refers to it, so a mismatch against one of
     // them can merge it into `.err`; it is then no longer ground and the next
     // reference instantiates a fresh copy.
+    //
+    // The annotation node that refers to an instance joins its class, so an
+    // instance is shared only among references whose nodes belong to the same
+    // kind of graph (`SharedInstanceOwner`).
     const instance_key: PolarizedInstanceKey = .{
         .declaration = var_to_instantiate,
         .polarity_behavior = polarity_behavior,
         .polarity = polarity,
         .reach = reach,
     };
+    const shared_key: SharedInstanceKey = .{
+        .position = instance_key,
+        .owner = if (env.rank() == .generalized) .template else .use,
+    };
     if (evidence == .none) {
-        if (self.ground_polarized_instances.get(instance_key)) |cached| {
+        if (self.ground_polarized_instances.get(shared_key)) |cached| {
             if (try self.varIsGround(cached)) return cached;
         }
     }
@@ -12470,7 +12478,7 @@ fn instantiateVarPolarized(
     }
     var reads_every_recorded_subtree = false;
     if (evidence == .none) {
-        if (self.polarized_instance_subtrees.get(instance_key)) |entries| {
+        if (self.polarized_instance_subtrees.get(shared_key)) |entries| {
             try self.groundSubtreeEntries(entries.items, &shared_subtrees);
             reads_every_recorded_subtree = shared_subtrees.items.len == entries.items.len and
                 self.codec_instance_copies.len == 0 and
@@ -12496,12 +12504,12 @@ fn instantiateVarPolarized(
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
     if (evidence == .none) {
         if (opened_marker_exts.items.len == 0 and try self.varIsGround(instantiated)) {
-            try self.ground_polarized_instances.put(self.gpa, instance_key, instantiated);
+            try self.ground_polarized_instances.put(self.gpa, shared_key, instantiated);
             if (self.annotation_generation_is_retainable) {
                 try self.retainable_generation_shared_roots.append(self.gpa, instantiated);
             }
         } else {
-            const slot = try self.polarized_instance_subtrees.getOrPut(self.gpa, instance_key);
+            const slot = try self.polarized_instance_subtrees.getOrPut(self.gpa, shared_key);
             if (!slot.found_existing) slot.value_ptr.* = .empty;
             if (reads_every_recorded_subtree) {
                 try self.debugAssertMaximalGroundSubtreeCopies(instantiated, slot.value_ptr.items);
@@ -12803,6 +12811,26 @@ const PolarizedInstanceKey = struct {
     polarity_behavior: PolarityVarBehavior,
     polarity: Polarity,
     reach: Instantiator.AdapterReach,
+};
+
+/// Which graph the annotation nodes that read a shared instance belong to.
+/// Each such node joins the instance's class, and a merged class holds the
+/// lower of the two ranks.
+const SharedInstanceOwner = enum {
+    /// A reference generated at generalized rank, inside a type declaration:
+    /// the instance is part of that declaration's template, which every use
+    /// of the declaration copies.
+    template,
+    /// A reference generated at a scope's own rank: the instance is a
+    /// monotype, which settles at `outermost` like every ground type and is
+    /// read where it stands.
+    use,
+};
+
+/// The key of an instance that references share (`instantiateVarPolarized`).
+const SharedInstanceKey = struct {
+    position: PolarizedInstanceKey,
+    owner: SharedInstanceOwner,
 };
 
 /// Record alias markers an annotation-position instantiation resolved open,
@@ -44377,7 +44405,15 @@ fn distributeRecordOmittedDefaults(self: *Self) Allocator.Error!void {
     errdefer output.deinit(self.cir.gpa);
     for (self.record_constructions.items) |expr_idx| {
         if (self.hoistExprInvalidated(expr_idx) or self.erroneous_value_exprs.contains(expr_idx)) continue;
-        const resolved = self.types.resolveVar(ModuleEnv.varFrom(expr_idx));
+        var resolved = self.types.resolveVar(ModuleEnv.varFrom(expr_idx));
+        // An annotated or expected-typed literal builds its record on a
+        // separate body variable and relates its own variable to the
+        // annotation. When the annotation names an alias, the expression's
+        // root is that alias node, and unification related the alias's
+        // backing to the body's record class.
+        while (resolved.desc.content == .alias) {
+            resolved = self.types.resolveVar(self.types.getAliasBackingVar(resolved.desc.content.alias));
+        }
         if (resolved.desc.content == .err) continue;
         const group = by_root.get(resolved.var_) orelse continue;
         const seen = try emitted.getOrPut(expr_idx);
@@ -44405,6 +44441,7 @@ fn distributeRecordOmittedDefaults(self: *Self) Allocator.Error!void {
             });
         }
     }
+    std.mem.sort(ModuleEnv.RecordOmittedDefault, output.items(), {}, ModuleEnv.RecordOmittedDefault.lessThan);
     self.cir.record_omitted_defaults.deinit(self.cir.gpa);
     self.cir.record_omitted_defaults = output;
 }
@@ -44435,16 +44472,8 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     var recursive_defaults: std.ArrayList(PendingDefaultCheck) = .empty;
     defer recursive_defaults.deinit(self.gpa);
 
-    var evidence = DefaultWalkEvidence{
-        .omitted_defaults_by_expr = .init(self.gpa),
-        .next_omitted_default = try self.gpa.alloc(EvidenceLink, self.cir.record_omitted_defaults.items().len),
-    };
+    var evidence = DefaultWalkEvidence{};
     defer evidence.deinit(self.gpa);
-    for (self.cir.record_omitted_defaults.items(), 0..) |omitted, index| {
-        const entry = try evidence.omitted_defaults_by_expr.getOrPut(omitted.expr);
-        evidence.next_omitted_default[index] = if (entry.found_existing) .some(@fromBackingInt(entry.value_ptr.*)) else .none;
-        entry.value_ptr.* = @intCast(index);
-    }
 
     // Top-level binder pattern -> def body, for following reference edges
     // through def bodies during the residue walk. A destructuring def
@@ -44828,10 +44857,6 @@ fn linkedRecord(link: EvidenceLink) ?u32 {
 /// Prebuilt evidence indexes for one `checkDefaultRestrictions` run (built
 /// once, shared by every default's residue walk).
 const DefaultWalkEvidence = struct {
-    /// Construction -> first recorded omission, with links into the CIR table.
-    /// Built once so cycle walks consume exact omission evidence in O(fields).
-    omitted_defaults_by_expr: collections.DenseMap(CIR.Expr.Idx, u32),
-    next_omitted_default: []EvidenceLink,
     pattern_to_def_expr: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
     /// Local instantiating node -> its first scheme-use record index
     /// (`value_use`/`nested_function_use` slots only); `next_node_scheme_use`
@@ -44848,8 +44873,6 @@ const DefaultWalkEvidence = struct {
     next_instantiation: []EvidenceLink = &.{},
 
     fn deinit(evidence: *DefaultWalkEvidence, gpa: std.mem.Allocator) void {
-        evidence.omitted_defaults_by_expr.deinit();
-        gpa.free(evidence.next_omitted_default);
         evidence.pattern_to_def_expr.deinit(gpa);
         evidence.node_to_scheme_uses.deinit(gpa);
         gpa.free(evidence.next_node_scheme_use);
@@ -45172,7 +45195,6 @@ fn defaultMaterializationIsRecursive(
             .e_empty_record => {
                 if (try self.appendOmittedDefaultDependencies(
                     expr_idx,
-                    evidence,
                     self_module,
                     target_expr_node,
                     visited_defaults,
@@ -45184,7 +45206,6 @@ fn defaultMaterializationIsRecursive(
                 if (record.ext == null) {
                     if (try self.appendOmittedDefaultDependencies(
                         expr_idx,
-                        evidence,
                         self_module,
                         target_expr_node,
                         visited_defaults,
@@ -45434,16 +45455,12 @@ fn appendDefaultWalkStmtExprs(
 fn appendOmittedDefaultDependencies(
     self: *Self,
     record_expr: CIR.Expr.Idx,
-    evidence: *const DefaultWalkEvidence,
     self_module: base.ModuleIdentity.Idx,
     target_expr_node: u32,
     visited_defaults: *collections.DenseMapUnmanaged(u32, void),
     expr_work: *std.ArrayList(CIR.Expr.Idx),
 ) std.mem.Allocator.Error!bool {
-    var next = evidence.omitted_defaults_by_expr.get(record_expr);
-    while (next) |index| {
-        const omitted = self.cir.record_omitted_defaults.items()[index];
-        next = linkedRecord(evidence.next_omitted_default[index]);
+    for (ModuleEnv.RecordOmittedDefault.ofExpr(self.cir.record_omitted_defaults.items(), record_expr)) |omitted| {
         if (omitted.origin_module != self_module) continue;
         if (omitted.default_expr_node == target_expr_node) return true;
         const seen = try visited_defaults.getOrPut(self.gpa, omitted.default_expr_node);

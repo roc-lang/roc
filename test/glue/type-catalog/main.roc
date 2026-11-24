@@ -15,6 +15,8 @@ platform ""
         "roc_u128": u128_for_host,
         "roc_single_payload": single_payload_for_host,
         "roc_single_no_payload": single_no_payload_for_host,
+        "roc_multi_payload": multi_payload_for_host!,
+        "roc_zero_sized_wrapper": zero_sized_wrapper_for_host,
         "roc_result_a": result_a_for_host,
         "roc_result_b": result_b_for_host,
     }
@@ -22,6 +24,7 @@ platform ""
         "roc_catalog_roundtrip": CatalogHost.roundtrip!,
         "roc_catalog_single_payload_roundtrip": CatalogHost.single_payload_roundtrip!,
         "roc_catalog_single_no_payload": CatalogHost.single_no_payload!,
+        "roc_catalog_multi_payload_roundtrip": CatalogHost.multi_payload_roundtrip!,
     }
     targets: {
         inputs_dir: "targets/",
@@ -99,6 +102,16 @@ single_payload_for_host = |_| {
 single_no_payload_for_host : {} -> Catalog.SingleNoPayload
 single_no_payload_for_host = |_| {
     Ready
+}
+
+multi_payload_for_host! : {} => Catalog.MultiPayload
+multi_payload_for_host! = |_| {
+    CatalogHost.multi_payload_roundtrip!(Stepped(21, [3, 5, 8]))
+}
+
+zero_sized_wrapper_for_host : [Marker], Catalog.ZeroSizedWrapper -> Catalog.ZeroSizedWrapper
+zero_sized_wrapper_for_host = |_, wrapper| {
+    { empty: {}, only: wrapper.only + 1.0 }
 }
 
 result_a_for_host : {} -> A.Result

@@ -73,7 +73,8 @@ pub const Inputs = struct {
     /// entry wrappers of its provides, the data it exports, and the stack
     /// pointer accessors of a WebAssembly 1.0 module.
     app_public: []const []const u8,
-    /// The platform's `provides` symbols.
+    /// The platform's `provides` symbols. An object keeps every one; a
+    /// module keeps those its roots reach.
     provides: []const []const u8,
     /// The platform's hosted symbols, sorted and distinct.
     hosted: []const []const u8,
@@ -844,8 +845,9 @@ pub fn composeModule(
     try program.walk.init();
     _ = try program.walk.place(0);
 
-    // Roots: the platform's exports, the stack exports, the host's retained
-    // atoms (placing the host reaches them), and the provides.
+    // Roots: the platform's exports, the stack exports, and the host's
+    // retained atoms (placing the host reaches them). A provide is placed
+    // when one of them reaches it.
     var undefined_exports: std.ArrayList([]const u8) = .empty;
     const export_targets = try arena.alloc(?Resolved, config.exports.len + config.stack_exports.len);
     for (config.exports, export_targets[0..config.exports.len]) |name, *target| {
@@ -859,12 +861,6 @@ pub fn composeModule(
     if (undefined_exports.items.len != 0) {
         outcome.undefined_exports = undefined_exports.items;
         return error.UndefinedExports;
-    }
-    for (inputs.provides) |name| {
-        // The checked program defines every provide (the checker rejects an
-        // app that lacks one), and the root unit exports its wrapper.
-        const found = program.app_exports.get(name) orelse base.invariant("wasm fast dev link invariant violated: no unit image defines the provided symbol {s}", .{name});
-        try program.walk.reachSymbol(found.image, found.symbol);
     }
     var ctors_exported = false;
     for (export_targets) |target| switch (target.?) {
@@ -1383,7 +1379,7 @@ fn stackRooms(arena: Allocator, plan: *const Layout) Allocator.Error![]u64 {
     return StackRoom.programRooms(arena, functions, edges.items);
 }
 
-/// Report every platform boundary function no engine would load: a
+/// Report every placed platform boundary function no engine would load: a
 /// provided entry wrapper, or a hosted function the app calls.
 fn checkParameters(arena: Allocator, program: *const Program, inputs: Inputs, outcome: *Outcome) LinkError!void {
     const limit = layout.abi.wasm_max_function_params;
@@ -1392,7 +1388,9 @@ fn checkParameters(arena: Allocator, program: *const Program, inputs: Inputs, ou
         const found = program.app_exports.get(name) orelse continue;
         const view = program.items[found.image].view;
         if (symbolKind(view, found.symbol) != .function) continue;
-        const function = view.functions()[view.exports()[found.symbol].function];
+        const local = view.exports()[found.symbol].function;
+        if (program.walk.states[found.image] == null or !program.reached(found.image, local)) continue;
+        const function = view.functions()[local];
         const params = view.types()[function.type].param_count;
         if (params > limit) try problems.append(arena, .{ .symbol = try arena.dupe(u8, name), .hosted = false, .param_count = params });
     }
@@ -2853,6 +2851,68 @@ test "__table_base is 1 wherever it appears, and a relative table index is the s
     try std.testing.expectEqual(absolute, relative + @as(i32, @intCast(table_base)));
 }
 
+test "a provide no export reaches is left out with the hosted import it calls" {
+    const allocator = std.testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The host: `run` calls the app's `roc_used` and nothing names
+    // `roc_unused`.
+    const host = try WasmUnitImage.encode(allocator, .{
+        .stack_checks = false,
+        .types = &.{.{ .params = &.{}, .results = &.{} }},
+        .functions = &.{.{ .body = try testBody(arena, &.{ &.{0x10}, &test_zero_leb, &.{0x0b} }), .type = 0, .export_name = "run", .sites = &.{
+            .{ .offset = 2, .kind = .function_index_leb, .target_kind = .import, .target = 0, .addend = 0 },
+        } }},
+        .segments = &.{},
+        .data_exports = &.{},
+        .table_requests = &.{},
+        .imports = &.{.{ .module = "env", .name = "roc_used", .kind = .function, .type = .some(0) }},
+    });
+    defer allocator.free(host);
+    const support = try testIdleImage(allocator, arena, "roc_builtins_unused");
+    defer allocator.free(support);
+    // The root unit: `roc_used` does nothing, and `roc_unused` calls the
+    // hosted `native_only`, which only the embedder could define.
+    const root = try WasmUnitImage.encode(allocator, .{
+        .stack_checks = false,
+        .types = &.{.{ .params = &.{}, .results = &.{} }},
+        .functions = &.{
+            .{ .body = try testBody(arena, &.{&.{0x0b}}), .type = 0, .export_name = "roc_used", .sites = &.{} },
+            .{ .body = try testBody(arena, &.{ &.{0x10}, &test_zero_leb, &.{0x0b} }), .type = 0, .export_name = "roc_unused", .sites = &.{
+                .{ .offset = 2, .kind = .function_index_leb, .target_kind = .import, .target = 0, .addend = 0 },
+            } },
+        },
+        .segments = &.{},
+        .data_exports = &.{},
+        .table_requests = &.{},
+        .imports = &.{.{ .module = "env", .name = "native_only", .kind = .function, .type = .some(0) }},
+    });
+    defer allocator.free(root);
+
+    const units = [_]View{try View.init(root)};
+    const bytes = try testComposeModule(allocator, arena, .{
+        .host = try View.init(host),
+        .support = try View.init(support),
+        .units = &units,
+        .root = 0,
+        .app_public = &.{ "roc_unused", "roc_used" },
+        .provides = &.{ "roc_used", "roc_unused" },
+        .hosted = &.{"native_only"},
+    }, &.{"run"});
+    var module = try WasmModule.preload(allocator, bytes, .executable);
+    defer module.deinit();
+
+    // Functions: `run`, then `roc_used`, which it calls.
+    try std.testing.expectEqual(@as(usize, 0), module.imports.items.len);
+    try std.testing.expectEqual(@as(usize, 2), module.function_offsets.items.len);
+    try std.testing.expectEqual(@as(u32, 0), try testExportIndex(&module, "run"));
+    var cursor: usize = 2;
+    try std.testing.expectEqual(@as(u32, 1), try WasmModule.readU32(try testFunctionBody(&module, 0), &cursor));
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x0b }, try testFunctionBody(&module, 1));
+}
+
 test "constructors nothing names run from a wrapper of each exported function" {
     if (comptime @import("builtin").os.tag != .linux) return error.SkipZigTest;
     const allocator = std.testing.allocator;
@@ -2894,12 +2954,12 @@ test "constructors nothing names run from a wrapper of each exported function" {
     var module = try WasmModule.preload(allocator, bytes, .executable);
     defer module.deinit();
 
-    // Functions: `run`, `ctor`, `roc_main`, `__wasm_call_ctors`, then the
-    // wrapper the export names.
-    try std.testing.expectEqual(@as(usize, 5), module.function_offsets.items.len);
-    try std.testing.expectEqual(@as(u32, 4), try testExportIndex(&module, "run"));
-    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x10, 0x01, 0x0b }, try testFunctionBody(&module, 3));
-    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x10, 0x03, 0x20, 0x00, 0x10, 0x00, 0x0b }, try testFunctionBody(&module, 4));
+    // Functions: `run`, `ctor`, `__wasm_call_ctors`, then the wrapper the
+    // export names.
+    try std.testing.expectEqual(@as(usize, 4), module.function_offsets.items.len);
+    try std.testing.expectEqual(@as(u32, 3), try testExportIndex(&module, "run"));
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x10, 0x01, 0x0b }, try testFunctionBody(&module, 2));
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x10, 0x02, 0x20, 0x00, 0x10, 0x00, 0x0b }, try testFunctionBody(&module, 3));
     try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x20, 0x00, 0x0b }, try testFunctionBody(&module, 0));
 }
 

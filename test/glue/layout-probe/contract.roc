@@ -12,6 +12,7 @@ app [
 	provide_vector_quad,
 	provide_vector_hva,
 	provide_vector_wrapper,
+	provide_zero_sized_wrapper,
 	provide_vector_tuple,
 	provide_vector_tag,
 	make_vector_tag,
@@ -81,6 +82,9 @@ main! = || {
 	vector_wrapper = { only: u8x16 }
 	vector_wrapper_back = Probe.roundtrip_vector_wrapper!(vector_wrapper)
 	expect vector_wrapper_back.only.to_u128_bits() == bits_a
+
+	zero_sized_wrapper_back = Probe.roundtrip_zero_sized_wrapper!(Marker, { empty: {}, only: 6.5 })
+	expect zero_sized_wrapper_back.only == 7.5
 
 	vector_tuple = (0x1020304050607080.U64, u8x16, i16x8)
 	vector_tuple_back = Probe.roundtrip_vector_tuple!(vector_tuple)
@@ -188,6 +192,8 @@ provide_vector_quad = |value| value
 provide_vector_hva = |value| value
 
 provide_vector_wrapper = |value| value
+
+provide_zero_sized_wrapper = |_, value| { empty: {}, only: value.only + 1.0 }
 
 provide_vector_tuple = |value| value
 

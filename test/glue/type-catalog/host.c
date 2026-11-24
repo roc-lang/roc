@@ -94,6 +94,14 @@ CatalogPayload roc_catalog_single_payload_roundtrip(CatalogPayload arg0) {
     return arg0;
 }
 
+Stepped roc_catalog_multi_payload_roundtrip(Stepped arg0) {
+    if (arg0._0 != 21 || arg0._1.length != 3) {
+        record_failure("multi-payload argument mismatch");
+    }
+    arg0._0 += 1;
+    return arg0;
+}
+
 static size_t roc_str_len(const RocStr *str) {
     if ((intptr_t)str->length < 0) {
         return ((const uint8_t *)str)[sizeof(RocStr) - 1u] ^ 0x80u;
@@ -160,6 +168,20 @@ static void run_contract(void) {
     }
     if (roc_u128((unsigned __int128)123456789u) != (unsigned __int128)123456789u) {
         record_failure("U128 identity mismatch");
+    }
+
+    Stepped stepped = roc_multi_payload();
+    if (stepped._0 != 22) {
+        record_failure("multi-payload first payload mismatch");
+    }
+    const uint64_t *steps = (const uint64_t *)stepped._1.elements;
+    if (stepped._1.length != 3 || steps[0] != 3 || steps[1] != 5 || steps[2] != 8) {
+        record_failure("multi-payload second payload mismatch");
+    }
+
+    CatalogZeroSizedWrapper zero_sized = { .only = 6.5 };
+    if (roc_zero_sized_wrapper(zero_sized).only != 7.5) {
+        record_failure("zero-sized wrapper mismatch");
     }
 }
 
