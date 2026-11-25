@@ -15760,7 +15760,10 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 /// Canonicalize and seal the solved type store, flattening the rows the
 /// module's checked output can name (design.md "Sealing").
 pub fn sealTypes(self: *Self) std.mem.Allocator.Error!void {
-    try self.types.canonicalizeAndSealReached(self.cir.getIdentStoreConst(), SealRoots{ .env = self.cir });
+    try self.types.canonicalizeAndSealReached(self.cir.getIdentStoreConst(), SealRoots{
+        .env = self.cir,
+        .node_vars = @intCast(@min(self.cir.store.nodes.len(), self.types.len())),
+    });
 }
 
 /// Every variable a reader of the module's sealed type store may start from:
@@ -15768,11 +15771,13 @@ pub fn sealTypes(self: *Self) std.mem.Allocator.Error!void {
 /// checker output names besides.
 const SealRoots = struct {
     env: *const ModuleEnv,
+    /// How many CIR nodes have a variable of their own.
+    node_vars: u32,
 
     pub fn forEach(self: SealRoots, visitor: anytype) std.mem.Allocator.Error!void {
         const env = self.env;
         const node_count: u32 = @intCast(env.store.nodes.len());
-        try visitor.visitLeading(node_count);
+        try visitor.visitLeading(self.node_vars);
         var node_idx: u32 = CIR.Node.first_idx;
         while (node_idx < node_count) : (node_idx += 1) {
             const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
