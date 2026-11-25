@@ -2571,26 +2571,27 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        const range_start: u32 = @intCast(self.types_store.record_fields.len());
-
+        const merged = &self.scratch.merged_fields;
+        merged.clearRetainingCapacity();
         for (self.scratch.in_both_fields.sliceRange(post.shared_fields_range)) |shared| {
             const next_presence = shared.next_presence orelse
                 base.invariant("type unifier invariant violated: shared record field had no merged presence", .{});
 
-            _ = try self.types_store.appendRecordFields(&[_]RecordField{.{
+            _ = try merged.append(self.scratch.gpa, .{
                 .name = shared.b.name,
                 .presence = next_presence,
-            }});
+            });
         }
 
-        try self.mergeRowAppendedFrom(.record, post.pair, range_start, post.mb_a_extended_fields, post.mb_b_extended_fields, post.ext);
+        try self.mergeRow(.record, post.pair, post.mb_a_extended_fields, post.mb_b_extended_fields, post.ext);
     }
 
-    /// Append the merged row's tags in name order: the shared tags, and when
+    /// Gather the merged row's tags in name order: the shared tags, and when
     /// both sides extend, each side's own tags merged among them. The
     /// partition left each of the three groups in name order.
     fn processSharedTagsAfterChildren(self: *Self, post: SharedTagsAfterChildren) Error!void {
-        const range_start: u32 = @intCast(self.types_store.tags.len());
+        const merged = &self.scratch.merged_tags;
+        merged.clearRetainingCapacity();
         const shared = self.scratch.in_both_tags.sliceRange(post.shared_tags_range);
 
         if (post.both_extended) |extended| {
@@ -2617,24 +2618,24 @@ const Unifier = struct {
                 }
                 switch (group orelse break) {
                     .in_both => {
-                        try self.appendSharedTag(shared[shared_i]);
+                        _ = try merged.append(self.scratch.gpa, sharedTag(shared[shared_i]));
                         shared_i += 1;
                     },
                     .only_in_a => {
-                        _ = try self.types_store.appendTags(only_in_a[a_i..][0..1]);
+                        _ = try merged.append(self.scratch.gpa, only_in_a[a_i]);
                         a_i += 1;
                     },
                     .only_in_b => {
-                        _ = try self.types_store.appendTags(only_in_b[b_i..][0..1]);
+                        _ = try merged.append(self.scratch.gpa, only_in_b[b_i]);
                         b_i += 1;
                     },
                 }
             }
         } else {
-            for (shared) |tags| try self.appendSharedTag(tags);
+            for (shared) |tags| _ = try merged.append(self.scratch.gpa, sharedTag(tags));
         }
 
-        try self.mergeRowAppendedFrom(.tag_union, post.pair, range_start, null, null, post.ext);
+        try self.mergeRow(.tag_union, post.pair, null, null, post.ext);
 
         // The merged row now holds its own entry for each of these tags, and
         // the part that held it before keeps its own.
@@ -2645,16 +2646,16 @@ const Unifier = struct {
         }
     }
 
-    /// Append the merged tag for a tag both rows hold.
-    fn appendSharedTag(self: *Self, tags: TwoTags) std.mem.Allocator.Error!void {
+    /// The merged tag for a tag both rows hold.
+    fn sharedTag(tags: TwoTags) Tag {
         // A tag both rows hold is pattern-only exactly when both rows hold it
         // only because match patterns asked for it (design.md "Pattern-Only
         // Tags").
-        _ = try self.types_store.appendTags(&[_]Tag{.{
+        return .{
             .name = tags.b.name,
             .args = tags.b.args,
             .pattern_only = tags.a.pattern_only and tags.b.pattern_only,
-        }});
+        };
     }
 
     /// Note every pattern-only tag among `tags`, which `part` holds, as one
@@ -2666,29 +2667,65 @@ const Unifier = struct {
         }
     }
 
-    /// Append each side's unshared entries after the shared entries already
-    /// appended from `range_start`, then merge the row built from all of them.
-    fn mergeRowAppendedFrom(
+    /// Add each side's unshared entries after the merged entries gathered in
+    /// the kind's `merged_` scratch list, then merge the pair into the row of
+    /// all of them over `ext`.
+    fn mergeRow(
         self: *Self,
         comptime kind: RowKind,
         pair: MergePair,
-        range_start: u32,
         mb_a_extended: ?kind.Entry().SafeList.Range,
         mb_b_extended: ?kind.Entry().SafeList.Range,
         ext: Var,
     ) std.mem.Allocator.Error!void {
+        const merged = self.scratch.rowList(kind, "merged_");
         if (mb_a_extended) |extended| {
-            _ = try kind.appendToStore(self.types_store, self.scratch.rowList(kind, "only_in_a_").sliceRange(extended));
+            _ = try merged.appendSlice(self.scratch.gpa, self.scratch.rowList(kind, "only_in_a_").sliceRange(extended));
         }
         if (mb_b_extended) |extended| {
-            _ = try kind.appendToStore(self.types_store, self.scratch.rowList(kind, "only_in_b_").sliceRange(extended));
+            _ = try merged.appendSlice(self.scratch.gpa, self.scratch.rowList(kind, "only_in_b_").sliceRange(extended));
         }
 
-        const appended = kind.row(kind.storeEntries(self.types_store).rangeToEnd(range_start), ext);
+        const row_ = kind.row(try self.storedRowEntries(kind, pair, merged.items()), ext);
         try self.types_store.unifierUnion(pair.a, pair.b, .{
-            .content = kind.content(try self.rowForMerge(kind, pair, appended)),
+            .content = kind.content(try self.rowForMerge(kind, pair, row_)),
             .rank = pair.rank,
         });
+    }
+
+    /// A range of the store's entries holding exactly `entries`, in order.
+    /// When the own row of either side of `pair` holds them already, that is
+    /// its range: the store never rewrites an entry it holds, so a range is
+    /// interchangeable with any other holding the same entries, and the
+    /// side's row stays readable through the merged class as well. Otherwise
+    /// `entries` are appended.
+    fn storedRowEntries(
+        self: *Self,
+        comptime kind: RowKind,
+        pair: MergePair,
+        entries: []const kind.Entry(),
+    ) std.mem.Allocator.Error!kind.Entry().SafeMultiList.Range {
+        for ([_]Var{ pair.b, pair.a }) |side| {
+            const own = switch (self.types_store.resolveVar(side).desc.content) {
+                .structure => |flat_type| kind.rowOf(flat_type) orelse continue,
+                .flex, .rigid, .alias, .field_presence, .err => continue,
+            };
+            const own_entries = kind.entriesOf(own);
+            if (self.storeEntriesEql(kind, own_entries, entries)) return own_entries;
+        }
+        return try kind.appendToStore(self.types_store, entries);
+    }
+
+    /// Whether the store's entries in `range` are `entries`, in order.
+    fn storeEntriesEql(self: *Self, comptime kind: RowKind, range: kind.Entry().SafeMultiList.Range, entries: []const kind.Entry()) bool {
+        if (range.len() != entries.len) return false;
+        if (entries.len == 0) return true;
+        const stored = kind.storeEntries(self.types_store);
+        for (entries, 0..) |entry, offset| {
+            const stored_entry = stored.get(@fromBackingInt(@backingInt(range.start) + @as(u32, @intCast(offset))));
+            if (!std.meta.eql(stored_entry, entry)) return false;
+        }
+        return true;
     }
 
     /// A fresh row holding `entries` over `ext`.
@@ -5454,6 +5491,8 @@ pub const Scratch = struct {
     only_in_a_fields: RecordFieldSafeList,
     only_in_b_fields: RecordFieldSafeList,
     in_both_fields: TwoRecordFieldsSafeList,
+    /// The merged row a record relation builds before storing it.
+    merged_fields: RecordFieldSafeList,
     /// Successful width-absorption facts consumed by the checker before the
     /// next unification call resets this scratch store.
     absorbed_record_defaults: AbsorbedRecordDefault.SafeList,
@@ -5482,6 +5521,8 @@ pub const Scratch = struct {
     only_in_a_tags: TagSafeList,
     only_in_b_tags: TagSafeList,
     in_both_tags: TwoTagsSafeList,
+    /// The merged row a tag-union relation builds before storing it.
+    merged_tags: TagSafeList,
 
     // constraints
     deferred_constraints: DeferredConstraintCheck.SafeList,
@@ -5658,6 +5699,7 @@ pub const Scratch = struct {
             .only_in_a_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
             .only_in_b_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
             .in_both_fields = try TwoRecordFieldsSafeList.initCapacity(gpa, 32),
+            .merged_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
             .absorbed_record_defaults = try AbsorbedRecordDefault.SafeList.initCapacity(gpa, 4),
             .gathered_tags = try TagSafeList.initCapacity(gpa, 32),
             .bounded_row_violation = null,
@@ -5666,6 +5708,7 @@ pub const Scratch = struct {
             .only_in_a_tags = try TagSafeList.initCapacity(gpa, 32),
             .only_in_b_tags = try TagSafeList.initCapacity(gpa, 32),
             .in_both_tags = try TwoTagsSafeList.initCapacity(gpa, 32),
+            .merged_tags = try TagSafeList.initCapacity(gpa, 32),
             .deferred_constraints = try DeferredConstraintCheck.SafeList.initCapacity(gpa, 32),
             .only_in_a_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
             .only_in_b_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
@@ -5701,11 +5744,13 @@ pub const Scratch = struct {
         self.only_in_a_fields.deinit(self.gpa);
         self.only_in_b_fields.deinit(self.gpa);
         self.in_both_fields.deinit(self.gpa);
+        self.merged_fields.deinit(self.gpa);
         self.absorbed_record_defaults.deinit(self.gpa);
         self.gathered_tags.deinit(self.gpa);
         self.only_in_a_tags.deinit(self.gpa);
         self.only_in_b_tags.deinit(self.gpa);
         self.in_both_tags.deinit(self.gpa);
+        self.merged_tags.deinit(self.gpa);
         self.deferred_constraints.deinit(self.gpa);
         self.only_in_a_static_dispatch_constraints.deinit(self.gpa);
         self.only_in_b_static_dispatch_constraints.deinit(self.gpa);
@@ -5744,6 +5789,7 @@ pub const Scratch = struct {
         self.only_in_a_fields.clearRetainingCapacity();
         self.only_in_b_fields.clearRetainingCapacity();
         self.in_both_fields.clearRetainingCapacity();
+        self.merged_fields.clearRetainingCapacity();
         self.absorbed_record_defaults.clearRetainingCapacity();
         self.gathered_tags.clearRetainingCapacity();
         self.bounded_row_violation = null;
@@ -5752,6 +5798,7 @@ pub const Scratch = struct {
         self.only_in_a_tags.clearRetainingCapacity();
         self.only_in_b_tags.clearRetainingCapacity();
         self.in_both_tags.clearRetainingCapacity();
+        self.merged_tags.clearRetainingCapacity();
         self.deferred_constraints.clearRetainingCapacity();
         self.determined_literals.clearRetainingCapacity();
         self.only_in_a_static_dispatch_constraints.clearRetainingCapacity();

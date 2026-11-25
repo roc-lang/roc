@@ -2941,9 +2941,12 @@ pub const Store = struct {
     /// just before it (`varRange`), so a stored descriptor keeps only the
     /// range's start. Every range of the pool is made here or by
     /// `mkAliasWithPackedSourceDecl`, or copied from ranges they made by
-    /// `appendVarsPoolEntries`.
+    /// `appendVarsPoolEntries`. An empty `s` appends nothing and is
+    /// `Range.empty()`, which a descriptor stores as
+    /// `stored_empty_var_range`.
     pub fn appendVars(self: *Self, s: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
         self.debugAssertUnsealed();
+        if (s.len == 0) return .empty();
         const trace = tracy.traceNamed(@src(), "typesStore.appendVars");
         defer trace.end();
         // A source slice that lives inside this same list (a `sliceVars`
@@ -2994,7 +2997,7 @@ pub const Store = struct {
     }
 
     /// What a stored descriptor keeps of `Range.empty()`. Every range
-    /// `appendVars` makes starts after its length slot, so no such range
+    /// `appendVars` appends starts after its length slot, so no such range
     /// starts at zero.
     pub const stored_empty_var_range: u32 = 0;
 
@@ -4734,6 +4737,28 @@ test "resolveVarAndCompressPath - flattens redirect chain to flex" {
     try std.testing.expectEqual(c, result.var_);
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(a));
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(b));
+}
+
+test "an empty vars range appends nothing and a non-empty one appends its length slot and vars" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+    const ret = try store.fresh();
+    const arg = try store.fresh();
+
+    const before = store.varsPoolLen();
+    const empty = try store.appendVars(&.{});
+    try std.testing.expectEqual(VarSafeList.Range.empty(), empty);
+    try std.testing.expectEqual(before, store.varsPoolLen());
+    try std.testing.expectEqual(Store.stored_empty_var_range, store.storedVarRange(empty));
+
+    const no_args = try store.freshFromContent(try store.mkFuncPure(&.{}, ret));
+    try std.testing.expectEqual(before, store.varsPoolLen());
+    try std.testing.expectEqual(@as(usize, 0), store.sliceVars(store.resolveVar(no_args).desc.content.structure.fn_pure.args).len);
+
+    const one_arg = try store.freshFromContent(try store.mkFuncPure(&.{arg}, ret));
+    try std.testing.expectEqual(before + 2, store.varsPoolLen());
+    try std.testing.expectEqualSlices(Var, &.{arg}, store.sliceVars(store.resolveVar(one_arg).desc.content.structure.fn_pure.args));
 }
 
 test "canonicalizing for seal gives children representatives and flattens rows" {

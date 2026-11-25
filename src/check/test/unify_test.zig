@@ -527,6 +527,123 @@ test "unify - a shared tag is pattern-only only when both rows' tags are" {
     }
 }
 
+test "unify - records whose merged row is the second row's own fields keep that row's range" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const store = &env.module_env.types;
+    const a_info = try env.mkRecordOpen(&.{
+        try env.mkRecordField("x", try store.fresh()),
+        try env.mkRecordField("y", try store.fresh()),
+    });
+    const b_info = try env.mkRecordOpen(&.{
+        try env.mkRecordField("x", try store.fresh()),
+        try env.mkRecordField("y", try store.fresh()),
+    });
+    const a = try store.freshFromContent(a_info.content);
+    const b = try store.freshFromContent(b_info.content);
+    const fields_before = store.record_fields.len();
+
+    try std.testing.expectEqual(.unified, try env.unify(a, b));
+
+    const merged = try TestEnv.getRecordOrErr(store.resolveVar(a).desc);
+    try std.testing.expectEqual(b_info.record.fields, merged.fields);
+    try std.testing.expectEqual(fields_before, store.record_fields.len());
+}
+
+test "unify - a record merge whose merged presence matches neither row stores a new row" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const store = &env.module_env.types;
+    const a_field = try env.mkRecordField("x", try store.fresh());
+    const b_field = try env.mkUnknownRecordField("x", try store.fresh(), try store.fresh());
+    const a_info = try env.mkRecordOpen(&.{a_field});
+    const b_info = try env.mkRecordOpen(&.{b_field});
+    const a = try store.freshFromContent(a_info.content);
+    const b = try store.freshFromContent(b_info.content);
+    const fields_before = store.record_fields.len();
+
+    try std.testing.expectEqual(.unified, try env.unify(a, b));
+
+    const merged = try TestEnv.getRecordOrErr(store.resolveVar(a).desc);
+    try std.testing.expect(!std.meta.eql(merged.fields, a_info.record.fields));
+    try std.testing.expect(!std.meta.eql(merged.fields, b_info.record.fields));
+    try std.testing.expectEqual(fields_before + 1, store.record_fields.len());
+    // The rows the operands held are as they were.
+    try std.testing.expectEqual(a_field, store.getRecordFieldAt(a_info.record.fields, 0));
+    try std.testing.expectEqual(b_field, store.getRecordFieldAt(b_info.record.fields, 0));
+}
+
+test "unify - tag unions whose merged row is the second row's own tags keep that row's range" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const store = &env.module_env.types;
+    const a_info = try env.mkTagUnionOpen(&.{
+        try env.mkTag("A", &.{try store.fresh()}),
+        try env.mkTag("B", &.{}),
+    });
+    const b_info = try env.mkTagUnionOpen(&.{
+        try env.mkTag("A", &.{try store.fresh()}),
+        try env.mkTag("B", &.{}),
+    });
+    const a = try store.freshFromContent(a_info.content);
+    const b = try store.freshFromContent(b_info.content);
+    const tags_before = store.tags.len();
+
+    try std.testing.expectEqual(.unified, try env.unify(a, b));
+
+    const merged = try TestEnv.getTagUnionOrErr(store.resolveVar(a).desc);
+    try std.testing.expectEqual(b_info.tag_union.tags, merged.tags);
+    try std.testing.expectEqual(tags_before, store.tags.len());
+}
+
+test "unify - a merged row equal to the first row's own tags keeps the first row's range" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const store = &env.module_env.types;
+    // Neither tag has a payload, so the merged tag (the second row's payload,
+    // unmarked because the first row's tag is) is the first row's tag.
+    const a_tag = try env.mkTag("Shared", &.{});
+    var b_tag = try env.mkTag("Shared", &.{});
+    b_tag.pattern_only = true;
+    const a_info = try env.mkTagUnionOpen(&.{a_tag});
+    const b_info = try env.mkTagUnionOpen(&.{b_tag});
+    const a = try store.freshFromContent(a_info.content);
+    const b = try store.freshFromContent(b_info.content);
+    const tags_before = store.tags.len();
+
+    try std.testing.expectEqual(.unified, try env.unify(a, b));
+
+    const merged = try TestEnv.getTagUnionOrErr(store.resolveVar(a).desc);
+    try std.testing.expectEqual(a_info.tag_union.tags, merged.tags);
+    try std.testing.expectEqual(tags_before, store.tags.len());
+    try std.testing.expect(!try rowTagPatternOnly(&env, a, "Shared"));
+    try std.testing.expect(store.getTagAt(b_info.tag_union.tags, 0).pattern_only);
+}
+
+test "unify - a shared tag that stops being pattern-only is stored in a new row, leaving the marked one as it was" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const store = &env.module_env.types;
+    // Distinct payload variables keep the merged tag, which takes the
+    // second row's payload, from equaling the first row's tag.
+    const a_tag = try env.mkTag("Shared", &.{try store.fresh()});
+    var b_tag = try env.mkTag("Shared", &.{try store.fresh()});
+    b_tag.pattern_only = true;
+    const a_info = try env.mkTagUnionOpen(&.{a_tag});
+    const b_info = try env.mkTagUnionOpen(&.{b_tag});
+    const a = try store.freshFromContent(a_info.content);
+    const b = try store.freshFromContent(b_info.content);
+    const tags_before = store.tags.len();
+
+    try std.testing.expectEqual(.unified, try env.unify(a, b));
+
+    const merged = try TestEnv.getTagUnionOrErr(store.resolveVar(a).desc);
+    try std.testing.expect(!std.meta.eql(merged.tags, b_info.tag_union.tags));
+    try std.testing.expectEqual(tags_before + 1, store.tags.len());
+    try std.testing.expect(!try rowTagPatternOnly(&env, a, "Shared"));
+    try std.testing.expect(store.getTagAt(b_info.tag_union.tags, 0).pattern_only);
+}
+
 /// Whether the store journals `part` as keeping its own entry for the
 /// pattern-only tag `name` that `root`'s row holds a copy of.
 fn journalsPatternOnlyTagCopy(env: *TestEnv, part: Var, root: Var, name: []const u8) std.mem.Allocator.Error!bool {

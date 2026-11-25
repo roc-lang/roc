@@ -6100,6 +6100,26 @@ function's use, would be quantified by that function while the value still
 shares it. Pinned by `src/check/test/issue_13011_test.zig`, the rank tests
 in `src/check/test/unify_test.zig`, and `test/cli/Issue13011StoreWrites.roc`.
 
+### Type Store Pools
+
+A type store keeps the variables, record fields and tags its descriptors
+hold in three pools, and while checking runs it only appends to them: no
+entry is rewritten once appended, and a discarded probe drops only what it
+appended. A range is therefore interchangeable with any other range holding
+the same entries, and ranges may be shared by several descriptors and tags.
+Two consequences keep checking from appending entries no class will hold:
+
+- An empty vars range is `Range.empty()`, which a descriptor stores as
+  `stored_empty_var_range`. Appending no variables appends nothing, not even
+  the length slot a non-empty range keeps before its start.
+- A row merge whose merged row comes out equal, entry for entry, to the own
+  row of either operand stores that operand's range instead of a copy
+  (`Unifier.storedRowEntries`). Merging two rows with the same labels gives
+  the second row's entries whenever their payloads and marks are the second's,
+  so most merges append no row. A merged row that differs from both, such as
+  one whose shared tag stops being pattern-only or whose field takes a kind
+  variable from one side and a value variable from the other, is appended.
+
 ### Descriptor Words
 
 A type store keeps each descriptor as a 16-byte row: a 32-bit word and a
