@@ -73,7 +73,8 @@ pub fn generateObjectFileWithDebug(
         .symbol = table.indices.get(rel.target_symbol_name).?,
         .addend = rel.addend,
     };
-    return generateIndexedObjectFileWithDebug(allocator, target, code, rodata, 0, symbols, indexed.items, indexed_data, &.{}, debug, output);
+    const rodata_piece = [1]UnitImage.SectionPiece{.{ .offset = 0, .bytes = rodata }};
+    return generateIndexedObjectFileWithDebug(allocator, target, code, .whole(&rodata_piece), 0, symbols, indexed.items, indexed_data, &.{}, debug, output);
 }
 
 /// Write producer-resolved relocations. Every target indexes the supplied symbol column.
@@ -90,7 +91,7 @@ pub fn generateIndexedObjectFileWithDebug(
     allocator: Allocator,
     target: RocTarget,
     code: []const u8,
-    rodata: []const u8,
+    rodata: UnitImage.PiecedBytes,
     zero_fill_size: u64,
     symbols: []const Symbol,
     relocations: []const IndexedRelocation,
@@ -122,7 +123,7 @@ pub fn indexedImageObject(
     arena: Allocator,
     target: RocTarget,
     code: []const u8,
-    rodata: []const u8,
+    rodata: UnitImage.PiecedBytes,
     zero_fill_size: u64,
     symbols: []const Symbol,
     relocations: []const IndexedRelocation,
@@ -148,7 +149,7 @@ fn emitIndexed(
     allocator: Allocator,
     target: RocTarget,
     code: []const u8,
-    rodata: []const u8,
+    rodata: UnitImage.PiecedBytes,
     zero_fill_size: u64,
     symbols: []const Symbol,
     relocations: []const IndexedRelocation,
@@ -671,7 +672,7 @@ test "x86_64 windows object covers recorded helper ranges without symbols" {
     }) |case| {
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(allocator);
-        try generateIndexedObjectFileWithDebug(allocator, .x64win, code, &.{}, 0, symbols, &.{}, &.{}, case.recorded, null, &output);
+        try generateIndexedObjectFileWithDebug(allocator, .x64win, code, .{}, 0, symbols, &.{}, &.{}, case.recorded, null, &output);
 
         // No .rdata, so .pdata is the second section header; each x64 entry is 12 bytes.
         const num_sections = std.mem.readInt(u16, output.items[2..4], .little);
@@ -1046,7 +1047,8 @@ test "indexed object relocations preserve targets through format symbol ordering
         };
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(allocator);
-        try generateIndexedObjectFileWithDebug(allocator, target, &(@as([32]u8, @splat(0))), &(@as([32]u8, @splat(0))), 0, &symbols, &relocations, &data_relocations, &.{}, null, &output);
+        const zero_piece = [1]UnitImage.SectionPiece{.{ .offset = 0, .bytes = &(@as([32]u8, @splat(0))) }};
+        try generateIndexedObjectFileWithDebug(allocator, target, &(@as([32]u8, @splat(0))), .whole(&zero_piece), 0, &symbols, &relocations, &data_relocations, &.{}, null, &output);
         const decoded = try TestObjectTables.read(target, output.items);
         const expected = [_][]const u8{ "local_data", "external_function", "local_data", "global_data" };
         try std.testing.expectEqual(@as(usize, 4), decoded.text.len / decoded.relocation_size);

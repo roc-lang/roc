@@ -238,7 +238,7 @@ pub const MachOWriter = struct {
     text: []const u8,
 
     // Read-only data section
-    rodata: []const u8,
+    rodata: UnitImage.PiecedBytes,
     /// Size of `__bss`, which the file declares without storing bytes.
     zero_fill_size: u64,
 
@@ -280,7 +280,7 @@ pub const MachOWriter = struct {
             .allocator = allocator,
             .arch = arch,
             .text = &.{},
-            .rodata = &.{},
+            .rodata = .{},
             .zero_fill_size = 0,
             .symbols = .empty,
             .text_relocs = .empty,
@@ -312,7 +312,7 @@ pub const MachOWriter = struct {
         self.zero_fill_size = size;
     }
 
-    pub fn setRodata(self: *Self, rodata: []const u8) void {
+    pub fn setRodata(self: *Self, rodata: UnitImage.PiecedBytes) void {
         self.rodata = rodata;
     }
 
@@ -655,7 +655,7 @@ pub const MachOWriter = struct {
         output.appendSliceAssumeCapacity(self.text);
 
         // Write read-only data section content
-        output.appendSliceAssumeCapacity(self.rodata);
+        self.rodata.appendAssumeCapacity(output);
         for (self.rodata_relocs.items) |rel| {
             const value = if (rel.is_extern) rel.addend else self.localRelocationValue(rel.symbol_idx, rel.addend);
             std.mem.writeInt(i64, output.items[@as(usize, rodata_offset) + rel.offset ..][0..8], value, .little);
@@ -749,7 +749,8 @@ pub const MachOWriter = struct {
     /// borrowed from the writer; the read-only data and debug sections are
     /// copied into `arena` with the addends `write` stores in their fields.
     pub fn imageObject(self: *const Self, arena: Allocator, keep_debug: bool) (Allocator.Error || UnitImage.BuildError)!UnitImage.Object {
-        const rodata = try arena.dupe(u8, self.rodata);
+        const rodata = try arena.alloc(u8, @intCast(self.rodata.len));
+        self.rodata.writeTo(rodata);
         for (self.rodata_relocs.items) |rel| {
             const value = if (rel.is_extern) rel.addend else self.localRelocationValue(rel.symbol_idx, rel.addend);
             std.mem.writeInt(i64, rodata[rel.offset..][0..8], value, .little);

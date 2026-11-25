@@ -92,6 +92,10 @@ pub fn classifyType(allocator: std.mem.Allocator, store: *const Store, start: Id
             // convention for these aggregates (generated C glue spells their vector
             // members as vector/byte unions to pin that classification), whereas
             // only C toolchains implement AAPCS64's multi-member HVA register rule.
+            //
+            // A vector member is 16 bytes and a homogeneous float aggregate holds at
+            // most four 8-byte floats, so a larger aggregate is neither.
+            if (store.layoutSize(lay) > max_hfa_floats * 8) return classifyBySize(store, lay);
             var maybe_vector_kind: ?layout.Vector = null;
             const vector_count = try countVectors(allocator, store, idx, &maybe_vector_kind);
             if (vector_count == 1) {
@@ -142,10 +146,14 @@ fn countVectors(allocator: std.mem.Allocator, store: *const Store, idx: Idx, may
                 const start = pending.items.len;
                 var i: u32 = 0;
                 while (i < field_count) : (i += 1) {
-                    // A zero-sized field is no member of the C struct the host declares.
-                    if (store.getStructFieldSize(struct_idx, i) == 0) continue;
-                    if (store.getStructFieldIsPadding(struct_idx, i)) return null;
-                    try pending.append(pending_allocator, store.getStructFieldLayout(struct_idx, i));
+                    const field = store.getStructField(struct_idx, i);
+                    if (field.is_padding) {
+                        // Zero-sized padding reserves no bytes: it is no member of
+                        // the struct the host declares.
+                        if (store.layoutSize(store.getLayout(field.layout)) == 0) continue;
+                        return null;
+                    }
+                    try pending.append(pending_allocator, field.layout);
                 }
                 std.mem.reverse(Idx, pending.items[start..]);
             },
@@ -161,7 +169,9 @@ fn countVectors(allocator: std.mem.Allocator, store: *const Store, idx: Idx, may
                 if (info.variants.len != 1 or info.data.discriminant_size != 0) return null;
                 try pending.append(pending_allocator, info.variants.get(0).payload_layout);
             },
-            .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .hole, .ptr, .dynamic => return null,
+            // A zero-sized member is no member of the struct the host declares.
+            .zst, .hole => {},
+            .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .ptr, .dynamic => return null,
         }
     }
     return count;
@@ -198,13 +208,17 @@ fn countFloats(allocator: std.mem.Allocator, store: *const Store, idx: Idx, mayb
                 const start = pending.items.len;
                 var i: u32 = 0;
                 while (i < field_count) : (i += 1) {
-                    // A zero-sized field is no member of the C struct the host declares.
-                    if (store.getStructFieldSize(struct_idx, i) == 0) continue;
-                    // Unnamed padding is opaque, alignment-1 bytes, never a float
-                    // member, so any padding makes the aggregate non-homogeneous (it
-                    // falls back to size-based integer classification).
-                    if (store.getStructFieldIsPadding(struct_idx, i)) return null;
-                    try pending.append(pending_allocator, store.getStructFieldLayout(struct_idx, i));
+                    const field = store.getStructField(struct_idx, i);
+                    if (field.is_padding) {
+                        // Zero-sized padding reserves no bytes: it is no member of
+                        // the struct the host declares.
+                        if (store.layoutSize(store.getLayout(field.layout)) == 0) continue;
+                        // Unnamed padding is opaque, alignment-1 bytes, never a float
+                        // member, so it makes the aggregate non-homogeneous (it
+                        // falls back to size-based integer classification).
+                        return null;
+                    }
+                    try pending.append(pending_allocator, field.layout);
                 }
                 std.mem.reverse(Idx, pending.items[start..]);
             },
@@ -231,9 +245,11 @@ fn countFloats(allocator: std.mem.Allocator, store: *const Store, idx: Idx, mayb
                 if (info.variants.len != 1 or info.data.discriminant_size != 0) return null;
                 try pending.append(pending_allocator, info.variants.get(0).payload_layout);
             },
+            // A zero-sized member is no member of the struct the host declares.
+            .zst, .hole => {},
             // Anything else (pointer, list, box, non-transparent tag union, …)
             // makes the aggregate non-homogeneous.
-            .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .hole, .ptr, .dynamic => return null,
+            .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .ptr, .dynamic => return null,
         }
     }
     return count;

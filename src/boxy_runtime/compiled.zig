@@ -92,6 +92,42 @@ pub fn fieldAddr(desc: *const TypeDesc, base: [*]u8, field_index: u32, ops: *Roc
     return componentAddr(field.desc, base + field.offset);
 }
 
+/// Release the slot of field `field_index` of the record or tuple at `base`
+/// once the field's value has moved out of it. A slot that is a recursion box
+/// gives up its reference to the box: the last one frees the allocation
+/// without releasing the value that left, and any other one leaves the box to
+/// its remaining holders, whose value the moved copy now shares. Every other
+/// slot is the value itself and holds nothing further.
+pub fn fieldReleaseBox(desc: *const TypeDesc, base: [*]u8, field_index: u32, ops: *RocOps) void {
+    const record = recordOf(desc, ops);
+    if (field_index >= record.count) invariant(ops, "a field index past its record's fields");
+    const field = record.fieldBySemanticIndex(field_index);
+    releaseSlotBox(field.desc, base + field.offset, ops);
+}
+
+/// `fieldReleaseBox` for the only payload of the active variant of the tag
+/// union at `base`.
+pub fn tagPayloadReleaseBox(desc: *const TypeDesc, base: [*]u8, ops: *RocOps) void {
+    const union_desc = unionOf(desc, ops);
+    const variant = &union_desc.variants()[union_desc.readDiscriminant(base)];
+    if (variant.payload_count != 1) invariant(ops, "a moved tag payload that is not its tag's only payload");
+    releaseSlotBox(payloadDesc(variant, 0), base + payloadOffset(variant, 0), ops);
+}
+
+/// Release the component slot `desc` describes once its value has moved out.
+fn releaseSlotBox(desc: *const TypeDesc, slot: [*]u8, ops: *RocOps) void {
+    if (desc.kind != .recursive_box) return;
+    const payload = desc.child.?;
+    if (payload.size == 0) return;
+    const box: ?[*]u8 = @as(*const ?[*]u8, @ptrCast(@alignCast(slot))).*;
+    if (utils.isUnique(box, ops)) {
+        utils.freeDataPtrC(box, payload.alignment, payload.flags.contains_refcounted, ops);
+        return;
+    }
+    walk.incref(payload, boxPayloadAddr(payload, @ptrCast(@alignCast(slot))), 1, ops);
+    walk.decref(desc, slot, ops);
+}
+
 /// The discriminant of the tag union value at `base`.
 pub fn tagDiscriminant(desc: *const TypeDesc, base: [*]const u8, ops: *RocOps) u32 {
     const union_desc = backing(desc);

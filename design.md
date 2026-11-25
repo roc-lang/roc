@@ -1105,8 +1105,21 @@ generator the object is encoded from (`arrange`, `assembleArranged`):
   excerpt's location) and every helper with a frame, whether the program
   declares it or only spliced code reaches it.
 
-A prepared data catalog owns one immutable copy of its payload bytes, names,
-and relocations. It records exact outgoing data and code-symbol edges once;
+A prepared data catalog owns one immutable copy of its items' names and
+relocations. Payload bytes have one owner, and every later holder borrows
+them: each item names the owner keeping its bytes alive (`DataItem.
+payload_owner`), and a catalog, set or unit's pieces holding an item retains
+that owner instead of copying the bytes. A catalog built from exports either
+copies their bytes into its own storage, when the exports go away first, or
+borrows them from exports a keeper owns (`DataOwner.initKeeper`), which the
+catalog retains: a unit's pieces borrow the bytes of the unit's literal
+backings and frozen constants this way, and the keeper frees those exports
+with the last catalog retaining it. Object writers are given the read-only
+data as pieces borrowed from the data items (`UnitImage.PiecedBytes`), and a
+unit image writes its block and writable data straight from the sections
+into the image, patching the block's in-place references there, so each
+datum's bytes are copied once, into the encoded object or image. The
+catalog records exact outgoing data and code-symbol edges once;
 each catalog entry holds both its datum and its edges. Fragments carry only dense
 root indices into this shared graph, and an excerpt set retains each graph owner
 once. Copying, pruning and object assembly preserve these graph references.
@@ -1116,8 +1129,9 @@ The graph producer propagates the code-pointer property along reverse data edges
 once, including cycles.
 The catalog, workers, and copied sets can be destroyed independently. This is
 compiler-storage ownership; it changes no generated reference-count operation.
-Renaming data first gives the new set its own metadata and backing, preserving
-the catalog's immutable contents. Catalogs belong to one program's symbol
+Renaming data first gives the new set its own metadata, preserving the
+catalog's immutable contents; the renamed items share the catalog's payload
+bytes and retain its owner. Catalogs belong to one program's symbol
 domain; equal program-local names from other programs never establish sharing.
 
 ### Read-Only Type Analysis
@@ -1599,6 +1613,10 @@ at runtime with it. That outcome never changes what the program computes.
 many roots hoisting selected, how many of those an evaluator
 completes and the checked-value writer completes, and how many value-form
 expressions their bodies keep.
+
+`ROC_CHECKER_SPECULATION_STATS` prints, for each module the type checker
+checks, how many of each probe site's probes (Probes) were kept and how many
+were discarded.
 
 ### Every Rejection Is Explicit Recovery
 
@@ -2443,7 +2461,10 @@ CIR kinds (as the checked body reader presents them) and checked types:
   (`exact_numeral.fits`; a float literal always converts, to its nearest
   value);
 - a string literal whose quote dispatches to no `from_quote`, made of literal
-  segments only, whose checked type is the builtin `Str`;
+  segments only, whose checked type is the builtin `Str`, and a file imported
+  as `Str`, which is one such segment on its own;
+- a bytes literal (`import "file" as bytes : List(U8)`), whose checked type is
+  always `List(U8)`;
 - an empty list, a tag with no payload, or an empty record whose checked
   type is the empty record (at a record type of optional fields it builds
   each field's presence slot);
@@ -2523,7 +2544,10 @@ where a value's parts come from differs: an evaluator's result memory, the
 checked expression's parts, or the stored value of a constant the expression
 reads. A numeral's bytes are the bytes lowering gives the literal
 (`exact_numeral.encodeBits`), and a literal list or string has no capacity
-beyond its items (Static Lists And Strings Keep Their Capacity). A read of a
+beyond its items (Static Lists And Strings Keep Their Capacity). A string of
+one segment and a bytes literal are stored as blobs borrowed from the
+module's string literal store, with no copy ("Constant Storage"); a bytes
+literal is the packed items of its `List(U8)`. A read of a
 constant is the constant's stored value, capacity included: the writer
 copies the read root's nodes into the reading root's store under the
 reading root's own plan, choosing each tag's variant by name, so a read at a
@@ -2843,6 +2867,9 @@ graph in their LLVM module, including callable and explicit helper relocations.
 They never embed compiler-process addresses: installed generators must survive
 another process. The loaded image outlives copying the generator's result,
 because returned values can borrow its immutable storage.
+A `roc glue --opt=dev` generator object is compiled with no LLVM optimization
+passes, and its functions carry no inlining attributes, so each procedure's
+code is generated once.
 A node whose bytes are all zero and that no relocation writes into is
 declared, not stored: the object writers place it in their format's zero-fill
 section (`.bss` for ELF and COFF, `__DATA,__bss` for Mach-O) by size and
@@ -4638,7 +4665,7 @@ rank is not `Descriptor.rank`: descriptor rank is the Hindley-Milner scope level
 used to decide generalization, while union-find rank is private data-structure
 metadata. On a union, the lower structural rank redirects to the higher one; a
 tie keeps the second storage root and increments its structural rank. Path
-compression may change storage parents at any time outside a solver savepoint.
+compression may change storage parents at any time outside a probe (Probes).
 Neither operation may change the class descriptor or checked representative.
 
 Each live storage root names one descriptor whose root metadata contains the
@@ -4666,13 +4693,11 @@ last-in-first-out, so the indices a module's check produces, and the bytes
 written to its cache, stay deterministic. The free list is runtime-only: a
 loaded store starts with none, and nothing outside the store may hold a
 descriptor index across a merge, since the index may name another class once
-reused. While a savepoint is open a merge does not free its orphan, because
-rollback restores the slot that named it; the orphan waits on a pending list
-that commit frees and rollback discards. A probe may still reissue descriptors
-from the free list: those predate the probe, so the writes that reissue them
-journal like any other pre-probe write, and the probe only counts them as
-taken rather than removing them, so commit removes them and rollback forgets
-the count.
+reused. While a probe is open a merge does not free its orphan, because
+discarding the probe restores the slot that named it; the orphan waits on a
+pending list that keeping the probe frees and discarding it drops. An open probe
+sets the free list aside, so it reissues no descriptor and every class it
+creates is appended.
 
 `resolveVar` returns the checked representative and class descriptor;
 storage-root traversal is a private store operation. Consequently a checked
@@ -4680,8 +4705,8 @@ representative is not required to be a storage root slot. `is_root` on a
 resolved variable means that the queried variable is the checked
 representative, which is the only root notion checker consumers may use.
 
-Solver savepoints journal storage-parent, structural-rank, and root-metadata
-mutations and restore all three byte-for-byte. Serializing the sealed store
+The unifier's writes inside a probe journal storage-parent, structural-rank,
+and root-metadata mutations, and discarding it restores all three byte-for-byte. Serializing the sealed store
 includes both metadata stores, so loading a cached store preserves its checked
 representatives and balanced structure. A declared solver-mutating redirect
 joins whole classes through the same balanced mechanism while explicitly
@@ -4689,15 +4714,14 @@ adopting the redirect destination's descriptor and checked representative; it
 must not directly graft one storage root beneath another and recreate an
 unbounded chain.
 
-A solver savepoint runs only non-poisoning unification. Successful speculative
-relations may be committed in place, but a mismatch returns without poisoning
-either top-level operand so the savepoint owner can roll the relation back.
+A probe runs only non-poisoning unification. Successful speculative
+relations may be kept in place, but a mismatch returns without poisoning
+either top-level operand so the probe's owner can discard the relation.
 Occurrence-directed mismatch poisoning is permanent recovery against the live
-equivalence classes; running it inside a savepoint would both do work whose
+equivalence classes; running it inside a probe would both do work whose
 result must be discarded and make correctness depend on the queried
-occurrence's current representative. The commit-probe API fixes the
-non-poisoning behavior for every relation it runs, and ordinary poisoning
-unification asserts that no savepoint is active.
+occurrence's current representative. Poisoning unification asserts that no
+probe is open.
 
 A failed unification is different from a successful class union. Either
 operand can be one checked occurrence already connected to a shared binding: a
@@ -6126,7 +6150,7 @@ The fold relates arguments in order, so the parameter type a rejected argument
 met already carries what earlier operands gave the function's shared
 variables. Only once a relation has been rejected, and only when the callee's
 type is an instance of a scheme, the checker asks whether the argument is
-wrong by itself: in a commit-probe it relates the argument to its parameter in
+wrong by itself: in a probe it relates the argument to its parameter in
 a fresh copy of that scheme, then relates one earlier operand (an earlier
 argument, or a method call's receiver) to the same copy. The first earlier
 operand whose relation fails there is reported with the argument as a
@@ -12086,7 +12110,15 @@ allocation.
 
 Strings and flat scalar or fixed-product lists use one shared content-interned blob store.
 `List(U8)` therefore has the same constant-storage cost as a `Str` containing
-the same bytes, and equal string/list contents reuse one blob. A packed list
+the same bytes, and equal string/list contents reuse one blob. A blob the
+checked-value writer stores from a literal of the store's own module (a string
+of one segment, or a file imported as bytes) is borrowed from the module's
+string literal store rather than copied (`ConstStore.BlobBacking`): those
+bytes never change once the module is canonicalized and live as long as the
+store, so the literal's bytes are resident once. A borrowed blob occupies its
+offsets in the blob bytes as if it were stored there, so serialization writes
+it in place and a serialized store is the same whichever of its blobs are
+borrowed; a loaded store owns all of them. A packed list
 view records its scalar encoding or fixed-product width and item count separately
 from its byte view. Fixed products are records, tuples, and nominal wrappers
 composed entirely of scalars, discriminant-only tag unions and zero-sized
@@ -12261,6 +12293,99 @@ under—an unreasoned redirect does not compile, and adding a caller means
 adding or citing a member, which is greppable and reviewable. A new
 probe-then-mutate rewrite requires a declared rule in this document first;
 "it makes a test pass" is not a rule.
+
+### Probes
+
+A site that must relate two types to learn whether they relate, and keep
+the relation only when they do, probes the unifier (`Check.beginProbe`,
+`probeRelate`, `probeKeep`, `probeYes`/`probeNo`, and `unifyIfRelates` for
+a site that keeps or drops one relation as it stands). Probes never nest: a
+probe begins only when none is open, which debug builds assert.
+
+Only the unifier runs inside a probe. A site prepares what it relates by
+appending only (fresh variables, a copy of an expected shape, a function
+over a lambda's parameters) after the probe begins and before the unifier
+runs, so discarding the probe drops it with everything else appended. What
+a relation leaves for the checker (fresh variables to rank and give
+regions, deferred dispatch constraints, literals it determined, defaults it
+absorbed) stays in the unifier's scratch until the site keeps the relation
+(`probeKeep`), and the literals and defaults are settled only once the
+probe is kept (`probeYes`), exactly as after a direct relation
+(`finishUnify`). A site that reads the tentative result before deciding
+reads it through non-compressing resolves. A relation inside a probe
+records no problem and poisons nothing.
+
+There is one unifier, and the type store has two families of in-place
+writes. The unifier's writes (`Store.unifierUnion` and the other `unifier*`
+functions, and the store internals they reach) compare the entry's index
+with the open probe's baseline, and when the entry predates the probe
+journal its old value before writing it. The baselines are the slot and
+descriptor counts when the probe began, and 0 while no probe is open, so
+outside a probe the one comparison never holds. Every other write is plain:
+it compares and journals nothing. That only the unifier overwrites an entry
+that predates an open probe is a compiler invariant: debug builds assert
+that a plain write reaches only entries the probe appended, and that a
+unifier write while a probe is open comes from the running unifier
+(`Store.enterUnifier`). The unifier compresses a storage path only when the
+slot baseline is 0, so no compression happens inside a probe.
+
+The journal is one undo log of tagged entries: a slot, descriptor, root or
+union rank, and the insertion, removal or replacement of a derived map plan
+row or tag tail closing row. Discarding the probe first drops the plan and
+closing rows of classes the probe created, which sort after every older
+class, and then replays the log strictly backwards. What a probe remembers
+when it begins (`ProbeMark`) is the lengths of the lists the unifier can
+grow: variables, record fields, tags, interpolation parts and metadata
+(which a nominal backing the unifier opens, or a deferred requirement
+callable it links, can copy), numeral facts, static dispatch constraints,
+folded dispatch relations and pattern-only tag copies. The baselines are
+the slot and descriptor counts, and the log needs no length, since it is
+empty whenever a probe begins. While the probe is open the type store's
+free list is set aside, so every class created is appended, and the
+descriptors the relation's merges orphan wait until the probe ends.
+
+Kept, the probe's writes stand and the orphaned descriptors are freed;
+discarded, every journaled entry is restored, everything appended is
+dropped, and the free list is put back, so the store is as it was; what
+the unifier's scratch holds about the relation's mismatch stays for the
+site's report. The one piece of checker code the unifier runs is the
+deferred requirement callable link (Deferred requirement callables): its
+redirect is one of the unifier's writes, the use it links is recorded, and
+a discarded probe unlinks it and drops the regions of the copies it made; a
+kept probe registers the copies.
+
+A relation inside a probe that meets a row repeating a label stops there.
+When that row predates the probe, the probe is discarded and the row is
+normalized (Row Union Normalization), which reports the row's conflict when
+it has one. A site whose probe holds one relation, or that relates first
+and then reads, probes again; a site whose probe holds several relations
+treats the probe as failed.
+
+Five sites instantiate schemes inside their probe (an inspect override's
+instance, a flexible constraint's default method, a rejected call's fresh
+function type, an interpolation part's method, the constructor an owned tag
+lifts into). Such a probe (`InstantiatingProbe`) also holds the lengths of
+the checker lists instantiation grows (`InstantiationMark`: scheme uses,
+dispatchers, open literals and the like) and truncates them when
+discarded, and sets the probe flags (`probe_depth`, `commit_probe_active`)
+while it is open, because what instantiation and the dispatch passes do
+depends on running inside a probe: an instantiation inside one journals
+the ambiguity candidates it flips so a discarded probe resets them
+(`recordAmbiguityCandidate`), registers no use for whole-use replay and
+defers no requirement callable (`instantiateVarHelpFromScheme`), and the
+literals its kept relations determine wait for the next dispatch pass
+(`settlePendingLiteralsAt`). Moving that instantiation out of the probe
+would change those decisions, so these sites keep the wide probe.
+
+The invariants that make a probe safe are compiler invariants, asserted in
+debug builds: probes never nest; while one is open, no plain write and no
+compressing resolve reaches an entry that predates it, and every unifier
+write comes from the unifier; and a discarded probe leaves every other
+checker list as long as it was when the probe began. The module test "a
+probe relates random small type pairs as a direct relation does, and a
+discarded probe changes nothing" pins that a kept probe solves the same
+types as a direct relation and a discarded one restores the store byte for
+byte.
 
 ### Concrete Builtin Numeral Introduction
 
@@ -12437,7 +12562,7 @@ constraints and off-root scheme requirements. Every omitted requirement remains
 on its source type and is enforced by the ordinary enclosing relation and the
 actual stored-value instantiation. Shape copies never enter literal, dispatch,
 ambiguity, or evidence worklists. The copy and its projected relation belong to
-one commit-probe, so a rejected aggregate relation retains neither the copy nor any
+one probe, so a rejected aggregate relation retains neither the copy nor any
 partial unification. Rejection is diagnosed by the owning full-shape relation.
 
 Record constructions retain the complete accepted projected row, not just
@@ -12475,7 +12600,7 @@ slots are copied together with one substitution map, preserving repeated-variabl
 equalities. Omitted variants remain authoritative in the enclosing full
 relation, and no declaration-template cell is exposed to mutation. Missing
 tags, arity disagreement, or erroneous context establish no slot copy. The
-selected copy and projected relations share one commit-probe; rejection leaves
+selected copy and projected relations share one probe; rejection leaves
 diagnostic ownership with the full enclosing relation. This is expected-shape
 guidance, not permission to discard a structural row's complement or the
 dispatch requirements it came with.
@@ -12519,9 +12644,9 @@ polymorphism a program could use. The rule reads only explicit context:
   aliases) seeds anything; an unknown slot leaves the lambda as it was.
 - A projected cell is already the construction's own fresh shape copy and is
   related directly. A record update's borrowed field is copied
-  (`copyExpectedShape`) inside the seed's commit-probe, so the base's own
+  (`copyExpectedShape`) inside the seed's probe, so the base's own
   type is never constrained by the seed.
-- The relation runs in one commit-probe. An expectation the lambda does not
+- The relation runs in one probe. An expectation the lambda does not
   fit (a different arity, or erroneous context) is rolled back with its copy,
   and the owning relation reports the mismatch exactly as without the seed.
 - An annotated lambda is checked against its annotation and is not seeded.
@@ -13688,7 +13813,7 @@ one tag (`Store.pattern_only_tag_copies`: the part that keeps its entry, the
 merged row, and the tag's name), at the merge that makes the copy. A relation
 that copies no marked tag journals nothing, which is every relation of a
 single-part pattern row with the row it matches. The journal is diagnostic
-metadata like the mark, and a savepoint's rollback truncates it with the rest
+metadata like the mark, and a discarded probe truncates it with the rest
 of the store.
 
 The judgment reads a tag as pattern-only when the entry its row lists is
@@ -14027,7 +14152,7 @@ value to the return as it relates any return, and `.boxy` joins the two
 checked types' rows (Row Joins). No lowering stage reconstructs the relation
 from the two types on its own.
 
-If the inferred body has not yet lifted to `Try`, the checker commit-probes a
+If the inferred body has not yet lifted to `Try`, the checker probes a
 fresh `Try` seed using the first concrete `?` success parameter and a fresh
 error row. An established relation is already the ordinary unifier's exact
 commit and becomes the composition target. A rejected relation rolls back all
@@ -14326,10 +14451,16 @@ Five consumers keep the rule exact:
   must lose its pattern-only mark (Pattern-Only Tags); that changes no type.
   A part left with no labels redirects to its extension
   (`RedirectRule.row_union_normalization`), taking the lower of the two ranks
-  as unification would. A row's repeated pairs relate together or not at
-  all: they are first probed as one set against throwaway problem stores,
-  with an occurs check of the row after each, and rolled back, so a rejected
-  row records nothing and leaves no relation on the types it shares. Relations can bind further tails and expose further repeats; the
+  as unification would. A row's repeated pairs relate in order; the first
+  pair whose relation fails, or makes an acyclic row anonymously recursive,
+  is the row's conflict, and a row the relation meets that repeats a label
+  of its own is a mismatch of that relation, so the conflict stays the
+  outer row's. The pairs relate together or not at all: they are first
+  probed as one set (Probes), with an occurs check of the row after each, and
+  the probe is discarded, so a rejected row records nothing and leaves no
+  relation on the types it shares. Normalization never runs inside a probe:
+  a probe's relation that meets a repeating row stops there, and the row is
+  normalized once the probe is discarded. Relations can bind further tails and expose further repeats; the
   chain is rescanned until none remain, and each pass removes a label.
 - The type-key writer reports a repeated label to the checker
   instead of keying it, in the requests the checker makes while inference is
@@ -14963,7 +15094,7 @@ through a method named `foo` (`test/cli/MethodsOnOpenRows*.roc`).
 Builtin `Str` interpolation accepts a part only when ordinary unification can
 make the part `Str` and every static-dispatch constraint already carried by the
 part is satisfiable by builtin `Str`. The checker decides both conditions in one
-commit-probe: success commits the unification and any method evidence; failure
+probe: success commits the unification and any method evidence; failure
 rolls the whole attempt back and reports the interpolation-part type mismatch.
 
 Builtin quote and interpolation literal constraints are discharged directly by
@@ -15086,14 +15217,14 @@ descriptor slots, none of which hold that context, so such a method is not an
 inspect override. A top-level method bound to a computed callable (see
 "Procedure Aliases") has no such context: its stored value is restored
 wherever inspection calls it, so it is an override when its instance
-qualifies. `Wrap(a) -> Str` qualifies, and so do an unannotated method
+qualifies. `Wrap(a) -> Str` qualifies, and so do an unconstrained `a -> Str`, whose
+instance at `T -> Str` takes the owner, an unannotated method
 whose argument is a record its owner's backing matches (`|c| "N(${c.count.to_str()})"`
 for an owner backed by `{ count : U64 }`) and an unannotated method whose
 result is a string literal: its declared result is a variable constrained by
 `from_quote` or `from_interpolation`, which `Str` satisfies. `Wrap(I64) -> Str`,
 `Pair(a, a) -> Str`,
-`Wrap(a) -> Str where [a.to_inspect : a -> Str]`, an unconstrained `a -> Str`,
-extra arguments, effectful functions, results `Str` cannot be (a numeral, `I64`,
+`Wrap(a) -> Str where [a.to_inspect : a -> Str]`, extra arguments, effectful functions, results `Str` cannot be (a numeral, `I64`,
 a rigid variable), and results that are `Str` only when one of `T`'s variables
 is (interpolating a payload of type `a`) do not. Inspection ignores an
 ineligible method and renders the value's default form; per the method-naming
@@ -15106,8 +15237,11 @@ type variables and its result with `Str`, and satisfies every requirement the
 copy carries exactly as the dispatch pass does, repeating as satisfying one
 binds further variables—a numeral by a builtin number type that fits it, a
 quote or interpolation conversion by `Str` (an interpolation's parts by
-becoming `Str`), any other requirement by its receiver's method. The method's
-own type is never changed. When the instance exists, is pure, and still takes
+becoming `Str`), any other requirement by its receiver's method. A method
+whose scheme is generalized keeps its own type; a method whose type is not
+generalized (a value computed by a call) is its own instance, so when it
+qualifies its argument and result become the owner and `Str`, and when it
+does not its type is left as it was. When the instance exists, is pure, and still takes
 the owner over distinct type variables that carry no requirements, checking
 records it as inspection's use of the method
 (`ModuleEnv.inspect_override_instances`) with its scheme-use record,
@@ -15471,7 +15605,7 @@ poisons that use's own occurrences and never the instance other uses share.
 Checking a module ends by thawing every frozen class, so no later stage,
 serialized store, or import sees the mark. Builds with runtime safety check
 the mechanism against what it replaces: every replay first relates a fresh
-copy of the method's scheme to the edge's callable on a savepoint and requires
+copy of the method's scheme to the edge's callable in a discarded probe and requires
 the result to equal the frozen instance exactly, expanding transparent aliases
 at every depth (including row extensions) and comparing each record or tag
 union row as its fields or tags sorted by name, however many extensions store
@@ -15560,10 +15694,11 @@ instantiation would have, and extending its substitution and relations with
 them. A use is linked when a drain is about to process one of its relations,
 when a unification is about to relate one of its placeholders, before an
 error report snapshots any type, before the rank it was instantiated at is
-generalized, and when module finalization begins. A link inside a speculative
-probe is part of the speculation: its copies and redirects are in the
-probe's savepoint, a rollback undoes them and leaves the use unlinked, and
-the outermost commit registers them. Builds with runtime safety check that
+generalized, and when module finalization begins. A link inside a probe is
+part of the speculation: its redirect is one of the unifier's writes, which
+the probe journals; discarding the
+probe undoes it and its copies and leaves the use unlinked, and keeping the probe
+registers them. Builds with runtime safety check that
 no instantiation copies a placeholder, and that by the end of checking every
 use not replayed is linked.
 
@@ -17082,6 +17217,13 @@ Other solved-graph mutations:
   Introduction (above). Uses the existing `unifyWith` descriptor-introduction
   mechanism for a proved concrete builtin conversion; does not mutate the
   context's type or introduce a redirect rule.
+- `projectExpectedTagPayload` without a borrowed record field—mechanism:
+  Expected Shape Context (above). Every refusal is read before the copy
+  writes anything, and the copy cannot fail, so it opens no probe.
+- `relateSameMethodRequirements`—mechanism: a relation whose probe
+  succeeded and was discarded, to read the conflict's description or the
+  method type's finiteness from the types as they were, is related again
+  directly, where it succeeds as it did in the probe.
 - `bindSchemeAliasDestructs` / `optionalDestructBinderType`—policy: Field
   Kinds, scheme alias destructure binding (above). A probe of whether a
   declaration's value is a binding scheme, and of whether each field kind of
@@ -17114,12 +17256,6 @@ Other solved-graph mutations:
   before the default commits and withdrawn when the decision left the class
   flex. The write never changes content or links classes; only diagnostics
   consult it, under Diagnostics About Defaulted Types (below).
-- `snapshotPreDefaultType` (`setClassContentInSavepoint`)—mechanism: restores
-  each default-decided class's recorded pre-default flex content solely to
-  render a diagnostic, under a store savepoint that is always rolled back
-  before returning. The write is to the class itself, a frozen class included,
-  since the view is of the whole class and the rollback restores it. No solved
-  type, dispatch decision, or plan metadata observes it.
 - `stateRowVariableRequirementsOnTheirValues`—policy: Methods On Open Rows
   (above). After an annotation's type is generated and before anything is
   related to it, each `where` requirement on a row variable the annotation
@@ -17330,7 +17466,7 @@ Other solved-graph mutations:
   then its whole error type is unified with the parent parser's error type.
 - `processReturnConstraints` / `collectTryReturnRowUses` /
   `projectTryReturnRow`—policy: Try Return-Row Composition (above).
-  A commit-probe seeds an unsettled inferred body only when ordinary
+  A probe seeds an unsettled inferred body only when ordinary
   unification establishes a `Try`. A lambda with a `?` return owns a composed `Try`: the annotated result,
   or a fresh `Try` sharing the body's success type. The body participates in
   the same batch, with a tagless body row always included in the residual
@@ -17356,7 +17492,7 @@ Other solved-graph mutations:
   (above). Rewrites the row part holding an outer copy of a repeated label to
   omit it, after relating the occurrences through ordinary unification.
 - `recordInspectOverrideInstances`—policy: Inspect Overrides (above). One
-  commit-probe per `to_inspect` declaration instantiates the method's scheme as
+  probe per `to_inspect` declaration instantiates the method's scheme as
   a dispatch target, unifies the copy's argument with its owner over fresh
   type variables and its result with `Str`, and accepts every requirement the
   copy carries (and an interpolated result's parts) against the types those
@@ -17367,7 +17503,7 @@ Other solved-graph mutations:
   are pinned by test/cli/InspectUnannotatedOverride.roc and
   test/cli/InspectIneligibleOverride.roc.
 - `constrainInterpolationPartToStr`—policy: Builtin Str Interpolation Part
-  Compatibility (above). One commit-probe unifies the part with `Str` and
+  Compatibility (above). One probe unifies the part with `Str` and
   validates every attached dispatch constraint; only full success is committed.
 - Literal defaulting (`commitLiteralDefault`)—policy: literal defaulting as
   declared in Static Dispatch At The Checked Boundary (the `LITERAL DEFAULTED`
@@ -17382,7 +17518,7 @@ Other solved-graph mutations:
   literal is open. The dispatch pass then checks each method
   requirement of a default-decided receiver against the default. The default
   is a type the program never chose, so that unification runs in a
-  commit-probe: a requirement the default satisfies is kept, and one it
+  probe: a requirement the default satisfies is kept, and one it
   rejects is rewound, reported as an undetermined type, and rejected without
   retyping anything reachable through the relation's argument graph.
   A pending use copy of a scheme requirement counts among its receiver's
@@ -17477,7 +17613,7 @@ Other solved-graph mutations:
   value against the complete expected type.
 - `seedCallResultFromContext`—policy: Expected Shape Context (above). Projects
   result context onto an instantiated call's return slot before argument
-  construction, using the same commit-probe and copy policy as aggregates.
+  construction, using the same probe and copy policy as aggregates.
   The ordinary owning result relation remains authoritative.
 - `relateSameMethodRequirementsAtBoundary` (`relateSameMethodRequirements`
   committed probe)—policy: one requirement per method on a type about to be
@@ -18973,6 +19109,17 @@ the edge's literal arguments), follows a forwarded literal requirement into the 
 scheme the same way, and lowers the literal's own conversion plan where it
 ends, unwrapping its `Try` as an in-place conversion does.
 
+Entering a scheme reaches its scope and not its body. A frame reads the
+scheme's variables, dictionary parameters and literal requirements, which
+its worker's record holds before any lowering (`Program.templateScope`), so
+a chain queues no worker it enters: a compile-time program evaluating a
+literal argument root holds the conversion and what the conversion calls,
+never the procedure whose literal it converts or anything only that
+procedure reaches. A body is queued where something needs it: a call, a
+function value, or a type table naming the worker (`Program.demandBody`),
+which is filled from the needs the worker's lowering declares, as the
+declaration table of a local procedure a frame's dictionary calls is.
+
 A root exists once the literal's own type is closed, which says nothing about
 the other types at its edge: `inner({ w: y }, 0)` with `0 : U64` has a root
 while `y` is a variable of the enclosing scheme. The wrapper has no enclosing
@@ -19331,8 +19478,9 @@ nothing to a callable whose refcount word is `REFCOUNT_FRAME` (Frame
 Callables), and the wasm backend's inline erased-callable reference counts
 test the same word. The Boxy runtime reads descriptors and nothing else: descriptor-guided copy,
 incref, decref, equality, hashing, inspection, and representation
-adaptation, component addressing and construction, the list operations that
-take an item descriptor, and the shared capture drop. It composes,
+adaptation, component addressing and construction, the release of the
+recursion box a field take leaves, the list operations that take an item
+descriptor, and the shared capture drop. It composes,
 interns, and allocates no descriptor or dictionary, and holds no state of its
 own: no cache, no lock, no atomic, and no thread-local. It has no procedure
 registry, no sidecar, no descriptor numbering, no deferred or pending calls,
@@ -19491,6 +19639,8 @@ With `--specialize=no`, every command writes what `roc check` writes, and
 `roc build` adds its remaining module objects, as does a dev run whose run
 image is composed from unit images (Hot Loading For Default Dev-Shim Runs),
 which also files its root unit and the host executable binary it launches.
+A dev glue run whose spec runs from unit images (Unit-Image Glue Execution)
+adds the same units for its spec, root unit included, and no executable.
 Checked module and pairing entries, the canonicalized
 module cache, and the evaluation output `roc check` produces
 (`ConstStore` constants) are written exactly as `roc check` writes them.
@@ -20445,10 +20595,17 @@ owner returns the error once it has received every task. Without an executor,
 the items run and commit in order on one sequential lane through the same
 callbacks.
 
-Each lane lends every item it runs one scratch arena, registered in the lane's
-state and reset after each item to a single retained chunk of at most
+A run gives every lane that runs its items a lane state of the run's own,
+created by the lane's first item and destroyed when the run returns, so the
+scratch a pass keeps per lane (its lane buffers, the item arena below) serves
+every procedure that lane runs in the run and none of it outlives the run: an
+idle worker holds no capacity grown by a pass that finished. Each lane lends
+every item it runs one scratch arena, registered in that lane state and reset
+after each item to a single retained chunk of at most
 `lane_scratch_retain_limit` (4 MiB), so a lane's steady-state items allocate
 nothing from the backing allocator and idle scratch is bounded per lane.
+Without an executor the items run on the caller's sequential lane, whose
+lifetime the caller chooses.
 
 A commit runs while lanes run later items, so it may change nothing an item
 reads. Native code generation commits in the run: lanes read only the frozen
@@ -23850,14 +24007,14 @@ replay"), which carries no flag, and the entry's remaining requirements are
 still requirements of the default. A default-decided receiver's dispatch
 replays like any other. A replay shares an instance whose relation to an equal
 callable already succeeded, so it cannot reject the default and runs outside
-the commit-probe that brackets the receiver's other requirements.
+the probe that brackets the receiver's other requirements.
 
 The report's type is the class as the program wrote it: every default-decided
 class reachable from the receiver is shown with the union of its recorded
 pre-default requirements, and literal-conversion requirements are omitted,
 since a literal's own conversion is the literal rather than a requirement on
-its type. That restoration is written under a store savepoint that is always
-rolled back, so no solved type changes. The report is about the recorded
+its type. The snapshot only shows those classes that way
+(`snapshotVarForErrorWithFlexViews`); no solved type is written. The report is about the recorded
 variable that stated the failed requirement (`defaultDecidedRecordStating`):
 a default can merge two recorded variables' classes, as when a selected
 method makes two literals one type, and whether it has yet depends on the
@@ -25491,6 +25648,25 @@ function it calls or defines) and checking left the site a pending diagnostic,
 so the evaluator reports the site's empirical failure whichever strategy
 lowered the root; every other failed test ends in `runtime_error`.
 
+A `str_match_set` tries its arms in order, and a backend may decide any group
+of arms together when the outcome equals trying them in order. The LLVM
+backend does so for each maximal run of exact arms, the arms that match one
+literal and capture nothing: no two of them match the same source, so it
+switches on the source's length and then on the source's bytes a chunk of at
+most eight at a time, and reaches the one candidate literal's arm or the miss
+edge after reading each byte a bounded number of times, however many arms the
+run has. Arms with captures keep their own tests, in arm order relative to the
+runs around them.
+
+A backend may likewise read a `str_is_eq` operand as a literal when the LIR
+says it is one: the operand's local has exactly one definition, and that
+definition assigns a string literal or copies a local that holds one, so
+every read of it reads those bytes. The LLVM backend records those locals in
+its per-procedure value plan and compares the other operand's length and
+bytes against constants, for literals of at most 64 bytes; a longer literal,
+and every comparison of two computed strings, uses the general comparison,
+which stops at the first differing chunk.
+
 Named record-rest binders are derived values, not durable pattern decisions.
 Monotype pattern lowering removes the rest binder from the record pattern,
 captures that exact record occurrence in a compiler-generated local, and
@@ -26783,23 +26959,36 @@ every unrolled occurrence, which matches the typing rule below that nested
 modes are uniform through an owning rc.
 
 A dynamic local normally carries one opaque owned unit. For a closed-row
-record or tuple whose logical fields account for all its stored ownership,
-Boxy lowering also emits its checked product shape:
+record or tuple, Boxy lowering also emits its checked product shape:
 the fields' layouts and descriptor locals. This is ownership data,
 not a memory layout: field addresses and representation sizes still come
 from runtime descriptors. A dynamic field occupies one ownership slot;
 a concrete struct field expands into its concrete slots. An open row or an
-unknown type has no enumerated product shape and remains opaque. The same
-applies when a substitution can put a recursion box around a field: projecting
-the logical payload does not transfer the box. The parent descriptor must
-remain responsible for its release. Type arguments reached only through a
-list, explicit box, or callable do not affect inline size.
+unknown type has no enumerated product shape and remains opaque.
+
+A substitution can put a recursion box around a field. A field read opens
+the box and yields the field's value, so the value is not all its slot
+holds. The shape marks each such field boxable (`ProductShape.boxable`):
+every field whose inline size some substitution leaves unbounded, a type
+variable included. Type arguments reached only through a list, explicit box,
+or callable do not affect inline size. ARC stamps a take of a boxable field
+(`RefExtra.releases_recursion_box`): the read moves the value into storage of
+the target's own, and the backend then releases the slot through the
+product's descriptor (`roc_desc_field_release_box`). A slot that is a
+recursion box holding the last reference frees its allocation without
+releasing the value that left; one that other holders share gives the moved
+value a reference of its own and drops the slot's reference to the box; a
+slot that is the value itself holds nothing further. A boxable field is one
+ownership slot and never an ownership-complete field read of its product, so
+its unit leaves only by a stamped take, and ARC releases a boxable field it
+does not take by taking it into a frame temporary and releasing that. A
+boxable field whose committed layout is a struct would spread over several
+slots of one box, so a product holding one has no shape.
 
 A dynamic tag union has no enumerated shape, but each of its payload reads
 names the variant it reads: the read sits under the arm that matched the tag,
 or follows the constructor that built it. Boxy lowering, which knows the tag's
-payload count from its checked type, reads the only payload of a tag that is
-known to be stored inline, into a
+payload count from its checked type, reads the only payload of a tag, into a
 local whose layout can hold refcounted data, as an `assign_ref`
 `tag_payload_struct` of the dynamic union into independent frame storage
 (backends copy it with the union's descriptor as `dyn.tag_payload_addr` of
@@ -26826,6 +27015,15 @@ none of them is the variant's whole contents, so none can carry the union's
 unit, and such a union is released whole. The certifier models a dynamic
 value without a product shape as one claim, which a complete payload
 projection spends.
+
+A tag's only payload can sit in a recursion box as a boxable field can.
+Lowering marks the read of such a payload `RefExtra.payload_boxable`, and
+where ARC moves the union's unit into the payload it stamps the read exactly
+as it stamps a take of a boxable field; the backend then releases the slot
+with `roc_desc_tag_payload_release_box`. That covers a payload that moves out
+whole. A boxable payload that is itself a product would give up its fields
+one at a time through a view of the box, so lowering reads it as a component
+borrowed from the union instead.
 
 An erased argument product's recorded slot boundaries are authoritative for
 both the start and width of each field read. Its non-owning prefix and scalar
@@ -27934,7 +28132,15 @@ its plan requests no variant. A variant reads its base procedure's prepared
 source, so a wave holds base owners or variants, never both, and every base
 wave precedes every variant wave. The wave then reserves its variants in owner
 order, emits the owners whose plans requested any in a second run, and
-appends every shard in owner order. A shard emitted before the wave's
+appends every shard in owner order. A source's prepared data and an owner's
+plan live only as long as an emission reads them: an owner frees its plan as
+soon as its shard is emitted, a base owner's task frees its source once the
+owner is emitted, a variant wave first prepares, in one ordered run, each
+source its variants read that is not prepared, and after the wave frees every
+source no queued variant names, and each shard is freed once it is appended.
+Preparation reads only the ownership-neutral body and the frozen solution and
+dismantle results, so a source prepared again for a variant wave is the one
+its base wave prepared. A shard emitted before the wave's
 reservations names the shorter procedure prefix it was cloned from; appending
 relocates it exactly like one emitted after them. Proving uniqueness settles
 against every source's prepared projections, so that schedule prepares every
@@ -31239,6 +31445,69 @@ in-process test does. It then calls the planned roots' wrappers, found by module
 and source root index through the test-root tables, with the existing
 bool-root runner.
 
+### Unit-Image Glue Execution
+
+A `roc glue --opt=dev --specialize=no` with a cache, on a compiler whose host
+loads unit images, runs its glue spec from unit images loaded into the
+compiler's own process, not from a plugin object compiled for the run. The
+choice is the same switch on optimization, strategy, cache presence and host
+as a composed dev run (`unitImageGlueApplies`, `unitImageRunApplies`), never a
+reaction to a failure, and it is what `roc glue` does by default. Every other
+glue run that compiles its spec lowers the whole spec and persists nothing it
+compiled. A dev run
+(`--opt=dev` with `--no-cache` or `--specialize=yes`) compiles that program
+with the dev backend into the compiler's own executable memory, beside its
+frozen data (`DevGlueCode`); `--opt=dev` never reaches LLVM. `--opt=size` and
+`--opt=speed` compile it through LLVM into a plugin object and load that
+object. An installed shorthand names a spec that is already compiled: its
+plugin object, built specialized with `--opt=speed` at install time, is
+loaded whatever `--opt` says, and only an explicit `--specialize=no` compiles
+the installed source instead, as any other spec. Loading it lowers nothing:
+the spec is checked, the plugin's stamp is verified against the checked
+root's identity, and the marshaller reads the entrypoint's host boundary
+(below), which is the host ABI the plugin's wrapper was compiled against
+under either strategy (`InstalledGlueSpec`).
+
+A glue spec is an app on the glue platform, so its program is rooted and
+divided exactly as a composed dev run's is: the spec and every module it
+imports, the glue platform's modules among them, are library units, and the
+platform's main module, which has the `make_glue` requirement, lowers with
+the spec's types in the root unit, whose image exports the `roc_make_glue`
+wrapper in the `(ret_ptr, args_ptr)` convention. The command builds those
+units as a composed dev run does (`lowerRunUnits`), each restored from the
+per-module cache or lowered, compiled by the dev backend and filed there
+under the key a run or build of the same program would use, so the three
+commands serve one another's units. The units run in the compiler's process,
+so they are compiled for the CPU level this machine executes
+(`host_cpu.nativeTarget`), the one target of every unit the compiler runs
+in its own process: compile-time evaluation's objects, `roc test`'s test
+units and these (`inProcessUnitTarget`). It then loads the builtins' unit, every other library unit after
+everything it imports, and the root unit, binding imports as a test unit's
+are bound (`LoadedUnitImages`), and calls the wrapper under the in-process
+host. The loaded images outlive the copying of the generator's result, which
+can borrow their immutable data.
+
+A unit's key covers everything its code is a function of (Caching Under
+`.boxy`): the module's source and stored values, its imports' interfaces and
+export records, the compiler, the target and the optimization level. An
+unchanged spec therefore costs a glue run its checked-module cache reads and
+the loading of its images, with no lowering and no code generation; an edit
+to the spec, to a module it imports or to a glue platform module rebuilds the
+units whose keys the edit changes and no others. The platform being described
+is input data to the generator and is in no unit's key.
+
+With every unit restored, no program lowered by the run names the layouts
+`roc_make_glue` takes and returns. The marshaller reads them from the
+entrypoint's host boundary instead (`postcheck.Boxy.EntrypointSchema`,
+`CheckedPipeline.BoxyEntrypointBoundary`): a `.boxy` program over the root
+unit's module set that lowers nothing, converts the entrypoint's checked type
+and commits the layout of each argument and of the result, and collects the
+named record and tag union schemas they reach. A layout is a function of its
+type alone (Per-Module Output), so these are the layouts the root unit's
+wrapper was compiled against, whichever run compiled it. The boundary is
+computed the same way whether the root unit was restored or built, so the
+marshaller has one source for it.
+
 ### Command-level execution
 
 `roc test --opt=size` and `roc test --opt=speed` use one command-level test
@@ -32200,6 +32469,19 @@ boxy caller passes its arguments and receives the result in that ABI
 directly. It must not change the hosted dispatch index, hosted symbol
 name, natural C ABI signature, ownership rule, or generated glue declaration.
 
+Every hosted lambda a module holds is one of its recorded hosted definitions
+(`ModuleEnv.hosted_defs`), and so has a row in the checked module's hosted
+procedure table: the platform declarations the hosted transform rewrote, and
+the `echo!` canonicalization gives a default app. That table is the only
+source of a hosted procedure's host symbol and dispatch slot, so a hosted
+lambda outside it could not be lowered. A default app compiled without its
+staged platform (as `roc test` compiles it) has no platform header in scope,
+and each of its declarations takes its own dispatch slot in a stable order.
+Lowering reaches a hosted procedure wherever code that calls it is lowered,
+whether or not anything runs the call: a compile-time program lowers a
+function value a constant holds without ever calling the hosted procedure
+the function calls.
+
 ## Root Application Preparation
 
 The parser's header and declaration index determine an entry module's platform
@@ -32444,6 +32726,20 @@ during the final link. Undefined functions referenced by the linked objects may
 remain host imports, but the linker must not treat a missing declared export as
 such an import or silently discard it.
 
+A wasm target's `minimum_memory`, `maximum_memory` and `initial_stack_size`
+are sizes `roc_target.wasm_memory` accepts: whole pages from one page to 4 GiB
+for the two memory sizes, and a multiple of the stack alignment below 4 GiB
+for the stack. The platform header is held to those rules where it is read
+(`TargetsConfig.fromAST` for a literal, `resolveCheckedConstants` for a named
+constant), and the `--wasm-memory` and `--wasm-stack-size` flags that override
+it take their accepted values from the same rules. Every size a link receives
+is therefore one both the composed link and wasm-ld can express, so neither
+re-validates a size's form: a link reports only what depends on the program,
+which is a configured size the laid-out program does not fit. Both links
+report that as the same `wasm_memory_layout` problem; the wasm-ld link reads
+the needed size from wasm-ld's diagnostic, since only the linker lays the
+program out.
+
 A wasm target's `global_base` is the first address the Roc program may use;
 the host owns every address below it, so it is at least 1. Whether a target
 has one selects the stack layout (`linker.wasmStackLayout`), and nothing else
@@ -32604,7 +32900,9 @@ signatures; template-local numeric assertions alone do not establish agreement
 with builtins.
 
 The glue script input and output are written using checked runtime record
-schemas and committed LIR layouts. No handwritten Zig extern record mirrors
+schemas and committed LIR layouts: those of the whole program a run lowered,
+or the entrypoint's host boundary when the spec runs from unit images
+(Unit-Image Glue Execution). No handwritten Zig extern record mirrors
 stand between `src/glue/platform/*.roc` and the glue runner. Named fields select
 schema logical indices; the layout store supplies their byte offsets and
 layouts. A checked-source schema regression test locks the remaining marshaller
@@ -32613,7 +32911,8 @@ field names and leaf types.
 The compiled glue script retains its readonly data image alongside its code.
 Code-to-data and data-to-function relocations are resolved together, and both
 images outlive extraction of the returned files; returned static strings must
-not become dangling pointers when the entrypoint returns.
+not become dangling pointers when the entrypoint returns. A spec run from unit
+images holds its data in those images, which stay loaded for as long.
 
 Glue's type table gives every row a shape id, the id of the first row that
 describes the same host type. Two rows have the same shape id exactly when
@@ -32666,6 +32965,45 @@ CheckedModule's provided export table, never from the shape of its type.
 Application `requires` declarations are Roc-internal bindings that never cross
 the host boundary, so they are neither glue layout roots nor part of the glue
 input.
+
+A generated file has one namespace for its top-level names. A generator builds
+most of them by joining other names (a module and a type, a type and a helper
+suffix, a union, a tag and a suffix, a hosted function and a suffix), and it
+declares each of the platform's linker symbols under the symbol's own name.
+Joined names can be equal to each other, to a symbol, and to the names of the
+generator's own runtime support, so each generator states every name it
+declares, and `TypeNamePlan` gives each name to one declaration. A name the
+generator owns yields to a name it does not:
+
+- A linker symbol and a name of the runtime support are both fixed: the
+  platform header chose the first, and host code is written against the
+  second. A symbol that the generated file cannot declare (a keyword of the
+  file's language, a name of its runtime support, or a helper name the
+  generator derives from a type id, a list item type or another symbol) stops
+  the glue run with an error naming the symbol. Which names those are depends
+  on the language the file is written in, so the generator decides, not the
+  platform header check: that check rejects only what no host in any language
+  could define, the runtime symbols and the `roc__` prefix.
+- The names derived from a hosted function or a provided entry yield to the
+  fixed names and to each other: every function or entry involved takes names
+  derived from its hosted index or its place in the provides list.
+- A host type's names yield to all of those and to other host types': a name
+  declared for two host types denotes neither, and both take the names derived
+  from their shape ids, exactly like shapes that share a Roc name.
+- A preferred name is granted only when every name its type would declare
+  under it is free, and an alias is emitted only under a name nothing else
+  declares.
+
+If two declarations still collide under their id-derived names, the glue run
+fails with an error naming both. A generator never emits two declarations
+under one name, and never lets one declaration stand for another.
+
+The members of one record or tag union have a namespace of their own, and a
+generator can spell two of them alike after converting case or escaping a
+reserved word. A spelling two members share denotes neither: each takes it
+followed by a marker and its rank among the members that share it, ordered by
+Roc name, so every place that names a member derives the same name from the
+member names alone.
 
 The platform header maps linker symbols explicitly, symbol-string first, in
 both directions:

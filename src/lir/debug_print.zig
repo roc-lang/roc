@@ -86,6 +86,7 @@ const Printer = struct {
                         .nominal => try writer.print("ref.nominal l{d}", .{@backingInt(s.op.source)}),
                     }
                     if (self.store.stmtRowOrDefault(s.extra).take_kind == .take) try writer.writeAll(" take");
+                    if (self.store.stmtRowOrDefault(s.extra).releases_recursion_box) try writer.writeAll(" release_box");
                     const absent_fields = self.store.getU32Span(self.store.stmtRowOrDefault(s.extra).residual_shell_absent_fields);
                     if (absent_fields.len != 0) {
                         try writer.writeAll(" shell_absent={");

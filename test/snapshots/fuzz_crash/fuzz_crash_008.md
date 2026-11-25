@@ -8,7 +8,7 @@ type=file
 ||1
 ~~~
 # EXPECTED
-ASCII CONTROL CHARACTER - :0:0:0:0
+ASCII CONTROL CHARACTER - fuzz_crash_008.md:1:2:1:3
 UNEXPECTED STATEMENT - fuzz_crash_008.md:1:1:1:2
 UNEXPECTED STATEMENT - fuzz_crash_008.md:1:3:1:4
 UNEXPECTED STATEMENT - fuzz_crash_008.md:1:4:1:5
@@ -18,9 +18,11 @@ UNEXPECTED STATEMENT - fuzz_crash_008.md:1:4:1:5
 	(report
 		(severity runtime_error)
 		(title "ASCII Control Character")
+		(region (start 1 2) (end 1 3))
 		(headline
 			(reflow "ASCII control characters are not allowed in Roc source code."))
-		(document))
+		(document
+			(source-region (file "fuzz_crash_008.md") (start 1 2) (end 1 3) (annotation error) (line-text "|\u{0f}|1"))))
 	(report
 		(severity runtime_error)
 		(title "Unexpected Statement")

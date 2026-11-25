@@ -55,17 +55,22 @@ pub fn classifyType(store: *const Store, start: Idx) Class {
                 // struct the host declares, so it does not count. A lone
                 // unnamed-padding field is not a real newtype member, so it is never
                 // unwrapped.
-                var only_sized_field: ?u32 = null;
-                var i: u32 = 0;
-                while (i < field_count) : (i += 1) {
-                    if (store.getStructFieldSize(struct_idx, i) == 0) continue;
-                    if (only_sized_field != null) return .indirect;
-                    only_sized_field = i;
+                var only_sized_field = store.getStructField(struct_idx, 0);
+                if (field_count != 1) {
+                    var sized_fields: u32 = 0;
+                    var i: u32 = 0;
+                    while (i < field_count) : (i += 1) {
+                        const field = store.getStructField(struct_idx, i);
+                        if (store.layoutSize(store.getLayout(field.layout)) == 0) continue;
+                        if (sized_fields != 0) return .indirect;
+                        sized_fields = 1;
+                        only_sized_field = field;
+                    }
                 }
-                // The size assertion above holds, so a struct has a sized field.
-                const field = only_sized_field.?;
-                if (store.getStructFieldIsPadding(struct_idx, field)) return .indirect;
-                idx = store.getStructFieldLayout(struct_idx, field);
+                // The size assertion above holds, so the struct has a sized
+                // field: its only field, or the one the loop found.
+                if (only_sized_field.is_padding) return .indirect;
+                idx = only_sized_field.layout;
             },
             .tag_union => {
                 const info = store.getTagUnionInfo(lay);

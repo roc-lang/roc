@@ -164,14 +164,16 @@ pub fn level() CpuLevel {
 /// This is what a command compiles for when the user names no `--target`: the
 /// artifact runs here, so its floor is this machine's.
 pub fn nativeTarget() RocTarget {
-    const native = comptime RocTarget.detectNative();
-    const baseline = comptime native.baselineCpuTarget();
+    return targetAtLevel(comptime RocTarget.detectNative(), level());
+}
 
-    if (baseline) |baseline_target| {
-        if (level() == .v1) return baseline_target;
-    }
-
-    return native;
+/// `native` spelled for a machine that executes `cpu_level`: its `v1` twin
+/// on a baseline machine, when it has one, and itself otherwise.
+pub fn targetAtLevel(native: RocTarget, cpu_level: CpuLevel) RocTarget {
+    return switch (cpu_level) {
+        .v1 => native.baselineCpuTarget() orelse native,
+        .default => native,
+    };
 }
 
 fn detect() CpuLevel {
@@ -329,6 +331,19 @@ test "the native target carries the detected level" {
 
     try std.testing.expectEqual(RocTarget.detectNative(), native.defaultCpuTarget());
     try std.testing.expectEqual(level(), native.cpuLevel());
+}
+
+test "a baseline machine's native target is the v1 twin, whose code it executes" {
+    for (std.enums.values(RocTarget)) |target| {
+        try std.testing.expectEqual(target, targetAtLevel(target, .default));
+        const baseline = targetAtLevel(target, .v1);
+        if (target.baselineCpuTarget()) |twin| {
+            try std.testing.expectEqual(twin, baseline);
+            try std.testing.expectEqual(CpuLevel.v1, baseline.cpuLevel());
+        } else {
+            try std.testing.expectEqual(target, baseline);
+        }
+    }
 }
 
 test "detection is cached rather than repeated" {

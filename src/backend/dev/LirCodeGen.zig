@@ -18089,6 +18089,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.codegen.patchJump(skip, self.codegen.currentOffset());
         }
 
+        /// Release the slot a stamped field take left
+        /// (`LIR.RefExtra.releases_recursion_box`).
+        fn generateDynFieldReleaseBox(self: *Self, record: LocalId, field_index: u32) Allocator.Error!void {
+            try self.spillAllVectorLocals();
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
+            try self.addWordArg(&builder, self.localDyn(record).?.desc);
+            try self.addBytesArg(&builder, record);
+            try builder.addImmArg(field_index);
+            try self.callBoxyRuntime(&builder, "roc_desc_field_release_box");
+        }
+
+        /// `generateDynFieldReleaseBox` for a tag union's only payload.
+        fn generateDynTagPayloadReleaseBox(self: *Self, tag_union: LocalId) Allocator.Error!void {
+            try self.spillAllVectorLocals();
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
+            try self.addWordArg(&builder, self.localDyn(tag_union).?.desc);
+            try self.addBytesArg(&builder, tag_union);
+            try self.callBoxyRuntime(&builder, "roc_desc_tag_payload_release_box");
+        }
+
         /// The return of a procedure whose result is dynamic: the value's
         /// bytes are written to the caller's result storage, unless the
         /// procedure built them there.
@@ -21113,8 +21135,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .assign_ref => |assign| {
                             if (assign.op.kind == .field and self.localDyn(assign.op.source) != null) {
                                 try self.generateDyn(assign.target, .{ .field_addr = .{ .base = assign.op.source, .desc = self.localDyn(assign.op.source).?.desc, .field_index = .{ .immediate = assign.op.index } } });
+                                if (self.store.stmtRowOrDefault(assign.extra).releases_recursion_box) try self.generateDynFieldReleaseBox(assign.op.source, assign.op.index);
                             } else if (assign.op.kind == .tag_payload_struct and self.localDyn(assign.op.source) != null) {
                                 try self.generateDyn(assign.target, .{ .tag_payload_addr = .{ .base = assign.op.source, .desc = self.localDyn(assign.op.source).?.desc, .payload_index = 0 } });
+                                if (self.store.stmtRowOrDefault(assign.extra).releases_recursion_box) try self.generateDynTagPayloadReleaseBox(assign.op.source);
                             } else if (assign.op.kind == .local and self.localDyn(assign.target) != null) {
                                 try self.generateDyn(assign.target, .{ .copy = .{ .src = assign.op.source, .desc = self.localDyn(assign.target).?.desc } });
                             } else {
@@ -23487,6 +23511,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.codegen.getCode();
         }
 
+        /// Free what only linking the finished image reads, once a linker
+        /// has copied it into an executable mapping (`HostSplice.link`): the
+        /// code bytes, their relocations, and the symbol declarations those
+        /// name, which may borrow names the image's other inputs own. The
+        /// tables mapping an offset of the mapped code back to its
+        /// procedure, statement, and failure stay. The generator emits and
+        /// links nothing afterwards.
+        pub fn releaseLinkedCode(self: *Self) void {
+            self.assertImageFinished();
+            const emit = &self.codegen.emit;
+            emit.buf.clearAndFree(emit.allocator);
+            emit.relocs.clearAndFree(emit.allocator);
+            self.codegen.relocations.clearAndFree(self.codegen.allocator);
+            self.codegen.symbols.deinit(self.codegen.allocator);
+            self.codegen.symbols = .{};
+        }
+
         /// Get generated callable ranges for dynamic unwind registration.
         pub fn getUnwindFunctions(self: *const Self) []const coff.FunctionInfo {
             return self.unwind_functions.items;
@@ -24071,7 +24112,7 @@ test "issue 13186: x64mac inline expect site survives unit image construction" {
         arena.allocator(),
         .x64mac,
         codegen.codegen.emit.buf.items,
-        &.{},
+        .{},
         0,
         &symbols,
         codegen.codegen.relocations.items,
@@ -24111,10 +24152,10 @@ test "x86_64 expect sites are zero-extended 32-bit fields in every object format
 
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        const image = try writer.indexedImageObject(arena.allocator(), target, code, &.{}, 0, &symbols, codegen.codegen.relocations.items, &.{}, &.{}, null, false);
+        const image = try writer.indexedImageObject(arena.allocator(), target, code, .{}, 0, &symbols, codegen.codegen.relocations.items, &.{}, &.{}, null, false);
         var encoded: std.ArrayList(u8) = .empty;
         defer encoded.deinit(allocator);
-        try writer.generateIndexedObjectFileWithDebug(allocator, target, code, &.{}, 0, &symbols, codegen.codegen.relocations.items, &.{}, &.{}, null, &encoded);
+        try writer.generateIndexedObjectFileWithDebug(allocator, target, code, .{}, 0, &symbols, codegen.codegen.relocations.items, &.{}, &.{}, null, &encoded);
         try std.testing.expectEqual(@as(usize, 2), image.relocs.len);
         for (image.relocs, [_]u64{ 1, 7 }, [_]i64{ 0, std.math.maxInt(u32) }) |reloc, offset, addend| {
             try std.testing.expectEqual(UnitImage.RelocKind.abs32, reloc.kind);
