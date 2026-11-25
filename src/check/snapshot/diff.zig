@@ -130,8 +130,8 @@ fn findBestTypoSuggestion(
         if (dist == 0 or dist > best_dist or !base.typo.isLikelyTypo(typo_text.len, candidate_text.len, dist)) continue;
         if (dist == best_dist) {
             const previous = ident_store.getText(best.?);
-            const prefix = std.mem.findDiff(u8, typo_text, candidate_text).?;
-            const prev_prefix = std.mem.findDiff(u8, typo_text, previous).?;
+            const prefix = base.typo.commonPrefixLen(typo_text, candidate_text);
+            const prev_prefix = base.typo.commonPrefixLen(typo_text, previous);
             if (prefix < prev_prefix or (prefix == prev_prefix and Ident.textOrder(candidate_text, previous) != .gt)) continue;
         }
         best_dist = dist;

@@ -7,7 +7,7 @@ const std = @import("std");
 
 const InferredEntries = struct { solved: usize, sealed: usize };
 
-fn inferredMatchEntries(width: usize) !InferredEntries {
+fn inferredMatchEntries(width: usize) TestEnv.TestEnvError!InferredEntries {
     var source = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer source.deinit();
     try source.writer.writeAll("value = |t| match t {\n");

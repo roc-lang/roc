@@ -9,7 +9,9 @@ const TestEnv = @import("TestEnv.zig");
 
 const Measure = enum { record_entries, tag_entries, coverage_bytes };
 
-fn measure(which: Measure, width: usize) !usize {
+const MeasureError = TestEnv.TestEnvError || exhaustive.PatternResolveError;
+
+fn measure(which: Measure, width: usize) MeasureError!usize {
     var source = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer source.deinit();
     const w = &source.writer;
@@ -71,7 +73,7 @@ fn measure(which: Measure, width: usize) !usize {
     }
 }
 
-fn expectLinearStorage(which: Measure) !void {
+fn expectLinearStorage(which: Measure) MeasureError!void {
     const small = try measure(which, 32);
     const large = try measure(which, 128);
     // Four times the input; allow for arena chunk sizing, but not 16x growth.

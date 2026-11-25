@@ -752,7 +752,7 @@ pub const Store = struct {
                     } } };
                     store.descs.setRow(desc_idx, store.encodeDescWithoutIdentity(desc));
                 },
-                .flex, .rigid, .alias, .field_presence, .err, .tuple, .nominal_type, .empty_record, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound => unreachable,
+                .flex, .rigid, .alias, .field_presence, .err, .tuple, .nominal_type, .empty_record, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound => unreachable, // callers flatten only record and tag-union descriptors
             }
         }
     };
@@ -789,7 +789,7 @@ pub const Store = struct {
         fn expand(self: *SealTracer, desc_idx: DescStore.Idx) Allocator.Error!void {
             const store = self.flattener.store;
             switch (store.descs.getWord(desc_idx).kind) {
-                .field_presence, .err, .empty_record, .empty_tag_union => unreachable,
+                .field_presence, .err, .empty_record, .empty_tag_union => unreachable, // `visit` queues only descriptors that hold a variable
                 .flex, .rigid => for (store.sliceStaticDispatchConstraints(store.variableConstraintsAt(desc_idx))) |constraint| {
                     try self.visit(constraint.fn_var);
                 },

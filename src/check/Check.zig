@@ -15781,15 +15781,10 @@ const SealRoots = struct {
         var node_idx: u32 = CIR.Node.first_idx;
         while (node_idx < node_count) : (node_idx += 1) {
             const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-            switch (env.store.nodes.get(@fromBackingInt(@intCast(node_idx))).tag) {
-                .expr_call, .expr_field_access => try output_type_roots.forEachCallTypeRoot(env, expr_idx, visitor),
-                .expr_dispatch_call,
-                .expr_interpolation,
-                .expr_type_dispatch_call,
-                .expr_type_dispatch_call_dispatcher,
-                .expr_method_eq,
-                => try output_type_roots.forEachStaticDispatchTypeRoot(env, expr_idx, visitor),
-                else => {},
+            switch (output_type_roots.nodeTypeRoots(env.store.nodes.get(@fromBackingInt(@intCast(node_idx))).tag)) {
+                .call => try output_type_roots.forEachCallTypeRoot(env, expr_idx, visitor),
+                .static_dispatch => try output_type_roots.forEachStaticDispatchTypeRoot(env, expr_idx, visitor),
+                .none => {},
             }
         }
         for (env.for_loop_dispatch_plans.items()) |plan| try output_type_roots.forEachForLoopDispatchTypeRoot(plan, visitor);
