@@ -2472,7 +2472,8 @@ roots (`CompileTimeRootTable.fromModule`), after it has published the
 module's dispatch plans: a numeral with a `from_numeral` plan is not in value
 form, and a literal with a conversion root always has such a plan, so the
 conversion roots published later decide nothing. Deciding reads the checked
-types and changes none.
+types and changes none. The walk classifies each part by its node kind before it decodes the
+part, so a part that cannot be in value form is never decoded.
 
 A lookup is decided last, once every root of the module exists with its
 request eligibility: publication resolves it from checked CIR to the root it
