@@ -124,10 +124,18 @@ fn findBestTypoSuggestion(
     for (candidates) |candidate| {
         const candidate_text = ident_store.getText(candidate);
         const dist = base.typo.editDistance(typo_text, candidate_text);
-        if (dist > 0 and dist < best_dist and base.typo.isLikelyTypo(typo_text.len, candidate_text.len, dist)) {
-            best_dist = dist;
-            best = candidate;
+        // A row's split into head and extension is not source order. Break
+        // equal-distance tag ties by longest common prefix, then name, not
+        // whichever constructor the solver happened to put in the head.
+        if (dist == 0 or dist > best_dist or !base.typo.isLikelyTypo(typo_text.len, candidate_text.len, dist)) continue;
+        if (dist == best_dist) {
+            const previous = ident_store.getText(best.?);
+            const prefix = base.typo.commonPrefixLen(typo_text, candidate_text);
+            const prev_prefix = base.typo.commonPrefixLen(typo_text, previous);
+            if (prefix < prev_prefix or (prefix == prev_prefix and Ident.textOrder(candidate_text, previous) != .gt)) continue;
         }
+        best_dist = dist;
+        best = candidate;
     }
 
     return best;
@@ -691,6 +699,17 @@ fn gatherTagsFromUnion(
 }
 
 // Tests
+test "tag typo ties do not depend on the solver's row partition" {
+    const gpa = std.testing.allocator;
+    var idents = try Ident.Store.initCapacity(gpa, 4);
+    defer idents.deinit(gpa);
+    const typo = try idents.insert(gpa, Ident.for_text("T16"));
+    const short = try idents.insert(gpa, Ident.for_text("T1"));
+    const similar = try idents.insert(gpa, Ident.for_text("T15"));
+    try std.testing.expectEqual(similar, findBestTypoSuggestion(typo, &.{ short, similar }, &idents).?);
+    try std.testing.expectEqual(similar, findBestTypoSuggestion(typo, &.{ similar, short }, &idents).?);
+}
+
 test "snapshot record field presence is preserved in missing-field hints" {
     const gpa = std.testing.allocator;
 

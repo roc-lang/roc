@@ -322,6 +322,8 @@ pub const MismatchBehavior = enum {
 /// Per-call options. All axes default to the common case.
 pub const Options = struct {
     context: Context = .none,
+    /// Fresh, unnamed tail introduced by a member demand, not a rest binder.
+    member_tail: ?Var = null,
     on_mismatch: MismatchBehavior = .poison_to_err,
     root_relation: RootRelation = .ordinary,
     row_width_relation: RowWidthRelation = .construction,
@@ -393,6 +395,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         opts.field_presence_relation,
         opts.nominal_record_mismatch_role,
     );
+    unifier.member_tail = opts.member_tail;
     unifier.deferred_callables = env.deferred_callables;
     const root_mismatch: MismatchHandling = if (opts.method_requirements) |requirements| .{ .record_method_conflict = .{
         .method_name = requirements.method_name,
@@ -618,6 +621,7 @@ const Unifier = struct {
     row_width_relation: RowWidthRelation,
     field_presence_relation: FieldPresenceRelation,
     nominal_record_mismatch_role: NominalRecordMismatchRole,
+    member_tail: ?Var = null,
     /// The unresolved "actual" var before resolution, used for deferred constraint origin tracking.
     /// This allows error messages to point to the original expression rather than the resolved type.
     unresolved_a: ?Var,
@@ -3656,6 +3660,8 @@ const Unifier = struct {
 
         try self.enterRecordRelation(vars);
 
+        if (try self.relateMember(.record, vars, .{ .fields = a_fields, .ext = a_ext }, .{ .fields = b_fields, .ext = b_ext })) return;
+
         // Every relation drains its chain duplicates before returning, so the
         // ones gathered here split exactly into `a`'s and then `b`'s.
         std.debug.assert(self.scratch.chain_duplicate_fields.items.len == 0);
@@ -3775,8 +3781,177 @@ const Unifier = struct {
 
     const RowExtension = enum { exactly_the_same, a_extends_b, b_extends_a, both_extend };
 
+    /// A member demand's tail is existential. When the member already exists
+    /// in a single row part, relate its payload and keep the receiver's row;
+    /// no use names the remainder of that row.
+    fn relateMember(self: *Self, comptime kind: RowKind, vars: *const ResolvedVarDescs, a: kind.Row(), b: kind.Row()) Error!bool {
+        const private = self.member_tail orelse return false;
+        const demand_a = a.ext == private;
+        if (!demand_a and b.ext != private) return false;
+        const demand = if (demand_a) a else b;
+        const receiver = if (demand_a) b else a;
+        if (receiver.ext == private or kind.entriesOf(demand).count != 1) return false;
+        const store = self.types_store;
+        if (store.resolveVarWord(private).word.kind != .flex) return false;
+        // Chained parts need duplicate normalization. A nominal opening is
+        // not the receiver itself and requires the ordinary nominal merge.
+        const tail = store.resolveVarWord(receiver.ext).word.kind;
+        if (tail != .flex and tail != .rigid and !(if (kind == .record) tail == .empty_record else tail == .empty_tag_union)) return false;
+        const receiver_var = if (demand_a) vars.b else vars.a;
+        if (receiver_var.desc.content != .structure or kind.rowOf(receiver_var.desc.content.structure) == null) return false;
+        // Moving a younger row under an older parent must lower the other
+        // entries too (`freshParent`); that relation is not just a lookup.
+        if (Rank.min(vars.a.desc.rank, vars.b.desc.rank) != receiver_var.desc.rank) return false;
+
+        const entries = kind.storeEntries(store);
+        const wanted = entries.sliceRange(kind.entriesOf(demand)).get(0);
+        const range = kind.entriesOf(receiver);
+        // Equal singleton rows also relate their tails to one another.
+        if (range.count <= 1) return false;
+        const run = entries.sliceRange(range);
+        const index = if (kind == .tag_union)
+            Tag.findName(self.ident_store, run.items(.name), wanted.name)
+        else
+            try self.scratch.recordMemberIndex(store, range, wanted.name);
+        const found = run.get(index orelse return false);
+        if (kind == .record) {
+            if (wanted.presence.decode() != .required or found.presence.decode() != .required) return false;
+            if (!self.memberBinding(wanted.presence.typeVar(), found.presence.typeVar())) return false;
+        } else {
+            if (!wanted.pattern_only and found.pattern_only) return false;
+            if (wanted.args.count != found.args.count) return false;
+            for (store.sliceVars(wanted.args), store.sliceVars(found.args)) |binder, payload| {
+                if (!self.memberBinding(binder, payload)) return false;
+            }
+        }
+        self.member_tail = null;
+        if (kind == .tag_union) try store.unifierRequireTagRow(receiver.ext);
+        try self.scheduleStoredMerge(vars, if (demand_a) .b else .a);
+        if (kind == .record) {
+            const av = if (demand_a) wanted.presence.typeVar() else found.presence.typeVar();
+            const bv = if (demand_a) found.presence.typeVar() else wanted.presence.typeVar();
+            try self.scheduleGuardedPair(av, bv, .propagate);
+        } else {
+            const ax = if (demand_a) wanted.args else found.args;
+            const bx = if (demand_a) found.args else wanted.args;
+            var i = ax.count;
+            while (i != 0) {
+                i -= 1;
+                try self.scheduleGuardedPair(store.getVarAt(ax, i), store.getVarAt(bx, i), .propagate);
+            }
+        }
+        return true;
+    }
+
+    // Only skip the residual when the payload relation keeps one shared
+    // class. Two aliases, for example, can relate through their backings
+    // without themselves merging. Keep the ordinary mismatch evidence and
+    // operand selection for such relations.
+    fn memberBinding(self: *Self, binder: Var, payload: Var) bool {
+        const a = self.types_store.resolveVarWord(binder);
+        const b = self.types_store.resolveVarWord(payload);
+        return a.desc_idx == b.desc_idx or (self.isPlainFlex(a) and !a.word.requiresTagRow() and
+            !a.word.flags().frozen and !b.word.flags().frozen and self.storedContentMerge(a, b) != null);
+    }
+
     fn GatheredRow(comptime kind: RowKind) type {
         return struct { ext: Var, range: kind.Entry().SafeList.Range };
+    }
+
+    /// Add a new pattern tag to an inferred row, including at every older
+    /// reference to its open tail. Coalescing equal-sized sorted runs gives
+    /// logarithmic chain depth without copying the whole row on each arm.
+    fn extendPatternRow(self: *Self, vars: *const ResolvedVarDescs, a: TagUnion, b: TagUnion) Error!bool {
+        const private = self.member_tail.?;
+        const demand_a = a.ext == private;
+        if (!demand_a and b.ext != private) return false;
+        const demand = if (demand_a) a else b;
+        const owner = if (demand_a) vars.b else vars.a;
+        const rank = owner.desc.rank;
+        const store = self.types_store;
+        if (store.probeOpen() or demand.tags.count != 1 or vars.a.desc.rank != vars.b.desc.rank or
+            owner.desc.content.unwrapTagUnion() == null or vars.a.desc.flags.frozen or vars.b.desc.flags.frozen) return false;
+        const added = store.getTagAt(demand.tags, 0);
+        if (!added.pattern_only) return false;
+        const tail_word = store.resolveVarWord(private);
+        if (!self.isPlainFlex(tail_word) or tail_word.word.rank != rank or tail_word.word.flags().frozen) return false;
+        for (store.sliceVars(added.args)) |arg| {
+            const word = store.resolveVarWord(arg);
+            if (!self.isPlainFlex(word) or word.word.flags().frozen or word.word.requiresTagRow()) return false;
+        }
+
+        const runs = &self.scratch.growing_tag_runs;
+        // Only the ranges, not roots or descriptors, certify disjointness.
+        // Ranges are immutable. A changed chain needs general normalization.
+        var part = owner;
+        var row = if (demand_a) b else a;
+        const starting = row.tags.count == 1 and store.resolveVarWord(row.ext).word.kind == .flex;
+        const path = &self.scratch.tag_growth_path;
+        path.clearRetainingCapacity();
+        while (true) {
+            const depth = path.items.len;
+            if (!starting and (depth >= runs.items.len or !std.meta.eql(row.tags, runs.items[depth]))) return false;
+            if (part.desc.rank != rank or part.desc.flags.frozen or part.desc.flags.bounded_row_ext or part.desc.flags.nominal_backing_structure) return false;
+            if (Tag.findName(self.ident_store, store.getTagsSlice(row.tags).items(.name), added.name) != null) return false;
+            try path.append(self.scratch.gpa, .{ .part = part.var_, .tags = row.tags });
+            part = store.resolveVar(row.ext);
+            row = part.desc.content.unwrapTagUnion() orelse break;
+        }
+        if (!starting and path.items.len != runs.items.len) return false;
+        const end = store.resolveVarWord(part.var_);
+        if (!self.isPlainFlex(end) or end.word.rank != rank or end.word.flags().frozen or end.desc_idx == tail_word.desc_idx) return false;
+        if (end.word.flags().deferred_callable or tail_word.word.flags().deferred_callable) return false;
+
+        // The old tail really gains the tag, even when another value names
+        // that tail. The demand's private tail becomes its new open end.
+        try store.unifierRequireTagRow(private);
+        if (starting) {
+            for (store.sliceVars(store.getTagAt(path.items[0].tags, 0).args)) |arg| try self.lowerRankTo(arg, rank);
+        }
+        const singleton = try self.freshParent(vars, .{ .structure = .{ .tag_union = demand } });
+        try store.unifierUnionKeepingContent(part.var_, singleton, .b, rank);
+        var combined = demand.tags;
+        var fuse_from = path.items.len;
+        while (fuse_from != 0) {
+            const prev = path.items[fuse_from - 1];
+            if (prev.tags.count != combined.count) break;
+            fuse_from -= 1;
+            combined = try self.mergeDisjointTagRuns(prev.tags, combined);
+        }
+        if (fuse_from != path.items.len) {
+            const fuse_at = path.items[fuse_from].part;
+            // A mark in a suffix and its copy in the fused part remain one
+            // diagnostic fact if a producer later meets just one of them.
+            try store.pattern_only_tag_copies.append(store.gpa, .{ .part = part.var_, .root = fuse_at, .name = added.name });
+            for (path.items[fuse_from + 1 ..]) |absorbed| {
+                const tags = store.getTagsSlice(absorbed.tags);
+                for (tags.items(.name), tags.items(.pattern_only)) |name, marked| {
+                    if (marked) try store.pattern_only_tag_copies.append(store.gpa, .{ .part = absorbed.part, .root = fuse_at, .name = name });
+                }
+            }
+            try store.unifierSetVarContent(fuse_at, .{ .structure = .{ .tag_union = .{ .tags = combined, .ext = private } } });
+        }
+        runs.clearRetainingCapacity();
+        try runs.ensureTotalCapacity(self.scratch.gpa, fuse_from + 1);
+        for (path.items[0..fuse_from]) |keep| runs.appendAssumeCapacity(keep.tags);
+        runs.appendAssumeCapacity(combined);
+        self.member_tail = null;
+        try store.unifierUnionKeepingContent(vars.a.var_, vars.b.var_, if (demand_a) .b else .a, rank);
+        return true;
+    }
+
+    fn mergeDisjointTagRuns(self: *Self, left: Tag.SafeMultiList.Range, right: Tag.SafeMultiList.Range) Error!Tag.SafeMultiList.Range {
+        const store = self.types_store;
+        const start: u32 = @intCast(store.tags.len());
+        var i: u32 = 0;
+        var j: u32 = 0;
+        while (i < left.count or j < right.count) {
+            const take_left = j == right.count or (i < left.count and Tag.orderByName(self.ident_store, store.getTagAt(left, i), store.getTagAt(right, j)) == .lt);
+            const tag = if (take_left) store.getTagAt(left, i) else store.getTagAt(right, j);
+            _ = try store.appendTags(&.{tag});
+            if (take_left) i += 1 else j += 1;
+        }
+        return store.tags.rangeToEnd(start);
     }
     /// A field repeated along one row's extension chain is the same field:
     /// its value types and kinds are equal exactly (design.md "Row Union
@@ -4311,6 +4486,11 @@ const Unifier = struct {
     ) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
+
+        if (self.member_tail != null) {
+            if (try self.relateMember(.tag_union, vars, a_tag_union, b_tag_union)) return;
+            if (try self.extendPatternRow(vars, a_tag_union, b_tag_union)) return;
+        }
 
         // Every relation drains its chain duplicates before returning, so the
         // ones gathered here split exactly into `a`'s and then `b`'s.
@@ -5450,6 +5630,9 @@ pub const Scratch = struct {
     frame_refused_tag_tails: RefusedTagTails,
 
     // records - used internal by unification
+    member_indices: std.AutoHashMapUnmanaged(RecordField.SafeMultiList.Range, collections.DenseMapUnmanaged(u29, u32)) = .empty,
+    growing_tag_runs: std.ArrayList(Tag.SafeMultiList.Range) = .empty,
+    tag_growth_path: std.ArrayList(struct { part: Var, tags: Tag.SafeMultiList.Range }) = .empty,
     gathered_fields: RecordFieldSafeList,
     only_in_a_fields: RecordFieldSafeList,
     only_in_b_fields: RecordFieldSafeList,
@@ -5690,6 +5873,11 @@ pub const Scratch = struct {
 
     /// Deinit scratch
     pub fn deinit(self: *Self) void {
+        var indices = self.member_indices.valueIterator();
+        while (indices.next()) |index| index.deinit(self.gpa);
+        self.member_indices.deinit(self.gpa);
+        self.growing_tag_runs.deinit(self.gpa);
+        self.tag_growth_path.deinit(self.gpa);
         self.fresh_vars.deinit(self.gpa);
         self.determined_literals.deinit(self.gpa);
         self.effect_dependency_seen.deinit();
@@ -5776,6 +5964,25 @@ pub const Scratch = struct {
     }
 
     // helpers //
+
+    /// Names and offsets in a stored range never change while checking. Do
+    /// not remember ranges appended in probes, whose offsets can be reused.
+    fn recordMemberIndex(self: *Self, store: *types_mod.Store, range: RecordField.SafeMultiList.Range, name: Ident.Idx) std.mem.Allocator.Error!?usize {
+        const names = store.getRecordFieldsSlice(range).items(.name);
+        if (names.len <= 8 or store.probeOpen()) {
+            for (names, 0..) |n, i| if (n.eql(name)) return i;
+            return null;
+        }
+        const slot = try self.member_indices.getOrPut(self.gpa, range);
+        if (!slot.found_existing) {
+            slot.value_ptr.* = .empty;
+            for (names, 0..) |n, i| {
+                const place = try slot.value_ptr.getOrPut(self.gpa, n.idx);
+                if (!place.found_existing) place.value_ptr.* = @intCast(i);
+            }
+        }
+        return @as(usize, slot.value_ptr.get(name.idx) orelse return null);
+    }
 
     /// One of the kind's scratch lists, named by prefix: `gathered_`,
     /// `only_in_a_`, `only_in_b_`, `in_both_`, or `chain_duplicate_`.
