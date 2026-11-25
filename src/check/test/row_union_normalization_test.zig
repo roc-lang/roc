@@ -3,6 +3,32 @@
 //! only conflicting ones are rejected.
 
 const TestEnv = @import("./TestEnv.zig");
+const std = @import("std");
+
+const InferredEntries = struct { solved: usize, sealed: usize };
+
+fn inferredMatchEntries(width: usize) TestEnv.TestEnvError!InferredEntries {
+    var source = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer source.deinit();
+    try source.writer.writeAll("value = |t| match t {\n");
+    for (0..width) |i| try source.writer.print("    T{d}(v) => v\n", .{i});
+    try source.writer.writeAll("}\n");
+    var env = try TestEnv.initOpen("Test", source.written());
+    defer env.deinit();
+    try env.assertNoErrors();
+    const solved = env.checker.types.tags.len();
+    try env.checker.sealTypes();
+    return .{ .solved = solved, .sealed = env.checker.types.tags.len() };
+}
+
+test "wide row growth: inferring a union does not publish a full suffix per branch" {
+    const small = try inferredMatchEntries(64);
+    const large = try inferredMatchEntries(256);
+    if (large.solved > 8 * small.solved or large.sealed > 8 * small.sealed)
+        std.debug.print("inferred: 64 tags {any}, 256 tags {any}\n", .{ small, large });
+    try std.testing.expect(large.solved <= 8 * small.solved);
+    try std.testing.expect(large.sealed <= 8 * small.sealed);
+}
 
 test "row union - a callback may raise the tag its wrapper adds" {
     const source =

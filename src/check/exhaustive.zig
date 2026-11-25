@@ -280,6 +280,8 @@ pub const BuiltinIdents = struct {
     /// Opening memo for this exhaustiveness entry point (see
     /// `NominalOpenCache`).
     open_cache: *NominalOpenCache,
+    /// Borrowed for just one match, while its type view cannot change.
+    tag_families: ?*TagFamilies = null,
     /// The Builtin module identifier
     builtin_module: Ident.Idx,
     /// List type identifiers (unqualified and Builtin-qualified)
@@ -2016,15 +2018,9 @@ fn isSketchedPatternInhabited(
             .pattern => |at| switch (at.pattern) {
                 .ctor => |c| {
                     // Look up the union type to get tag_id and argument types
-                    const union_result = try getUnionFromType(allocator, type_store, builtin_idents, at.type_var);
-                    const union_info = switch (union_result) {
-                        .success => |u| u,
-                        .not_a_union => return error.TypeError,
-                    };
-                    const tag_id = findTagId(union_info, c.tag_name) orelse return error.TypeError;
-
-                    // Get the constructor's argument types
-                    const arg_types = try getCtorArgTypes(type_store, builtin_idents, at.type_var, tag_id);
+                    const family = try tagFamily(allocator, type_store, builtin_idents, at.type_var);
+                    const tag_id = family.names.get(c.tag_name.idx) orelse return error.TypeError;
+                    const arg_types = family.info.alternatives[tag_id.toInt()].tagArgs();
 
                     // Check if any argument type is uninhabited, and also
                     // check nested patterns
@@ -2078,21 +2074,19 @@ const SketchedInhabitedItem = union(enum) {
     pattern: struct { pattern: UnresolvedPattern, type_var: Var },
 };
 
-/// Find the tag_id for a tag name within a union.
-/// Uses Ident.Idx equality directly.
-fn findTagId(union_info: Union, tag_name: Ident.Idx) ?TagId {
-    for (union_info.alternatives) |alt| {
-        const alt_ident = switch (alt.name) {
-            .tag => |t| if (t.eql(Ident.Idx.NONE)) continue else t,
-            .opaque_type => |o| o,
-        };
-        if (alt_ident.eql(tag_name)) {
-            // Return the stored tag_id, not the array position.
-            // The tag_id preserves the original index for getCtorArgTypes.
-            return alt.tag_id;
-        }
-    }
-    return null;
+const TagFamily = struct { info: Union, names: TagIdsByName };
+const TagFamilies = collections.DenseMapUnmanaged(Var, TagFamily);
+
+fn tagFamily(allocator: Allocator, store: *TypeStore, idents: BuiltinIdents, column: Var) PatternResolveError!TagFamily {
+    const root = resolveRoot(store, column);
+    if (idents.tag_families) |families| if (families.get(root)) |family| return family;
+    const info = switch (try getUnionFromType(allocator, store, idents, root)) {
+        .success => |u| u,
+        .not_a_union => return error.TypeError,
+    };
+    const family: TagFamily = .{ .info = info, .names = try tagIdsByName(allocator, info) };
+    if (idents.tag_families) |families| try families.put(allocator, root, family);
+    return family;
 }
 
 /// Constructor ids of a union by constructor name, so a constructor pattern
@@ -2606,6 +2600,7 @@ fn buildListCtorsForChecking(
 pub const SketchedMatrix = struct {
     rows: []const []const UnresolvedPattern,
     allocator: std.mem.Allocator,
+    tag_partition: ?*const TagPartition = null,
 
     pub fn init(allocator: std.mem.Allocator, rows: []const []const UnresolvedPattern) SketchedMatrix {
         return .{ .rows = rows, .allocator = allocator };
@@ -2613,6 +2608,16 @@ pub const SketchedMatrix = struct {
 
     pub fn isEmpty(self: SketchedMatrix) bool {
         return self.rows.len == 0;
+    }
+
+    fn indexTags(self: SketchedMatrix) Allocator.Error!SketchedMatrix {
+        if (self.tag_partition != null) return self;
+        const index = try self.allocator.create(TagPartition);
+        index.* = .{};
+        for (self.rows, 0..) |row, i| try index.add(self.allocator, row, i);
+        var result = self;
+        result.tag_partition = index;
+        return result;
     }
 
     /// Get the first column of patterns
@@ -2623,6 +2628,40 @@ pub const SketchedMatrix = struct {
             col[i] = if (row.len > 0) row[0] else .anything;
         }
         return col;
+    }
+};
+
+/// A constructor sees only its own rows and rows not headed by a tag. Keep
+/// the latter once, interleaving the two lists in original order at lookup.
+const TagPartition = struct {
+    named: collections.DenseMapUnmanaged(u29, std.ArrayList(usize)) = .empty,
+    other: std.ArrayList(usize) = .empty,
+
+    fn add(self: *TagPartition, gpa: Allocator, row: []const UnresolvedPattern, i: usize) Allocator.Error!void {
+        if (row.len == 0 or row[0] != .ctor) return self.other.append(gpa, i);
+        const place = try self.named.getOrPut(gpa, row[0].ctor.tag_name.idx);
+        if (!place.found_existing) place.value_ptr.* = .empty;
+        try place.value_ptr.append(gpa, i);
+    }
+
+    fn candidates(self: *const TagPartition, matrix: SketchedMatrix, name: ?Ident.Idx) Allocator.Error![]const []const UnresolvedPattern {
+        const named: []const usize = if (name) |n| if (self.named.get(n.idx)) |bucket| bucket.items else &.{} else &.{};
+        const others = self.other.items;
+        if (others.len == 0 and named.len == 1) return matrix.rows[named[0]..][0..1];
+        if (others.len == matrix.rows.len) return matrix.rows;
+        const result = try matrix.allocator.alloc([]const UnresolvedPattern, named.len + others.len);
+        var i: usize = 0;
+        var j: usize = 0;
+        for (result) |*slot| {
+            if (j == others.len or (i < named.len and named[i] < others[j])) {
+                slot.* = matrix.rows[named[i]];
+                i += 1;
+            } else {
+                slot.* = matrix.rows[others[j]];
+                j += 1;
+            }
+        }
+        return result;
     }
 };
 
@@ -2666,6 +2705,7 @@ fn collectCtorsSketched(
     var found_literal = false;
     var found_wildcard = false;
     var union_info: ?Union = null;
+    var family_ids: ?TagIdsByName = null;
 
     // For records, collect all unique field names from all patterns
     var all_record_fields: RecordFieldUnion = .{};
@@ -2676,13 +2716,11 @@ fn collectCtorsSketched(
             .ctor => |c| {
                 found_ctor = true;
                 if (union_info == null) {
-                    const union_result = try getUnionFromType(allocator, type_store, builtin_idents, first_col_type);
-                    switch (union_result) {
-                        .success => |u| union_info = u,
-                        .not_a_union => return error.TypeError,
-                    }
+                    const family = try tagFamily(allocator, type_store, builtin_idents, first_col_type);
+                    union_info = family.info;
+                    family_ids = family.names;
                     // Verify tag exists
-                    if (findTagId(union_info.?, c.tag_name) == null) {
+                    if (!family.names.contains(c.tag_name.idx)) {
                         return error.TypeError;
                     }
                 }
@@ -2716,7 +2754,7 @@ fn collectCtorsSketched(
     }
 
     if (found_ctor) {
-        const tag_ids = try tagIdsByName(allocator, union_info.?);
+        const tag_ids = family_ids orelse try tagIdsByName(allocator, union_info.?);
         // Collect all unique tag IDs
         var tag_set = collections.DenseMap(TagId, void).init(allocator);
         for (first_col) |pat| {
@@ -2843,7 +2881,11 @@ fn specializeByConstructorSketched(
     union_info: Union,
     tag_ids_by_name: *const TagIdsByName,
 ) error{OutOfMemory}!SketchedMatrix {
-    var new_rows = try SpecializedRows.init(allocator, matrix.rows.len);
+    const rows = if (matrix.tag_partition != null and union_info.render_as == .tag)
+        try matrix.tag_partition.?.candidates(matrix, ctorNameIdent(union_info.alternatives[tag_id.toInt()].name))
+    else
+        matrix.rows;
+    var new_rows = try SpecializedRows.init(allocator, rows.len);
     // A record row's field name -> its position among the row's fields.
     var pat_positions: collections.DenseMapUnmanaged(u29, usize) = .empty;
     defer pat_positions.deinit(allocator);
@@ -2854,7 +2896,7 @@ fn specializeByConstructorSketched(
         .tag, .opaque_type, .tuple => null,
     };
 
-    for (matrix.rows) |row| {
+    for (rows) |row| {
         if (row.len == 0) continue;
 
         const first = row[0];
@@ -3361,7 +3403,7 @@ fn exhaustiveEnter(
                 }
             }
             const frame: ExhaustiveCtorsFrame = .{
-                .matrix = matrix,
+                .matrix = if (ctor_info.union_info.render_as == .tag) try matrix.indexTags() else matrix,
                 .column_types = column_types,
                 .alternatives = if (omit_open) real_alternatives else ctor_info.union_info.alternatives,
                 .union_info = ctor_info.union_info,
@@ -3696,12 +3738,9 @@ fn usefulEnter(
 
     switch (first) {
         .ctor => |c| {
-            const union_result = try getUnionFromType(allocator, type_store, builtin_idents, first_col_type);
-            const union_info = switch (union_result) {
-                .success => |u| u,
-                .not_a_union => return error.TypeError,
-            };
-            const tag_ids = try tagIdsByName(allocator, union_info);
+            const family = try tagFamily(allocator, type_store, builtin_idents, first_col_type);
+            const union_info = family.info;
+            const tag_ids = family.names;
             const tag_id = tag_ids.get(c.tag_name.idx) orelse return error.TypeError;
 
             const specialized = try specializeByConstructorSketched(
@@ -3712,7 +3751,7 @@ fn usefulEnter(
                 union_info,
                 &tag_ids,
             );
-            const specialized_types = try column_types.specializeByConstructor(allocator, tag_id, c.args.len);
+            const specialized_types = try column_types.specializeByPayloads(allocator, union_info.alternatives[tag_id.toInt()].tagArgs(), c.args.len);
 
             const extended_row = try concatRow(allocator, c.args, rest);
 
@@ -3866,7 +3905,7 @@ fn usefulEnter(
                     // Every possible constructor was named. Its payload can
                     // still contain values none of those rows covered.
                     try frames.append(allocator, .{
-                        .matrix = existing_matrix,
+                        .matrix = if (ctor_info.union_info.render_as == .tag) try existing_matrix.indexTags() else existing_matrix,
                         .rest = rest,
                         .column_types = column_types,
                         .kind = .{ .ctors = .{ .union_info = ctor_info.union_info, .tag_ids = ctor_info.tag_ids } },
@@ -4006,6 +4045,7 @@ pub fn checkRedundancySketched(
     var non_redundant: std.ArrayList([]const UnresolvedPattern) = .empty;
     var redundant_rows: std.ArrayList(UselessRow) = .empty;
     var unmatchable_rows: std.ArrayList(UselessRow) = .empty;
+    var partition: ?TagPartition = null;
 
     for (rows) |row| {
         // First check if the pattern is on an uninhabited type (unmatchable)
@@ -4025,11 +4065,19 @@ pub fn checkRedundancySketched(
 
         // A guarded arm can itself be unreachable but cannot establish
         // coverage for a later arm, because the guard can fail.
-        const matrix = SketchedMatrix.init(allocator, non_redundant.items);
+        var matrix = SketchedMatrix.init(allocator, non_redundant.items);
+        if (partition == null and row.patterns.len != 0 and row.patterns[0] == .ctor) {
+            partition = .{};
+            for (non_redundant.items, 0..) |prior, i| try partition.?.add(allocator, prior, i);
+        }
+        if (partition) |*index| matrix.tag_partition = index;
         const is_useful = try isUsefulSketched(allocator, type_store, builtin_idents, matrix, row.patterns, column_types, close_open_extension);
 
         if (is_useful) {
-            if (row.guard == .no_guard) try non_redundant.append(allocator, row.patterns);
+            if (row.guard == .no_guard) {
+                if (partition) |*index| try index.add(allocator, row.patterns, non_redundant.items.len);
+                try non_redundant.append(allocator, row.patterns);
+            }
         } else {
             try redundant_rows.append(allocator, .{ .branch_index = row.branch_index, .pattern = row.pattern });
         }
@@ -4090,12 +4138,15 @@ pub fn checkMatch(
     source_store: *types.Store,
     module_env: *const Can.ModuleEnv,
     node_store: *const NodeStore,
-    builtin_idents: BuiltinIdents,
+    input_idents: BuiltinIdents,
     branches_span: CIR.Expr.Match.Branch.Span,
     scrutinee_type: Var,
     overall_region: Region,
     scrutinee_constructed_tags: ?[]const Ident.Idx,
 ) PatternResolveError!CheckResult {
+    var families: TagFamilies = .empty;
+    var builtin_idents = input_idents;
+    builtin_idents.tag_families = &families;
     const type_store = builtin_idents.open_cache.reader(source_store);
     defer builtin_idents.open_cache.finishRead();
     // Every allocation, results included, lives in the caller's arena.
