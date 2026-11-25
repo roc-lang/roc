@@ -110,30 +110,6 @@ pub fn EpochSet(comptime Key: type, comptime representation: SetRepresentation, 
         logical_len: usize = 0,
         borrowed: bool = false,
         pages: zeroed_pages.Pages = .{ .bytes = &.{} },
-        /// Whether a traversal holds the set (`beginTraversal`); tracked only
-        /// in builds with runtime safety.
-        traversal_active: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) false else {},
-
-        /// Empty the set for a traversal over keys below `key_count`. A set
-        /// serves one traversal at a time: beginning another before
-        /// `endTraversal` is a compiler invariant violation.
-        pub fn beginTraversal(self: *Self, gpa: Allocator, key_count: usize) Allocator.Error!void {
-            if (representation != .stamps or source != .internal) @compileError("traversals use internally counted stamps");
-            try self.ensureLen(gpa, key_count);
-            if (std.debug.runtime_safety) {
-                std.debug.assert(!self.traversal_active);
-                self.traversal_active = true;
-            }
-            self.reset();
-        }
-
-        /// Release the set held by `beginTraversal`.
-        pub fn endTraversal(self: *Self) void {
-            if (std.debug.runtime_safety) {
-                std.debug.assert(self.traversal_active);
-                self.traversal_active = false;
-            }
-        }
 
         /// An empty fixed-domain stamped set on fresh zero pages.
         pub fn initSparse(key_count: usize) Allocator.Error!Self {
@@ -498,6 +474,251 @@ pub fn EpochColumn(comptime Key: type, comptime T: type, comptime source: EpochS
     };
 }
 
+/// Whether an `EpochBitSet` also lists its members.
+pub const MemberOrder = enum {
+    /// Membership and a member count only; the set cannot be iterated.
+    unlisted,
+    /// Members are also listed in insertion order for iteration.
+    insertion,
+};
+
+/// A set of `Key`s that empties in constant time, at about one and a half
+/// bits per key of its domain.
+///
+/// Keys are bits packed 64 to a word, and each word carries a `u32` stamp. A
+/// word holds members only while its stamp equals the current epoch; a word
+/// with any other stamp reads as empty and is rewritten whole by its first
+/// insertion of the epoch, so emptying the set is one epoch advance. Lookup
+/// and insertion are branchless within the column: the stamp comparison
+/// becomes a mask over the word.
+///
+/// Nothing is allocated before the first insertion, and the column grows to
+/// the words the inserted keys reach, so a set that only ever holds low keys
+/// spans only those words. Keys past the column's end are absent.
+///
+/// A set serves one traversal at a time when it is held through
+/// `beginTraversal` and `endTraversal`; safety builds assert that no
+/// traversal begins while another holds it.
+pub fn EpochBitSet(comptime Key: type, comptime order: MemberOrder) type {
+    return struct {
+        const Self = @This();
+
+        /// Sixty-four keys and their stamp. The halves of the bits are
+        /// stored apart so a word takes 12 bytes rather than 16.
+        const Word = extern struct { stamp: u32, lo: u32, hi: u32 };
+
+        allocator: Allocator,
+        words: []Word = &.{},
+        /// The members of the current epoch, in insertion order.
+        keys: if (order == .insertion) std.ArrayList(Key) else void = if (order == .insertion) .empty else {},
+        /// The number of members of the current epoch.
+        member_count: if (order == .unlisted) usize else void = if (order == .unlisted) 0 else {},
+        epoch: Epoch = .{},
+        /// Whether a traversal holds the set; tracked only in safety builds.
+        traversal_active: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) false else {},
+
+        pub fn init(allocator: Allocator) Self {
+            return .{ .allocator = allocator };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.allocator.free(self.words);
+            if (order == .insertion) self.keys.deinit(self.allocator);
+            self.* = undefined;
+        }
+
+        /// The number of members.
+        pub fn count(self: *const Self) usize {
+            return if (order == .insertion) self.keys.items.len else self.member_count;
+        }
+
+        /// Whether `k` is a member.
+        pub inline fn contains(self: *const Self, k: Key) bool {
+            const i = keyIndex(Key, k);
+            const w = i >> 6;
+            if (w >= self.words.len) return false;
+            const word = self.words[w];
+            const bits = wordBits(word) & self.liveMask(word);
+            return ((bits >> @as(u6, @truncate(i))) & 1) != 0;
+        }
+
+        /// Add `k`, returning whether it was already a member.
+        pub inline fn testAndInsert(self: *Self, k: Key) Allocator.Error!bool {
+            const i = keyIndex(Key, k);
+            const w = i >> 6;
+            if (w >= self.words.len) try self.growWords(w + 1);
+            if (order == .insertion) try self.keys.ensureUnusedCapacity(self.allocator, 1);
+            const word = &self.words[w];
+            const bits = wordBits(word.*) & self.liveMask(word.*);
+            const bit = @as(u64, 1) << @as(u6, @truncate(i));
+            const present = (bits & bit) != 0;
+            const updated = bits | bit;
+            word.* = .{ .stamp = self.epoch.current, .lo = @truncate(updated), .hi = @truncate(updated >> 32) };
+            if (!present) {
+                if (order == .insertion) self.keys.appendAssumeCapacity(k) else self.member_count += 1;
+            }
+            return present;
+        }
+
+        /// Add `k`.
+        pub inline fn insert(self: *Self, k: Key) Allocator.Error!void {
+            _ = try self.testAndInsert(k);
+        }
+
+        /// Remove every member.
+        pub fn clearRetainingCapacity(self: *Self) void {
+            if (order == .insertion) self.keys.clearRetainingCapacity() else self.member_count = 0;
+            if (self.epoch.advance()) {
+                for (self.words) |*word| word.stamp = 0;
+                storage_work.add(.bytes_filled, self.words.len * @sizeOf(u32));
+            }
+        }
+
+        /// Empty the set and hold it for one traversal. Beginning another
+        /// traversal before `endTraversal` is a compiler invariant violation.
+        pub fn beginTraversal(self: *Self) void {
+            if (std.debug.runtime_safety) {
+                std.debug.assert(!self.traversal_active);
+                self.traversal_active = true;
+            }
+            self.clearRetainingCapacity();
+        }
+
+        /// Release the set held by `beginTraversal`.
+        pub fn endTraversal(self: *Self) void {
+            if (std.debug.runtime_safety) {
+                std.debug.assert(self.traversal_active);
+                self.traversal_active = false;
+            }
+        }
+
+        /// Iterates the members in insertion order. Like `DenseMap`'s
+        /// iterators, it copies each key, so a key pointer stays valid while
+        /// the set grows, and members inserted during iteration are visited
+        /// too.
+        pub fn keyIterator(self: *const Self) KeyIterator {
+            if (order != .insertion) @compileError("an unlisted set cannot be iterated");
+            return .{ .set = self };
+        }
+
+        /// Iterates the members in insertion order, by value.
+        pub fn constKeyIterator(self: *const Self) ConstKeyIterator {
+            if (order != .insertion) @compileError("an unlisted set cannot be iterated");
+            return .{ .set = self };
+        }
+
+        /// Iterates the members in insertion order as entries holding a key
+        /// pointer, the shape map iterators have.
+        pub fn iterator(self: *const Self) Iterator {
+            if (order != .insertion) @compileError("an unlisted set cannot be iterated");
+            return .{ .inner = .{ .set = self } };
+        }
+
+        pub const KeyIterator = struct {
+            set: *const Self,
+            position: usize = 0,
+            key: Key = undefined,
+
+            pub fn next(self: *KeyIterator) ?*const Key {
+                if (self.position >= self.set.keys.items.len) return null;
+                self.key = self.set.keys.items[self.position];
+                self.position += 1;
+                return &self.key;
+            }
+        };
+
+        pub const ConstKeyIterator = struct {
+            set: *const Self,
+            position: usize = 0,
+
+            pub fn next(self: *ConstKeyIterator) ?Key {
+                if (self.position >= self.set.keys.items.len) return null;
+                const key = self.set.keys.items[self.position];
+                self.position += 1;
+                return key;
+            }
+        };
+
+        /// An iterated member.
+        pub const Entry = struct { key_ptr: *const Key };
+
+        pub const Iterator = struct {
+            inner: KeyIterator,
+
+            pub fn next(self: *Iterator) ?Entry {
+                return .{ .key_ptr = self.inner.next() orelse return null };
+            }
+        };
+
+        inline fn wordBits(word: Word) u64 {
+            return (@as(u64, word.hi) << 32) | word.lo;
+        }
+
+        /// All ones when `word` belongs to the current epoch, else zero.
+        inline fn liveMask(self: *const Self, word: Word) u64 {
+            return @as(u64, 0) -% @intFromBool(word.stamp == self.epoch.current);
+        }
+
+        fn growWords(self: *Self, min_len: usize) Allocator.Error!void {
+            const old_len = self.words.len;
+            const new_len = @max(min_len, old_len +| old_len / 2 +| 4);
+            self.words = try self.allocator.realloc(self.words, new_len);
+            for (self.words[old_len..]) |*word| word.* = .{ .stamp = 0, .lo = 0, .hi = 0 };
+            storage_work.add(.bytes_filled, (new_len - old_len) * @sizeOf(Word));
+        }
+    };
+}
+
+/// A pool of reusable `EpochBitSet`s for passes that repeatedly need
+/// short-lived sets over one domain. A pooled set keeps its words, so
+/// acquiring one costs an epoch advance. The pool hands out sets by value, so
+/// nested scopes may acquire further sets while an outer one is still in use,
+/// and each nesting depth keeps words of its own.
+pub fn EpochBitSetPool(comptime Key: type, comptime order: MemberOrder) type {
+    return struct {
+        const Self = @This();
+
+        pub const Set = EpochBitSet(Key, order);
+
+        /// Sets kept beyond this many are freed on release instead of pooled.
+        const max_pooled = 8;
+
+        allocator: Allocator,
+        sets: [max_pooled]Set = undefined,
+        len: usize = 0,
+
+        pub fn init(allocator: Allocator) Self {
+            return .{ .allocator = allocator };
+        }
+
+        pub fn deinit(self: *Self) void {
+            for (self.sets[0..self.len]) |*set| set.deinit();
+            self.* = undefined;
+        }
+
+        /// An empty set, reusing a pooled set's storage when one is available.
+        pub fn acquire(self: *Self) Set {
+            if (self.len > 0) {
+                self.len -= 1;
+                return self.sets[self.len];
+            }
+            return Set.init(self.allocator);
+        }
+
+        /// Return an acquired set to the pool. The caller's set is consumed.
+        pub fn release(self: *Self, set: *Set) void {
+            if (self.len == max_pooled) {
+                set.deinit();
+                return;
+            }
+            set.clearRetainingCapacity();
+            self.sets[self.len] = set.*;
+            self.len += 1;
+            set.* = undefined;
+        }
+    };
+}
+
 /// A map from `Key` to `V` that empties in constant time and iterates in
 /// insertion order, with the observable behavior of a `DenseMap` that is
 /// never removed from: the same lookups, the same entries, and the same
@@ -708,57 +929,6 @@ pub fn EpochMap(comptime Key: type, comptime V: type) type {
             self.pages.items[page_index] = page;
             self.allocated_pages += 1;
             return page;
-        }
-    };
-}
-
-/// A pool of reusable `EpochMap`s for passes that repeatedly need short-lived
-/// maps over one domain that outlives them. A fresh map would allocate and
-/// clear a column spanning the domain on first use; a pooled map keeps its
-/// column, so acquiring one costs an epoch advance. The pool hands out maps by
-/// value, so nested scopes may acquire further maps while an outer one is
-/// still in use, and each nesting depth keeps a column of its own.
-pub fn EpochMapPool(comptime Key: type, comptime V: type) type {
-    return struct {
-        const Self = @This();
-
-        pub const Map = EpochMap(Key, V);
-
-        /// Maps kept beyond this many are freed on release instead of pooled.
-        const max_pooled = 8;
-
-        allocator: Allocator,
-        maps: [max_pooled]Map = undefined,
-        len: usize = 0,
-
-        pub fn init(allocator: Allocator) Self {
-            return .{ .allocator = allocator };
-        }
-
-        pub fn deinit(self: *Self) void {
-            for (self.maps[0..self.len]) |*map| map.deinit();
-            self.* = undefined;
-        }
-
-        /// An empty map, reusing a pooled map's storage when one is available.
-        pub fn acquire(self: *Self) Map {
-            if (self.len > 0) {
-                self.len -= 1;
-                return self.maps[self.len];
-            }
-            return Map.init(self.allocator);
-        }
-
-        /// Return an acquired map to the pool. The caller's map is consumed.
-        pub fn release(self: *Self, map: *Map) void {
-            if (self.len == max_pooled) {
-                map.deinit();
-                return;
-            }
-            map.clearRetainingCapacity();
-            self.maps[self.len] = map.*;
-            self.len += 1;
-            map.* = undefined;
         }
     };
 }
@@ -982,23 +1152,6 @@ test "borrowed epoch cursors never free their owner's stamps" {
     try testing.expectEqualSlices(u32, &.{ 0, 0, 0, 0 }, &stamps);
 }
 
-test "a traversal empties the set, grows it, and releases it" {
-    var set: EpochSet(TestKey, .stamps, .internal) = .{};
-    defer set.deinit(testing.allocator);
-    try set.beginTraversal(testing.allocator, 4);
-    set.insert(testKey(3));
-    try testing.expect(set.contains(testKey(3)));
-    set.endTraversal();
-    try set.beginTraversal(testing.allocator, 9);
-    if (std.debug.runtime_safety) try testing.expect(set.traversal_active);
-    try testing.expect(!set.contains(testKey(3)));
-    try testing.expect(!set.contains(testKey(8)));
-    set.insert(testKey(8));
-    try testing.expect(set.contains(testKey(8)));
-    set.endTraversal();
-    if (std.debug.runtime_safety) try testing.expect(!set.traversal_active);
-}
-
 test "an epoch map matches a dense map's entries and iteration order" {
     const DenseMap = @import("DenseMap.zig").DenseMap;
     var dense = DenseMap(TestKey, u32).init(testing.allocator);
@@ -1094,23 +1247,148 @@ test "an epoch map key beyond its column after a clear is absent" {
     try testing.expectEqual(@as(?u32, 4), map.get(9));
 }
 
-test "an epoch map pool hands out empty maps that keep their columns, nested or not" {
-    var pool = EpochMapPool(u32, void).init(testing.allocator);
+test "an epoch bitset matches a dense set's membership, count and insertion order" {
+    const DenseMap = @import("DenseMap.zig").DenseMap;
+    var dense = DenseMap(TestKey, void).init(testing.allocator);
+    defer dense.deinit();
+    var listed = EpochBitSet(TestKey, .insertion).init(testing.allocator);
+    defer listed.deinit();
+    var unlisted = EpochBitSet(TestKey, .unlisted).init(testing.allocator);
+    defer unlisted.deinit();
+
+    var prng = std.Random.DefaultPrng.init(0xb175);
+    const random = prng.random();
+    for (0..6000) |_| {
+        const key = testKey(random.uintLessThan(u32, 700));
+        switch (random.uintLessThan(u8, 12)) {
+            0 => {
+                dense.clearRetainingCapacity();
+                listed.clearRetainingCapacity();
+                unlisted.clearRetainingCapacity();
+            },
+            1, 2, 3, 4 => {
+                const expected = (try dense.getOrPut(key)).found_existing;
+                try testing.expectEqual(expected, try listed.testAndInsert(key));
+                try testing.expectEqual(expected, try unlisted.testAndInsert(key));
+            },
+            else => {
+                try testing.expectEqual(dense.contains(key), listed.contains(key));
+                try testing.expectEqual(dense.contains(key), unlisted.contains(key));
+            },
+        }
+        try testing.expectEqual(dense.count(), listed.count());
+        try testing.expectEqual(dense.count(), unlisted.count());
+    }
+
+    var expected_keys = dense.constKeyIterator();
+    var actual_keys = listed.constKeyIterator();
+    var entries = listed.iterator();
+    while (expected_keys.next()) |expected| {
+        try testing.expectEqual(expected, actual_keys.next().?);
+        try testing.expectEqual(expected, entries.next().?.key_ptr.*);
+    }
+    try testing.expect(actual_keys.next() == null);
+    try testing.expect(entries.next() == null);
+}
+
+test "an epoch bitset allocates nothing before an insertion and grows to the words it touches" {
+    var set = EpochBitSet(u32, .unlisted).init(testing.allocator);
+    defer set.deinit();
+    try testing.expect(!set.contains(5));
+    set.beginTraversal();
+    try testing.expect(!set.contains(1_000_000));
+    set.endTraversal();
+    try testing.expectEqual(@as(usize, 0), set.words.len);
+    try set.insert(3);
+    try testing.expect(set.words.len < 8);
+    try testing.expect(!set.contains(1_000_000));
+    // Growth in the middle of an epoch keeps earlier members.
+    try set.insert(1000);
+    try testing.expect(set.contains(3));
+    try testing.expect(set.contains(1000));
+    try testing.expect(!set.contains(999));
+    try testing.expect(!set.contains(1001));
+    try testing.expect(!set.contains(@intCast(64 * set.words.len + 5)));
+    try testing.expectEqual(@as(usize, 2), set.count());
+}
+
+test "an epoch bitset word from an earlier epoch reads empty and is reset by its first insertion" {
+    var set = EpochBitSet(u32, .unlisted).init(testing.allocator);
+    defer set.deinit();
+    for ([_]u32{ 0, 1, 63, 64, 130 }) |key| try set.insert(key);
+    set.clearRetainingCapacity();
+    for ([_]u32{ 0, 1, 63, 64, 130 }) |key| try testing.expect(!set.contains(key));
+    try testing.expectEqual(@as(usize, 0), set.count());
+    // Inserting one key of a stale word drops the word's old members.
+    try testing.expect(!try set.testAndInsert(1));
+    try testing.expect(set.contains(1));
+    try testing.expect(!set.contains(0));
+    try testing.expect(!set.contains(63));
+    try testing.expect(try set.testAndInsert(1));
+    try testing.expect(!set.contains(64));
+    try testing.expect(!set.contains(130));
+}
+
+test "an epoch bitset wrap clears every stamp and restarts at one" {
+    var set = EpochBitSet(u32, .insertion).init(testing.allocator);
+    defer set.deinit();
+    try set.insert(2);
+    set.epoch.current = std.math.maxInt(u32) - 1;
+    try set.insert(70);
+    set.clearRetainingCapacity();
+    try testing.expectEqual(std.math.maxInt(u32), set.epoch.current);
+    try testing.expect(!set.contains(70));
+    try set.insert(100);
+    set.clearRetainingCapacity();
+    try testing.expectEqual(@as(u32, 1), set.epoch.current);
+    // Key 2 was stamped with epoch 1 long ago; the wrap cleared it.
+    for (0..200) |i| try testing.expect(!set.contains(@intCast(i)));
+    for (set.words) |word| try testing.expectEqual(@as(u32, 0), word.stamp);
+    try testing.expectEqual(@as(usize, 0), set.count());
+}
+
+test "an epoch bitset traversal empties the set each time it begins" {
+    var set = EpochBitSet(TestKey, .unlisted).init(testing.allocator);
+    defer set.deinit();
+    set.beginTraversal();
+    try set.insert(testKey(9));
+    if (std.debug.runtime_safety) try testing.expect(set.traversal_active);
+    set.endTraversal();
+    set.beginTraversal();
+    try testing.expect(!set.contains(testKey(9)));
+    set.endTraversal();
+    if (std.debug.runtime_safety) try testing.expect(!set.traversal_active);
+}
+
+test "an epoch bitset pool hands out empty sets that keep their words, nested or not" {
+    var pool = EpochBitSetPool(u32, .insertion).init(testing.allocator);
     defer pool.deinit();
     var outer = pool.acquire();
-    try outer.put(40, {});
+    try outer.insert(400);
     var inner = pool.acquire();
-    try testing.expect(!inner.contains(40));
-    try inner.put(7, {});
+    try testing.expect(!inner.contains(400));
+    try inner.insert(7);
     pool.release(&inner);
-    try testing.expect(outer.contains(40));
+    try testing.expect(outer.contains(400));
     pool.release(&outer);
     var again = pool.acquire();
     defer pool.release(&again);
-    try testing.expectEqual(@as(usize, 1), again.allocated_pages);
-    try testing.expect(!again.contains(40));
+    try testing.expect(again.words.len > 400 / 64);
+    try testing.expect(!again.contains(400));
     try testing.expect(!again.contains(7));
     try testing.expectEqual(@as(usize, 0), again.count());
+}
+
+fn exerciseBitSetAllocationFailures(gpa: Allocator) (Allocator.Error || error{TestUnexpectedResult})!void {
+    var set = EpochBitSet(u32, .insertion).init(gpa);
+    defer set.deinit();
+    for ([_]u32{ 5, 900, 6, 5000, 900 }) |key| _ = try set.testAndInsert(key);
+    try testing.expect(set.contains(5000));
+    try testing.expect(set.count() == 4);
+}
+
+test "an epoch bitset stays consistent when an allocation fails" {
+    try testing.checkAllAllocationFailures(testing.allocator, exerciseBitSetAllocationFailures, .{});
 }
 
 test "an epoch map allocates only the pages its keys touch" {

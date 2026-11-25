@@ -1358,7 +1358,7 @@ scratch_ground_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// reads the store and calls nothing that walks types itself
 /// (`typeHasGeneralizedVar`, `varIsGround`, `varIsGroundWith`). Each such walk
 /// holds the set from `beginTraversal` to `endTraversal`, so two never overlap.
-closed_walk_seen: collections.EpochSet(Var, .stamps, .internal) = .{},
+closed_walk_seen: collections.EpochBitSet(Var, .unlisted),
 scratch_replay_sources: std.ArrayListUnmanaged(u32) = .empty,
 scratch_replay_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
 scratch_replay_nodes: collections.DenseMapUnmanaged(Var, Var) = .empty,
@@ -1612,11 +1612,13 @@ reachable_pending: std.ArrayListUnmanaged(Var) = .empty,
 /// Reachable-variable sets lent to one query at a time
 /// (`collectReachableVars` and its callers); a query nested in another
 /// acquires a set of its own.
-reach_sets: collections.EpochMapPool(Var, void),
+reach_sets: collections.EpochBitSetPool(Var, .insertion),
+/// Like `reach_sets`, for queries that only test membership.
+reach_marks: collections.EpochBitSetPool(Var, .unlisted),
 /// The variables a frozen scheme's relation reaches
 /// (`collectFrozenRelationEnclosingVars`), and those an enclosing variable
 /// reaches once its rank is given back (`restoreEnclosingVarRanks`).
-frozen_relation_reachable: collections.EpochMap(Var, void),
+frozen_relation_reachable: collections.EpochBitSet(Var, .insertion),
 /// The expression that fails when a requirement a row variable holds fails,
 /// keyed by the requirement's callable var: the first one it was held with,
 /// which for a requirement copied from a scheme is the use that instantiated
@@ -1671,7 +1673,7 @@ rejected_tuple_accesses: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
 /// Scratch for the ambiguity judgment: the pinnable set (every resolved var
 /// some caller can still pin) of one judgment event. Init-allocated; cleared
 /// and rebuilt per event.
-pinnable_vars: collections.EpochMap(Var, void),
+pinnable_vars: collections.EpochBitSet(Var, .unlisted),
 /// Scratch for the ambiguity verdict apply: dispatcher vars already reported,
 /// shared by the instantiation and creation applies to avoid double-reporting.
 reported_dispatch_vars: collections.DenseMap(Var, void),
@@ -1681,7 +1683,7 @@ ambiguity_verdict_vars: collections.DenseMap(Var, void),
 /// Scratch for the ambiguity judgment: vars an outside caller can pin through
 /// the judged scheme's complete interface, including expected result types
 /// (rebuilt per judgment event).
-external_pinnable: collections.EpochMap(Var, void),
+external_pinnable: collections.EpochBitSet(Var, .insertion),
 /// Per-event traversal memo keyed by both reachable var and opaque receiver.
 /// Different receiver exclusions cannot share visitation state, while repeated
 /// requirements with the same receiver can reuse the completed walk.
@@ -1693,15 +1695,15 @@ scheme_relation_reachability: std.AutoHashMap(SchemeReachabilityVisit, void),
 /// of their closure, while the plain walks' membership early-return is only
 /// sound over sets whose every member carries its full closure. Consumers merge
 /// this overlay into their set once all plain walks into it have run.
-scheme_relation_reachable_vars: collections.EpochMap(Var, void),
+scheme_relation_reachable_vars: collections.EpochBitSet(Var, .insertion),
 /// Scratch for `defaultLiteralsAtGeneralizationBoundary`: reachable-var
 /// closure of the def root(s) being generalized (constraint-signature edges
 /// included).
-boundary_reachable_vars: collections.EpochMap(Var, void),
+boundary_reachable_vars: collections.EpochBitSet(Var, .unlisted),
 /// Scratch for `boundaryDefaultLeaksIntoSignature`: closure of one boundary
 /// literal's constraint signatures, intersected with
 /// `boundary_reachable_vars` to detect interface leaks.
-boundary_leak_vars: collections.EpochMap(Var, void),
+boundary_leak_vars: collections.EpochBitSet(Var, .insertion),
 // Literal-defaulting scratch (front-loaded; cleared per round/use). Reused across
 // the per-def/finalize defaulting passes—see runLiteralDefaultingRounds. Safe as
 // shared fields despite that function's cascade reentrancy: every buffer is cleared
@@ -1713,7 +1715,7 @@ literal_defaulting_seen_roots: collections.DenseMap(Var, void),
 literal_defaulting_reaches: std.AutoHashMapUnmanaged(LiteralReach, void) = .empty,
 /// The gathered literals that wait this round.
 literal_defaulting_waiting: collections.DenseMap(Var, void),
-literal_defaulting_footprint: collections.EpochMap(Var, void),
+literal_defaulting_footprint: collections.EpochBitSet(Var, .insertion),
 /// The round's pending use copies of scheme requirements, chained per
 /// still-flex receiver root (`indexPendingRequirementCopies`). A copy is
 /// detached from its receiver's descriptor, so this index is how defaulting
@@ -2236,6 +2238,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .plain_wait_seen = .scratch,
     .reachable_pending = .scratch,
     .reach_sets = .scratch,
+    .reach_marks = .scratch,
     .frozen_relation_reachable = .scratch,
     .open_row_failure_exprs = .keyed,
     .interpolation_dispatchers = .keyed,
@@ -5029,7 +5032,7 @@ fn initAssumePrepared(
         .retired_operand_sequences = collections.DenseMap(CIR.Expr.Idx, RetiredOperandSequence).init(gpa),
         .binder_source_exprs = collections.DenseMap(CIR.Pattern.Idx, CIR.Expr.Idx).init(gpa),
         .has_can_diagnostics = if (cir.store.scratch) |scratch| scratch.diagnostics.top() > 0 else false,
-        .pinnable_vars = collections.EpochMap(Var, void).init(gpa),
+        .pinnable_vars = collections.EpochBitSet(Var, .unlisted).init(gpa),
         .use_instance_by_fn_var = collections.DenseMap(Var, u32).init(gpa),
         .own_dispatch_exprs = collections.DenseMap(Var, CIR.Expr.Idx).init(gpa),
         .callee_use_calls = collections.DenseMap(CIR.Expr.Idx, CIR.Expr.Idx).init(gpa),
@@ -5037,18 +5040,20 @@ fn initAssumePrepared(
         .reach_free_schemes = collections.DenseMap(Var, void).init(gpa),
         .link_var_map = collections.EpochMap(Var, Var).init(gpa),
         .scratch_deferred_placeholders = collections.DenseMap(Var, Var).init(gpa),
-        .frozen_relation_reachable = collections.EpochMap(Var, void).init(gpa),
-        .reach_sets = collections.EpochMapPool(Var, void).init(gpa),
+        .frozen_relation_reachable = collections.EpochBitSet(Var, .insertion).init(gpa),
+        .reach_sets = collections.EpochBitSetPool(Var, .insertion).init(gpa),
+        .reach_marks = collections.EpochBitSetPool(Var, .unlisted).init(gpa),
+        .closed_walk_seen = collections.EpochBitSet(Var, .unlisted).init(gpa),
         .reported_dispatch_vars = collections.DenseMap(Var, void).init(gpa),
         .ambiguity_verdict_vars = collections.DenseMap(Var, void).init(gpa),
-        .external_pinnable = collections.EpochMap(Var, void).init(gpa),
+        .external_pinnable = collections.EpochBitSet(Var, .insertion).init(gpa),
         .scheme_relation_reachability = std.AutoHashMap(SchemeReachabilityVisit, void).init(gpa),
-        .scheme_relation_reachable_vars = collections.EpochMap(Var, void).init(gpa),
-        .boundary_reachable_vars = collections.EpochMap(Var, void).init(gpa),
-        .boundary_leak_vars = collections.EpochMap(Var, void).init(gpa),
+        .scheme_relation_reachable_vars = collections.EpochBitSet(Var, .insertion).init(gpa),
+        .boundary_reachable_vars = collections.EpochBitSet(Var, .unlisted).init(gpa),
+        .boundary_leak_vars = collections.EpochBitSet(Var, .insertion).init(gpa),
         .literal_defaulting_seen_roots = collections.DenseMap(Var, void).init(gpa),
         .literal_defaulting_waiting = collections.DenseMap(Var, void).init(gpa),
-        .literal_defaulting_footprint = collections.EpochMap(Var, void).init(gpa),
+        .literal_defaulting_footprint = collections.EpochBitSet(Var, .insertion).init(gpa),
         .literal_defaulting_receiver_copy_heads = collections.DenseMap(Var, u32).init(gpa),
         .literal_defaulting_joined_receivers = collections.DenseMap(Var, void).init(gpa),
         .alt_pattern_baseline = std.AutoHashMap(u32, MatchAltBaselineEntry).init(gpa),
@@ -12134,7 +12139,7 @@ fn bindBindingSchemeVar(self: *Self, scheme_var: Var, alias_var: Var) Allocator.
 /// quantified variable.
 fn typeHasGeneralizedVar(self: *Self, root_var: Var) Allocator.Error!bool {
     if (self.types.resolveVar(root_var).desc.rank == .generalized) return true;
-    try self.closed_walk_seen.beginTraversal(self.gpa, @intCast(self.types.len()));
+    self.closed_walk_seen.beginTraversal();
     defer self.closed_walk_seen.endTraversal();
     self.binding_scheme_classification_stack.clearRetainingCapacity();
     defer self.binding_scheme_classification_stack.clearRetainingCapacity();
@@ -12143,7 +12148,7 @@ fn typeHasGeneralizedVar(self: *Self, root_var: Var) Allocator.Error!bool {
     while (self.binding_scheme_classification_stack.pop()) |pending_var| {
         const resolved = self.types.resolveVar(pending_var);
         if (resolved.desc.rank == .generalized) return true;
-        if (self.closed_walk_seen.testAndInsert(resolved.var_)) continue;
+        if (try self.closed_walk_seen.testAndInsert(resolved.var_)) continue;
 
         switch (resolved.desc.content) {
             .err, .field_presence => {},
@@ -18698,7 +18703,7 @@ fn finishAmbiguityPinnableSets(
     self.pinnable_vars.clearRetainingCapacity();
     var external_iter = self.external_pinnable.keyIterator();
     while (external_iter.next()) |var_| {
-        try self.pinnable_vars.put(var_.*, {});
+        try self.pinnable_vars.insert(var_.*);
     }
 
     for (open_literal_vars) |literal_var| {
@@ -18720,8 +18725,8 @@ fn finishAmbiguityPinnableSets(
     // its own closure.
     var relation_iter = self.scheme_relation_reachable_vars.keyIterator();
     while (relation_iter.next()) |var_| {
-        try self.external_pinnable.put(var_.*, {});
-        try self.pinnable_vars.put(var_.*, {});
+        try self.external_pinnable.insert(var_.*);
+        try self.pinnable_vars.insert(var_.*);
     }
 }
 
@@ -20131,14 +20136,14 @@ fn judgeAmbiguityCandidate(
         return;
     }
 
-    const active_pinnable = if (candidate.requires_current_resolution or
+    const pinnable = if (candidate.requires_current_resolution or
         (selection != null and
             selection.?.is_instantiated_where_clause and
             selection.?.where_dispatch_use != null))
-        &self.external_pinnable
+        self.external_pinnable.contains(resolved_var)
     else
-        &self.pinnable_vars;
-    if (active_pinnable.contains(resolved_var)) return;
+        self.pinnable_vars.contains(resolved_var);
+    if (pinnable) return;
 
     // An unpinned scheme instantiation with a default is not ambiguous. Its
     // classification instead schedules exact validation against the one owner
@@ -20187,8 +20192,8 @@ fn instantiationArgumentsCanPin(
     const expr_idx = instantiation_expr orelse return false;
     const func = self.functionTypeFromVar(ModuleEnv.varFrom(expr_idx)) orelse return false;
 
-    var reached = self.reach_sets.acquire();
-    defer self.reach_sets.release(&reached);
+    var reached = self.reach_marks.acquire();
+    defer self.reach_marks.release(&reached);
     for (self.types.sliceVars(func.args)) |arg| {
         try self.collectReachableVars(arg, &reached);
     }
@@ -20469,8 +20474,8 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
 
             var arg_region: ?Region = null;
             for (self.cir.store.sliceExpr(call.args)) |arg_idx| {
-                var reached = self.reach_sets.acquire();
-                defer self.reach_sets.release(&reached);
+                var reached = self.reach_marks.acquire();
+                defer self.reach_marks.release(&reached);
                 try self.collectDataReachableVars(ModuleEnv.varFrom(arg_idx), &reached);
                 if (reached.contains(resolved.var_)) {
                     arg_region = self.cir.store.getExprRegion(arg_idx);
@@ -20898,7 +20903,7 @@ fn applyCreationAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
 /// Collect, into `out`, `var_`'s resolved id and every resolved var id
 /// structurally reachable from it (tuples, records, tag payloads, function args
 /// and rets). Used to mark complete scheme interfaces and local pinning sources.
-fn collectReachableVars(self: *Self, var_: Var, out: *collections.EpochMap(Var, void)) std.mem.Allocator.Error!void {
+fn collectReachableVars(self: *Self, var_: Var, out: anytype) std.mem.Allocator.Error!void {
     return self.collectReachableVarsExcluding(var_, null, out);
 }
 
@@ -20906,7 +20911,7 @@ fn collectReachableVarsExcluding(
     self: *Self,
     root: Var,
     excluded_root: ?Var,
-    out: *collections.EpochMap(Var, void),
+    out: anytype,
 ) std.mem.Allocator.Error!void {
     const pending = &self.reachable_pending;
     pending.clearRetainingCapacity();
@@ -20919,7 +20924,7 @@ fn collectReachableVarsExcluding(
             try self.scheme_relation_reachability.put(visit, {});
             if (resolved.var_ == excluded) continue;
         } else if (out.contains(resolved.var_)) continue;
-        try out.put(resolved.var_, {});
+        try out.insert(resolved.var_);
 
         // Visit children in order: push them, then reverse the run.
         const start = pending.items.len;
@@ -20966,14 +20971,14 @@ fn collectReachableVarsExcluding(
     }
 }
 
-fn collectDataReachableVars(self: *Self, root: Var, out: *collections.EpochMap(Var, void)) std.mem.Allocator.Error!void {
+fn collectDataReachableVars(self: *Self, root: Var, out: anytype) std.mem.Allocator.Error!void {
     var pending: std.ArrayList(Var) = .empty;
     defer pending.deinit(self.gpa);
     try pending.append(self.gpa, root);
     while (pending.pop()) |var_| {
         const resolved = self.types.resolveVar(var_);
         if (out.contains(resolved.var_)) continue;
-        try out.put(resolved.var_, {});
+        try out.insert(resolved.var_);
 
         // Visit children in order: push them, then reverse the run.
         const start = pending.items.len;
@@ -27281,7 +27286,7 @@ fn closeTopLevelValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 fn closeTopLevelValuePayloads(
     self: *Self,
     value_var: Var,
-    data_vars: *collections.EpochMap(Var, void),
+    data_vars: *collections.EpochBitSet(Var, .insertion),
     unions: *std.ArrayListUnmanaged(Var),
     env: *Env,
 ) std.mem.Allocator.Error!void {
@@ -40947,7 +40952,7 @@ fn methodCallArgContext(
 /// presence vars, and no error content.
 fn varIsGround(self: *Self, root_var: Var) std.mem.Allocator.Error!bool {
     const visited = &self.closed_walk_seen;
-    try visited.beginTraversal(self.gpa, @intCast(self.types.len()));
+    visited.beginTraversal();
     defer visited.endTraversal();
     const stack = &self.type_visit_stack;
     const stack_base = stack.items.len;
@@ -40957,7 +40962,7 @@ fn varIsGround(self: *Self, root_var: Var) std.mem.Allocator.Error!bool {
     while (stack.items.len > stack_base) {
         const var_ = stack.pop().?;
         const resolved = self.types.resolveVar(var_);
-        if (visited.testAndInsert(resolved.var_)) continue;
+        if (try visited.testAndInsert(resolved.var_)) continue;
 
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => return false,
@@ -46184,7 +46189,7 @@ fn isReceiverCopyCallable(self: *Self, receiver: Var, fn_var: Var) bool {
 fn collectConstraintSignatureReachable(
     self: *Self,
     constraint_range: StaticDispatchConstraint.SafeList.Range,
-    out: *collections.EpochMap(Var, void),
+    out: *collections.EpochBitSet(Var, .insertion),
 ) std.mem.Allocator.Error!void {
     out.clearRetainingCapacity();
     for (self.types.sliceStaticDispatchConstraints(constraint_range)) |constraint| {
@@ -47057,8 +47062,8 @@ fn replaceNestedTemplatesAtBoundary(
     const rank = env.rank();
     try self.collectSameMethodCopies(roots, rank, copies);
     if (copies.items.len == 0) return;
-    var interface_vars = self.reach_sets.acquire();
-    defer self.reach_sets.release(&interface_vars);
+    var interface_vars = self.reach_marks.acquire();
+    defer self.reach_marks.release(&interface_vars);
     var interface_collected = false;
     var rewritten: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
     defer rewritten.deinit(self.gpa);
@@ -47162,7 +47167,7 @@ fn appendTemplatesBetween(
 fn nestedTemplateEscapes(
     self: *Self,
     template_root: Var,
-    interface_vars: *const collections.EpochMap(Var, void),
+    interface_vars: *const collections.EpochBitSet(Var, .unlisted),
 ) bool {
     for (self.type_schemes.items) |scheme| {
         if (!interface_vars.contains(self.types.resolveVar(scheme.root_var).var_)) continue;
@@ -47587,7 +47592,7 @@ fn retireResolvedTypeSchemeRequirements(self: *Self) Allocator.Error!void {
 fn requirementCallableIsAttached(
     self: *Self,
     requirement: SchemeDispatchRequirement,
-    published_vars: *const collections.EpochMap(Var, void),
+    published_vars: *const collections.EpochBitSet(Var, .unlisted),
 ) bool {
     const receiver = self.types.resolveVar(requirement.receiver_var);
     if (receiver.desc.rank != .generalized) return false;
@@ -47603,7 +47608,7 @@ fn requirementCallableIsAttached(
 fn requirementHasPublishedStructuralOrigin(
     self: *Self,
     requirement: SchemeDispatchRequirement,
-    published_vars: *const collections.EpochMap(Var, void),
+    published_vars: *const collections.EpochBitSet(Var, .unlisted),
 ) bool {
     const receiver = self.types.resolveVar(requirement.receiver_var);
     const origin_receiver = self.types.resolveVar(requirement.structural_origin.receiver_var);
@@ -47643,8 +47648,8 @@ fn retireStructurallyPublishedTypeSchemeRequirements(
     const boundary_rank = env.rank();
     if (self.type_schemes.items.len == 0) return;
 
-    var published_vars = self.reach_sets.acquire();
-    defer self.reach_sets.release(&published_vars);
+    var published_vars = self.reach_marks.acquire();
+    defer self.reach_marks.release(&published_vars);
     for (roots) |root| {
         try self.collectReachableVars(root.interface, &published_vars);
     }
@@ -47732,8 +47737,8 @@ fn retireStructurallyPublishedTypeSchemeRequirements(
 /// scheme rooted at `scheme_root` does not reach through its type and the
 /// constraints on it.
 fn requirementReachesUnrootedSchemeVar(self: *Self, scheme_root: Var, requirement: SchemeDispatchRequirement) Allocator.Error!bool {
-    var rooted = self.reach_sets.acquire();
-    defer self.reach_sets.release(&rooted);
+    var rooted = self.reach_marks.acquire();
+    defer self.reach_marks.release(&rooted);
     try self.collectReachableVars(scheme_root, &rooted);
     var reached = self.reach_sets.acquire();
     defer self.reach_sets.release(&reached);
@@ -48083,12 +48088,12 @@ fn laterUseCanRefine(self: *Self, var_: Var) bool {
 /// instantiates and checks against the where clause.
 fn codecRelationVarsIntersect(
     self: *Self,
-    relation: *const collections.EpochMap(Var, void),
-    interface: *const collections.EpochMap(Var, void),
+    relation: *const collections.EpochBitSet(Var, .insertion),
+    interface: *const collections.EpochBitSet(Var, .unlisted),
     method: Ident.Idx,
 ) Allocator.Error!bool {
-    var declared = self.reach_sets.acquire();
-    defer self.reach_sets.release(&declared);
+    var declared = self.reach_marks.acquire();
+    defer self.reach_marks.release(&declared);
     var keys = relation.constKeyIterator();
     while (keys.next()) |var_| {
         switch (self.types.resolveVar(var_).desc.content) {
@@ -48114,7 +48119,7 @@ fn codecRelationVarsIntersect(
 /// Whether any refinable var in `vars` belongs to a definition enclosing the
 /// boundary at `rank`. The outermost rank is the module's own scope, which no
 /// definition's scheme encloses.
-fn refinableVarsEscapeRank(self: *Self, vars: *const collections.EpochMap(Var, void), rank: Rank) bool {
+fn refinableVarsEscapeRank(self: *Self, vars: *const collections.EpochBitSet(Var, .insertion), rank: Rank) bool {
     var iter = vars.constKeyIterator();
     while (iter.next()) |var_| {
         if (!self.laterUseCanRefine(var_)) continue;
@@ -48131,7 +48136,7 @@ fn refinableVarsEscapeRank(self: *Self, vars: *const collections.EpochMap(Var, v
 fn codecInputsAreSettledAtBoundary(
     self: *Self,
     constraint: StaticDispatchConstraint,
-    inputs: *collections.EpochMap(Var, void),
+    inputs: *collections.EpochBitSet(Var, .insertion),
     rank: Rank,
 ) Allocator.Error!bool {
     const factory = self.types.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse return false;
@@ -48182,8 +48187,8 @@ fn captureSchemeDispatchRequirements(
     }
     var codec_relation_vars = self.reach_sets.acquire();
     defer self.reach_sets.release(&codec_relation_vars);
-    var interface_vars = self.reach_sets.acquire();
-    defer self.reach_sets.release(&interface_vars);
+    var interface_vars = self.reach_marks.acquire();
+    defer self.reach_marks.release(&interface_vars);
     var interface_collected = false;
 
     const rank = env.rank();
@@ -48399,8 +48404,8 @@ fn settleBoundaryLocalDerivedCodecRecords(
     defer exts.deinit(self.gpa);
     var kinds = std.ArrayList(Var).empty;
     defer kinds.deinit(self.gpa);
-    var interface_vars = self.reach_sets.acquire();
-    defer self.reach_sets.release(&interface_vars);
+    var interface_vars = self.reach_marks.acquire();
+    defer self.reach_marks.release(&interface_vars);
     var interface_collected = false;
 
     var shape_exts = std.ArrayList(Var).empty;
@@ -48498,7 +48503,7 @@ fn settleBoundaryLocalDerivedCodecRecords(
 fn appendBoundaryLocalKinds(
     self: *Self,
     candidates: []const Var,
-    interface_vars: *const collections.EpochMap(Var, void),
+    interface_vars: *const collections.EpochBitSet(Var, .unlisted),
     rank: Rank,
     out: *std.ArrayList(Var),
 ) Allocator.Error!void {
@@ -48651,7 +48656,7 @@ fn collectBoundaryReachableVars(self: *Self, roots: []const BoundaryRoot) std.me
     // (defaulting protection and leak detection).
     var relation_iter = self.scheme_relation_reachable_vars.keyIterator();
     while (relation_iter.next()) |var_| {
-        try self.boundary_reachable_vars.put(var_.*, {});
+        try self.boundary_reachable_vars.insert(var_.*);
     }
 }
 
@@ -53468,12 +53473,12 @@ fn useRootSettledGround(self: *Self, root: Var) Allocator.Error!bool {
 
 fn varIsGroundWith(self: *Self, var_: Var, functions: FreezeFunctions) Allocator.Error!bool {
     self.scratch_ground_vars.clearRetainingCapacity();
-    try self.closed_walk_seen.beginTraversal(self.gpa, @intCast(self.types.len()));
+    self.closed_walk_seen.beginTraversal();
     defer self.closed_walk_seen.endTraversal();
     try self.scratch_ground_vars.append(self.gpa, var_);
     while (self.scratch_ground_vars.pop()) |next| {
         const resolved = self.types.resolveVar(next);
-        if (self.closed_walk_seen.testAndInsert(resolved.var_)) continue;
+        if (try self.closed_walk_seen.testAndInsert(resolved.var_)) continue;
         switch (resolved.desc.content) {
             .flex, .rigid, .err => return false,
             .field_presence => {},
@@ -58627,8 +58632,8 @@ fn decideUnreachedOpenRowsAtBoundary(self: *Self, roots: []const BoundaryRoot, e
     if (self.open_row_holders.items.len == 0 or !env.var_pool.generalizesInnermostScope()) return;
     std.debug.assert(self.probe_depth == 0 and !self.commit_probe_active);
     const rank = env.rank();
-    var reached = self.reach_sets.acquire();
-    defer self.reach_sets.release(&reached);
+    var reached = self.reach_marks.acquire();
+    defer self.reach_marks.release(&reached);
     var candidates = collections.DenseMap(Var, void).init(self.gpa);
     defer candidates.deinit();
     var write: usize = 0;
