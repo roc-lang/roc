@@ -503,20 +503,25 @@ pub fn EpochColumn(comptime Key: type, comptime T: type, comptime source: EpochS
 /// never removed from: the same lookups, the same entries, and the same
 /// iteration order after any sequence of insertions and clears.
 ///
-/// Each key owns a slot in a flat column indexed by the key, holding a stamp
-/// and the value side by side, so a lookup is one bounds check and one load.
-/// A slot holds an entry only when its stamp equals the current epoch; the
-/// column grows on insertion, and keys past its end hold nothing. The keys of
-/// the current epoch are also listed in insertion order for iteration.
+/// Each key owns a slot holding a stamp and the value side by side. A slot
+/// holds an entry only when its stamp equals the current epoch, so emptying
+/// the map is one epoch advance. Slots live in pages of 64 consecutive keys,
+/// found through a directory indexed by the key's page; a page is allocated,
+/// with its stamps cleared, the first time one of its keys is inserted, so
+/// the map's storage follows the keys it has held rather than the size of
+/// their domain. Keys whose page does not exist hold nothing. The keys of the
+/// current epoch are also listed in insertion order for iteration.
 ///
-/// The column spans every key up to the largest one inserted, so this suits
-/// maps that are cleared and refilled many times over one domain that
-/// outlives them, such as a type store's variables.
+/// This suits maps that are cleared and refilled many times over one domain
+/// that outlives them, such as a type store's variables.
 pub fn EpochMap(comptime Key: type, comptime V: type) type {
     return struct {
         const Self = @This();
 
         const Slot = struct { stamp: u32, value: V };
+        const page_shift = 6;
+        const page_len = 1 << page_shift;
+        const Page = [page_len]Slot;
 
         pub const Entry = struct {
             key_ptr: *const Key,
@@ -529,7 +534,11 @@ pub fn EpochMap(comptime Key: type, comptime V: type) type {
         };
 
         allocator: Allocator,
-        slots: []Slot = &.{},
+        /// The page of each run of 64 keys, null until one of them is
+        /// inserted. It spans the pages up to the highest one inserted into.
+        pages: std.ArrayList(?*Page) = .empty,
+        /// The number of pages allocated.
+        allocated_pages: usize = 0,
         /// The keys holding entries in the current epoch, in insertion order.
         keys: std.ArrayList(Key) = .empty,
         epoch: Epoch = .{},
@@ -539,7 +548,8 @@ pub fn EpochMap(comptime Key: type, comptime V: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.allocator.free(self.slots);
+            for (self.pages.items) |page| if (page) |allocated| self.allocator.destroy(allocated);
+            self.pages.deinit(self.allocator);
             self.keys.deinit(self.allocator);
             self.* = undefined;
         }
@@ -574,14 +584,10 @@ pub fn EpochMap(comptime Key: type, comptime V: type) type {
 
         pub fn getOrPut(self: *Self, key: Key) Allocator.Error!GetOrPutResult {
             const i = keyIndex(Key, key);
-            if (i < self.slots.len) {
-                const slot = &self.slots[i];
-                if (slot.stamp == self.epoch.current) return .{ .value_ptr = &slot.value, .found_existing = true };
-            } else {
-                try self.growSlots(i + 1);
-            }
+            const page = try self.ensurePage(i >> page_shift);
+            const slot = &page[i & (page_len - 1)];
+            if (slot.stamp == self.epoch.current) return .{ .value_ptr = &slot.value, .found_existing = true };
             try self.keys.append(self.allocator, key);
-            const slot = &self.slots[i];
             slot.stamp = self.epoch.current;
             return .{ .value_ptr = &slot.value, .found_existing = false };
         }
@@ -601,8 +607,11 @@ pub fn EpochMap(comptime Key: type, comptime V: type) type {
         pub fn clearRetainingCapacity(self: *Self) void {
             self.keys.clearRetainingCapacity();
             if (self.epoch.advance()) {
-                for (self.slots) |*slot| slot.stamp = 0;
-                storage_work.add(.bytes_filled, self.slots.len * @sizeOf(u32));
+                for (self.pages.items) |page| {
+                    const allocated = page orelse continue;
+                    for (allocated) |*slot| slot.stamp = 0;
+                }
+                storage_work.add(.bytes_filled, self.allocated_pages * page_len * @sizeOf(u32));
             }
         }
 
@@ -647,7 +656,7 @@ pub fn EpochMap(comptime Key: type, comptime V: type) type {
                 if (self.position >= self.map.keys.items.len) return null;
                 self.key = self.map.keys.items[self.position];
                 self.position += 1;
-                return .{ .key_ptr = &self.key, .value_ptr = &self.map.slots[keyIndex(Key, self.key)].value };
+                return .{ .key_ptr = &self.key, .value_ptr = &self.map.liveSlot(keyIndex(Key, self.key)).?.value };
             }
         };
 
@@ -672,22 +681,33 @@ pub fn EpochMap(comptime Key: type, comptime V: type) type {
                 if (self.position >= self.map.keys.items.len) return null;
                 const key = self.map.keys.items[self.position];
                 self.position += 1;
-                return &self.map.slots[keyIndex(Key, key)].value;
+                return &self.map.liveSlot(keyIndex(Key, key)).?.value;
             }
         };
 
         inline fn liveSlot(self: *const Self, i: usize) ?*Slot {
-            if (i >= self.slots.len) return null;
-            const slot = &self.slots[i];
+            const page_index = i >> page_shift;
+            if (page_index >= self.pages.items.len) return null;
+            const page = self.pages.items[page_index] orelse return null;
+            const slot = &page[i & (page_len - 1)];
             return if (slot.stamp == self.epoch.current) slot else null;
         }
 
-        fn growSlots(self: *Self, min_len: usize) Allocator.Error!void {
-            const old_len = self.slots.len;
-            const new_len = @max(min_len, old_len +| old_len / 2 +| 8);
-            self.slots = try self.allocator.realloc(self.slots, new_len);
-            for (self.slots[old_len..]) |*slot| slot.* = .{ .stamp = 0, .value = undefined };
-            storage_work.add(.bytes_filled, (new_len - old_len) * @sizeOf(u32));
+        /// The page holding the keys of `page_index`, allocated with its
+        /// stamps cleared if none of them was inserted before.
+        fn ensurePage(self: *Self, page_index: usize) Allocator.Error!*Page {
+            if (page_index >= self.pages.items.len) {
+                const old_len = self.pages.items.len;
+                try self.pages.resize(self.allocator, page_index + 1);
+                @memset(self.pages.items[old_len..], null);
+            }
+            if (self.pages.items[page_index]) |page| return page;
+            const page = try self.allocator.create(Page);
+            for (page) |*slot| slot.* = .{ .stamp = 0, .value = undefined };
+            storage_work.add(.bytes_filled, page_len * @sizeOf(u32));
+            self.pages.items[page_index] = page;
+            self.allocated_pages += 1;
+            return page;
         }
     };
 }
@@ -1087,8 +1107,40 @@ test "an epoch map pool hands out empty maps that keep their columns, nested or 
     pool.release(&outer);
     var again = pool.acquire();
     defer pool.release(&again);
-    try testing.expect(again.slots.len > 40);
+    try testing.expectEqual(@as(usize, 1), again.allocated_pages);
     try testing.expect(!again.contains(40));
     try testing.expect(!again.contains(7));
     try testing.expectEqual(@as(usize, 0), again.count());
+}
+
+test "an epoch map allocates only the pages its keys touch" {
+    var map = EpochMap(u32, u32).init(testing.allocator);
+    defer map.deinit();
+    try testing.expectEqual(@as(?u32, null), map.get(100_000));
+    try testing.expectEqual(@as(usize, 0), map.allocated_pages);
+    try map.put(100_000, 1);
+    try map.put(100_001, 2);
+    try testing.expectEqual(@as(usize, 1), map.allocated_pages);
+    try map.put(3, 3);
+    try testing.expectEqual(@as(usize, 2), map.allocated_pages);
+    try testing.expectEqual(@as(?u32, null), map.get(4));
+    try testing.expectEqual(@as(?u32, null), map.get(50_000));
+    map.clearRetainingCapacity();
+    try testing.expectEqual(@as(?u32, null), map.get(100_000));
+    try map.put(100_002, 4);
+    try testing.expectEqual(@as(usize, 2), map.allocated_pages);
+    try testing.expectEqual(@as(?u32, 4), map.get(100_002));
+    try testing.expectEqual(@as(?u32, null), map.get(100_001));
+}
+
+fn exerciseEpochMapAllocationFailures(gpa: Allocator) (Allocator.Error || error{TestUnexpectedResult})!void {
+    var map = EpochMap(u32, u32).init(gpa);
+    defer map.deinit();
+    for ([_]u32{ 5, 900, 6, 5000, 900 }) |key| try map.put(key, key + 1);
+    try testing.expect(map.get(5000) == 5001);
+    try testing.expect(map.count() == 4);
+}
+
+test "an epoch map stays consistent when an allocation fails" {
+    try testing.checkAllAllocationFailures(testing.allocator, exerciseEpochMapAllocationFailures, .{});
 }
