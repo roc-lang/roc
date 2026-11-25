@@ -590,7 +590,6 @@ pub const ReachScratch = struct {
 /// edge is visited once.
 fn markIdentityVariables(allocator: Allocator, env: *const ModuleEnv, var_facts: []SealedVarFacts, scratch: *ReachScratch) Allocator.Error!void {
     const reached = scratch.newly_reached.items;
-    if (reached.len == 0) return;
     for (reached, 0..) |var_, position| try scratch.positions.put(allocator, var_, @intCast(position));
 
     var lister = IdentityEdgeLister{ .allocator = allocator, .env = env, .var_facts = var_facts, .scratch = scratch };
@@ -801,12 +800,15 @@ const ColumnBuilder = struct {
 /// given. `scratch` is the caller's, empty on entry and on return.
 pub fn reach(allocator: Allocator, env: *const ModuleEnv, var_facts: []SealedVarFacts, scratch: *ReachScratch, root: Var, newly_reached: ?*std.ArrayList(Var)) Allocator.Error!void {
     std.debug.assert(scratch.pending.items.len == 0 and scratch.newly_reached.items.len == 0);
-    defer scratch.clear();
+    errdefer scratch.clear();
     var walker = ReachWalker{ .env = env, .var_facts = var_facts, .newly_reached = &scratch.newly_reached, .pending = &scratch.pending };
     try walker.reach(allocator, root, null);
+    // Most walks start at a type an earlier walk reached and reach nothing.
+    if (scratch.newly_reached.items.len == 0) return;
     while (walker.pending.pop()) |var_| try walker.expand(allocator, var_);
     try markIdentityVariables(allocator, env, var_facts, scratch);
     if (newly_reached) |list| try list.appendSlice(allocator, scratch.newly_reached.items);
+    scratch.clear();
 }
 
 const ReachWalker = struct {
