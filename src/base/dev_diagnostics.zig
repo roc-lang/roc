@@ -88,6 +88,9 @@ pub const Var = enum {
     /// an evaluator completes, roots the checked-value writer completes, and
     /// value-form expressions their bodies keep.
     hoist_root_stats,
+    /// Print, for every module the type checker checks, how many of each
+    /// probe site's probes were kept and how many were discarded.
+    checker_speculation_stats,
 
     /// The variable's name in the environment.
     pub fn envName(comptime self: Var) [:0]const u8 {
@@ -116,6 +119,7 @@ pub const Var = enum {
             .range_prove_stats => "ROC_RANGE_PROVE_STATS",
             .trace_run_order => "ROC_TRACE_RUN_ORDER",
             .hoist_root_stats => "ROC_HOIST_ROOT_STATS",
+            .checker_speculation_stats => "ROC_CHECKER_SPECULATION_STATS",
         };
     }
 };

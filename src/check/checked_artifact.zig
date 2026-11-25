@@ -24114,7 +24114,9 @@ fn copyPairingColumns(comptime T: type, source: T, allocator: Allocator) Allocat
         @memcpy(result, source);
         return result;
     } else if (comptime @typeInfo(T) == .@"struct") {
-        if (comptime @hasDecl(T, "fromBorrowedSlice") and @hasField(T, "length")) {
+        if (comptime @hasDecl(T, "copyForPairing")) {
+            return source.copyForPairing(allocator);
+        } else if (comptime @hasDecl(T, "fromBorrowedSlice") and @hasField(T, "length")) {
             artifact_serialize.assertRelocatablePod(std.meta.Child(T.Slice));
             return T.fromSlice(allocator, source.items());
         } else if (comptime @hasField(T, "items") and @hasField(T, "capacity")) {
@@ -26007,7 +26009,12 @@ fn valueFormWalk(allocator: Allocator, bodies: CheckedBodies, root: CIR.Expr.Idx
                     if (segment_data != .str_segment) return .other;
                 }
             },
-            .empty_list, .zero_argument_tag => {},
+            // A segment outside a string is a file imported as `Str`: a
+            // string literal of that one segment. Segments of a string are
+            // never walked.
+            .str_segment => if (checkedConcreteBuiltinForLiteralTarget(bodies.types, bodies.exprType(id)) != .str) return .other,
+            // A bytes literal's checked type is always `List(U8)`.
+            .empty_list, .zero_argument_tag, .bytes_literal => {},
             // An empty literal at a record type of optional fields builds
             // each field's slot as missing.
             .empty_record => if (!recordTypeIsClosedAndRequired(bodies.types, bodies.exprType(id), 0)) return .other,
@@ -26033,7 +26040,7 @@ fn valueFormWalk(allocator: Allocator, bodies: CheckedBodies, root: CIR.Expr.Idx
                 if (block.statements.len != 0) return .other;
                 try stack.append(allocator, block.final_expr);
             },
-            .str_segment, .bytes_literal, .lookup_required, .match_, .if_, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return .other,
+            .lookup_required, .match_, .if_, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return .other,
         }
     }
     return if (reads_constants) .reads_constants else .value_form;
@@ -26243,8 +26250,8 @@ pub fn appendValueFormConstReads(allocator: Allocator, bodies: CheckedBodies, ex
             .record => |record| for (record.fields) |field| try stack.append(allocator, bodies.recordFieldValue(field)),
             .nominal => |nominal| try stack.append(allocator, nominal.backing_expr),
             .block => |block| try stack.append(allocator, block.final_expr),
-            .numeral, .str, .empty_list, .zero_argument_tag, .empty_record => {},
-            .str_segment, .bytes_literal, .lookup_required, .match_, .if_, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => checkedArtifactInvariant("a value-form expression has a part that is not in value form", .{}),
+            .numeral, .str, .str_segment, .bytes_literal, .empty_list, .zero_argument_tag, .empty_record => {},
+            .lookup_required, .match_, .if_, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => checkedArtifactInvariant("a value-form expression has a part that is not in value form", .{}),
         }
     }
 }
@@ -26282,7 +26289,8 @@ fn valueFormCandidate(bodies: CheckedBodies, id: CIR.Expr.Idx) ?checked_bodies_m
 fn valueFormCandidateTag(tag: CIR.Node.Tag) bool {
     return tag == .expr_num or tag == .expr_dec or tag == .expr_dec_small or tag == .expr_num_from_numeral or
         tag == .expr_typed_int or tag == .expr_typed_frac or tag == .expr_typed_num_from_numeral or
-        tag == .expr_string or tag == .expr_string_segment or tag == .expr_empty_list or tag == .expr_empty_record or
+        tag == .expr_string or tag == .expr_string_segment or tag == .expr_bytes_literal or tag == .expr_empty_list or
+        tag == .expr_empty_record or
         tag == .expr_zero_argument_tag or tag == .expr_list or tag == .expr_tuple or tag == .expr_tag or
         tag == .expr_record or tag == .expr_nominal or tag == .expr_nominal_external or tag == .expr_block or
         tag == .expr_var or tag == .expr_external_lookup or tag == .expr_associated_lookup_resolved;

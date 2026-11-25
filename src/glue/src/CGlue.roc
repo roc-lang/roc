@@ -23,7 +23,11 @@ make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
 	input = GlueInput.from_types(types_list)
 	type_table = TypeTable.from_list(input.types)
-	header_content = generate_c_header(input.hosted_functions, type_table, input.provides_entries)
+	symbols = TypeNamePlan.platform_symbols(input.hosted_functions, input.provides_entries)
+	undeclarable_symbol_c(symbols)?
+	renamed_roots = renamed_roots_c(input.hosted_functions, input.provides_entries, type_table, symbols)?
+	duplicate_names = duplicate_type_names(input.hosted_functions, type_table, symbols, renamed_roots)?
+	header_content = generate_c_header(input.hosted_functions, type_table, input.provides_entries, duplicate_names)
 
 	Ok([{ name: "roc_platform_abi.h", content: header_content }])
 }
@@ -218,13 +222,47 @@ c_vector_union_comment =
 	\\   from classifying the aggregate as homogeneous: the Roc host ABI passes
 	\\   multi-vector aggregates in memory, matching Zig and Rust hosts. */
 
-c_record_field_decl : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, AbiFieldLayout, AbiWidth, Bool -> Str
-c_record_field_decl = |type_table, duplicate_record_names, duplicate_tag_names, preferred_names, field, width, wrap_vector_members| {
-	field_name = name_to_c_field_ident(field.name)
+## The named fields of a record, whose names settle each one's member name.
+field_names_c : List(AbiFieldLayout) -> List(Str)
+field_names_c = |fields| {
+	var $names = []
+
+	for field in fields {
+		if !field.is_padding {
+			$names = $names.append(field.name)
+		}
+	}
+
+	$names
+}
+
+## The tags of a union, whose names settle each one's member names.
+tag_names_c : TagUnionRepr -> List(Str)
+tag_names_c = |tu| List.map(tu.tags, |tag| tag.name)
+
+## The member names of the fields or tags named `member_names`. Every
+## identifier `name_to_c_field_ident` gives is lowercase, so a ranked one is no
+## other member's own.
+field_idents_c : List(Str) -> TypeNamePlan.MemberIdents
+field_idents_c = |member_names|
+	TypeNamePlan.member_idents(member_names, name_to_c_field_ident, "_Member")
+
+## For each tag, the part of its constant and payload struct names that comes
+## from the tag. No name `name_to_struct_name` gives holds an underscore, so a
+## ranked one is no other tag's own.
+tag_constants_c : List(Str) -> TypeNamePlan.MemberIdents
+tag_constants_c = |tag_names|
+	TypeNamePlan.member_idents(tag_names, name_to_struct_name, "_")
+
+c_record_field_decl : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, Str, AbiFieldLayout, AbiWidth, Bool -> Str
+c_record_field_decl = |type_table, duplicate_record_names, duplicate_tag_names, preferred_names, member_name, field, width, wrap_vector_members| {
 	if field.is_padding {
+		field_name = name_to_c_field_ident(field.name)
+
 		# Padding fields are nonzero at both widths (asserted by the compiler).
 		"    uint8_t ${field_name}[${U64.to_str(AbiFieldLayout.size(field, width))}];\n"
 	} else {
+		field_name = member_name
 		c_type = type_id_to_c(type_table, duplicate_record_names, duplicate_tag_names, preferred_names, field.type_id)
 		if wrap_vector_members {
 			"    union { ${c_type} value; uint8_t bytes[${U64.to_str(AbiFieldLayout.size(field, width))}]; } ${field_name};\n"
@@ -236,13 +274,23 @@ c_record_field_decl = |type_table, duplicate_record_names, duplicate_tag_names, 
 
 ## Fields arrive in committed layout order (valid at both pointer widths);
 ## only per-width padding byte counts differ between the two renderings.
-c_record_fields_decl : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, List(AbiFieldLayout), AbiWidth, Bool -> Str
-c_record_fields_decl = |type_table, duplicate_record_names, duplicate_tag_names, preferred_names, fields, width, wrap_vector_members| {
+c_record_fields_decl : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, TypeNamePlan.MemberIdents, List(AbiFieldLayout), AbiWidth, Bool -> Str
+c_record_fields_decl = |type_table, duplicate_record_names, duplicate_tag_names, preferred_names, field_idents, fields, width, wrap_vector_members| {
 	var $field_strs = ""
+	var $member_index = 0
 	for field in fields {
+		member_name = if field.is_padding {
+			""
+		} else {
+			field_idents.at($member_index)
+		}
+		if !field.is_padding {
+			$member_index = $member_index + 1
+		}
+
 		# A zero-sized field occupies no storage, and C has no zero-sized member.
 		if !field.is_zero_sized() {
-			$field_strs = Str.concat($field_strs, c_record_field_decl(type_table, duplicate_record_names, duplicate_tag_names, preferred_names, field, width, wrap_vector_members))
+			$field_strs = Str.concat($field_strs, c_record_field_decl(type_table, duplicate_record_names, duplicate_tag_names, preferred_names, member_name, field, width, wrap_vector_members))
 		}
 	}
 	$field_strs
@@ -283,25 +331,387 @@ hosted_module_name_to_struct_name = |name|
 		}
 	}
 
-generated_type_names_c : TypeTable, List(Str), List(Str) -> List(Str)
-generated_type_names_c = |type_table, duplicate_records, duplicate_tags| {
-	var $names = []
+## Roc names emitted under id-derived names. For host types these are the
+## named tag unions and named records whose name appears in the type table
+## with different shapes, and those whose declarations would collide with
+## another declaration in the generated header; they take shape-derived names.
+## `renamed_roots` are the hosted functions and provided entries that take
+## index-derived names. The result is computed once per glue run and reused
+## while rendering names.
+duplicate_type_names : List(HostedFunctionInfo), TypeTable, List(Str), List(Str) -> Try(List(Str), Str)
+duplicate_type_names = |hosted_functions, type_table, symbols, renamed_roots|
+	TypeNamePlan.disambiguated(
+		List.concat(reserved_type_names_c(hosted_functions, type_table, renamed_roots), symbols),
+		List.concat(renamed_roots, List.concat(duplicate_tag_union_names(type_table), duplicate_record_names(type_table))),
+		|renamed| declared_types_c(type_table, renamed),
+	)
+
+## Type names the runtime support in every generated header declares or takes
+## from the standard headers it includes. A host type declared under one of
+## them would redefine it.
+runtime_type_names_c : List(Str)
+runtime_type_names_c = [
+	"HostedFn",
+	"HostedFunctions",
+	"NULL",
+	"RocBox",
+	"RocDec",
+	"RocErasedCallable",
+	"RocErasedCallableFn",
+	"RocErasedCallableOnDrop",
+	"RocErasedCallablePayload",
+	"RocI16x8",
+	"RocI32x4",
+	"RocI64x2",
+	"RocI8x16",
+	"RocList",
+	"RocOpaqueList",
+	"RocOps",
+	"RocStr",
+	"RocU16x8",
+	"RocU32x4",
+	"RocU64x2",
+	"RocU8x16",
+]
+
+## Type names the generated header declares whatever the type table's own
+## types are named: the runtime support and each hosted function's argument
+## type.
+reserved_type_names_c : List(HostedFunctionInfo), TypeTable, List(Str) -> List(Str)
+reserved_type_names_c = |hosted_functions, type_table, renamed| {
+	arg_shape = ArgShape.from_table(type_table)
+	var $names = runtime_type_names_c
+
+	for func in hosted_functions {
+		$names = List.concat($names, hosted_top_level_names_c(arg_shape, renamed, func))
+	}
+
+	$names
+}
+
+## Names other than type names that the generated header declares or uses
+## whatever the platform holds: its macros and functions, and the names it
+## takes from the standard headers it includes. The header declares each
+## platform symbol under the symbol's own name, which would redefine one of
+## these or be rewritten by it.
+runtime_value_names_c : List(Str)
+runtime_value_names_c = [
+	"HOSTED_FUNCTION_COUNT",
+	"ROC_ALIGNAS",
+	"ROC_ALIGNOF",
+	"ROC_ASSERT_VECTOR",
+	"ROC_ERASED_CALLABLE_CAPTURE_ALIGNMENT",
+	"ROC_ERASED_CALLABLE_CAPTURE_OFFSET",
+	"ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT",
+	"ROC_ERASED_CALLABLE_PAYLOAD_SIZE",
+	"ROC_PLATFORM_ABI_H",
+	"ROC_RETURNS_NONNULL",
+	"ROC_STATIC_ASSERT",
+	"UINT64_MAX",
+	"UINTPTR_MAX",
+	"bool",
+	"false",
+	"int16_t",
+	"int16x8_t",
+	"int32_t",
+	"int32x4_t",
+	"int64_t",
+	"int64x2_t",
+	"int8_t",
+	"int8x16_t",
+	"intptr_t",
+	"offsetof",
+	"ptrdiff_t",
+	"roc_abi_copy_bytes",
+	"roc_erased_callable_capture_ptr",
+	"roc_erased_callable_payload_ptr",
+	"size_t",
+	"true",
+	"uint16_t",
+	"uint16x8_t",
+	"uint32_t",
+	"uint32x4_t",
+	"uint64_t",
+	"uint64x2_t",
+	"uint8_t",
+	"uint8x16_t",
+	"uintptr_t",
+	"v128_t",
+]
+
+## Words C keeps for itself, which cannot name a declaration.
+keywords_c : List(Str)
+keywords_c = [
+	"alignas",
+	"alignof",
+	"auto",
+	"break",
+	"case",
+	"char",
+	"const",
+	"continue",
+	"default",
+	"do",
+	"double",
+	"else",
+	"enum",
+	"extern",
+	"float",
+	"for",
+	"goto",
+	"if",
+	"inline",
+	"int",
+	"long",
+	"register",
+	"restrict",
+	"return",
+	"short",
+	"signed",
+	"sizeof",
+	"static",
+	"static_assert",
+	"struct",
+	"switch",
+	"typedef",
+	"union",
+	"unsigned",
+	"void",
+	"volatile",
+	"while",
+]
+
+## True for the identifiers C reserves for the implementation, which the
+## compiler and its headers may define as anything: those that begin with two
+## underscores, or with an underscore and an uppercase letter.
+is_implementation_name_c : Str -> Bool
+is_implementation_name_c = |name| {
+		bytes = Str.to_utf8(name)
+		match List.get(bytes, 1) {
+			Ok(second) => List.first(bytes) == Ok('_') and (second == '_' or (second >= 'A' and second <= 'Z'))
+			Err(_) => Bool.False
+		}
+	}
+
+## An error when the generated header cannot declare one of the platform's
+## symbols under its own name: the name is a keyword, is reserved for the C
+## implementation, or belongs to the runtime support.
+undeclarable_symbol_c : List(Str) -> Try({}, Str)
+undeclarable_symbol_c = |symbols| {
+	fixed_names = List.concat(runtime_type_names_c, List.concat(runtime_value_names_c, keywords_c))
+	TypeNamePlan.undeclarable_symbol(symbols, fixed_names)?
+
+	for symbol in symbols {
+		if is_implementation_name_c(symbol) {
+			return Err(TypeNamePlan.symbol_error(symbol))
+		}
+	}
+
+	Ok({})
+}
+
+## The name a hosted function's argument type, and the aliases of the types
+## it reaches, are derived from.
+hosted_struct_name_c : List(Str), HostedFunctionInfo -> Str
+hosted_struct_name_c = |renamed, func|
+	Str.concat(name_to_struct_name(func.name), TypeNamePlan.index_suffix(renamed, func.name, func.index, "Hosted"))
+
+## The name of a hosted function's index macro, after `HOSTED_IDX_`.
+hosted_upper_ident_c : List(Str), HostedFunctionInfo -> Str
+hosted_upper_ident_c = |renamed, func|
+	Str.concat(name_to_upper_ident(func.name), TypeNamePlan.index_suffix(renamed, func.name, func.index, "_HOSTED"))
+
+## The name of a hosted function's member of `HostedFunctions`.
+hosted_field_ident_c : List(Str), HostedFunctionInfo -> Str
+hosted_field_ident_c = |renamed, func|
+	Str.concat(name_to_c_field_ident(func.name), TypeNamePlan.index_suffix(renamed, func.name, func.index, "_hosted"))
+
+## The name the aliases of the types a provided entry reaches are derived
+## from. `position` is the entry's place in the platform's provides list.
+provided_struct_name_c : List(Str), ProvidesEntry, U64 -> Str
+provided_struct_name_c = |renamed, entry, position|
+	Str.concat(name_to_struct_name(entry.name), TypeNamePlan.index_suffix(renamed, entry.name, position, "Provided"))
+
+## The top-level names the generated header declares for a hosted function:
+## its index macro and its argument type.
+hosted_top_level_names_c : ArgShape, List(Str), HostedFunctionInfo -> List(Str)
+hosted_top_level_names_c = |arg_shape, renamed, func| {
+	index_macro = "HOSTED_IDX_${hosted_upper_ident_c(renamed, func)}"
+
+	match arg_shape.hosted_args(func) {
+		NoMeaningfulArgs => [index_macro]
+		SingleRecordArg(_) => [index_macro, "${hosted_struct_name_c(renamed, func)}Args"]
+		PositionalArgs(_) => [index_macro, "${hosted_struct_name_c(renamed, func)}Args"]
+	}
+}
+
+## What the generated header derives from the name of each hosted function and
+## each provided entry when the Roc names in `renamed` take index-derived
+## names: a hosted function's top-level names; its member of
+## `HostedFunctions`, which is compared only with other members; and the base
+## its aliases are named from, which is not itself declared and so is compared
+## only with other bases.
+declared_roots_c : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> List(TypeNamePlan.Declared)
+declared_roots_c = |hosted_functions, provides_list, type_table, renamed| {
+	arg_shape = ArgShape.from_table(type_table)
+	var $declared = []
+
+	for func in hosted_functions {
+		$declared = $declared.append({
+			roc_name: func.name,
+			id: func.index * 2,
+			names: List.concat(
+				hosted_top_level_names_c(arg_shape, renamed, func),
+				[
+					"member ${hosted_field_ident_c(renamed, func)}",
+					"base ${hosted_struct_name_c(renamed, func)}",
+				],
+			),
+		})
+	}
+
+	var $position = 0
+	for entry in provides_list {
+		$declared = $declared.append({
+			roc_name: entry.name,
+			id: $position * 2 + 1,
+			names: ["base ${provided_struct_name_c(renamed, entry, $position)}"],
+		})
+		$position = $position + 1
+	}
+
+	$declared
+}
+
+## The hosted functions and provided entries whose derived names take
+## index-derived names, because they would collide with another declaration.
+renamed_roots_c : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> Try(List(Str), Str)
+renamed_roots_c = |hosted_functions, provides_list, type_table, symbols|
+	TypeNamePlan.disambiguated(
+		List.concat(runtime_type_names_c, List.concat(runtime_value_names_c, symbols)),
+		[],
+		|renamed| declared_roots_c(hosted_functions, provides_list, type_table, renamed),
+	)
+
+## Every top-level name the generated header declares for the host type at
+## `type_id` when it emits that type as `struct_name`: the type itself and each
+## helper type, tag constant, and function named after it.
+type_names_declared_as_c : TypeTable, U64, Str -> List(Str)
+type_names_declared_as_c = |type_table, type_id, struct_name|
+	match type_table.get(type_id) {
+		RocRecord(rec) =>
+			if rec.name != "" and !type_table.is_zero_sized(type_id) {
+				[struct_name]
+			} else {
+				[]
+			}
+		RocTagUnion(tu) =>
+			match type_table.single_variant_payload(type_id, tu) {
+				SinglePayloadStruct(_) => [struct_name]
+				NotSingleVariant => type_names_declared_as_union_c(type_table, type_id, tu, struct_name)
+				SinglePayload(_) => []
+				SingleNoPayload => []
+			}
+		_ => []
+	}
+
+## `type_names_declared_as_c` of the tag union `tu` with several variants.
+type_names_declared_as_union_c : TypeTable, U64, TagUnionRepr, Str -> List(Str)
+type_names_declared_as_union_c = |type_table, type_id, tu, struct_name|
+	if tu.name != "" {
+		abi_layout = type_table.layout(type_id)
+		has_payload = abi_layout.tag_union_has_payload()
+		abi_tags = abi_tag_layouts_c(abi_layout)
+		var $names = if has_payload {
+			[struct_name, "${struct_name}Tag", "${struct_name}TagPayloadStorage"]
+		} else {
+			[struct_name]
+		}
+		var $tag_idx = 0
+		tag_names = tag_names_c(tu)
+		tag_constants = tag_constants_c(tag_names)
+		tag_fields = field_idents_c(tag_names)
+		for tag in tu.tags {
+			constant_name = tag_constants.at($tag_idx)
+			$names = $names.append("${struct_name}Tag_${constant_name}")
+			if has_payload {
+				field_name = tag_fields.at($tag_idx)
+				$names = $names.append("${struct_name}_make_${field_name}")
+				if abi_tag_has_payload_c(abi_tag_at_c(abi_tags, $tag_idx)) {
+					$names = $names.append("${struct_name}_payload_${field_name}")
+					if List.len(tag.payload) != 1 {
+						$names = $names.append("${struct_name}${constant_name}Payload")
+					}
+				}
+			}
+			$tag_idx = $tag_idx + 1
+		}
+		$names
+	} else {
+		[]
+	}
+
+## Whether the generated header declares the tag union at `type_id` as a
+## struct. A union without payloads is declared as its discriminant's integer
+## type instead.
+declares_tag_union_struct_c : TypeTable, U64, TagUnionRepr -> Bool
+declares_tag_union_struct_c = |type_table, type_id, tu|
+	match type_table.single_variant_payload(type_id, tu) {
+		SinglePayloadStruct(_) => tu.name != ""
+		NotSingleVariant => tu.name != "" and type_table.layout(type_id).tag_union_has_payload()
+		SinglePayload(_) => Bool.False
+		SingleNoPayload => Bool.False
+	}
+
+## What the generated header declares for each named host type when the Roc
+## names in `duplicate_names` are emitted under shape-derived names.
+declared_types_c : TypeTable, List(Str) -> List(TypeNamePlan.Declared)
+declared_types_c = |type_table, duplicate_names| {
+	var $declared = []
 	var $type_id = 0
 
 	for type_info in type_table.entries() {
-		match type_info.repr {
-			RocRecord(rec) =>
-				if rec.name != "" and !type_table.is_zero_sized($type_id) {
-					$names = $names.append(record_struct_name(type_table, duplicate_records, $type_id, rec))
-				}
-			RocTagUnion(tu) =>
-				if type_table.declares_tag_union($type_id, tu) {
-					$names = $names.append(default_tag_union_struct_name(type_table, duplicate_tags, $type_id, tu))
-				}
-			_ => {}
+		if type_info.shape_id == $type_id {
+			match type_info.repr {
+				RocRecord(rec) =>
+					if rec.name != "" and !type_table.is_zero_sized($type_id) {
+						struct_name = record_struct_name(type_table, duplicate_names, $type_id, rec)
+						$declared = $declared.append({
+							roc_name: rec.name,
+							id: $type_id,
+							names: type_names_declared_as_c(type_table, $type_id, struct_name),
+						})
+					}
+				RocTagUnion(tu) =>
+					if type_table.declares_tag_union($type_id, tu) {
+						struct_name = default_tag_union_struct_name(type_table, duplicate_names, $type_id, tu)
+						$declared = $declared.append({
+							roc_name: tu.name,
+							id: $type_id,
+							names: type_names_declared_as_c(type_table, $type_id, struct_name),
+						})
+					}
+				_ => {}
+			}
 		}
 
 		$type_id = $type_id + 1
+	}
+
+	$declared
+}
+
+## Every name the generated header declares before any preferred name or alias
+## is chosen, which neither of those may take.
+declared_type_names_c : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> List(Str)
+declared_type_names_c = |hosted_functions, provides_list, type_table, duplicate_names| {
+	var $names = List.concat(
+		reserved_type_names_c(hosted_functions, type_table, duplicate_names),
+		TypeNamePlan.platform_symbols(hosted_functions, provides_list),
+	)
+
+	for declared in declared_types_c(type_table, duplicate_names) {
+		$names = List.concat($names, declared.names)
 	}
 
 	$names
@@ -344,7 +754,7 @@ type_name_roots_c = |hosted_functions, provides_list, type_table, ambiguous_name
 	var $roots = []
 
 	for func in hosted_functions {
-		base = name_to_struct_name(func.name)
+		base = hosted_struct_name_c(ambiguous_names, func)
 		module_base = hosted_module_name_to_struct_name(func.name)
 
 		var $arg_idx = 0
@@ -365,9 +775,11 @@ type_name_roots_c = |hosted_functions, provides_list, type_table, ambiguous_name
 		})
 	}
 
+	var $position = 0
 	for entry in provides_list {
-		base = name_to_struct_name(entry.name)
+		base = provided_struct_name_c(ambiguous_names, entry, $position)
 		module_base = hosted_module_name_to_struct_name(entry.name)
+		$position = $position + 1
 
 		match entry.exported {
 			ProvidedProcedure(func) => {
@@ -441,7 +853,7 @@ type_alias_roots_c = |hosted_functions, provides_list, type_table, ambiguous_nam
 	var $roots = []
 
 	for func in hosted_functions {
-		base = name_to_struct_name(func.name)
+		base = hosted_struct_name_c(ambiguous_names, func)
 		module_base = hosted_module_name_to_struct_name(func.name)
 
 		var $arg_idx = 0
@@ -454,9 +866,11 @@ type_alias_roots_c = |hosted_functions, provides_list, type_table, ambiguous_nam
 		$roots = append_type_alias_roots_c($roots, type_table, ambiguous_names, base, module_base, func.ret_type_id, [])
 	}
 
+	var $position = 0
 	for entry in provides_list {
-		base = name_to_struct_name(entry.name)
+		base = provided_struct_name_c(ambiguous_names, entry, $position)
 		module_base = hosted_module_name_to_struct_name(entry.name)
+		$position = $position + 1
 
 		match entry.exported {
 			ProvidedProcedure(func) => {
@@ -478,11 +892,12 @@ type_alias_roots_c = |hosted_functions, provides_list, type_table, ambiguous_nam
 	$roots
 }
 
-preferred_type_names_c : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str), List(Str) -> TypeNamePlan.PreferredNames
-preferred_type_names_c = |hosted_functions, provides_list, type_table, duplicate_records, duplicate_tags|
+preferred_type_names_c : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> TypeNamePlan.PreferredNames
+preferred_type_names_c = |hosted_functions, provides_list, type_table, duplicate_names|
 	TypeNamePlan.from_table(type_table).preferred_names(
-		generated_type_names_c(type_table, duplicate_records, duplicate_tags),
-		type_name_roots_c(hosted_functions, provides_list, type_table, List.concat(duplicate_records, duplicate_tags)),
+		declared_type_names_c(hosted_functions, provides_list, type_table, duplicate_names),
+		type_name_roots_c(hosted_functions, provides_list, type_table, duplicate_names),
+		|type_id, struct_name| type_names_declared_as_c(type_table, type_id, struct_name),
 	)
 
 # =============================================================================
@@ -604,18 +1019,20 @@ expect name_to_c_field_ident("true") == "true_field"
 # Header Generation
 # =============================================================================
 
-generate_c_header : List(HostedFunctionInfo), TypeTable, List(ProvidesEntry) -> Str
-generate_c_header = |hosted_functions, type_table, provides_list| {
-	duplicate_records = duplicate_record_names(type_table)
-	duplicate_tags = duplicate_tag_union_names(type_table)
-	preferred_names = preferred_type_names_c(hosted_functions, provides_list, type_table, duplicate_records, duplicate_tags)
+generate_c_header : List(HostedFunctionInfo), TypeTable, List(ProvidesEntry), List(Str) -> Str
+generate_c_header = |hosted_functions, type_table, provides_list, duplicate_names| {
+	# Records and tag unions share one namespace, so a Roc name emitted under
+	# shape-derived names is emitted that way for both kinds.
+	duplicate_records = duplicate_names
+	duplicate_tags = duplicate_names
+	preferred_names = preferred_type_names_c(hosted_functions, provides_list, type_table, duplicate_names)
 
-	defines = generate_defines(hosted_functions)
+	defines = generate_defines(hosted_functions, duplicate_names)
 	count = List.len(hosted_functions)
 	type_decls = generate_type_decls(type_table, duplicate_records, duplicate_tags, preferred_names)
 	type_aliases = generate_platform_type_aliases_c(hosted_functions, provides_list, type_table, duplicate_records, duplicate_tags, preferred_names)
 	args_structs = generate_all_args_structs(hosted_functions, type_table, duplicate_records, duplicate_tags, preferred_names)
-	hosted_fn_fields = generate_hosted_fn_fields(hosted_functions)
+	hosted_fn_fields = generate_hosted_fn_fields(hosted_functions, duplicate_names)
 	hosted_symbol_decls = generate_hosted_symbol_decls(hosted_functions, type_table, duplicate_records, duplicate_tags, preferred_names)
 	provided_symbol_decls = generate_provided_symbol_decls(provides_list, type_table, duplicate_records, duplicate_tags, preferred_names)
 
@@ -640,12 +1057,12 @@ generate_c_header = |hosted_functions, type_table, provides_list| {
 		.concat(header_guard_bottom)
 }
 
-generate_defines : List(HostedFunctionInfo) -> Str
-generate_defines = |hosted_functions| {
+generate_defines : List(HostedFunctionInfo), List(Str) -> Str
+generate_defines = |hosted_functions, renamed| {
 	var $defines = ""
 	var $first = Bool.True
 	for func in hosted_functions {
-		upper_name = name_to_upper_ident(func.name)
+		upper_name = hosted_upper_ident_c(renamed, func)
 		if !$first {
 			$defines = Str.concat($defines, "\n")
 		}
@@ -684,7 +1101,7 @@ generate_opaque_type_decls = |type_table, duplicate_records, duplicate_tags, pre
 					}
 				}
 			RocTagUnion(tu) =>
-				if type_table.declares_tag_union($type_id, tu) {
+				if declares_tag_union_struct_c(type_table, $type_id, tu) {
 					type_name = tag_union_struct_name(type_table, preferred_names, duplicate_tags, $type_id, tu)
 					if !(List.contains($seen_names, type_name)) {
 						$seen_names = $seen_names.append(type_name)
@@ -816,14 +1233,15 @@ c_payload_layout_assertions = |type_name, tag_layout, width| {
 		Pointer64 => tag_layout.payload_alignment64
 	}
 	fields = tag_layout.payload_fields
-	Str.concat(static_asserts(type_name, size, alignment), c_record_offset_assertions(type_name, fields, width))
+	Str.concat(static_asserts(type_name, size, alignment), c_record_offset_assertions(type_name, field_idents_c(field_names_c(fields)), fields, width))
 }
 
 generate_payload_type_decl_c : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, Str, AbiTagLayout -> Str
 generate_payload_type_decl_c = |type_table, duplicate_records, duplicate_tags, preferred_names, type_name, tag_layout| {
 	wrap_vector_members = c_needs_vector_union_spelling(type_table, tag_layout.payload_fields)
-	fields64 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, tag_layout.payload_fields, Pointer64, wrap_vector_members)
-	fields32 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, tag_layout.payload_fields, Pointer32, wrap_vector_members)
+	field_idents = field_idents_c(field_names_c(tag_layout.payload_fields))
+	fields64 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, field_idents, tag_layout.payload_fields, Pointer64, wrap_vector_members)
+	fields32 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, field_idents, tag_layout.payload_fields, Pointer32, wrap_vector_members)
 	assertions64 = c_payload_layout_assertions(type_name, tag_layout, Pointer64)
 	assertions32 = c_payload_layout_assertions(type_name, tag_layout, Pointer32)
 	comment = if wrap_vector_members {
@@ -852,6 +1270,9 @@ c_tag_union_layout_assertions = |type_name, abi_layout, width| {
 
 generate_tag_union_type_decl : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, U64, TagUnionRepr, AbiLayout -> Str
 generate_tag_union_type_decl = |type_table, duplicate_records, duplicate_tags, preferred_names, type_id, tu, abi_layout| {
+	tag_names = tag_names_c(tu)
+	tag_constants = tag_constants_c(tag_names)
+	tag_fields = field_idents_c(tag_names)
 	struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_tags, type_id, tu)
 	disc_type = c_discriminant_type(abi_layout.discriminant_size())
 	abi_tags = abi_tag_layouts_c(abi_layout)
@@ -859,13 +1280,13 @@ generate_tag_union_type_decl = |type_table, duplicate_records, duplicate_tags, p
 
 	var $tag_constants = ""
 	var $tag_index = 0
-	for tag in tu.tags {
+	for _tag in tu.tags {
 		separator = if $tag_index == 0 {
 			""
 		} else {
 			","
 		}
-		constant_name = name_to_struct_name(tag.name)
+		constant_name = tag_constants.at($tag_index)
 		$tag_constants = Str.concat($tag_constants, "${separator}\n    ${struct_name}Tag_${constant_name} = ${U64.to_str($tag_index)}")
 		$tag_index = $tag_index + 1
 	}
@@ -885,8 +1306,8 @@ generate_tag_union_type_decl = |type_table, duplicate_records, duplicate_tags, p
 		var $variant_index = 0
 		for tag in tu.tags {
 			tag_layout = abi_tag_at_c(abi_tags, $variant_index)
-			field_name = name_to_c_field_ident(tag.name)
-			constant_name = name_to_struct_name(tag.name)
+			field_name = tag_fields.at($variant_index)
+			constant_name = tag_constants.at($variant_index)
 			has_payload = abi_tag_has_payload_c(tag_layout)
 			if !has_payload {
 				$union_fields = Str.concat($union_fields, "    uint8_t ${field_name};\n")
@@ -958,12 +1379,22 @@ generate_tag_union_type_decl = |type_table, duplicate_records, duplicate_tags, p
 abi_record_fields_c : AbiLayout -> List(AbiFieldLayout)
 abi_record_fields_c = |abi_layout| abi_layout.record_fields()
 
-c_record_offset_assertions : Str, List(AbiFieldLayout), AbiWidth -> Str
-c_record_offset_assertions = |type_name, fields, width| {
+c_record_offset_assertions : Str, TypeNamePlan.MemberIdents, List(AbiFieldLayout), AbiWidth -> Str
+c_record_offset_assertions = |type_name, field_idents, fields, width| {
 	var $assertions = ""
+	var $member_index = 0
 	for field in fields {
+		member_name = if field.is_padding {
+			""
+		} else {
+			field_idents.at($member_index)
+		}
+		if !field.is_padding {
+			$member_index = $member_index + 1
+		}
+
 		if !field.is_padding and !field.is_zero_sized() {
-			field_name = name_to_c_field_ident(field.name)
+			field_name = member_name
 			offset = AbiFieldLayout.offset(field, width)
 			$assertions = Str.concat($assertions, "ROC_STATIC_ASSERT(offsetof(${type_name}, ${field_name}) == ${U64.to_str(offset)}, \"${type_name}.${field_name} offset mismatch\");\n")
 		}
@@ -986,10 +1417,11 @@ generate_record_type_decl = |type_table, duplicate_records, duplicate_tags, pref
 generate_struct_type_decl : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, Str, List(AbiFieldLayout), AbiLayout -> Str
 generate_struct_type_decl = |type_table, duplicate_records, duplicate_tags, preferred_names, type_name, fields, abi_layout| {
 	wrap_vector_members = c_needs_vector_union_spelling(type_table, fields)
-	fields64 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, fields, Pointer64, wrap_vector_members)
-	fields32 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, fields, Pointer32, wrap_vector_members)
-	assertions64 = Str.concat(static_asserts(type_name, abi_layout.size64, abi_layout.alignment64), c_record_offset_assertions(type_name, fields, Pointer64))
-	assertions32 = Str.concat(static_asserts(type_name, abi_layout.size32, abi_layout.alignment32), c_record_offset_assertions(type_name, fields, Pointer32))
+	field_idents = field_idents_c(field_names_c(fields))
+	fields64 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, field_idents, fields, Pointer64, wrap_vector_members)
+	fields32 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, field_idents, fields, Pointer32, wrap_vector_members)
+	assertions64 = Str.concat(static_asserts(type_name, abi_layout.size64, abi_layout.alignment64), c_record_offset_assertions(type_name, field_idents, fields, Pointer64))
+	assertions32 = Str.concat(static_asserts(type_name, abi_layout.size32, abi_layout.alignment32), c_record_offset_assertions(type_name, field_idents, fields, Pointer32))
 	comment = if wrap_vector_members {
 		"${c_vector_union_comment}\n"
 	} else {
@@ -1067,7 +1499,7 @@ add_type_alias_c = |state, alias, target| {
 
 generate_platform_type_aliases_c : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames -> Str
 generate_platform_type_aliases_c = |hosted_functions, provides_list, type_table, duplicate_records, duplicate_tags, preferred_names| {
-	var $state = { content: "", seen: generated_type_names_c(type_table, duplicate_records, duplicate_tags) }
+	var $state = { content: "", seen: preferred_names.declared_names() }
 	name_plan = TypeNamePlan.from_table(type_table)
 
 	for plan in name_plan.alias_plan(type_alias_roots_c(hosted_functions, provides_list, type_table, List.concat(duplicate_records, duplicate_tags))) {
@@ -1093,15 +1525,16 @@ generate_all_args_structs = |hosted_functions, type_table, duplicate_records, du
 
 generate_args_struct : HostedFunctionInfo, TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames -> Str
 generate_args_struct = |func, type_table, duplicate_records, duplicate_tags, preferred_names| {
-	struct_name = name_to_struct_name(func.name)
+	struct_name = hosted_struct_name_c(duplicate_records, func)
 	arg_shape = ArgShape.from_table(type_table)
 
 	match arg_shape.hosted_args(func) {
 		NoMeaningfulArgs => ""
 		SingleRecordArg(record) => {
 			wrap_vector_members = c_needs_vector_union_spelling(type_table, record.fields)
-			fields64 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, record.fields, Pointer64, wrap_vector_members)
-			fields32 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, record.fields, Pointer32, wrap_vector_members)
+			field_idents = field_idents_c(field_names_c(record.fields))
+			fields64 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, field_idents, record.fields, Pointer64, wrap_vector_members)
+			fields32 = c_record_fields_decl(type_table, duplicate_records, duplicate_tags, preferred_names, field_idents, record.fields, Pointer32, wrap_vector_members)
 
 			doc = doc_comment([
 				"Arguments for ${func.name}",
@@ -1176,7 +1609,7 @@ direct_hosted_param_list = |type_table, duplicate_records, duplicate_tags, prefe
 
 	for arg_type_id in arg_shape.abi_visible_type_ids(func.arg_type_ids) {
 		arg_c = if use_args_wrapper {
-			"${name_to_struct_name(func.name)}Args"
+			"${hosted_struct_name_c(duplicate_records, func)}Args"
 		} else {
 			type_id_to_c(type_table, duplicate_records, duplicate_tags, preferred_names, arg_type_id)
 		}
@@ -1244,13 +1677,13 @@ generate_provided_symbol_decls = |provides_list, type_table, duplicate_records, 
 	section("Provided Symbols", $decls)
 }
 
-generate_hosted_fn_fields : List(HostedFunctionInfo) -> Str
-generate_hosted_fn_fields = |hosted_functions| {
+generate_hosted_fn_fields : List(HostedFunctionInfo), List(Str) -> Str
+generate_hosted_fn_fields = |hosted_functions, renamed| {
 	var $fields = ""
 	var $first = Bool.True
 
 	for f in hosted_functions {
-		field_name = name_to_c_field_ident(f.name)
+		field_name = hosted_field_ident_c(renamed, f)
 		c_func_name = name_to_c_func_name(f.name)
 		if !$first {
 			$fields = Str.concat($fields, "\n")

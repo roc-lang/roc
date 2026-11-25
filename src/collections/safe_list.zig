@@ -395,6 +395,15 @@ pub fn SafeList(comptime T: type) type {
             @memcpy(all[i..][0..new_items.len], new_items);
         }
 
+        /// `insert` into room the list already has.
+        pub fn insertAssumeCapacity(self: *SafeList(T), i: usize, item: T) void {
+            std.debug.assert(i <= self.length and self.length < self.capacity);
+            self.length += 1;
+            const all = self.items();
+            std.mem.copyBackwards(T, all[i + 1 ..], all[i .. all.len - 1]);
+            all[i] = item;
+        }
+
         /// Remove and return the item at index `i`, moving every later item down by one.
         pub fn orderedRemove(self: *SafeList(T), i: usize) T {
             const all = self.items();

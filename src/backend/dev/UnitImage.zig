@@ -35,6 +35,7 @@
 //! This file depends on `std` alone, so Roc's build graph can convert the
 //! support objects with it.
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const magic = "RBXU".*;
@@ -675,10 +676,9 @@ pub fn buildObjects(allocator: Allocator, parsed: []const Object, options: Build
     if (block_size > limit or data_size > limit or bss_size > limit or debug_sizes[0] > limit or debug_sizes[1] > limit or debug_sizes[2] > limit) return error.ImageTooLarge;
     if (unwind_sizes[0] > limit or unwind_sizes[1] > limit) return error.ImageTooLarge;
 
-    const block_bytes = try arena.alloc(u8, @intCast(block_size));
-    @memset(block_bytes, 0);
-    const data_bytes = try arena.alloc(u8, @intCast(data_size));
-    @memset(data_bytes, 0);
+    // The block and the writable data are written once, straight from the
+    // objects' sections into the image as it is encoded, and the block's
+    // in-place references are patched there (`Sites.block_patches`).
     var debug_bytes: [3][]u8 = undefined;
     for (&debug_bytes, debug_sizes) |*slot, size| {
         slot.* = try arena.alloc(u8, @intCast(size));
@@ -694,8 +694,7 @@ pub fn buildObjects(allocator: Allocator, parsed: []const Object, options: Build
             const place = place_or_null orelse continue;
             if (section.class == .bss) continue;
             const destination: []u8 = switch (place.region) {
-                .block => block_bytes,
-                .data => data_bytes,
+                .block, .data => continue,
                 .bss => unreachable, // only zero-fill sections are placed there, and they have no bytes
                 .debug_line => debug_bytes[0],
                 .debug_info => debug_bytes[1],
@@ -703,7 +702,7 @@ pub fn buildObjects(allocator: Allocator, parsed: []const Object, options: Build
                 .pdata => unwind_bytes[0],
                 .xdata => unwind_bytes[1],
             };
-            @memcpy(destination[@intCast(place.offset)..][0..section.bytes.len], section.bytes);
+            section.writeContents(destination[@intCast(place.offset)..]);
         }
     }
 
@@ -800,7 +799,6 @@ pub fn buildObjects(allocator: Allocator, parsed: []const Object, options: Build
         .arena = arena,
         .options = options,
         .atom_list = .{ .starts = atom_starts.items },
-        .block_bytes = block_bytes,
     };
     switch (options.atoms) {
         .whole => {},
@@ -964,8 +962,8 @@ pub fn buildObjects(allocator: Allocator, parsed: []const Object, options: Build
     // The header begins the image.
     const header_offset = layout.reserve(@sizeOf(Header), 8);
     std.debug.assert(header_offset == 0);
-    const block_offset = layout.reserve(block_bytes.len, page_size);
-    const data_offset = layout.reserve(data_bytes.len, 16);
+    const block_offset = layout.reserve(@intCast(block_size), page_size);
+    const data_offset = layout.reserve(@intCast(data_size), 16);
     const symbols_offset = layout.reserve(symbol_records.items.len * @sizeOf(Symbol), 8);
     const exports_offset = layout.reserve(exported.items.len * @sizeOf(u32), 8);
     const imports_offset = layout.reserve(import_records.len * @sizeOf(Import), 8);
@@ -992,11 +990,11 @@ pub fn buildObjects(allocator: Allocator, parsed: []const Object, options: Build
         .magic = magic,
         .version = format_version,
         .block_offset = block_offset,
-        .block_size = @intCast(block_bytes.len),
+        .block_size = @intCast(block_size),
         .block_align = @intCast(block_align),
         .text_size = @intCast(text_size),
         .data_offset = data_offset,
-        .data_size = @intCast(data_bytes.len),
+        .data_size = @intCast(data_size),
         .data_align = @intCast(data_align),
         .bss_size = @intCast(bss_size),
         .bss_align = @intCast(bss_align),
@@ -1036,8 +1034,27 @@ pub fn buildObjects(allocator: Allocator, parsed: []const Object, options: Build
         .digest = @splat(0),
     };
     @memcpy(out[0..@sizeOf(Header)], std.mem.asBytes(&header));
-    @memcpy(out[block_offset..][0..block_bytes.len], block_bytes);
-    @memcpy(out[data_offset..][0..data_bytes.len], data_bytes);
+    const block_bytes = out[block_offset..][0..@intCast(block_size)];
+    const data_bytes = out[data_offset..][0..@intCast(data_size)];
+    for (parsed, places) |object, object_places| {
+        for (object.sections, object_places) |section, place_or_null| {
+            const place = place_or_null orelse continue;
+            if (section.class == .bss) continue;
+            const destination = switch (place.region) {
+                .block => block_bytes,
+                .data => data_bytes,
+                .bss, .debug_line, .debug_info, .debug_abbrev, .pdata, .xdata => continue,
+            };
+            section.writeContents(destination[@intCast(place.offset)..]);
+        }
+    }
+    for (sites.block_patches.items) |patch| {
+        const field = block_bytes[@intCast(patch.offset)..][0..@intCast(kindWidth(patch.kind))];
+        if (!applySite(field, patch.kind, patch.total, patch.offset)) {
+            allocator.free(out);
+            return error.RelocationOutOfRange;
+        }
+    }
     @memcpy(out[symbols_offset..][0 .. symbol_records.items.len * @sizeOf(Symbol)], std.mem.sliceAsBytes(symbol_records.items));
     @memcpy(out[exports_offset..][0 .. exported.items.len * @sizeOf(u32)], std.mem.sliceAsBytes(exported.items));
     @memcpy(out[imports_offset..][0 .. import_records.len * @sizeOf(Import)], std.mem.sliceAsBytes(import_records));
@@ -1295,13 +1312,17 @@ const Resolutions = struct {
 
 const PendingImport = struct { weak: bool };
 const PendingSite = struct { import: u32, site: Site };
+/// A field at block offset `offset` that resolves in place to `total`.
+const BlockPatch = struct { offset: u64, kind: SiteKind, total: i64 };
 
 /// The sites, edges and resolved references `build` collects.
 const Sites = struct {
     arena: Allocator,
     options: BuildOptions,
     atom_list: Atoms,
-    block_bytes: []u8,
+    /// The fields resolved in place in the block, patched once the block is
+    /// written into the image.
+    block_patches: std.ArrayList(BlockPatch) = .empty,
     import_index: std.StringArrayHashMapUnmanaged(PendingImport) = .empty,
     import_sites: std.ArrayList(PendingSite) = .empty,
     local_sites: std.ArrayList(Site) = .empty,
@@ -1378,8 +1399,7 @@ const Sites = struct {
             if (relative and site_place.region == .block and local.region == .block) {
                 // The block is placed page aligned, so page and low-bit
                 // arithmetic over block offsets holds wherever it lands.
-                const field = self.block_bytes[@intCast(site_offset)..][0..@intCast(kindWidth(kind))];
-                if (!applySite(field, kind, total, site_offset)) return error.RelocationOutOfRange;
+                try self.block_patches.append(self.arena, .{ .offset = site_offset, .kind = kind, .total = total });
                 try self.noteRef(site_atom.?, site_offset, RefKind.ofSite(kind), target_atom.?, total);
                 return;
             }
@@ -1483,10 +1503,62 @@ pub const SectionClass = enum {
 /// An input object's section, classified.
 pub const Section = struct {
     class: SectionClass,
-    /// The section's contents; empty for zero-fill.
+    /// The section's contents; empty for zero-fill, and for a section whose
+    /// contents are `pieced`.
     bytes: []const u8,
+    /// The contents of a section a writer holds in pieces (its static
+    /// data), instead of `bytes`.
+    pieced: ?PiecedBytes = null,
     size: u64,
     addralign: u64,
+
+    /// Write the section's contents to the start of `destination`.
+    pub fn writeContents(self: Section, destination: []u8) void {
+        if (self.pieced) |pieced| return pieced.writeTo(destination[0..@intCast(pieced.len)]);
+        @memcpy(destination[0..self.bytes.len], self.bytes);
+    }
+};
+
+/// One stretch of a section's contents, `offset` bytes into it.
+pub const SectionPiece = struct {
+    offset: u64,
+    bytes: []const u8,
+};
+
+/// A section's contents as pieces at increasing, non-overlapping offsets,
+/// zero wherever no piece lies. A writer holds its static data this way:
+/// each datum is a piece borrowed from where the datum lives, so writing
+/// the section copies each datum once, straight to where it is written.
+pub const PiecedBytes = struct {
+    len: u64 = 0,
+    pieces: []const SectionPiece = &.{},
+
+    /// The contents of one contiguous run of bytes, held by `piece`.
+    pub fn whole(piece: *const [1]SectionPiece) PiecedBytes {
+        std.debug.assert(piece[0].offset == 0);
+        return .{ .len = piece[0].bytes.len, .pieces = piece };
+    }
+
+    /// Write the contents to `destination`, which is exactly as long.
+    pub fn writeTo(self: PiecedBytes, destination: []u8) void {
+        std.debug.assert(destination.len == self.len);
+        var at: usize = 0;
+        for (self.pieces) |piece| {
+            const start: usize = @intCast(piece.offset);
+            if (builtin.mode == .debug) std.debug.assert(start >= at and start + piece.bytes.len <= destination.len);
+            @memset(destination[at..start], 0);
+            @memcpy(destination[start..][0..piece.bytes.len], piece.bytes);
+            at = start + piece.bytes.len;
+        }
+        @memset(destination[at..], 0);
+    }
+
+    /// Append the contents to `out`, which has room for them.
+    pub fn appendAssumeCapacity(self: PiecedBytes, out: *std.ArrayList(u8)) void {
+        const start = out.items.len;
+        out.items.len += @intCast(self.len);
+        self.writeTo(out.items[start..]);
+    }
 };
 
 /// How an input object's symbol binds across objects.
@@ -3828,4 +3900,22 @@ test "function table entries sort by address" {
     try std.testing.expectEqual(@as(u32, 7), std.mem.readInt(u32, entries[4..8], .little));
     try std.testing.expectEqual(@as(u32, 0x2000), std.mem.readInt(u32, entries[12..16], .little));
     try std.testing.expectEqual(@as(u32, 0x3000), std.mem.readInt(u32, entries[24..28], .little));
+}
+
+test "pieced section contents write each piece in place and zero between them" {
+    const pieces = [_]SectionPiece{
+        .{ .offset = 2, .bytes = "ab" },
+        .{ .offset = 4, .bytes = "cde" },
+        .{ .offset = 9, .bytes = "f" },
+    };
+    const pieced: PiecedBytes = .{ .len = 12, .pieces = &pieces };
+    var written: [12]u8 = @splat(0xaa);
+    pieced.writeTo(&written);
+    try std.testing.expectEqualSlices(u8, "\x00\x00abcde\x00\x00f\x00\x00", &written);
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.testing.allocator);
+    try out.ensureTotalCapacityPrecise(std.testing.allocator, 13);
+    out.appendAssumeCapacity('>');
+    pieced.appendAssumeCapacity(&out);
+    try std.testing.expectEqualSlices(u8, ">\x00\x00abcde\x00\x00f\x00\x00", out.items);
 }

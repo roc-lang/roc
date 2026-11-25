@@ -11,6 +11,21 @@ allocations and callable pointers. They must remain self-contained when installe
 and loaded by another process, rather than borrowing the compiler's addresses or
 assuming a platform link will supply their data.
 
+By default (`--opt=dev` with a cache) `roc glue` compiles no plugin. It builds
+the glue spec as per-module unit images with the dev backend, exactly as a dev
+run of an app builds them, restores from the module cache every unit whose
+inputs are unchanged, and loads the images into the compiler's own process. A
+second run of an unchanged spec therefore does no code generation at all, and
+an edit rebuilds only the modules it touches. `--opt=dev` with `--no-cache` or
+`--specialize=yes` compiles the whole spec with the dev backend on every run,
+and `--opt=size` and `--opt=speed` compile it through LLVM into a plugin
+object on every run. `--verbose` prints how many modules and units the cache
+served.
+
+An installed glue spec (`roc glue <shorthand> ...`) is already compiled, so
+`--opt` does not apply to it: its plugin is loaded as installed. Passing
+`--specialize=no` compiles the installed source instead.
+
 ## Why Glue Code Generates the Interface
 
 The Roc platform ABI is not just a collection of structs that can be copied by
@@ -218,7 +233,8 @@ id are different host types. `TypeTable.duplicate_record_names` and
 `TypeTable.duplicate_tag_union_names` report those names, and
 `TypeTable.shape_suffix` gives each shape its suffix, so the generated names
 are `TypesWrapType2` and `TypesWrapType5` in every language. A name that is
-not shared keeps its bare form.
+not shared keeps its bare form unless a declaration made under it would
+collide with another one (see "One Namespace Per Generated File").
 
 An ambiguous bare name is never emitted, not even as an alias: `TypesWrap`
 would denote one instantiation chosen by table order. Roots that reach such a
@@ -227,6 +243,89 @@ type are aliased by their own position instead (`Take_wrapsArg0`,
 
 Generators must not decide type identity themselves, by comparing names,
 sizes, or field lists.
+
+### One Namespace Per Generated File
+
+A generated file has one namespace for its top-level names, and most names a
+generator puts there are built by joining other names: a module and a type
+(`A.BC` and `AB.C` are both `ABC`), a type and a helper suffix
+(`EventRelease`, `EventTag`, `EventPayload`), a union, a tag, and a suffix
+(`EventPressPayload`), or a hosted function and a suffix (`HostSendArgs`). The
+rest come from the platform header as linker symbols, which the file declares
+under their own names. Nothing about Roc's naming rules keeps two of those
+from being equal, or from equaling a name the runtime support declares,
+imports, or uses for a parameter. `TypeNamePlan` therefore decides who gets
+each name, in this order of precedence:
+
+1. Fixed names. The platform's linker symbols cannot change, and neither can
+   the runtime support's names, which host code is written against. A symbol
+   that a generator cannot declare stops the glue run with an error that names
+   it (`undeclarable_symbol_*`): a keyword of the generator's language, a name
+   in `runtime_type_names_*` or `runtime_value_names_*`, or a name from a
+   family the generator derives from type ids, list item types, or other
+   symbols (RustGlue's `<symbol>_owned`, for example). What a symbol collides
+   with differs by language: a Rust function shares a namespace only with
+   other values, C adds its macros and the standard headers' names, and Zig
+   rejects a top-level name shared with any parameter or local in the file.
+   So each list holds the names for which a symbol of that name makes
+   that generator's output fail to compile, and a declaration, import,
+   parameter, or local added to a generator's runtime support is added to its
+   list.
+2. Names derived from a hosted function or a provided entry: its argument and
+   result types, its index macro and `HostedFunctions` member in C, and the
+   base its aliases are named from (`declared_roots_*`). When one of them is
+   fixed, or is also derived from another function or entry, both take names
+   derived from their hosted index or their place in the provides list:
+   `Host.send_it!` and `Host.sendIt!` become `HostSendItHosted4Args` and
+   `HostSendItHosted5Args`.
+3. Each host type's own name and the names derived from it, which a generator
+   reports through `type_names_declared_as_*`. When one of them is taken by
+   anything above, or is also declared for another host type, the name denotes
+   neither, and `TypeNamePlan.disambiguated` adds the Roc names involved to
+   the ones emitted under shape-derived names.
+4. Preferred names (`HostLoadResult` for the `Try` a hosted `Host.load!`
+   returns), granted only when every name the type would declare under the
+   preferred name is free.
+5. Aliases, emitted only under names nothing above declares. A tag union's
+   `Payload` and `Tag` aliases are emitted only with the alias they are named
+   after.
+
+A generator's `duplicate_names` is the complete list of Roc names, of types,
+hosted functions, and provided entries, that take id-derived names. Two
+declarations whose id-derived names still collide make the glue run fail with
+an error that names both.
+
+So a collision renames the declarations a generator owns, drops the aliases
+that collide, and rejects only a name the platform fixed, and what a generator
+emits always compiles. `issue 13350: declared names stay distinct in every
+generator` builds a platform out of such collisions and compiles all three
+outputs, and `RustGlue rejects a linker symbol it cannot declare` and its
+ZigGlue and CGlue counterparts cover both sides of the symbol rule.
+
+The members of one record or tag union (fields, enum variants, payload union
+members, and the constructors and accessors named after a tag) have a
+namespace of their own, and a generator can spell two of them alike: `fooBar`
+and `foo_bar` are both `foo_bar` in C and Rust, `HTTPError` and `Httperror`
+are both `httperror` in every generator, and in C the tag `Auto` is escaped
+as `auto_field`, which is how `AutoField` is spelled. A spelling two members
+share denotes neither. `TypeNamePlan.member_idents` gives each the spelling
+followed by a marker and its rank among the members that share it, ordered by
+Roc name: `foo_bar_Member0` and `foo_bar_Member1`, or `STag_FooBar_0` and
+`STag_FooBar_1` for C tag constants. The marker holds a character the
+spelling never does (an uppercase letter after lowercase spellings, an
+underscore after C constant names), and a ranked name that is still another
+member's own takes the marker again. Every place that names members asks
+`member_idents` for the whole declaration at once and reads each member's
+identifier by position, so the declaration, its accessors, its constructors,
+and its refcount helpers agree. A member that is
+a reserved word of the generated language is escaped first (`r#type` in Rust,
+`default_field` in C), and the escaped spelling is what is compared. A Rust
+declaration that holds ranked members carries `#[allow(non_snake_case)]`.
+
+The rule covers the names a generator's own output declares or uses. It does
+not cover the rest of what C's included headers declare (`<arm_neon.h>`
+alone declares thousands of intrinsics), so a symbol named like one of those
+still fails in the C compiler.
 
 ## Regenerating the C Header Snapshot
 

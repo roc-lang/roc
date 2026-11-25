@@ -6609,10 +6609,12 @@ fn runExprStatementKernel(
                 open_syntax.peekPayload(StatementAssociatedStatementState).expr_block_depth == expr_blocks.depth())
             {
                 const state = open_syntax.popStatementPayload(.statement_type_associated_statement, StatementAssociatedStatementState);
-                if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
-                    const stmt = self.store.getStatement(completed);
-                    if (stmt == .expr and self.peek() == .CloseCurly) {
-                        try self.pushDiagnostic(.nominal_associated_cannot_have_final_expression, .{
+                const node_tags = self.store.nodes.field(.tag);
+                if (node_tags[@backingInt(completed)] == .expr) {
+                    // A malformed expression already has its own report.
+                    const expr_node = self.store.nodes.field(.data)[@backingInt(completed)].lhs;
+                    if (node_tags[expr_node] != .malformed) {
+                        try self.pushDiagnostic(.associated_block_cannot_have_expression, .{
                             .start = state.statement_pos,
                             .end = self.pos,
                         });

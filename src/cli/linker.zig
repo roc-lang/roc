@@ -109,11 +109,10 @@ pub const WasmOptimizeMode = enum {
 };
 
 /// Default WASM stack size: 8MB
-pub const DEFAULT_WASM_STACK_SIZE: usize = 8 * 1024 * 1024;
+pub const DEFAULT_WASM_STACK_SIZE: u64 = 8 * 1024 * 1024;
 
-/// WebAssembly linear memory is at most 4 GiB.
-const wasm_memory_limit: u64 = 1 << 32;
-const wasm_page_size: u64 = 64 * 1024;
+const wasm_memory_limit = roc_target.wasm_memory.limit;
+const wasm_page_size = roc_target.wasm_memory.page_size;
 
 /// Where a linked wasm module's stack sits relative to its static data.
 pub const WasmStackLayout = union(enum) {
@@ -137,9 +136,9 @@ pub fn wasmStackLayout(global_base: ?u32) WasmStackLayout {
 /// The largest maximum memory a stack-first module may declare. A stack
 /// pointer that wraps below 0 lands at most `stack_size` bytes below 4 GiB, so
 /// memory must never reach those addresses for the first write to trap.
-pub fn stackFirstMaximumMemory(stack_size: usize) usize {
-    const usable = wasm_memory_limit - @min(@as(u64, stack_size), wasm_memory_limit);
-    return @intCast(usable - usable % wasm_page_size);
+pub fn stackFirstMaximumMemory(stack_size: u64) u64 {
+    const usable = wasm_memory_limit - @min(stack_size, wasm_memory_limit);
+    return usable - usable % wasm_page_size;
 }
 
 /// The names a linked wasm module exports so its host can tell a stack
@@ -231,14 +230,19 @@ pub const LinkConfig = struct {
     /// Initial memory size for WASM targets (bytes). This is the amount of linear memory
     /// available to the WASM module at runtime. Must be a multiple of 64KB (WASM page size).
     /// Null lets wasm-ld size memory itself from the data segments plus the stack.
-    wasm_initial_memory: ?usize = null,
+    wasm_initial_memory: ?u64 = null,
 
     /// Maximum memory size for WASM targets (bytes), when the runtime contract needs one.
-    wasm_maximum_memory: ?usize = null,
+    wasm_maximum_memory: ?u64 = null,
+
+    /// Where a link that fails because wasm-ld found a configured memory
+    /// size too small for the program says which size and what it needs.
+    /// Such a link fails with `LinkFailed`.
+    wasm_memory_problem: ?*?WasmMemoryProblem = null,
 
     /// Stack size for WASM targets (bytes). This is the amount of memory reserved for the
     /// call stack within the WASM linear memory. Must be a multiple of 16 (stack alignment).
-    wasm_stack_size: usize = DEFAULT_WASM_STACK_SIZE,
+    wasm_stack_size: u64 = DEFAULT_WASM_STACK_SIZE,
 
     /// Whether the final WASM module imports `env.memory` instead of defining memory.
     wasm_import_memory: bool = false,
@@ -430,6 +434,48 @@ test "undefined compiler symbols are read from every LLD frontend's wording and 
     try std.testing.expectEqual(@as(usize, 0), (try undefinedCompilerSymbols(arena.allocator(), "ld.lld: error: cannot open crt1.o\n")).len);
 }
 
+/// A configured memory size wasm-ld found too small for the program.
+pub const WasmMemoryProblem = struct {
+    what: enum { initial_memory_too_small, maximum_memory_too_small },
+    /// The size the program needs, in bytes.
+    needed: u64,
+};
+
+/// The memory size wasm-ld's diagnostics say the program does not fit, if any.
+///
+/// Only the linker lays the program out, so only it knows the size the
+/// program needs. Reading that size from its diagnostic lets a wasm-ld link
+/// report a memory configuration exactly as a composed link does.
+fn wasmMemoryProblem(diagnostics: []const u8) ?WasmMemoryProblem {
+    var lines = std.mem.splitScalar(u8, diagnostics, '\n');
+    while (lines.next()) |line| {
+        inline for (.{
+            .{ ": error: initial memory too small, ", .initial_memory_too_small },
+            .{ ": error: maximum memory too small, ", .maximum_memory_too_small },
+        }) |wording| {
+            if (std.mem.find(u8, line, wording[0])) |marker_at| {
+                const rest = line[marker_at + wording[0].len ..];
+                const end = std.mem.findScalar(u8, rest, ' ') orelse rest.len;
+                if (std.fmt.parseInt(u64, rest[0..end], 10)) |needed| {
+                    return .{ .what = wording[1], .needed = needed };
+                } else |_| {}
+            }
+        }
+    }
+    return null;
+}
+
+test "wasm-ld's memory diagnostics are read into the size the program needs" {
+    const initial = wasmMemoryProblem("wasm-ld: warning: something else\nwasm-ld: error: initial memory too small, 8388608 bytes needed\n").?;
+    try std.testing.expectEqual(.initial_memory_too_small, initial.what);
+    try std.testing.expectEqual(@as(u64, 8388608), initial.needed);
+    const maximum = wasmMemoryProblem("wasm-ld: error: maximum memory too small, 131072 bytes needed\n").?;
+    try std.testing.expectEqual(.maximum_memory_too_small, maximum.what);
+    try std.testing.expectEqual(@as(u64, 131072), maximum.needed);
+    try std.testing.expectEqual(@as(?WasmMemoryProblem, null), wasmMemoryProblem("wasm-ld: error: roc_app.o: undefined symbol: roc_alloc\n"));
+    try std.testing.expectEqual(@as(?WasmMemoryProblem, null), wasmMemoryProblem(""));
+}
+
 /// Prints the linker's diagnostics and classifies a failed link.
 ///
 /// A compiler bug is normally caught by a debug-only assertion: release builds
@@ -439,9 +485,13 @@ test "undefined compiler symbols are read from every LLD frontend's wording and 
 /// the work of finding and describing it, so one scan of its diagnostics per
 /// link is the entire cost of telling the user whose bug this is and where to
 /// report it. That is worth paying in release builds.
-fn finishLldLink(ctx: *CliCtx, target_format: TargetFormat, outcome: embedded_lld.Outcome) LinkError!void {
+fn finishLldLink(ctx: *CliCtx, target_format: TargetFormat, outcome: embedded_lld.Outcome, wasm_memory_problem: ?*?WasmMemoryProblem) LinkError!void {
     ctx.io.stderr().writeAll(outcome.diagnostics) catch {};
     if (outcome.succeeded) return;
+    if (wasm_memory_problem) |problem| {
+        problem.* = wasmMemoryProblem(outcome.diagnostics);
+        if (problem.* != null) return LinkError.LinkFailed;
+    }
     const symbols = try undefinedCompilerSymbols(ctx.arena, outcome.diagnostics);
     if (symbols.len == 0) return LinkError.LinkFailed;
     ctx.addProblemIgnoreError(.{ .undefined_compiler_symbols = .{
@@ -1121,7 +1171,7 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
         timing.finalization_ns += @intCast(now(ctx.io.std_io) - finalization_start);
     };
     defer ctx.gpa.free(outcome.diagnostics);
-    try finishLldLink(ctx, config.target_format, outcome);
+    try finishLldLink(ctx, config.target_format, outcome, config.wasm_memory_problem);
 
     if (config.target_format == .wasm and config.wasm_optimize != .none and !config.disable_output) {
         optimizeWasmOutput(ctx, config) catch |err| {
@@ -1193,7 +1243,7 @@ pub fn linkWasmObjectsRelocatable(
         .disable_output = false,
     });
     defer ctx.gpa.free(outcome.diagnostics);
-    try finishLldLink(ctx, .wasm, outcome);
+    try finishLldLink(ctx, .wasm, outcome, null);
 }
 
 fn binaryenStatusName(status: c_int) []const u8 {

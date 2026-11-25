@@ -699,6 +699,12 @@ planned: std.ArrayList(CFStmtId) = .empty,
 value_accesses: std.ArrayList(ValueAccesses) = .empty,
 merge_nodes: std.ArrayList(MergeNode) = .empty,
 pairs: std.ArrayList(MergePair) = .empty,
+/// The locals that hold one string literal wherever they are read, in the
+/// order their definitions were walked. During planning, every local a string
+/// literal assignment or a copy of such a local defines.
+str_literal_defs: std.ArrayList(StrLiteralDef) = .empty,
+/// By local: one more than its index in `str_literal_defs`, or zero.
+str_literal_slots: std.ArrayList(u32) = .empty,
 
 const ValueAccesses = struct { start: u32, end: u32, definition: ?u32 = null };
 
@@ -709,6 +715,15 @@ const PartCandidate = struct { target: LocalId, part: LocalId, offset: u32 };
 const MergeNode = struct { position: u32, node: u32, stmt: u32 };
 const MergePair = struct { stmt: u32, local: LocalId };
 
+/// A local whose one definition assigns a string literal, so every read of
+/// it reads that literal.
+const StrLiteralDef = struct {
+    local: LocalId,
+    literal: lir.LIR.StrLiteral,
+    /// The local this one copies, for a copy.
+    source: ?LocalId,
+};
+
 pub fn init(allocator: Allocator) Self {
     return .{ .allocator = allocator, .indexes = StackPlan.Indexes.init(allocator) };
 }
@@ -716,6 +731,8 @@ pub fn init(allocator: Allocator) Self {
 pub fn deinit(self: *Self) void {
     self.indexes.deinit();
     self.reps.deinit(self.allocator);
+    self.str_literal_defs.deinit(self.allocator);
+    self.str_literal_slots.deinit(self.allocator);
     self.places.deinit(self.allocator);
     self.inventory.deinit(self.allocator);
     self.view_states.deinit(self.allocator);
@@ -799,6 +816,27 @@ pub fn ssaLocals(self: *const Self) []const LocalId {
     return self.ssa_locals.items;
 }
 
+/// The string literal `local` holds wherever it is read: its only definition
+/// assigns that literal, or copies a local that holds it. Null for a local
+/// defined any other way. While the procedure is being planned, it answers
+/// for every local some statement defines either way.
+pub fn strLiteral(self: *const Self, local: LocalId) ?lir.LIR.StrLiteral {
+    const raw = @backingInt(local);
+    if (raw >= self.str_literal_slots.items.len) return null;
+    const slot = self.str_literal_slots.items[raw];
+    return if (slot == 0) null else self.str_literal_defs.items[slot - 1].literal;
+}
+
+/// Record that a statement defines `local` as `literal`, directly or by
+/// copying `source`.
+fn noteStrLiteralDef(self: *Self, local: LocalId, literal: lir.LIR.StrLiteral, source: ?LocalId) Allocator.Error!void {
+    const slot = &self.str_literal_slots.items[@backingInt(local)];
+    // A second definition disqualifies the local once definitions are counted.
+    if (slot.* != 0) return;
+    try self.str_literal_defs.append(self.allocator, .{ .local = local, .literal = literal, .source = source });
+    slot.* = @intCast(self.str_literal_defs.items.len);
+}
+
 /// Forget the planned procedure.
 pub fn clear(self: *Self) void {
     for (self.inventory.items) |local| {
@@ -806,6 +844,8 @@ pub fn clear(self: *Self) void {
         self.view_states.items[@backingInt(local)] = .untracked;
     }
     self.inventory.clearRetainingCapacity();
+    for (self.str_literal_defs.items) |def| self.str_literal_slots.items[@backingInt(def.local)] = 0;
+    self.str_literal_defs.clearRetainingCapacity();
     self.deferred.clearRetainingCapacity();
     self.copies.clearRetainingCapacity();
     self.part_candidates.clearRetainingCapacity();
@@ -848,6 +888,11 @@ pub fn plan(
         @memset(self.reps.items[old_len..], .memory);
         try self.addressed.resize(self.allocator, local_count);
         @memset(self.addressed.items[old_len..], false);
+    }
+    if (self.str_literal_slots.items.len < local_count) {
+        const old_len = self.str_literal_slots.items.len;
+        try self.str_literal_slots.resize(self.allocator, local_count);
+        @memset(self.str_literal_slots.items[old_len..], 0);
     }
     if (self.places.items.len < local_count) {
         const old_len = self.places.items.len;
@@ -895,6 +940,11 @@ pub fn plan(
                     .local, .list_reinterpret, .nominal => try self.copies.append(self.allocator, .{ assign.op.source, assign.target }),
                     .discriminant, .field, .tag_payload, .tag_payload_struct => {},
                 }
+                // Only a copy walked after its source's definition is
+                // recorded.
+                if (assign.op.kind == .local) {
+                    if (self.strLiteral(assign.op.source)) |literal| try self.noteStrLiteralDef(assign.target, literal, assign.op.source);
+                }
             },
             .set_local => |assign| try self.copies.append(self.allocator, .{ assign.value, assign.target }),
             .str_match => |s| try self.noteDeferredCaptures(store, s.source, store.stmtRow(s.data).steps),
@@ -914,9 +964,12 @@ pub fn plan(
             .assign_tag => |assign| if (assign.payload) |payload| {
                 try self.notePartCandidate(assign.target, payload, .{ .payload = assign.discriminant }, ops);
             },
+            .assign_literal => |assign| switch (assign.value) {
+                .str_literal => |literal| try self.noteStrLiteralDef(assign.target, literal, null),
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .static_data, .bytes_literal, .proc_ref => {},
+            },
             .init_uninitialized,
             .dyn,
-            .assign_literal,
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
@@ -965,7 +1018,7 @@ pub fn plan(
     const has_memory_candidates = for (self.inventory.items) |local| {
         if (self.view_states.items[@backingInt(local)] == .candidate) break true;
     } else false;
-    if (self.ssa_locals.items.len == 0 and !has_memory_candidates) return;
+    if (self.ssa_locals.items.len == 0 and !has_memory_candidates and self.str_literal_defs.items.len == 0) return;
     try self.classify(store, params, param_count, root, ops);
 }
 
@@ -989,7 +1042,8 @@ const Tracked = struct {
     plan: *const Self,
 
     pub fn tracks(self: Tracked, local: LocalId) bool {
-        return self.plan.rep(local) != .memory or self.plan.view_states.items[@backingInt(local)] != .untracked;
+        return self.plan.rep(local) != .memory or self.plan.view_states.items[@backingInt(local)] != .untracked or
+            self.plan.strLiteral(local) != null;
     }
 
     pub fn statement(_: Tracked, _: *StackPlan, _: u32, _: lir.LIR.CFStmt) Allocator.Error!void {}
@@ -1225,6 +1279,14 @@ fn classify(self: *Self, store: *const LirStore, params: LocalSpan, param_count:
     }
 
     try self.planMemory(store, &stack_plan, params, root, ops);
+
+    // Keep the locals whose candidate definition is their only one, and
+    // whose copied local, walked before them, was kept.
+    for (self.str_literal_defs.items) |def| {
+        const value = stack_plan.values.items[stack_plan.localIndex(def.local).?];
+        const copies_literal = if (def.source) |source| self.strLiteral(source) != null else true;
+        if (value.definitions != 1 or value.mutable or !copies_literal) self.str_literal_slots.items[@backingInt(def.local)] = 0;
+    }
 
     const entry = self.indexes.nodeOf(root).?;
     var any_merged = false;

@@ -955,6 +955,17 @@ pub const VarPool = struct {
         self.ranks.items[@backingInt(rank)].shrinkRetainingCapacity(new_len);
     }
 
+    /// Drop every var from `first` on from the rank lists: the vars a
+    /// discarded probe created and ranked. They were ranked after every older
+    /// var, so they end each list.
+    pub fn dropVarsFrom(self: *Self, first: Var) void {
+        for (self.ranks.items) |*list| {
+            var len = list.items.len;
+            while (len > 0 and @backingInt(list.items[len - 1]) >= @backingInt(first)) len -= 1;
+            list.shrinkRetainingCapacity(len);
+        }
+    }
+
     pub fn getVarsForRank(self: *Self, rank: Rank) []Var {
         if (builtin.mode == .debug) {
             if (@backingInt(rank) > @backingInt(self.current_rank)) {
