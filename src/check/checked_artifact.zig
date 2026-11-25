@@ -13614,6 +13614,9 @@ fn sealCheckedProcedureTemplateRefs(
         &callable_derived_schemes,
     );
     defer collector.deinit();
+    var inert = try skippableInertExprs(allocator, bodies.index(), static_dispatch_plans, .{ &local_schemes, &nested_function_uses, &callable_derived_schemes });
+    defer inert.deinit(allocator);
+    collector.inert = &inert;
 
     // Flatten each template's collected refs into the two shared per-table pools,
     // recording each template's sub-range. Growing the pools as lists keeps the pass
@@ -17681,6 +17684,9 @@ const CheckedTemplateRefCollector = struct {
     visited_patterns: collections.DenseMap(CIR.Pattern.Idx, void),
     visited_statements: collections.DenseMap(CIR.Statement.Idx, void),
     work: std.ArrayList(Work) = .empty,
+    /// Expressions whose whole subtree collects nothing
+    /// (`skippableInertExprs`), so their subtrees are not visited.
+    inert: ?*const std.DynamicBitSetUnmanaged = null,
 
     fn init(
         allocator: Allocator,
@@ -17888,6 +17894,7 @@ const CheckedTemplateRefCollector = struct {
     }
 
     fn visitExpr(self: *CheckedTemplateRefCollector, expr_id: CIR.Expr.Idx) Allocator.Error!void {
+        if (self.inert) |inert| if (inert.isSet(@backingInt(expr_id))) return;
         const entry = try self.visited_exprs.getOrPut(expr_id);
         if (entry.found_existing) return;
 
@@ -18432,6 +18439,9 @@ pub const NestedProcSiteTable = struct {
         builder.resolved_value_refs = resolved_value_refs;
         defer builder.deinitScratch();
         errdefer builder.deinitAll();
+        var inert = try skippableInertExprs(allocator, bodies.index(), static_dispatch_plans, .{&scope_by_checked_expr});
+        defer inert.deinit(allocator);
+        builder.inert = &inert;
 
         for (templates.templates.items()) |*template| {
             const start: u32 = @intCast(builder.template_refs.items.len);
@@ -19173,6 +19183,42 @@ test "issue 11128 procedure template extension stays amortized" {
     try std.testing.expect(bytes.allocated_bytes <= 8 * count * @sizeOf(CheckedProcedureTemplate));
 }
 
+/// The reached expressions a walk over checked bodies may skip whole: the
+/// module index's inert subtrees (`ModuleIndex.inertExprs`) less every
+/// subtree that holds a literal with a conversion plan or one of the
+/// expressions keying `key_maps`, the expressions where the walk records
+/// something of its own.
+fn skippableInertExprs(
+    allocator: Allocator,
+    index: *const ModuleIndex,
+    plans: *const static_dispatch.StaticDispatchPlanTable,
+    key_maps: anytype,
+) Allocator.Error!std.DynamicBitSetUnmanaged {
+    var inert = try index.inertExprs().clone(allocator);
+    errdefer inert.deinit(allocator);
+    for ([_][]const static_dispatch.PlanKV{ plans.numeral_by_node.items(), plans.quote_by_node.items() }) |entries| {
+        for (entries) |entry| clearInertAncestors(index, &inert, entry.key);
+    }
+    inline for (key_maps) |map| {
+        var keys = map.keyIterator();
+        while (keys.next()) |key| {
+            const raw: u32 = if (@TypeOf(key.*) == u32) key.* else @backingInt(key.*);
+            clearInertAncestors(index, &inert, raw);
+        }
+    }
+    return inert;
+}
+
+/// Clear `raw` and each enclosing expression from `inert`. An expression
+/// that is not set has no set ancestor, so the walk stops there.
+fn clearInertAncestors(index: *const ModuleIndex, inert: *std.DynamicBitSetUnmanaged, raw: u32) void {
+    var node = raw;
+    while (node < inert.bit_length and inert.isSet(node)) {
+        inert.unset(node);
+        node = index.parentOf(node) orelse return;
+    }
+}
+
 fn nestedProcScopeMap(
     allocator: Allocator,
     scopes: []const DispatchRefScope,
@@ -19247,6 +19293,9 @@ const NestedProcSiteBuilder = struct {
     callee_lookups: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty,
     /// Each local procedure some lookup names, by its expression.
     local_proc_uses: std.AutoHashMapUnmanaged(CIR.Expr.Idx, LocalProcUse) = .empty,
+    /// Expressions whose whole subtree records nothing
+    /// (`skippableInertExprs`), so their subtrees are not scanned.
+    inert: ?*const std.DynamicBitSetUnmanaged = null,
 
     const LocalProcUse = struct {
         binder: CIR.Pattern.Idx,
@@ -19456,6 +19505,7 @@ const NestedProcSiteBuilder = struct {
         owner: NestedProcSiteOwner,
         suppress_current_site: bool,
     ) Allocator.Error!void {
+        if (self.inert) |inert| if (inert.isSet(@backingInt(expr_id))) return;
         const previous_scope = self.current_scope;
         self.current_scope = nestedProcLexicalScope(
             previous_scope,
@@ -26135,7 +26185,8 @@ fn completeConstantReadersWithWriter(
         if (builtin.mode == .debug) std.debug.assert(root.completion == .evaluate);
         if (root.request_eligibility != .eligible) continue;
         local.clearRetainingCapacity();
-        if (try valueFormWalk(allocator, bodies, root.rootExpr(), &stack, .{ .scope = scope, .local = &local }) != .value_form) continue;
+        const reader_shape = try valueFormWalk(allocator, bodies, root.rootExpr(), &stack, .{ .scope = scope, .local = &local });
+        if (reader_shape != .value_form) continue;
         states[index] = .pending;
         for (local.items) |read| try edges.append(allocator, .{ .read = read, .reader = @intCast(index) });
     }

@@ -7620,6 +7620,15 @@ of a node's shape costs what reading the node costs:
   dispatch-constraint, dispatch-type-root, resolved-reference and
   local-pattern-role passes read those lists instead of scanning every node
   of the module.
+  The index also records each reached node's parent and, bottom up as it
+  finishes each unit, which expressions have a subtree made only of
+  literals and constructions (`ModuleIndex.inertExprs`). Template
+  reference collection and nested procedure site collection skip such a
+  subtree whole, after clearing from that set every subtree holding a
+  literal with a conversion plan or an expression where the walk records
+  something of its own (a generalized local scope, a nested function use,
+  a callable-derived scheme): nothing in what is skipped would be
+  recorded, so every collected list keeps its contents and order.
   The analyses themselves are computed on first demand. A unit's analyses
   keep their memos in dense arrays indexed by position in the unit and
   touch each node of the unit once per analysis; divergence is decided for

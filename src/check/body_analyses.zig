@@ -63,6 +63,75 @@ pub const NodeFlags = packed struct(u8) {
     destructured_alias: bool = false,
 };
 
+/// Whether an expression's own kind is a literal or a construction: it does
+/// nothing but hold its children, apart from converting a literal through
+/// its type's `from_numeral` or `from_quote`.
+fn exprKindIsInert(expr: CIR.Expr) bool {
+    return switch (expr) {
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_str,
+        .e_str_segment,
+        .e_bytes_literal,
+        .e_empty_list,
+        .e_empty_record,
+        .e_zero_argument_tag,
+        .e_list,
+        .e_tuple,
+        .e_tag,
+        .e_record,
+        .e_nominal,
+        .e_nominal_external,
+        => true,
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_deferred_import_ref,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
+        .e_lookup_required,
+        .e_match,
+        .e_if,
+        .e_block,
+        .e_closure,
+        .e_lambda,
+        .e_binop,
+        .e_unary_minus,
+        .e_field_access,
+        .e_method_call,
+        .e_structural_eq,
+        .e_structural_hash,
+        .e_type_method_call,
+        .e_tuple_access,
+        .e_crash,
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_derived_method,
+        .e_return,
+        .e_break,
+        .e_for,
+        .e_hosted_lambda,
+        .e_run_low_level,
+        .e_runtime_error,
+        .e_call,
+        .e_interpolation,
+        .e_dispatch_call,
+        .e_method_eq,
+        .e_type_dispatch_call,
+        => false,
+    };
+}
+
 /// What owns a top-level unit's nodes.
 pub const UnitKind = enum(u8) {
     /// A global value definition: its pattern and expression.
@@ -130,6 +199,14 @@ pub const ModuleIndex = struct {
     binding_statements: []StatementId = &.{},
     /// The reached lambdas (`e_lambda`), in no particular order.
     lambda_exprs: []ExprId = &.{},
+    /// Per node: the node whose children include it, or zero for a unit's
+    /// root and an unreached node.
+    parent_of: []u32 = &.{},
+    /// The reached expressions whose whole subtree is literals and
+    /// constructions (`exprKindIsInert`), so a walk that acts only on
+    /// lookups, calls, procedures, dispatches, and literal conversions finds
+    /// nothing in it beyond those conversions.
+    inert_exprs: std.DynamicBitSetUnmanaged = .{},
 
     /// The index of `env`'s bodies. `promoted_patterns` are the binding
     /// patterns of the module's promoted local procedures.
@@ -157,6 +234,8 @@ pub const ModuleIndex = struct {
         allocator.free(self.lookup_exprs);
         allocator.free(self.binding_statements);
         allocator.free(self.lambda_exprs);
+        allocator.free(self.parent_of);
+        self.inert_exprs.deinit(allocator);
         self.* = .{};
     }
 
@@ -216,6 +295,20 @@ pub const ModuleIndex = struct {
     /// The reached lambdas (`e_lambda`), in no particular order.
     pub fn lambdaExprs(self: *const ModuleIndex) []const ExprId {
         return self.lambda_exprs;
+    }
+
+    /// The node whose children include a reached node, or null for a unit's
+    /// root.
+    pub fn parentOf(self: *const ModuleIndex, raw_node: u32) ?u32 {
+        std.debug.assert(self.nodeKind(raw_node) != .unreached);
+        const parent = self.parent_of[raw_node];
+        return if (parent == 0) null else parent;
+    }
+
+    /// The reached expressions whose whole subtree is literals and
+    /// constructions (`exprKindIsInert`).
+    pub fn inertExprs(self: *const ModuleIndex) *const std.DynamicBitSetUnmanaged {
+        return &self.inert_exprs;
     }
 
     /// The unit that owns a reached node.
@@ -321,6 +414,11 @@ pub const ModuleIndex = struct {
         lookup_exprs: std.ArrayList(u32) = .empty,
         binding_statements: std.ArrayList(StatementId) = .empty,
         lambda_exprs: std.ArrayList(ExprId) = .empty,
+        parent_of: []u32,
+        inert_exprs: std.DynamicBitSetUnmanaged,
+        /// The node whose children are being marked, or zero while a unit's
+        /// roots are.
+        current_parent: u32 = 0,
 
         fn init(allocator: Allocator, env: *const ModuleEnv) Allocator.Error!Builder {
             const node_count = env.store.nodes.len();
@@ -333,6 +431,11 @@ pub const ModuleIndex = struct {
             const unit_of = try allocator.alloc(UnitId, node_count);
             errdefer allocator.free(unit_of);
             const position_in_unit = try allocator.alloc(u32, node_count);
+            errdefer allocator.free(position_in_unit);
+            const parent_of = try allocator.alloc(u32, node_count);
+            errdefer allocator.free(parent_of);
+            @memset(parent_of, 0);
+            const inert_exprs = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
             return .{
                 .allocator = allocator,
                 .env = env,
@@ -340,6 +443,8 @@ pub const ModuleIndex = struct {
                 .node_flags = node_flags,
                 .unit_of = unit_of,
                 .position_in_unit = position_in_unit,
+                .parent_of = parent_of,
+                .inert_exprs = inert_exprs,
             };
         }
 
@@ -362,6 +467,8 @@ pub const ModuleIndex = struct {
             self.lookup_exprs.deinit(self.allocator);
             self.binding_statements.deinit(self.allocator);
             self.lambda_exprs.deinit(self.allocator);
+            self.allocator.free(self.parent_of);
+            self.inert_exprs.deinit(self.allocator);
         }
 
         fn finish(self: *Builder) Allocator.Error!ModuleIndex {
@@ -417,6 +524,8 @@ pub const ModuleIndex = struct {
                 .lookup_exprs = lookup_exprs,
                 .binding_statements = binding_statements,
                 .lambda_exprs = lambda_exprs,
+                .parent_of = self.parent_of,
+                .inert_exprs = self.inert_exprs,
             };
         }
 
@@ -500,6 +609,7 @@ pub const ModuleIndex = struct {
                 .start = @intCast(self.unit_nodes.items.len),
                 .len = 0,
             });
+            self.current_parent = 0;
             return id;
         }
 
@@ -507,6 +617,17 @@ pub const ModuleIndex = struct {
             const owned = &self.units.items[@backingInt(id)];
             owned.len = @as(u32, @intCast(self.unit_nodes.items.len)) - owned.start;
             const nodes = self.unit_nodes.items[owned.start..];
+            // Nodes are listed in marking order, every node after the node
+            // whose children include it, so in reverse each node's whole
+            // subtree is decided before the node is.
+            var remaining = nodes.len;
+            while (remaining > 0) {
+                remaining -= 1;
+                const raw = nodes[remaining];
+                if (self.inert_exprs.isSet(raw)) continue;
+                const parent = self.parent_of[raw];
+                if (parent != 0) self.inert_exprs.unset(parent);
+            }
             std.mem.sort(u32, nodes, {}, std.sort.asc(u32));
             for (nodes, 0..) |raw, position| self.position_in_unit[raw] = @intCast(position);
         }
@@ -521,15 +642,25 @@ pub const ModuleIndex = struct {
             if (self.node_kinds[raw] != .unreached) return;
             self.node_kinds[raw] = kind;
             self.unit_of[raw] = id;
+            self.parent_of[raw] = self.current_parent;
             try self.unit_nodes.append(self.allocator, raw);
             try self.work.append(self.allocator, pending);
         }
 
         fn drain(self: *Builder, id: UnitId) Allocator.Error!void {
             while (self.work.pop()) |pending| switch (pending) {
-                .expr => |expr| try self.markExprChildren(expr, id),
-                .pattern => |pattern| try self.markPatternChildren(pattern, id),
-                .statement => |statement| try self.markStatementChildren(statement, id),
+                .expr => |expr| {
+                    self.current_parent = @backingInt(expr);
+                    try self.markExprChildren(expr, id);
+                },
+                .pattern => |pattern| {
+                    self.current_parent = @backingInt(pattern);
+                    try self.markPatternChildren(pattern, id);
+                },
+                .statement => |statement| {
+                    self.current_parent = @backingInt(statement);
+                    try self.markStatementChildren(statement, id);
+                },
             };
         }
 
@@ -543,7 +674,9 @@ pub const ModuleIndex = struct {
 
         fn markExprChildren(self: *Builder, expr_idx: ExprId, id: UnitId) Allocator.Error!void {
             const store = &self.env.store;
-            switch (store.getExpr(expr_idx)) {
+            const expr = store.getExpr(expr_idx);
+            if (exprKindIsInert(expr)) self.inert_exprs.set(@backingInt(expr_idx));
+            switch (expr) {
                 .e_str => |str| try self.markExprs(store.sliceExpr(str.span), id),
                 .e_list => |list| try self.markExprs(store.sliceExpr(list.elems), id),
                 .e_tuple => |tuple| try self.markExprs(store.sliceExpr(tuple.elems), id),
