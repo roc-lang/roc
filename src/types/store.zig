@@ -671,7 +671,7 @@ pub const Store = struct {
 
         var live_descs = try Survivors.init(gpa, self.descs.backing.len());
         defer live_descs.deinit(gpa);
-        for (0..self.slots.len()) |index| {
+        for (0..self.slots.words.items.len) |index| {
             const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(index));
             const storage = self.findStorageRoot(slotIdxToVar(slot_idx));
             if (storage.storage_var != slotIdxToVar(slot_idx)) self.slots.set(slot_idx, .{ .redirect = storage.storage_var });

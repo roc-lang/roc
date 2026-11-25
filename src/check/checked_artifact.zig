@@ -38591,8 +38591,9 @@ fn testIndexId(comptime Id: type, index: usize) Id {
 test "local procedure uses carry exact producer-recorded dispatch scope ownership" {
     var refs = ResolvedValueRefTable{};
     defer refs.deinit(std.testing.allocator);
-    for (0..2) |offset| {
-        _ = try refs.append(std.testing.allocator, .{
+    var ref_ids: [2]ResolvedValueRefId = undefined;
+    for (&ref_ids, 0..) |*ref_id, offset| {
+        ref_id.* = try refs.append(std.testing.allocator, .{
             .expr = @fromBackingInt(@intCast(10 + offset)),
             .ref = .{ .local_proc = .{
                 .binder = @fromBackingInt(@intCast(20 + offset)),
@@ -38614,11 +38615,11 @@ test "local procedure uses carry exact producer-recorded dispatch scope ownershi
 
     try std.testing.expectEqual(
         @as(?DispatchScopeId, testIndexId(DispatchScopeId, 0)),
-        refs.ref(@fromBackingInt(@intCast(0))).local_proc.dispatch_scope,
+        refs.ref(ref_ids[0]).local_proc.dispatch_scope,
     );
     try std.testing.expectEqual(
         @as(?DispatchScopeId, null),
-        refs.ref(@fromBackingInt(@intCast(1))).local_proc.dispatch_scope,
+        refs.ref(ref_ids[1]).local_proc.dispatch_scope,
     );
 }
 
