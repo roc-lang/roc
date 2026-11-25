@@ -26931,8 +26931,7 @@ slots of one box, so a product holding one has no shape.
 A dynamic tag union has no enumerated shape, but each of its payload reads
 names the variant it reads: the read sits under the arm that matched the tag,
 or follows the constructor that built it. Boxy lowering, which knows the tag's
-payload count from its checked type, reads the only payload of a tag that is
-known to be stored inline, into a
+payload count from its checked type, reads the only payload of a tag, into a
 local whose layout can hold refcounted data, as an `assign_ref`
 `tag_payload_struct` of the dynamic union into independent frame storage
 (backends copy it with the union's descriptor as `dyn.tag_payload_addr` of
@@ -26959,6 +26958,15 @@ none of them is the variant's whole contents, so none can carry the union's
 unit, and such a union is released whole. The certifier models a dynamic
 value without a product shape as one claim, which a complete payload
 projection spends.
+
+A tag's only payload can sit in a recursion box as a boxable field can.
+Lowering marks the read of such a payload `RefExtra.payload_boxable`, and
+where ARC moves the union's unit into the payload it stamps the read exactly
+as it stamps a take of a boxable field; the backend then releases the slot
+with `roc_desc_tag_payload_release_box`. That covers a payload that moves out
+whole. A boxable payload that is itself a product would give up its fields
+one at a time through a view of the box, so lowering reads it as a component
+borrowed from the union instead.
 
 An erased argument product's recorded slot boundaries are authoritative for
 both the start and width of each field read. Its non-owning prefix and scalar

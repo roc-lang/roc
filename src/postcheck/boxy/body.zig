@@ -905,8 +905,8 @@ pub const Builder = struct {
     /// Payload `payload_index` of the active tag of the dynamic tag union
     /// `union_value`, the tag at position `variant` among its union's tags, into
     /// `target`; `only` is set when that payload is its tag's only one. A
-    /// tag's only inline payload that can hold refcounted data is the whole
-    /// active variant, so it is read as an ownership-complete tag payload read of
+    /// tag's only payload that can hold refcounted data is the whole active
+    /// variant, so it is read as an ownership-complete tag payload read of
     /// the union (`tag_payload_struct`) into independent frame storage: ARC can
     /// move the union's unit into it and take its fields. Any other payload
     /// is a component address borrowed from the union.
@@ -917,12 +917,24 @@ pub const Builder = struct {
             .record, .tuple => true,
             .primitive, .empty_record, .tag_union, .list, .box, .nominal, .function, .variable => false,
         };
-        if (only and self.holdsRefcounted(target) and (product or try self.program.layouts.alwaysInlineComponent(payload_ty))) {
+        // A payload whose slot some instantiation stores in a recursion box
+        // moves out whole, and the read that moves it releases the box. A
+        // product would give up its fields one at a time through a view of
+        // that box instead, so such a payload stays a borrowed component.
+        const stored_inline = product or try self.program.layouts.alwaysInlineComponent(payload_ty);
+        const target_local = self.store.getLocal(target);
+        const moves_whole = target_local.product == .none and self.program.result.layouts.getLayout(target_local.layout_idx).tag != .struct_;
+        if (only and self.holdsRefcounted(target) and (stored_inline or moves_whole)) {
             if (self.store.localDyn(target)) |dyn| {
                 if (dyn.storage == .view) self.store.getLocalPtr(target).dyn_storage = .frame;
             }
             const index: layout.VariantIndex = @intCast(variant);
-            return self.emitLinear(.{ .assign_ref = .{ .target = target, .op = LIR.RefOp.tagPayloadStruct(union_value, index, index), .next = undefined } });
+            return self.emitLinear(.{ .assign_ref = .{
+                .target = target,
+                .op = LIR.RefOp.tagPayloadStruct(union_value, index, index),
+                .extra = try self.store.addOptionalStmtRow(LIR.RefExtra, .{ .payload_boxable = !stored_inline }),
+                .next = undefined,
+            } });
         }
         try self.emitDyn(target, .{ .tag_payload_addr = .{ .base = union_value, .desc = desc, .payload_index = payload_index } });
     }

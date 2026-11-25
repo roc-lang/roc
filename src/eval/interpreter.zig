@@ -2496,6 +2496,9 @@ pub const Interpreter = struct {
                     }
                     if (assign.op.kind == .tag_payload_struct and self.store.getLocal(assign.op.source).dyn != null) {
                         try self.execDyn(frame, current, assign.target, .{ .tag_payload_addr = .{ .base = assign.op.source, .desc = self.store.getLocal(assign.op.source).dyn.?.desc, .payload_index = 0 } });
+                        if (self.store.stmtRowOrDefault(assign.extra).releases_recursion_box) {
+                            boxy.compiled.tagPayloadReleaseBox(try self.descAt(frame, self.store.getLocal(assign.op.source).dyn.?.desc), try self.localBytes(frame, assign.op.source), &self.roc_ops);
+                        }
                         current = assign.next;
                         continue;
                     }

@@ -102,17 +102,30 @@ pub fn fieldReleaseBox(desc: *const TypeDesc, base: [*]u8, field_index: u32, ops
     const record = recordOf(desc, ops);
     if (field_index >= record.count) invariant(ops, "a field index past its record's fields");
     const field = record.fieldBySemanticIndex(field_index);
-    if (field.desc.kind != .recursive_box) return;
-    const payload = field.desc.child.?;
+    releaseSlotBox(field.desc, base + field.offset, ops);
+}
+
+/// `fieldReleaseBox` for the only payload of the active variant of the tag
+/// union at `base`.
+pub fn tagPayloadReleaseBox(desc: *const TypeDesc, base: [*]u8, ops: *RocOps) void {
+    const union_desc = unionOf(desc, ops);
+    const variant = &union_desc.variants()[union_desc.readDiscriminant(base)];
+    if (variant.payload_count != 1) invariant(ops, "a moved tag payload that is not its tag's only payload");
+    releaseSlotBox(payloadDesc(variant, 0), base + payloadOffset(variant, 0), ops);
+}
+
+/// Release the component slot `desc` describes once its value has moved out.
+fn releaseSlotBox(desc: *const TypeDesc, slot: [*]u8, ops: *RocOps) void {
+    if (desc.kind != .recursive_box) return;
+    const payload = desc.child.?;
     if (payload.size == 0) return;
-    const slot = base + field.offset;
     const box: ?[*]u8 = @as(*const ?[*]u8, @ptrCast(@alignCast(slot))).*;
     if (utils.isUnique(box, ops)) {
         utils.freeDataPtrC(box, payload.alignment, payload.flags.contains_refcounted, ops);
         return;
     }
     walk.incref(payload, boxPayloadAddr(payload, @ptrCast(@alignCast(slot))), 1, ops);
-    walk.decref(field.desc, slot, ops);
+    walk.decref(desc, slot, ops);
 }
 
 /// The discriminant of the tag union value at `base`.

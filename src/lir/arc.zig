@@ -2815,7 +2815,9 @@ const Inserter = struct {
                     .op = assign.op,
                     .extra = try self.store.addOptionalStmtRow(LIR.RefExtra, .{
                         .take_kind = if (step.take_assign_ref_target) .take else .none,
-                        .releases_recursion_box = step.take_assign_ref_target and self.readsBoxableField(assign.op),
+                        .payload_boxable = self.store.stmtRowOrDefault(assign.extra).payload_boxable,
+                        .releases_recursion_box = step.take_assign_ref_target and
+                            (self.readsBoxableField(assign.op) or self.store.stmtRowOrDefault(assign.extra).payload_boxable),
                         .residual_shell_absent_fields = try self.materializeResidualShellAbsentFields(
                             assign,
                             step.residual_shell_absent_mask,

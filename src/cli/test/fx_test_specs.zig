@@ -141,8 +141,8 @@ pub const io_spec_tests = [_]TestSpec{
     },
     .{
         .roc_file = "test/fx/boxy_boxable_field_take.roc",
-        .io_spec = "0<seed|1>unique: seed tag 2|1>shared: seed kept tag 1 seed kept tag 2|1>items only: 2|1>tag only: seed taken tag|1>nested: seed inner/1 1|1>plain: seed plain 2",
-        .description = "Generic functions move fields out of a record whose slot is a recursion box, releasing the box",
+        .io_spec = "0<seed|1>unique: seed tag 2|1>shared: seed kept tag 1 seed kept tag 2|1>items only: 2|1>tag only: seed taken tag|1>nested: seed inner/1 1|1>payload: 3 0|1>plain: seed plain 2",
+        .description = "Generic functions move fields and tag payloads out of slots that are recursion boxes, releasing the boxes",
     },
     .{
         .roc_file = "test/fx/var_reassign_in_nested_block_expr.roc",

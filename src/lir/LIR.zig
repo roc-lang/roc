@@ -1257,8 +1257,13 @@ pub const RefExtra = struct {
     /// this exact path state; evaluators must not inspect those stale
     /// field bytes as live values.
     residual_shell_absent_fields: U32Span = .empty(),
-    /// Set by ARC on a field take out of a dynamic product whose shape marks
-    /// the field `boxable`. The read moves the field's value into the
+    /// Set by lowering on a `tag_payload_struct` read of a dynamic tag union
+    /// whose payload slot is a recursion box in some instantiation: the
+    /// counterpart of `ProductShape.boxable` for a tag's only payload.
+    payload_boxable: bool = false,
+    /// Set by ARC on a take out of a dynamic value whose slot can be a
+    /// recursion box: a field its product shape marks `boxable`, or a
+    /// `payload_boxable` tag payload. The read moves the value into the
     /// target's own storage, and the slot it leaves is released with the
     /// source's descriptor: a slot that is a recursion box gives up its
     /// allocation, and any other slot holds nothing further.

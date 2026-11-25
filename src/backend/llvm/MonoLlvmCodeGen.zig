@@ -4666,11 +4666,13 @@ pub const MonoLlvmCodeGen = struct {
                 // (`LIR.RefExtra.releases_recursion_box`).
                 if (self.store.stmtRowOrDefault(assign.extra).releases_recursion_box) {
                     const ptr_ty = try self.ptrType();
-                    _ = try self.callBoxyRuntime("roc_desc_field_release_box", .void, &.{ ptr_ty, ptr_ty, .i32 }, &.{
-                        try self.wordValue(self.localDyn(assign.op.source).?.desc),
-                        try self.bytesAddress(assign.op.source),
-                        try self.intValue(.i32, assign.op.index),
-                    });
+                    const desc = try self.wordValue(self.localDyn(assign.op.source).?.desc);
+                    const bytes = try self.bytesAddress(assign.op.source);
+                    switch (assign.op.kind) {
+                        .field => _ = try self.callBoxyRuntime("roc_desc_field_release_box", .void, &.{ ptr_ty, ptr_ty, .i32 }, &.{ desc, bytes, try self.intValue(.i32, assign.op.index) }),
+                        .tag_payload_struct => _ = try self.callBoxyRuntime("roc_desc_tag_payload_release_box", .void, &.{ ptr_ty, ptr_ty }, &.{ desc, bytes }),
+                        .local, .discriminant, .tag_payload, .list_reinterpret, .nominal => unreachable, // ARC stamps only field and whole-payload takes
+                    }
                 }
                 try work.append(wa, .{ .node = assign.next });
             },

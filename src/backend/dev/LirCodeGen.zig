@@ -18101,6 +18101,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.callBoxyRuntime(&builder, "roc_desc_field_release_box");
         }
 
+        /// `generateDynFieldReleaseBox` for a tag union's only payload.
+        fn generateDynTagPayloadReleaseBox(self: *Self, tag_union: LocalId) Allocator.Error!void {
+            try self.spillAllVectorLocals();
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
+            try self.addWordArg(&builder, self.localDyn(tag_union).?.desc);
+            try self.addBytesArg(&builder, tag_union);
+            try self.callBoxyRuntime(&builder, "roc_desc_tag_payload_release_box");
+        }
+
         /// The return of a procedure whose result is dynamic: the value's
         /// bytes are written to the caller's result storage, unless the
         /// procedure built them there.
@@ -21128,6 +21138,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 if (self.store.stmtRowOrDefault(assign.extra).releases_recursion_box) try self.generateDynFieldReleaseBox(assign.op.source, assign.op.index);
                             } else if (assign.op.kind == .tag_payload_struct and self.localDyn(assign.op.source) != null) {
                                 try self.generateDyn(assign.target, .{ .tag_payload_addr = .{ .base = assign.op.source, .desc = self.localDyn(assign.op.source).?.desc, .payload_index = 0 } });
+                                if (self.store.stmtRowOrDefault(assign.extra).releases_recursion_box) try self.generateDynTagPayloadReleaseBox(assign.op.source);
                             } else if (assign.op.kind == .local and self.localDyn(assign.target) != null) {
                                 try self.generateDyn(assign.target, .{ .copy = .{ .src = assign.op.source, .desc = self.localDyn(assign.target).?.desc } });
                             } else {
