@@ -7138,6 +7138,10 @@ carries it as its substitution, and the edge instantiates every literal
 requirement of the binding's entry wrapper at it: the binding's own value
 and every instance the binding's body forwards (`empty` at the binding's
 variable).
+Inspection's call of a `to_inspect` override is a dispatch edge too, held by
+no template: checking records the override's instance at `T -> Str`
+(Inspect Overrides), and where `T` takes no type argument that instance is
+closed, so a polymorphic binding the override is bound to has a root there.
 A use whose instance no edge names (a frame that derives its literal
 arguments from its types, a dictionary entry) reads the root of some module
 holding that constant at that closed type (`Program.constantInstance`,
@@ -7155,8 +7159,27 @@ a forwarded use reads its own literal argument, a word of its type table
 holding an immortal callable that restores the stored instance (the root's
 entry wrapper); a value of a type the body does not know cannot be one table
 word, so the word is the callable, which never recomputes. Under `.lss` a use
-reads the stored instance its edge names, or the one its closed type names,
-or, in a compile-time program evaluating that instance, the instance's slot.
+reads the stored instance its edge names, or, in a compile-time program
+evaluating that instance, the instance's slot. A forwarded use inside a
+generalized local scope that a use of the scope lowers (a scheme alias, `pick
+= color` read by `dbg pick`) is named by that use's edge, outward through the
+edges of the scopes the instance is forwarded through until one names a root
+(`EvidenceChain.entered_by`): the root may be at a type that only the graph's
+sealing would fix in the reading body, as `pick : [Purple, Mauve]` read by
+nothing that closes its row. The lookup of a destructuring scheme alias,
+lowered at a use of a name it binds, is named by that use's edge
+(`BodyContext.destructured_alias_use`). A forwarded use in a specialization of
+a top-level scheme reads the instance its closed type names: the variables
+the instance is forwarded over are the scheme's, which the specialization
+fixes. A read that finds no instance is a compiler bug, with one exception:
+inspection's call of a `to_inspect` override whose owner takes type arguments
+(`T(a) -> Str`) computes the binding it is bound to in place
+(`InstanceRead.open_inspect_override`). Inspection reaches the owner at
+whatever arguments the inspected value has, in generic code too, where
+`Str.inspect` carries no requirement that could forward the instance to a
+caller, so no checked edge can name the instance at a closed type. The
+binding's body computes at the call the value an instance root at that type
+would store, and a `dbg` or `expect` in it runs there too.
 No global mutable state and no adapter or re-tagging wrapper exists. Each
 instance's stored functions are built at that closed instance, so their type
 descriptors are that instance's.
