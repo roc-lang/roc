@@ -7717,6 +7717,12 @@ pub const MonoLlvmCodeGen = struct {
             try self.storeSimdLocal(target, try self.callIntrinsic("llvm.aarch64.neon.tbl1.v16i8", vector_ty, &.{ vector_ty, vector_ty }, &.{ table, indices }));
             return;
         }
+        // simd128's swizzle zeroes a lane whose index is 16 or more, which is
+        // exactly the semantics this op promises.
+        if (self.target.cpu.arch == .wasm32 and std.Target.wasm.featureSetHas(self.target.cpu.features, .simd128)) {
+            try self.storeSimdLocal(target, try self.callIntrinsic("llvm.wasm.swizzle", vector_ty, &.{ vector_ty, vector_ty }, &.{ table, indices }));
+            return;
+        }
         var result = builder.zeroInitValue(vector_ty) catch return error.OutOfMemory;
         for (0..16) |i| {
             const lane_index = builder.intValue(.i32, i) catch return error.OutOfMemory;
