@@ -17235,12 +17235,12 @@ fn varHoldsFunction(self: *Self, var_: Var) Allocator.Error!bool {
         .alias => {},
     }
     if (self.types.isFunctionFree(resolved.var_)) return false;
-    var reached = self.reach_sets.acquire();
-    defer self.reach_sets.release(&reached);
-    var scan = HeldFunctionScan{ .check = self, .visited = &reached };
+    var walked = self.reach_sets.acquire();
+    defer self.reach_sets.release(&walked);
+    var scan = HeldFunctionScan{ .check = self, .visited = &walked };
     const holds = try HeldFunctionScan.Eval.runWith(self.gpa, &self.held_function_scan_scratch, &scan, var_);
     if (!holds) {
-        var visited = reached.keyIterator();
+        var visited = walked.keyIterator();
         while (visited.next()) |reached| try self.types.markFunctionFree(&.{reached.*});
     }
     return holds;
@@ -17257,7 +17257,7 @@ const HeldFunctionScan = struct {
         const resolved = self.types.resolveVar(var_);
         if (scan.visited.contains(resolved.var_)) return .{ .value = false };
         if (self.types.isFunctionFree(resolved.var_)) return .{ .value = false };
-        try scan.visited.put(resolved.var_, {});
+        try scan.visited.insert(resolved.var_);
 
         switch (resolved.desc.content) {
             .err,
@@ -21498,8 +21498,7 @@ const UnresolvedConstraintScan = struct {
             }
             return .{ .value = false };
         }
-        if (scan.visited.contains(resolved.var_)) return .{ .value = false };
-        try scan.visited.put(resolved.var_, {});
+        if (try scan.visited.testAndInsert(resolved.var_)) return .{ .value = false };
 
         switch (resolved.desc.content) {
             .flex => |flex| return .{ .value = scan.unresolved(flex.constraints) },
