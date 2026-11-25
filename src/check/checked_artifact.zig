@@ -23244,8 +23244,10 @@ fn publishLiteralArgumentRoots(
                             .edge = edge.key,
                             .callee_requirement = j,
                             // A constant's instance is stored whatever it
-                            // holds: no reader recomputes it.
-                            .validate_only = !constant_instance and (sealed or !obligation.site.carriesValue() or holds_function),
+                            // holds: no reader recomputes it. A literal's
+                            // root is stored when its value is data alone,
+                            // at a sealed type too.
+                            .validate_only = !constant_instance and (!obligation.site.carriesValue() or holds_function),
                             .holds_function = constant_instance and holds_function,
                             .sealed = sealed,
                             // The canonical instantiation's own constant;
@@ -25936,9 +25938,9 @@ pub const LiteralEdgeEntry = struct {
 /// What a `literal_argument` root converts: the literal requirement
 /// `callee_requirement` of the scheme this module's `edge` instantiates, at
 /// the type `ty`, which is closed unless the root is sealed. A validate-only
-/// root (its value is an interpolation assembler, or holds a function, or the
-/// root is sealed) is evaluated for its outcome and stores no value; its
-/// wrapper, called at runtime, converts the literal.
+/// root (its value is an interpolation assembler, or holds a function) is
+/// evaluated for its outcome and stores no value; its wrapper, called at
+/// runtime, converts the literal.
 pub const LiteralArgumentRoot = struct {
     site: LiteralSite,
     ty: CheckedTypeId,
@@ -25948,7 +25950,8 @@ pub const LiteralArgumentRoot = struct {
     /// The root's type mentions a variable that no scheme around its edge
     /// quantifies, so no use fixes it and it seals: `helper({})` where
     /// `helper : {} -> Sql(a)` and nothing relates the result's `a` to the
-    /// program. A sealed root is validate-only.
+    /// program. A sealed root is stored like any other unless its value
+    /// holds a function.
     sealed: bool,
     /// The root is a polymorphic constant's canonical instance of the
     /// constant itself (its `edge` is the constant's `LiteralEdge.canonical`),
@@ -27155,8 +27158,9 @@ fn publishCompileTimeRootRequestEligibility(
     defer callable.deinit();
     for (roots) |*root| {
         base.dev_diagnostics.countTestWork(.checked_root_eligibility_queries, 1);
-        // A sealed literal argument root is evaluated for its outcome at a
-        // type whose variables no use fixes, and stores no value.
+        // A sealed literal argument root is evaluated at a type whose
+        // variables no use fixes: always requested, although its type is not
+        // concrete.
         if (root.literal_argument) |argument| if (argument.sealed) {
             root.request_eligibility = .eligible;
             continue;

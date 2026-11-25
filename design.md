@@ -5885,7 +5885,10 @@ debug invariant checks it against the serialized `display_module_name_idx`.
 
 The cache id does not include target ABI, pointer width, layout ids, field offsets,
 alignment decisions, backend choice, object format, code-generation options,
-post-check lowering strategy, or post-check specialization state.
+post-check lowering strategy, or post-check specialization state. The checked
+module cache files an entry under that id and the compilation's strategy
+(`coordinator.checkedEntryKey`), because the stored images in it are at the
+layouts of the strategy whose evaluator wrote them (Stored Images).
 
 Module boundaries are cache boundaries only. They must never change the final
 runtime behavior or performance of the compiled program, except for debug
@@ -6969,13 +6972,14 @@ unreached rejected bindings until it reaches one and crashes there, and
 
 ### Polymorphic Constants
 
-A top-level constant, and a constant the compiler hoists into a compile-time
-root, generalizes over every type variable of its type that carries no
-requirement, whether or not it is annotated. Open tag rows and open record
-rows count as such variables. A variable that carries a requirement does not
-generalize: the constant keeps it weak, exactly as a weak value keeps every
-variable, so number literals keep one shared type. A local value binding that
-is not hoisted is weak as before.
+A top-level constant generalizes over every type variable of its type that
+carries no requirement, whether or not it is annotated. Open tag rows and
+open record rows count as such variables. A variable that carries a
+requirement does not generalize: the constant keeps it weak, exactly as a
+weak value keeps every variable, so number literals keep one shared type. A
+local value binding is weak, including one the compiler hoists into a
+compile-time root (a hoisted constant), so a hoisted constant never
+generalizes and has one type (see below).
 
 ```roc
 empty : List(_a)
@@ -7321,7 +7325,10 @@ checked procedure templates for promoted callables. It does not store
 post-check representation data. In particular, the checked module does not
 contain runtime type payloads, value conversion plans, callable-set
 descriptors, boxy `TypeDesc` data, boxy dictionaries, erased callable ABI
-decisions, layout ids, runtime tag discriminants, or backend encodings.
+decisions, layout ids, or backend encodings. A stored image's bytes are the
+value at the 64-bit layout of its stored type, so they hold that layout's
+field offsets and discriminants (Stored Images); nothing else in the checked
+module does.
 
 The method registry is a view over the checked module: each retained method's
 callable type is the solver variable of its definition. Derived declarations
@@ -18982,9 +18989,9 @@ special-cased: a literal at a builtin number type takes the same path as one
 at a user type, through the builtin type's own `from_numeral`.
 
 The checker records the data in every checked module, whatever strategy
-the compilation runs under: the data describes the program, and a checked
-module serves both strategies' programs (its cache identity names no
-strategy).
+the compilation runs under: the data describes the program, and checking
+computes it from the module's typing inputs alone (a checked module's entry
+is filed per strategy only because of its stored images, Stored Images).
 
 - A scheme's *literal requirements* (`CheckedProcedureTemplate.literal_requirements`,
   and the dispatch scope's `literal_requirements`): one per literal of its own body
@@ -19031,14 +19038,14 @@ strategy).
   and nothing reads the argument (`.unbound`). Otherwise, as in
   `x = helper({})` where `helper : {} -> Sql(a)` and nothing fixes `a`, the
   variable seals and the edge is where the literal's type stops changing: it
-  is a *sealed* root (`LiteralArgumentRoot.sealed`), a validate-only
-  `literal_argument` root at the sealed type. Its conversion cannot depend on
-  the variable, which no value of the program has, so compile-time
-  evaluation runs it once and reports its rejection, and the runtime program
-  converts the literal through the root's wrapper. A sealed root is always
-  requested, although its type is not concrete. A polymorphic constant's
-  instance at such a type is a sealed root too, but stored like every other
-  instance, and reads restore it: a constant is never `.unbound`. A
+  is a *sealed* root (`LiteralArgumentRoot.sealed`), a `literal_argument`
+  root at the sealed type. Its conversion cannot depend on the variable,
+  which no value of the program has, so compile-time evaluation runs it once,
+  reports its rejection, and stores its value like any other literal
+  argument root's, which the root's wrapper restores for every reader. A
+  sealed root is always requested, although its type is not concrete. A
+  polymorphic constant's instance at such a type is a sealed root too, and
+  reads restore it: a constant is never `.unbound`. A
   template's `literal_argument_demand` lists the
   roots its edges read, so compile-time evaluation orders them before any
   evaluation of the template.
@@ -31069,7 +31076,9 @@ stored constants is a compiler bug in one of the evaluators or
 in the data they consume.
 
 Both evaluators store the same checked values in `ConstStore`, so a checked
-module holds the same values whichever strategy completed it. A function
+module holds the same values whichever strategy completed it; each strategy
+still files its own entry, since an image is at its writer's layouts and no
+stored value is shared between strategies (Stored Images). A function
 value alone is stored in the representation of the strategy that completed
 it ("Stored Function Values"), which is why a root holding one, and every
 root reading it, belongs to the evaluator of the compilation's own strategy.
