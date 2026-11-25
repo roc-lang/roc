@@ -9684,7 +9684,7 @@ test "published closed roots compose three deep and a closed cyclic root does no
     try types_store.setVarContent(cyclic, .{ .structure = .{ .tuple = .{ .elems = try types_store.appendVars(&.{ cyclic, leaf }) } } });
     const holder = try types_store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try types_store.appendVars(&.{ cyclic, inner }) } } });
 
-    try test_env.module_env.types.canonicalizeAndSeal(test_env.module_env.getIdentStoreConst());
+    try test_env.module_env.types.canonicalizeAndSeal(test_env.module_env.getIdentStoreConst(), test_env.module_env.types.len(), test_env.module_env);
     const source_modules = [_]TypedCIR.Modules.SourceModule{
         .{ .precompiled = test_env.module_env },
     };
@@ -10141,7 +10141,7 @@ test "poisoned record field presence preserves its value type and canonical key"
         .ext = ext_var,
     } } });
 
-    try test_env.module_env.types.canonicalizeAndSeal(test_env.module_env.getIdentStoreConst());
+    try test_env.module_env.types.canonicalizeAndSeal(test_env.module_env.getIdentStoreConst(), test_env.module_env.types.len(), test_env.module_env);
     const source_modules = [_]TypedCIR.Modules.SourceModule{
         .{ .precompiled = test_env.module_env },
     };
@@ -10202,7 +10202,7 @@ test "checked and source keys agree on recursive types however they are unrolled
     try types_store.setVarContent(rolled, try Build.tagUnion(types_store, nil_name, cons_name, &.{ elem, rolled }));
     const once = try types_store.freshFromContent(try Build.tagUnion(types_store, nil_name, cons_name, &.{ elem, rolled }));
 
-    try test_env.module_env.types.canonicalizeAndSeal(test_env.module_env.getIdentStoreConst());
+    try test_env.module_env.types.canonicalizeAndSeal(test_env.module_env.getIdentStoreConst(), test_env.module_env.types.len(), test_env.module_env);
     const source_modules = [_]TypedCIR.Modules.SourceModule{
         .{ .precompiled = test_env.module_env },
     };
@@ -10574,7 +10574,7 @@ test "checked output keeps proven closed empty tag union explicit" {
     const allocator = std.testing.allocator;
     try withEmptyTagCheckedOutputForTest(allocator, struct {
         fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, type_store: *types.Store, explicit_empty: Var) EmptyTagCheckedOutputTestError!void {
-            try type_store.canonicalizeAndSeal(module.identStoreConst());
+            try type_store.canonicalizeAndSeal(module.identStoreConst(), type_store.len(), types.Store.NoSealHolders{});
             var active = try CheckedSourceTypeRoots.init(allocator, module);
             defer active.deinit();
             const test_keys = try attachTestSealedTypes(allocator, module, names, imports, store);
@@ -10590,7 +10590,7 @@ test "checked output keeps redirected proven empty tag union explicit" {
     try withEmptyTagCheckedOutputForTest(allocator, struct {
         fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, type_store: *types.Store, explicit_empty: Var) EmptyTagCheckedOutputTestError!void {
             const redirected = try type_store.freshRedirect(explicit_empty);
-            try type_store.canonicalizeAndSeal(module.identStoreConst());
+            try type_store.canonicalizeAndSeal(module.identStoreConst(), type_store.len(), types.Store.NoSealHolders{});
             var active = try CheckedSourceTypeRoots.init(allocator, module);
             defer active.deinit();
             const test_keys = try attachTestSealedTypes(allocator, module, names, imports, store);
@@ -10613,7 +10613,7 @@ test "independent closed function graphs share one key and add no synthesized ro
             const second_ret = try type_store.freshFromContent(.{ .structure = .empty_tag_union });
             const second_fn = try type_store.freshFromContent(try type_store.mkFuncPure(&.{second_arg}, second_ret));
 
-            try type_store.canonicalizeAndSeal(module.identStoreConst());
+            try type_store.canonicalizeAndSeal(module.identStoreConst(), type_store.len(), types.Store.NoSealHolders{});
             var active = try CheckedSourceTypeRoots.init(allocator, module);
             defer active.deinit();
             const test_keys = try attachTestSealedTypes(allocator, module, names, imports, store);

@@ -7074,10 +7074,11 @@ sealed. It consists of exactly these parts:
   nothing else does.
 
 **Sealing.** Checking canonicalizes the solver store in place as its last
-write before sealing it (`types.Store.canonicalizeAndSeal`). Every slot comes
-to name its class's storage root directly; every variable a descriptor, a type
-argument or record field pool, or a nominal declaration holds becomes its
-class's checked representative; and every record and tag union row absorbs the
+write before sealing it (`types.Store.canonicalizeAndSeal`). Every class comes
+to be stored at its checked representative, which every other member names
+directly; every variable a descriptor, a type argument or record field pool,
+or a nominal declaration holds becomes its class's checked representative;
+and every record and tag union row absorbs the
 rows its extension chain reaches, so a sealed row is flat and its extension is
 never itself a row. Canonicalization walks the slots once, the variable and
 field pools once, and the live descriptors once. The descriptor pass reads
@@ -7091,22 +7092,48 @@ identifies the constraint; a reader resolves it with one slot read.
 
 Canonicalization then closes the gaps the store's dead entries leave. The
 sealed store is the same store with its gaps closed, not a second
-representation. A descriptor survives when a slot names it; a vars, record
-field or tag pool row, or an identity row, survives when a surviving
-descriptor names it, directly or through a tag's argument range, or when a
-nominal declaration's formals name it; a derived-map selection survives with
-its class. Every column keeps its survivors in their original order and slides
-each down to its rank: the number of survivors before it, read from the
-column's liveness bit set as a running count per mask word plus a population
-count within the word. No translation table is built, a survivor only ever
-moves down, so each column closes in place in one forward pass, a range shared
-by two descriptors stays shared, and anything sorted by index stays sorted.
-Marking folds into the descriptor pass above; closing then walks each column
-once, the pools first, rewriting their variables to representatives as they
-move, then the descriptors, then the descriptor index of every root slot. The
-static-dispatch constraint rows and the numeral and interpolation rows they
-name keep their indices, because checking records constraint indices outside
-the store.
+representation. Every class survives, stored at its checked representative:
+the slot pass makes the representative's slot hold the descriptor and every
+other member's slot name the representative. A variable survives when
+canonicalization made it (every variable below the count the store held when
+checking began, which covers every CIR node's variable), when it is a
+class's representative, when a holder outside the store names it, or when a
+surviving static-dispatch constraint or interpolation row names it as its
+own variable. Every variable the store's descriptors, pools and nominal
+declarations hold is a representative, so this is complete. Every other
+variable dies: a merged-away member nothing names. A pool or identity row
+survives when a surviving descriptor names it, directly, through a tag's
+argument range or through a constraint's numeral and interpolation rows, or
+when a nominal declaration's formals name it. A constraint row also survives
+when a holder names its index, or when a holder names its function variable,
+because a reader finds a constraint by the function variable checking
+recorded at its dispatch site. A derived-map selection survives with its
+class.
+
+Every column keeps its survivors in their original order and slides each down
+to its rank: the number of survivors before it, read from the column's
+liveness bit set as a running count per mask word plus a population count
+within the word. No translation table is built, a survivor only ever moves
+down, so each column closes in place in one forward pass, a range shared by
+two descriptors stays shared, and anything sorted by index stays sorted.
+Variables below the canonical count keep their numbers. Marking folds into
+the slot and descriptor passes above, except for one pass over the constraint
+pool that keeps the rows holders reach by function variable. Closing then
+walks each column once: the pools first, rewriting their variables to
+representatives and renumbering them as they move, then the slots, which
+name only representatives and so are renumbered without reading one another,
+then the descriptors.
+
+The holders outside the store are exactly what checking recorded before
+sealing: the `ModuleEnv` side tables and CIR node payloads that name a
+variable or a constraint index (`ModuleEnv.visitSealHolders`) and the
+checking problems (`problem.Store.visitSealHolders`). A holder keeps the
+variable it recorded, representative or not, since several holders identify
+a relation by its raw variable; checking hands each one to sealing once to
+keep it alive and once to renumber it. Snapshots name variables only as keys
+of their own presentation stores and are not holders. Everything published
+after sealing (`CheckedTypeStore`, `sealed_var_facts`, type keys) is sized
+and numbered by the sealed store.
 
 The checked type id of a source type is its checked representative's bit pattern,
 so a rendered payload's children

@@ -15761,10 +15761,37 @@ const PendingRecordDestruct = struct {
 /// defaulting rounds at finalize (see `checkFileInternal`), then canonicalize
 /// and seal the solved type store: every later stage only reads it.
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
+    // Canonicalization made every variable the store holds before checking
+    // fills it up to the module's nodes, and checking makes the rest.
+    const canonical_vars = @max(self.types.len(), self.cir.store.regions.len());
+    const canonical_regions = self.var_regions.mark();
     try self.checkFileInternal(false);
     self.printSpeculationStats();
-    try self.types.canonicalizeAndSeal(self.cir.getIdentStoreConst());
+    try self.sealTypes(canonical_vars);
+    // Sealing renumbered every variable checking made; their regions served
+    // only checking, which has finished.
+    self.var_regions.truncate(canonical_regions);
 }
+
+/// Seal the solved type store, keeping the numbers of the `canonical_vars`
+/// variables canonicalization made and renumbering every variable and
+/// constraint index checking recorded outside the store.
+fn sealTypes(self: *Self, canonical_vars: u64) std.mem.Allocator.Error!void {
+    try self.types.canonicalizeAndSeal(self.cir.getIdentStoreConst(), canonical_vars, SealHolders{ .cir = self.cir, .problems = &self.problems });
+}
+
+/// What checking recorded outside the type store that names its variables
+/// or constraints: the module's side tables and CIR, and the problems.
+/// Snapshots name variables only as their own keys and are not renumbered.
+const SealHolders = struct {
+    cir: *ModuleEnv,
+    problems: *ProblemStore,
+
+    pub fn visitSealHolders(self: SealHolders, visitor: anytype) void {
+        self.cir.visitSealHolders(visitor);
+        self.problems.visitSealHolders(visitor);
+    }
+};
 
 /// The checker's probe sites (`checker_speculation_stats`).
 const SpeculationSite = enum {

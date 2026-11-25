@@ -3024,7 +3024,7 @@ EndOfFile,
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1263) (dispatcher-var 282)
+						(e-interpolation (constraint-fn-var 1076) (dispatcher-var 282)
 							(first
 								(e-literal (string "H, ")))
 							(parts
@@ -3092,18 +3092,18 @@ EndOfFile,
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 1362)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1147)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 1359)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1145)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 1368)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1150)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 1365)
+															(e-dispatch-call (method "minus") (constraint-fn-var 1148)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -3118,11 +3118,11 @@ EndOfFile,
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 1386)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1160)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 1383)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 1158)
 												(receiver
 													(e-num (value "3")))
 												(args

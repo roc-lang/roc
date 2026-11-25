@@ -67,22 +67,22 @@ fib = |n| if (n <= 1) n else fib(n - 1) + fib(n - 2)
 						(e-lookup-local
 							(p-assign (ident "n")))))
 				(if-else
-					(e-dispatch-call (method "plus") (constraint-fn-var 242)
+					(e-dispatch-call (method "plus") (constraint-fn-var 235)
 						(receiver
-							(e-call (constraint-fn-var 238)
+							(e-call (constraint-fn-var 232)
 								(e-lookup-local
 									(p-assign (ident "fib")))
-								(e-dispatch-call (method "minus") (constraint-fn-var 236)
+								(e-dispatch-call (method "minus") (constraint-fn-var 231)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "n"))))
 									(args
 										(e-num (value "1"))))))
 						(args
-							(e-call (constraint-fn-var 241)
+							(e-call (constraint-fn-var 234)
 								(e-lookup-local
 									(p-assign (ident "fib")))
-								(e-dispatch-call (method "minus") (constraint-fn-var 239)
+								(e-dispatch-call (method "minus") (constraint-fn-var 233)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "n"))))
