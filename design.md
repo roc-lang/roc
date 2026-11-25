@@ -7097,15 +7097,26 @@ sealed. It consists of exactly these parts:
 write before sealing it (`types.Store.canonicalizeAndSeal`). Every slot comes
 to name its class's storage root directly; every variable a descriptor, a type
 argument or record field pool, or a nominal declaration holds becomes its
-class's checked representative; and every record and tag union row absorbs the
-rows its extension chain reaches, so a sealed row is flat and its extension is
-never itself a row. Canonicalization walks the slots once, the variable and
-field pools once, and the live descriptors once. The descriptor pass reads
-each descriptor's kind and goes further only for a function, a record or a tag
-union, the kinds that hold a variable inline: it replaces a function's return
-or a row's extension by its representative, and resolving an extension also
-tells whether the extension is itself a row, so a row that must absorb its
-chain is found and flattened in that same step. A static-dispatch constraint
+class's checked representative; and every record and tag union row a reader
+can name absorbs the rows its extension chain reaches, so such a row is flat
+and its extension is never itself a row. Canonicalization walks the slots
+once, the variable and field pools once, and the live descriptors once. The
+descriptor pass reads each descriptor's kind and goes further only for a
+function, a record or a tag union, the kinds that hold a variable inline: it
+replaces a function's return or a row's extension by its representative, and
+resolving an extension also tells whether the extension is itself a row.
+
+When some row's extension is a row, sealing traces the store from its roots
+and flattens each row the trace reaches, before reading that row's children.
+The roots are every variable a reader may start from: each CIR node's own
+variable, each variable a node or a recorded checker output names besides
+(`Check.SealRoots`), and each nominal declaration's backing. Every root
+publication or a later producer reaches is one of these, so no root is added
+after sealing. A row no root reaches keeps its chain and is never read: the
+solver's superseded row parts, such as the tails an inferred union outgrew,
+cost nothing to seal. Reading a sealed row whose extension is a row is a
+compiler bug, asserted in debug builds. When no row's extension is a row,
+there is nothing to flatten and no trace runs. A static-dispatch constraint
 keeps the function variable checking recorded for it, because that variable
 identifies the constraint; a reader resolves it with one slot read. The
 checked type id of a source type is its checked representative's bit pattern,
@@ -12610,6 +12621,120 @@ arithmetic remains polymorphic, and mixed-type user methods stay callable by nam
 nominal and extended rows still guide nested defaulted/optional construction;
 inconsistent shared type variables and unsupported real dispatches still fail.
 
+### The Literal Typing Rule
+
+**A literal checked against an expected type that is fully known is checked
+by one structural walk of literal and type together, and each literal node's
+type is the corresponding part of the expected type.** Where the expected type
+has nothing left to decide, unification can learn nothing from relating the
+literal to it, so the literal gets no skeleton, no expected-shape copy and no
+probe. Whether the rule applies is decided once, up front, from explicit data
+alone (the literal's syntax and the expected type as it stands), before
+anything is written (`literalTypingRuleCovers`, through
+`literalTypingRulePart`); a literal outside the rule is checked by the general
+path (Expected Shape Context) from the start. The rule is never tried and then
+retried: a literal it covers cannot fail it.
+
+The literal forms are: a record construction with no update base and no unset
+field, `{}`, a tuple, a list, `[]`, a tag with or without payloads, a number
+literal with no suffix, and a string literal with no suffix and no
+interpolation.
+
+The rule starts at a literal whose expected type reaches it through a channel
+whose owner relates the literal to that type anyway: the literal's own
+annotation or expected type (its expression frame owns that relation), or a
+cell of an enclosing construction's projected shape, which is already a fresh
+copy that the construction relates to the literal's value. Context that only
+guides, without that relation (a branch body's, a call or method argument's,
+a binary operand's or a nominal constructor backing's contextual type, a
+lambda's seeded result), and a borrowed record-update field, do not start it:
+the general path copies such context and never unifies into it. A tag starts
+no walk of its own either: on the general path a tag relates to the union it
+is expected at by extending it, which leaves the merged union holding the
+tags the literal lacked as an extension row rather than the union's own one
+row; as a part of a literal under the rule, the general path's owning
+relation relates the whole union to the union's one row, which is the
+union's own content. Every literal
+part of a literal under the rule is under the rule with the part of the
+expected type it matched (`ExpectedType.literal_rule`).
+
+The decision walks literal and type together, following aliases, and the
+rule applies exactly when every pair matches:
+
+- a record construction: a record row, ending in the empty record, of exactly
+  the literal's fields, each `required`;
+- `{}`: the empty record, or a row of no fields ending in it;
+- a tuple: a tuple of the literal's arity;
+- a list, and `[]`: the builtin `List` of one argument, which each item
+  matches and which for `[]` is fully known;
+- a tag: a structural tag union of one row closed directly by the empty tag
+  union, holding the tag once with the literal's arity, each payload matching
+  its slot and every other tag's payloads fully known;
+- a number: a builtin number type holding the literal's exact value (the fit
+  Concrete Builtin Numeral Introduction uses);
+- a string: the builtin `Str`.
+
+A type is fully known when nothing reachable from it is a flex variable (a
+deferred literal's, a `_` hole's, a row extension), a rigid, an error, a
+function, or a variable at generalized rank, and every field kind in it is
+decided. Everything else is outside the rule, so the whole literal keeps the
+general path: a nominal type other than `List`, `Str` and the builtin number
+types (a record or tag lifted into a declared nominal), an optional or
+defaulted field whether supplied or omitted, an open or uncommitted row, a
+tag union written over an extension, a number that does not fit or whose type
+is custom, a suffixed literal, an interpolation, a lambda, and any
+sub-expression that is not a literal form (a lookup, a call). A literal part
+outside the rule does not stop a literal nested inside it from starting the
+rule again at its own projected cell.
+
+Each node takes its part by one ordinary unification of its own variable with
+that part, after its children, and a record construction first gives its
+variable its own row. A record construction's fields keep kind variables of
+their own (Field Kinds), and the expected row decides each `required`; the
+relation of a required field to a field of kind variable keeps the kind
+variable as the merged field's kind. Every record a literal built therefore
+reaches its fields through kind variables, which makes its type no ground
+type, and a use of a checked definition shares a type that is not ground
+where it copies a ground one. So under the rule the record's row is its
+fields at their parts, each over a fresh kind already decided `required`,
+ending in the part's own tail, and that row relates to the part: the merged
+row is the one the general path leaves. `{}` builds its row over an
+uncommitted tail exactly as the general path does before relating it.
+
+This is a mechanism (Solver-Mutating Rewrites). Inside the rule every relation
+the general path runs succeeds: the skeleton's relation to the expected copy,
+each item's relation to its cell, the construction's relation to its
+projected row, the list fold, and the owning relation. None of them can decide
+anything, so each node's class ends merged with the corresponding part of the
+expected type, with the content the owning relation's merge gives it, which
+is the content the rule gives it; the only difference is the variables the
+general path minted and merged, so only variable numbering changes. A literal
+the rule covers yields no diagnostic on either path, and a literal that would
+yield one is outside the rule, so every diagnostic, with its region, its
+rendered types and its count, is the general path's.
+
+What the general path leaves behind for such a literal, and what the rule
+leaves:
+
+- every node's own expression frame runs as for any expression (rank,
+  hoisting and value-form roots, dispatch checks, relation operands);
+- a record construction and `{}` are registered as record constructions;
+- a record construction's field kinds are its own variables, decided
+  `required`; they are not listed for `defaultLiteralFieldKinds`, which skips
+  a decided kind;
+- a number literal records its literal plan with no conversion function and a
+  string literal its quote plan, exactly as Concrete Builtin Numeral
+  Introduction and Concrete Builtin Quote Introduction do, so finalization
+  seals both `builtin_direct`;
+- a record construction mints no uncommitted tail: its row ends in the
+  part's committed tail, which is what the tail commits to;
+- no default is absorbed and no literal is deferred, determined or left open,
+  since no field is omitted and every number and string has its builtin type.
+
+`ROC_CHECKER_SPECULATION_STATS` also prints how many literal nodes each module
+checked by the rule and by the general path. Accepted and rejected sides are
+pinned in `literal_typing_rule_test.zig`.
+
 ### Lambda Parameters Seeded From Context
 
 A lambda with no annotation of its own is checked knowing the parameter types
@@ -13722,6 +13847,20 @@ A value's record follows the same rule through its uncommitted tail
 (Uncommitted Record Tails): every use shares it, a use that lifts the record
 into a nominal type does so for every use, and the tail commits to the empty record when the module finishes
 checking.
+
+A field access or direct tag pattern demands a member, not a remainder. Its
+fresh, unnamed tail is existential: when relating the member merely binds its
+payload to the receiver's slot, the joined type is the receiver's row itself.
+No other use observes a copy of its remaining labels. This does not apply to
+a rest binder, a shared extension, or a relation that changes field kind or
+tag provenance.
+
+When a pattern introduces a previously absent tag into an inferred open
+row, every existing reference to the old extension must see the new tag.
+The row may combine adjacent disjoint tag runs, but an absorbed part remains
+valid in isolation, and a marked entry copied out of it remains the same
+diagnostic fact (Pattern-Only Tags). A bounded or rigid tail cannot be
+extended by this rule.
 
 A use of a top-level value is therefore never a widening of the value: no
 row coercion and no `ModuleEnv` record exist for value uses. Where a
@@ -17217,6 +17356,14 @@ Other solved-graph mutations:
   Introduction (above). Uses the existing `unifyWith` descriptor-introduction
   mechanism for a proved concrete builtin conversion; does not mutate the
   context's type or introduce a redirect rule.
+- `literalTypingRulePart`—mechanism: The Literal Typing Rule (above). A
+  read-only match of a literal's syntax against its fully known expected
+  type gates one ordinary unification of each literal node's variable (a
+  record construction's over its own row of decided field kinds) with the
+  part of that type it matched, in place of the general path's skeleton,
+  shape copy and probes, whose relations would all succeed and decide
+  nothing. It writes nothing outside unification, restamps no plan, and
+  introduces no redirect rule.
 - `projectExpectedTagPayload` without a borrowed record field—mechanism:
   Expected Shape Context (above). Every refusal is read before the copy
   writes anything, and the copy cannot fail, so it opens no probe.
@@ -28560,8 +28707,12 @@ is a view of the slots it covers. It holds no unit: its field reads are
 reads of the container's slots offset by the view's first slot, so a
 consumed read through it takes those slots from the container, and its
 other uses observe its whole range. A borrowed tag union read out of a
-container is a view of its one slot: nothing reads through it except an
-ownership-complete payload view, which carries the union's whole unit. It is
+container is a view of its one slot. An owned read of the active variant's
+complete refcounted payload can take that slot at the read. Later reads of
+sibling fields need no retain; a later observation of the same slot or intact
+record still needs its unit. The union view itself remains borrowed unless
+it has a separate reason to hold the slot. A borrowed payload view also
+carries the union's whole unit. The union view is
 held when that payload reaches a consuming operand (the closure read out of a
 record of closures, whose captures are unwrapped and passed to the closure
 body), or when it dismantles through that payload view (the held tag-union

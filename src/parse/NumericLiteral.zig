@@ -201,8 +201,7 @@ pub const Owned = struct {
 /// `exponent10 == 0` and its digits' value in `significand`. `parseScanned`
 /// turns such a record into the same facts `parseInto` derives from the
 /// token's text. When `flags.exact` is clear the literal does not fit this
-/// form (too many digits, an exponent too large, or a spelling whose text
-/// `parseInto` reads differently from the tokenizer) and its facts come from
+/// form (too many digits or an exponent too large) and its facts come from
 /// `parseInto`.
 pub const Scanned = struct {
     significand: u64,

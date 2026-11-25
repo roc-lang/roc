@@ -923,6 +923,25 @@ const Analysis = struct {
         entry.disqualified = true;
     }
 
+    /// An owned projection of the complete active payload can spend the union's
+    /// slot at the read, even if a sibling keeps the containing record live.
+    fn noteOwnedPayloadRead(self: *Analysis, stmt: LIR.CFStmtId, target: LIR.LocalId, op: LIR.RefOp) Error!bool {
+        if (self.solution.isBorrowed(target)) return false;
+        const view = self.unionViewOf(op.source) orelse return false;
+        if (!projectionOwnsAllRc(self.store, self.layouts, op.source, target, encodeProjection(op).?)) return false;
+        // If the view itself takes the union, the ordinary complete-projection
+        // move applies instead. It cannot also dismantle via a borrowed payload.
+        try self.touchUnion(op.source);
+        const candidate = (try self.entryOf(self.resolveRoot(op.source))) orelse return false;
+        try self.recordSlotRead(candidate, .{
+            .stmt = stmt,
+            .target = target,
+            .slots = .{ .first = self.view_base[view], .count = 1 },
+            .through = .some(view),
+        }, self.view_parent.get(view));
+        return true;
+    }
+
     /// A borrowed payload view of a union root that owns every refcounted
     /// byte of the union's active variant. The view is the struct candidate
     /// the union dismantles through; a second view or variant leaves the
@@ -1058,28 +1077,28 @@ const Analysis = struct {
             self.view_parent.set(target_index, through);
             try self.view_candidates.put(self.gpa, target_index, .{ .def_stmt = .some(stmt), .def_count = 1 });
         }
-        try candidate.reads.append(self.gpa, .{
+        try self.recordSlotRead(candidate, .{
             .stmt = stmt,
             .target = target,
             .slots = slots,
             .view = view,
             .through = through,
-        });
+        }, through);
+        return view;
+    }
+
+    fn recordSlotRead(self: *Analysis, candidate: *Candidate, read: Read, enclosing_view: OptionalU32) Error!void {
+        try candidate.reads.append(self.gpa, read);
         // Every view the read went through reads the same slots, from its
         // own base, as the container it becomes when it holds them.
-        var next_enclosing = through.get();
+        var next_enclosing = enclosing_view.get();
         while (next_enclosing) |enclosing| : (next_enclosing = self.view_parent.get(enclosing).get()) {
             const enclosing_candidate = self.view_candidates.getPtr(enclosing) orelse
                 dismantleInvariant("ARC dismantle view had no container entry");
-            try enclosing_candidate.reads.append(self.gpa, .{
-                .stmt = stmt,
-                .target = target,
-                .slots = .{ .first = slots.first - self.view_base[enclosing], .count = slots.count },
-                .view = view,
-                .through = through,
-            });
+            var relative = read;
+            relative.slots.first -= self.view_base[enclosing];
+            try enclosing_candidate.reads.append(self.gpa, relative);
         }
-        return view;
     }
 
     /// A complete read canonicalized to a dominating representative. If the
@@ -2504,12 +2523,12 @@ fn classifyStatement(
                     if (!analysis.isView(stmt.op.source)) analysis.disqualify(stmt.op.source);
                     try analysis.noteDef(stmt.target, current);
                 },
-                .tag_payload => {
-                    try analysis.useWhole(current, stmt.op.source);
-                    try analysis.noteDef(stmt.target, current);
-                },
-                .tag_payload_struct => {
-                    if (!try analysis.notePayloadView(current, stmt.target, stmt.op)) try analysis.useWhole(current, stmt.op.source);
+                .tag_payload, .tag_payload_struct => {
+                    if (!try analysis.noteOwnedPayloadRead(current, stmt.target, stmt.op) and
+                        !(stmt.op.kind == .tag_payload_struct and try analysis.notePayloadView(current, stmt.target, stmt.op)))
+                    {
+                        try analysis.useWhole(current, stmt.op.source);
+                    }
                     try analysis.noteDef(stmt.target, current);
                 },
                 inline .list_reinterpret, .nominal => {

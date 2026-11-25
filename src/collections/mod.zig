@@ -93,6 +93,8 @@ pub const EpochColumn = epochs.EpochColumn;
 /// Append-only columns that grow on virtual reservations without copying.
 pub const ReservedList = @import("ReservedList.zig").ReservedList;
 pub const ReservedColumns = @import("ReservedList.zig").ReservedColumns;
+/// The estimated size at which a `ReservedList` starts on a reservation.
+pub const reserved_list_threshold_bytes = @import("ReservedList.zig").reserve_threshold_bytes;
 /// A mark-and-reset bump allocator for per-pass tables.
 pub const ScratchArena = @import("ScratchArena.zig");
 /// Items grouped by key: CSR for dense keys, sorted pairs for sparse keys.

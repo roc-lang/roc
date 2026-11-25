@@ -59,6 +59,12 @@ pub fn editDistance(a: []const u8, b: []const u8) u32 {
     return prev[b.len];
 }
 
+/// The length of the longest prefix `a` and `b` share. Ranks typo candidates
+/// at equal edit distance.
+pub fn commonPrefixLen(a: []const u8, b: []const u8) usize {
+    return std.mem.findDiff(u8, a, b) orelse a.len;
+}
+
 /// Check if a string is a likely typo of another.
 /// Uses edit distance with length-dependent thresholds.
 pub fn isLikelyTypo(typo_len: usize, correct_len: usize, dist: u32) bool {
@@ -72,6 +78,13 @@ pub fn isLikelyTypo(typo_len: usize, correct_len: usize, dist: u32) bool {
 
     // Longer strings: allow edit distance of 1-2
     return dist <= 2;
+}
+
+test "commonPrefixLen" {
+    try std.testing.expectEqual(@as(usize, 2), commonPrefixLen("T16", "T15"));
+    try std.testing.expectEqual(@as(usize, 2), commonPrefixLen("T16", "T1"));
+    try std.testing.expectEqual(@as(usize, 3), commonPrefixLen("abc", "abc"));
+    try std.testing.expectEqual(@as(usize, 0), commonPrefixLen("abc", "xbc"));
 }
 
 test "editDistance - identical strings" {
