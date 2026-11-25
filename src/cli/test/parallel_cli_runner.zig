@@ -786,6 +786,7 @@ const CustomCase = enum {
     bundle_issue_12565_main_roc_root,
     bundle_file_imports,
     bundle_issue_11608_output_dir_cross_device,
+    bundle_output_dir_through_symlink,
     install_run_roundtrip,
     install_hash_mismatch,
     url_bundle_expanded_limit,
@@ -3921,6 +3922,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "a generic body's table holds descriptors whose overrides its own dictionaries and local methods supply (BoxyScopedTableOverrides, specialized)", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/BoxyScopedTableOverrides.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12899: a body-local nominal over the body's type variable used at two types (specialized)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=yes", "--no-cache" }, .roc_file = "test/cli/Issue12899LocalTypeTwoInstances.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12899: a body-local nominal over the body's type variable used at two types (boxy)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/Issue12899LocalTypeTwoInstances.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "record update carrying a field of an imported nominal's payload through a var (specialized)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=yes", "--no-cache" }, .roc_file = "test/cli/record_update_carried_imported_field/CarriedUpdate.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "record update carrying a field of an imported nominal's payload through a var (boxy)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/record_update_carried_imported_field/CarriedUpdate.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12899: explicit parameters and transitive recursive captures (specialized)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=yes", "--no-cache" }, .roc_file = "test/cli/Issue12899CapturedNominals.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (7) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12899: explicit parameters and transitive recursive captures (boxy)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/Issue12899CapturedNominals.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (7) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "imported recursive nominals restored from stored combinators compare equal (boxy_restored_tree, boxy, interpreter)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/boxy_restored_tree/Main.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
@@ -6250,6 +6253,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc bundle issue 10845 entry point in a subdirectory bundles relative to it", .body = .{ .custom = .bundle_entrypoint_subdirectory } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bundle issue 12565 roots a platform at its main.roc whatever the argument order", .body = .{ .custom = .bundle_issue_12565_main_roc_root } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bundle issue 11608 succeeds when --output-dir is on a different filesystem", .body = .{ .custom = .bundle_issue_11608_output_dir_cross_device } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc bundle reports an --output-dir reached through a symlink relative to the working directory", .body = .{ .custom = .bundle_output_dir_through_symlink } },
     .{ .id = 0, .suite = .subcommands, .name = "a destructure whose pattern rejects its value crashes at runtime instead of panicking the compiler", .backend = .dev, .body = .{ .command = .{ .args = &.{}, .roc_file = "test/cli/destructure_pattern_mismatch.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stdout, .text = "before" }, .{ .stream = .stderr, .text = "crashed" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "failed inline expect exits with code 1 and continues program (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{}, .roc_file = "test/cli/failed_inline_expect.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stdout, .text = "Hello, World!" }, .{ .stream = .stderr, .text = "expect failed" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "failed inline expect exits with code 1 and continues program (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/cli/failed_inline_expect.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stdout, .text = "Hello, World!" }, .{ .stream = .stderr, .text = "Expect failed" } } } } },
@@ -7564,6 +7568,7 @@ fn runCustomCase(
         .bundle_entrypoint_subdirectory => customBundleEntrypointSubdirectory(io, allocator, &env, &timer, timeout_ms),
         .bundle_issue_12565_main_roc_root => customBundleIssue12565MainRocRoot(io, allocator, &env, &timer, timeout_ms),
         .bundle_issue_11608_output_dir_cross_device => customBundleIssue11608OutputDirCrossDevice(io, allocator, &env, &timer, timeout_ms),
+        .bundle_output_dir_through_symlink => customBundleOutputDirThroughSymlink(io, allocator, &env, &timer, timeout_ms),
         .install_run_roundtrip => customInstallRunRoundtrip(io, allocator, &env, &timer, timeout_ms),
         .install_hash_mismatch => customInstallHashMismatch(io, allocator, &env, &timer, timeout_ms),
         .url_bundle_expanded_limit => customUrlBundleExpandedLimit(io, allocator, &env, &timer, timeout_ms),
@@ -19110,8 +19115,14 @@ fn customBundleIssue11608OutputDirCrossDevice(io: std.Io, allocator: Allocator, 
         return failureFromRun(allocator, timer, bundle_result, "roc bundle did not report a created file");
     const created_rest = bundle_result.stdout[created_idx + created_prefix.len ..];
     const created_eol = std.mem.find(u8, created_rest, "\n") orelse created_rest.len;
-    // roc names the archive relative to the directory it ran in.
-    const created_path = std.fs.path.resolve(allocator, &.{ package_dir, std.mem.trim(u8, created_rest[0..created_eol], " \r") }) catch |err|
+    // roc names the archive relative to the directory it ran in. The output
+    // directory is on another filesystem, so the path climbs out of the
+    // working directory; follow it from the real directory, as the operating
+    // system does, so a symlink above the work directory cannot change where
+    // the climb lands.
+    const real_package_dir = std.Io.Dir.cwd().realPathFileAlloc(io, package_dir, allocator) catch |err|
+        return customInfraFailure(allocator, timer, "failed to resolve package directory: {}", .{err});
+    const created_path = std.fs.path.resolve(allocator, &.{ real_package_dir, std.mem.trim(u8, created_rest[0..created_eol], " \r") }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate created path: {}", .{err});
     if (!std.mem.eql(u8, std.fs.path.dirname(created_path) orelse "", out_dir_final)) {
         return customFailure(allocator, timer, "roc bundle reported the archive at '{s}' instead of inside the requested output dir '{s}'", .{ created_path, out_dir_final });
@@ -19131,6 +19142,84 @@ fn customBundleIssue11608OutputDirCrossDevice(io: std.Io, allocator: Allocator, 
         }
     }
 
+    return null;
+}
+
+/// `roc bundle` run from a directory entered through a symlink, with an
+/// `--output-dir` also spelled through that symlink, reports the archive at a
+/// path that names it both when joined onto the working directory as typed
+/// and when followed from the working directory the process actually has. The
+/// symlink sits at a different depth from its target, so comparing a resolved
+/// working directory with an unresolved output path would climb to the wrong
+/// directory.
+fn customBundleOutputDirThroughSymlink(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    if (builtin.os.tag == .windows) {
+        return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "symlinked bundle fixture requires POSIX symlinks" };
+    }
+    const tree = createWorkSubdir(io, allocator, env, "symlink-real/deep/tree") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create real tree: {}", .{err});
+    const real_app = std.fs.path.join(allocator, &.{ tree, "app" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
+    std.Io.Dir.cwd().createDirPath(io, real_app) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create app dir: {}", .{err});
+    const real_out = std.fs.path.join(allocator, &.{ tree, "out" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate out path: {}", .{err});
+    std.Io.Dir.cwd().createDirPath(io, real_out) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create out dir: {}", .{err});
+    const app_main = std.fs.path.join(allocator, &.{ real_app, "main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate main.roc path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_main, .data = "package [Helper] {}\n" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write main.roc: {}", .{err});
+    const app_helper = std.fs.path.join(allocator, &.{ real_app, "Helper.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Helper.roc path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_helper, .data = "module []\n\nhelper : U64\nhelper = 42\n" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write Helper.roc: {}", .{err});
+
+    var work_dir = std.Io.Dir.openDirAbsolute(io, env.dirs.work_dir, .{}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to open work dir: {}", .{err});
+    defer work_dir.close(io);
+    work_dir.symLink(io, "symlink-real/deep/tree", "symlink-link", .{ .is_directory = true }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create symlink: {}", .{err});
+    const link_app = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "symlink-link", "app" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate linked app path: {}", .{err});
+    const link_out = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "symlink-link", "out" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate linked out path: {}", .{err});
+
+    const roc_abs = if (std.fs.path.isAbsolute(roc_binary_path))
+        roc_binary_path
+    else
+        std.fs.path.join(allocator, &.{ project_root_path, roc_binary_path }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate roc path: {}", .{err});
+    const bundle_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before bundling");
+    const bundle_result = runRawInEnv(io, allocator, env, &.{ roc_abs, "bundle", "--output-dir", link_out, "main.roc" }, link_app, null, bundle_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "bundle spawn error: {}", .{err});
+    if (exitCode(bundle_result.term) != 0) {
+        return failureFromRun(allocator, timer, bundle_result, "roc bundle failed with an --output-dir reached through a symlink");
+    }
+    const created_prefix = "Created: ";
+    const created_idx = std.mem.find(u8, bundle_result.stdout, created_prefix) orelse
+        return failureFromRun(allocator, timer, bundle_result, "roc bundle did not report a created file");
+    const created_rest = bundle_result.stdout[created_idx + created_prefix.len ..];
+    const created_eol = std.mem.find(u8, created_rest, "\n") orelse created_rest.len;
+    const shown = std.mem.trim(u8, created_rest[0..created_eol], " \r");
+
+    // Joined onto the working directory as typed, the path names the archive
+    // through the symlink.
+    const typed = std.fs.path.resolve(allocator, &.{ link_app, shown }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate typed path: {}", .{err});
+    if (!std.mem.eql(u8, std.fs.path.dirname(typed) orelse "", link_out)) {
+        return customFailure(allocator, timer, "roc bundle reported '{s}', which names '{s}' from the working directory as typed instead of a file in '{s}'", .{ shown, typed, link_out });
+    }
+    // Followed from the process's real working directory, it names the
+    // archive in the real output directory.
+    const followed = std.fs.path.resolve(allocator, &.{ real_app, shown }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate followed path: {}", .{err});
+    std.Io.Dir.cwd().access(io, followed, .{}) catch |err|
+        return customFailure(allocator, timer, "roc bundle reported '{s}', which does not name the archive from the real working directory: {}", .{ shown, err });
+    if (!std.mem.eql(u8, std.fs.path.dirname(followed) orelse "", real_out)) {
+        return customFailure(allocator, timer, "roc bundle reported '{s}', which names '{s}' from the real working directory instead of a file in '{s}'", .{ shown, followed, real_out });
+    }
     return null;
 }
 

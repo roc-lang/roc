@@ -885,6 +885,11 @@ result_relation_defers: bool = false,
 /// Per probe site, how many of its probes were kept and how many discarded
 /// (`checker_speculation_stats`).
 speculation_counts: SpeculationCounts = @splat(@splat(0)),
+/// How many literal nodes were checked by the general path (index 0) and by
+/// The Literal Typing Rule (index 1) (`checker_speculation_stats`).
+literal_rule_counts: [2]u32 = @splat(0),
+/// Scratch for `literalTypingRuleCovers`: the literal parts still to match.
+literal_rule_pairs: std.ArrayListUnmanaged(LiteralRulePair) = .empty,
 /// Scratch for `widenedReachCopy`: one row's tags, gathered along its
 /// extension chain.
 widened_use_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty,
@@ -1815,6 +1820,8 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .widen_closed_rows_only = .lexical,
     .result_relation_defers = .lexical,
     .speculation_counts = .scratch,
+    .literal_rule_counts = .scratch,
+    .literal_rule_pairs = .scratch,
     .widened_use_tags = .scratch,
     .widened_kept_tail_rows = .scratch,
     .occurs_scratch = .scratch,
@@ -15810,6 +15817,13 @@ fn printSpeculationStats(self: *const Self) void {
             @tagName(site),
             counts[1],
             counts[0],
+        });
+    }
+    if (self.literal_rule_counts[0] != 0 or self.literal_rule_counts[1] != 0) {
+        std.debug.print("checker-literal-rule: {s} rule={d} general={d}\n", .{
+            self.cir.module_name,
+            self.literal_rule_counts[1],
+            self.literal_rule_counts[0],
         });
     }
 }
@@ -30898,6 +30912,10 @@ const Expected = struct {
         /// shape: already a fresh shape copy, which the construction relates
         /// to its value anyway, so a nested construction projects it directly.
         projected_cell: bool = false,
+        /// `var_` is the part of a fully known expected type that an
+        /// enclosing literal under The Literal Typing Rule (design.md)
+        /// matched this literal against; the literal's node takes it.
+        literal_rule: bool = false,
     };
 
     fn none() Expected {
@@ -32390,6 +32408,410 @@ fn commitProjectedStoredValue(
     return self.unifyIfRelates(.projected_stored_value, projected, actual, env, .{});
 }
 
+/// A literal and the part of the expected type it is matched against, pending
+/// in `literalTypingRuleCovers`.
+const LiteralRulePair = struct {
+    expr: CIR.Expr.Idx,
+    var_: Var,
+};
+
+/// The Literal Typing Rule (design.md): the part of the expected type that a
+/// literal's node takes, or null when the literal keeps the general path. The
+/// rule starts at a literal whose own frame or whose enclosing construction
+/// relates it to its expected type anyway, and every literal part of a
+/// literal under the rule carries its part (`ExpectedType.literal_rule`).
+fn literalTypingRulePart(self: *Self, expr_idx: CIR.Expr.Idx, expected: Expected) Allocator.Error!?Var {
+    const part: ?Var = part: {
+        if (expected.contextual_type) |context| {
+            if (context.literal_rule) break :part context.var_;
+        }
+        // A tag starts no walk of its own: relating a tag to the union it is
+        // expected at leaves the tags it lacks as an extension row, which is
+        // not the union's own content (design.md).
+        const expr = self.cir.store.getExpr(expr_idx);
+        if (expr == .e_tag or expr == .e_zero_argument_tag) break :part null;
+        const target = expected.aggregateType() orelse break :part null;
+        if (target.record_field != null) break :part null;
+        if (expected.expected_type == null and !target.projected_cell) break :part null;
+        if (!try self.literalTypingRuleCovers(expr_idx, target.var_)) break :part null;
+        break :part target.var_;
+    };
+    if (comptime base.dev_diagnostics.available) {
+        self.literal_rule_counts[@intFromBool(part != null)] += 1;
+    }
+    return part;
+}
+
+/// Whether The Literal Typing Rule covers `root` against `expected_var`: the
+/// literal and the type match pair by pair, and the type has nothing left to
+/// decide. Reads only; writes nothing.
+fn literalTypingRuleCovers(self: *Self, root: CIR.Expr.Idx, expected_var: Var) Allocator.Error!bool {
+    const pending = &self.literal_rule_pairs;
+    pending.clearRetainingCapacity();
+    try pending.append(self.gpa, .{ .expr = root, .var_ = expected_var });
+    while (pending.pop()) |pair| {
+        if (!try self.literalRuleMatches(pair.expr, pair.var_)) {
+            pending.clearRetainingCapacity();
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Match one literal against one part of the expected type, queueing its
+/// literal parts with the parts of the type they must match.
+fn literalRuleMatches(self: *Self, expr_idx: CIR.Expr.Idx, var_: Var) Allocator.Error!bool {
+    const store = &self.cir.store;
+    const resolved = self.types.resolveThroughAliases(var_);
+    if (resolved.desc.rank == .generalized) return false;
+    const content = resolved.desc.content;
+    const node_idx = ModuleEnv.nodeIdxFrom(expr_idx);
+    switch (store.getExpr(expr_idx)) {
+        .e_record => |record| {
+            if (record.ext != null or store.sliceUnsetFields(record.unsets).len != 0) return false;
+            const fields = store.sliceRecordFields(record.fields);
+            const row_len = self.literalRuleRequiredRowLen(var_) orelse return false;
+            // Canonicalization drops a repeated field, so a literal of as
+            // many distinct fields as the row, each found in it, is exactly
+            // the row.
+            if (row_len != fields.len) return false;
+            for (fields) |field_idx| {
+                const field = store.getRecordField(field_idx);
+                const field_var = self.literalRuleRecordField(var_, field.name) orelse return false;
+                try self.literal_rule_pairs.append(self.gpa, .{ .expr = field.value, .var_ = field_var });
+            }
+            return true;
+        },
+        .e_empty_record => return self.literalRuleRequiredRowLen(var_) == 0,
+        .e_tuple => |tuple| {
+            const elems = store.sliceExpr(tuple.elems);
+            const tuple_type = literalRuleTuple(content) orelse return false;
+            if (tuple_type.elems.len() != elems.len) return false;
+            for (elems, 0..) |elem, index| {
+                try self.literal_rule_pairs.append(self.gpa, .{
+                    .expr = elem,
+                    .var_ = self.types.getVarAt(tuple_type.elems, @intCast(index)),
+                });
+            }
+            return true;
+        },
+        .e_list => |list| {
+            const nominal = content.unwrapNominalType() orelse return false;
+            const elem_var = self.nominalBuiltinPayloadVar(nominal, .list) orelse return false;
+            if (list.elems.span.len == 0) return self.literalRuleTypeIsFullyKnown(elem_var);
+            for (store.sliceExpr(list.elems)) |elem| {
+                try self.literal_rule_pairs.append(self.gpa, .{ .expr = elem, .var_ = elem_var });
+            }
+            return true;
+        },
+        .e_empty_list => {
+            const nominal = content.unwrapNominalType() orelse return false;
+            const elem_var = self.nominalBuiltinPayloadVar(nominal, .list) orelse return false;
+            return self.literalRuleTypeIsFullyKnown(elem_var);
+        },
+        .e_tag => |tag| {
+            const args = store.sliceExpr(tag.args);
+            const slots = try self.literalRuleTagPayloadMatching(var_, tag.name, args.len) orelse return false;
+            for (args, 0..) |arg, index| {
+                try self.literal_rule_pairs.append(self.gpa, .{
+                    .expr = arg,
+                    .var_ = self.types.getVarAt(slots, @intCast(index)),
+                });
+            }
+            return true;
+        },
+        .e_zero_argument_tag => |tag| return try self.literalRuleTagPayloadMatching(var_, tag.name, 0) != null,
+        .e_num => |num| switch (num.kind) {
+            .num_unbound, .int_unbound => return self.literalRuleNumeralFits(node_idx, content),
+            .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => return false,
+        },
+        .e_num_from_numeral => return self.literalRuleNumeralFits(node_idx, content),
+        inline .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => |frac| {
+            if (frac.has_suffix) return false;
+            return self.literalRuleNumeralFits(node_idx, content);
+        },
+        .e_str => |str| {
+            if (self.cir.numericSuffixTargetForNode(node_idx) != null) return false;
+            for (store.sliceExpr(str.span)) |segment| {
+                if (store.getExpr(segment) != .e_str_segment) return false;
+            }
+            const nominal = content.unwrapNominalType() orelse return false;
+            return self.nominalIsBuiltinStrType(nominal);
+        },
+        .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_block, .e_nominal, .e_nominal_external, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return false,
+    }
+}
+
+fn literalRuleTuple(content: Content) ?types_mod.Tuple {
+    return switch (content) {
+        .structure => |flat| switch (flat) {
+            .tuple => |tuple| tuple,
+            .record, .empty_record, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => null,
+        },
+        .flex, .rigid, .alias, .field_presence, .err => null,
+    };
+}
+
+/// Whether an unsuffixed number literal's exact value fits the builtin
+/// number type `content` is (Concrete Builtin Numeral Introduction's fit).
+fn literalRuleNumeralFits(self: *Self, node_idx: CIR.Node.Idx, content: Content) Allocator.Error!bool {
+    if (self.cir.numericSuffixTargetForNode(node_idx) != null) return false;
+    const nominal = content.unwrapNominalType() orelse return false;
+    const kind = self.builtinNumKindFromNominalType(nominal) orelse return false;
+    const literal = self.recordedNumeralLiteralForNode(node_idx);
+    const info = try self.exactNumeralInfoForLiteral(literal, self.cir.store.getNodeRegion(node_idx));
+    return validateBuiltinFromNumeralLiteral(kind, info) == null;
+}
+
+/// The number of fields of the record row `var_` when it ends in the empty
+/// record and every field is `required`; null for any other type.
+fn literalRuleRequiredRowLen(self: *Self, var_: Var) ?usize {
+    var current = var_;
+    var len: usize = 0;
+    while (true) {
+        const resolved = self.types.resolveThroughAliases(current);
+        if (resolved.desc.rank == .generalized) return null;
+        switch (resolved.desc.content) {
+            .structure => |flat| switch (flat) {
+                .empty_record => return len,
+                .record => |record| {
+                    const presences = self.types.getRecordFieldsSlice(record.fields).items(.presence);
+                    for (presences) |presence| {
+                        switch (presence.decode()) {
+                            .required => {},
+                            .unknown => |unknown| switch (self.types.resolveVar(unknown.presence).desc.content) {
+                                .field_presence => |kind| if (kind != .required) return null,
+                                .flex, .rigid, .alias, .structure, .err => return null,
+                            },
+                        }
+                    }
+                    len += presences.len;
+                    current = record.ext;
+                },
+                .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => return null,
+            },
+            .flex, .rigid, .alias, .field_presence, .err => return null,
+        }
+    }
+}
+
+/// The value type of field `name` along the record row `var_`, or null.
+fn literalRuleRecordField(self: *Self, var_: Var, name: Ident.Idx) ?Var {
+    const idents = self.cir.getIdentStoreConst();
+    const wanted = idents.getText(name);
+    var current = var_;
+    while (true) {
+        const record = self.types.resolveThroughAliases(current).desc.content.unwrapRecord() orelse return null;
+        const field_slice = self.types.getRecordFieldsSlice(record.fields);
+        const names = field_slice.items(.name);
+        var lo: usize = 0;
+        var hi = names.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            switch (Ident.textOrder(wanted, idents.getText(names[mid]))) {
+                .lt => hi = mid,
+                .gt => lo = mid + 1,
+                .eq => return field_slice.items(.presence)[mid].typeVar(),
+            }
+        }
+        current = record.ext;
+    }
+}
+
+/// The payload slots of tag `name` in the structural tag union `var_`, or
+/// null unless the union is one row of tags closed directly by the empty tag
+/// union, holds `name` once with `arity` payloads, and every other tag's
+/// payloads are fully known.
+fn literalRuleTagPayloadMatching(self: *Self, var_: Var, name: Ident.Idx, arity: usize) Allocator.Error!?Var.SafeList.Range {
+    const resolved = self.types.resolveThroughAliases(var_);
+    if (resolved.desc.rank == .generalized) return null;
+    const tags = resolved.desc.content.unwrapTagUnion() orelse return null;
+    switch (self.types.resolveVar(tags.ext).desc.content) {
+        .structure => |flat| switch (flat) {
+            .empty_tag_union => {},
+            .record, .empty_record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union => return null,
+        },
+        .flex, .rigid, .alias, .field_presence, .err => return null,
+    }
+    var found: ?Var.SafeList.Range = null;
+    const slice = self.types.getTagsSlice(tags.tags);
+    for (slice.items(.name), slice.items(.args)) |tag_name, args| {
+        if (tag_name.eql(name)) {
+            if (found != null or args.len() != arity) return null;
+            found = args;
+            continue;
+        }
+        for (self.types.sliceVars(args)) |arg| {
+            if (!try self.literalRuleTypeIsFullyKnown(arg)) return null;
+        }
+    }
+    return found;
+}
+
+/// The payload slots of tag `name` in the tag union `var_`, which
+/// `literalRuleTagPayloadMatching` has accepted.
+fn literalRuleTagPayload(self: *Self, var_: Var, name: Ident.Idx) Var.SafeList.Range {
+    const tags = self.types.resolveThroughAliases(var_).desc.content.unwrapTagUnion() orelse
+        unreachable; // the rule's decision accepted a tag union holding `name`
+    const slice = self.types.getTagsSlice(tags.tags);
+    for (slice.items(.name), slice.items(.args)) |tag_name, args| {
+        if (tag_name.eql(name)) return args;
+    }
+    unreachable; // the rule's decision found `name` in the union's one row
+}
+
+/// Whether nothing reachable from `root` is left to decide (The Literal
+/// Typing Rule): no flex variable, rigid, error, function, undecided field
+/// kind, or variable at generalized rank.
+fn literalRuleTypeIsFullyKnown(self: *Self, root: Var) Allocator.Error!bool {
+    const stack = &self.type_visit_stack;
+    const stack_base = stack.items.len;
+    defer stack.items.len = stack_base;
+    self.var_set.clearRetainingCapacity();
+    defer self.var_set.clearRetainingCapacity();
+    try stack.append(self.gpa, root);
+    while (stack.items.len > stack_base) {
+        const resolved = self.types.resolveVar(stack.pop().?);
+        if ((try self.var_set.getOrPut(resolved.var_)).found_existing) continue;
+        if (resolved.desc.rank == .generalized) return false;
+        switch (resolved.desc.content) {
+            .flex, .rigid, .err => return false,
+            .field_presence => {},
+            .alias => |alias| try stack.append(self.gpa, self.types.getAliasBackingVar(alias)),
+            .structure => |flat| switch (flat) {
+                .empty_record, .empty_tag_union => {},
+                .record => |record| {
+                    const presences = self.types.getRecordFieldsSlice(record.fields).items(.presence);
+                    for (presences) |presence| {
+                        switch (presence.decode()) {
+                            .required => |value| try stack.append(self.gpa, value),
+                            .unknown => |unknown| {
+                                try stack.append(self.gpa, unknown.var_);
+                                try stack.append(self.gpa, unknown.presence);
+                            },
+                        }
+                    }
+                    try stack.append(self.gpa, record.ext);
+                },
+                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .tag_union => |tags| {
+                    for (self.types.getTagsSlice(tags.tags).items(.args)) |args| {
+                        try stack.appendSlice(self.gpa, self.types.sliceVars(args));
+                    }
+                    try stack.append(self.gpa, tags.ext);
+                },
+                .fn_pure, .fn_effectful, .fn_unbound => return false,
+            },
+        }
+    }
+    return true;
+}
+
+/// The value type of supplied field `name` in the row the rule's decision
+/// accepted.
+fn literalRuleSuppliedField(self: *Self, part: Var, name: Ident.Idx) Var {
+    return self.literalRuleRecordField(part, name) orelse
+        unreachable; // the rule's decision found every supplied field in the row
+}
+
+/// Give a record construction under The Literal Typing Rule its part of the
+/// expected type. Its fields keep kind variables of their own (design.md
+/// "Field Kinds"), which the expected row decides `required`, so the row the
+/// record relates to its part is its fields over those decided kinds, ending
+/// in the part's own tail.
+fn takeLiteralRuleRecord(
+    self: *Self,
+    expr_var: Var,
+    region: Region,
+    source_fields: []const CIR.RecordField.Idx,
+    part: Var,
+    env: *Env,
+) Allocator.Error!void {
+    const fields_top = self.scratch_record_fields.top();
+    defer self.scratch_record_fields.clearFrom(fields_top);
+    for (source_fields) |field_idx| {
+        const field = self.cir.store.getRecordField(field_idx);
+        try self.scratch_record_fields.append(.{
+            .name = field.name,
+            .presence = .unknown(
+                try self.freshFromContent(.{ .field_presence = .required }, env, region),
+                ModuleEnv.varFrom(field.value),
+            ),
+        });
+    }
+    const fields = self.scratch_record_fields.sliceFromStart(fields_top);
+    std.mem.sort(types_mod.RecordField, fields, self.cir.getIdentStore(), types_mod.RecordField.sortByNameAsc);
+    try self.unifyWith(expr_var, .{ .structure = .{ .record = .{
+        .fields = try self.types.appendRecordFields(fields),
+        .ext = self.literalRuleRowTail(part),
+    } } }, env);
+    try self.takeLiteralRulePart(expr_var, part, env);
+}
+
+/// The final extension of the record row the rule's decision accepted: the
+/// empty record its chain ends in.
+fn literalRuleRowTail(self: *Self, part: Var) Var {
+    var current = part;
+    while (true) {
+        const resolved = self.types.resolveThroughAliases(current);
+        const record = resolved.desc.content.unwrapRecord() orelse return resolved.var_;
+        current = record.ext;
+    }
+}
+
+/// The item type of the builtin `List` the rule's decision accepted.
+fn literalRuleListElem(self: *Self, part: Var) Var {
+    const nominal = self.types.resolveThroughAliases(part).desc.content.unwrapNominalType() orelse
+        unreachable; // the rule's decision accepted a builtin List
+    return self.nominalBuiltinPayloadVar(nominal, .list) orelse
+        unreachable; // the rule's decision accepted a builtin List of one argument
+}
+
+/// Item `index` of the tuple the rule's decision accepted.
+fn literalRuleTupleElem(self: *Self, part: Var, index: u32) Var {
+    const tuple = literalRuleTuple(self.types.resolveThroughAliases(part).desc.content) orelse
+        unreachable; // the rule's decision accepted a tuple of this arity
+    return self.types.getVarAt(tuple.elems, index);
+}
+
+/// A literal form with no child expressions that The Literal Typing Rule
+/// covers, or null.
+const LiteralRuleLeaf = enum { numeral, empty_record, empty_list, zero_argument_tag };
+
+fn literalRuleLeaf(expr: CIR.Expr) ?LiteralRuleLeaf {
+    return switch (expr) {
+        .e_num => |num| switch (num.kind) {
+            .num_unbound, .int_unbound => .numeral,
+            .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => null,
+        },
+        .e_num_from_numeral => .numeral,
+        inline .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => |frac| if (frac.has_suffix) null else .numeral,
+        .e_empty_record => .empty_record,
+        .e_empty_list => .empty_list,
+        .e_zero_argument_tag => .zero_argument_tag,
+        .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_list, .e_tuple, .e_record, .e_tag, .e_match, .e_if, .e_call, .e_block, .e_nominal, .e_nominal_external, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => null,
+    };
+}
+
+/// The expectation a literal part of a literal under The Literal Typing Rule
+/// is checked with: the part of the expected type it matched.
+fn literalRuleChildExpected(frame: *const ExprCheckFrame, part: Var) Expected {
+    return frame.nested_expected.forStatement().withContextualType(.{
+        .var_ = part,
+        .context = frame.nested_expected.aggregateType().?.context,
+        .projected_cell = true,
+        .literal_rule = true,
+    });
+}
+
+/// Give a literal under The Literal Typing Rule its part of the expected type:
+/// one unification of its node's variable, which nothing else constrains.
+fn takeLiteralRulePart(self: *Self, expr_var: Var, part: Var, env: *Env) Allocator.Error!void {
+    const result = try self.unify(part, expr_var, env);
+    std.debug.assert(result == .unified);
+}
+
 /// A frame is begun, finished, and aborted by one checker against the one
 /// `Env` of the activity run it belongs to; both are passed to its methods.
 const ExprCheckFrame = struct {
@@ -33213,6 +33635,27 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
     const expr_region = frame.expr_region;
     const expr_var = frame.expr_var;
 
+    if (literalRuleLeaf(expr)) |leaf| {
+        if (try self.literalTypingRulePart(expr_idx, frame.nested_expected)) |part| {
+            switch (leaf) {
+                .numeral => {
+                    try self.takeLiteralRulePart(expr_var, part, env);
+                    try self.cir.store.recordLiteralDispatchPlan(ModuleEnv.nodeIdxFrom(expr_idx), .numeral, expr_var, null, null);
+                },
+                .empty_record => {
+                    try self.record_constructions.append(self.gpa, expr_idx);
+                    try self.unifyWith(expr_var, .{ .structure = .{ .record = .{
+                        .fields = try self.types.appendRecordFields(&.{}),
+                        .ext = try self.freshUncommittedTail(env, expr_region),
+                    } } }, env);
+                    try self.takeLiteralRulePart(expr_var, part, env);
+                },
+                .empty_list, .zero_argument_tag => try self.takeLiteralRulePart(expr_var, part, env),
+            }
+            return false;
+        }
+    }
+
     check: switch (expr) {
         // str //
         .e_str_segment => try self.unifyWith(expr_var, self.builtinStrContent(), env),
@@ -33953,7 +34396,11 @@ fn resumeStrCheck(self: *Self, task: *ExprTask, state: *StrCheck, env: *Env, chi
         } };
     }
 
-    if (state.did_err) {
+    const rule_part = if (state.did_err or state.has_interpolation) null else try self.literalTypingRulePart(expr_idx, frame.nested_expected);
+    if (rule_part) |part| {
+        try self.takeLiteralRulePart(expr_var, part, env);
+        try self.cir.store.recordLiteralDispatchPlan(ModuleEnv.nodeIdxFrom(expr_idx), .quote, expr_var, null, null);
+    } else if (state.did_err) {
         // If any segment errored, propagate that error to the root string
         try self.markErroneous(expr_var);
     } else if (state.has_interpolation) {
@@ -33981,6 +34428,9 @@ fn resumeStrCheck(self: *Self, task: *ExprTask, state: *StrCheck, env: *Env, chi
 
 const ListCheck = struct {
     phase: enum { start, first, fold, remaining } = .start,
+    /// The part of the expected type this list takes under The Literal
+    /// Typing Rule (design.md); null on the general path.
+    rule: ?Var = null,
     seed_elem_var: ?Var = null,
     elem_var: Var = undefined,
     index: u32 = 0,
@@ -34007,9 +34457,26 @@ fn resumeListCheck(self: *Self, task: *ExprTask, state: *ListCheck, env: *Env, c
     const child_expected = nested_expected.forStatement();
     const elems = self.cir.store.exprSlice(frame.expr.e_list.elems);
 
+    if (state.rule) |part| {
+        if (child_done) state.index += 1;
+        if (state.index < elems.len) {
+            return .{ .child = .{ .expr = elems[state.index], .expected = literalRuleChildExpected(frame, self.literalRuleListElem(part)) } };
+        }
+        try self.takeLiteralRulePart(expr_var, part, env);
+        return .done;
+    }
+
     switch (state.phase) {
         .start => {
             std.debug.assert(!child_done);
+            if (try self.literalTypingRulePart(frame.expr_idx, nested_expected)) |part| {
+                state.rule = part;
+                if (elems.len == 0) {
+                    try self.takeLiteralRulePart(expr_var, part, env);
+                    return .done;
+                }
+                return .{ .child = .{ .expr = elems[0], .expected = literalRuleChildExpected(frame, self.literalRuleListElem(part)) } };
+            }
             if (elems.len == 0) {
                 // Create a nominal List with a fresh unbound element type
                 const elem_var = try self.fresh(env, expr_region);
@@ -34113,6 +34580,9 @@ const AggregateCheck = struct {
     /// Which scratch stack collects this construction's children.
     scratch: enum { vars, record_fields },
     started: bool = false,
+    /// The part of the expected type this construction takes under The
+    /// Literal Typing Rule (design.md); null on the general path.
+    rule: ?Var = null,
     projected: ?Var.SafeList.Range = null,
     /// The record constructor owns the projected row, including omitted slots.
     projected_record: ?Var = null,
@@ -34150,9 +34620,10 @@ fn resumeTupleCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: *
     const elems_slice = self.cir.store.exprSlice(frame.expr.e_tuple.elems);
 
     if (!state.started) {
+        state.rule = try self.literalTypingRulePart(frame.expr_idx, nested_expected);
         // Establish a tuple skeleton first, so an enclosing relation can
         // supply each element's shape before that element is checked.
-        state.projected = projected: {
+        state.projected = if (state.rule != null) null else projected: {
             _ = nested_expected.aggregateType() orelse break :projected null;
             const projected_top = self.scratch_vars.top();
             defer self.scratch_vars.clearFrom(projected_top);
@@ -34173,6 +34644,8 @@ fn resumeTupleCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: *
         // to the slot projected above.
         state.scratch_top = self.scratch_vars.top();
         state.started = true;
+    } else if (child_done and state.rule != null) {
+        state.index += 1;
     } else if (child_done) {
         const elem_var = try self.storedValueVar(elems_slice[state.index], env);
         if (state.projected) |projected_elems| {
@@ -34189,8 +34662,15 @@ fn resumeTupleCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: *
     if (state.index < elems_slice.len) {
         return .{ .child = .{
             .expr = elems_slice[state.index],
-            .expected = aggregateChildExpected(frame, state.projected, self.types, state.index),
+            .expected = if (state.rule) |part|
+                literalRuleChildExpected(frame, self.literalRuleTupleElem(part, state.index))
+            else
+                aggregateChildExpected(frame, state.projected, self.types, state.index),
         } };
+    }
+    if (state.rule) |part| {
+        try self.takeLiteralRulePart(expr_var, part, env);
+        return .done;
     }
 
     defer self.scratch_vars.clearFrom(state.scratch_top);
@@ -34414,12 +34894,13 @@ fn resumeRecordCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: 
 
     if (!state.started) {
         try self.record_constructions.append(self.gpa, expr_idx);
+        state.rule = try self.literalTypingRulePart(expr_idx, nested_expected);
 
         // Build a record skeleton with one payload slot per supplied field.
         // Relating an orphan expected copy to this skeleton admits omitted
         // defaulted fields at the real source record construction, and pins
         // each supplied field's payload before its expression is checked.
-        state.projected = projected: {
+        state.projected = if (state.rule != null) null else projected: {
             _ = nested_expected.aggregateType() orelse break :projected null;
             const projected_fields_top = self.scratch_record_fields.top();
             defer self.scratch_record_fields.clearFrom(projected_fields_top);
@@ -34463,6 +34944,8 @@ fn resumeRecordCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: 
         // Write down the top of the scratch records array
         state.scratch_top = self.scratch_record_fields.top();
         state.started = true;
+    } else if (child_done and state.rule != null) {
+        state.index += 1;
     } else if (child_done) {
         const field = self.cir.store.getRecordField(source_fields[state.index]);
         const field_value_var = try self.storedValueVar(field.value, env);
@@ -34500,8 +34983,15 @@ fn resumeRecordCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: 
         const field = self.cir.store.getRecordField(source_fields[state.index]);
         return .{ .child = .{
             .expr = field.value,
-            .expected = aggregateChildExpected(frame, state.projected, self.types, state.index),
+            .expected = if (state.rule) |part|
+                literalRuleChildExpected(frame, self.literalRuleSuppliedField(part, field.name))
+            else
+                aggregateChildExpected(frame, state.projected, self.types, state.index),
         } };
+    }
+    if (state.rule) |part| {
+        try self.takeLiteralRuleRecord(expr_var, expr_region, source_fields, part, env);
+        return .done;
     }
 
     defer self.scratch_record_fields.clearFrom(state.scratch_top);
@@ -34563,9 +35053,10 @@ fn resumeTagCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: *En
     const arg_expr_idx_slice = self.cir.store.sliceExpr(e.args);
 
     if (!state.started) {
+        state.rule = try self.literalTypingRulePart(frame.expr_idx, nested_expected);
         // Project this constructor's payload slots from the expected tag
         // union before checking payload expressions.
-        state.projected = projected: {
+        state.projected = if (state.rule != null) null else projected: {
             // A zero-payload tag has no nested construction to guide. Its
             // ordinary enclosing relation must remain the sole place that
             // grounds and discharges the expected type's constraints.
@@ -34578,6 +35069,8 @@ fn resumeTagCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: *En
         // edge before relating it to the projected payload slot.
         state.scratch_top = self.scratch_vars.top();
         state.started = true;
+    } else if (child_done and state.rule != null) {
+        state.index += 1;
     } else if (child_done) {
         const arg_var = try self.storedValueVar(arg_expr_idx_slice[state.index], env);
         if (state.projected) |projected_args| {
@@ -34594,8 +35087,15 @@ fn resumeTagCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: *En
     if (state.index < arg_expr_idx_slice.len) {
         return .{ .child = .{
             .expr = arg_expr_idx_slice[state.index],
-            .expected = aggregateChildExpected(frame, state.projected, self.types, state.index),
+            .expected = if (state.rule) |part|
+                literalRuleChildExpected(frame, self.types.getVarAt(self.literalRuleTagPayload(part, e.name), @intCast(state.index)))
+            else
+                aggregateChildExpected(frame, state.projected, self.types, state.index),
         } };
+    }
+    if (state.rule) |part| {
+        try self.takeLiteralRulePart(expr_var, part, env);
+        return .done;
     }
 
     defer self.scratch_vars.clearFrom(state.scratch_top);
