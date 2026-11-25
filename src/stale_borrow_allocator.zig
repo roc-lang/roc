@@ -44,8 +44,44 @@ const Host = enum { linux, libc_posix, none };
 
 const host: Host = switch (builtin.os.tag) {
     .linux => .linux,
-    .macos, .ios, .tvos, .watchos, .visionos, .freebsd, .netbsd, .openbsd, .dragonfly => if (builtin.link_libc) .libc_posix else .none,
-    else => .none,
+    .macos, .ios, .tvos, .watchos, .visionos, .maccatalyst, .driverkit, .freebsd, .netbsd, .openbsd, .dragonfly => if (builtin.link_libc) .libc_posix else .none,
+    .illumos,
+    .haiku,
+    .windows,
+    .freestanding,
+    .wasi,
+    .other,
+    .contiki,
+    .fuchsia,
+    .hermit,
+    .managarm,
+    .hurd,
+    .plan9,
+    .rtems,
+    .serenity,
+    .uefi,
+    .@"3ds",
+    .wiiu,
+    .@"switch",
+    .gba,
+    .psx,
+    .tios,
+    .ashetos,
+    .ps3,
+    .ps4,
+    .ps5,
+    .psp,
+    .vita,
+    .emscripten,
+    .amdhsa,
+    .amdpal,
+    .cuda,
+    .mesa3d,
+    .nvcl,
+    .opencl,
+    .opengl,
+    .vulkan,
+    => .none,
 };
 
 /// Whether freed large allocations can be made inaccessible on this host.
@@ -197,8 +233,7 @@ fn remap(_: *anyopaque, memory: []u8, _: Alignment, new_len: usize, _: usize) ?[
     return if (new_len == memory.len) memory.ptr else null;
 }
 
-fn free(ctx: *anyopaque, memory: []u8, alignment: Alignment, ret_addr: usize) void {
-    _ = ret_addr;
+fn free(ctx: *anyopaque, memory: []u8, alignment: Alignment, _: usize) void {
     const self: *StaleBorrowAllocator = @ptrCast(@alignCast(ctx));
     if (self.isProtected(memory.len)) {
         const pages_len = std.mem.alignForward(usize, memory.len, std.heap.pageSize());
