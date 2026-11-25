@@ -26922,7 +26922,7 @@ recursion box holding the last reference frees its allocation without
 releasing the value that left; one that other holders share gives the moved
 value a reference of its own and drops the slot's reference to the box; a
 slot that is the value itself holds nothing further. A boxable field is one
-ownership slot and never an ownership-complete projection of its product, so
+ownership slot and never an ownership-complete field read of its product, so
 its unit leaves only by a stamped take, and ARC releases a boxable field it
 does not take by taking it into a frame temporary and releasing that. A
 boxable field whose committed layout is a struct would spread over several
