@@ -1105,8 +1105,21 @@ generator the object is encoded from (`arrange`, `assembleArranged`):
   excerpt's location) and every helper with a frame, whether the program
   declares it or only spliced code reaches it.
 
-A prepared data catalog owns one immutable copy of its payload bytes, names,
-and relocations. It records exact outgoing data and code-symbol edges once;
+A prepared data catalog owns one immutable copy of its items' names and
+relocations. Payload bytes have one owner, and every later holder borrows
+them: each item names the owner keeping its bytes alive (`DataItem.
+payload_owner`), and a catalog, set or unit's pieces holding an item retains
+that owner instead of copying the bytes. A catalog built from exports either
+copies their bytes into its own storage, when the exports go away first, or
+borrows them from exports a keeper owns (`DataOwner.initKeeper`), which the
+catalog retains: a unit's pieces borrow the bytes of the unit's literal
+backings and frozen constants this way, and the keeper frees those exports
+with the last catalog retaining it. Object writers are given the read-only
+data as pieces borrowed from the data items (`UnitImage.PiecedBytes`), and a
+unit image writes its block and writable data straight from the sections
+into the image, patching the block's in-place references there, so each
+datum's bytes are copied once, into the encoded object or image. The
+catalog records exact outgoing data and code-symbol edges once;
 each catalog entry holds both its datum and its edges. Fragments carry only dense
 root indices into this shared graph, and an excerpt set retains each graph owner
 once. Copying, pruning and object assembly preserve these graph references.
@@ -1116,8 +1129,9 @@ The graph producer propagates the code-pointer property along reverse data edges
 once, including cycles.
 The catalog, workers, and copied sets can be destroyed independently. This is
 compiler-storage ownership; it changes no generated reference-count operation.
-Renaming data first gives the new set its own metadata and backing, preserving
-the catalog's immutable contents. Catalogs belong to one program's symbol
+Renaming data first gives the new set its own metadata, preserving the
+catalog's immutable contents; the renamed items share the catalog's payload
+bytes and retain its owner. Catalogs belong to one program's symbol
 domain; equal program-local names from other programs never establish sharing.
 
 ### Read-Only Type Analysis
@@ -2447,7 +2461,10 @@ CIR kinds (as the checked body reader presents them) and checked types:
   (`exact_numeral.fits`; a float literal always converts, to its nearest
   value);
 - a string literal whose quote dispatches to no `from_quote`, made of literal
-  segments only, whose checked type is the builtin `Str`;
+  segments only, whose checked type is the builtin `Str`, and a file imported
+  as `Str`, which is one such segment on its own;
+- a bytes literal (`import "file" as bytes : List(U8)`), whose checked type is
+  always `List(U8)`;
 - an empty list, a tag with no payload, or an empty record whose checked
   type is the empty record (at a record type of optional fields it builds
   each field's presence slot);
@@ -2527,7 +2544,10 @@ where a value's parts come from differs: an evaluator's result memory, the
 checked expression's parts, or the stored value of a constant the expression
 reads. A numeral's bytes are the bytes lowering gives the literal
 (`exact_numeral.encodeBits`), and a literal list or string has no capacity
-beyond its items (Static Lists And Strings Keep Their Capacity). A read of a
+beyond its items (Static Lists And Strings Keep Their Capacity). A string of
+one segment and a bytes literal are stored as blobs borrowed from the
+module's string literal store, with no copy ("Constant Storage"); a bytes
+literal is the packed items of its `List(U8)`. A read of a
 constant is the constant's stored value, capacity included: the writer
 copies the read root's nodes into the reading root's store under the
 reading root's own plan, choosing each tag's variant by name, so a read at a
@@ -7074,19 +7094,30 @@ sealed. It consists of exactly these parts:
   nothing else does.
 
 **Sealing.** Checking canonicalizes the solver store in place as its last
-write before sealing it (`types.Store.canonicalizeAndSeal`). Every class comes
-to be stored at its checked representative, which every other member names
-directly; every variable a descriptor, a type argument or record field pool,
-or a nominal declaration holds becomes its class's checked representative;
-and every record and tag union row absorbs the
-rows its extension chain reaches, so a sealed row is flat and its extension is
-never itself a row. Canonicalization walks the slots once, the variable and
-field pools once, and the live descriptors once. The descriptor pass reads
-each descriptor's kind and goes further only for a function, a record or a tag
-union, the kinds that hold a variable inline: it replaces a function's return
-or a row's extension by its representative, and resolving an extension also
-tells whether the extension is itself a row, so a row that must absorb its
-chain is found and flattened in that same step. A static-dispatch constraint
+write before sealing it (`types.Store.canonicalizeAndSealReached`). Every class
+comes to be stored at its checked representative, which every other member
+names directly; every variable a descriptor, a type argument or record field
+pool, or a nominal declaration holds becomes its class's checked
+representative; and every record and tag union row a reader
+can name absorbs the rows its extension chain reaches, so such a row is flat
+and its extension is never itself a row. Canonicalization walks the slots
+once, the variable and field pools once, and the live descriptors once. The
+descriptor pass reads each descriptor's kind and goes further only for a
+function, a record or a tag union, the kinds that hold a variable inline: it
+replaces a function's return or a row's extension by its representative, and
+resolving an extension also tells whether the extension is itself a row.
+
+When some row's extension is a row, sealing traces the store from its roots
+and flattens each row the trace reaches, before reading that row's children.
+The roots are every variable a reader may start from: each CIR node's own
+variable, each variable a node or a recorded checker output names besides
+(`Check.SealRoots`), and each nominal declaration's backing. Every root
+publication or a later producer reaches is one of these, so no root is added
+after sealing. A row no root reaches keeps its chain and is never read: the
+solver's superseded row parts, such as the tails an inferred union outgrew,
+cost nothing to seal. Reading a sealed row whose extension is a row is a
+compiler bug, asserted in debug builds. When no row's extension is a row,
+there is nothing to flatten and no trace runs. A static-dispatch constraint
 keeps the function variable checking recorded for it, because that variable
 identifies the constraint; a reader resolves it with one slot read.
 
@@ -7116,9 +7147,11 @@ liveness bit set as a running count per mask word plus a population count
 within the word. No translation table is built, a survivor only ever moves
 down, so each column closes in place in one forward pass, a range shared by
 two descriptors stays shared, and anything sorted by index stays sorted.
-Variables below the canonical count keep their numbers. Marking folds into
-the slot and descriptor passes above, except for one pass over the constraint
-pool that keeps the rows holders reach by function variable. Closing then
+Variables below the canonical count keep their numbers. Representatives are
+marked in the slot and descriptor passes above; the pool and identity rows
+are marked by one more pass over the live descriptors once flattening has
+made every row final, and one pass over the constraint pool keeps the rows
+holders reach by function variable. Closing then
 walks each column once: the pools first, rewriting their variables to
 representatives and renumbering them as they move, then the slots, which
 name only representatives and so are renumbered without reading one another,
@@ -12137,7 +12170,15 @@ allocation.
 
 Strings and flat scalar or fixed-product lists use one shared content-interned blob store.
 `List(U8)` therefore has the same constant-storage cost as a `Str` containing
-the same bytes, and equal string/list contents reuse one blob. A packed list
+the same bytes, and equal string/list contents reuse one blob. A blob the
+checked-value writer stores from a literal of the store's own module (a string
+of one segment, or a file imported as bytes) is borrowed from the module's
+string literal store rather than copied (`ConstStore.BlobBacking`): those
+bytes never change once the module is canonicalized and live as long as the
+store, so the literal's bytes are resident once. A borrowed blob occupies its
+offsets in the blob bytes as if it were stored there, so serialization writes
+it in place and a serialized store is the same whichever of its blobs are
+borrowed; a loaded store owns all of them. A packed list
 view records its scalar encoding or fixed-product width and item count separately
 from its byte view. Fixed products are records, tuples, and nominal wrappers
 composed entirely of scalars, discriminant-only tag unions and zero-sized
@@ -12628,6 +12669,120 @@ The accepted and rejected sides are pinned in `issue_11229_test.zig`: let-bound
 arithmetic remains polymorphic, and mixed-type user methods stay callable by name;
 nominal and extended rows still guide nested defaulted/optional construction;
 inconsistent shared type variables and unsupported real dispatches still fail.
+
+### The Literal Typing Rule
+
+**A literal checked against an expected type that is fully known is checked
+by one structural walk of literal and type together, and each literal node's
+type is the corresponding part of the expected type.** Where the expected type
+has nothing left to decide, unification can learn nothing from relating the
+literal to it, so the literal gets no skeleton, no expected-shape copy and no
+probe. Whether the rule applies is decided once, up front, from explicit data
+alone (the literal's syntax and the expected type as it stands), before
+anything is written (`literalTypingRuleCovers`, through
+`literalTypingRulePart`); a literal outside the rule is checked by the general
+path (Expected Shape Context) from the start. The rule is never tried and then
+retried: a literal it covers cannot fail it.
+
+The literal forms are: a record construction with no update base and no unset
+field, `{}`, a tuple, a list, `[]`, a tag with or without payloads, a number
+literal with no suffix, and a string literal with no suffix and no
+interpolation.
+
+The rule starts at a literal whose expected type reaches it through a channel
+whose owner relates the literal to that type anyway: the literal's own
+annotation or expected type (its expression frame owns that relation), or a
+cell of an enclosing construction's projected shape, which is already a fresh
+copy that the construction relates to the literal's value. Context that only
+guides, without that relation (a branch body's, a call or method argument's,
+a binary operand's or a nominal constructor backing's contextual type, a
+lambda's seeded result), and a borrowed record-update field, do not start it:
+the general path copies such context and never unifies into it. A tag starts
+no walk of its own either: on the general path a tag relates to the union it
+is expected at by extending it, which leaves the merged union holding the
+tags the literal lacked as an extension row rather than the union's own one
+row; as a part of a literal under the rule, the general path's owning
+relation relates the whole union to the union's one row, which is the
+union's own content. Every literal
+part of a literal under the rule is under the rule with the part of the
+expected type it matched (`ExpectedType.literal_rule`).
+
+The decision walks literal and type together, following aliases, and the
+rule applies exactly when every pair matches:
+
+- a record construction: a record row, ending in the empty record, of exactly
+  the literal's fields, each `required`;
+- `{}`: the empty record, or a row of no fields ending in it;
+- a tuple: a tuple of the literal's arity;
+- a list, and `[]`: the builtin `List` of one argument, which each item
+  matches and which for `[]` is fully known;
+- a tag: a structural tag union of one row closed directly by the empty tag
+  union, holding the tag once with the literal's arity, each payload matching
+  its slot and every other tag's payloads fully known;
+- a number: a builtin number type holding the literal's exact value (the fit
+  Concrete Builtin Numeral Introduction uses);
+- a string: the builtin `Str`.
+
+A type is fully known when nothing reachable from it is a flex variable (a
+deferred literal's, a `_` hole's, a row extension), a rigid, an error, a
+function, or a variable at generalized rank, and every field kind in it is
+decided. Everything else is outside the rule, so the whole literal keeps the
+general path: a nominal type other than `List`, `Str` and the builtin number
+types (a record or tag lifted into a declared nominal), an optional or
+defaulted field whether supplied or omitted, an open or uncommitted row, a
+tag union written over an extension, a number that does not fit or whose type
+is custom, a suffixed literal, an interpolation, a lambda, and any
+sub-expression that is not a literal form (a lookup, a call). A literal part
+outside the rule does not stop a literal nested inside it from starting the
+rule again at its own projected cell.
+
+Each node takes its part by one ordinary unification of its own variable with
+that part, after its children, and a record construction first gives its
+variable its own row. A record construction's fields keep kind variables of
+their own (Field Kinds), and the expected row decides each `required`; the
+relation of a required field to a field of kind variable keeps the kind
+variable as the merged field's kind. Every record a literal built therefore
+reaches its fields through kind variables, which makes its type no ground
+type, and a use of a checked definition shares a type that is not ground
+where it copies a ground one. So under the rule the record's row is its
+fields at their parts, each over a fresh kind already decided `required`,
+ending in the part's own tail, and that row relates to the part: the merged
+row is the one the general path leaves. `{}` builds its row over an
+uncommitted tail exactly as the general path does before relating it.
+
+This is a mechanism (Solver-Mutating Rewrites). Inside the rule every relation
+the general path runs succeeds: the skeleton's relation to the expected copy,
+each item's relation to its cell, the construction's relation to its
+projected row, the list fold, and the owning relation. None of them can decide
+anything, so each node's class ends merged with the corresponding part of the
+expected type, with the content the owning relation's merge gives it, which
+is the content the rule gives it; the only difference is the variables the
+general path minted and merged, so only variable numbering changes. A literal
+the rule covers yields no diagnostic on either path, and a literal that would
+yield one is outside the rule, so every diagnostic, with its region, its
+rendered types and its count, is the general path's.
+
+What the general path leaves behind for such a literal, and what the rule
+leaves:
+
+- every node's own expression frame runs as for any expression (rank,
+  hoisting and value-form roots, dispatch checks, relation operands);
+- a record construction and `{}` are registered as record constructions;
+- a record construction's field kinds are its own variables, decided
+  `required`; they are not listed for `defaultLiteralFieldKinds`, which skips
+  a decided kind;
+- a number literal records its literal plan with no conversion function and a
+  string literal its quote plan, exactly as Concrete Builtin Numeral
+  Introduction and Concrete Builtin Quote Introduction do, so finalization
+  seals both `builtin_direct`;
+- a record construction mints no uncommitted tail: its row ends in the
+  part's committed tail, which is what the tail commits to;
+- no default is absorbed and no literal is deferred, determined or left open,
+  since no field is omitted and every number and string has its builtin type.
+
+`ROC_CHECKER_SPECULATION_STATS` also prints how many literal nodes each module
+checked by the rule and by the general path. Accepted and rejected sides are
+pinned in `literal_typing_rule_test.zig`.
 
 ### Lambda Parameters Seeded From Context
 
@@ -13741,6 +13896,20 @@ A value's record follows the same rule through its uncommitted tail
 (Uncommitted Record Tails): every use shares it, a use that lifts the record
 into a nominal type does so for every use, and the tail commits to the empty record when the module finishes
 checking.
+
+A field access or direct tag pattern demands a member, not a remainder. Its
+fresh, unnamed tail is existential: when relating the member merely binds its
+payload to the receiver's slot, the joined type is the receiver's row itself.
+No other use observes a copy of its remaining labels. This does not apply to
+a rest binder, a shared extension, or a relation that changes field kind or
+tag provenance.
+
+When a pattern introduces a previously absent tag into an inferred open
+row, every existing reference to the old extension must see the new tag.
+The row may combine adjacent disjoint tag runs, but an absorbed part remains
+valid in isolation, and a marked entry copied out of it remains the same
+diagnostic fact (Pattern-Only Tags). A bounded or rigid tail cannot be
+extended by this rule.
 
 A use of a top-level value is therefore never a widening of the value: no
 row coercion and no `ModuleEnv` record exist for value uses. Where a
@@ -17236,6 +17405,14 @@ Other solved-graph mutations:
   Introduction (above). Uses the existing `unifyWith` descriptor-introduction
   mechanism for a proved concrete builtin conversion; does not mutate the
   context's type or introduce a redirect rule.
+- `literalTypingRulePart`—mechanism: The Literal Typing Rule (above). A
+  read-only match of a literal's syntax against its fully known expected
+  type gates one ordinary unification of each literal node's variable (a
+  record construction's over its own row of decided field kinds) with the
+  part of that type it matched, in place of the general path's skeleton,
+  shape copy and probes, whose relations would all succeed and decide
+  nothing. It writes nothing outside unification, restamps no plan, and
+  introduces no redirect rule.
 - `projectExpectedTagPayload` without a borrowed record field—mechanism:
   Expected Shape Context (above). Every refusal is read before the copy
   writes anything, and the copy cannot fail, so it opens no probe.
@@ -19497,8 +19674,9 @@ nothing to a callable whose refcount word is `REFCOUNT_FRAME` (Frame
 Callables), and the wasm backend's inline erased-callable reference counts
 test the same word. The Boxy runtime reads descriptors and nothing else: descriptor-guided copy,
 incref, decref, equality, hashing, inspection, and representation
-adaptation, component addressing and construction, the list operations that
-take an item descriptor, and the shared capture drop. It composes,
+adaptation, component addressing and construction, the release of the
+recursion box a field take leaves, the list operations that take an item
+descriptor, and the shared capture drop. It composes,
 interns, and allocates no descriptor or dictionary, and holds no state of its
 own: no cache, no lock, no atomic, and no thread-local. It has no procedure
 registry, no sidecar, no descriptor numbering, no deferred or pending calls,
@@ -20613,10 +20791,17 @@ owner returns the error once it has received every task. Without an executor,
 the items run and commit in order on one sequential lane through the same
 callbacks.
 
-Each lane lends every item it runs one scratch arena, registered in the lane's
-state and reset after each item to a single retained chunk of at most
+A run gives every lane that runs its items a lane state of the run's own,
+created by the lane's first item and destroyed when the run returns, so the
+scratch a pass keeps per lane (its lane buffers, the item arena below) serves
+every procedure that lane runs in the run and none of it outlives the run: an
+idle worker holds no capacity grown by a pass that finished. Each lane lends
+every item it runs one scratch arena, registered in that lane state and reset
+after each item to a single retained chunk of at most
 `lane_scratch_retain_limit` (4 MiB), so a lane's steady-state items allocate
 nothing from the backing allocator and idle scratch is bounded per lane.
+Without an executor the items run on the caller's sequential lane, whose
+lifetime the caller chooses.
 
 A commit runs while lanes run later items, so it may change nothing an item
 reads. Native code generation commits in the run: lanes read only the frozen
@@ -26970,23 +27155,36 @@ every unrolled occurrence, which matches the typing rule below that nested
 modes are uniform through an owning rc.
 
 A dynamic local normally carries one opaque owned unit. For a closed-row
-record or tuple whose logical fields account for all its stored ownership,
-Boxy lowering also emits its checked product shape:
+record or tuple, Boxy lowering also emits its checked product shape:
 the fields' layouts and descriptor locals. This is ownership data,
 not a memory layout: field addresses and representation sizes still come
 from runtime descriptors. A dynamic field occupies one ownership slot;
 a concrete struct field expands into its concrete slots. An open row or an
-unknown type has no enumerated product shape and remains opaque. The same
-applies when a substitution can put a recursion box around a field: projecting
-the logical payload does not transfer the box. The parent descriptor must
-remain responsible for its release. Type arguments reached only through a
-list, explicit box, or callable do not affect inline size.
+unknown type has no enumerated product shape and remains opaque.
+
+A substitution can put a recursion box around a field. A field read opens
+the box and yields the field's value, so the value is not all its slot
+holds. The shape marks each such field boxable (`ProductShape.boxable`):
+every field whose inline size some substitution leaves unbounded, a type
+variable included. Type arguments reached only through a list, explicit box,
+or callable do not affect inline size. ARC stamps a take of a boxable field
+(`RefExtra.releases_recursion_box`): the read moves the value into storage of
+the target's own, and the backend then releases the slot through the
+product's descriptor (`roc_desc_field_release_box`). A slot that is a
+recursion box holding the last reference frees its allocation without
+releasing the value that left; one that other holders share gives the moved
+value a reference of its own and drops the slot's reference to the box; a
+slot that is the value itself holds nothing further. A boxable field is one
+ownership slot and never an ownership-complete field read of its product, so
+its unit leaves only by a stamped take, and ARC releases a boxable field it
+does not take by taking it into a frame temporary and releasing that. A
+boxable field whose committed layout is a struct would spread over several
+slots of one box, so a product holding one has no shape.
 
 A dynamic tag union has no enumerated shape, but each of its payload reads
 names the variant it reads: the read sits under the arm that matched the tag,
 or follows the constructor that built it. Boxy lowering, which knows the tag's
-payload count from its checked type, reads the only payload of a tag that is
-known to be stored inline, into a
+payload count from its checked type, reads the only payload of a tag, into a
 local whose layout can hold refcounted data, as an `assign_ref`
 `tag_payload_struct` of the dynamic union into independent frame storage
 (backends copy it with the union's descriptor as `dyn.tag_payload_addr` of
@@ -27013,6 +27211,15 @@ none of them is the variant's whole contents, so none can carry the union's
 unit, and such a union is released whole. The certifier models a dynamic
 value without a product shape as one claim, which a complete payload
 projection spends.
+
+A tag's only payload can sit in a recursion box as a boxable field can.
+Lowering marks the read of such a payload `RefExtra.payload_boxable`, and
+where ARC moves the union's unit into the payload it stamps the read exactly
+as it stamps a take of a boxable field; the backend then releases the slot
+with `roc_desc_tag_payload_release_box`. That covers a payload that moves out
+whole. A boxable payload that is itself a product would give up its fields
+one at a time through a view of the box, so lowering reads it as a component
+borrowed from the union instead.
 
 An erased argument product's recorded slot boundaries are authoritative for
 both the start and width of each field read. Its non-owning prefix and scalar
@@ -28121,7 +28328,15 @@ its plan requests no variant. A variant reads its base procedure's prepared
 source, so a wave holds base owners or variants, never both, and every base
 wave precedes every variant wave. The wave then reserves its variants in owner
 order, emits the owners whose plans requested any in a second run, and
-appends every shard in owner order. A shard emitted before the wave's
+appends every shard in owner order. A source's prepared data and an owner's
+plan live only as long as an emission reads them: an owner frees its plan as
+soon as its shard is emitted, a base owner's task frees its source once the
+owner is emitted, a variant wave first prepares, in one ordered run, each
+source its variants read that is not prepared, and after the wave frees every
+source no queued variant names, and each shard is freed once it is appended.
+Preparation reads only the ownership-neutral body and the frozen solution and
+dismantle results, so a source prepared again for a variant wave is the one
+its base wave prepared. A shard emitted before the wave's
 reservations names the shorter procedure prefix it was cloned from; appending
 relocates it exactly like one emitted after them. Proving uniqueness settles
 against every source's prepared projections, so that schedule prepares every
@@ -28541,8 +28756,12 @@ is a view of the slots it covers. It holds no unit: its field reads are
 reads of the container's slots offset by the view's first slot, so a
 consumed read through it takes those slots from the container, and its
 other uses observe its whole range. A borrowed tag union read out of a
-container is a view of its one slot: nothing reads through it except an
-ownership-complete payload view, which carries the union's whole unit. It is
+container is a view of its one slot. An owned read of the active variant's
+complete refcounted payload can take that slot at the read. Later reads of
+sibling fields need no retain; a later observation of the same slot or intact
+record still needs its unit. The union view itself remains borrowed unless
+it has a separate reason to hold the slot. A borrowed payload view also
+carries the union's whole unit. The union view is
 held when that payload reaches a consuming operand (the closure read out of a
 record of closures, whose captures are unwrapped and passed to the closure
 body), or when it dismantles through that payload view (the held tag-union

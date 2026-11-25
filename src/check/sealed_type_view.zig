@@ -2,9 +2,9 @@
 //! type store.
 //!
 //! Checking canonicalizes the store before sealing it
-//! (`types.Store.canonicalizeAndSeal`), so every child a descriptor names is
-//! its class's checked representative and every record and tag union row is
-//! flat. A checked type id of a source type is that representative's bit
+//! (`types.Store.canonicalizeAndSealReached`), so every child a descriptor
+//! names is its class's checked representative and every record and tag
+//! union row the view can reach is flat. A checked type id of a source type is that representative's bit
 //! pattern, and the view renders it as a `CheckedTypePayload` without
 //! allocating: child ids alias the store's own variable pools, and record
 //! fields, tags and constraints are handles that read the store's rows one at
@@ -327,6 +327,8 @@ pub const SealedTypeView = struct {
             .record => {
                 const record = type_store.recordAt(desc_idx);
                 if (record.fields.len() == 0 and checked_artifact.checkedRecordExtIsEmpty(env, record.ext)) return .empty_record;
+                // Sealing flattened every row its roots reach.
+                std.debug.assert(type_store.kindOf(record.ext) != .record);
                 return .{ .record = .{
                     .fields = .{ .sealed = .{ .fields = type_store.getRecordFieldsSlice(record.fields), .view = self } },
                     .ext = type_ids.fromVar(record.ext),
@@ -356,6 +358,7 @@ pub const SealedTypeView = struct {
             .tag_union => {
                 const tag_union = type_store.tagUnionAt(desc_idx);
                 if (tag_union.tags.len() == 0 and checked_artifact.checkedTagUnionExtIsEmpty(env, tag_union.ext)) return .empty_tag_union;
+                std.debug.assert(type_store.kindOf(tag_union.ext) != .tag_union);
                 return .{ .tag_union = .{
                     .tags = .{ .sealed = .{ .tags = type_store.getTagsSlice(tag_union.tags), .view = self } },
                     .ext = type_ids.fromVar(tag_union.ext),
@@ -683,6 +686,7 @@ const ReachWalker = struct {
                         },
                     }
                 }
+                std.debug.assert(type_store.kindOf(record.ext) != .record);
                 try self.reach(allocator, record.ext, .empty_record);
             },
             .tuple => for (type_store.sliceVars(type_store.tupleAt(desc_idx).elems)) |elem| try self.reach(allocator, elem, null),
@@ -698,6 +702,7 @@ const ReachWalker = struct {
                 for (type_store.getTagsSlice(tag_union.tags).items(.args)) |args| {
                     for (type_store.sliceVars(args)) |arg| try self.reach(allocator, arg, null);
                 }
+                std.debug.assert(type_store.kindOf(tag_union.ext) != .tag_union);
                 try self.reach(allocator, tag_union.ext, .empty_tag_union);
             },
         }

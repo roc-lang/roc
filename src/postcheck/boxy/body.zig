@@ -610,6 +610,8 @@ pub const Builder = struct {
     /// innermost last.
     type_descs: collections.DenseMapUnmanaged(TypeId, LocalId) = .empty,
     product_shapes: collections.DenseMapUnmanaged(TypeId, LIR.StmtRowId(LIR.ProductShape)) = .empty,
+    /// Some shape in `product_shapes` marks a field boxable.
+    has_boxable_shape: bool = false,
 
     constant_slots: collections.DenseMapUnmanaged(LocalId, LIR.StaticDataId) = .empty,
     /// The recipes of the hidden words this body reads (`tables.zig`).
@@ -903,8 +905,8 @@ pub const Builder = struct {
     /// Payload `payload_index` of the active tag of the dynamic tag union
     /// `union_value`, the tag at position `variant` among its union's tags, into
     /// `target`; `only` is set when that payload is its tag's only one. A
-    /// tag's only inline payload that can hold refcounted data is the whole
-    /// active variant, so it is read as an ownership-complete tag payload read of
+    /// tag's only payload that can hold refcounted data is the whole active
+    /// variant, so it is read as an ownership-complete tag payload read of
     /// the union (`tag_payload_struct`) into independent frame storage: ARC can
     /// move the union's unit into it and take its fields. Any other payload
     /// is a component address borrowed from the union.
@@ -915,12 +917,24 @@ pub const Builder = struct {
             .record, .tuple => true,
             .primitive, .empty_record, .tag_union, .list, .box, .nominal, .function, .variable => false,
         };
-        if (only and self.holdsRefcounted(target) and (product or try self.program.layouts.alwaysInlineComponent(payload_ty))) {
+        // A payload whose slot some instantiation stores in a recursion box
+        // moves out whole, and the read that moves it releases the box. A
+        // product would give up its fields one at a time through a view of
+        // that box instead, so such a payload stays a borrowed component.
+        const stored_inline = product or try self.program.layouts.alwaysInlineComponent(payload_ty);
+        const target_local = self.store.getLocal(target);
+        const moves_whole = target_local.product == .none and self.program.result.layouts.getLayout(target_local.layout_idx).tag != .struct_;
+        if (only and self.holdsRefcounted(target) and (stored_inline or moves_whole)) {
             if (self.store.localDyn(target)) |dyn| {
                 if (dyn.storage == .view) self.store.getLocalPtr(target).dyn_storage = .frame;
             }
             const index: layout.VariantIndex = @intCast(variant);
-            return self.emitLinear(.{ .assign_ref = .{ .target = target, .op = LIR.RefOp.tagPayloadStruct(union_value, index, index), .next = undefined } });
+            return self.emitLinear(.{ .assign_ref = .{
+                .target = target,
+                .op = LIR.RefOp.tagPayloadStruct(union_value, index, index),
+                .extra = try self.store.addOptionalStmtRow(LIR.RefExtra, .{ .payload_boxable = !stored_inline }),
+                .next = undefined,
+            } });
         }
         try self.emitDyn(target, .{ .tag_payload_addr = .{ .base = union_value, .desc = desc, .payload_index = payload_index } });
     }
@@ -946,17 +960,29 @@ pub const Builder = struct {
         }
         const components = try self.structComponentTypes(structural);
         defer self.allocator.free(components);
-        // A ProductShape permits residual releases as well as takes. It is
-        // valid only when every described field owns precisely its logical
-        // value. A descriptor-driven field read transparently opens a recursion box;
-        // the payload alone cannot take or release that box's ownership unit.
-        for (components) |component| {
-            if (!try self.program.layouts.alwaysInlineComponent(component)) {
+        // A field whose slot some instantiation stores in a recursion box
+        // is marked boxable: a field read opens the box, so a take of the
+        // field also releases the box it leaves behind. Such a field is one
+        // ownership slot. A committed struct would spread over several,
+        // each takeable out of the one box, so a product holding one keeps
+        // its whole-value ownership.
+        const boxable = try self.allocator.alloc(u32, components.len);
+        defer self.allocator.free(boxable);
+        var any_boxable = false;
+        for (components, boxable) |component, *mark| {
+            const is_boxable = !try self.program.layouts.alwaysInlineComponent(component);
+            mark.* = @intFromBool(is_boxable);
+            if (!is_boxable) continue;
+            any_boxable = true;
+            if (!try self.closed(component)) continue;
+            const committed = try self.program.layouts.layoutOf(component);
+            if (self.program.result.layouts.getLayout(committed).tag == .struct_) {
                 try self.product_shapes.put(self.allocator, ty, .none);
                 return .none;
             }
         }
-        const shape = try self.productShapeFields(0, components);
+        const shape = try self.productShapeFields(0, components, if (any_boxable) boxable else &.{});
+        if (any_boxable) self.has_boxable_shape = true;
         try self.product_shapes.put(self.allocator, ty, shape);
         return shape;
     }
@@ -964,7 +990,7 @@ pub const Builder = struct {
     /// Ownership fields of a complete product, in field-index order. Leading
     /// ABI words are opaque, non-owning fields; offsets still come from the
     /// producer's record descriptor, never from this ownership row.
-    fn productShapeFields(self: *Builder, leading: usize, components: []const TypeId) Allocator.Error!LIR.StmtRowId(LIR.ProductShape) {
+    fn productShapeFields(self: *Builder, leading: usize, components: []const TypeId, boxable: []const u32) Allocator.Error!LIR.StmtRowId(LIR.ProductShape) {
         const count = leading + components.len;
         const field_layouts = try self.allocator.alloc(u32, count);
         defer self.allocator.free(field_layouts);
@@ -994,6 +1020,7 @@ pub const Builder = struct {
             .layouts = try self.store.addU32Span(field_layouts),
             .slots = try self.store.addU32Span(slots),
             .descriptors = try self.store.addLocalSpan(descriptors),
+            .boxable = try self.store.addU32Span(boxable),
         });
     }
 
@@ -2249,6 +2276,9 @@ pub const Builder = struct {
 
     /// Whether any local of this procedure lives in the dynamic frame region.
     fn hasDynamicFrame(self: *const Builder) bool {
+        // ARC releases a boxable field it does not take through a frame
+        // temporary of its own.
+        if (self.has_boxable_shape) return true;
         for (self.frame_locals.items) |local| {
             const dyn = self.store.localDyn(local) orelse continue;
             if (dyn.storage == .frame) return true;
@@ -2754,7 +2784,7 @@ pub const Builder = struct {
         try self.beginTable(table);
         const full_desc = try self.argsDesc(1, try self.descWords(worker.params));
         try self.emitEntry(.{ .assign_ref = .{ .target = desc_hole, .op = LIR.RefOp.local(full_desc), .next = undefined } });
-        const product = try self.productShapeFields(1, worker.params);
+        const product = try self.productShapeFields(1, worker.params, &.{});
         self.store.getLocalPtr(record).product = product;
         return record;
     }
@@ -3270,7 +3300,7 @@ pub const Builder = struct {
     pub fn argsRecordLocal(self: *Builder, params: []const TypeId, storage: LIR.DynStorage) Allocator.Error!LocalId {
         if (try self.allClosed(params)) return self.closedLocal(try self.argsRecordLayout(params));
         const desc = try self.argsRecordDesc(params);
-        const product = try self.productShapeFields(0, params);
+        const product = try self.productShapeFields(0, params, &.{});
         return self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = storage }, .product = product });
     }
 
@@ -6693,7 +6723,7 @@ pub const Builder = struct {
             return self.pushValue(try self.adaptValue(target, ret, result_ty));
         }
         const desc = try self.argsDesc(@intCast(words.len), try self.descWords(params));
-        const product = try self.productShapeFields(words.len, params);
+        const product = try self.productShapeFields(words.len, params, &.{});
         const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = .frame }, .product = product });
         const fields = try std.mem.concat(self.allocator, LocalId, &.{ words, args });
         defer self.allocator.free(fields);

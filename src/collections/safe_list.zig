@@ -11,6 +11,13 @@ const CompactWriter = @import("CompactWriter.zig");
 /// `u32`.
 const max_len: usize = std.math.maxInt(u32);
 
+/// Whether this build hunts stale borrows. A Debug build moves an owned list
+/// to a fresh allocation on every growth instead of asking the allocator to
+/// grow it in place, so a slice or pointer held across a growth reads the old
+/// allocation, which the allocator has freed and filled with `undefined`. It
+/// also overwrites the items an owned list drops on a shrink with `undefined`.
+const hunt_stale_borrows = @import("builtin").mode == .debug;
+
 /// Rejects a length past the 32-bit index range as allocation failure.
 fn checkLen(new_len: usize) Allocator.Error!void {
     if (new_len > max_len) return error.OutOfMemory;
@@ -299,7 +306,7 @@ pub fn SafeList(comptime T: type) type {
         pub fn ensureTotalCapacityPrecise(self: *SafeList(T), gpa: Allocator, new_capacity: usize) Allocator.Error!void {
             if (new_capacity <= self.length or new_capacity <= self.capacity) return;
             try checkLen(new_capacity);
-            if (self.capacity != 0) {
+            if (self.capacity != 0 and !hunt_stale_borrows) {
                 const old_memory = self.ptr[0..self.capacity];
                 if (gpa.remap(old_memory, new_capacity)) |new_memory| {
                     self.ptr = new_memory.ptr;
@@ -416,14 +423,17 @@ pub fn SafeList(comptime T: type) type {
         /// Remove and return the last item, or `null` when the list is empty.
         pub fn pop(self: *SafeList(T)) ?T {
             if (self.length == 0) return null;
-            self.length -= 1;
-            return self.ptr[self.length];
+            const last = self.ptr[self.length - 1];
+            self.shrinkRetainingCapacity(self.length - 1);
+            return last;
         }
 
         /// Set the length to `new_len`, which must not exceed the length. The
         /// capacity, and so the list's ownership, is unchanged.
         pub fn shrinkRetainingCapacity(self: *SafeList(T), new_len: usize) void {
             std.debug.assert(new_len <= self.length);
+            // A borrowed list's items belong to someone else.
+            if (hunt_stale_borrows and self.capacity != 0) @memset(self.ptr[new_len..self.length], undefined);
             self.length = @intCast(new_len);
         }
 
@@ -455,7 +465,7 @@ pub fn SafeList(comptime T: type) type {
 
         /// Remove every item, keeping the capacity and so the list's ownership.
         pub fn clearRetainingCapacity(self: *SafeList(T)) void {
-            self.length = 0;
+            self.shrinkRetainingCapacity(0);
         }
 
         /// Set the length to `new_len`, growing first when needed. Items past the

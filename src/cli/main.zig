@@ -1044,6 +1044,9 @@ var debug_allocator: std.heap.DebugAllocator(.{ .stack_trace_frames = build_opti
     .backing_allocator = std.heap.page_allocator,
 };
 
+/// In a Debug build, the wrapper over `debug_allocator` that makes stale borrows fail.
+var stale_borrow_allocator: if (base.StaleBorrowAllocator.available) base.StaleBorrowAllocator else void = undefined;
+
 fn renderValidationError(
     ctx: *CliCtx,
     result: platform_validation.ValidationResult,
@@ -1082,8 +1085,9 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
     var gpa, const is_safe = gpa: {
         // Debug builds use the leak-checking debug allocator; -Ddebug-gpa forces it
-        // in release builds too (e.g. to leak-check a ReleaseSafe binary). Everything
-        // else uses the fast target allocator—see base.defaultGpa.
+        // in release builds too (e.g. to leak-check a ReleaseSafe binary). A Debug
+        // build also wraps it in base.StaleBorrowAllocator. Everything else uses
+        // the fast target allocator—see base.defaultGpa.
         const use_debug_allocator = builtin.os.tag != .freestanding and
             (builtin.mode == .debug or build_options.debug_gpa);
         if (use_debug_allocator) {
@@ -1094,12 +1098,17 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
             if (builtin.link_libc and std.valgrind.runningOnValgrind() != 0) {
                 break :gpa .{ std.heap.c_allocator, false };
             }
+            if (base.StaleBorrowAllocator.available) {
+                stale_borrow_allocator = .init(debug_allocator.allocator(), .{});
+                break :gpa .{ stale_borrow_allocator.allocator(), true };
+            }
             break :gpa .{ debug_allocator.allocator(), true };
         }
         break :gpa .{ base.defaultGpa(), false };
     };
     defer restoreWindowsConsoleCodePage();
     defer if (is_safe) {
+        if (base.StaleBorrowAllocator.available) stale_borrow_allocator.flush();
         std.debug.assert(build_options.debugGpaOk(debug_allocator.deinit()));
     };
 
@@ -7013,7 +7022,9 @@ fn buildRunRootImage(
         target,
         .{},
     );
-    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
+    // The pieces take the static data (`compileToPieces`).
+    var static_data_owned = true;
+    defer if (static_data_owned) compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, lowered);
     defer ctx.gpa.free(entrypoints);
 
@@ -7024,6 +7035,7 @@ fn buildRunRootImage(
     object_compiler.post_check_executor = build_env.postCheckExecutor();
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
     object_compiler.internal_entrypoints = true;
+    static_data_owned = false;
     var pieces = object_compiler.compileToPieces(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
@@ -9050,7 +9062,7 @@ fn preloadWasmObject(
     };
 }
 
-fn configuredWasmStackBytes(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) usize {
+fn configuredWasmStackBytes(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) u64 {
     if (args.wasm_stack_size) |bytes| return bytes;
     if (wasm) |config| {
         if (config.initial_stack_size) |bytes| return bytes;
@@ -9062,7 +9074,7 @@ fn configuredWasmStackBytes(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTarg
 /// platform's targets config specifies one. Null lets the linker size memory
 /// from the data segments plus the stack, which is always sufficient for
 /// those regions. The host must grow memory for its heap independently.
-fn configuredWasmMinimumMemory(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) ?usize {
+fn configuredWasmMinimumMemory(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) ?u64 {
     if (args.wasm_memory) |bytes| return bytes;
     if (wasm) |config| {
         if (config.minimum_memory) |bytes| return bytes;
@@ -9286,7 +9298,7 @@ fn linkWasmOutput(
     const maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null;
     const initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm);
     // The maximum the link declares, as `linker.link` passes it to wasm-ld.
-    const declared_maximum: ?usize = switch (linker.wasmStackLayout(global_base)) {
+    const declared_maximum: ?u64 = switch (linker.wasmStackLayout(global_base)) {
         .stack_first => maximum: {
             const limit = linker.stackFirstMaximumMemory(stack_size);
             if (maximum_memory) |bytes| {
@@ -9340,7 +9352,7 @@ fn linkWasmOutput(
     linker.link(ctx, link_config) catch |err| {
         // wasm-ld finds a size too small only when that size was passed to it.
         if (memory_problem) |problem| {
-            const configured: ?usize = switch (problem.what) {
+            const configured: ?u64 = switch (problem.what) {
                 .initial_memory_too_small => initial_memory,
                 .maximum_memory_too_small => declared_maximum,
             };
@@ -12505,7 +12517,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer ctx.gpa.free(entrypoints);
 
     const static_data_exports = try buildCommandStaticData(ctx, &reporter, root_artifact, imported_artifacts, relation_artifacts, &lowered, target);
-    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
+    // Root pieces take the static data (`compileToPieces`) and keep it alive
+    // while they live; every other path releases it here.
+    var static_data_owned = true;
+    defer if (static_data_owned) compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     if (target_arch == .wasm32) {
         reporter.begin(code_generation_phase_name);
@@ -12541,6 +12556,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
 
     if (boxy_library) |library| {
+        static_data_owned = false;
         var root_pieces = object_compiler.compileToPieces(
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
@@ -16045,7 +16061,9 @@ fn unitTestRootImage(
     finishPostCheckLowering(reporter, &spec_timing, .boxy);
 
     const static_data = try compile.static_data_exports.buildStaticData(ctx.gpa, .{ .root = modules.root, .imports = imported_artifacts }, &lowered, target, .{});
-    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
+    // The pieces take the static data (`compileToPieces`).
+    var static_data_owned = true;
+    defer if (static_data_owned) compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
     var wrappers = try compile.boxy_unit.testEntrypoints(ctx.gpa, &lowered, module_digests.items, root_indices.items);
     defer wrappers.deinit(ctx.gpa);
     reporter.begin(devBackendPhaseName(target));
@@ -16056,6 +16074,7 @@ fn unitTestRootImage(
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
     object_compiler.internal_entrypoints = true;
     object_compiler.relocatable_expect_sites = true;
+    static_data_owned = false;
     var pieces = object_compiler.compileToPieces(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,

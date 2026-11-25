@@ -121,6 +121,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/recursive_alias_test.zig"));
     std.testing.refAllDecls(@import("test/generalize_redirect_test.zig"));
     std.testing.refAllDecls(@import("test/row_union_normalization_test.zig"));
+    std.testing.refAllDecls(@import("test/wide_row_growth_test.zig"));
     std.testing.refAllDecls(@import("test/exhaustiveness_test.zig"));
     std.testing.refAllDecls(@import("test/type_view_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9705_test.zig"));
@@ -156,6 +157,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/closed_operator_test.zig"));
     std.testing.refAllDecls(@import("test/closed_method_call_test.zig"));
     std.testing.refAllDecls(@import("test/deferred_literal_test.zig"));
+    std.testing.refAllDecls(@import("test/literal_typing_rule_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11245_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11587_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11621_test.zig"));

@@ -53,8 +53,8 @@ pub const Options = struct {
     compiler_version: ?[]const u8 = null,
     /// Borrowed, invocation-owned builtin facts. Never shared between threads.
     builtin_facts: ?*BuiltinFacts = null,
-    /// Absolute working directory that messages show paths relative to.
-    working_dir: ?[]const u8 = null,
+    /// Working directory that messages show paths relative to.
+    working_dir: ?@import("reporting").SourcePathBase = null,
 };
 
 /// Report of the result of formatting Roc files including the count of successes, failures, and any files that need to be reformatted
