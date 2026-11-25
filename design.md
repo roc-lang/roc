@@ -2518,8 +2518,7 @@ The writer stores the root under the plan, layout and stored type the
 result type exactly as that evaluator's lowering computes them, by a program
 of the same modules that lowers nothing (`postcheck.Boxy.ValueSchema`).
 Non-function values have one stored representation under either strategy.
-One store writer
-serves both producers (`eval/const_store_writer.zig`): the plan-directed walk,
+One store writer serves both producers (`eval/const_store_writer.zig`): the plan-directed walk,
 the node shapes it fills, the field and variant order, packed scalar and
 product lists, nominal wrapping, and the stored type are shared, and only
 where a value's parts come from differs: an evaluator's result memory, the
@@ -3018,8 +3017,7 @@ Boxy runtime lowering is a distinct declared specialization strategy: that
 consumer's runtime roots are excluded from the LSS union and lowered by the
 separate Boxy pipeline after checking completes. Compile-time evaluation uses
 the same selected strategy ("Compile-Time Evaluation Under `.lss`").
-This split follows the
-selected strategy, never a failed specialization attempt.
+This split follows the selected strategy, never a failed specialization attempt.
 
 #### Demand-Driven Compile-Time Specialization
 
@@ -19996,11 +19994,11 @@ Builtin, follows the same rule as a program of that module alone.
 
 Every producer of checked modules names its strategy; the finalization option
 has no default, and neither do the `BuildEnv` and `Coordinator` that drive a
-compilation, which take the strategy as a parameter of `init`. One rule
-decides it everywhere: the command's explicit strategy, otherwise the strategy
-of its runtime program, or `.boxy` when it has no runtime consumer.
-`roc check` therefore defaults to `.boxy`, regardless of `--opt`, but honors
-both explicit `--specialize` settings for compile-time evaluation. The coordinator's
+compilation, which take the strategy as a parameter of `init`. Runtime commands
+use their runtime program's strategy for evaluation too. `roc check` defaults
+to `.boxy`, regardless of `--opt`, but honors both explicit `--specialize`
+settings for compile-time evaluation. Other clients without a runtime consumer
+name `.boxy`. The coordinator's
 compilations take it from their command (`CliBuildEnvOptions.specialization_strategy`).
 The REPL session
 (`roc repl` and the REPL WebAssembly module) evaluates each expression as a
