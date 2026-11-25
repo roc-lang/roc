@@ -28682,8 +28682,12 @@ is a view of the slots it covers. It holds no unit: its field reads are
 reads of the container's slots offset by the view's first slot, so a
 consumed read through it takes those slots from the container, and its
 other uses observe its whole range. A borrowed tag union read out of a
-container is a view of its one slot: nothing reads through it except an
-ownership-complete payload view, which carries the union's whole unit. It is
+container is a view of its one slot. An owned read of the active variant's
+complete refcounted payload can take that slot at the read. Later reads of
+sibling fields need no retain; a later observation of the same slot or intact
+record still needs its unit. The union view itself remains borrowed unless
+it has a separate reason to hold the slot. A borrowed payload view also
+carries the union's whole unit. The union view is
 held when that payload reaches a consuming operand (the closure read out of a
 record of closures, whose captures are unwrapped and passed to the closure
 body), or when it dismantles through that payload view (the held tag-union
