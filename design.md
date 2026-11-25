@@ -19478,8 +19478,9 @@ nothing to a callable whose refcount word is `REFCOUNT_FRAME` (Frame
 Callables), and the wasm backend's inline erased-callable reference counts
 test the same word. The Boxy runtime reads descriptors and nothing else: descriptor-guided copy,
 incref, decref, equality, hashing, inspection, and representation
-adaptation, component addressing and construction, the list operations that
-take an item descriptor, and the shared capture drop. It composes,
+adaptation, component addressing and construction, the release of the
+recursion box a field take leaves, the list operations that take an item
+descriptor, and the shared capture drop. It composes,
 interns, and allocates no descriptor or dictionary, and holds no state of its
 own: no cache, no lock, no atomic, and no thread-local. It has no procedure
 registry, no sidecar, no descriptor numbering, no deferred or pending calls,
@@ -26958,23 +26959,36 @@ every unrolled occurrence, which matches the typing rule below that nested
 modes are uniform through an owning rc.
 
 A dynamic local normally carries one opaque owned unit. For a closed-row
-record or tuple whose logical fields account for all its stored ownership,
-Boxy lowering also emits its checked product shape:
+record or tuple, Boxy lowering also emits its checked product shape:
 the fields' layouts and descriptor locals. This is ownership data,
 not a memory layout: field addresses and representation sizes still come
 from runtime descriptors. A dynamic field occupies one ownership slot;
 a concrete struct field expands into its concrete slots. An open row or an
-unknown type has no enumerated product shape and remains opaque. The same
-applies when a substitution can put a recursion box around a field: projecting
-the logical payload does not transfer the box. The parent descriptor must
-remain responsible for its release. Type arguments reached only through a
-list, explicit box, or callable do not affect inline size.
+unknown type has no enumerated product shape and remains opaque.
+
+A substitution can put a recursion box around a field. A field read opens
+the box and yields the field's value, so the value is not all its slot
+holds. The shape marks each such field boxable (`ProductShape.boxable`):
+every field whose inline size some substitution leaves unbounded, a type
+variable included. Type arguments reached only through a list, explicit box,
+or callable do not affect inline size. ARC stamps a take of a boxable field
+(`RefExtra.releases_recursion_box`): the read moves the value into storage of
+the target's own, and the backend then releases the slot through the
+product's descriptor (`roc_desc_field_release_box`). A slot that is a
+recursion box holding the last reference frees its allocation without
+releasing the value that left; one that other holders share gives the moved
+value a reference of its own and drops the slot's reference to the box; a
+slot that is the value itself holds nothing further. A boxable field is one
+ownership slot and never an ownership-complete field read of its product, so
+its unit leaves only by a stamped take, and ARC releases a boxable field it
+does not take by taking it into a frame temporary and releasing that. A
+boxable field whose committed layout is a struct would spread over several
+slots of one box, so a product holding one has no shape.
 
 A dynamic tag union has no enumerated shape, but each of its payload reads
 names the variant it reads: the read sits under the arm that matched the tag,
 or follows the constructor that built it. Boxy lowering, which knows the tag's
-payload count from its checked type, reads the only payload of a tag that is
-known to be stored inline, into a
+payload count from its checked type, reads the only payload of a tag, into a
 local whose layout can hold refcounted data, as an `assign_ref`
 `tag_payload_struct` of the dynamic union into independent frame storage
 (backends copy it with the union's descriptor as `dyn.tag_payload_addr` of
@@ -27001,6 +27015,15 @@ none of them is the variant's whole contents, so none can carry the union's
 unit, and such a union is released whole. The certifier models a dynamic
 value without a product shape as one claim, which a complete payload
 projection spends.
+
+A tag's only payload can sit in a recursion box as a boxable field can.
+Lowering marks the read of such a payload `RefExtra.payload_boxable`, and
+where ARC moves the union's unit into the payload it stamps the read exactly
+as it stamps a take of a boxable field; the backend then releases the slot
+with `roc_desc_tag_payload_release_box`. That covers a payload that moves out
+whole. A boxable payload that is itself a product would give up its fields
+one at a time through a view of the box, so lowering reads it as a component
+borrowed from the union instead.
 
 An erased argument product's recorded slot boundaries are authoritative for
 both the start and width of each field read. Its non-owning prefix and scalar

@@ -110,7 +110,9 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v84: procedure specs record whether they take a tail carry
 ///      (`tail_carry`).
 /// v85: absent optional ids and indices are stored as zero.
-pub const FORMAT_VERSION: u32 = 86;
+/// v87: dynamic product shapes mark their boxable fields, and field takes
+///      record the recursion box they release.
+pub const FORMAT_VERSION: u32 = 87;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
