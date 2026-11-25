@@ -3017,8 +3017,8 @@ pub const FinalMemoryConfig = struct {
     stack_bytes: u32,
     import_memory: bool = false,
     imported_memory_zeroed: bool = false,
-    minimum_memory: ?usize = null,
-    maximum_memory: ?usize = null,
+    minimum_memory: ?u64 = null,
+    maximum_memory: ?u64 = null,
     export_memory: bool = true,
 };
 
@@ -3045,12 +3045,12 @@ pub fn finalizeMemoryAndTableWithConfig(self: *Self, config: FinalMemoryConfig) 
     // Calculate memory pages: data + stack, rounded up to page boundary.
     const required_bytes = @as(u64, data_end) + @as(u64, config.stack_bytes);
     const configured_min = config.minimum_memory orelse 0;
-    const total_bytes: u64 = @max(required_bytes, @as(u64, configured_min));
+    const total_bytes: u64 = @max(required_bytes, configured_min);
     const page_size: u64 = 65536;
     const pages: u32 = @intCast(@max(1, (total_bytes + page_size - 1) / page_size));
     self.memory_min_pages = pages;
     self.memory_max_pages = if (config.maximum_memory) |maximum_memory|
-        @intCast(@max(1, (@as(u64, maximum_memory) + page_size - 1) / page_size))
+        @intCast(@max(1, (maximum_memory + page_size - 1) / page_size))
     else
         null;
 

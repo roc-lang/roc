@@ -9050,7 +9050,7 @@ fn preloadWasmObject(
     };
 }
 
-fn configuredWasmStackBytes(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) usize {
+fn configuredWasmStackBytes(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) u64 {
     if (args.wasm_stack_size) |bytes| return bytes;
     if (wasm) |config| {
         if (config.initial_stack_size) |bytes| return bytes;
@@ -9062,7 +9062,7 @@ fn configuredWasmStackBytes(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTarg
 /// platform's targets config specifies one. Null lets the linker size memory
 /// from the data segments plus the stack, which is always sufficient for
 /// those regions. The host must grow memory for its heap independently.
-fn configuredWasmMinimumMemory(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) ?usize {
+fn configuredWasmMinimumMemory(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) ?u64 {
     if (args.wasm_memory) |bytes| return bytes;
     if (wasm) |config| {
         if (config.minimum_memory) |bytes| return bytes;
@@ -9286,7 +9286,7 @@ fn linkWasmOutput(
     const maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null;
     const initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm);
     // The maximum the link declares, as `linker.link` passes it to wasm-ld.
-    const declared_maximum: ?usize = switch (linker.wasmStackLayout(global_base)) {
+    const declared_maximum: ?u64 = switch (linker.wasmStackLayout(global_base)) {
         .stack_first => maximum: {
             const limit = linker.stackFirstMaximumMemory(stack_size);
             if (maximum_memory) |bytes| {
@@ -9340,7 +9340,7 @@ fn linkWasmOutput(
     linker.link(ctx, link_config) catch |err| {
         // wasm-ld finds a size too small only when that size was passed to it.
         if (memory_problem) |problem| {
-            const configured: ?usize = switch (problem.what) {
+            const configured: ?u64 = switch (problem.what) {
                 .initial_memory_too_small => initial_memory,
                 .maximum_memory_too_small => declared_maximum,
             };
