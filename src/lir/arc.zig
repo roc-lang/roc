@@ -2784,6 +2784,13 @@ const Inserter = struct {
             shape.piece_mask;
     }
 
+    /// Whether `op` reads a field its source's product shape marks boxable
+    /// (`LIR.ProductShape.boxable`).
+    fn readsBoxableField(self: *const Inserter, op: LIR.RefOp) bool {
+        if (op.kind != .field or self.store.getLocal(op.source).product == .none) return false;
+        return arc_dismantle.ProductFields.of(self.store, self.layouts, op.source).?.at(op.index).boxable;
+    }
+
     fn materializeArcPlanStep(self: *Inserter, step: *const ArcPlanStep, tail: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         const stmt = self.store.getCFStmt(step.stmt);
         const saved_rewrite_stmt = self.current_rewrite_stmt;
@@ -2808,6 +2815,7 @@ const Inserter = struct {
                     .op = assign.op,
                     .extra = try self.store.addOptionalStmtRow(LIR.RefExtra, .{
                         .take_kind = if (step.take_assign_ref_target) .take else .none,
+                        .releases_recursion_box = step.take_assign_ref_target and self.readsBoxableField(assign.op),
                         .residual_shell_absent_fields = try self.materializeResidualShellAbsentFields(
                             assign,
                             step.residual_shell_absent_mask,
@@ -8155,13 +8163,16 @@ const Inserter = struct {
             var coverage: SlotCoverage = .{};
             self.residualCoverage(container, residual_mask, field.layout, first, &coverage);
             if (!coverage.residual) continue;
+            // A boxable field leaves its slot when it is taken, so its
+            // temporary holds the value in storage of its own.
             const temp = try self.store.addLocal(.{
                 .layout_idx = field.layout,
-                .dyn = if (self.layouts.getLayout(field.layout).tag == .dynamic) .{ .desc = field.desc.?, .storage = .view } else null,
+                .dyn = if (self.layouts.getLayout(field.layout).tag == .dynamic) .{ .desc = field.desc.?, .storage = if (field.boxable) .frame else .view } else null,
             });
             try self.dismantle_temps.append(self.lane_allocator, temp);
             const read_op: LIR.RefOp = LIR.RefOp.field(source, @intCast(field.index));
             if (coverage.absent) {
+                std.debug.assert(!field.boxable);
                 tail = try self.releaseResidualSlots(local, temp, field.layout, first, container, residual_mask, cause, tail);
                 var absent = std.ArrayList(u32).empty;
                 defer absent.deinit(self.emission_allocator);
@@ -8188,6 +8199,7 @@ const Inserter = struct {
                 .op = read_op,
                 .extra = try self.store.addOptionalStmtRow(LIR.RefExtra, .{
                     .take_kind = .take,
+                    .releases_recursion_box = field.boxable,
                 }),
                 .next = tail,
             } }, self.dismantleOrigin(cause, local));
@@ -20485,6 +20497,49 @@ test "ARC dynamic product takes independently stored fields and preserves aliase
             return err;
         };
     }
+}
+
+test "ARC stamps the box release on every take of a boxable dynamic product field" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const record_desc = try d.desc();
+    const field_desc = try d.desc();
+    const param = try d.value(record_desc, .param);
+    const field = try d.value(field_desc, .frame);
+    const result = try d.value(field_desc, .result);
+    d.f.store.getLocalPtr(param).product = try d.f.store.addStmtRow(LIR.ProductShape, .{
+        .layouts = try d.f.store.addU32Span(&.{ @backingInt(d.dynamic), @backingInt(d.dynamic) }),
+        .slots = try d.f.store.addU32Span(&.{ 0, 1, 2 }),
+        .descriptors = try d.f.span(&.{ field_desc, field_desc }),
+        .boxable = try d.f.store.addU32Span(&.{ 1, 1 }),
+    });
+    const ret = try d.f.ret(result);
+    const append = try d.f.assignLowLevel(result, &.{field}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), ret);
+    const read = try d.f.assignRefField(field, param, 0, append);
+    const proc = try d.proc(&.{ record_desc, field_desc, param }, read, d.dynamic, result);
+    _ = try insert(&d.f.store, &d.f.layouts, .{ .roots = &.{proc}, .specialize = false });
+    try testing.expectEqual(@as(usize, 0), d.f.countRc(field, .incref));
+    try d.f.expectRc(param, 0, 0, 0);
+    // The field moved to the append and the one released in its place both
+    // leave their slots by a stamped take into storage of their own.
+    var seen = [_]bool{ false, false };
+    for (0..d.f.store.cfStmtCount()) |stmt_index| {
+        const stmt = d.f.store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+        if (stmt.* != .assign_ref) continue;
+        const assign = stmt.assign_ref;
+        const extra = d.f.store.stmtRowOrDefault(assign.extra);
+        if (assign.op.kind != .field or assign.op.source != param or extra.take_kind != .take) continue;
+        try testing.expect(extra.releases_recursion_box);
+        try testing.expectEqual(LIR.DynStorage.frame, d.f.store.getLocal(assign.target).dyn.?.storage);
+        seen[assign.op.index] = true;
+    }
+    try testing.expectEqualSlices(bool, &.{ true, true }, &seen);
+    var diag: arc_certify.Diagnostic = .{};
+    const sigs = [_]arc_sig.RcSig{.{}};
+    arc_certify.certifyStore(testing.allocator, &d.f.store, &d.f.layouts, .{ .sigs = &sigs }, &.{proc}, &diag) catch |err| {
+        std.debug.print("boxable dynamic product certification failed: {any}\n", .{diag});
+        return err;
+    };
 }
 
 test "ARC erased argument products take fields and preserve prefix and scalar reads" {

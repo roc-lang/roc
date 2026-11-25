@@ -573,6 +573,11 @@ pub const ProductShape = struct {
     slots: U32Span,
     /// One descriptor per field, in the same order as `layouts`.
     descriptors: LocalSpan,
+    /// One word per field, nonzero where the field's stored slot is a
+    /// recursion box in some instantiation: a take of such a field moves its
+    /// value out of the slot and releases the box (`RefExtra`). Empty when
+    /// no field's slot can be boxed.
+    boxable: U32Span = .empty(),
 };
 
 /// What a `dynamic` local's value is (design.md "Dynamic Values In LIR"):
@@ -1252,6 +1257,12 @@ pub const RefExtra = struct {
     /// this exact path state; evaluators must not inspect those stale
     /// field bytes as live values.
     residual_shell_absent_fields: U32Span = .empty(),
+    /// Set by ARC on a field take out of a dynamic product whose shape marks
+    /// the field `boxable`. The read moves the field's value into the
+    /// target's own storage, and the slot it leaves is released with the
+    /// source's descriptor: a slot that is a recursion box gives up its
+    /// allocation, and any other slot holds nothing further.
+    releases_recursion_box: bool = false,
 };
 
 /// The fields of `CFStmt.assign_low_level` that only particular operations

@@ -8393,6 +8393,14 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         .assign_ref => |assign| {
             if (assign.op.kind == .field and self.localDyn(assign.op.source) != null) {
                 try self.generateDyn(assign.target, .{ .field_addr = .{ .base = assign.op.source, .desc = self.localDyn(assign.op.source).?.desc, .field_index = .{ .immediate = assign.op.index } } });
+                // Release the slot a stamped field take left
+                // (`LIR.RefExtra.releases_recursion_box`).
+                if (self.store.stmtRowOrDefault(assign.extra).releases_recursion_box) {
+                    try self.emitProcLocal(self.localDyn(assign.op.source).?.desc);
+                    try self.emitBytesAddress(assign.op.source);
+                    try self.emitI32Const(@bitCast(assign.op.index));
+                    try self.emitBoxyRuntimeCall(.field_release_box);
+                }
             } else if (assign.op.kind == .tag_payload_struct and self.localDyn(assign.op.source) != null) {
                 try self.generateDyn(assign.target, .{ .tag_payload_addr = .{ .base = assign.op.source, .desc = self.localDyn(assign.op.source).?.desc, .payload_index = 0 } });
             } else if (assign.op.kind == .local and self.localDyn(assign.target) != null) {

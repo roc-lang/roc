@@ -5875,15 +5875,18 @@ const Certifier = struct {
                             }
                             try state.setVariantDiscriminant(assign.target, source_value);
                         },
-                        .field => try self.bindPayloadReadWithShell(
-                            &state,
-                            assign.target,
-                            assign.op.source,
-                            arc_dismantle.encodeProjection(assign.op).?,
-                            self.store.stmtRowOrDefault(assign.extra).take_kind,
-                            null,
-                            self.store.getU32Span(self.store.stmtRowOrDefault(assign.extra).residual_shell_absent_fields),
-                        ),
+                        .field => {
+                            try self.requireBoxReleaseStamp(assign.target, assign.op, self.store.stmtRowOrDefault(assign.extra));
+                            try self.bindPayloadReadWithShell(
+                                &state,
+                                assign.target,
+                                assign.op.source,
+                                arc_dismantle.encodeProjection(assign.op).?,
+                                self.store.stmtRowOrDefault(assign.extra).take_kind,
+                                null,
+                                self.store.getU32Span(self.store.stmtRowOrDefault(assign.extra).residual_shell_absent_fields),
+                            );
+                        },
                         .tag_payload => try self.bindPayloadRead(
                             &state,
                             assign.target,
@@ -6355,6 +6358,27 @@ const Certifier = struct {
                     if (segment.walk != 0) try self.propagateTerminal(segment.walk);
                     return;
                 },
+            }
+        }
+    }
+
+    /// A field take releases the slot it leaves exactly when its source's
+    /// product shape marks the field boxable, and then moves the value into
+    /// storage of the target's own: the slot's box does not outlive the take.
+    fn requireBoxReleaseStamp(self: *Certifier, target: LIR.LocalId, op: LIR.RefOp, extra: LIR.RefExtra) CertifyError!void {
+        const boxable = self.store.getLocal(op.source).product != .none and
+            arc_dismantle.ProductFields.of(self.store, self.layouts, op.source).?.at(op.index).boxable;
+        if (extra.releases_recursion_box != (boxable and extra.take_kind == .take)) {
+            self.diag.context_local = op.source;
+            self.diag.context_proc = self.current_proc;
+            return self.fail("field read {d} of product {d} disagrees with its shape on releasing a recursion box", .{ op.index, @backingInt(op.source) });
+        }
+        if (!extra.releases_recursion_box) return;
+        if (self.store.getLocal(target).dyn) |dyn| {
+            if (dyn.storage == .view) {
+                self.diag.context_local = target;
+                self.diag.context_proc = self.current_proc;
+                return self.fail("take of boxable field {d} of product {d} binds a view of the box it releases", .{ op.index, @backingInt(op.source) });
             }
         }
     }

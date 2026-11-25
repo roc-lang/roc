@@ -127,6 +127,11 @@ pub fn roc_desc_field_addr(desc: *const TypeDesc, base: ?[*]u8, field_index: u32
     return compiled.fieldAddr(desc, valuePtr(base), field_index, ops());
 }
 
+/// The C-ABI form of `compiled.fieldReleaseBox`.
+pub fn roc_desc_field_release_box(desc: *const TypeDesc, base: ?[*]u8, field_index: u32) callconv(.c) void {
+    compiled.fieldReleaseBox(desc, valuePtr(base), field_index, ops());
+}
+
 /// The C-ABI form of `compiled.listElemAddr`.
 pub fn roc_desc_list_item_addr(elem: *const TypeDesc, list: *const RocList, index: u64) callconv(.c) [*]u8 {
     return compiled.listElemAddr(elem, list, index);

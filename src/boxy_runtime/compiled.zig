@@ -92,6 +92,29 @@ pub fn fieldAddr(desc: *const TypeDesc, base: [*]u8, field_index: u32, ops: *Roc
     return componentAddr(field.desc, base + field.offset);
 }
 
+/// Release the slot of field `field_index` of the record or tuple at `base`
+/// once the field's value has moved out of it. A slot that is a recursion box
+/// gives up its reference to the box: the last one frees the allocation
+/// without releasing the value that left, and any other one leaves the box to
+/// its remaining holders, whose value the moved copy now shares. Every other
+/// slot is the value itself and holds nothing further.
+pub fn fieldReleaseBox(desc: *const TypeDesc, base: [*]u8, field_index: u32, ops: *RocOps) void {
+    const record = recordOf(desc, ops);
+    if (field_index >= record.count) invariant(ops, "a field index past its record's fields");
+    const field = record.fieldBySemanticIndex(field_index);
+    if (field.desc.kind != .recursive_box) return;
+    const payload = field.desc.child.?;
+    if (payload.size == 0) return;
+    const slot = base + field.offset;
+    const box: ?[*]u8 = @as(*const ?[*]u8, @ptrCast(@alignCast(slot))).*;
+    if (utils.isUnique(box, ops)) {
+        utils.freeDataPtrC(box, payload.alignment, payload.flags.contains_refcounted, ops);
+        return;
+    }
+    walk.incref(payload, boxPayloadAddr(payload, @ptrCast(@alignCast(slot))), 1, ops);
+    walk.decref(field.desc, slot, ops);
+}
+
 /// The discriminant of the tag union value at `base`.
 pub fn tagDiscriminant(desc: *const TypeDesc, base: [*]const u8, ops: *RocOps) u32 {
     const union_desc = backing(desc);
