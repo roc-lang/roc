@@ -23487,6 +23487,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.codegen.getCode();
         }
 
+        /// Free what only linking the finished image reads, once a linker
+        /// has copied it into an executable mapping (`HostSplice.link`): the
+        /// code bytes, their relocations, and the symbol declarations those
+        /// name, which may borrow names the image's other inputs own. The
+        /// tables mapping an offset of the mapped code back to its
+        /// procedure, statement, and failure stay. The generator emits and
+        /// links nothing afterwards.
+        pub fn releaseLinkedCode(self: *Self) void {
+            self.assertImageFinished();
+            const emit = &self.codegen.emit;
+            emit.buf.clearAndFree(emit.allocator);
+            emit.relocs.clearAndFree(emit.allocator);
+            self.codegen.relocations.clearAndFree(self.codegen.allocator);
+            self.codegen.symbols.deinit(self.codegen.allocator);
+            self.codegen.symbols = .{};
+        }
+
         /// Get generated callable ranges for dynamic unwind registration.
         pub fn getUnwindFunctions(self: *const Self) []const coff.FunctionInfo {
             return self.unwind_functions.items;
