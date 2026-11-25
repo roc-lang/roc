@@ -293,9 +293,9 @@ NO CHANGE
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-dispatch-call (method "count_of") (constraint-fn-var 419)
+				(e-dispatch-call (method "count_of") (constraint-fn-var 415)
 					(receiver
-						(e-dispatch-call (method "bump") (constraint-fn-var 415)
+						(e-dispatch-call (method "bump") (constraint-fn-var 411)
 							(receiver
 								(e-nominal (nominal "Counter")
 									(e-record
@@ -314,9 +314,9 @@ NO CHANGE
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-dispatch-call (method "to_num") (constraint-fn-var 436)
+				(e-dispatch-call (method "to_num") (constraint-fn-var 432)
 					(receiver
-						(e-dispatch-call (method "toggle") (constraint-fn-var 432)
+						(e-dispatch-call (method "toggle") (constraint-fn-var 428)
 							(receiver
 								(e-nominal (nominal "expect_in_associated_block.Counter.Flag")
 									(e-tag (name "Off"))))

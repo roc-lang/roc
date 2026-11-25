@@ -888,13 +888,14 @@ pub const Cursor = struct {
             var saw_separator = false;
             while (true) {
                 const c = self.peek() orelse 0;
-                if (self.chompBasePrefixedInteger(c)) |prefixed| {
-                    // `parseInto` reads a base prefix only right after the
-                    // leading `0`, so a separator before it spells a
-                    // different number there.
-                    if (saw_separator) self.number.scanned.flags.exact = false;
-                    tok = prefixed;
-                    break;
+                // A base prefix is the two characters `0x`, `0o` or `0b`
+                // with nothing between them. After a separator the letter
+                // is not a prefix, so `0_x10` ends in the bad suffix `x10`.
+                if (!saw_separator) {
+                    if (self.chompBasePrefixedInteger(c)) |prefixed| {
+                        tok = prefixed;
+                        break;
+                    }
                 }
                 switch (c) {
                     '0'...'9' => {
@@ -2824,9 +2825,9 @@ test "tokenizer number records at the edges of the exact form" {
         .{ .text = "1_000_000", .outcome = .exact },
         .{ .text = "0_1", .outcome = .exact },
         .{ .text = "1_.5_0", .outcome = .exact },
-        // A separator before a base prefix: the text parser reads `0_`.
-        .{ .text = "0_x10", .outcome = .inexact },
-        .{ .text = "0_b1", .outcome = .inexact },
+        // A separator before a base letter leaves no base prefix.
+        .{ .text = "0_x10", .outcome = .not_a_number },
+        .{ .text = "0_b1", .outcome = .not_a_number },
         // Base prefixes up to and past 64 bits.
         .{ .text = "0xFFFF_FFFF_FFFF_FFFF", .outcome = .exact },
         .{ .text = "0x1_0000_0000_0000_0000", .outcome = .inexact },
@@ -3178,7 +3179,7 @@ test "issue 13366: every tokenizer diagnostic covers the source it reports" {
         .{ .source = "n = 007.5e2", .tag = .LeadingZero, .start = 4, .end = 11 },
         .{ .source = "n = 0_12u8", .tag = .LeadingZero, .start = 4, .end = 10 },
         .{ .source = "n = 0X1F", .tag = .UppercaseBase, .start = 5, .end = 6 },
-        .{ .source = "n = 0_B11", .tag = .UppercaseBase, .start = 6, .end = 7 },
+        .{ .source = "n = 0B_11", .tag = .UppercaseBase, .start = 5, .end = 6 },
         .{ .source = "a\rb", .tag = .MisplacedCarriageReturn, .start = 1, .end = 2 },
         .{ .source = "a \x01 b", .tag = .AsciiControl, .start = 2, .end = 3 },
         .{ .source = "s = \"a\x01b\"", .tag = .NonPrintableUnicodeInStrLiteral, .start = 6, .end = 7 },
@@ -3491,6 +3492,63 @@ test "number suffixes" {
     // malformed token so the digit prefix cannot become a tuple access.
     try testTokenization(gpa, "x.70000c", &[_]Token.Tag{ .LowerIdent, .MalformedNumberBadSuffix });
     try testTokenization(gpa, "x.0u8", &[_]Token.Tag{ .LowerIdent, .MalformedNumberBadSuffix });
+}
+
+test "a base prefix is contiguous" {
+    const gpa = std.testing.allocator;
+
+    // A separator between the `0` and the base letter leaves the letter and
+    // the digits after it as a suffix the number does not accept.
+    try testTokenization(gpa, "0_x10", &[_]Token.Tag{.MalformedNumberBadSuffix});
+    try testTokenization(gpa, "0_X10", &[_]Token.Tag{.MalformedNumberBadSuffix});
+    try testTokenization(gpa, "0_b1", &[_]Token.Tag{.MalformedNumberBadSuffix});
+    try testTokenization(gpa, "0_o7", &[_]Token.Tag{.MalformedNumberBadSuffix});
+    try testTokenization(gpa, "0__x10", &[_]Token.Tag{.MalformedNumberBadSuffix});
+    try testTokenization(gpa, "-0_x10", &[_]Token.Tag{.MalformedNumberBadSuffix});
+    try testTokenization(gpa, "0_x", &[_]Token.Tag{.MalformedNumberBadSuffix});
+
+    // An uppercase letter after a separator is not a base prefix either, so
+    // the tokenizer reports nothing about its case.
+    {
+        var messages: [4]Diagnostic = undefined;
+        var cursor = Cursor.init("0_B11", &messages);
+        try std.testing.expectEqual(Token.Tag.MalformedNumberBadSuffix, cursor.chompNumber());
+        try std.testing.expectEqual(@as(u32, 0), cursor.message_count);
+    }
+
+    // Separators among the digits, including right after the prefix, and
+    // trailing separators keep the number.
+    try testTokenization(gpa, "0x_10", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, "0x1_0", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, "1_0", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, "0_", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, "0_1", &[_]Token.Tag{.Int});
+
+    // A minus before an underscore is not part of a number.
+    try testTokenization(gpa, "-_1", &[_]Token.Tag{ .OpUnaryMinus, .NamedUnderscore });
+
+    // The tokenizer's value for each accepted spelling is the one the text
+    // parser derives.
+    const values = [_]struct { text: []const u8, value: u64 }{
+        .{ .text = "0x_10", .value = 16 },
+        .{ .text = "0x1_0", .value = 16 },
+        .{ .text = "0b1_0", .value = 2 },
+        .{ .text = "0o1_7", .value = 15 },
+        .{ .text = "1_0", .value = 10 },
+        .{ .text = "0_", .value = 0 },
+        .{ .text = "0_1", .value = 1 },
+    };
+    for (values) |case| {
+        errdefer std.debug.print("number text: '{s}'\n", .{case.text});
+        var messages: [4]Diagnostic = undefined;
+        var cursor = Cursor.init(case.text, &messages);
+        try std.testing.expectEqual(Token.Tag.Int, cursor.chompNumber());
+        try std.testing.expectEqual(case.text.len, cursor.pos);
+        try std.testing.expect(cursor.number.scanned.flags.exact);
+        try std.testing.expectEqual(case.value, cursor.number.scanned.significand);
+        try std.testing.expectEqual(@as(i32, 0), cursor.number.scanned.exponent10);
+        try std.testing.expectEqual(ScannedOutcome.exact, try expectScannedMatchesText(gpa, case.text));
+    }
 }
 
 test "malformed unicode identifiers" {

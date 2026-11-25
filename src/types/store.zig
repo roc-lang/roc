@@ -615,13 +615,26 @@ pub const Store = struct {
     }
 
     /// Canonicalize the solved store and drop what no class reaches any more
-    /// (`canonicalizeAndCompactForSeal`), then seal it. Checking calls this
-    /// once, when it finishes a module.
+    /// (`canonicalizeAndCompactForSeal`), flattening every row, then seal it.
     pub fn canonicalizeAndSeal(self: *Self, idents: *const base.Ident.Store) Allocator.Error!void {
         // Canonicalization renumbers classes, and no report reads a closing
         // once checking has finished.
         self.tag_tail_closings.clearRetainingCapacity();
-        try self.canonicalizeAndCompactForSeal(idents);
+        try self.canonicalizeAndCompactForSeal(idents, {});
+        try self.seal();
+    }
+
+    /// Canonicalize the solved store and drop what no class reaches any more
+    /// (`canonicalizeAndCompactForSeal`), flattening the rows `roots`
+    /// reaches, then seal it. Checking calls this once, when it finishes a
+    /// module. `roots.forEach(visitor)` names every variable a reader of the
+    /// sealed store may start from, through `visitor.visit(Var)`,
+    /// `visitor.visitRequired(?Var, comptime []const u8)` and
+    /// `visitor.visitLeading(u32)`, the last naming every variable below a
+    /// count. The store itself adds its nominal declarations' backings.
+    pub fn canonicalizeAndSealReached(self: *Self, idents: *const base.Ident.Store, roots: anytype) Allocator.Error!void {
+        self.tag_tail_closings.clearRetainingCapacity();
+        try self.canonicalizeAndCompactForSeal(idents, roots);
         try self.seal();
     }
 
@@ -630,13 +643,15 @@ pub const Store = struct {
     /// Canonicalization: every slot comes to name its class's storage root
     /// directly; every variable a descriptor, a type argument or field pool
     /// entry, or a nominal declaration holds becomes its class's checked
-    /// representative; and every record and tag union row absorbs the rows
-    /// its extension chain reaches, so a row's extension is never itself a
-    /// row. A reader of the sealed store therefore receives representatives
-    /// as children and reads each row in one piece. A static-dispatch
-    /// constraint keeps its own function variable: checking recorded that
-    /// variable at the dispatch site, so it identifies the constraint, and a
-    /// reader resolves it (one slot read).
+    /// representative; and every record and tag union row `roots` reaches
+    /// absorbs the rows its extension chain reaches, so such a row's
+    /// extension is never itself a row. A reader of the sealed store
+    /// therefore receives representatives as children and reads each row it
+    /// can reach in one piece. A row no root reaches keeps its chain: nothing
+    /// reads it. With no roots (`{}`), every row is flattened. A
+    /// static-dispatch constraint keeps its own function variable: checking
+    /// recorded that variable at the dispatch site, so it identifies the
+    /// constraint, and a reader resolves it (one slot read).
     ///
     /// Compaction: every descriptor no slot names and every pool entry no
     /// live descriptor reaches is dropped, and the survivors keep their
@@ -657,14 +672,16 @@ pub const Store = struct {
     ///
     /// The passes, in order: the slots, which also find the live
     /// descriptors; the live descriptors, canonicalizing what each holds
-    /// inline, absorbing row chains and marking the pool entries each one's
-    /// final content reaches; the reached pool entries, each canonicalized
-    /// and moved down in one step, so an entry no class reaches is never
-    /// canonicalized; and the live descriptors again, moving each down with
-    /// its ranges' new starts. Pool entries are canonicalized while slots and
-    /// descriptors still have their solved numbering, which representative
-    /// lookups read.
-    fn canonicalizeAndCompactForSeal(self: *Self, idents: *const base.Ident.Store) Allocator.Error!void {
+    /// inline, finding the rows with a chain to absorb and marking the pool
+    /// entries each other one's content reaches; the flattening of the
+    /// chained rows (those `roots` reaches, or all of them), after which
+    /// each chained row's final content is marked; the reached pool entries,
+    /// each canonicalized and moved down in one step, so an entry no class
+    /// reaches is never canonicalized; and the live descriptors again, moving
+    /// each down with its ranges' new starts. Pool entries are canonicalized
+    /// while slots and descriptors still have their solved numbering, which
+    /// representative lookups read.
+    fn canonicalizeAndCompactForSeal(self: *Self, idents: *const base.Ident.Store, roots: anytype) Allocator.Error!void {
         self.debugAssertUnsealed();
         if (std.debug.runtime_safety and self.probe_open) base.invariant("a type store was canonicalized with a probe open", .{});
         const gpa = self.gpa;
@@ -692,16 +709,10 @@ pub const Store = struct {
         // variable inline (a return or an extension), so only those are
         // canonicalized here; the variables of every other kind are pool
         // entries. Resolving a row's extension also tells whether it is
-        // itself a row: such a row absorbs its chain into rows appended to
-        // its pool, and every other one only has its extension replaced. A
-        // chain's segments are read as stored: a segment at a lower index has
-        // absorbed its own chain already, and one at a higher index has not.
-        // Every appended row is the final content of the live descriptor that
-        // appended it, so all of them are reached.
-        var row_fields: std.ArrayListUnmanaged(RecordField) = .empty;
-        defer row_fields.deinit(gpa);
-        var row_tags: std.ArrayListUnmanaged(Tag) = .empty;
-        defer row_tags.deinit(gpa);
+        // itself a row: such a row has a chain to absorb, and its pool
+        // entries are marked once flattening has settled its final content.
+        var chained: std.ArrayListUnmanaged(DescStore.Idx) = .empty;
+        defer chained.deinit(gpa);
         var live = live_descs.runs();
         while (live.next()) |run| for (run.start..run.end) |index| {
             const desc_idx: DescStore.Idx = @fromBackingInt(@intCast(index));
@@ -716,62 +727,41 @@ pub const Store = struct {
                     self.markStoredVarRange(&vars_reached, payload[0]);
                     self.markStoredVarRange(&vars_reached, payload[2]);
                 },
-                .record => {
-                    const record = self.recordAt(desc_idx);
-                    const ext = self.findStorageRoot(record.ext);
-                    if (self.descs.getWord(ext.desc_idx).kind != .record) {
-                        self.setInlineVarForSeal(desc_idx, Desc.row_ext_payload_word, representativeOf(ext));
-                        fields_reached.setRange(payload[0], payload[1]);
-                        continue;
+                .record, .tag_union => |kind| {
+                    const ext = self.findStorageRoot(@fromBackingInt(payload[Desc.row_ext_payload_word]));
+                    self.setInlineVarForSeal(desc_idx, Desc.row_ext_payload_word, representativeOf(ext));
+                    if (self.descs.getWord(ext.desc_idx).kind == kind) {
+                        try chained.append(gpa, desc_idx);
+                    } else {
+                        self.markRowEntries(&fields_reached, &tags_reached, &vars_reached, desc_idx);
                     }
-                    row_fields.clearRetainingCapacity();
-                    var segment = record;
-                    var guard = debug.IterationGuard.init("canonicalizeAndCompactForSeal.record");
-                    while (true) {
-                        guard.tick();
-                        var fields = self.record_fields.iterRange(segment.fields);
-                        while (fields.next()) |field| try row_fields.append(gpa, field);
-                        segment = self.extensionRecord(segment.ext) orelse break;
-                    }
-                    std.mem.sort(RecordField, row_fields.items, idents, RecordField.sortByNameAsc);
-                    var desc = self.descAt(desc_idx);
-                    desc.content = .{ .structure = .{ .record = .{
-                        .fields = try self.record_fields.appendSlice(gpa, row_fields.items),
-                        .ext = self.representativeVar(segment.ext),
-                    } } };
-                    self.descs.setRow(desc_idx, self.encodeDescWithoutIdentity(desc));
-                },
-                .tag_union => {
-                    const tag_union = self.tagUnionAt(desc_idx);
-                    const ext = self.findStorageRoot(tag_union.ext);
-                    if (self.descs.getWord(ext.desc_idx).kind != .tag_union) {
-                        self.setInlineVarForSeal(desc_idx, Desc.row_ext_payload_word, representativeOf(ext));
-                        tags_reached.setRange(payload[0], payload[1]);
-                        for (self.tags.sliceRange(tag_union.tags).items(.args)) |args| markVarRange(&vars_reached, args);
-                        continue;
-                    }
-                    row_tags.clearRetainingCapacity();
-                    var segment = tag_union;
-                    var guard = debug.IterationGuard.init("canonicalizeAndCompactForSeal.tag_union");
-                    while (true) {
-                        guard.tick();
-                        var tags = self.tags.iterRange(segment.tags);
-                        while (tags.next()) |tag| try row_tags.append(gpa, tag);
-                        segment = self.extensionTagUnion(segment.ext) orelse break;
-                    }
-                    std.mem.sort(Tag, row_tags.items, idents, Tag.sortByNameAsc);
-                    for (row_tags.items) |tag| markVarRange(&vars_reached, tag.args);
-                    var desc = self.descAt(desc_idx);
-                    desc.content = .{ .structure = .{ .tag_union = .{
-                        .tags = try self.tags.appendSlice(gpa, row_tags.items),
-                        .ext = self.representativeVar(segment.ext),
-                    } } };
-                    self.descs.setRow(desc_idx, self.encodeDescWithoutIdentity(desc));
                 },
             }
         };
-        try fields_reached.extendReached(gpa, self.record_fields.len());
-        try tags_reached.extendReached(gpa, self.tags.len());
+
+        if (chained.items.len != 0) {
+            var flattener = RowFlattener{ .store = self, .idents = idents };
+            defer flattener.deinit();
+            if (@TypeOf(roots) == void) {
+                // A chain's segments are read as stored: one flattened already
+                // has absorbed its own chain, and one not yet reached has not.
+                for (chained.items) |desc_idx| try flattener.flatten(desc_idx);
+            } else {
+                var traced = try std.DynamicBitSetUnmanaged.initEmpty(gpa, self.descs.backing.len());
+                defer traced.deinit(gpa);
+                var tracer = SealTracer{ .flattener = &flattener, .reached = &traced };
+                defer tracer.pending.deinit(gpa);
+                for (self.nominal_decls.items()) |decl| try tracer.visit(decl.backing);
+                try roots.forEach(&tracer);
+                while (tracer.pending.pop()) |desc_idx| try tracer.expand(desc_idx);
+            }
+            // Every appended row is the final content of the chained row
+            // that appended it, so all of them are reached. A chained row no
+            // root reaches keeps its own entries.
+            try fields_reached.extendReached(gpa, self.record_fields.len());
+            try tags_reached.extendReached(gpa, self.tags.len());
+            for (chained.items) |desc_idx| self.markRowEntries(&fields_reached, &tags_reached, &vars_reached, desc_idx);
+        }
         for (self.nominal_decls.items()) |*decl| {
             decl.backing = self.representativeVar(decl.backing);
             markVarRange(&vars_reached, decl.formals);
@@ -903,6 +893,151 @@ pub const Store = struct {
         if (range.count == 0) return;
         reached.setRange(@backingInt(range.start) - 1, range.count + 1);
     }
+
+    /// Mark the pool entries a live row's stored content reaches: its fields,
+    /// or its tags and their payloads.
+    fn markRowEntries(self: *const Self, fields_reached: *Survivors, tags_reached: *Survivors, vars_reached: *Survivors, desc_idx: DescStore.Idx) void {
+        const payload = self.descs.backing.items(.payload)[@backingInt(desc_idx)];
+        switch (self.descs.getWord(desc_idx).kind) {
+            .record => fields_reached.setRange(payload[0], payload[1]),
+            .tag_union => {
+                tags_reached.setRange(payload[0], payload[1]);
+                for (self.tags.sliceRange(self.tagUnionAt(desc_idx).tags).items(.args)) |args| markVarRange(vars_reached, args);
+            },
+            .flex, .rigid, .alias, .field_presence, .err, .tuple, .nominal_type, .empty_record, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound => unreachable, // callers mark only record and tag-union descriptors
+        }
+    }
+
+    /// Flattens the chained rows of a store being canonicalized.
+    const RowFlattener = struct {
+        store: *Self,
+        idents: *const base.Ident.Store,
+        fields: std.ArrayListUnmanaged(RecordField) = .empty,
+        tags: std.ArrayListUnmanaged(Tag) = .empty,
+
+        fn deinit(self: *RowFlattener) void {
+            self.fields.deinit(self.store.gpa);
+            self.tags.deinit(self.store.gpa);
+        }
+
+        /// Make the row `desc_idx` absorb the rows its extension chain
+        /// reaches. A row whose extension is not a row is left as it is.
+        fn flatten(self: *RowFlattener, desc_idx: DescStore.Idx) Allocator.Error!void {
+            const store = self.store;
+            switch (store.descs.getWord(desc_idx).kind) {
+                .record => {
+                    var segment = store.recordAt(desc_idx);
+                    if (store.extensionRecord(segment.ext) == null) return;
+                    self.fields.clearRetainingCapacity();
+                    var guard = debug.IterationGuard.init("canonicalizeAndCompactForSeal.record");
+                    while (true) {
+                        guard.tick();
+                        var fields = store.record_fields.iterRange(segment.fields);
+                        while (fields.next()) |field| try self.fields.append(store.gpa, field);
+                        segment = store.extensionRecord(segment.ext) orelse break;
+                    }
+                    std.mem.sort(RecordField, self.fields.items, self.idents, RecordField.sortByNameAsc);
+                    var desc = store.descAt(desc_idx);
+                    desc.content = .{ .structure = .{ .record = .{
+                        .fields = try store.record_fields.appendSlice(store.gpa, self.fields.items),
+                        .ext = segment.ext,
+                    } } };
+                    store.descs.setRow(desc_idx, store.encodeDescWithoutIdentity(desc));
+                },
+                .tag_union => {
+                    var segment = store.tagUnionAt(desc_idx);
+                    if (store.extensionTagUnion(segment.ext) == null) return;
+                    self.tags.clearRetainingCapacity();
+                    var guard = debug.IterationGuard.init("canonicalizeAndCompactForSeal.tag_union");
+                    while (true) {
+                        guard.tick();
+                        var tags = store.tags.iterRange(segment.tags);
+                        while (tags.next()) |tag| try self.tags.append(store.gpa, tag);
+                        segment = store.extensionTagUnion(segment.ext) orelse break;
+                    }
+                    std.mem.sort(Tag, self.tags.items, self.idents, Tag.sortByNameAsc);
+                    var desc = store.descAt(desc_idx);
+                    desc.content = .{ .structure = .{ .tag_union = .{
+                        .tags = try store.tags.appendSlice(store.gpa, self.tags.items),
+                        .ext = segment.ext,
+                    } } };
+                    store.descs.setRow(desc_idx, store.encodeDescWithoutIdentity(desc));
+                },
+                .flex, .rigid, .alias, .field_presence, .err, .tuple, .nominal_type, .empty_record, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound => unreachable, // callers flatten only record and tag-union descriptors
+            }
+        }
+    };
+
+    /// Walks every descriptor a sealed store's readers can reach from its
+    /// roots, flattening each row it reaches before reading the row's
+    /// children.
+    const SealTracer = struct {
+        flattener: *RowFlattener,
+        reached: *std.DynamicBitSetUnmanaged,
+        pending: std.ArrayListUnmanaged(DescStore.Idx) = .empty,
+
+        pub fn visit(self: *SealTracer, var_: Var) Allocator.Error!void {
+            const store = self.flattener.store;
+            const desc_idx = store.resolveDescIdx(var_);
+            if (self.reached.isSet(@backingInt(desc_idx))) return;
+            self.reached.set(@backingInt(desc_idx));
+            switch (store.descs.getWord(desc_idx).kind) {
+                // These hold no variable.
+                .field_presence, .err, .empty_record, .empty_tag_union => {},
+                .flex, .rigid, .alias, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .record, .tag_union => try self.pending.append(store.gpa, desc_idx),
+            }
+        }
+
+        pub fn visitRequired(self: *SealTracer, var_: ?Var, comptime _: []const u8) Allocator.Error!void {
+            if (var_) |required| try self.visit(required);
+        }
+
+        /// Visit every variable below `count`.
+        pub fn visitLeading(self: *SealTracer, count: u32) Allocator.Error!void {
+            for (0..count) |raw| try self.visit(@fromBackingInt(@intCast(raw)));
+        }
+
+        fn expand(self: *SealTracer, desc_idx: DescStore.Idx) Allocator.Error!void {
+            const store = self.flattener.store;
+            switch (store.descs.getWord(desc_idx).kind) {
+                .field_presence, .err, .empty_record, .empty_tag_union => unreachable, // `visit` queues only descriptors that hold a variable
+                .flex, .rigid => for (store.sliceStaticDispatchConstraints(store.variableConstraintsAt(desc_idx))) |constraint| {
+                    try self.visit(constraint.fn_var);
+                },
+                .alias => {
+                    const alias = store.aliasAt(desc_idx);
+                    try self.visit(store.getAliasBackingVar(alias));
+                    for (store.sliceAliasArgs(alias)) |arg| try self.visit(arg);
+                },
+                .tuple => for (store.sliceVars(store.tupleAt(desc_idx).elems)) |elem| try self.visit(elem),
+                .nominal_type => for (store.sliceNominalArgs(store.nominalAt(desc_idx))) |arg| try self.visit(arg),
+                .fn_pure, .fn_effectful, .fn_unbound => {
+                    const func = store.funcAt(desc_idx);
+                    for (store.sliceVars(func.args)) |arg| try self.visit(arg);
+                    try self.visit(func.ret);
+                },
+                .record => {
+                    try self.flattener.flatten(desc_idx);
+                    const record = store.recordAt(desc_idx);
+                    var fields = store.record_fields.iterRange(record.fields);
+                    while (fields.next()) |field| {
+                        try self.visit(field.presence.typeVar());
+                        if (field.presence.presenceVar()) |presence| try self.visit(presence);
+                    }
+                    try self.visit(record.ext);
+                },
+                .tag_union => {
+                    try self.flattener.flatten(desc_idx);
+                    const tag_union = store.tagUnionAt(desc_idx);
+                    var tags = store.tags.iterRange(tag_union.tags);
+                    while (tags.next()) |tag| {
+                        for (store.sliceVars(tag.args)) |arg| try self.visit(arg);
+                    }
+                    try self.visit(tag_union.ext);
+                },
+            }
+        }
+    };
 
     /// Replace the variable a function or row descriptor holds inline in
     /// `payload_word`, leaving the rest of its stored row as it is: the row
