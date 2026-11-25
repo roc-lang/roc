@@ -25991,7 +25991,7 @@ fn valueFormWalk(allocator: Allocator, bodies: *const CheckedBodies, root: CIR.E
             // A segment outside a string is a file imported as `Str`: a
             // string literal of that one segment. Segments of a string are
             // never walked.
-            .str_segment => if (checkedConcreteBuiltinForLiteralTarget(&bodies.types,bodies.exprType(id)) != .str) return .other,
+            .str_segment => if (checkedConcreteBuiltinForLiteralTarget(&bodies.types, bodies.exprType(id)) != .str) return .other,
             // A bytes literal's checked type is always `List(U8)`.
             .empty_list, .zero_argument_tag, .bytes_literal => {},
             // An empty literal at a record type of optional fields builds

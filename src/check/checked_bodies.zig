@@ -940,7 +940,7 @@ pub const CheckedBodies = struct {
             .e_for => .{ .pattern = view.get(.patt), .expr = view.get(.expr), .body = view.get(.body) },
             .e_hosted_lambda => .{ .symbol_name = view.get(.symbol_name), .args = node_store.slicePatterns(view.get(.args)) },
             .e_run_low_level => .{ .op = view.get(.op), .args = node_store.sliceExpr(view.get(.args)) },
-            .e_frac_f32, .e_frac_f64, .e_lookup_associated_local, .e_lookup_associated, .e_method_call, .e_type_method_call, .e_deferred_import_ref => comptime unreachable,
+            .e_frac_f32, .e_frac_f64, .e_lookup_associated_local, .e_lookup_associated, .e_method_call, .e_type_method_call, .e_deferred_import_ref => comptime unreachable, // `exprDataKindOf` is null for these kinds, so the return type rejects them at compile time
         };
     }
 
@@ -1092,7 +1092,7 @@ pub const CheckedBodies = struct {
             },
             .underscore => {},
             .runtime_error => {},
-            .frac_f32_literal, .frac_f64_literal, .deferred_import_ref => comptime unreachable,
+            .frac_f32_literal, .frac_f64_literal, .deferred_import_ref => comptime unreachable, // `patternDataKindOf` is null for these kinds, so the return type rejects them at compile time
         };
     }
 
