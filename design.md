@@ -350,8 +350,8 @@ stores those IDs unchanged, and every iteration over entries excludes the unused
 slot. This choice never silently renumbers IDs crossing a compiler boundary.
 Borrowed column views own no allocation.
 
-Internally counted epochs start at one. Before an advance would reach
-`maxInt(u32)`, the stamps are cleared and the epoch restarts at one. Natural
+Internally counted epochs start at one. When an advance would overflow the
+epoch's width, the stamps are cleared and the epoch restarts at one. Natural
 epochs are increasing producer-owned IDs; restarting their domain requires
 clearing the stamps. Data are read only under a matching stamp.
 
@@ -1105,8 +1105,21 @@ generator the object is encoded from (`arrange`, `assembleArranged`):
   excerpt's location) and every helper with a frame, whether the program
   declares it or only spliced code reaches it.
 
-A prepared data catalog owns one immutable copy of its payload bytes, names,
-and relocations. It records exact outgoing data and code-symbol edges once;
+A prepared data catalog owns one immutable copy of its items' names and
+relocations. Payload bytes have one owner, and every later holder borrows
+them: each item names the owner keeping its bytes alive (`DataItem.
+payload_owner`), and a catalog, set or unit's pieces holding an item retains
+that owner instead of copying the bytes. A catalog built from exports either
+copies their bytes into its own storage, when the exports go away first, or
+borrows them from exports a keeper owns (`DataOwner.initKeeper`), which the
+catalog retains: a unit's pieces borrow the bytes of the unit's literal
+backings and frozen constants this way, and the keeper frees those exports
+with the last catalog retaining it. Object writers are given the read-only
+data as pieces borrowed from the data items (`UnitImage.PiecedBytes`), and a
+unit image writes its block and writable data straight from the sections
+into the image, patching the block's in-place references there, so each
+datum's bytes are copied once, into the encoded object or image. The
+catalog records exact outgoing data and code-symbol edges once;
 each catalog entry holds both its datum and its edges. Fragments carry only dense
 root indices into this shared graph, and an excerpt set retains each graph owner
 once. Copying, pruning and object assembly preserve these graph references.
@@ -1116,8 +1129,9 @@ The graph producer propagates the code-pointer property along reverse data edges
 once, including cycles.
 The catalog, workers, and copied sets can be destroyed independently. This is
 compiler-storage ownership; it changes no generated reference-count operation.
-Renaming data first gives the new set its own metadata and backing, preserving
-the catalog's immutable contents. Catalogs belong to one program's symbol
+Renaming data first gives the new set its own metadata, preserving the
+catalog's immutable contents; the renamed items share the catalog's payload
+bytes and retain its owner. Catalogs belong to one program's symbol
 domain; equal program-local names from other programs never establish sharing.
 
 ### Read-Only Type Analysis
@@ -2447,7 +2461,10 @@ CIR kinds (as the checked body reader presents them) and checked types:
   (`exact_numeral.fits`; a float literal always converts, to its nearest
   value);
 - a string literal whose quote dispatches to no `from_quote`, made of literal
-  segments only, whose checked type is the builtin `Str`;
+  segments only, whose checked type is the builtin `Str`, and a file imported
+  as `Str`, which is one such segment on its own;
+- a bytes literal (`import "file" as bytes : List(U8)`), whose checked type is
+  always `List(U8)`;
 - an empty list, a tag with no payload, or an empty record whose checked
   type is the empty record (at a record type of optional fields it builds
   each field's presence slot);
@@ -2527,7 +2544,10 @@ where a value's parts come from differs: an evaluator's result memory, the
 checked expression's parts, or the stored value of a constant the expression
 reads. A numeral's bytes are the bytes lowering gives the literal
 (`exact_numeral.encodeBits`), and a literal list or string has no capacity
-beyond its items (Static Lists And Strings Keep Their Capacity). A read of a
+beyond its items (Static Lists And Strings Keep Their Capacity). A string of
+one segment and a bytes literal are stored as blobs borrowed from the
+module's string literal store, with no copy ("Constant Storage"); a bytes
+literal is the packed items of its `List(U8)`. A read of a
 constant is the constant's stored value, capacity included: the writer
 copies the read root's nodes into the reading root's store under the
 reading root's own plan, choosing each tag's variant by name, so a read at a
@@ -2556,10 +2576,10 @@ takes its modules in dependency order). A read records no root read
 (`CompileTimeRootReadTable`), as no `.boxy` evaluation of a root does: the
 read root is complete whenever the reader is. The checked artifact still carries each such root's
 request, entry wrapper template, and const template: the root graph walks no
-wrapper of a completed root, but a module's object defines each completed
-root's wrapper for the other objects of a link, and runtime reads restore
-the stored value through the const template, exactly as for an evaluated
-root.
+wrapper of a completed root, but a module's object defines the wrapper of a
+completed root whose value holds a function (Per-Module Output), and
+runtime reads restore the stored value through the const template, exactly
+as for an evaluated root.
 
 #### Value-Form Expressions Stay In Their Bodies
 
@@ -2810,9 +2830,22 @@ it never emits runtime initialization code. Static reachability and compaction
 retain and remap both child slots and referenced procedures. Identical frozen
 nodes can share storage by their contents and relocations.
 
-A body that reads a stored value built from parts holds one statement, the
-read of the value's own slot. `.boxy` lowering resolves a list's items, a
-product's fields, a tag's payloads, and a box's payload to their child slots
+A stored value that is data alone, holding no function value and no failed
+value anywhere inside it, is one slot naming its ConstStore node
+(`Program.storedDataAlone`), whatever it holds: the data encoder writes it
+from the store through its type's plan, so the work of every pass and backend
+is independent of how many values it holds, and only the encoder's is
+proportional to them. The encoder writes each stored value straight into
+the bytes of the value holding it, and shares among its readers the frozen
+descriptor of every value that owns an allocation (a stored list, a box, an
+allocated string, and a product or tag a recursive type keeps behind a box),
+so each allocation is frozen once however many values hold it; any other
+scalar, product or tag is written for each holder.
+
+A body that reads any other stored value, built from parts, holds one
+statement, the read of the value's own slot. `.boxy` lowering resolves a
+list's items, a product's fields, a tag's payloads, and a box's payload to
+their child slots
 without reading any of them (`Task.restore_part`), and a completed callable's
 type table and capture record are parts of its slot the same way. A stored
 function value is the one part restored as a value, because its restore
@@ -2834,6 +2867,9 @@ graph in their LLVM module, including callable and explicit helper relocations.
 They never embed compiler-process addresses: installed generators must survive
 another process. The loaded image outlives copying the generator's result,
 because returned values can borrow its immutable storage.
+A `roc glue --opt=dev` generator object is compiled with no LLVM optimization
+passes, and its functions carry no inlining attributes, so each procedure's
+code is generated once.
 A node whose bytes are all zero and that no relocation writes into is
 declared, not stored: the object writers place it in their format's zero-fill
 section (`.bss` for ELF and COFF, `__DATA,__bss` for Mach-O) by size and
@@ -3560,16 +3596,26 @@ An entry-block slot is allocated for the whole activation, so LLVM can overlap
 two slots only through `llvm.lifetime.start` and `llvm.lifetime.end`. The LLVM
 backend brackets the slot of every local whose address it passes to an
 out-of-line Roc procedure call (a result returned through memory, or an
-argument passed by pointer) or an explicit RC helper call with markers at that
-storage owner's exact lifetime boundaries, which the shared LIR stack planner
-solves over the procedure's explicit control-flow graph. Other slots carry no
-markers: SROA removes slots whose addresses never escape, and markers on them
-would only add optimizer work. RC argument emission and lifetime planning
-share the same size rule: small values use the shared RC scratch slot; larger
-values pass their own storage. Views extend their owner's lifetime. Procedure
-arguments, which the prologue writes, and locals in deferred string-match
-captures, which the backend materializes outside the statements that access
-them, keep their activation lifetime.
+argument passed by pointer), an explicit RC helper call, or a low-level
+operation's operand that `ValuePlan.lowLevelAccess` declares is accessed by
+address, with markers at that storage owner's exact lifetime boundaries, which
+the shared LIR stack planner solves over the procedure's explicit control-flow
+graph. A builtin reads and writes those operands only during its own
+statement. Other slots carry no markers: SROA removes slots whose addresses
+never escape, and markers on them would only add optimizer work. RC argument
+emission and lifetime planning share the same size rule: small values use the
+shared RC scratch slot; larger values pass their own storage. Views and parts
+extend their owner's lifetime: a view's definition writes none of its owner's
+bytes, the owner's first part's definition starts them, and each later part's
+keeps the bytes before it live. Procedure arguments, which the prologue
+writes, and locals in deferred string-match captures, which the backend
+materializes outside the statements that access them, keep their activation
+lifetime.
+
+The operands of a `str_from_parts` concatenation are copied into one array per
+procedure, sized for the procedure's largest concatenation, which the value
+plan records. The builtin reads the parts before it returns, so every
+concatenation in the procedure reuses the same frame bytes.
 
 A speed build marks two kinds of procedure `alwaysinline`: a wrapper, a
 loop-free body of a few statements of its own, and a leaf, a moderate body
@@ -3659,6 +3705,15 @@ zeroed unused bytes. Longer literals use the allocating runtime constructor.
 This is representation lowering of explicit LIR literal bytes; it introduces no
 ownership decisions and leaves all explicit LIR ARC statements intact.
 
+LLVM reads a string's length as a select between the small length in its last
+byte and the length word with the small-string bit cleared. The bit is already
+clear whenever the heap arm is taken, so clearing it changes no value; it
+states in the arm itself that the word's sign bit is zero. LLVM otherwise
+learns that only from the select's condition, and InstCombine then proves the
+loaded word is not undef by walking the dominator chain to the function entry
+for every checked arithmetic operation the length reaches, which is quadratic
+in a function of many such operations.
+
 The runtime encoding of values is defined once, by the structs
 and constants in `src/builtins`: `RocStr` and `RocList` field order and word
 count, the small-string flag and length mask, the seamless-slice tag, the
@@ -3738,6 +3793,14 @@ the parser, and the parser walks that token buffer directly. The parser does not
 use recursive grammar functions, and it does not keep source substrings as an
 implicit parsing cursor. Source text may be consulted only through token
 metadata, for diagnostics, literal decoding, and identifier interning.
+
+Tokenization decodes each number token's value while it scans the digits: the
+token carries a record (`NumericLiteral.Scanned`) holding up to 19 significant
+digits as an integer, a decimal exponent, the sign and the deprecated suffix.
+When that record is exact the parser derives the literal's facts from it
+alone; a literal outside its form (more digits, a larger exponent, or a
+spelling the text decoder reads differently) is marked inexact by the
+tokenizer and decoded from its text. Both derivations produce identical facts.
 
 ### Redundant explicit returns
 
@@ -6880,7 +6943,12 @@ for a function-typed value such as `id = mk({})` too. It quotes the
 annotation, suggests writing `_` in place of each type variable (or removing
 each `..`) or a concrete type, and, for a named binding, the thunk built from
 the program's own text (`empty : {} -> List(a)` / `empty = |{}| []`) to call
-as `empty({})` where the binding must be used at many types.
+as `empty({})` where the binding must be used at many types. The thunk's
+annotation opens its result's output rows (Polarity), so its signature drops
+each anonymous `..` in an output position, which would otherwise be reported
+as redundant: `color : [Red, ..]` suggests `color : {} -> [Red]`
+(`Check.thunkResultText`). A `..` in an input position is a rigid there and
+stays.
 
 A placeholder for a function that is not implemented yet is not a function
 either: `parse : Str -> Try(a, [Bad])` / `parse = ...`, or `= crash "todo"`,
@@ -7723,6 +7791,13 @@ requirement signatures themselves can refer to those templates and are checked
 afterward. App checking substitutes one fresh,
 outermost-rank inference variable per binder, shared across all requirements,
 so definition generalization cannot give sibling requirements different types.
+An annotated required definition is related to its
+requirement after its boundary has generalized it, so that relation uses an
+instance of its scheme, as a caller's use does: a binder never joins a
+scheme's quantified classes, and no monomorphic definition a binder reaches
+shares a generalized variable. The source-free invocation that names the
+solved requirement (above) is a further instance of that scheme, and it is
+related to the requirement the same way.
 Each platform alias's explicit `(origin module, source declaration)` key and
 backing identity root select that same substitution during requirement copying.
 The solved identity slots carry the inferred types into the pairing; no copied
@@ -12035,7 +12110,15 @@ allocation.
 
 Strings and flat scalar or fixed-product lists use one shared content-interned blob store.
 `List(U8)` therefore has the same constant-storage cost as a `Str` containing
-the same bytes, and equal string/list contents reuse one blob. A packed list
+the same bytes, and equal string/list contents reuse one blob. A blob the
+checked-value writer stores from a literal of the store's own module (a string
+of one segment, or a file imported as bytes) is borrowed from the module's
+string literal store rather than copied (`ConstStore.BlobBacking`): those
+bytes never change once the module is canonicalized and live as long as the
+store, so the literal's bytes are resident once. A borrowed blob occupies its
+offsets in the blob bytes as if it were stored there, so serialization writes
+it in place and a serialized store is the same whichever of its blobs are
+borrowed; a loaded store owns all of them. A packed list
 view records its scalar encoding or fixed-product width and item count separately
 from its byte view. Fixed products are records, tuples, and nominal wrappers
 composed entirely of scalars, discriminant-only tag unions and zero-sized
@@ -12527,6 +12610,120 @@ arithmetic remains polymorphic, and mixed-type user methods stay callable by nam
 nominal and extended rows still guide nested defaulted/optional construction;
 inconsistent shared type variables and unsupported real dispatches still fail.
 
+### The Literal Typing Rule
+
+**A literal checked against an expected type that is fully known is checked
+by one structural walk of literal and type together, and each literal node's
+type is the corresponding part of the expected type.** Where the expected type
+has nothing left to decide, unification can learn nothing from relating the
+literal to it, so the literal gets no skeleton, no expected-shape copy and no
+probe. Whether the rule applies is decided once, up front, from explicit data
+alone (the literal's syntax and the expected type as it stands), before
+anything is written (`literalTypingRuleCovers`, through
+`literalTypingRulePart`); a literal outside the rule is checked by the general
+path (Expected Shape Context) from the start. The rule is never tried and then
+retried: a literal it covers cannot fail it.
+
+The literal forms are: a record construction with no update base and no unset
+field, `{}`, a tuple, a list, `[]`, a tag with or without payloads, a number
+literal with no suffix, and a string literal with no suffix and no
+interpolation.
+
+The rule starts at a literal whose expected type reaches it through a channel
+whose owner relates the literal to that type anyway: the literal's own
+annotation or expected type (its expression frame owns that relation), or a
+cell of an enclosing construction's projected shape, which is already a fresh
+copy that the construction relates to the literal's value. Context that only
+guides, without that relation (a branch body's, a call or method argument's,
+a binary operand's or a nominal constructor backing's contextual type, a
+lambda's seeded result), and a borrowed record-update field, do not start it:
+the general path copies such context and never unifies into it. A tag starts
+no walk of its own either: on the general path a tag relates to the union it
+is expected at by extending it, which leaves the merged union holding the
+tags the literal lacked as an extension row rather than the union's own one
+row; as a part of a literal under the rule, the general path's owning
+relation relates the whole union to the union's one row, which is the
+union's own content. Every literal
+part of a literal under the rule is under the rule with the part of the
+expected type it matched (`ExpectedType.literal_rule`).
+
+The decision walks literal and type together, following aliases, and the
+rule applies exactly when every pair matches:
+
+- a record construction: a record row, ending in the empty record, of exactly
+  the literal's fields, each `required`;
+- `{}`: the empty record, or a row of no fields ending in it;
+- a tuple: a tuple of the literal's arity;
+- a list, and `[]`: the builtin `List` of one argument, which each item
+  matches and which for `[]` is fully known;
+- a tag: a structural tag union of one row closed directly by the empty tag
+  union, holding the tag once with the literal's arity, each payload matching
+  its slot and every other tag's payloads fully known;
+- a number: a builtin number type holding the literal's exact value (the fit
+  Concrete Builtin Numeral Introduction uses);
+- a string: the builtin `Str`.
+
+A type is fully known when nothing reachable from it is a flex variable (a
+deferred literal's, a `_` hole's, a row extension), a rigid, an error, a
+function, or a variable at generalized rank, and every field kind in it is
+decided. Everything else is outside the rule, so the whole literal keeps the
+general path: a nominal type other than `List`, `Str` and the builtin number
+types (a record or tag lifted into a declared nominal), an optional or
+defaulted field whether supplied or omitted, an open or uncommitted row, a
+tag union written over an extension, a number that does not fit or whose type
+is custom, a suffixed literal, an interpolation, a lambda, and any
+sub-expression that is not a literal form (a lookup, a call). A literal part
+outside the rule does not stop a literal nested inside it from starting the
+rule again at its own projected cell.
+
+Each node takes its part by one ordinary unification of its own variable with
+that part, after its children, and a record construction first gives its
+variable its own row. A record construction's fields keep kind variables of
+their own (Field Kinds), and the expected row decides each `required`; the
+relation of a required field to a field of kind variable keeps the kind
+variable as the merged field's kind. Every record a literal built therefore
+reaches its fields through kind variables, which makes its type no ground
+type, and a use of a checked definition shares a type that is not ground
+where it copies a ground one. So under the rule the record's row is its
+fields at their parts, each over a fresh kind already decided `required`,
+ending in the part's own tail, and that row relates to the part: the merged
+row is the one the general path leaves. `{}` builds its row over an
+uncommitted tail exactly as the general path does before relating it.
+
+This is a mechanism (Solver-Mutating Rewrites). Inside the rule every relation
+the general path runs succeeds: the skeleton's relation to the expected copy,
+each item's relation to its cell, the construction's relation to its
+projected row, the list fold, and the owning relation. None of them can decide
+anything, so each node's class ends merged with the corresponding part of the
+expected type, with the content the owning relation's merge gives it, which
+is the content the rule gives it; the only difference is the variables the
+general path minted and merged, so only variable numbering changes. A literal
+the rule covers yields no diagnostic on either path, and a literal that would
+yield one is outside the rule, so every diagnostic, with its region, its
+rendered types and its count, is the general path's.
+
+What the general path leaves behind for such a literal, and what the rule
+leaves:
+
+- every node's own expression frame runs as for any expression (rank,
+  hoisting and value-form roots, dispatch checks, relation operands);
+- a record construction and `{}` are registered as record constructions;
+- a record construction's field kinds are its own variables, decided
+  `required`; they are not listed for `defaultLiteralFieldKinds`, which skips
+  a decided kind;
+- a number literal records its literal plan with no conversion function and a
+  string literal its quote plan, exactly as Concrete Builtin Numeral
+  Introduction and Concrete Builtin Quote Introduction do, so finalization
+  seals both `builtin_direct`;
+- a record construction mints no uncommitted tail: its row ends in the
+  part's committed tail, which is what the tail commits to;
+- no default is absorbed and no literal is deferred, determined or left open,
+  since no field is omitted and every number and string has its builtin type.
+
+`ROC_CHECKER_SPECULATION_STATS` also prints how many literal nodes each module
+checked by the rule and by the general path. Accepted and rejected sides are
+pinned in `literal_typing_rule_test.zig`.
+
 ### Lambda Parameters Seeded From Context
 
 A lambda with no annotation of its own is checked knowing the parameter types
@@ -12873,6 +13070,23 @@ annotations would otherwise be copied once per reference. A shared instance
 is unified with every annotation that refers to it; if a mismatch merges any
 of it into an error it is no longer ground, and the next reference
 instantiates a fresh copy.
+
+An instance is shared only among references of the same kind. The annotation
+node that refers to an instance joins its class, and a merged class holds the
+lower of the two ranks. A reference inside a type declaration is generated at
+generalized rank, so its instance is part of that declaration's template: its
+classes carry generalized rank like the rest of the template, and each use of
+the declaration copies them. A reference generated at a scope's own rank is a
+use: its instance is a monotype that settles at `outermost`, like every ground
+type, and is read where it stands. A use never reads a template's instance,
+nor a template a use's. A class at generalized rank is by definition one a
+quantified variable is reachable from (`Check.typeHasGeneralizedVar` stops at
+the first one it meets), so a use that read a template's instance would make
+the binding it annotates a scheme with nothing to quantify. A host-boundary
+annotation closes the declarations it references just as a nominal
+declaration's body does, so the two name the same positions, and a provided
+function whose annotation read such an instance would be rejected as
+polymorphic.
 
 Before a use that decides markers per occurrence (`.preserve_one_sided`,
 `.resolve_by_polarity`, `.defer_open`) copies anything, a pre-walk
@@ -16331,10 +16545,15 @@ Restrictions:
   lifting paths retain the checked representatives of the record relation,
   alongside its original operands, so a polymorphic call's formal slot cannot
   hide the literal that supplies it. Checking registers fresh record expressions
-  as they are checked. At settlement, before default-cycle validation, it groups
-  accepted omission decisions by solved record equality and distributes each
-  decision to every registered construction in that class that did not supply
-  the field. This consumes the unifier's explicit default identity, including
+  as they are checked. An annotated or expected-typed expression checks its
+  body on a fresh variable and relates its own variable to the annotation, so
+  when the annotation names an alias, the expression's root is that alias
+  node, a class of its own; the literal's record class is reached through the
+  alias's backing, which unification related to the body. At settlement, before default-cycle validation, it groups accepted omission
+  decisions by solved record equality and distributes each decision to every
+  registered construction in that class that did not supply the field, then
+  publishes the omissions sorted by construction so each consumer finds one
+  construction's omissions by binary search. This consumes the unifier's explicit default identity, including
   when later value relations normalized the field to required; it never
   reconstructs an omission from a nominal declaration or a solved field kind.
   Equal decisions are coalesced before visiting constructors, and only classes
@@ -17112,6 +17331,14 @@ Other solved-graph mutations:
   Introduction (above). Uses the existing `unifyWith` descriptor-introduction
   mechanism for a proved concrete builtin conversion; does not mutate the
   context's type or introduce a redirect rule.
+- `literalTypingRulePart`—mechanism: The Literal Typing Rule (above). A
+  read-only match of a literal's syntax against its fully known expected
+  type gates one ordinary unification of each literal node's variable (a
+  record construction's over its own row of decided field kinds) with the
+  part of that type it matched, in place of the general path's skeleton,
+  shape copy and probes, whose relations would all succeed and decide
+  nothing. It writes nothing outside unification, restamps no plan, and
+  introduces no redirect rule.
 - `projectExpectedTagPayload` without a borrowed record field—mechanism:
   Expected Shape Context (above). Every refusal is read before the copy
   writes anything, and the copy cannot fail, so it opens no probe.
@@ -19004,6 +19231,17 @@ the edge's literal arguments), follows a forwarded literal requirement into the 
 scheme the same way, and lowers the literal's own conversion plan where it
 ends, unwrapping its `Try` as an in-place conversion does.
 
+Entering a scheme reaches its scope and not its body. A frame reads the
+scheme's variables, dictionary parameters and literal requirements, which
+its worker's record holds before any lowering (`Program.templateScope`), so
+a chain queues no worker it enters: a compile-time program evaluating a
+literal argument root holds the conversion and what the conversion calls,
+never the procedure whose literal it converts or anything only that
+procedure reaches. A body is queued where something needs it: a call, a
+function value, or a type table naming the worker (`Program.demandBody`),
+which is filled from the needs the worker's lowering declares, as the
+declaration table of a local procedure a frame's dictionary calls is.
+
 A root exists once the literal's own type is closed, which says nothing about
 the other types at its edge: `inner({ w: y }, 0)` with `0 : U64` has a root
 while `y` is a variable of the enclosing scheme. The wrapper has no enclosing
@@ -19362,8 +19600,9 @@ nothing to a callable whose refcount word is `REFCOUNT_FRAME` (Frame
 Callables), and the wasm backend's inline erased-callable reference counts
 test the same word. The Boxy runtime reads descriptors and nothing else: descriptor-guided copy,
 incref, decref, equality, hashing, inspection, and representation
-adaptation, component addressing and construction, the list operations that
-take an item descriptor, and the shared capture drop. It composes,
+adaptation, component addressing and construction, the release of the
+recursion box a field take leaves, the list operations that take an item
+descriptor, and the shared capture drop. It composes,
 interns, and allocates no descriptor or dictionary, and holds no state of its
 own: no cache, no lock, no atomic, and no thread-local. It has no procedure
 registry, no sidecar, no descriptor numbering, no deferred or pending calls,
@@ -19434,6 +19673,16 @@ Nothing a module emits depends on a module that imports it:
   program whose roots may name modules no unit lowers; exact procedure aliases
   likewise emit no evaluator wrapper, because their checked forwarding metadata
   directs every use to the referenced procedure rather than an evaluated value;
+  the wrappers of its numeral, quote and interpolation conversion roots are
+  not, since every use of a converted literal restores the root's stored
+  value or converts the literal in place, and neither is a validation root's,
+  which has no value for any body to read;
+  nor is the wrapper of a constant whose stored value is data alone
+  (`Program.storedDataAlone`) and whose template no longer names an entry
+  procedure, because every read of such a constant restores the stored value
+  into the reading body, so a constant no body reads puts no data in any
+  object; a stored function value's wrapper is emitted, since its restore
+  lowers the workers the value names, which other objects link against;
 - its conversion workers are its own and memoized within it alone;
 - ARC solves each of its procedures' ownership signatures from the procedure's
   body and its callees, and a call from another module demands no ownership
@@ -19455,6 +19704,27 @@ Nothing a module emits depends on a module that imports it:
 This is the invariant the per-module Boxy cache (Caching Under `.boxy`) rests
 on, and it is the reason modules can be lowered independently and in
 parallel.
+
+A unit's calls compile against the export interfaces other units recorded, so
+a unit lowers only after the unit of every module its lowering sees (its
+checked module's lowering visibility, the modules of
+`collectImportedArtifactViews`): a lowering names workers only of modules it
+sees. Its dependencies (`Coordinator.unitDependencyKeys`) are its direct
+imports and every seen module outside its import closure; a seen module inside
+the closure is a dependency of a dependency, whose unit is done before the
+dependency's. A module sees a module outside its import closure when a type
+reaches it without an import. An app's entrypoint takes its platform's
+requirement types, so the app's descriptor of such a type names the method
+workers of the module declaring it (`Program.nominalOverrides`), a platform
+module the app need not import: an app whose `main!` takes `List(OsStr)` and
+calls `len` on it compiles against `OsStr`'s export records. Everything that
+orders units takes its edges from that one set: the coordinator's
+`BoxyObjects`, the link's `buildBoxyLibraryObjects`, the set of objects a
+compile-time program links against, and the order a test program loads its
+unit images in (`unitLoadOrder`). So no unit lowers while a unit it can call
+is still running, and no image loads before one whose symbols it imports.
+Dependencies are acyclic: imports are, and a module outside the app's import
+closure that the app sees is a platform module, which does not see the app.
 
 Unit lowering finishes the closure of those module-definition workers and
 records their export inventory in `seedUnitWorkers`, with which of them are
@@ -19491,6 +19761,8 @@ With `--specialize=no`, every command writes what `roc check` writes, and
 `roc build` adds its remaining module objects, as does a dev run whose run
 image is composed from unit images (Hot Loading For Default Dev-Shim Runs),
 which also files its root unit and the host executable binary it launches.
+A dev glue run whose spec runs from unit images (Unit-Image Glue Execution)
+adds the same units for its spec, root unit included, and no executable.
 Checked module and pairing entries, the canonicalized
 module cache, and the evaluation output `roc check` produces
 (`ConstStore` constants) are written exactly as `roc check` writes them.
@@ -19550,9 +19822,14 @@ and Per-Module Output is the invariant that makes it possible:
   edit to a private function's body, a new private definition, or a new
   expression inside an exposed function's body that leaves its ownership
   signature and needs alone rebuilds the edited module only, because no
-  worker's name is a position in its module (NAMES, below). A unit's task
+  worker's name is a position in its module (NAMES, below). An app sees the
+  module declaring a platform requirement type without importing it
+  (Per-Module Output); the app's checking policy digest covers its platform
+  requirement context, the platform root's content identity over its whole
+  import closure, so the app's key covers that module's export records as
+  well. A unit's task
   computes its key on its lane, once its
-  imports' units are done: the module's own part of its digests (its stored
+  dependencies' units are done: the module's own part of its digests (its stored
   values and public surface, the bulk of the hashing) is hashed there, or
   earlier by a lane no unit was ready for, and the imports' parts come from
   the digest table their units recorded into, which the lanes share under a
@@ -19958,10 +20235,9 @@ evaluation (`BoxyLinkedImages`), by symbol. A module with no object yet is
 compiled whole and filed by the compilation that first needs it, whichever
 command that is; the root module's own constant code is compiled for the
 evaluation and discarded. A module can have an object only once every
-compile-time root of its own is complete: in its object, an evaluated root's
-entry wrapper restores the stored value, which the other objects of a link read
-through it, so an object lowered while a root was still pending would compute
-the root's body at every read instead. The coordinator's unit scheduler
+compile-time root of its own is complete: a body that reads an evaluated root
+restores its stored value where it reads, so an object lowered while a root was
+still pending would compute the root's body at every read instead. The coordinator's unit scheduler
 (`compile.coordinator.BoxyObjects`) therefore builds each module's object as
 soon as the module can have one and the compilation needs it, and no sooner: a
 module restored from the checked cache with its roots complete, or one with no
@@ -19971,15 +20247,16 @@ says whether its evaluation will run a program against its imports' objects
 (`CompileTimeFinalization.evaluationLinksImportObjects`: a root still to
 evaluate under `.boxy` that the checked-value writer does not complete, and no
 platform requirements), so every compilation, `roc check` included, asks for
-the objects of such a module's import closure the moment the module is
-type-checked, and the units of those that can have an object build while
+the objects of such a module's dependencies (its imports and the modules its
+lowering sees outside its import closure, Per-Module Output) the moment the
+module is type-checked, and the units of those that can have an object build while
 checking continues. The evaluation asks for them again, for every such module,
 before it completes the value-form roots and builds the root graph, which
 matters after the scheduler starts over under the link's names. Each unit lowers
-only once its imports have standalone objects, since its calls compile against
-their export interfaces. If an import cannot have an object in this compilation
-(for example, a hosted declaration without its platform), neither can its
-importers. Programs evaluating roots against such imports use shared lowering;
+only once its dependencies have standalone objects, since its calls compile
+against their export interfaces. If a dependency cannot have an object in this
+compilation (for example, a hosted declaration without its platform), neither
+can its dependents. Programs evaluating roots against such imports use shared lowering;
 they still wait for every checked value they read. Independent units
 run on the post-check executor alongside checking, the other units, and the
 evaluations of other modules. The evaluations run the same way: a module's
@@ -20002,7 +20279,7 @@ function-value stages finish. On cancellation or preparation failure, evaluation
 discards unsubmitted programs and joins submitted work before freeing the graph,
 module lists, or image set any worker borrowed; its bookkeeping needs no new
 allocation and it stores no additional results. A module's evaluation thus waits only for
-the values its roots read and the objects of its own import closure. The link
+the values its roots read and the objects of its own dependency closure. The link
 waits for every unit after program evaluation. Platform-only evaluation before
 pairing joins running object tasks before storing its values, but retains
 queued app units: their imports can still have roots that program evaluation
@@ -20440,10 +20717,17 @@ owner returns the error once it has received every task. Without an executor,
 the items run and commit in order on one sequential lane through the same
 callbacks.
 
-Each lane lends every item it runs one scratch arena, registered in the lane's
-state and reset after each item to a single retained chunk of at most
+A run gives every lane that runs its items a lane state of the run's own,
+created by the lane's first item and destroyed when the run returns, so the
+scratch a pass keeps per lane (its lane buffers, the item arena below) serves
+every procedure that lane runs in the run and none of it outlives the run: an
+idle worker holds no capacity grown by a pass that finished. Each lane lends
+every item it runs one scratch arena, registered in that lane state and reset
+after each item to a single retained chunk of at most
 `lane_scratch_retain_limit` (4 MiB), so a lane's steady-state items allocate
 nothing from the backing allocator and idle scratch is bounded per lane.
+Without an executor the items run on the caller's sequential lane, whose
+lifetime the caller chooses.
 
 A commit runs while lanes run later items, so it may change nothing an item
 reads. Native code generation commits in the run: lanes read only the frozen
@@ -25486,6 +25770,25 @@ function it calls or defines) and checking left the site a pending diagnostic,
 so the evaluator reports the site's empirical failure whichever strategy
 lowered the root; every other failed test ends in `runtime_error`.
 
+A `str_match_set` tries its arms in order, and a backend may decide any group
+of arms together when the outcome equals trying them in order. The LLVM
+backend does so for each maximal run of exact arms, the arms that match one
+literal and capture nothing: no two of them match the same source, so it
+switches on the source's length and then on the source's bytes a chunk of at
+most eight at a time, and reaches the one candidate literal's arm or the miss
+edge after reading each byte a bounded number of times, however many arms the
+run has. Arms with captures keep their own tests, in arm order relative to the
+runs around them.
+
+A backend may likewise read a `str_is_eq` operand as a literal when the LIR
+says it is one: the operand's local has exactly one definition, and that
+definition assigns a string literal or copies a local that holds one, so
+every read of it reads those bytes. The LLVM backend records those locals in
+its per-procedure value plan and compares the other operand's length and
+bytes against constants, for literals of at most 64 bytes; a longer literal,
+and every comparison of two computed strings, uses the general comparison,
+which stops at the first differing chunk.
+
 Named record-rest binders are derived values, not durable pattern decisions.
 Monotype pattern lowering removes the rest binder from the record pattern,
 captures that exact record occurrence in a compiler-generated local, and
@@ -26778,23 +27081,36 @@ every unrolled occurrence, which matches the typing rule below that nested
 modes are uniform through an owning rc.
 
 A dynamic local normally carries one opaque owned unit. For a closed-row
-record or tuple whose logical fields account for all its stored ownership,
-Boxy lowering also emits its checked product shape:
+record or tuple, Boxy lowering also emits its checked product shape:
 the fields' layouts and descriptor locals. This is ownership data,
 not a memory layout: field addresses and representation sizes still come
 from runtime descriptors. A dynamic field occupies one ownership slot;
 a concrete struct field expands into its concrete slots. An open row or an
-unknown type has no enumerated product shape and remains opaque. The same
-applies when a substitution can put a recursion box around a field: projecting
-the logical payload does not transfer the box. The parent descriptor must
-remain responsible for its release. Type arguments reached only through a
-list, explicit box, or callable do not affect inline size.
+unknown type has no enumerated product shape and remains opaque.
+
+A substitution can put a recursion box around a field. A field read opens
+the box and yields the field's value, so the value is not all its slot
+holds. The shape marks each such field boxable (`ProductShape.boxable`):
+every field whose inline size some substitution leaves unbounded, a type
+variable included. Type arguments reached only through a list, explicit box,
+or callable do not affect inline size. ARC stamps a take of a boxable field
+(`RefExtra.releases_recursion_box`): the read moves the value into storage of
+the target's own, and the backend then releases the slot through the
+product's descriptor (`roc_desc_field_release_box`). A slot that is a
+recursion box holding the last reference frees its allocation without
+releasing the value that left; one that other holders share gives the moved
+value a reference of its own and drops the slot's reference to the box; a
+slot that is the value itself holds nothing further. A boxable field is one
+ownership slot and never an ownership-complete field read of its product, so
+its unit leaves only by a stamped take, and ARC releases a boxable field it
+does not take by taking it into a frame temporary and releasing that. A
+boxable field whose committed layout is a struct would spread over several
+slots of one box, so a product holding one has no shape.
 
 A dynamic tag union has no enumerated shape, but each of its payload reads
 names the variant it reads: the read sits under the arm that matched the tag,
 or follows the constructor that built it. Boxy lowering, which knows the tag's
-payload count from its checked type, reads the only payload of a tag that is
-known to be stored inline, into a
+payload count from its checked type, reads the only payload of a tag, into a
 local whose layout can hold refcounted data, as an `assign_ref`
 `tag_payload_struct` of the dynamic union into independent frame storage
 (backends copy it with the union's descriptor as `dyn.tag_payload_addr` of
@@ -26821,6 +27137,15 @@ none of them is the variant's whole contents, so none can carry the union's
 unit, and such a union is released whole. The certifier models a dynamic
 value without a product shape as one claim, which a complete payload
 projection spends.
+
+A tag's only payload can sit in a recursion box as a boxable field can.
+Lowering marks the read of such a payload `RefExtra.payload_boxable`, and
+where ARC moves the union's unit into the payload it stamps the read exactly
+as it stamps a take of a boxable field; the backend then releases the slot
+with `roc_desc_tag_payload_release_box`. That covers a payload that moves out
+whole. A boxable payload that is itself a product would give up its fields
+one at a time through a view of the box, so lowering reads it as a component
+borrowed from the union instead.
 
 An erased argument product's recorded slot boundaries are authoritative for
 both the start and width of each field read. Its non-owning prefix and scalar
@@ -27317,7 +27642,14 @@ caller's frame is gone.
   tail area and calls it. The chain therefore runs in the frame of whoever
   entered the group. A member copies its aggregate arguments into its own
   frame on entry, because they may sit in the tail area and the next
-  frame-replacing call overwrites it.
+  frame-replacing call overwrites it. The tail area and the drivers are the
+  defining unit's own. A member other units call (`LirProcSpec.exported`)
+  is defined under a local name, and its exported name belongs to its tail
+  entry: a function with the member's signature that calls the member and
+  then the group's driver. A call from another unit is an ordinary call to
+  that entry, which returns the group's result, so an importer drives
+  nothing and needs no fact about the callee's group, and a change to which
+  of a module's functions form a group never reaches its importers' code.
 - The interpreter ends the activation that made the call and starts the
   callee's in the same native frame.
 
@@ -27886,7 +28218,9 @@ Callables), tail-drive summary and tail carry—functions of its body and its
 callees—are the whole of what another module compiles against (Per-Module
 Output). Imports are acyclic, so no same-SCC tail call crosses a unit: a
 worker's tail group lies within its module, and an importer's ordinary call
-passes a carry-taking worker no carry.
+passes a carry-taking worker no carry. On WebAssembly that call reaches the
+worker's tail entry, which finishes the chain in the defining unit
+(Frame-Replacing Calls).
 Variants inherit their source's unit.
 
 Ownership solving and field-take analysis finish before parallel emission
@@ -27920,7 +28254,15 @@ its plan requests no variant. A variant reads its base procedure's prepared
 source, so a wave holds base owners or variants, never both, and every base
 wave precedes every variant wave. The wave then reserves its variants in owner
 order, emits the owners whose plans requested any in a second run, and
-appends every shard in owner order. A shard emitted before the wave's
+appends every shard in owner order. A source's prepared data and an owner's
+plan live only as long as an emission reads them: an owner frees its plan as
+soon as its shard is emitted, a base owner's task frees its source once the
+owner is emitted, a variant wave first prepares, in one ordered run, each
+source its variants read that is not prepared, and after the wave frees every
+source no queued variant names, and each shard is freed once it is appended.
+Preparation reads only the ownership-neutral body and the frozen solution and
+dismantle results, so a source prepared again for a variant wave is the one
+its base wave prepared. A shard emitted before the wave's
 reservations names the shorter procedure prefix it was cloned from; appending
 relocates it exactly like one emitted after them. Proving uniqueness settles
 against every source's prepared projections, so that schedule prepares every
@@ -30180,10 +30522,19 @@ all argument registers and introduce no new callee-save or frame requirements.
 
 ## LLVM Value Representation
 
-Aggregate transport preserves storage identity. Records, tuples, and inline tag
-payloads use the same memory-view plan: an immutable alias or field read names
-its ultimate storage owner and a committed byte offset. LLVM does not rebuild
-these aliases or field reads field by field. The existing per-proc
+Aggregate transport preserves storage identity. Records, tuples, inline tag
+payloads, strings, lists, and boxes use the same memory-view plan: an
+immutable alias (an `assign_ref` of kind `local`, `nominal`, or
+`list_reinterpret`) of any of these layouts, or a record or tag payload
+component read of a record or tag union, names its ultimate storage owner and
+a committed byte offset. LLVM does not rebuild these aliases or field reads
+field by field, and does not copy a string, list, or box header into a slot of
+its own. Every emitter of these layouts writes a local's slot only at the
+local's own definition: builtins read headers by value and write only through
+the target's address, and in-place list and string updates change heap memory
+only. Locals in deferred string-match captures are the exception, because
+emission writes them outside their LIR definition, so they are never views or
+view sources. The existing per-proc
 value planner uses the shared LIR access inventory and liveness solution to
 prove these views. A join declaration does not mutate its parameters: an
 `initialize_join_param` write is an ordinary definition. Single-definition join
@@ -30193,6 +30544,19 @@ execute repeatedly: a view may not remain live across its storage owner's next
 definition. View chains are resolved once, and all reads through them extend the
 owner's LLVM slot lifetime. A view's definition does not overwrite its owner's
 bytes.
+
+The inverse also holds: a record field or tag payload operand of a
+construction is a part of the construction's target, defined directly at the
+byte offset where the construction stores it, so the construction leaves it in
+place instead of copying it. The plan admits a part when the operand has
+exactly the stored layout, when the operand and the target each have one
+static definition and are immutable, non-parameter, memory locals outside
+deferred captures, when every definition writing the owner's bytes lies in the
+owner's definition's straight-line block, and when no local that reads the
+bytes a part's definitions write (the owner, a view of it, or an enclosing
+aggregate the target is itself a part of) is live on entry to any of those
+definitions. A box target's bytes live in a fresh heap cell, so its operands
+are never parts.
 
 An ordinary indirect fast-call parameter with no body writes can use the
 caller's storage directly. Tail-group parameters keep their snapshots because
@@ -30279,9 +30643,14 @@ A record or tag literal writes each byte of its storage once: its fields, or
 its payload and discriminant, and then zeroes only the bytes those leave (the
 padding between fields, the bytes between a short payload and the
 discriminant, and the alignment tail). It never zero-fills its storage and
-then overwrites it. LLVM's SROA rewrites an `llvm.memset` that lands on a part
-of a slot it promotes as a vector by first loading that part's old value. The
-load makes the slot live into its block, so mem2reg gives every join inside a
+then overwrites it. A gap shorter than the aggregate's alignment is padding
+and is zeroed by aligned integer stores; only a short variant's unused payload
+bytes take an `llvm.memset`. A constructed aggregate is often copied whole
+right after it is built, into a list item, a box, or a parent, and LLVM's
+memcpy optimization pass rewrites a `memset` followed by such a copy by
+updating its memory SSA at a cost proportional to the block, once per pair.
+LLVM's SROA rewrites an `llvm.memset` that lands on a part of a slot it
+promotes as a vector by first loading that part's old value. The load makes the slot live into its block, so mem2reg gives every join inside a
 loop around the write a phi of the slot's previous-iteration bytes, which
 nothing reads. A zero-fill under every field puts such a memset on every part
 of the slot; zeroing only the gaps puts it only on bytes nothing else writes.
@@ -31197,6 +31566,69 @@ and, for a hosted symbol, a stub that crashes exactly as a hosted call in an
 in-process test does. It then calls the planned roots' wrappers, found by module
 and source root index through the test-root tables, with the existing
 bool-root runner.
+
+### Unit-Image Glue Execution
+
+A `roc glue --opt=dev --specialize=no` with a cache, on a compiler whose host
+loads unit images, runs its glue spec from unit images loaded into the
+compiler's own process, not from a plugin object compiled for the run. The
+choice is the same switch on optimization, strategy, cache presence and host
+as a composed dev run (`unitImageGlueApplies`, `unitImageRunApplies`), never a
+reaction to a failure, and it is what `roc glue` does by default. Every other
+glue run that compiles its spec lowers the whole spec and persists nothing it
+compiled. A dev run
+(`--opt=dev` with `--no-cache` or `--specialize=yes`) compiles that program
+with the dev backend into the compiler's own executable memory, beside its
+frozen data (`DevGlueCode`); `--opt=dev` never reaches LLVM. `--opt=size` and
+`--opt=speed` compile it through LLVM into a plugin object and load that
+object. An installed shorthand names a spec that is already compiled: its
+plugin object, built specialized with `--opt=speed` at install time, is
+loaded whatever `--opt` says, and only an explicit `--specialize=no` compiles
+the installed source instead, as any other spec. Loading it lowers nothing:
+the spec is checked, the plugin's stamp is verified against the checked
+root's identity, and the marshaller reads the entrypoint's host boundary
+(below), which is the host ABI the plugin's wrapper was compiled against
+under either strategy (`InstalledGlueSpec`).
+
+A glue spec is an app on the glue platform, so its program is rooted and
+divided exactly as a composed dev run's is: the spec and every module it
+imports, the glue platform's modules among them, are library units, and the
+platform's main module, which has the `make_glue` requirement, lowers with
+the spec's types in the root unit, whose image exports the `roc_make_glue`
+wrapper in the `(ret_ptr, args_ptr)` convention. The command builds those
+units as a composed dev run does (`lowerRunUnits`), each restored from the
+per-module cache or lowered, compiled by the dev backend and filed there
+under the key a run or build of the same program would use, so the three
+commands serve one another's units. The units run in the compiler's process,
+so they are compiled for the CPU level this machine executes
+(`host_cpu.nativeTarget`), the one target of every unit the compiler runs
+in its own process: compile-time evaluation's objects, `roc test`'s test
+units and these (`inProcessUnitTarget`). It then loads the builtins' unit, every other library unit after
+everything it imports, and the root unit, binding imports as a test unit's
+are bound (`LoadedUnitImages`), and calls the wrapper under the in-process
+host. The loaded images outlive the copying of the generator's result, which
+can borrow their immutable data.
+
+A unit's key covers everything its code is a function of (Caching Under
+`.boxy`): the module's source and stored values, its imports' interfaces and
+export records, the compiler, the target and the optimization level. An
+unchanged spec therefore costs a glue run its checked-module cache reads and
+the loading of its images, with no lowering and no code generation; an edit
+to the spec, to a module it imports or to a glue platform module rebuilds the
+units whose keys the edit changes and no others. The platform being described
+is input data to the generator and is in no unit's key.
+
+With every unit restored, no program lowered by the run names the layouts
+`roc_make_glue` takes and returns. The marshaller reads them from the
+entrypoint's host boundary instead (`postcheck.Boxy.EntrypointSchema`,
+`CheckedPipeline.BoxyEntrypointBoundary`): a `.boxy` program over the root
+unit's module set that lowers nothing, converts the entrypoint's checked type
+and commits the layout of each argument and of the result, and collects the
+named record and tag union schemas they reach. A layout is a function of its
+type alone (Per-Module Output), so these are the layouts the root unit's
+wrapper was compiled against, whichever run compiled it. The boundary is
+computed the same way whether the root unit was restored or built, so the
+marshaller has one source for it.
 
 ### Command-level execution
 
@@ -32159,6 +32591,19 @@ boxy caller passes its arguments and receives the result in that ABI
 directly. It must not change the hosted dispatch index, hosted symbol
 name, natural C ABI signature, ownership rule, or generated glue declaration.
 
+Every hosted lambda a module holds is one of its recorded hosted definitions
+(`ModuleEnv.hosted_defs`), and so has a row in the checked module's hosted
+procedure table: the platform declarations the hosted transform rewrote, and
+the `echo!` canonicalization gives a default app. That table is the only
+source of a hosted procedure's host symbol and dispatch slot, so a hosted
+lambda outside it could not be lowered. A default app compiled without its
+staged platform (as `roc test` compiles it) has no platform header in scope,
+and each of its declarations takes its own dispatch slot in a stable order.
+Lowering reaches a hosted procedure wherever code that calls it is lowered,
+whether or not anything runs the call: a compile-time program lowers a
+function value a constant holds without ever calling the hosted procedure
+the function calls.
+
 ## Root Application Preparation
 
 The parser's header and declaration index determine an entry module's platform
@@ -32403,6 +32848,20 @@ during the final link. Undefined functions referenced by the linked objects may
 remain host imports, but the linker must not treat a missing declared export as
 such an import or silently discard it.
 
+A wasm target's `minimum_memory`, `maximum_memory` and `initial_stack_size`
+are sizes `roc_target.wasm_memory` accepts: whole pages from one page to 4 GiB
+for the two memory sizes, and a multiple of the stack alignment below 4 GiB
+for the stack. The platform header is held to those rules where it is read
+(`TargetsConfig.fromAST` for a literal, `resolveCheckedConstants` for a named
+constant), and the `--wasm-memory` and `--wasm-stack-size` flags that override
+it take their accepted values from the same rules. Every size a link receives
+is therefore one both the composed link and wasm-ld can express, so neither
+re-validates a size's form: a link reports only what depends on the program,
+which is a configured size the laid-out program does not fit. Both links
+report that as the same `wasm_memory_layout` problem; the wasm-ld link reads
+the needed size from wasm-ld's diagnostic, since only the linker lays the
+program out.
+
 A wasm target's `global_base` is the first address the Roc program may use;
 the host owns every address below it, so it is at least 1. Whether a target
 has one selects the stack layout (`linker.wasmStackLayout`), and nothing else
@@ -32552,6 +33011,8 @@ Generated Zig and Rust bindings provide a `RocHost` helper for host-owned
 allocation state. Its fields are exactly the `env` and callback prefix of
 `RocOps`, with callback self pointers referring to `RocHost`. It has no
 `hosted_fns` member: hosted calls use the platform's declared linker symbols.
+Rust spells each callback as an `unsafe extern "C" fn` pointer, because a
+callback's contract is on the pointers its caller hands it.
 This helper is not passed across compiled Roc entrypoints. The glue ABI lock
 compares its complete prefix size, alignment, field offsets, and callback
 signatures with the interpreter types defined by builtins. C bindings call the runtime
@@ -32561,7 +33022,9 @@ signatures; template-local numeric assertions alone do not establish agreement
 with builtins.
 
 The glue script input and output are written using checked runtime record
-schemas and committed LIR layouts. No handwritten Zig extern record mirrors
+schemas and committed LIR layouts: those of the whole program a run lowered,
+or the entrypoint's host boundary when the spec runs from unit images
+(Unit-Image Glue Execution). No handwritten Zig extern record mirrors
 stand between `src/glue/platform/*.roc` and the glue runner. Named fields select
 schema logical indices; the layout store supplies their byte offsets and
 layouts. A checked-source schema regression test locks the remaining marshaller
@@ -32570,7 +33033,8 @@ field names and leaf types.
 The compiled glue script retains its readonly data image alongside its code.
 Code-to-data and data-to-function relocations are resolved together, and both
 images outlive extraction of the returned files; returned static strings must
-not become dangling pointers when the entrypoint returns.
+not become dangling pointers when the entrypoint returns. A spec run from unit
+images holds its data in those images, which stay loaded for as long.
 
 Glue's type table gives every row a shape id, the id of the first row that
 describes the same host type. Two rows have the same shape id exactly when
@@ -32581,6 +33045,27 @@ instantiations of one generic nominal share a name and differ in layout, and
 one instantiation can occupy several rows. Generators emit one declaration per
 shape, give shapes that share a name distinct names derived from the shape id,
 and never emit the shared bare name, as a declaration or as an alias.
+
+A tag union with one variant stores no discriminant, so its host type is its
+payload, which is how the C ABI classification of host-boundary values sees it
+too. With one payload, that is the payload's own type. With several payloads
+that occupy storage, it is a struct of the variant's committed payload fields,
+which generators declare under the union's name like any other declared type,
+with the ownership operations of a record. When no payload occupies storage,
+the union has no host value. A generator never lets one payload stand for the
+others.
+
+A value whose committed size is zero has no host representation. It is not
+passed as an argument and not returned, so a hosted or provided signature
+omits it, and a struct that holds one as a field or tag payload has no member
+for it. Generators declare no type for a zero-sized record or union. Glue
+decides this from the committed size, never from the shape of the type: `{}`,
+a union with one payload-free tag, and a record or union of such values are
+all zero-sized. C ABI classification on every target sees the same struct the
+host declares, the one made of an aggregate's sized members. A zero-sized
+field, including the zero-sized `_` field that opts a nominal record into
+declared order, therefore neither breaks a homogeneous float or vector
+aggregate nor stops a struct with one sized field from passing as that field.
 
 Glue's type table describes values. A function value, wherever it appears
 (boxed, in a record or tag payload, or in a stored signature), is one
@@ -32602,6 +33087,45 @@ CheckedModule's provided export table, never from the shape of its type.
 Application `requires` declarations are Roc-internal bindings that never cross
 the host boundary, so they are neither glue layout roots nor part of the glue
 input.
+
+A generated file has one namespace for its top-level names. A generator builds
+most of them by joining other names (a module and a type, a type and a helper
+suffix, a union, a tag and a suffix, a hosted function and a suffix), and it
+declares each of the platform's linker symbols under the symbol's own name.
+Joined names can be equal to each other, to a symbol, and to the names of the
+generator's own runtime support, so each generator states every name it
+declares, and `TypeNamePlan` gives each name to one declaration. A name the
+generator owns yields to a name it does not:
+
+- A linker symbol and a name of the runtime support are both fixed: the
+  platform header chose the first, and host code is written against the
+  second. A symbol that the generated file cannot declare (a keyword of the
+  file's language, a name of its runtime support, or a helper name the
+  generator derives from a type id, a list item type or another symbol) stops
+  the glue run with an error naming the symbol. Which names those are depends
+  on the language the file is written in, so the generator decides, not the
+  platform header check: that check rejects only what no host in any language
+  could define, the runtime symbols and the `roc__` prefix.
+- The names derived from a hosted function or a provided entry yield to the
+  fixed names and to each other: every function or entry involved takes names
+  derived from its hosted index or its place in the provides list.
+- A host type's names yield to all of those and to other host types': a name
+  declared for two host types denotes neither, and both take the names derived
+  from their shape ids, exactly like shapes that share a Roc name.
+- A preferred name is granted only when every name its type would declare
+  under it is free, and an alias is emitted only under a name nothing else
+  declares.
+
+If two declarations still collide under their id-derived names, the glue run
+fails with an error naming both. A generator never emits two declarations
+under one name, and never lets one declaration stand for another.
+
+The members of one record or tag union have a namespace of their own, and a
+generator can spell two of them alike after converting case or escaping a
+reserved word. A spelling two members share denotes neither: each takes it
+followed by a marker and its rank among the members that share it, ordered by
+Roc name, so every place that names a member derives the same name from the
+member names alone.
 
 The platform header maps linker symbols explicitly, symbol-string first, in
 both directions:
@@ -33087,8 +33611,11 @@ symbol the link defines (`__stack_pointer`, `__memory_base` and
 to the host's definitions, else to the embedder; a host import resolves only
 to the names the app gives the host (its provides, exported data and the
 WebAssembly 1.0 stack accessors), then to the link's symbols, else to the
-embedder. An atom walk from the platform's exports, the stack exports, the
-host's retained atoms and the provides decides what is placed. Index spaces
+embedder. An atom walk from the platform's exports, the stack exports and
+the host's retained atoms decides what is placed: a provide nothing among
+them reaches is left out with everything only it reaches, the hosted imports
+it calls included, so a module imports from its embedder only what placed
+code names. Index spaces
 follow placement order (host, support, units by content digest; within an
 image, its order), memory follows `linker.wasmStackLayout` with initialized
 segments first and zero-filled ones after (emitted as zeros only when memory

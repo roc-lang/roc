@@ -1460,11 +1460,14 @@ fn markGloballyResolvablePattern(self: *Self, pattern_idx: Pattern.Idx) std.mem.
     try self.globally_resolvable_patterns.put(pattern_idx, {});
 }
 
-fn markBoundPatternsGloballyResolvable(self: *Self, pattern_idx: Pattern.Idx) std.mem.Allocator.Error!void {
+/// Mark the binders of a top-level pattern globally resolvable. With an
+/// `owner`, the walk also records `owner` as the owner of every node of the
+/// pattern (`ModuleEnv.top_level_def_owners`).
+fn markBoundPatternsGloballyResolvable(self: *Self, pattern_idx: Pattern.Idx, owner: ?CIR.Def.Idx) std.mem.Allocator.Error!void {
     const bound_vars_top = self.scratch_bound_vars.top();
     defer self.scratch_bound_vars.clearFrom(bound_vars_top);
 
-    try self.collectBoundVarsToScratch(pattern_idx);
+    try self.collectBoundVarsInto(&self.scratch_bound_vars, pattern_idx, false, owner);
     for (self.scratch_bound_vars.sliceFromStart(bound_vars_top)) |bound_pattern_idx| {
         try self.markGloballyResolvablePattern(bound_pattern_idx);
     }
@@ -1501,7 +1504,9 @@ fn appendPropagatedFreeVarExcludingBound(
 
 fn recordGlobalValueDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
     const def = self.env.store.getDef(def_idx);
-    try self.markBoundPatternsGloballyResolvable(def.pattern);
+    try self.env.addTopLevelDefOwner(def_idx, ModuleEnv.nodeIdxFrom(def_idx));
+    try self.env.addTopLevelDefOwner(def_idx, ModuleEnv.nodeIdxFrom(def.expr));
+    try self.markBoundPatternsGloballyResolvable(def.pattern, def_idx);
     try self.scratch_global_value_defs.append(self.env.gpa, def_idx);
 }
 
@@ -5258,6 +5263,7 @@ pub fn canonicalizeFile(
         try self.env.store.addScratchDef(def_idx);
     }
     self.env.global_value_defs = try self.env.store.defSpanFrom(global_value_defs_start);
+    self.env.finishTopLevelDefOwners();
 
     var value_binding_defs_match_global = true;
     var top_level_value_defs_match_global = true;
@@ -5886,7 +5892,7 @@ fn canonicalizeDestructuredLiteralDef(
         };
     };
     if (self.currentScopeIdx() == 0) {
-        try self.markBoundPatternsGloballyResolvable(pattern_idx);
+        try self.markBoundPatternsGloballyResolvable(pattern_idx, null);
     }
 
     const pattern = self.env.store.getPattern(pattern_idx);
@@ -6046,14 +6052,15 @@ const TypeAnnoIdent = struct {
 };
 
 fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allocator.Error!void {
-    try self.collectBoundVarsInto(&self.scratch_bound_vars, pattern_idx, false);
+    try self.collectBoundVarsInto(&self.scratch_bound_vars, pattern_idx, false, null);
 }
 
 /// Walk `pattern_idx` and append every `assign`/`as` binder it introduces to
 /// `target`, recursing through tuple/record/list/tag/nominal/str-interp shapes.
 /// A pattern replaced by a runtime error still introduced the binders written
-/// in its source, so the walk reads each pattern as written.
-fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern_idx: Pattern.Idx, comptime skip_existing: bool) Allocator.Error!void {
+/// in its source, so the walk reads each pattern as written. With an `owner`,
+/// the walk records `owner` as the owner of every pattern node it visits.
+fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern_idx: Pattern.Idx, comptime skip_existing: bool, owner: ?CIR.Def.Idx) Allocator.Error!void {
     var stack_allocator_state_buffer: [1024]u8 align(@alignOf(usize)) = undefined;
     var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, self.env.gpa);
     const stack_allocator = stack_allocator_state.allocator();
@@ -6062,6 +6069,7 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
 
     try pending.append(stack_allocator, pattern_idx);
     while (pending.pop()) |current_idx| {
+        if (owner) |def_idx| try self.env.addTopLevelDefOwner(def_idx, ModuleEnv.nodeIdxFrom(current_idx));
         const pattern = self.env.store.getSourcePattern(current_idx);
         switch (pattern) {
             .assign, .var_assign => {
@@ -6153,7 +6161,7 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
 fn beginDefiningBoundVars(self: *Self, pattern_idx: Pattern.Idx, reassign_targets_start: u32) Allocator.Error!DataSpan {
     const start = self.scratch_defining_bound_vars.top();
     errdefer self.scratch_defining_bound_vars.clearFrom(start);
-    try self.collectBoundVarsInto(&self.scratch_defining_bound_vars, pattern_idx, false);
+    try self.collectBoundVarsInto(&self.scratch_defining_bound_vars, pattern_idx, false, null);
 
     const reassign_targets = self.scratch_reassign_targets.sliceFromStart(reassign_targets_start);
     if (reassign_targets.len > 0) {
@@ -6227,7 +6235,7 @@ fn isDefiningBoundVar(self: *Self, pattern_idx: Pattern.Idx) bool {
 }
 
 fn collectReassignBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allocator.Error!void {
-    try self.collectBoundVarsInto(&self.scratch_bound_vars, pattern_idx, true);
+    try self.collectBoundVarsInto(&self.scratch_bound_vars, pattern_idx, true, null);
 }
 
 fn boundPatternIdent(self: *Self, pattern_idx: Pattern.Idx) ?base.Ident.Idx {
@@ -8318,7 +8326,7 @@ fn canonicalizeDeclWithAnnotation(
         break :blk try self.canonicalizePatternOrMalformed(decl.pattern);
     };
     if (self.currentScopeIdx() == 0) {
-        try self.markBoundPatternsGloballyResolvable(pattern_idx);
+        try self.markBoundPatternsGloballyResolvable(pattern_idx, null);
     }
 
     // Track the declaration's bound binders so a reference to one of them on the
@@ -21791,6 +21799,13 @@ fn injectEchoPlatform(self: *Self) std.mem.Allocator.Error!void {
         .annotation = annotation_idx,
         .kind = .let,
     }, synthetic_region);
+
+    // The def is this module's one hosted declaration. Recording it is what
+    // gives the hosted lambda its host symbol and dispatch slot in later
+    // stages.
+    const hosted_defs_start = self.env.store.scratchDefTop();
+    try self.env.store.addScratchDef(def_idx);
+    self.env.hosted_defs = try self.env.store.defSpanFrom(hosted_defs_start);
 
     // Add the def to scratch so it's included in all_defs
     try self.env.store.addScratchDef(def_idx);

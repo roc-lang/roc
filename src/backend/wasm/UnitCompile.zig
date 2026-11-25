@@ -291,7 +291,7 @@ pub fn imageOfModule(gpa: Allocator, module: *const WasmModule, stack_checks: bo
     const image_imports = try arena.alloc(WasmUnitImage.InputImport, imports.list.items.len);
     for (image_imports, imports.list.items) |*out, import| {
         out.* = import.input;
-        if (import.module_type) |module_type| out.type = try types.of(module_type);
+        if (import.module_type) |module_type| out.type = .some(try types.of(module_type));
     }
 
     return WasmUnitImage.encode(gpa, .{

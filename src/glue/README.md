@@ -11,6 +11,21 @@ allocations and callable pointers. They must remain self-contained when installe
 and loaded by another process, rather than borrowing the compiler's addresses or
 assuming a platform link will supply their data.
 
+By default (`--opt=dev` with a cache) `roc glue` compiles no plugin. It builds
+the glue spec as per-module unit images with the dev backend, exactly as a dev
+run of an app builds them, restores from the module cache every unit whose
+inputs are unchanged, and loads the images into the compiler's own process. A
+second run of an unchanged spec therefore does no code generation at all, and
+an edit rebuilds only the modules it touches. `--opt=dev` with `--no-cache` or
+`--specialize=yes` compiles the whole spec with the dev backend on every run,
+and `--opt=size` and `--opt=speed` compile it through LLVM into a plugin
+object on every run. `--verbose` prints how many modules and units the cache
+served.
+
+An installed glue spec (`roc glue <shorthand> ...`) is already compiled, so
+`--opt` does not apply to it: its plugin is loaded as installed. Passing
+`--specialize=no` compiles the installed source instead.
+
 ## Why Glue Code Generates the Interface
 
 The Roc platform ABI is not just a collection of structs that can be copied by
@@ -59,6 +74,23 @@ should cover:
   and owned results
 - unsafe or ownership-typed APIs where the host language cannot make invalid
   states impossible
+
+A host uses the generated Rust file either as a module file (`mod abi;`) or by
+splicing it into a module with `include!`, which is how a build script's
+`OUT_DIR` output is consumed. `include!` rejects inner doc comments and inner
+attributes, and a lint level on an item does not cover that item's own `#[cfg]`
+attributes, so the file holds every generated item in one private module that
+carries the lint levels, and re-exports that module's contents. The file
+compiles without any rustc or default clippy diagnostic under editions 2021 and
+2024, including under cargo's `--check-cfg`, whether or not the host uses any
+of it. Callbacks whose callers must hand them valid pointers (the `RocHost`
+fields, erased-callable functions, and box payload teardown) are
+`unsafe extern "C" fn` pointers; a host's safe function coerces to one.
+
+A Roc field or tag whose name is a keyword of the host language, or a macro the
+generated file's own includes define, is spelled so that the generated file
+still compiles: Zig quotes it, Rust uses a raw identifier or a suffixed name
+where raw identifiers are not allowed, and C uses a suffixed name.
 
 Glue generators must consume compiler-emitted metadata such as `RecordRepr`,
 `RecordField`, `TagUnionRepr`, `TagVariant`, `TypeRepr`, and explicit ownership
@@ -201,7 +233,8 @@ id are different host types. `TypeTable.duplicate_record_names` and
 `TypeTable.duplicate_tag_union_names` report those names, and
 `TypeTable.shape_suffix` gives each shape its suffix, so the generated names
 are `TypesWrapType2` and `TypesWrapType5` in every language. A name that is
-not shared keeps its bare form.
+not shared keeps its bare form unless a declaration made under it would
+collide with another one (see "One Namespace Per Generated File").
 
 An ambiguous bare name is never emitted, not even as an alias: `TypesWrap`
 would denote one instantiation chosen by table order. Roots that reach such a
@@ -210,6 +243,89 @@ type are aliased by their own position instead (`Take_wrapsArg0`,
 
 Generators must not decide type identity themselves, by comparing names,
 sizes, or field lists.
+
+### One Namespace Per Generated File
+
+A generated file has one namespace for its top-level names, and most names a
+generator puts there are built by joining other names: a module and a type
+(`A.BC` and `AB.C` are both `ABC`), a type and a helper suffix
+(`EventRelease`, `EventTag`, `EventPayload`), a union, a tag, and a suffix
+(`EventPressPayload`), or a hosted function and a suffix (`HostSendArgs`). The
+rest come from the platform header as linker symbols, which the file declares
+under their own names. Nothing about Roc's naming rules keeps two of those
+from being equal, or from equaling a name the runtime support declares,
+imports, or uses for a parameter. `TypeNamePlan` therefore decides who gets
+each name, in this order of precedence:
+
+1. Fixed names. The platform's linker symbols cannot change, and neither can
+   the runtime support's names, which host code is written against. A symbol
+   that a generator cannot declare stops the glue run with an error that names
+   it (`undeclarable_symbol_*`): a keyword of the generator's language, a name
+   in `runtime_type_names_*` or `runtime_value_names_*`, or a name from a
+   family the generator derives from type ids, list item types, or other
+   symbols (RustGlue's `<symbol>_owned`, for example). What a symbol collides
+   with differs by language: a Rust function shares a namespace only with
+   other values, C adds its macros and the standard headers' names, and Zig
+   rejects a top-level name shared with any parameter or local in the file.
+   So each list holds the names for which a symbol of that name makes
+   that generator's output fail to compile, and a declaration, import,
+   parameter, or local added to a generator's runtime support is added to its
+   list.
+2. Names derived from a hosted function or a provided entry: its argument and
+   result types, its index macro and `HostedFunctions` member in C, and the
+   base its aliases are named from (`declared_roots_*`). When one of them is
+   fixed, or is also derived from another function or entry, both take names
+   derived from their hosted index or their place in the provides list:
+   `Host.send_it!` and `Host.sendIt!` become `HostSendItHosted4Args` and
+   `HostSendItHosted5Args`.
+3. Each host type's own name and the names derived from it, which a generator
+   reports through `type_names_declared_as_*`. When one of them is taken by
+   anything above, or is also declared for another host type, the name denotes
+   neither, and `TypeNamePlan.disambiguated` adds the Roc names involved to
+   the ones emitted under shape-derived names.
+4. Preferred names (`HostLoadResult` for the `Try` a hosted `Host.load!`
+   returns), granted only when every name the type would declare under the
+   preferred name is free.
+5. Aliases, emitted only under names nothing above declares. A tag union's
+   `Payload` and `Tag` aliases are emitted only with the alias they are named
+   after.
+
+A generator's `duplicate_names` is the complete list of Roc names, of types,
+hosted functions, and provided entries, that take id-derived names. Two
+declarations whose id-derived names still collide make the glue run fail with
+an error that names both.
+
+So a collision renames the declarations a generator owns, drops the aliases
+that collide, and rejects only a name the platform fixed, and what a generator
+emits always compiles. `issue 13350: declared names stay distinct in every
+generator` builds a platform out of such collisions and compiles all three
+outputs, and `RustGlue rejects a linker symbol it cannot declare` and its
+ZigGlue and CGlue counterparts cover both sides of the symbol rule.
+
+The members of one record or tag union (fields, enum variants, payload union
+members, and the constructors and accessors named after a tag) have a
+namespace of their own, and a generator can spell two of them alike: `fooBar`
+and `foo_bar` are both `foo_bar` in C and Rust, `HTTPError` and `Httperror`
+are both `httperror` in every generator, and in C the tag `Auto` is escaped
+as `auto_field`, which is how `AutoField` is spelled. A spelling two members
+share denotes neither. `TypeNamePlan.member_idents` gives each the spelling
+followed by a marker and its rank among the members that share it, ordered by
+Roc name: `foo_bar_Member0` and `foo_bar_Member1`, or `STag_FooBar_0` and
+`STag_FooBar_1` for C tag constants. The marker holds a character the
+spelling never does (an uppercase letter after lowercase spellings, an
+underscore after C constant names), and a ranked name that is still another
+member's own takes the marker again. Every place that names members asks
+`member_idents` for the whole declaration at once and reads each member's
+identifier by position, so the declaration, its accessors, its constructors,
+and its refcount helpers agree. A member that is
+a reserved word of the generated language is escaped first (`r#type` in Rust,
+`default_field` in C), and the escaped spelling is what is compared. A Rust
+declaration that holds ranked members carries `#[allow(non_snake_case)]`.
+
+The rule covers the names a generator's own output declares or uses. It does
+not cover the rest of what C's included headers declare (`<arm_neon.h>`
+alone declares thousands of intrinsics), so a symbol named like one of those
+still fails in the C compiler.
 
 ## Regenerating the C Header Snapshot
 
@@ -331,9 +447,9 @@ language-specific.
 | Stored Roc closures and dev hot-reload image lifetime | Retain/release helpers for callable boxes and documented per-thread host-state requirements for later invocation | `glue command with CGlue generates expected C header` covers boxed callable store/call signatures; `glue regression: ZigGlue decrefs non-refcounted boxed payloads with payload alignment` checks retained callable final decref; `roc --watch hot reloads app-provided Model through Box` covers image lifetime outside the glue suite. |
 | Natural C ABI target differences, including sret, aggregate returns, wasm32, and pointer width | Generated extern signatures and compile-time layout assertions per target language | Full `glue runtime:` matrix compiles/links/runs native and wasm32 hosts for CGlue/ZigGlue/RustGlue; `glue runtime: type-catalog` covers `Dec`, `I128`, `U128`, records, unions, and aggregate returns; C exact-header and compile checks catch stale C ABI signatures. |
 | Native 128-bit vector ABI, including SysV SSE/SSEUP, Win64 indirect arguments, AAPCS64 Q-register placement, memory-class multi-vector aggregates, wasm `v128`, mixed aggregates, and register exhaustion | Distinct generated vector leaf types, C-layout aggregates, exact assertions, and extern declarations that use the target C ABI directly | `glue runtime: layout-probe` calls every vector and aggregate shape in both directions from generated C/Zig/Rust hosts; `run-check-glue-abi` compile-locks generated C and Zig across x86-64/AArch64 Linux/macOS/Windows plus wasm and Rust across native+wasm. |
-| Compiler-emitted layout facts: field order, offsets, discriminants, size, alignment, zero-sized values, and Bool representation | Glue consumers must use emitted `AbiLayout` metadata and generated assertions rather than reconstructing layout | `glue runtime: layout-probe`, `glue runtime: duplicate-tags`, and `glue runtime: type-catalog` cover emitted layout facts across all languages/targets; `glue command generated Zig compiles with zig build-obj` checks field offsets and compile-time layout assertions. |
+| Compiler-emitted layout facts: field order, offsets, discriminants, size, alignment, zero-sized values, and Bool representation | Glue consumers must use emitted `AbiLayout` metadata and generated assertions rather than reconstructing layout | `glue runtime: layout-probe`, `glue runtime: duplicate-tags`, and `glue runtime: type-catalog` cover emitted layout facts across all languages/targets; `glue command generated Zig compiles with zig build-obj` checks field offsets and compile-time layout assertions. `glue regression: a zero-sized value is no parameter, result, or struct member in any generator` covers zero-sized arguments, results, record fields and tag payloads, and `glue runtime: layout-probe` passes a record with a zero-sized field in both directions. |
 | Nominal vs structural records and explicit padding fields | Generated records with concrete committed fields plus explicit padding and per-target size, alignment, field-offset, and padding assertions | `glue runtime: type-catalog` covers nominal and structural records; `glue runtime: layout-probe` covers padded/boxed/vector layouts; `glue regression: ZigGlue quotes bang record fields` covers field names that require escaping. |
-| Tag union active-payload handling, discriminant layout, single-variant unwrapping, duplicate names, recursive tags, and payload ownership transfer | Generated tag constructors/destructors, unsafe borrowed references, and unsafe consuming payload projections that only touch the validated active payload | `glue runtime: duplicate-tags` covers duplicate module-local tag/result names; `glue runtime: type-catalog` covers single-payload, no-payload, recursive, boxed, and result tag unions and consumes Rust owning payloads through `take_payload_*_unchecked`. |
+| Tag union active-payload handling, discriminant layout, single-variant unwrapping, duplicate names, recursive tags, and payload ownership transfer | Generated tag constructors/destructors, unsafe borrowed references, and unsafe consuming payload projections that only touch the validated active payload | `glue runtime: duplicate-tags` covers duplicate module-local tag/result names; `glue runtime: type-catalog` covers single-payload, no-payload, single-variant multi-payload, recursive, boxed, and result tag unions and consumes Rust owning payloads through `take_payload_*_unchecked`. `issue 13348: a one-tag union with several payloads is a struct of them in every generator` covers the struct every generator declares for a single-variant union with several payloads, its per-shape names, and its ownership methods. |
 | Opaque or library containers such as `Dict` whose internals are not platform ABI | Opaque-safe helpers only; no generator or host code may infer container internals from semantic names | `glue regression: ZigGlue uses RocBox for opaque boxed app types` enforces `RocBox` for opaque boxed app values; `glue regression: a value holding an opaque Roc value has no host release in any generator` enforces that nothing holding one can be released or allocated by the host; C/Rust source-shape and compile controls cover opaque helper signatures without exposing container internals. |
 | Accidental shallow copies of ownership-bearing values | Rust non-`Copy` or unsafe ownership APIs; Zig/C retain/release naming and runtime double-free/leak checks | `glue runtime: cli-main`, `app-model`, and `type-catalog` all check balanced live allocations after owned values cross the boundary; `glue regression: RustGlue succeeds on fx platform` covers Rust ownership-shaped generated APIs. |
 | Error paths after ownership transfer into hosted functions | Scenario helpers that deliberately fail after receiving owned values and verify cleanup policy | `glue runtime: duplicate-tags` exercises `Try`-returning hosted functions with owned payloads; `glue runtime: cli-main` checks failure reporting paths and requires owned hosted args to be decrefed before a host-side failure is recorded. |

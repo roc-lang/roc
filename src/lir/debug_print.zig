@@ -86,6 +86,7 @@ const Printer = struct {
                         .nominal => try writer.print("ref.nominal l{d}", .{@backingInt(s.op.source)}),
                     }
                     if (self.store.stmtRowOrDefault(s.extra).take_kind == .take) try writer.writeAll(" take");
+                    if (self.store.stmtRowOrDefault(s.extra).releases_recursion_box) try writer.writeAll(" release_box");
                     const absent_fields = self.store.getU32Span(self.store.stmtRowOrDefault(s.extra).residual_shell_absent_fields);
                     if (absent_fields.len != 0) {
                         try writer.writeAll(" shell_absent={");
@@ -677,7 +678,7 @@ test "proc fingerprint ignores program numbering but not content" {
             for (0..padding) |_| _ = try store.addLocal(.{ .layout_idx = .u64 });
             for (0..padding) |index| {
                 _ = try store.addProcSpec(.{
-                    .name = .none,
+                    .name = .fromRaw(1),
                     .identity = LIR.ProcIdentity.forTest(@intCast(100 + index)),
                     .args = .empty(),
                     .body = .none,
@@ -685,7 +686,7 @@ test "proc fingerprint ignores program numbering but not content" {
                 }, .none);
             }
             const callee = try store.addProcSpec(.{
-                .name = .none,
+                .name = .fromRaw(1),
                 .identity = LIR.ProcIdentity.forTest(callee_identity),
                 .args = .empty(),
                 .body = .none,
@@ -700,7 +701,7 @@ test "proc fingerprint ignores program numbering but not content" {
                 .next = ret,
             } }, .test_fixture);
             return try store.addProcSpec(.{
-                .name = .none,
+                .name = .fromRaw(1),
                 .identity = LIR.ProcIdentity.forTest(1),
                 .args = .empty(),
                 .body = .some(call),

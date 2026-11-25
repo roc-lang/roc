@@ -320,8 +320,7 @@ pub fn Bindings(comptime V: type) type {
             };
             try self.free_slots.ensureTotalCapacity(gpa, self.slots.items.len + 1);
             const slot = self.free_slots.pop() orelse slot: {
-                const fresh = std.math.cast(u32, self.slots.items.len) orelse return error.OutOfMemory;
-                if (fresh == std.math.maxInt(u32)) return error.OutOfMemory;
+                const fresh = try collections.nextBiasedId(self.slots.items.len);
                 _ = try self.slots.addOne(gpa);
                 break :slot fresh;
             };

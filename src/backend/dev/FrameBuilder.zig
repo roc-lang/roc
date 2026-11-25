@@ -192,8 +192,8 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             if (self.callee_pop == 0) return emit.ret();
             switch (isa) {
                 .x86_64 => {
-                    if (self.callee_pop <= std.math.maxInt(u16)) {
-                        try emit.retImm16(@intCast(self.callee_pop));
+                    if (std.math.cast(u16, self.callee_pop)) |pop_bytes| {
+                        try emit.retImm16(pop_bytes);
                     } else {
                         try emit.pop(.R11);
                         try emit.addRegImm32(.w64, .RSP, @intCast(self.callee_pop));

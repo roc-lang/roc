@@ -46,12 +46,6 @@ pub const Symbol = packed struct(u64) {
     pub fn hash(self: Symbol) u64 {
         return self.id;
     }
-
-    pub const none: Symbol = .{ .id = std.math.maxInt(u64) };
-
-    pub fn isNone(self: Symbol) bool {
-        return self.id == none.id;
-    }
 };
 
 /// Content identity of a lowered procedure: a digest of everything that
@@ -579,6 +573,11 @@ pub const ProductShape = struct {
     slots: U32Span,
     /// One descriptor per field, in the same order as `layouts`.
     descriptors: LocalSpan,
+    /// One word per field, nonzero where the field's stored slot is a
+    /// recursion box in some instantiation: a take of such a field moves its
+    /// value out of the slot and releases the box (`RefExtra`). Empty when
+    /// no field's slot can be boxed.
+    boxable: U32Span = .empty(),
 };
 
 /// What a `dynamic` local's value is (design.md "Dynamic Values In LIR"):
@@ -1258,6 +1257,17 @@ pub const RefExtra = struct {
     /// this exact path state; evaluators must not inspect those stale
     /// field bytes as live values.
     residual_shell_absent_fields: U32Span = .empty(),
+    /// Set by lowering on a `tag_payload_struct` read of a dynamic tag union
+    /// whose payload slot is a recursion box in some instantiation: the
+    /// counterpart of `ProductShape.boxable` for a tag's only payload.
+    payload_boxable: bool = false,
+    /// Set by ARC on a take out of a dynamic value whose slot can be a
+    /// recursion box: a field its product shape marks `boxable`, or a
+    /// `payload_boxable` tag payload. The read moves the value into the
+    /// target's own storage, and the slot it leaves is released with the
+    /// source's descriptor: a slot that is a recursion box gives up its
+    /// allocation, and any other slot holds nothing further.
+    releases_recursion_box: bool = false,
 };
 
 /// The fields of `CFStmt.assign_low_level` that only particular operations

@@ -641,7 +641,7 @@ pub const BuildEnv = struct {
     /// follows it is appended wiring.
     fn syntheticRootSourceMap(self: *const BuildEnv) base.StagedSourceMap {
         const original = self.synthetic_root_original_source orelse
-            return .{ .header_lines = self.synthetic_root_header_lines, .footer_start = std.math.maxInt(u32) };
+            return .{ .header_lines = self.synthetic_root_header_lines, .footer_start = base.StagedSourceMap.no_footer };
         return .{
             .header_lines = self.synthetic_root_header_lines,
             .footer_start = @intCast(self.synthetic_root_header_len + original.len),
@@ -2974,7 +2974,7 @@ pub const BuildEnv = struct {
         is_app: bool,
         /// True if this is a platform sibling module (e.g., Stdout, Stderr)
         is_platform_sibling: bool,
-        /// Dependency depth from root
+        /// Dependency depth from root, or `ModuleState.unreached_depth`
         depth: u32,
         /// Platform provides entries (only populated for platform main modules)
         provides_entries: []const ProvidesEntry = &.{},
@@ -3557,6 +3557,16 @@ pub const BuildEnv = struct {
     /// The digests of every checked module of this build, its link.
     pub fn boxyLinkDigests(self: *BuildEnv) Allocator.Error!boxy_interface.Digests {
         return self.builtCoordinator().boxyLinkDigests();
+    }
+
+    /// The modules whose units `artifact`'s unit waits for
+    /// (`Coordinator.unitDependencyKeys`). The caller owns the result.
+    pub fn unitDependencyKeys(
+        self: *BuildEnv,
+        allocator: Allocator,
+        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error![]const [32]u8 {
+        return self.builtCoordinator().unitDependencyKeys(allocator, artifact);
     }
 
     /// Collect published checked artifacts available to post-check lowering.
@@ -4241,7 +4251,7 @@ pub const OrderedSink = struct {
     const Entry = struct {
         pkg_name: []const u8, // borrowed from BuildEnv.packages
         module_name: []const u8, // borrowed from Coordinator module state
-        depth: u32, // min dependency depth
+        depth: u32, // min dependency depth, or `ModuleState.unreached_depth`
         reports: std.array_list.Managed(Report), // zero or more reports for this module
         ready: bool,
         emitted: bool,
@@ -4392,7 +4402,7 @@ pub const OrderedSink = struct {
             try self.entries.append(.{
                 .pkg_name = pkg_name,
                 .module_name = module_name,
-                .depth = std.math.maxInt(u32),
+                .depth = coordinator_mod.ModuleState.unreached_depth,
                 .reports = reports_list,
                 .ready = false,
                 .emitted = false,

@@ -73,7 +73,8 @@ pub const Worker = struct {
     scratch: std.mem.Allocator,
     /// Type-erased mutable state owned by this physical lane. Values registered
     /// here survive synchronous batch boundaries and are destroyed with the
-    /// worker pool.
+    /// worker pool, except for an ordered run's items, whose lane state
+    /// belongs to the run and is destroyed when it returns (`runOrdered`).
     lane_state: *LaneState,
 };
 
@@ -217,11 +218,11 @@ pub const TimedTasks = struct {
     }
 };
 
-/// The scratch capacity a lane keeps between the items of ordered runs. A
+/// The scratch capacity a lane keeps between the items of one ordered run. A
 /// lane's item scratch returns to one retained chunk of at most this many
 /// bytes after every item, so steady-state items allocate nothing from the
 /// backing allocator, and idle capacity is bounded by this times the lanes
-/// that ran items.
+/// running the run's items.
 pub const lane_scratch_retain_limit: usize = 4 << 20;
 
 /// The scratch arena a lane lends every item it runs, registered in the
@@ -328,7 +329,10 @@ threadlocal var waiting_owner: ?*const anyopaque = null;
 ///
 /// Lanes claim consecutive items in chunks from one shared counter, never
 /// more than a bounded window of chunks past the oldest uncommitted one, so
-/// results waiting for their commit are bounded too. Each lane keeps its
+/// results waiting for their commit are bounded too. Every lane running the
+/// run's items gets a lane state of the run's own, which the run destroys
+/// before it returns: what an item registers in `Worker.lane_state` serves the
+/// later items that lane runs and outlives none of them. Each lane keeps its
 /// item scratch between items (`lane_scratch_retain_limit`); an item's
 /// `Worker.scratch` dies when its `runItem` returns. Commits run while lanes
 /// keep running later items, so `commitItem` must not change anything a
@@ -338,7 +342,7 @@ threadlocal var waiting_owner: ?*const anyopaque = null;
 /// The first error, from an item or a commit, stops lanes claiming further
 /// chunks; every item already claimed finishes, no further item commits, and
 /// the error is returned. Without an executor, items run and commit in order
-/// on `sequential_lane`.
+/// on `sequential_lane`, whose lifetime is the caller's.
 pub fn runOrdered(
     comptime Ctx: type,
     allocator: std.mem.Allocator,
@@ -407,8 +411,6 @@ fn OrderedRun(comptime Ctx: type) type {
             err: Ctx.Error = undefined,
         };
 
-        const none: usize = std.math.maxInt(usize);
-
         ctx: *Ctx,
         executor: Executor,
         timing: ?*OrderedTiming,
@@ -418,11 +420,15 @@ fn OrderedRun(comptime Ctx: type) type {
         next_claim: std.atomic.Value(usize) = .init(0),
         /// Chunks committed so far; lanes claim only below this plus `window`.
         committed: std.atomic.Value(usize) = .init(0),
-        /// The chunk whose completion the owner is blocked on, or `none`. The
-        /// lane finishing it returns from its drain task, so its completion
-        /// wakes the owner.
-        awaited: std.atomic.Value(usize) = .init(none),
+        /// The index plus one of the chunk whose completion the owner is
+        /// blocked on, or zero when it awaits none. The lane finishing it
+        /// returns from its drain task, so its completion wakes the owner.
+        awaited: std.atomic.Value(usize) = .init(0),
         stop: std.atomic.Value(bool) = .init(false),
+        /// The run's lane states, by worker id, each created by the first
+        /// item its lane runs and touched only by that lane until the run
+        /// has received every task.
+        lanes: []?LaneState,
         lane_ns: []OrderedTiming.Lane = &.{},
         commit_ns: u64 = 0,
         tasks: u64 = 0,
@@ -463,6 +469,9 @@ fn OrderedRun(comptime Ctx: type) type {
                 }
                 std.debug.assert(next == chunk_count);
             }
+            const lanes = try allocator.alloc(?LaneState, executor.lane_count);
+            errdefer allocator.free(lanes);
+            @memset(lanes, null);
             const lane_ns: []OrderedTiming.Lane = if (options.timing != null) try allocator.alloc(OrderedTiming.Lane, executor.lane_count) else &.{};
             for (lane_ns) |*lane| lane.* = .{};
             return .{
@@ -471,13 +480,26 @@ fn OrderedRun(comptime Ctx: type) type {
                 .timing = options.timing,
                 .chunks = chunks,
                 .window = @max(4 * executor.worker_count, 8),
+                .lanes = lanes,
                 .lane_ns = lane_ns,
             };
         }
 
+        /// Runs once every task of the run has been received.
         fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            for (self.lanes) |*slot| if (slot.*) |*lane| lane.deinit();
+            allocator.free(self.lanes);
             allocator.free(self.chunks);
             if (self.lane_ns.len != 0) allocator.free(self.lane_ns);
+        }
+
+        /// The run's lane state for the lane `worker` names, allocating from
+        /// the allocator of the worker's own lane state.
+        fn laneOf(self: *Self, worker: Worker) *LaneState {
+            std.debug.assert(worker.id < self.lanes.len);
+            const slot = &self.lanes[worker.id];
+            if (slot.* == null) slot.* = LaneState.init(worker.lane_state.allocator);
+            return &slot.*.?;
         }
 
         /// The next claimable chunk, or null once every chunk is claimed, the
@@ -494,7 +516,8 @@ fn OrderedRun(comptime Ctx: type) type {
         fn drainTask(context: *anyopaque, worker: Worker) ?*anyopaque {
             const self: *Self = @ptrCast(@alignCast(context));
             const inline_owner = if (waiting_owner) |owner| owner == @as(*const anyopaque, self) else false;
-            const arena = LaneArena.of(worker.lane_state) catch {
+            const lane = self.laneOf(worker);
+            const arena = LaneArena.of(lane) catch {
                 // Claim one chunk only to report the failure in order.
                 if (self.claim()) |index| self.finish(index, error.OutOfMemory);
                 return self;
@@ -508,7 +531,7 @@ fn OrderedRun(comptime Ctx: type) type {
                         .id = worker.id,
                         .allocator = worker.allocator,
                         .scratch = arena.allocator(),
-                        .lane_state = worker.lane_state,
+                        .lane_state = lane,
                     });
                     _ = arena.reset(.{ .retain_with_limit = lane_scratch_retain_limit });
                     if (self.timing) |active| self.lane_ns[worker.id].ns +|= active.since(item_started);
@@ -518,7 +541,7 @@ fn OrderedRun(comptime Ctx: type) type {
                     };
                 }
                 self.finish(index, failure);
-                if (inline_owner or self.awaited.load(.seq_cst) == index) break;
+                if (inline_owner or self.awaited.load(.seq_cst) == index + 1) break;
             }
             return self;
         }
@@ -579,7 +602,7 @@ fn OrderedRun(comptime Ctx: type) type {
                     session.submit(.{ .id = @intCast(self.tasks), .context = self, .run = drainTask }) catch |err| return err;
                     self.tasks += 1;
                 }
-                self.awaited.store(committed, .seq_cst);
+                self.awaited.store(committed + 1, .seq_cst);
                 if (self.chunks[committed].state.load(.seq_cst) == .pending) {
                     // The awaited chunk is claimed by a running task, which
                     // returns once it finishes the chunk, or is claimable by
@@ -587,7 +610,7 @@ fn OrderedRun(comptime Ctx: type) type {
                     std.debug.assert(session.outstanding != 0);
                     _ = self.receive(session);
                 }
-                self.awaited.store(none, .monotonic);
+                self.awaited.store(0, .monotonic);
             }
         }
     };
@@ -824,9 +847,13 @@ pub const ThreadedTestExecutor = struct {
     threads: []std.Thread = &.{},
     lanes: []LaneState = &.{},
     closing: bool = false,
-    /// Submissions accepted before every further one fails.
-    submit_limit: usize = std.math.maxInt(usize),
+    /// Submissions accepted before every further one fails; `unlimited`
+    /// accepts every submission.
+    submit_limit: usize = unlimited,
     submitted: usize = 0,
+
+    /// A `submit_limit` above every submission count.
+    const unlimited: usize = std.math.maxInt(usize);
 
     pub fn start(self: *ThreadedTestExecutor, thread_count: usize) (std.mem.Allocator.Error || std.Thread.SpawnError)!void {
         self.lanes = try std.testing.allocator.alloc(LaneState, thread_count + 1);
@@ -896,7 +923,7 @@ pub const ThreadedTestExecutor = struct {
         const self: *ThreadedTestExecutor = @ptrCast(@alignCast(context));
         self.mutex.lockUncancelable(io);
         defer self.mutex.unlock(io);
-        if (self.submitted == self.submit_limit) return error.OutOfMemory;
+        if (self.submitted >= self.submit_limit) return error.OutOfMemory;
         self.submitted += 1;
         try self.tasks.append(std.testing.allocator, task);
         self.task_ready.signal(io);
@@ -1066,6 +1093,61 @@ test "ordered run reports a refused submission after draining accepted tasks" {
         try std.testing.expectError(error.OutOfMemory, runOrdered(OrderedTestItems, std.testing.allocator, &items, 400, pool.executor(), &sequential, .{}));
         try std.testing.expectEqual(@as(usize, 0), items.running.load(.seq_cst));
         for (items.commits.items, 0..) |committed, index| try std.testing.expectEqual(index, committed);
+    }
+}
+
+/// Items that each register one value per lane in `Worker.lane_state`,
+/// counting how many values were created and destroyed.
+const LaneStateItems = struct {
+    pub const Error = std.mem.Allocator.Error;
+
+    created: std.atomic.Value(usize) = .init(0),
+    destroyed: std.atomic.Value(usize) = .init(0),
+
+    const Value = struct {
+        items: *LaneStateItems,
+        uses: usize = 0,
+
+        fn destroy(opaque_value: *anyopaque) void {
+            const value: *Value = @ptrCast(@alignCast(opaque_value));
+            _ = value.items.destroyed.fetchAdd(1, .seq_cst);
+            std.testing.allocator.destroy(value);
+        }
+    };
+
+    var key: u8 = 0;
+
+    pub fn weight(_: *const LaneStateItems, _: usize) u64 {
+        return 1;
+    }
+
+    pub fn runItem(self: *LaneStateItems, _: usize, worker: Worker) Error!void {
+        const value: *Value = if (worker.lane_state.get(&key)) |existing| @ptrCast(@alignCast(existing)) else blk: {
+            const fresh = try std.testing.allocator.create(Value);
+            fresh.* = .{ .items = self };
+            try worker.lane_state.put(&key, fresh, Value.destroy);
+            _ = self.created.fetchAdd(1, .seq_cst);
+            break :blk fresh;
+        };
+        value.uses += 1;
+    }
+
+    pub fn commitItem(_: *LaneStateItems, _: usize) Error!void {}
+};
+
+test "ordered run lane state serves its items and is destroyed with the run" {
+    var sequential = LaneState.init(std.testing.allocator);
+    defer sequential.deinit();
+    for ([_]usize{ 1, 2, 4 }) |threads| {
+        var pool = ThreadedTestExecutor{};
+        try pool.start(threads);
+        defer pool.stop();
+        var items = LaneStateItems{};
+        try runOrdered(LaneStateItems, std.testing.allocator, &items, 300, pool.executor(), &sequential, .{});
+        const created = items.created.load(.seq_cst);
+        try std.testing.expect(created >= 1);
+        try std.testing.expect(created <= pool.executor().lane_count);
+        try std.testing.expectEqual(created, items.destroyed.load(.seq_cst));
     }
 }
 

@@ -202,6 +202,11 @@ pub extern "C" fn roc_probe_roundtrip_vector_quad(arg0: abi::ProbeVectorQuad) ->
 pub extern "C" fn roc_probe_roundtrip_vector_hva(arg0: abi::ProbeVectorHva) -> abi::ProbeVectorHva { arg0 }
 #[no_mangle]
 pub extern "C" fn roc_probe_roundtrip_vector_wrapper(arg0: abi::ProbeVectorWrapper) -> abi::ProbeVectorWrapper { arg0 }
+
+#[no_mangle]
+pub extern "C" fn roc_probe_roundtrip_zero_sized_wrapper(arg0: abi::ProbeZeroSizedWrapper) -> abi::ProbeZeroSizedWrapper {
+    abi::ProbeZeroSizedWrapper { only: arg0.only + 1.0 }
+}
 #[no_mangle]
 pub extern "C" fn roc_probe_roundtrip_vector_tag(arg0: abi::ProbeVectorTag) -> abi::ProbeVectorTag { arg0 }
 #[no_mangle]
@@ -293,6 +298,11 @@ fn check_provided_abi() {
         let wrapper = abi::ProbeVectorWrapper { only: u8x16 };
         let wrapper_back = abi::roc_provide_vector_wrapper(wrapper);
         if vector_bits(wrapper_back.only) != bits { fail("provided vector wrapper mismatch"); }
+
+        let zero_sized = abi::ProbeZeroSizedWrapper { only: 6.5 };
+        if abi::roc_provide_zero_sized_wrapper(zero_sized).only != 7.5 {
+            fail("provided zero-sized wrapper mismatch");
+        }
 
         let record = abi::ProbeVectorRecord {
             bytes: u8x16,

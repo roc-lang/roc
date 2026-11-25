@@ -887,9 +887,6 @@ pub const DictionaryNode = struct {
     /// The requirement this entry resolves; null for a tree's root target.
     requirement: ?DictRequirement,
     kind: Kind,
-    /// The shallowest target on this entry's path that some back edge below
-    /// it returns to, if any.
-    reaches: collections.OptionalU32 = .none,
 
     pub const Kind = union(enum) {
         /// A requirement no method target resolves.
@@ -905,8 +902,6 @@ pub const DictionaryNode = struct {
         instance: TargetInstance,
         /// The node of each of `instance.requirements`.
         children: []const u32,
-        /// How many targets are above this one on its path.
-        depth: u32,
         /// Whether a back edge returns to this target.
         recursive: bool = false,
     };
@@ -1005,6 +1000,9 @@ pub const Program = struct {
     /// evaluates later from (`rootValueSlot`), by root.
     root_value_slots: std.AutoHashMapUnmanaged(RootSlotKey, LIR.StaticDataId) = .empty,
     stored_value_slots: std.AutoHashMapUnmanaged(StoredValueKey, LIR.StaticDataId) = .empty,
+    /// Whether each stored node of a module is data alone
+    /// (`storedDataAlone`), by node, for the modules asked about.
+    stored_data_alone: std.AutoHashMapUnmanaged(ModuleIndex, std.ArrayList(DataAlone)) = .empty,
     /// The static data slot each value-form expression a body keeps reads
     /// (`inlineLiteralSlot`), by the expression's initializer worker.
     inline_literal_slots: collections.DenseMapUnmanaged(WorkerId, LIR.StaticDataId) = .empty,
@@ -1713,6 +1711,9 @@ pub const Program = struct {
         self.platform_identities.deinit(self.allocator);
         self.root_value_slots.deinit(self.allocator);
         self.stored_value_slots.deinit(self.allocator);
+        var data_alone_tables = self.stored_data_alone.valueIterator();
+        while (data_alone_tables.next()) |table| table.deinit(self.allocator);
+        self.stored_data_alone.deinit(self.allocator);
         self.inline_literal_slots.deinit(self.allocator);
         self.requested_roots.deinit(self.allocator);
         self.const_schema.deinit(self.allocator);
@@ -1737,6 +1738,81 @@ pub const Program = struct {
         return switch (source) {
             .module => |index| self.module(index).view.const_store,
         };
+    }
+
+    /// What is known of a stored node (`storedDataAlone`).
+    pub const DataAlone = enum(u8) { unknown, yes, no };
+
+    /// Whether stored constant `node` of `source` is data alone: neither it
+    /// nor any value it holds is a function value or a failed value. Static
+    /// data freezes such a value from the store through its type's const
+    /// plan (`LirProgram.StoredStaticValue`), so it is one slot whatever it
+    /// holds. Every node the question visits is answered once per lowering.
+    pub fn storedDataAlone(self: *Program, source: ConstSource, node: checked.ConstNodeId) Allocator.Error!bool {
+        const const_store = self.constStore(source);
+        const entry = try self.stored_data_alone.getOrPut(self.allocator, switch (source) {
+            .module => |index| index,
+        });
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        const table = entry.value_ptr;
+        const known = table.items.len;
+        if (known < const_store.nodeCount()) {
+            try table.resize(self.allocator, const_store.nodeCount());
+            @memset(table.items[known..], .unknown);
+        }
+        const answers = table.items;
+        if (answers[@backingInt(node)] != .unknown) return answers[@backingInt(node)] == .yes;
+
+        const Frame = struct { node: checked.ConstNodeId, next: usize = 0 };
+        var frames: std.ArrayList(Frame) = .empty;
+        defer frames.deinit(self.allocator);
+        try frames.append(self.allocator, .{ .node = node });
+        while (frames.items.len != 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            var single: [1]checked.ConstNodeId = undefined;
+            const children: ?[]const checked.ConstNodeId = switch (const_store.get(frame.node)) {
+                .pending => invariant("a stored constant was never filled"),
+                .crash, .checked_error, .fn_value, .boxy_fn => null,
+                .zst, .scalar, .str => &.{},
+                .box => |child| blk: {
+                    single[0] = child;
+                    break :blk &single;
+                },
+                .nominal => |nominal| blk: {
+                    single[0] = nominal.backing;
+                    break :blk &single;
+                },
+                .tuple, .record => |items| items,
+                .tag => |tag| tag.payloads,
+                .list => |list| switch (list.items) {
+                    .nodes => |items| items,
+                    .empty, .packed_bytes => &.{},
+                },
+            };
+            var answer: DataAlone = if (children == null) .no else .yes;
+            var unanswered: ?checked.ConstNodeId = null;
+            if (children) |items| while (frame.next < items.len) {
+                const child = items[frame.next];
+                switch (answers[@backingInt(child)]) {
+                    .yes => frame.next += 1,
+                    .no => {
+                        answer = .no;
+                        break;
+                    },
+                    .unknown => {
+                        unanswered = child;
+                        break;
+                    },
+                }
+            };
+            if (unanswered) |child| {
+                try frames.append(self.allocator, .{ .node = child });
+                continue;
+            }
+            answers[@backingInt(frame.node)] = answer;
+            _ = frames.pop();
+        }
+        return answers[@backingInt(node)] == .yes;
     }
 
     /// The names `source`'s stored types intern.
@@ -1842,10 +1918,12 @@ pub const Program = struct {
         return try self.listIntTemplateWorker(module_index, template_id, item);
     }
 
-    /// The worker of a procedure template as the scope of the lambdas it
-    /// contains, lowered only when something calls the template itself. The
-    /// owner of a closure that compile-time evaluation stored is such a
-    /// scope: its body ran at compile time.
+    /// The worker of a procedure template as a scope: of the lambdas it
+    /// contains, or of a literal chain frame converting a literal there. It
+    /// is lowered only when something calls the template itself or a type
+    /// table names it (`demandBody`). The owner of a closure that
+    /// compile-time evaluation stored is such a scope: its body ran at
+    /// compile time.
     pub fn templateScope(self: *Program, module_index: ModuleIndex, template_id: checked_names.CheckedProcedureTemplateId) Allocator.Error!WorkerId {
         const key: WorkerKey = .{ .template = .{ .module = module_index, .template = template_id } };
         if (self.worker_ids.get(key)) |existing| return existing;
@@ -2314,6 +2392,27 @@ pub const Program = struct {
             if (exported.const_ref.template == const_ref.template) return;
         }
         invariant("a lowering read a constant of another module that the module does not expose");
+    }
+
+    /// `templateScope` of the template `ref` names.
+    pub fn templateRefScope(self: *Program, ref: checked_names.ProcedureTemplateRef) Allocator.Error!WorkerId {
+        const view = self.moduleByKey(.{ .bytes = ref.artifact.bytes });
+        return try self.templateScope(view.index, ref.template);
+    }
+
+    /// Queue the body of worker `id`, which a type table names, when only
+    /// its scope was reached so far: a table is filled from the needs its
+    /// worker's lowering declares.
+    pub fn demandBody(self: *Program, id: WorkerId) Allocator.Error!void {
+        const target = self.worker(id);
+        if (target.queued or target.imported) return;
+        switch (target.key) {
+            .template => |template| switch (template.binding) {
+                .generic => _ = try self.templateWorker(template.module, template.template),
+                .list_int => |item| _ = try self.listIntTemplateWorker(template.module, template.template, item),
+            },
+            .adapter, .default, .lambda, .method_entry, .literal_thunk, .root_slot, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .callable_eval_entry, .convert => {},
+        }
     }
 
     /// `templateScopeWorker` of the template `ref` names.
@@ -3242,8 +3341,6 @@ pub const Program = struct {
             const done = walk.frames.pop().?;
             const entry = &walk.nodes.items[done.node];
             entry.kind.target.children = done.children.items;
-            entry.reaches = .of(done.reaches);
-            if (walk.frames.items.len > 0) if (done.reaches) |depth| walk.reach(depth);
         }
         return walk.nodes.items;
     }
@@ -3267,7 +3364,6 @@ pub const Program = struct {
         const Frame = struct {
             node: u32,
             next: usize = 0,
-            reaches: ?u32 = null,
             children: std.ArrayList(u32) = .empty,
         };
 
@@ -3283,11 +3379,6 @@ pub const Program = struct {
             return index;
         }
 
-        fn reach(self: *DictionaryWalk, depth: u32) void {
-            const top = &self.frames.items[self.frames.items.len - 1];
-            top.reaches = if (top.reaches) |reaches| @min(reaches, depth) else depth;
-        }
-
         fn visit(self: *DictionaryWalk, requirement: DictRequirement) Allocator.Error!void {
             const resolution = try self.program.resolveRequirement(requirement);
             switch (resolution) {
@@ -3301,16 +3392,13 @@ pub const Program = struct {
                 const on_path = &self.nodes.items[frame.node].kind.target;
                 if (on_path.target != target or !std.mem.eql(TypeId, on_path.instance.bound, instance.bound)) continue;
                 on_path.recursive = true;
-                const depth = on_path.depth;
-                _ = try self.add(.{ .requirement = requirement, .kind = .{ .back_edge = frame.node }, .reaches = .some(depth) });
-                return self.reach(depth);
+                _ = try self.add(.{ .requirement = requirement, .kind = .{ .back_edge = frame.node } });
+                return;
             }
-            const depth: u32 = @intCast(self.frames.items.len);
             const node = try self.add(.{ .requirement = requirement, .kind = .{ .target = .{
                 .target = target,
                 .instance = instance,
                 .children = &.{},
-                .depth = depth,
             } } });
             try self.frames.append(self.program.allocator, .{ .node = node });
         }
@@ -5000,8 +5088,20 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
         for (view.view.callable_eval_templates.templates) |callable| {
             if (callable.forwarded_lookup.get() != null) forwarded_roots[@backingInt(callable.root)] = true;
         }
-        for (view.view.checked_procedure_templates.templates.items(), 0..) |template, index| {
-            if (!unitEmitsTemplate(view, template, forwarded_roots)) continue;
+        // A constant's entry procedure is called only where a read finds
+        // the constant's template still names it (`ConstTemplateState.eval_template`).
+        const templates = view.view.checked_procedure_templates.templates.items();
+        const const_entries = try program.allocator.alloc(bool, templates.len);
+        defer program.allocator.free(const_entries);
+        @memset(const_entries, false);
+        for (view.view.const_templates.templates.items()) |const_template| switch (const_template.state) {
+            .eval_template => |eval| if (program.moduleByKey(.{ .bytes = eval.entry_template.artifact.bytes }).index == view.index) {
+                const_entries[@backingInt(eval.entry_template.template)] = true;
+            },
+            .reserved, .stored_const, .unimplemented => {},
+        };
+        for (templates, 0..) |template, index| {
+            if (!try unitEmitsTemplate(program, view, template, forwarded_roots, const_entries[index])) continue;
             if (try templateRejected(program, view, template)) continue;
             const worker = try program.templateWorker(view.index, @fromBackingInt(@intCast(index)));
             _ = try program.methodEntryWorker(worker);
@@ -5210,21 +5310,34 @@ fn templateRejected(program: *Program, view: *const types.ModuleView, template: 
 
 /// Whether a module unit emits `template` (design.md "Per-Module Output"):
 /// every template another object may call or compose, which leaves out the
-/// wrappers of `expect` and REPL roots and of interpolation conversion roots.
-/// Nothing reaches the first two but a test plan's or a REPL's own roots, and
-/// each of those lowers as one program; nothing calls an interpolation
-/// conversion root's wrapper at all, since every use converts its literal in
-/// place (design.md "Literal Arguments").
+/// wrappers of `expect` and REPL roots, of literal conversion roots, and of
+/// validation roots. Nothing reaches the first two but a test plan's or a
+/// REPL's own roots, and each of those lowers as one program; nothing calls
+/// a conversion root's wrapper at all, since every use restores the root's
+/// stored value or converts its literal in place (`restoreConversionRoot`;
+/// design.md "Literal Arguments"); and a validation root has no value for
+/// any body to read.
 /// Exact procedure aliases forward to their targets without evaluator wrappers.
-fn unitEmitsTemplate(view: *const types.ModuleView, template: checked.CheckedProcedureTemplate, forwarded_roots: []const bool) bool {
+/// A constant whose stored value is data alone has no caller of its wrapper
+/// either: every read restores the stored value where it reads, so the
+/// wrapper is emitted only while a constant's template names it as its entry
+/// procedure (`const_entry`). A stored function value's wrapper stays: its
+/// restore is what lowers the workers the value names, which other objects
+/// link against.
+fn unitEmitsTemplate(program: *Program, view: *const types.ModuleView, template: checked.CheckedProcedureTemplate, forwarded_roots: []const bool, const_entry: bool) Allocator.Error!bool {
     return switch (template.body) {
         .checked_body, .intrinsic_wrapper, .unimplemented => true,
         .entry_wrapper => |wrapper_id| blk: {
             const root_id = view.view.entry_wrappers.get(wrapper_id).root;
             if (forwarded_roots[@backingInt(root_id)]) break :blk false;
-            break :blk switch (view.view.compile_time_roots.root(root_id).kind) {
-                .expect, .repl_expr, .interpolation_conversion => false,
-                .callable_binding, .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => true,
+            const root = view.view.compile_time_roots.root(root_id);
+            break :blk switch (root.kind) {
+                .expect, .repl_expr, .interpolation_conversion, .hoisted_validation, .numeral_conversion, .quote_conversion => false,
+                .constant, .hoisted_constant => const_entry or switch (root.payloadFor(.boxy)) {
+                    .const_node => |node| !try program.storedDataAlone(.{ .module = view.index }, node),
+                    .fn_value, .pending, .unevaluated, .discarded, .expect, .runtime => true,
+                },
+                .callable_binding, .literal_argument => true,
             };
         },
     };

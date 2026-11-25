@@ -41,7 +41,7 @@ const DeclIndex = AST.DeclIndex;
 
 /// Version of the layout below. Folded into the cache entry's version hash,
 /// so a format change invalidates every stored entry.
-pub const format_version: u32 = 4;
+pub const format_version: u32 = 5;
 
 /// A readable source pin was checked against this version. Null means the
 /// caller did not report a recognized release/nightly version, which skips

@@ -52,6 +52,15 @@ fn IndexValue(comptime Id: type, comptime reserved_zero: bool) type {
     };
 }
 
+/// The zero-based `u32` id a table holding `len` rows gives its next row, when
+/// that id plus one (its biased optional form, `OptionalId` or `OptionalU32`)
+/// also fits a `u32`. A table past that range has exhausted the
+/// representable ids, which is `error.OutOfMemory`.
+pub inline fn nextBiasedId(len: usize) error{OutOfMemory}!u32 {
+    if (len >= std.math.maxInt(u32)) return error.OutOfMemory;
+    return @intCast(len);
+}
+
 /// The payload of a compact optional form from this file, or null for any
 /// other type. A reflective walker treats a compact optional exactly as the
 /// `?Payload` its `get` returns.
@@ -227,6 +236,15 @@ test "optional IDs use one word and preserve both numbering policies" {
     try std.testing.expectEqual(@as(u32, 1), @backingInt(Direct.some(one)));
     try std.testing.expect(Biased.of(null) == .none);
     try std.testing.expectEqual(last, Biased.of(last).get().?);
+}
+
+test "nextBiasedId leaves room for the biased form" {
+    try std.testing.expectEqual(@as(u32, 0), try nextBiasedId(0));
+    try std.testing.expectEqual(std.math.maxInt(u32) - 1, try nextBiasedId(std.math.maxInt(u32) - 1));
+    try std.testing.expectError(error.OutOfMemory, nextBiasedId(std.math.maxInt(u32)));
+    if (@bitSizeOf(usize) > 32) {
+        try std.testing.expectError(error.OutOfMemory, nextBiasedId(@as(usize, std.math.maxInt(u32)) + 5));
+    }
 }
 
 test "optional raw values, enums and structs fit their payload width" {

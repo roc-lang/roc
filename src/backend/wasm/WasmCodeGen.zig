@@ -629,7 +629,7 @@ pub fn deinit(self: *Self) void {
     self.stack_check_entries.deinit(self.allocator);
     self.storage.deinit();
     self.registered_procs.deinit();
-    for (self.tail_drivers.items) |*driver| driver.members.deinit(self.allocator);
+    for (self.tail_drivers.items) |*driver| driver.deinit(self.allocator);
     self.tail_drivers.deinit(self.allocator);
     self.hosted_symbol_targets.deinit();
     self.function_symbols_by_index.deinit();
@@ -1401,6 +1401,24 @@ fn addLirProcFunctionSymbol(
     );
 }
 
+/// The local symbol of an exported tail-group member, whose own name its
+/// tail entry takes (`TailDriver.entries`).
+fn addTailMemberFunctionSymbol(
+    self: *Self,
+    defined: index_types.DefinedFunction,
+    identity: LIR.ProcIdentity,
+) Allocator.Error!SymbolIndex {
+    var identity_name: [LIR.ProcIdentity.symbol_name_len]u8 = undefined;
+    const name = std.fmt.allocPrint(self.allocator, "{s}.tail_member", .{identity.writeSymbolName(&identity_name)}) catch return error.OutOfMemory;
+    errdefer self.allocator.free(name);
+    try self.function_symbol_names.append(self.allocator, name);
+    return try self.addTrackedDefinedFunctionSymbol(
+        defined,
+        name,
+        WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN,
+    );
+}
+
 /// Resolve the undefined PIC base global, importing it on first use.
 /// A merged module may already import it (LLVM PIC objects do), so prefer that
 /// symbol over adding a second import of the same global.
@@ -2152,7 +2170,7 @@ pub fn generateModule(
     try self.module.finalizeMemoryAndTableWithConfig(.{
         .stack_bytes = self.wasm_stack_bytes,
         .minimum_memory = if (self.wasm_memory_pages > 0)
-            @as(usize, self.wasm_memory_pages) * 65536
+            @as(u64, self.wasm_memory_pages) * 65536
         else
             null,
         .export_memory = true,
@@ -6768,6 +6786,23 @@ const TailDriver = struct {
     result: ValType,
     defined: index_types.DefinedFunction,
     members: std.ArrayList(LIR.LirProcSpecId) = .empty,
+    /// The tail entry of each member other units call
+    /// (`LIR.LirProcSpec.exported`): a function under the member's name and
+    /// signature that calls the member and then this driver, so a call from
+    /// another unit, which only an exported procedure receives, returns the
+    /// group's result. A frame-replacing call never crosses a unit, so the
+    /// tail area and drivers stay private to the unit that defines the group.
+    entries: std.ArrayList(TailEntry) = .empty,
+
+    fn deinit(self: *TailDriver, allocator: Allocator) void {
+        self.members.deinit(allocator);
+        self.entries.deinit(allocator);
+    }
+};
+
+const TailEntry = struct {
+    member: LIR.LirProcSpecId,
+    defined: index_types.DefinedFunction,
 };
 
 const tail_area_args_offset: u32 = 16;
@@ -6829,7 +6864,13 @@ fn registerTailDrivers(self: *Self, proc_specs: []const LirProcSpec) Allocator.E
             try self.tail_drivers.append(self.allocator, .{ .group = proc.tail_group.get().?, .result = result, .defined = defined });
             break :blk &self.tail_drivers.items[self.tail_drivers.items.len - 1];
         };
-        try driver.members.append(self.allocator, @fromBackingInt(@as(u32, @intCast(i))));
+        const member: LIR.LirProcSpecId = @fromBackingInt(@as(u32, @intCast(i)));
+        try driver.members.append(self.allocator, member);
+        if (proc.exported) {
+            const entry = self.module.addDefinedFunction(try self.procFuncType(proc)) catch return error.OutOfMemory;
+            _ = try self.addLirProcFunctionSymbol(entry, proc.identity, true);
+            try driver.entries.append(self.allocator, .{ .member = member, .defined = entry });
+        }
     }
     if (self.tail_drivers.items.len == 0) return;
 
@@ -6947,7 +6988,33 @@ fn compileTailDrivers(self: *Self) Allocator.Error!void {
         try self.encodeLocalsDecl(&self.currentBody().preamble, 1);
         self.endFunction();
         self.restoreState(saved);
+        for (driver.entries.items) |entry| try self.compileTailEntry(driver, entry);
     }
+}
+
+/// A member's tail entry (`TailDriver.entries`): pass every parameter on to
+/// the member, then finish what it left pending.
+fn compileTailEntry(self: *Self, driver: *const TailDriver, entry: TailEntry) Allocator.Error!void {
+    const saved = self.saveState() catch return error.OutOfMemory;
+    errdefer self.abandonState(saved);
+    try self.beginFunction(entry.defined.local);
+    self.stack_frame_size = 0;
+    self.uses_stack_memory = false;
+    self.fp_local = 0;
+    self.cf_depth = 0;
+    self.in_proc = false;
+    self.current_proc_id = null;
+
+    const proc = self.store.getProcSpec(entry.member);
+    const param_count = self.rocParamCount(proc);
+    var param: u32 = 0;
+    while (param < param_count) : (param += 1) try self.emitLocalGet(param);
+    try self.emitCall(self.registered_procs.get(@backingInt(entry.member)) orelse unreachable); // pass 1 registered every tail-group member
+    try self.emitCall(driver.defined.function.raw());
+    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+    try self.encodeLocalsDecl(&self.currentBody().preamble, param_count);
+    self.endFunction();
+    self.restoreState(saved);
 }
 
 fn valTypeByteSize(vt: ValType) u32 {
@@ -7108,7 +7175,13 @@ fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) 
     const type_idx = try self.procFuncType(proc);
     const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
     const func_idx = defined.function.raw();
-    _ = try self.addLirProcFunctionSymbol(defined, proc.identity, proc.exported);
+    if (proc.exported and isTailGroupMember(proc)) {
+        // Other units call the member's tail entry under its name
+        // (`registerTailDrivers`).
+        _ = try self.addTailMemberFunctionSymbol(defined, proc.identity);
+    } else {
+        _ = try self.addLirProcFunctionSymbol(defined, proc.identity, proc.exported);
+    }
     const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
 
     self.registered_procs.put(key, func_idx) catch return error.OutOfMemory;
@@ -7389,13 +7462,7 @@ fn emitProcSpecBody(
     }
 
     // Locals declaration (beyond function parameters).
-    const param_count: u32 = if (erased_abi)
-        6
-    else blk: {
-        const hidden = hiddenParams(proc);
-        const direct_count = self.directArgCount(proc);
-        break :blk @intCast(direct_count + @intFromBool(direct_count < args.len) + hidden.count());
-    };
+    const param_count: u32 = if (erased_abi) 6 else self.rocParamCount(proc);
     try self.encodeLocalsDecl(&self.currentBody().preamble, param_count);
 
     // Prologue (if stack memory used)
@@ -8326,8 +8393,21 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         .assign_ref => |assign| {
             if (assign.op.kind == .field and self.localDyn(assign.op.source) != null) {
                 try self.generateDyn(assign.target, .{ .field_addr = .{ .base = assign.op.source, .desc = self.localDyn(assign.op.source).?.desc, .field_index = .{ .immediate = assign.op.index } } });
+                // Release the slot a stamped field take left
+                // (`LIR.RefExtra.releases_recursion_box`).
+                if (self.store.stmtRowOrDefault(assign.extra).releases_recursion_box) {
+                    try self.emitProcLocal(self.localDyn(assign.op.source).?.desc);
+                    try self.emitBytesAddress(assign.op.source);
+                    try self.emitI32Const(@bitCast(assign.op.index));
+                    try self.emitBoxyRuntimeCall(.field_release_box);
+                }
             } else if (assign.op.kind == .tag_payload_struct and self.localDyn(assign.op.source) != null) {
                 try self.generateDyn(assign.target, .{ .tag_payload_addr = .{ .base = assign.op.source, .desc = self.localDyn(assign.op.source).?.desc, .payload_index = 0 } });
+                if (self.store.stmtRowOrDefault(assign.extra).releases_recursion_box) {
+                    try self.emitProcLocal(self.localDyn(assign.op.source).?.desc);
+                    try self.emitBytesAddress(assign.op.source);
+                    try self.emitBoxyRuntimeCall(.tag_payload_release_box);
+                }
             } else if (assign.op.kind == .local and self.localDyn(assign.target) != null) {
                 try self.generateDyn(assign.target, .{ .copy = .{ .src = assign.op.source, .desc = self.localDyn(assign.target).?.desc } });
             } else if (assign.op.kind == .local and self.backing_aliases.contains(assign.target)) {
@@ -9192,6 +9272,14 @@ fn directArgCount(self: *const Self, proc: LirProcSpec) usize {
     const hidden_count = hiddenParams(proc).count();
     if (arg_count + hidden_count <= layout.abi.wasm_max_function_params) return arg_count;
     return layout.abi.wasm_max_function_params - 1 - hidden_count;
+}
+
+/// How many wasm parameters a Roc-convention procedure takes: its direct
+/// arguments, the address of the ones passed in memory when there are any,
+/// and its hidden parameters.
+fn rocParamCount(self: *const Self, proc: LirProcSpec) u32 {
+    const direct_count = self.directArgCount(proc);
+    return @intCast(direct_count + @intFromBool(direct_count < self.store.getLocalSpan(proc.args).len) + hiddenParams(proc).count());
 }
 
 const StoredArgs = struct {

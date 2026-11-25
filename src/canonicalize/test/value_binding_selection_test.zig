@@ -149,6 +149,90 @@ test "platform header targets and hosted rewrite share top-level selection" {
     try std.testing.expectEqual(@as(usize, 2), env.store.sliceDefs(env.hosted_defs).len);
     for (env.store.sliceDefs(env.hosted_defs)) |hosted_def| {
         try std.testing.expect(spanContainsDef(&env, env.value_binding_defs, hosted_def));
+        // The hosted expression replaced the annotation's in the owner table.
+        const hosted_expr = env.store.getDef(hosted_def).expr;
+        try std.testing.expectEqual(hosted_def, env.topLevelDefOwner(ModuleEnv.nodeIdxFrom(hosted_expr)).?);
+    }
+}
+
+test "a default app's echo! is its one hosted definition" {
+    const source =
+        \\main! = |_args| {
+        \\    echo!("hi")
+        \\    Ok({})
+        \\}
+    ;
+
+    const allocator = std.testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+    var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
+    defer can.deinit();
+    try can.canonicalizeFile();
+
+    try std.testing.expect(env.module_kind == .default_app);
+    const echo = findAssignedDef(&env, env.all_defs, "echo!") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(.e_hosted_lambda, std.meta.activeTag(env.store.getExpr(env.store.getDef(echo).expr)));
+    try std.testing.expectEqualSlices(CIR.Def.Idx, &.{echo}, env.store.sliceDefs(env.hosted_defs));
+}
+
+test "canonicalization records the top-level def owning each def, expression and pattern node" {
+    const source =
+        \\pair = (1, (2, 3))
+        \\(a, (b, c)) = pair
+    ;
+
+    const allocator = std.testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+    var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
+    defer can.deinit();
+    try can.canonicalizeFile();
+
+    const pair_def = findAssignedDef(&env, env.global_value_defs, "pair") orelse return error.TestUnexpectedResult;
+    const pair = env.store.getDef(pair_def);
+    try std.testing.expectEqual(pair_def, env.topLevelDefOwner(ModuleEnv.nodeIdxFrom(pair_def)).?);
+    try std.testing.expectEqual(pair_def, env.topLevelDefOwner(ModuleEnv.nodeIdxFrom(pair.expr)).?);
+    try std.testing.expectEqual(pair_def, env.topLevelDefOwner(ModuleEnv.nodeIdxFrom(pair.pattern)).?);
+    // Nodes inside a def's expression belong to no top-level def.
+    const pair_elems = env.store.sliceExpr(env.store.getExpr(pair.expr).e_tuple.elems);
+    try std.testing.expectEqual(@as(?CIR.Def.Idx, null), env.topLevelDefOwner(ModuleEnv.nodeIdxFrom(pair_elems[1])));
+
+    var destructure_def: ?CIR.Def.Idx = null;
+    for (env.store.sliceDefs(env.global_value_defs)) |def_idx| {
+        if (env.store.getPattern(env.store.getDef(def_idx).pattern) == .tuple) destructure_def = def_idx;
+    }
+    const def_idx = destructure_def orelse return error.TestUnexpectedResult;
+    const def = env.store.getDef(def_idx);
+    try std.testing.expectEqual(def_idx, env.topLevelDefOwner(ModuleEnv.nodeIdxFrom(def_idx)).?);
+    try std.testing.expectEqual(def_idx, env.topLevelDefOwner(ModuleEnv.nodeIdxFrom(def.expr)).?);
+    const outer = env.store.slicePatterns(env.store.getPattern(def.pattern).tuple.patterns);
+    const inner = env.store.slicePatterns(env.store.getPattern(outer[1]).tuple.patterns);
+    for ([_]CIR.Pattern.Idx{ def.pattern, outer[0], outer[1], inner[0], inner[1] }) |pattern_idx| {
+        try std.testing.expectEqual(def_idx, env.topLevelDefOwner(ModuleEnv.nodeIdxFrom(pattern_idx)).?);
+    }
+
+    const owners = env.top_level_def_owners.items();
+    for (owners[1..], owners[0 .. owners.len - 1]) |owner, previous| {
+        try std.testing.expect(previous.node < owner.node);
     }
 }
 

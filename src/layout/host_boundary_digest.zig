@@ -165,6 +165,11 @@ pub fn Walk(comptime Node: type, comptime Graph: type, comptime Error: type) typ
         const Self = @This();
         const NodeEdge = Edge(Node);
 
+        /// The `shallowest_ref` of a subtree that refers back to no frame:
+        /// deeper than every frame, so `@min` keeps any real reference and
+        /// it is never below a frame's depth.
+        const no_back_reference: usize = std.math.maxInt(usize);
+
         const Frame = struct {
             /// Null for the entrypoint signature, which no node names.
             node: ?Node,
@@ -177,6 +182,7 @@ pub fn Walk(comptime Node: type, comptime Graph: type, comptime Error: type) typ
             /// The shallowest active frame a cycle in this frame's subtree
             /// refers back to. A frame whose subtree refers above itself has
             /// a digest that depends on its ancestors, so it is not memoized.
+            /// `no_back_reference` while the subtree refers back to none.
             shallowest_ref: usize,
         };
 
@@ -251,7 +257,7 @@ pub fn Walk(comptime Node: type, comptime Graph: type, comptime Error: type) typ
         fn visit(self: *Self, start: Node) Error!?Child {
             var node = start;
             while (true) {
-                if (self.memo.get(node)) |digest| return .{ .digest = digest, .shallowest_ref = std.math.maxInt(usize) };
+                if (self.memo.get(node)) |digest| return .{ .digest = digest, .shallowest_ref = no_back_reference };
                 if (self.active.get(node)) |depth| {
                     var hasher = base.Sha256.init(.{});
                     updateHashBytes(&hasher, "cycle");
@@ -262,7 +268,7 @@ pub fn Walk(comptime Node: type, comptime Graph: type, comptime Error: type) typ
                 switch (try self.graph.shape(node, &self.edges)) {
                     .leaf => {
                         std.debug.assert(self.edges.items.len == edges_start);
-                        return .{ .digest = null, .shallowest_ref = std.math.maxInt(usize) };
+                        return .{ .digest = null, .shallowest_ref = no_back_reference };
                     },
                     .transparent => |next| {
                         std.debug.assert(self.edges.items.len == edges_start);
@@ -291,7 +297,7 @@ pub fn Walk(comptime Node: type, comptime Graph: type, comptime Error: type) typ
                 .edges_len = self.edges.items.len - edges_start,
                 .hasher = hasher,
                 .reaches_erased = erased,
-                .shallowest_ref = std.math.maxInt(usize),
+                .shallowest_ref = no_back_reference,
             });
             if (node) |active_node| try self.active.put(active_node, depth);
         }
@@ -321,7 +327,7 @@ pub fn Walk(comptime Node: type, comptime Graph: type, comptime Error: type) typ
                 // is the same wherever the node is reached.
                 if (frame.shallowest_ref >= depth) try self.memo.put(node, digest);
             }
-            return .{ .digest = digest, .shallowest_ref = if (frame.shallowest_ref >= depth) std.math.maxInt(usize) else frame.shallowest_ref };
+            return .{ .digest = digest, .shallowest_ref = if (frame.shallowest_ref >= depth) no_back_reference else frame.shallowest_ref };
         }
     };
 }

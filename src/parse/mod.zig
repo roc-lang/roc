@@ -59,7 +59,7 @@ fn runTokenDispatch(gpa: Allocator, env: *CommonEnv, parserCall: *const fn (*Par
     var tokenize_diagnostics = std.ArrayList(tokenize.Diagnostic).fromOwnedSlice(tokenize_diagnostics_slice);
     errdefer tokenize_diagnostics.deinit(gpa);
     if (result.extra_messages_dropped != 0) {
-        try tokenize_diagnostics.append(gpa, .{ .tag = .TooManyTokenizationErrors, .region = base.Region.from_raw_offsets(0, 0) });
+        try tokenize_diagnostics.append(gpa, .{ .tag = .TooManyTokenizationErrors, .region = result.first_dropped_region });
     }
 
     // Heap-allocate AST for unified ownership model
@@ -1336,6 +1336,10 @@ test "bidi source rejection and omitted diagnostics survive the parser boundary"
     try std.testing.expectEqual(@as(usize, 129), ast.tokenize_diagnostics.items.len);
     try std.testing.expectEqual(tokenize.Diagnostic.Tag.BidiControlInSource, ast.tokenize_diagnostics.items[0].tag);
     try std.testing.expectEqual(tokenize.Diagnostic.Tag.TooManyTokenizationErrors, ast.tokenize_diagnostics.items[128].tag);
+    // The omission marker points at the first diagnostic it stands for.
+    const first_omitted_offset: u32 = "# ".len + 128 * "\u{202e}".len;
+    try std.testing.expectEqual(first_omitted_offset, ast.tokenize_diagnostics.items[128].region.start.offset);
+    try std.testing.expectEqual(first_omitted_offset + "\u{202e}".len, ast.tokenize_diagnostics.items[128].region.end.offset);
     var report = try ast.tokenizeDiagnosticToReport(ast.tokenize_diagnostics.items[0], gpa, "Probe.roc");
     defer report.deinit();
 }
@@ -1552,6 +1556,61 @@ test "issue 13335: a package dependency record parse error is reported at the to
     });
 }
 
+test "a platform `targets` section parse error is reported at the token where parsing stopped" {
+    const platform = "platform \"\" requires {} exposes [] packages {} provides { \"roc_main\": main_for_host } targets: { inputs_dir: \"targets/\", ";
+    try expectHeaderDiagnosticsAtStoppingToken(&.{
+        .{
+            .before = platform,
+            .stopped_at = "Wasm32",
+            .after = ": { inputs: [app] } }",
+            .tag = .expected_targets_field_name,
+        },
+        .{
+            .before = platform ++ "wasm32 ",
+            .stopped_at = "{",
+            .after = " inputs: [app] } }",
+            .tag = .expected_targets_field_colon,
+        },
+        // Only `inputs_dir` takes a string, so the field name is the error.
+        .{
+            .before = platform,
+            .stopped_at = "inputs",
+            .after = ": \"other/\" }",
+            .tag = .expected_targets_field_name,
+        },
+        .{
+            .before = platform ++ "wasm32: ",
+            .stopped_at = "42",
+            .after = " }",
+            .tag = .expected_targets_field_name,
+        },
+    });
+}
+
+test "a host symbol map entry parse error is reported at the token where parsing stopped" {
+    const platform = "platform \"\" requires {} exposes [] packages {} ";
+    try expectHeaderDiagnosticsAtStoppingToken(&.{
+        .{
+            .before = platform ++ "provides { \"roc_main\" ",
+            .stopped_at = "main_for_host",
+            .after = " }",
+            .tag = .expected_symbol_map_colon,
+        },
+        .{
+            .before = platform ++ "provides { \"roc_main\": ",
+            .stopped_at = "42",
+            .after = " }",
+            .tag = .expected_symbol_map_function,
+        },
+        .{
+            .before = platform ++ "provides { \"roc_main\": main_for_host } hosted { \"roc_line\": Stdout.Line ",
+            .stopped_at = "42",
+            .after = " }",
+            .tag = .expected_symbol_map_function,
+        },
+    });
+}
+
 test "a second platform entry in a dependency record is reported at its `platform` keyword" {
     try expectHeaderDiagnosticsAtStoppingToken(&.{.{
         .before = "app [main] { pf: \"pf.roc\", a: platform \"a.roc\", b: ",
@@ -1613,5 +1672,34 @@ test "a malformed header node spans from the header keyword through the token wh
         const malformed = ast.store.getHeader(@fromBackingInt(@intCast(ast.root_node_idx))).malformed;
         try std.testing.expectEqual(@as(u32, 0), malformed.region.start);
         try std.testing.expectEqual(case.tokens_through_error, malformed.region.end);
+    }
+}
+
+test "a header that fails at end of file spans its tokens, so tokenizer errors inside it are header errors" {
+    const gpa = std.testing.allocator;
+    // Each header runs into the end of the file after a tokenizer problem
+    // inside it: an ASCII control character, or an invalid string escape.
+    const sources = [_][]const u8{
+        "module [foo,\x07 bar",
+        "app [main!] { pf: platform \"pf\\q.roc\"",
+        "platform \"\" requires {\x07} exposes [foo",
+    };
+    for (sources) |source| {
+        errdefer std.debug.print("\nheader source:\n{s}\n", .{source});
+
+        var env = try CommonEnv.init(gpa, source);
+        defer env.deinit(gpa);
+        const ast = try header(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 1), ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 1), ast.parse_diagnostics.items.len);
+        const parse_region = ast.tokenizedRegionToRegion(ast.parse_diagnostics.items[0].region);
+        try std.testing.expectEqual(source.len, @as(usize, parse_region.start.offset));
+
+        const file_header = ast.store.getHeader(@fromBackingInt(@intCast(ast.root_node_idx)));
+        try std.testing.expect(file_header == .malformed);
+        try std.testing.expect(ast.tokenize_diagnostics.items[0].region.start.offset < ast.headerEndOffset(file_header));
+        try std.testing.expect(ast.headerHasTokenizeErrors(file_header));
     }
 }

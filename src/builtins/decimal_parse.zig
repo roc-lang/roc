@@ -112,10 +112,12 @@ fn scanPrefix(bytes: []const u8, comptime grammar: Grammar) ?ParsedDecimal {
             if (isDigit(byte)) {
                 const digit = byte - '0';
                 if (!overflow) {
-                    if (magnitude > (std.math.maxInt(u64) - @as(u64, digit)) / 10) {
+                    const scaled, const scale_overflow = @mulWithOverflow(magnitude, 10);
+                    const sum, const add_overflow = @addWithOverflow(scaled, @as(u64, digit));
+                    if (scale_overflow | add_overflow != 0) {
                         overflow = true;
                     } else {
-                        magnitude = magnitude * 10 + digit;
+                        magnitude = sum;
                     }
                 }
             } else if (byte == '_' and isDigit(bytes[cursor - 1]) and cursor + 1 < bytes.len and isDigit(bytes[cursor + 1])) {

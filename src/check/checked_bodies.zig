@@ -1004,9 +1004,15 @@ pub const CheckedBodies = struct {
     }
 
     /// The checker-selected defaults of fields omitted at record
-    /// construction sites, by site, in checking order.
+    /// construction sites, sorted by site.
     pub fn recordOmittedDefaults(self: CheckedBodies) []const ModuleEnv.RecordOmittedDefault {
         return self.env.record_omitted_defaults.items();
+    }
+
+    /// The checker-selected defaults of the fields one record construction
+    /// omits.
+    pub fn recordOmittedDefaultsOf(self: CheckedBodies, construction: CIR.Expr.Idx) []const ModuleEnv.RecordOmittedDefault {
+        return ModuleEnv.RecordOmittedDefault.ofExpr(self.env.record_omitted_defaults.items(), construction);
     }
 
     /// One omitted default in the checked module's names.

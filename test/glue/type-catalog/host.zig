@@ -126,12 +126,17 @@ export fn roc_catalog_roundtrip(arg0: abi.EmptyOrPairOrPayloadOrRecursive) callc
     return arg0;
 }
 
-export fn roc_catalog_single_no_payload() callconv(.c) *anyopaque {
-    return undefined;
-}
+export fn roc_catalog_single_no_payload() callconv(.c) void {}
 
 export fn roc_catalog_single_payload_roundtrip(arg0: abi.CatalogPayload) callconv(.c) abi.CatalogPayload {
     return arg0;
+}
+
+export fn roc_catalog_multi_payload_roundtrip(arg0: abi.Stepped) callconv(.c) abi.Stepped {
+    if (arg0._0 != 21 or arg0._1.len() != 3) fail("multi-payload argument mismatch", .{});
+    var result = arg0;
+    result._0 += 1;
+    return result;
 }
 
 fn expectStr(str: *const abi.RocStr, expected: []const u8, label: []const u8) void {
@@ -167,9 +172,17 @@ fn runContract() void {
     if (abi.roc_i128(-123456789) != -123456789) fail("I128 identity mismatch", .{});
     if (abi.roc_u128(123456789) != 123456789) fail("U128 identity mismatch", .{});
 
+    const stepped = abi.roc_multi_payload();
+    if (stepped._0 != 22) fail("multi-payload first payload mismatch", .{});
+    if (!std.mem.eql(u64, stepped._1.items(), &.{ 3, 5, 8 })) fail("multi-payload second payload mismatch", .{});
+
+    const zero_sized: abi.CatalogZeroSizedWrapper = .{ .only = 6.5 };
+    if (abi.roc_zero_sized_wrapper(zero_sized).only != 7.5) fail("zero-sized wrapper mismatch", .{});
+
     result_a.decref(&roc_host);
     result_b.decref(&roc_host);
     structural.decref(&roc_host);
+    stepped.decref(&roc_host);
 }
 
 export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {

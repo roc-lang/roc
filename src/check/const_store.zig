@@ -1316,6 +1316,143 @@ pub const ConstTypeStore = struct {
     }
 };
 
+/// The bytes of a store's blobs, at the offsets its blob views name. Most
+/// are the store's own (`owned`). A blob added with `addBorrowedBlobData` is
+/// a checked literal of the store's module, borrowed from the module's
+/// string literal store, which never changes once the module is
+/// canonicalized and outlives the store, so the store keeps no copy of it.
+/// A borrowed run occupies its offsets as if its bytes were stored there:
+/// serialization writes the runs in place, so a serialized store is the same
+/// whichever of its blobs are borrowed, and a loaded store owns them all.
+pub const BlobBacking = struct {
+    /// The owned bytes in offset order, with every borrowed run left out.
+    owned: collections.SafeList(u8) = .{},
+    /// The borrowed runs, in offset order.
+    borrowed: std.ArrayList(Borrowed) = .empty,
+    /// The total length of the borrowed runs.
+    borrowed_len: u32 = 0,
+
+    pub const Borrowed = struct {
+        /// The run's offset among all the blob bytes.
+        start: u32,
+        /// The total length of the runs before this one.
+        before: u32,
+        bytes: []const u8,
+    };
+
+    /// The length of all the blob bytes, owned and borrowed.
+    fn len(self: *const BlobBacking) usize {
+        return self.owned.items().len + self.borrowed_len;
+    }
+
+    /// The bytes `range` names, which lie in one borrowed run or wholly
+    /// among the owned bytes.
+    fn slice(self: *const BlobBacking, range: ConstRange) []const u8 {
+        // An empty blob owns no backing.
+        if (range.len == 0) return &.{};
+        const runs = self.borrowed.items;
+        // The last run starting at or before the range.
+        var low: usize = 0;
+        var high: usize = runs.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (runs[mid].start <= range.start) low = mid + 1 else high = mid;
+        }
+        if (low == 0) return self.owned.items()[range.start..][0..range.len];
+        const run = runs[low - 1];
+        if (run.start == range.start) {
+            if (builtin.mode == .debug) std.debug.assert(run.bytes.len == range.len);
+            return run.bytes;
+        }
+        const before = run.before + @as(u32, @intCast(run.bytes.len));
+        return self.owned.items()[range.start - before ..][0..range.len];
+    }
+
+    fn appendBorrowed(self: *BlobBacking, allocator: Allocator, bytes: []const u8) Allocator.Error!ConstRange {
+        std.debug.assert(bytes.len != 0);
+        const start = std.math.cast(u32, self.len()) orelse return error.OutOfMemory;
+        const length = std.math.cast(u32, bytes.len) orelse return error.OutOfMemory;
+        _ = std.math.add(u32, start, length) catch return error.OutOfMemory;
+        try self.borrowed.append(allocator, .{ .start = start, .before = self.borrowed_len, .bytes = bytes });
+        self.borrowed_len += length;
+        return .{ .start = start, .len = length };
+    }
+
+    /// Undo the last `appendBorrowed`.
+    fn popBorrowed(self: *BlobBacking) void {
+        const run = self.borrowed.pop() orelse unreachable; // follows the `appendBorrowed` it undoes
+        self.borrowed_len -= @intCast(run.bytes.len);
+    }
+
+    fn deinit(self: *BlobBacking, allocator: Allocator) void {
+        self.owned.deinit(allocator);
+        self.borrowed.deinit(allocator);
+        self.* = .{};
+    }
+
+    /// A pairing session's copy (`checked_artifact.copyPairingColumns`): its
+    /// own owned bytes, borrowing the runs this backing borrows, which
+    /// outlive the session.
+    pub fn copyForPairing(self: BlobBacking, allocator: Allocator) Allocator.Error!BlobBacking {
+        var owned = try collections.SafeList(u8).initCapacity(allocator, self.owned.items().len);
+        errdefer owned.deinit(allocator);
+        _ = try owned.appendSlice(allocator, self.owned.items());
+        var borrowed = try std.ArrayList(Borrowed).initCapacity(allocator, self.borrowed.items.len);
+        borrowed.appendSliceAssumeCapacity(self.borrowed.items);
+        return .{ .owned = owned, .borrowed = borrowed, .borrowed_len = self.borrowed_len };
+    }
+
+    /// The serialized blob bytes, laid out exactly as a `SerializedSlice(u8)`
+    /// of all of them.
+    pub const Serialized = extern struct {
+        offset: i64 = 0,
+        len: u64 = 0,
+
+        pub const SerializedElement = u8;
+        pub const serialized_relocatable_pointers: usize = 1;
+
+        /// Append every blob byte in offset order, the borrowed runs where
+        /// they lie, as one contiguous slice.
+        pub fn serialize(self: *Serialized, backing: *const BlobBacking, gpa: Allocator, writer: *collections.CompactWriter) Allocator.Error!void {
+            const total = backing.len();
+            if (total == 0) {
+                self.* = .{};
+                return;
+            }
+            var first: ?usize = null;
+            var owned_at: usize = 0;
+            const owned = backing.owned.items();
+            for (backing.borrowed.items) |run| {
+                const owned_end = run.start - run.before;
+                if (owned_end > owned_at) {
+                    const at = try writer.appendSlicePodZeroedOffset(gpa, owned[owned_at..owned_end]);
+                    if (first == null) first = at;
+                    owned_at = owned_end;
+                }
+                const at = try writer.appendSlicePodZeroedOffset(gpa, run.bytes);
+                if (first == null) first = at;
+            }
+            if (owned.len > owned_at) {
+                const at = try writer.appendSlicePodZeroedOffset(gpa, owned[owned_at..]);
+                if (first == null) first = at;
+            }
+            self.offset = @intCast(first.?);
+            self.len = total;
+        }
+
+        /// The backing over the relocated buffer at `base_addr`, owning every blob.
+        pub fn deserializeInto(self: *const Serialized, base_addr: usize) BlobBacking {
+            const bytes: []u8 = if (self.len == 0) &.{} else @as([*]u8, @ptrFromInt(base_addr +% @as(usize, @intCast(self.offset))))[0..@intCast(self.len)];
+            return .{ .owned = collections.SafeList(u8).fromBorrowedSlice(bytes) };
+        }
+
+        pub fn validateRelocations(self: *const Serialized, backing_len: u64) error{CorruptArtifact}!void {
+            if (std.math.cast(u32, self.len) == null) return error.CorruptArtifact;
+            try artifact_serialize.validateOffsetLen(1, 1, self.offset, self.len, backing_len);
+        }
+    };
+};
+
 /// Store of compile-time constants completed by checking finalization.
 pub const ConstStore = struct {
     const VisitState = enum { unseen, active, done };
@@ -1337,7 +1474,7 @@ pub const ConstStore = struct {
     evidence_structural_pool: collections.SafeList(ConstFnStructuralEvidence),
     evidence_frame_pool: collections.SafeList(ConstFnEvidenceFrame),
     /// Flat pool of immutable backing bytes shared by strings and packed lists.
-    blob_backing: collections.SafeList(u8),
+    blob_backing: BlobBacking,
     /// `ConstBlobDataId` -> range into `blob_backing`.
     blob_views: collections.SafeList(ConstRange),
     /// Content index over the blobs, by their bytes: every blob is entered
@@ -1595,20 +1732,22 @@ pub const ConstStore = struct {
     /// as `addBlobData` interns a copy of it; nothing else may touch the blob
     /// table in between.
     pub fn reserveBlobData(self: *ConstStore, len: usize) Allocator.Error![]u8 {
-        const start: usize = self.blob_backing.length;
-        try self.blob_backing.resize(self.allocator, start + len);
-        return self.blob_backing.items()[start..];
+        const owned = &self.blob_backing.owned;
+        const start: usize = owned.length;
+        try owned.resize(self.allocator, start + len);
+        return owned.items()[start..];
     }
 
     /// Intern the `len` bytes written into the space `reserveBlobData`
     /// returned, releasing that space when equal bytes are already interned.
     pub fn commitBlobData(self: *ConstStore, len: usize) Allocator.Error!ConstBlobDataId {
-        const start = self.blob_backing.items().len - len;
-        errdefer self.blob_backing.shrinkRetainingCapacity(start);
-        const bytes = self.blob_backing.items()[start..];
+        const owned = &self.blob_backing.owned;
+        const owned_start = owned.items().len - len;
+        errdefer owned.shrinkRetainingCapacity(owned_start);
+        const bytes = owned.items()[owned_start..];
         const hash = blobHash(bytes);
         if (self.blob_index.find(hash, BlobBytesContext{ .store = self, .bytes = bytes })) |existing| {
-            self.blob_backing.shrinkRetainingCapacity(start);
+            owned.shrinkRetainingCapacity(owned_start);
             return @fromBackingInt(existing);
         }
 
@@ -1616,7 +1755,7 @@ pub const ConstStore = struct {
         // An empty blob owns no backing, as `artifact_serialize.appendSpan`
         // records it.
         const view: ConstRange = if (len == 0) .{ .start = 0, .len = 0 } else .{
-            .start = std.math.cast(u32, start) orelse return error.OutOfMemory,
+            .start = std.math.cast(u32, self.blob_backing.len() - len) orelse return error.OutOfMemory,
             .len = std.math.cast(u32, len) orelse return error.OutOfMemory,
         };
         _ = try self.blob_views.append(self.allocator, view);
@@ -1630,10 +1769,37 @@ pub const ConstStore = struct {
         if (self.blob_index.find(hash, BlobBytesContext{ .store = self, .bytes = bytes })) |existing| return @fromBackingInt(existing);
 
         const raw_id = std.math.cast(u32, self.blob_views.items().len) orelse return error.OutOfMemory;
-        const backing_len = self.blob_backing.items().len;
-        const view = try artifact_serialize.appendSpan(ConstRange, u8, &self.blob_backing, self.allocator, bytes);
-        errdefer self.blob_backing.shrinkRetainingCapacity(backing_len);
+        const owned = &self.blob_backing.owned;
+        const owned_len = owned.items().len;
+        // An empty blob owns no backing, as `artifact_serialize.appendSpan`
+        // records it.
+        const view: ConstRange = if (bytes.len == 0) .{ .start = 0, .len = 0 } else view: {
+            const start = std.math.cast(u32, self.blob_backing.len()) orelse return error.OutOfMemory;
+            const len = std.math.cast(u32, bytes.len) orelse return error.OutOfMemory;
+            _ = std.math.add(u32, start, len) catch return error.OutOfMemory;
+            _ = try owned.appendSlice(self.allocator, bytes);
+            break :view .{ .start = start, .len = len };
+        };
+        errdefer owned.shrinkRetainingCapacity(owned_len);
         _ = try self.blob_views.append(self.allocator, view);
+        errdefer _ = self.blob_views.pop();
+        try self.blob_index.insertNew(self.allocator, hash, raw_id);
+        return @fromBackingInt(raw_id);
+    }
+
+    /// `addBlobData` for bytes this store borrows rather than copies: a
+    /// checked literal of the store's own module, held by the module's
+    /// string literal store (`BlobBacking`).
+    pub fn addBorrowedBlobData(self: *ConstStore, bytes: []const u8) Allocator.Error!ConstBlobDataId {
+        if (bytes.len == 0) return self.addBlobData(bytes);
+        const hash = blobHash(bytes);
+        if (self.blob_index.find(hash, BlobBytesContext{ .store = self, .bytes = bytes })) |existing| return @fromBackingInt(existing);
+
+        const raw_id = std.math.cast(u32, self.blob_views.items().len) orelse return error.OutOfMemory;
+        try self.blob_views.ensureUnusedCapacity(self.allocator, 1);
+        const view = try self.blob_backing.appendBorrowed(self.allocator, bytes);
+        errdefer self.blob_backing.popBorrowed();
+        _ = self.blob_views.appendAssumeCapacity(view);
         errdefer _ = self.blob_views.pop();
         try self.blob_index.insertNew(self.allocator, hash, raw_id);
         return @fromBackingInt(raw_id);
@@ -1641,6 +1807,11 @@ pub const ConstStore = struct {
 
     fn nodeSlice(self: *const ConstStore, range: ConstRange) []const ConstNodeId {
         return self.node_pool.items()[range.start .. range.start + range.len];
+    }
+
+    /// How many nodes the store holds; every node id is below it.
+    pub fn nodeCount(self: *const ConstStore) usize {
+        return self.values.items().len;
     }
 
     pub fn get(self: *const ConstStore, id: ConstNodeId) ConstValue {
@@ -1696,7 +1867,7 @@ pub const ConstStore = struct {
             constStoreInvariant("blob backing id is out of range");
         }
         const view = self.blob_views.items()[index];
-        return self.blob_backing.items()[view.start .. view.start + view.len];
+        return self.blob_backing.slice(view);
     }
 
     /// Relocatable serialized form. Every field is a `SafeList`-equivalent POD
@@ -1712,7 +1883,7 @@ pub const ConstStore = struct {
         evidence_target_pool: artifact_serialize.SerializedSlice(ConstFnTargetEvidence) = .{},
         evidence_structural_pool: artifact_serialize.SerializedSlice(ConstFnStructuralEvidence) = .{},
         evidence_frame_pool: artifact_serialize.SerializedSlice(ConstFnEvidenceFrame) = .{},
-        blob_backing: artifact_serialize.SerializedSlice(u8) = .{},
+        blob_backing: BlobBacking.Serialized = .{},
         blob_views: artifact_serialize.SerializedSlice(ConstRange) = .{},
         blob_index: collections.HashedProbeTable.Serialized = .{},
 
@@ -2494,6 +2665,60 @@ test "a loaded ConstStore keeps its blob ids and deduplicates new blobs against 
 
     serialized.blob_index.len -= 1;
     try std.testing.expectError(error.CorruptArtifact, collections.validateSerializedRelocations(ConstStore.Serialized, serialized, buffer.len));
+}
+
+test "a store borrowing blobs serializes exactly as a store owning them and holds no copy" {
+    const CompactWriter = collections.CompactWriter;
+    const gpa = std.testing.allocator;
+    const literal = "a checked literal the store borrows rather than copies";
+    const literal_two = "another borrowed literal";
+
+    var borrowing = ConstStore.init(gpa);
+    defer borrowing.deinit();
+    var owning = ConstStore.init(gpa);
+    defer owning.deinit();
+    const ids = [_]ConstBlobDataId{
+        try borrowing.addBlobData("owned first"),
+        try borrowing.addBorrowedBlobData(literal),
+        try borrowing.addBlobData(""),
+        try borrowing.addBorrowedBlobData(literal_two),
+        try borrowing.addBlobData("owned last"),
+    };
+    // Equal bytes name the one blob whichever way either was added.
+    try std.testing.expectEqual(ids[1], try borrowing.addBlobData(literal));
+    try std.testing.expectEqual(ids[4], try borrowing.addBorrowedBlobData("owned last"));
+    const reserved = try borrowing.reserveBlobData(literal_two.len);
+    @memcpy(reserved, literal_two);
+    try std.testing.expectEqual(ids[3], try borrowing.commitBlobData(literal_two.len));
+    for ([_][]const u8{ "owned first", literal, "", literal_two, "owned last" }) |bytes| _ = try owning.addBlobData(bytes);
+
+    // The borrowed blobs are the literals themselves.
+    try std.testing.expectEqual(@intFromPtr(literal.ptr), @intFromPtr(borrowing.blobData(ids[1]).ptr));
+    try std.testing.expectEqual(@intFromPtr(literal_two.ptr), @intFromPtr(borrowing.blobData(ids[3]).ptr));
+    try std.testing.expectEqualStrings("owned first", borrowing.blobData(ids[0]));
+    try std.testing.expectEqualStrings("owned last", borrowing.blobData(ids[4]));
+    try std.testing.expectEqual(@as(usize, "owned first".len + "owned last".len), borrowing.blob_backing.owned.items().len);
+
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    var buffers: [2][]align(16) u8 = undefined;
+    for ([_]*const ConstStore{ &borrowing, &owning }, &buffers) |store, *buffer| {
+        var writer = CompactWriter.init();
+        const header = try writer.appendAlloc(arena.allocator(), ConstStore.Serialized);
+        try header.serialize(store, arena.allocator(), &writer);
+        buffer.* = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
+        _ = try writer.writeToBuffer(buffer.*);
+    }
+    defer for (buffers) |buffer| gpa.free(buffer);
+    try std.testing.expectEqualSlices(u8, buffers[1], buffers[0]);
+
+    const serialized: *ConstStore.Serialized = @ptrCast(@alignCast(buffers[0].ptr));
+    try collections.validateSerializedRelocations(ConstStore.Serialized, serialized, buffers[0].len);
+    var loaded = serialized.deserialize(@intFromPtr(buffers[0].ptr), gpa);
+    defer loaded.deinit();
+    for (ids, [_][]const u8{ "owned first", literal, "", literal_two, "owned last" }) |id, bytes| {
+        try std.testing.expectEqualStrings(bytes, loaded.blobData(id));
+    }
 }
 
 test "ConstStore.appendFn: no leak or double-free under allocation failure" {

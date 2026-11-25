@@ -3917,7 +3917,7 @@ fn initEvaluationProgram(
 ) FinalizeError!EvaluationProgram(ProgramPtr) {
     if (ProgramPtr == *InterpreterProgram) return .{ .storage = try InterpreterProgram.init(allocator, lowering_modules, lowered, options) };
     var native = try DevProgram.init(allocator, lowering_modules, lowered, options);
-    native.codegen.static_strings = native.static_strings.view();
+    if (native.extraction) |*kept| native.codegen.static_strings = kept.static_strings.view();
     return .{ .storage = native };
 }
 
@@ -4660,7 +4660,7 @@ pub const Timing = struct {
     /// evaluation runs as bursts interleaved with checking, so the progress
     /// reporter cannot window-sample it; the brackets that already time each
     /// burst fold a footprint reading at the same points.
-    mem_min: MemMinCounter = MemMinCounter.init(std.math.maxInt(u64)),
+    mem_min: MemMinCounter = MemMinCounter.init(unsampled_mem_min),
     mem_max: MemMaxCounter = .{},
     native_emission_mutex: std.atomic.Mutex = .unlocked,
     native_emission: NativeProcCompiler.Metrics = .{},
@@ -4836,7 +4836,7 @@ pub const Timing = struct {
         self.roots_declared.add(snapshot_value.roots_declared);
         self.roots_evaluated.add(snapshot_value.roots_evaluated);
         self.roots_completed_directly.add(snapshot_value.roots_completed_directly);
-        if (snapshot_value.mem_min != std.math.maxInt(u64)) self.mem_min.min(snapshot_value.mem_min);
+        self.mem_min.min(snapshot_value.mem_min);
         self.mem_max.max(snapshot_value.mem_max);
         for (&self.steps_ns, snapshot_value.steps_ns) |*counter, value| counter.add(value);
         for (&self.counts, snapshot_value.counts) |*counter, value| counter.add(value);
@@ -4895,6 +4895,10 @@ const MemMinCounter = base.ConcurrentU64;
 const MemMaxCounter = base.ConcurrentU64;
 const TimingCounter = base.ConcurrentU64;
 
+/// The `mem_min` before any footprint sample: above every footprint, so
+/// folding a sample in with `min` keeps the sample.
+pub const unsampled_mem_min: u64 = std.math.maxInt(u64);
+
 /// Immutable compile-time finalization timings for progress reporting.
 pub const TimingSnapshot = struct {
     total_ns: u64 = 0,
@@ -4911,7 +4915,8 @@ pub const TimingSnapshot = struct {
     roots_declared: u64 = 0,
     roots_evaluated: u64 = 0,
     roots_completed_directly: u64 = 0,
-    mem_min: u64 = std.math.maxInt(u64),
+    /// The smallest sampled process footprint, or `unsampled_mem_min`.
+    mem_min: u64 = unsampled_mem_min,
     mem_max: u64 = 0,
     native_emission: NativeProcCompiler.Metrics = .{},
     steps_ns: [Timing.step_count]u64 = @splat(0),
@@ -6779,14 +6784,18 @@ fn evaluationDemand(allocator: Allocator, result: *LirProgram.Result, roots: []c
 
 const DevProgram = struct {
     allocator: Allocator,
-    static_strings: backend.StaticStringData.Table,
     slots: StaticSlotEnvironment,
     codegen: backend.HostLirCodeGen,
     /// Native data and symbols linked into the evaluation image.
     splice: backend.dev.HostSplice,
     executable: backend.ExecutableMemory,
     entry_offsets: collections.DenseMap(lir.LIR.LirProcSpecId, usize),
-    excerpts: ?NativeProcCompiler.Retained,
+    /// What building the image read that only extracting its excerpts
+    /// (`extractExcerpts`) reads again. A program built without
+    /// `Options.keep_artifacts` frees it, with the code generator's copy of
+    /// the code and the splice's carried data, as soon as the image is
+    /// linked, rather than holding it while its roots run.
+    extraction: ?Extraction,
     /// The bytes the program's erased callables reserve before their
     /// captures (`LirProgram.Result.erased_capture_prefix`).
     capture_prefix: u32,
@@ -6803,6 +6812,14 @@ const DevProgram = struct {
     /// The program's lowering, whose module table reads the modules failure
     /// meanings name (`lir.Program.Result.meaningByCheckedKey`).
     lir_result: *const lir.Program.Result,
+
+    const Extraction = struct {
+        /// The string literals the procedures were compiled against.
+        static_strings: backend.StaticStringData.Table,
+        /// The compiled procedures' fragments, which the splice's carried
+        /// data borrows.
+        fragments: NativeProcCompiler.Retained,
+    };
 
     fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, options: Options) FinalizeError!DevProgram {
         const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
@@ -6956,15 +6973,25 @@ const DevProgram = struct {
         errdefer allocator.destroy(root_allocator);
         root_allocator.* = ThreadSafeAllocator.init(allocator);
 
+        // The linked image holds its own copy of the code and carried data.
+        var extraction: ?Extraction = .{ .static_strings = static_strings, .fragments = artifacts };
+        if (!options.keep_artifacts) {
+            codegen.releaseLinkedCode();
+            codegen.static_strings = .{};
+            splice.releaseCarriedData();
+            artifacts.deinit();
+            static_strings.deinit();
+            extraction = null;
+        }
+
         return .{
             .allocator = allocator,
-            .static_strings = static_strings,
             .slots = slots,
             .codegen = codegen,
             .splice = splice,
             .executable = executable,
             .entry_offsets = entry_offsets,
-            .excerpts = artifacts,
+            .extraction = extraction,
             .capture_prefix = lowered.lir_result.erased_capture_prefix,
             .root_allocator = root_allocator,
             .linked_images = options.boxy_linked_images,
@@ -7094,6 +7121,7 @@ const DevProgram = struct {
     /// values it reads. Its procedures are a dev build's object code, so a
     /// build splices them as its own.
     fn extractExcerpts(self: *DevProgram, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!backend.dev.CodeExcerpt.Set {
+        const kept = &self.extraction.?; // only a program built with `keep_artifacts` is extracted
         const frozen = lowered.frozen_static_data orelse finalizationInvariant("compile-time stage froze no completed values");
         return backend.dev.CodeExcerpt.extract(
             backend.HostLirCodeGen,
@@ -7101,7 +7129,7 @@ const DevProgram = struct {
             &self.codegen,
             lowered.lir_result.store.getProcSpecs(),
             &lowered.lir_result.layouts,
-            self.static_strings.exports,
+            kept.static_strings.exports,
             frozen.exports,
             self.splice.data.items,
         ) catch |err| switch (err) {
@@ -7117,9 +7145,9 @@ const DevProgram = struct {
         self.executable.deinit();
         self.splice.deinit();
         self.codegen.deinit();
-        if (self.excerpts) |*excerpts| excerpts.deinit();
+        if (self.extraction) |*kept| kept.fragments.deinit();
         self.slots.deinit();
-        self.static_strings.deinit();
+        if (self.extraction) |*kept| kept.static_strings.deinit();
         self.* = undefined;
     }
 };

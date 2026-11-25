@@ -1802,8 +1802,8 @@ const CompileTimeRequestScheduler = struct {
         defer reached.deinit(self.allocator);
         var pending = std.ArrayList(u32).empty;
         defer pending.deinit(self.allocator);
-        var best: ?usize = null;
-        var best_count: usize = std.math.maxInt(usize);
+        const Best = struct { start: usize, count: usize };
+        var best: ?Best = null;
         for (self.emitted, 0..) |emitted, start| {
             if (emitted) continue;
             reached.reset();
@@ -1817,12 +1817,9 @@ const CompileTimeRequestScheduler = struct {
                     try pending.append(self.allocator, dependency);
                 }
             }
-            if (count < best_count) {
-                best = start;
-                best_count = count;
-            }
+            if (best == null or count < best.?.count) best = .{ .start = start, .count = count };
         }
-        return best orelse checkedArtifactInvariant("request scheduling looked for a group with every request emitted", .{});
+        return (best orelse checkedArtifactInvariant("request scheduling looked for a group with every request emitted", .{})).start;
     }
 
     fn buildEdges(self: *CompileTimeRequestScheduler) Allocator.Error!void {
@@ -4424,8 +4421,7 @@ const CheckedTypePairSet = struct {
 
     /// Add `pair`, reporting whether it was already present.
     fn insert(self: *CheckedTypePairSet, pair: CheckedTypeExactPair) Allocator.Error!bool {
-        const row_index = std.math.cast(u32, self.rows.items.len) orelse return error.OutOfMemory;
-        if (row_index == std.math.maxInt(u32)) return error.OutOfMemory;
+        const row_index = try collections.nextBiasedId(self.rows.items.len);
         try self.rows.ensureUnusedCapacity(self.first_by_left.allocator, 1);
         const head = try self.first_by_left.getOrPut(pair.left);
         const first: collections.OptionalU32 = if (head.found_existing) .some(head.value_ptr.*) else .none;
@@ -17015,8 +17011,7 @@ const EvidencePass = struct {
         var hasher = std.hash.Wyhash.init(0);
         for (entries) |entry| std.hash.autoHash(&hasher, entry);
         const bucket_key = hasher.final();
-        const row_index = std.math.cast(u32, self.callable_contracts.items.len) orelse return error.OutOfMemory;
-        if (row_index == std.math.maxInt(u32)) return error.OutOfMemory;
+        const row_index = try collections.nextBiasedId(self.callable_contracts.items.len);
         try self.callable_contracts.ensureUnusedCapacity(self.allocator, 1);
         const bucket = try self.callable_contract_buckets.getOrPut(self.allocator, bucket_key);
         const newest: collections.OptionalU32 = if (bucket.found_existing) .some(bucket.value_ptr.*) else .none;
@@ -24074,7 +24069,9 @@ fn copyPairingColumns(comptime T: type, source: T, allocator: Allocator) Allocat
         @memcpy(result, source);
         return result;
     } else if (comptime @typeInfo(T) == .@"struct") {
-        if (comptime @hasDecl(T, "fromBorrowedSlice") and @hasField(T, "length")) {
+        if (comptime @hasDecl(T, "copyForPairing")) {
+            return source.copyForPairing(allocator);
+        } else if (comptime @hasDecl(T, "fromBorrowedSlice") and @hasField(T, "length")) {
             artifact_serialize.assertRelocatablePod(std.meta.Child(T.Slice));
             return T.fromSlice(allocator, source.items());
         } else if (comptime @hasField(T, "items") and @hasField(T, "capacity")) {
@@ -25967,7 +25964,12 @@ fn valueFormWalk(allocator: Allocator, bodies: CheckedBodies, root: CIR.Expr.Idx
                     if (segment_data != .str_segment) return .other;
                 }
             },
-            .empty_list, .zero_argument_tag => {},
+            // A segment outside a string is a file imported as `Str`: a
+            // string literal of that one segment. Segments of a string are
+            // never walked.
+            .str_segment => if (checkedConcreteBuiltinForLiteralTarget(bodies.types, bodies.exprType(id)) != .str) return .other,
+            // A bytes literal's checked type is always `List(U8)`.
+            .empty_list, .zero_argument_tag, .bytes_literal => {},
             // An empty literal at a record type of optional fields builds
             // each field's slot as missing.
             .empty_record => if (!recordTypeIsClosedAndRequired(bodies.types, bodies.exprType(id), 0)) return .other,
@@ -25993,7 +25995,7 @@ fn valueFormWalk(allocator: Allocator, bodies: CheckedBodies, root: CIR.Expr.Idx
                 if (block.statements.len != 0) return .other;
                 try stack.append(allocator, block.final_expr);
             },
-            .str_segment, .bytes_literal, .lookup_required, .match_, .if_, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return .other,
+            .lookup_required, .match_, .if_, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return .other,
         }
     }
     return if (reads_constants) .reads_constants else .value_form;
@@ -26202,8 +26204,8 @@ pub fn appendValueFormConstReads(allocator: Allocator, bodies: CheckedBodies, ex
             .record => |record| for (record.fields) |field| try stack.append(allocator, bodies.recordFieldValue(field)),
             .nominal => |nominal| try stack.append(allocator, nominal.backing_expr),
             .block => |block| try stack.append(allocator, block.final_expr),
-            .numeral, .str, .empty_list, .zero_argument_tag, .empty_record => {},
-            .str_segment, .bytes_literal, .lookup_required, .match_, .if_, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => checkedArtifactInvariant("a value-form expression has a part that is not in value form", .{}),
+            .numeral, .str, .str_segment, .bytes_literal, .empty_list, .zero_argument_tag, .empty_record => {},
+            .lookup_required, .match_, .if_, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => checkedArtifactInvariant("a value-form expression has a part that is not in value form", .{}),
         }
     }
 }
@@ -26230,8 +26232,8 @@ pub fn valueFormValueExpr(bodies: CheckedBodies, expr: CIR.Expr.Idx) CIR.Expr.Id
 /// publication resolves them.
 fn valueFormCandidate(bodies: CheckedBodies, id: CIR.Expr.Idx) ?checked_bodies_mod.ExprData {
     switch (bodies.env.store.getExpr(id)) {
-        .e_num, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external, .e_block, .e_lookup_local, .e_lookup_external, .e_lookup_associated_resolved => {},
-        .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
+        .e_num, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str, .e_str_segment, .e_bytes_literal, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external, .e_block, .e_lookup_local, .e_lookup_external, .e_lookup_associated_resolved => {},
+        .e_frac_f32, .e_frac_f64, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
     }
     if (bodies.exprIsRetired(id)) return null;
     return bodies.exprData(id);
@@ -33960,7 +33962,6 @@ pub const CheckedModuleArtifact = struct {
     pub fn verifyReadyForCompileTimeLowering(self: *const CheckedModuleArtifact) void {
         if (builtin.mode != .debug) return;
 
-        std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
         std.debug.assert(self.checked_types.roots.items().len == self.checked_types.payloads.items().len);
         verifyRootRequestSubsets(self.root_requests);
 
@@ -35031,7 +35032,6 @@ pub const CheckedModuleArtifact = struct {
         self.compile_time_debug.validate(self.compile_time_roots.roots.items().len) catch checkedArtifactInvariant("compile-time debug observation has an invalid root or message range", .{});
         if (builtin.mode != .debug) return;
 
-        std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
         verifyRootRequestSubsets(self.root_requests);
         self.verifyMethodIntrinsicRuntimeTargets();
 
@@ -39896,8 +39896,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x31, 0x26, 0x94, 0x8F, 0xA3, 0x29, 0x86, 0xFD, 0x0C, 0xB8, 0xB1, 0xDA, 0x7D, 0xD4, 0xA8, 0xAB,
-        0xC0, 0x2F, 0x88, 0xE3, 0x18, 0xE1, 0xE8, 0x5A, 0x28, 0x39, 0xA1, 0x01, 0x57, 0x43, 0x0E, 0xF6,
+        0x81, 0x32, 0x7D, 0x3C, 0xF6, 0xF0, 0x75, 0xA5, 0xA7, 0xE7, 0xBF, 0xB0, 0x6E, 0x9B, 0xDC, 0x2D,
+        0x80, 0xBE, 0xA0, 0xCC, 0xAA, 0xEA, 0x13, 0x24, 0x5F, 0xDE, 0xA0, 0x77, 0x57, 0xF0, 0x46, 0x07,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

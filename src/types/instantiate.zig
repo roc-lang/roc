@@ -478,7 +478,10 @@ pub const BackingOpenings = struct {
         end: PoolLens,
         args: []const Var,
 
-        const empty_vars_start: u32 = @backingInt(Var.SafeList.Range.empty_start);
+        /// No opening's pool run starts at offset zero (`poolOffset` names a
+        /// range after the run's first slot), so the stored empty range keeps
+        /// its value in both numberings.
+        const empty_vars_start: u32 = TypesStore.stored_empty_var_range;
 
         /// The reference a recorded opening makes to `var_`, which is one
         /// it minted or one of its args.

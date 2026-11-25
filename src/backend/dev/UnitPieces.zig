@@ -24,7 +24,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RUPC";
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 6;
+pub const format_version: u32 = 7;
 
 /// One source file the pieces' lines name, in the order the set indexes them.
 pub const SourceFile = struct {
@@ -56,11 +56,16 @@ pub const Pieces = struct {
     /// under the content names the unit's code names them by: the roots of
     /// the unit's static data, which no excerpt need reference.
     exported_data: []const CodeExcerpt.DataItem,
+    /// The payload owners `exported_data` shares bytes with, and the keeper
+    /// of the static data exports the pieces were compiled from, each
+    /// retained once.
+    data_owners: []const *CodeExcerpt.DataOwner = &.{},
     helper_aliases: []const HelperAlias,
 
     pub fn deinit(self: *Pieces) void {
         self.set.deinit();
         if (self.graph) |*graph| graph.deinit();
+        CodeExcerpt.releaseOwners(self.data_owners);
         self.arena.deinit();
         self.* = undefined;
     }
@@ -147,13 +152,13 @@ pub fn encode(allocator: Allocator, pieces: *const Pieces) Allocator.Error![]u8 
             try writer.byte(formByte(ref.form));
             try writer.word(ref.target);
             try writer.word(ref.delta);
-            try writer.word(ref.veneer.get() orelse std.math.maxInt(u32));
+            try writer.word(@backingInt(ref.veneer));
         }
         try writer.word(@intCast(excerpt.symbolic_refs.len));
         for (excerpt.symbolic_refs) |ref| {
             try writer.word(ref.site);
             try writer.byte(formByte(ref.form));
-            try writer.word(ref.veneer orelse std.math.maxInt(u32));
+            try writer.word(@backingInt(collections.OptionalU32.of(ref.veneer)));
             switch (ref.binding) {
                 .unresolved => try writer.byte(0),
                 .absent => try writer.byte(1),
@@ -238,8 +243,10 @@ pub fn decode(allocator: Allocator, bytes: []const u8) ReadError!Pieces {
     const sa = set_arena.allocator();
     const set_files = try sa.alloc([32]u8, source_files.len);
     for (source_files, set_files) |file, *identity| identity.* = file.identity;
-    const table = try readData(a, &reader);
-    var graph = try CodeExcerpt.PreparedData.init(allocator, &.{}, &.{}, table);
+    // The graph copies the table into its own storage, so the table only
+    // views the encoded bytes.
+    const table = try readData(a, &reader, .viewed);
+    var graph = try CodeExcerpt.PreparedData.init(allocator, &.{}, &.{}, .copy, table);
     errdefer graph.deinit();
     const excerpt_count = try reader.word();
     const excerpts = try sa.alloc(CodeExcerpt.Excerpt, excerpt_count);
@@ -273,7 +280,7 @@ pub fn decode(allocator: Allocator, bytes: []const u8) ReadError!Pieces {
                 .form = try readForm(&reader),
                 .target = try reader.word(),
                 .delta = try reader.word(),
-                .veneer = .of(optionalWord(try reader.word())),
+                .veneer = optionalWord(try reader.word()),
             };
             if (ref.target >= excerpt_count) return error.MalformedPieces;
         }
@@ -281,7 +288,7 @@ pub fn decode(allocator: Allocator, bytes: []const u8) ReadError!Pieces {
         for (symbolic_refs) |*ref| {
             const site = try reader.word();
             const form = try readForm(&reader);
-            const veneer = optionalWord(try reader.word());
+            const veneer = optionalWord(try reader.word()).get();
             const binding: @FieldType(CodeExcerpt.SymbolicReference, "binding") = switch (try reader.byte()) {
                 0 => .unresolved,
                 1 => .absent,
@@ -352,7 +359,7 @@ pub fn decode(allocator: Allocator, bytes: []const u8) ReadError!Pieces {
             .name = source_name,
         };
     }
-    const exported_data = try readData(a, &reader);
+    const exported_data = try readData(a, &reader, .owned);
     const helper_aliases = try a.alloc(HelperAlias, try reader.word());
     for (helper_aliases) |*alias| {
         alias.* = .{ .helper = try a.dupe(u8, try reader.str()), .alias = try a.dupe(u8, try reader.str()) };
@@ -387,8 +394,9 @@ fn readForm(reader: *Reader) ReadError!CodeExcerpt.Form {
     };
 }
 
-fn optionalWord(value: u32) ?u32 {
-    return if (value == std.math.maxInt(u32)) null else value;
+/// A word the writer stored as `collections.OptionalU32`: zero for absence.
+fn optionalWord(value: u32) collections.OptionalU32 {
+    return @fromBackingInt(value);
 }
 
 fn writeLoc(writer: *Writer, loc: base.SourceLoc) Allocator.Error!void {
@@ -486,11 +494,20 @@ fn writeData(writer: *Writer, data: []const CodeExcerpt.DataItem) Allocator.Erro
     }
 }
 
-fn readData(a: Allocator, reader: *Reader) ReadError![]CodeExcerpt.DataItem {
+/// How `readData` holds what an item's slices name.
+const DataText = enum {
+    /// Copied into the reader's allocator.
+    owned,
+    /// Viewed in the bytes being read, for a caller that copies the items
+    /// before those bytes go away.
+    viewed,
+};
+
+fn readData(a: Allocator, reader: *Reader, text: DataText) ReadError![]CodeExcerpt.DataItem {
     const data = try a.alloc(CodeExcerpt.DataItem, try reader.word());
     for (data) |*item| {
-        const name = try a.dupe(u8, try reader.str());
-        const item_bytes = try a.dupe(u8, try reader.str());
+        const name = try readText(a, reader, text);
+        const item_bytes = try readText(a, reader, text);
         const alignment = try reader.word();
         const symbol_offset = try reader.word();
         const program_local_name = try reader.flag();
@@ -502,7 +519,7 @@ fn readData(a: Allocator, reader: *Reader) ReadError![]CodeExcerpt.DataItem {
             const external = try reader.flag();
             relocation.* = .{
                 .offset = offset,
-                .name = try a.dupe(u8, try reader.str()),
+                .name = try readText(a, reader, text),
                 .addend = addend,
                 .function = function,
                 .external = external,
@@ -518,6 +535,14 @@ fn readData(a: Allocator, reader: *Reader) ReadError![]CodeExcerpt.DataItem {
         };
     }
     return data;
+}
+
+fn readText(a: Allocator, reader: *Reader, text: DataText) ReadError![]const u8 {
+    const viewed = try reader.str();
+    return switch (text) {
+        .owned => try a.dupe(u8, viewed),
+        .viewed => viewed,
+    };
 }
 
 const Writer = struct {

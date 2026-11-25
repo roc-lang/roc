@@ -110,7 +110,9 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v84: procedure specs record whether they take a tail carry
 ///      (`tail_carry`).
 /// v85: absent optional ids and indices are stored as zero.
-pub const FORMAT_VERSION: u32 = 85;
+/// v87: dynamic product shapes mark their boxable fields, and field takes
+///      record the recursion box they release.
+pub const FORMAT_VERSION: u32 = 87;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -1288,10 +1290,10 @@ test "mapped frozen graph preserves explicit data callable and helper relocation
     try std.testing.expectEqual(layout_mod.Idx.str, viewed[0].relocations[2].rc_helper.?.layout_idx);
     const rows = try sliceFromRef(StaticDataImage.Export, memory.ptr, fixed.end_index, copied);
     const relocations = try sliceFromRef(StaticDataImage.Relocation, memory.ptr, fixed.end_index, rows[0].relocations);
-    relocations[2].rc_layout = @intCast(program.layouts.layoutCount());
+    relocations[2].rc_layout = .some(@intCast(program.layouts.layoutCount()));
     try std.testing.expectError(error.InvalidLirImage, StaticDataImage.view(allocator, memory.ptr, fixed.end_index, copied, @intCast(program.static_data_values.items.len), program.store.procSpecCount(), program.layouts.layoutCount(), 8));
-    relocations[2].rc_layout = @backingInt(layout_mod.Idx.str);
-    rows[0].value_id = 1;
+    relocations[2].rc_layout = .some(@backingInt(layout_mod.Idx.str));
+    rows[0].value_id = .some(1);
     try std.testing.expectError(error.InvalidLirImage, StaticDataImage.view(allocator, memory.ptr, fixed.end_index, copied, @intCast(program.static_data_values.items.len), program.store.procSpecCount(), program.layouts.layoutCount(), 8));
 }
 

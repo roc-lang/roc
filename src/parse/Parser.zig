@@ -884,6 +884,30 @@ fn parseOptionalLiteralTypeSuffix(self: *Parser) std.mem.Allocator.Error!?AST.Li
     return try self.parseLiteralTypeSuffix();
 }
 
+/// A number token's stored literal and the deprecated suffix it was spelled with.
+const NumberLiteral = struct {
+    literal: NumericLiteral.Idx,
+    deprecated_suffix: NumericLiteral.DeprecatedSuffix,
+};
+
+/// Record the numeric literal of the `Int` or `Float` token at `token`. The
+/// tokenizer's record supplies the facts when it is exact; otherwise they
+/// are derived from the token's text.
+fn addNumberLiteral(self: *Parser, token: Token.Idx, kind: NumericLiteral.Kind) std.mem.Allocator.Error!NumberLiteral {
+    const scanned = self.tok_buf.scannedNumber(token);
+    if (scanned.flags.exact) {
+        return .{
+            .literal = try self.store.addScannedNumericLiteral(scanned, kind),
+            .deprecated_suffix = scanned.suffix,
+        };
+    }
+    const split = NumericLiteral.splitSource(self.tokenText(token), kind);
+    return .{
+        .literal = try self.store.addNumericLiteral(split, kind),
+        .deprecated_suffix = split.deprecated_suffix,
+    };
+}
+
 fn pushDeprecatedNumberSuffixDiagnostic(self: *Parser, suffix: NumericLiteral.DeprecatedSuffix, region: AST.TokenizedRegion) std.mem.Allocator.Error!void {
     if (suffix != .none) {
         try self.pushDiagnostic(.deprecated_number_suffix, region);
@@ -2193,10 +2217,10 @@ fn parseTargetConfigTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetConf
 fn parseTargetsSectionTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetsSection.Idx {
     const start = self.pos;
     self.expect(.OpColon) catch {
-        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_colon, start);
+        return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_colon, start, self.pos);
     };
     self.expect(.OpenCurly) catch {
-        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_open_curly, start);
+        return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_open_curly, start, self.pos);
     };
 
     var inputs_dir: ?TokenIdx = null;
@@ -2205,19 +2229,19 @@ fn parseTargetsSectionTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetsS
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
         if (self.peek() != .LowerIdent) {
             self.store.clearScratchFrom(AST.TargetEntry, entries_top);
-            return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
+            return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_field_name, start, self.pos);
         }
         const field_name_tok = self.pos;
         self.advance();
         self.expect(.OpColon) catch {
             self.store.clearScratchFrom(AST.TargetEntry, entries_top);
-            return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_colon, start);
+            return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_field_colon, start, self.pos);
         };
 
         if (self.peek() == .StringStart) {
             if (!std.mem.eql(u8, self.tokenText(field_name_tok), "inputs_dir")) {
                 self.store.clearScratchFrom(AST.TargetEntry, entries_top);
-                return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
+                return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_field_name, start, field_name_tok);
             }
             // inputs_dir: "targets/" directory directive
             self.advance();
@@ -2241,7 +2265,7 @@ fn parseTargetsSectionTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetsS
             }));
         } else {
             self.store.clearScratchFrom(AST.TargetEntry, entries_top);
-            return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
+            return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_field_name, start, self.pos);
         }
 
         _ = self.consumeComma();
@@ -2249,7 +2273,7 @@ fn parseTargetsSectionTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetsS
 
     self.expect(.CloseCurly) catch {
         self.store.clearScratchFrom(AST.TargetEntry, entries_top);
-        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_close_curly, start);
+        return try self.pushMalformedAt(AST.TargetsSection.Idx, .expected_targets_close_curly, start, self.pos);
     };
     return try self.store.addTargetsSection(.{
         .inputs_dir = inputs_dir,
@@ -2261,18 +2285,18 @@ fn parseTargetsSectionTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetsS
 fn parseSymbolMapEntryTokens(self: *Parser) std.mem.Allocator.Error!AST.SymbolMapEntry.Idx {
     const start = self.pos;
     self.expect(.StringStart) catch {
-        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_string, start);
+        return try self.pushMalformedAt(AST.SymbolMapEntry.Idx, .expected_symbol_string, start, self.pos);
     };
     if (self.peek() != .StringPart) {
-        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_string, start);
+        return try self.pushMalformedAt(AST.SymbolMapEntry.Idx, .expected_symbol_string, start, self.pos);
     }
     const symbol = self.pos;
     self.advance();
     self.expect(.StringEnd) catch {
-        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_string, start);
+        return try self.pushMalformedAt(AST.SymbolMapEntry.Idx, .expected_symbol_string, start, self.pos);
     };
     self.expect(.OpColon) catch {
-        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_map_colon, start);
+        return try self.pushMalformedAt(AST.SymbolMapEntry.Idx, .expected_symbol_map_colon, start, self.pos);
     };
 
     var module: ?TokenIdx = null;
@@ -2286,7 +2310,7 @@ fn parseSymbolMapEntryTokens(self: *Parser) std.mem.Allocator.Error!AST.SymbolMa
             self.advance();
         }
         if (self.peek() != .NoSpaceDotLowerIdent) {
-            return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_map_function, start);
+            return try self.pushMalformedAt(AST.SymbolMapEntry.Idx, .expected_symbol_map_function, start, self.pos);
         }
         func = self.pos;
         self.advance();
@@ -2294,7 +2318,7 @@ fn parseSymbolMapEntryTokens(self: *Parser) std.mem.Allocator.Error!AST.SymbolMa
         func = self.pos;
         self.advance();
     } else {
-        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_map_function, start);
+        return try self.pushMalformedAt(AST.SymbolMapEntry.Idx, .expected_symbol_map_function, start, self.pos);
     }
 
     return try self.store.addSymbolMapEntry(.{
@@ -3678,8 +3702,8 @@ fn runExprStatementKernel(
                 if (tok == .Int) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .int);
-                    const literal = try self.store.addNumericLiteral(deprecated, .int);
+                    const deprecated = try self.addNumberLiteral(start, .int);
+                    const literal = deprecated.literal;
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
 
@@ -3715,8 +3739,8 @@ fn runExprStatementKernel(
                 if (tok == .Float) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .frac);
-                    const literal = try self.store.addNumericLiteral(deprecated, .frac);
+                    const deprecated = try self.addNumberLiteral(start, .frac);
+                    const literal = deprecated.literal;
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
 
@@ -6585,10 +6609,12 @@ fn runExprStatementKernel(
                 open_syntax.peekPayload(StatementAssociatedStatementState).expr_block_depth == expr_blocks.depth())
             {
                 const state = open_syntax.popStatementPayload(.statement_type_associated_statement, StatementAssociatedStatementState);
-                if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
-                    const stmt = self.store.getStatement(completed);
-                    if (stmt == .expr and self.peek() == .CloseCurly) {
-                        try self.pushDiagnostic(.nominal_associated_cannot_have_final_expression, .{
+                const node_tags = self.store.nodes.field(.tag);
+                if (node_tags[@backingInt(completed)] == .expr) {
+                    // A malformed expression already has its own report.
+                    const expr_node = self.store.nodes.field(.data)[@backingInt(completed)].lhs;
+                    if (node_tags[expr_node] != .malformed) {
+                        try self.pushDiagnostic(.associated_block_cannot_have_expression, .{
                             .start = state.statement_pos,
                             .end = self.pos,
                         });
@@ -6694,8 +6720,8 @@ fn runExprStatementKernel(
                 if (tok == .Float) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .frac);
-                    const literal = try self.store.addNumericLiteral(deprecated, .frac);
+                    const deprecated = try self.addNumberLiteral(start, .frac);
+                    const literal = deprecated.literal;
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
                     if (try self.typeSuffixFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_suffix| {
@@ -6739,8 +6765,8 @@ fn runExprStatementKernel(
                 if (tok == .Int) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .int);
-                    const literal = try self.store.addNumericLiteral(deprecated, .int);
+                    const deprecated = try self.addNumberLiteral(start, .int);
+                    const literal = deprecated.literal;
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
                     if (try self.typeSuffixFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_suffix| {

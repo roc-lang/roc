@@ -2383,7 +2383,7 @@ fn hashSpecEvidenceShallow(hasher: *std.hash.Wyhash, entry: SpecEvidence) void {
             const identity = [_]u32{
                 target.target.module_idx,
                 @backingInt(target.target.def_idx),
-                if (target.local_proc_context) |context| @backingInt(context) else std.math.maxInt(u32),
+                if (target.local_proc_context) |context| @backingInt(context) else 0,
                 @intFromBool(target.local_proc_context != null),
             };
             hasher.update(std.mem.asBytes(&identity));
@@ -5214,8 +5214,20 @@ const SealedPendingTemplateBody = struct {
 };
 
 const SpecJobEpoch = enum(u64) { _ };
-/// Stable specialization workspace identity used to preserve per-worker epochs.
-pub const SpecJobWorkerId = enum(u32) { serial = std.math.maxInt(u32), _ };
+/// Stable specialization workspace identity used to preserve per-worker epochs:
+/// the serial path, or the post-check executor lane with the given id.
+pub const SpecJobWorkerId = union(enum) {
+    serial,
+    executor: usize,
+
+    /// Whether this is the executor lane `id`.
+    fn isExecutor(self: SpecJobWorkerId, id: usize) bool {
+        return switch (self) {
+            .serial => false,
+            .executor => |lane| lane == id,
+        };
+    }
+};
 
 /// The type and name stores of one specialization workspace epoch, as prefix
 /// views the coordinator reads in place.
@@ -5314,15 +5326,14 @@ const SpecJobWorkspace = struct {
         if (self.active_epoch != null) {
             Common.compilerBug("Monotype specialization workspace began overlapping epochs");
         }
-        if (self.next_epoch == std.math.maxInt(u64)) {
+        const following_epoch = std.math.add(u64, self.next_epoch, 1) catch
             Common.compilerBug("Monotype specialization workspace exhausted epoch identities");
-        }
         // The workspace has its final address once it lowers an epoch, and
         // every view is captured after this point.
         self.types.superseded = &self.superseded;
         self.name_store.superseded = &self.superseded;
-        const epoch: SpecJobEpoch = @fromBackingInt(@intCast(self.next_epoch));
-        self.next_epoch += 1;
+        const epoch: SpecJobEpoch = @fromBackingInt(self.next_epoch);
+        self.next_epoch = following_epoch;
         self.active_epoch = epoch;
         return epoch;
     }
@@ -5884,10 +5895,11 @@ fn inlineLiteralStorage(view: ModuleView, expr: CIR.Expr.Idx) Common.StaticDataS
     };
 }
 
-const ConstNodeAddress = struct {
-    module: checked.ModuleId,
-    node: checked.ConstNodeId,
-};
+/// What is known of a property of each stored node of one module
+/// (`Builder.ConstNodeProperty`), by node.
+const ConstNodeAnswers = std.ArrayList(ConstNodeAnswer);
+
+const ConstNodeAnswer = enum(u8) { unknown, holds, fails };
 
 /// Key for a memoized structural-derivation helper def. `value_ty` is the type
 /// being derived over; `result_ty` is the derivation's auxiliary type (the
@@ -6003,21 +6015,22 @@ const SymbolDomains = struct {
     active: SymbolDomain = .coordinator,
 
     fn fresh(self: *SymbolDomains) Common.Symbol {
-        const generator = switch (self.active) {
+        return freshFrom(switch (self.active) {
             .coordinator => &self.coordinator,
             .worker_local => &self.worker_local,
-        };
-        if (generator.next == std.math.maxInt(u32)) {
-            Common.compilerBug("Monotype symbol domain overflow");
-        }
-        return generator.fresh();
+        });
     }
 
     fn freshCoordinator(self: *SymbolDomains) Common.Symbol {
-        if (self.coordinator.next == std.math.maxInt(u32)) {
+        return freshFrom(&self.coordinator);
+    }
+
+    fn freshFrom(generator: *Common.SymbolGen) Common.Symbol {
+        const following = std.math.add(u32, generator.next, 1) catch
             Common.compilerBug("Monotype symbol domain overflow");
-        }
-        return self.coordinator.fresh();
+        const symbol: Common.Symbol = @fromBackingInt(generator.next);
+        generator.next = following;
+        return symbol;
     }
 };
 
@@ -6369,9 +6382,13 @@ const Builder = struct {
     /// ordered commit boundary; raw ids are only a fast exact-key path, while
     /// structural equality remains the reuse authority across instantiations.
     static_data_uses: std.ArrayList(StaticDataUse),
-    static_data_eligibility: std.AutoHashMap(ConstNodeAddress, bool),
-    /// Whether each stored node's value is data alone (`constNodeIsStoredData`).
-    stored_data: std.AutoHashMap(ConstNodeAddress, bool),
+    /// Whether each stored node's value has a stable static data
+    /// representation (`constNodeHasStableStaticDataRepresentation`), by
+    /// lowering module.
+    static_data_eligibility: collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers),
+    /// Whether each stored node's value is data alone
+    /// (`constNodeIsStoredData`), by lowering module.
+    stored_data: collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers),
     hosted_catalog: []HostedCatalogEntry = &.{},
     /// Exact `(owner, method)` -> target map over every reachable module's
     /// method registry, for compiler-generated component lookups (structural
@@ -6532,8 +6549,8 @@ const Builder = struct {
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .static_data_ids = std.AutoHashMap(StaticDataUse, Common.StaticDataId).init(allocator),
             .static_data_uses = .empty,
-            .static_data_eligibility = std.AutoHashMap(ConstNodeAddress, bool).init(allocator),
-            .stored_data = std.AutoHashMap(ConstNodeAddress, bool).init(allocator),
+            .static_data_eligibility = collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers).init(allocator),
+            .stored_data = collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers).init(allocator),
             .evidence_arena = base.SingleThreadArena.init(allocator),
             .const_evidence_memo = std.AutoHashMap(ConstEvidenceMemoKey, StoredConstFnEvidence).init(allocator),
             .const_evidence_by_content = std.AutoHashMap(u64, StoredConstFnEvidence).init(allocator),
@@ -6724,13 +6741,13 @@ const Builder = struct {
         std.debug.assert(executor_worker.id < inputs.lanes.len);
         const slot = &inputs.lanes[executor_worker.id];
         if (slot.*) |state| {
-            std.debug.assert(@backingInt(state.worker.worker_id) == executor_worker.id);
+            std.debug.assert(state.worker.worker_id.isExecutor(executor_worker.id));
             return state;
         }
         const state = try executor_worker.allocator.create(SpecJobLaneState);
         state.* = SpecJobLaneState.init(
             executor_worker.allocator,
-            @fromBackingInt(@intCast(executor_worker.id)),
+            .{ .executor = executor_worker.id },
         );
         slot.* = state;
         return state;
@@ -6783,8 +6800,11 @@ const Builder = struct {
         self.method_targets.deinit(self.allocator);
         self.inspect_overrides.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
-        self.static_data_eligibility.deinit();
-        self.stored_data.deinit();
+        for ([_]*collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers){ &self.static_data_eligibility, &self.stored_data }) |tables| {
+            var answers = tables.valueIterator();
+            while (answers.next()) |table| table.deinit(self.allocator);
+            tables.deinit();
+        }
         self.static_data_uses.deinit(self.allocator);
         self.static_data_ids.deinit();
         self.nested_site_cache.deinit();
@@ -6977,11 +6997,10 @@ const Builder = struct {
     }
 
     fn allocateInstantiationScope(self: *Builder) InstantiationScopeId {
-        if (self.next_instantiation_scope == std.math.maxInt(u64)) {
+        const following_scope = std.math.add(u64, self.next_instantiation_scope, 1) catch
             Common.invariant("Monotype instantiation scope identity exhausted");
-        }
-        const id: InstantiationScopeId = @fromBackingInt(@intCast(self.next_instantiation_scope));
-        self.next_instantiation_scope += 1;
+        const id: InstantiationScopeId = @fromBackingInt(self.next_instantiation_scope);
+        self.next_instantiation_scope = following_scope;
         self.countBodyDiagnostic("instantiation_scopes_created");
         return id;
     }
@@ -7946,7 +7965,7 @@ const Builder = struct {
             }
             context.completed = true;
             if (context.shard) |*shard| {
-                if (@backingInt(shard.worker_id) != completion.worker_id) {
+                if (!shard.worker_id.isExecutor(completion.worker_id)) {
                     Common.compilerBug("post-check executor changed root type worker ownership");
                 }
             }
@@ -7981,9 +8000,6 @@ const Builder = struct {
             const finished_ns = timingNowNs(std_io);
             context.worker_work_ns = @intCast(@max(0, finished_ns - task_started_ns));
         };
-        if (executor_worker.id >= std.math.maxInt(u32)) {
-            Common.compilerBug("post-check executor returned an invalid root type worker id");
-        }
         const lane = Builder.ensureSpecJobLaneState(executor_worker, context.inputs) catch {
             context.failed = true;
             return context;
@@ -8172,7 +8188,7 @@ const Builder = struct {
             }
             context.completed = true;
             if (context.shard) |*shard| {
-                if (@backingInt(shard.worker_id) != completion.worker_id) {
+                if (!shard.worker_id.isExecutor(completion.worker_id)) {
                     Common.compilerBug("post-check executor changed root worker ownership");
                 }
             }
@@ -9925,9 +9941,9 @@ const Builder = struct {
 
     fn traceLink(comptime how: []const u8, body_draft: *const BodyDraftStore, demand: Demand, callee: Ast.FnId) void {
         if (!LiteralDemand.traceEnabled()) return;
-        std.debug.print("ctfe-demand link {s} owner={d} draft={s} demand={s} -> fn#{d}\n", .{
+        std.debug.print("ctfe-demand link {s} owner={?d} draft={s} demand={s} -> fn#{d}\n", .{
             how,
-            if (body_draft.demand_owner) |owner| @backingInt(owner) else std.math.maxInt(u32),
+            if (body_draft.demand_owner) |owner| @as(?u32, @backingInt(owner)) else null,
             @tagName(body_draft.demand),
             @tagName(demand),
             @backingInt(callee),
@@ -10350,7 +10366,7 @@ const Builder = struct {
         }
         context.completed = true;
         if (context.shard) |*shard| {
-            if (@backingInt(shard.worker_id) != completion.worker_id) Common.compilerBug("post-check executor changed specialization worker ownership");
+            if (!shard.worker_id.isExecutor(completion.worker_id)) Common.compilerBug("post-check executor changed specialization worker ownership");
         }
         self.recordParallelWorkerWork(contexts[completion.id..][0..1]);
         self.recordRetainedSpecShardPeak(contexts, accepted, submitted);
@@ -10416,9 +10432,6 @@ const Builder = struct {
             const finished_ns = timingNowNs(std_io);
             context.worker_work_ns = @intCast(@max(0, finished_ns - task_started_ns));
         };
-        if (executor_worker.id >= std.math.maxInt(u32)) {
-            Common.compilerBug("post-check executor returned an invalid specialization worker id");
-        }
         const lane = Builder.ensureSpecJobLaneState(executor_worker, &context.inputs) catch {
             context.failed = true;
             return context;
@@ -10473,9 +10486,6 @@ const Builder = struct {
             const finished_ns = timingNowNs(std_io);
             context.worker_work_ns = @intCast(@max(0, finished_ns - task_started_ns));
         };
-        if (executor_worker.id >= std.math.maxInt(u32)) {
-            Common.compilerBug("post-check executor returned an invalid root worker id");
-        }
         const lane = Builder.ensureSpecJobLaneState(executor_worker, context.inputs) catch {
             context.failed = true;
             return context;
@@ -13022,7 +13032,7 @@ const Builder = struct {
         view: ModuleView,
         node: checked.ConstNodeId,
     ) Allocator.Error!bool {
-        var walk = ConstNodeProperty{ .builder = self, .view = view, .property = .stable_static_data };
+        var walk = try ConstNodeProperty.init(self, view, .stable_static_data);
         return try ConstNodeProperty.Eval.run(self.allocator, &walk, node);
     }
 
@@ -13032,6 +13042,8 @@ const Builder = struct {
         builder: *Builder,
         view: ModuleView,
         property: Property,
+        /// The property's answers for the nodes of `view`'s store.
+        answers: []ConstNodeAnswer,
 
         const Property = enum {
             /// The value has a static data representation that post-check
@@ -13043,16 +13055,31 @@ const Builder = struct {
 
         const Eval = collections.AnyAll.Evaluation(checked.ConstNodeId, ConstNodeProperty);
 
-        fn memo(self: *const ConstNodeProperty) *std.AutoHashMap(ConstNodeAddress, bool) {
-            return switch (self.property) {
-                .stable_static_data => &self.builder.static_data_eligibility,
-                .stored_data => &self.builder.stored_data,
+        /// A walk of `property` over `view`'s stored nodes, sharing the
+        /// answers earlier walks of it found there.
+        fn init(builder: *Builder, view: ModuleView, property: Property) Allocator.Error!ConstNodeProperty {
+            const tables = switch (property) {
+                .stable_static_data => &builder.static_data_eligibility,
+                .stored_data => &builder.stored_data,
             };
+            const entry = try tables.getOrPut(view.lowering_module orelse
+                Common.invariant("checked module view was read before its lowering module id was seeded"));
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            const table = entry.value_ptr;
+            const known = table.items.len;
+            if (known < view.const_store.nodeCount()) {
+                try table.resize(builder.allocator, view.const_store.nodeCount());
+                @memset(table.items[known..], .unknown);
+            }
+            return .{ .builder = builder, .view = view, .property = property, .answers = table.items };
         }
 
         pub fn enter(self: *ConstNodeProperty, items: Eval.Items, node: checked.ConstNodeId) Allocator.Error!Eval.Expansion {
-            const address = ConstNodeAddress{ .module = self.view.key, .node = node };
-            if (self.memo().get(address)) |holds| return .{ .value = holds };
+            switch (self.answers[@backingInt(node)]) {
+                .holds => return .{ .value = true },
+                .fails => return .{ .value = false },
+                .unknown => {},
+            }
             const leaf: ?bool = switch (self.view.const_store.get(node)) {
                 .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
                 .pending => Common.invariant("pending ConstStore node reached a stored value property"),
@@ -13110,7 +13137,7 @@ const Builder = struct {
                 },
             };
             if (leaf) |holds| {
-                try self.memo().put(address, holds);
+                self.answers[@backingInt(node)] = if (holds) .holds else .fails;
                 return .{ .value = holds };
             }
             return .{ .group = .all };
@@ -13118,7 +13145,7 @@ const Builder = struct {
 
         pub fn exit(self: *ConstNodeProperty, node: checked.ConstNodeId, result: ?bool) Allocator.Error!void {
             const holds = result orelse return;
-            try self.memo().put(.{ .module = self.view.key, .node = node }, holds);
+            self.answers[@backingInt(node)] = if (holds) .holds else .fails;
         }
     };
 
@@ -13156,7 +13183,7 @@ const Builder = struct {
     /// the stored nodes alone. Memoized per node over explicit `ConstStore`
     /// edges.
     fn constNodeIsStoredData(self: *Builder, view: ModuleView, node: checked.ConstNodeId) Allocator.Error!bool {
-        var walk = ConstNodeProperty{ .builder = self, .view = view, .property = .stored_data };
+        var walk = try ConstNodeProperty.init(self, view, .stored_data);
         return try ConstNodeProperty.Eval.run(self.allocator, &walk, node);
     }
 
@@ -17648,10 +17675,10 @@ fn DraftSpecLookup(comptime Family: type) type {
             open: OpenAddress,
             digest: DigestAddress,
         };
-        const OverflowId = enum(u32) { none = std.math.maxInt(u32), _ };
+        const OverflowId = enum(u32) { _ };
         const Candidates = struct {
             first: u32,
-            overflow: OverflowId = .none,
+            overflow: collections.OptionalId(OverflowId) = .none,
         };
         const Iterator = struct {
             first: ?u32,
@@ -17722,7 +17749,7 @@ fn DraftSpecLookup(comptime Family: type) type {
             } orelse return null;
             return .{
                 .first = candidates.first,
-                .rest = if (candidates.overflow == .none) &.{} else self.overflow_lists.items[@backingInt(candidates.overflow)].items,
+                .rest = if (candidates.overflow.get()) |overflow| self.overflow_lists.items[@backingInt(overflow)].items else &.{},
             };
         }
 
@@ -17751,18 +17778,17 @@ fn DraftSpecLookup(comptime Family: type) type {
                 return;
             }
             if (entry.value_ptr.first == raw_spec) return;
-            if (entry.value_ptr.overflow != .none) {
-                const list = &self.overflow_lists.items[@backingInt(entry.value_ptr.overflow)];
+            if (entry.value_ptr.overflow.get()) |existing_overflow| {
+                const list = &self.overflow_lists.items[@backingInt(existing_overflow)];
                 for (list.items) |existing| if (existing == raw_spec) return;
                 try list.append(self.allocator, raw_spec);
             } else {
-                if (self.overflow_lists.items.len == @backingInt(OverflowId.none)) return error.OutOfMemory;
+                const overflow: OverflowId = @fromBackingInt(try collections.nextBiasedId(self.overflow_lists.items.len));
                 var list: std.ArrayList(u32) = .empty;
                 errdefer list.deinit(self.allocator);
                 try list.append(self.allocator, raw_spec);
-                const overflow: OverflowId = @fromBackingInt(@intCast(self.overflow_lists.items.len));
                 try self.overflow_lists.append(self.allocator, list);
-                entry.value_ptr.overflow = overflow;
+                entry.value_ptr.overflow = .some(overflow);
             }
             if (pairs) |list| list.appendAssumeCapacity(.{ .node = address.open.node, .spec = raw_spec });
         }
@@ -18071,8 +18097,8 @@ const ActiveConstNodeBinding = struct {
     /// Tells this binding apart from a later one at the same stack index.
     serial: u32,
     /// The lowest stack index of an active binding the node's expression
-    /// reads, its own included.
-    min_read: u32 = std.math.maxInt(u32),
+    /// reads, its own included. It starts at the binding's own index.
+    min_read: u32,
     /// Lets of shared nodes that read this node's binding, bound around
     /// its expression, as a list through `ConstRestoreLet.next`.
     lets: collections.OptionalU32 = .none,
@@ -29021,16 +29047,16 @@ const BodyContext = struct {
     };
 
     /// Cursor states of a nominal instantiation.
-    const InstNominalCursor = struct {
-        const start = 0;
-        const args = 1;
-        const backing = 2;
-        const declared_order = 3;
+    const InstNominalCursor = enum(u8) {
+        start,
+        args,
+        backing,
+        declared_order,
     };
 
     fn stepInstNominal(self: *BodyContext, frame: *InstFrame, task: *InstNominalTask, input: ?InstResult) Allocator.Error!InstStep {
         const nominal = &task.nominal;
-        switch (frame.cursor) {
+        switch (@as(InstNominalCursor, @fromBackingInt(frame.cursor))) {
             InstNominalCursor.start => {
                 switch (nominal.representation) {
                     .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
@@ -29045,7 +29071,7 @@ const BodyContext = struct {
                     },
                     .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
                 }
-                frame.cursor = InstNominalCursor.args;
+                frame.cursor = @backingInt(InstNominalCursor.args);
                 return instSliceStep(nominal.args);
             },
             InstNominalCursor.args => {
@@ -29055,7 +29081,7 @@ const BodyContext = struct {
                     .builtin, .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability => {
                         const source = self.nominalInstantiationSource(nominal) orelse
                             Common.invariant("nominal backing instantiation could not resolve a declaration-backed nominal");
-                        frame.cursor = InstNominalCursor.backing;
+                        frame.cursor = @backingInt(InstNominalCursor.backing);
                         return .{ .call = .{ .decl_backing = try self.boxInstTask(InstDeclBackingTask, .{ .source = source, .args = task.args }) } };
                     },
                 }
@@ -29077,7 +29103,6 @@ const BodyContext = struct {
                 .backing = .of(task.backing),
                 .declared_order = input.?.get(.declared_order),
             })) } },
-            InstNominalCursor.declared_order + 1...std.math.maxInt(u8) => unreachable, // stepInstNominal only sets the cursor to InstNominalCursor constants
         }
     }
 
@@ -29086,7 +29111,7 @@ const BodyContext = struct {
         task.def = try typeDef(self.nameStoreMut(), self.builder.app_module_identity, self.view, nominal.origin_module, nominal.name, nominal.source_decl);
         self.builder.noteBuiltinTryDef(nominal.builtin, self.nameStore(), task.def);
         task.named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal) };
-        frame.cursor = InstNominalCursor.declared_order;
+        frame.cursor = @backingInt(InstNominalCursor.declared_order);
         return .{ .call = .{ .declared_order = try self.boxInstTask(InstDeclaredOrderTask, .{ .nominal = nominal, .args = task.args }) } };
     }
 
@@ -40766,6 +40791,7 @@ const BodyContext = struct {
             .owner = self.draft.current_owner,
             .cell = cell,
             .serial = self.draft.const_node_binding_serial,
+            .min_read = @intCast(index),
         });
         self.draft.const_node_binding_serial += 1;
         try self.draft.active_const_node_binding_indices.put(address, @intCast(index));
@@ -52513,8 +52539,7 @@ const BodyContext = struct {
         const wanted = self.nameStore().recordFieldLabelText(field_name);
         // A hoisted validation's unit result omits no field.
         const record_expr = exprSourceNode(self.view, checked_expr) orelse return null;
-        for (self.view.bodies.recordOmittedDefaults()) |omitted| {
-            if (omitted.expr != record_expr) continue;
+        for (self.view.bodies.recordOmittedDefaultsOf(record_expr)) |omitted| {
             const entry = self.view.bodies.recordOmittedDefault(omitted);
             if (Ident.textEql(self.view.names.recordFieldLabelText(entry.field_name), wanted)) {
                 return entry.default;

@@ -181,8 +181,8 @@ const KeyIndex = std.AutoHashMapUnmanaged([32]u8, Var);
 
 /// A canonical id memo in one atomic word. Zero is the empty slot, so the
 /// column can start on fresh zero pages, and an id `n` is stored as `n + 1`.
-/// `maxInt(u32)` has no stored form: it is left unmemoized, so its readers
-/// compute the same immutable answer each time.
+/// An id whose `n + 1` overflows has no stored form: it is left unmemoized,
+/// so its readers compute the same immutable answer each time.
 pub const CanonicalIdSlot = struct {
     word: std.atomic.Value(u32) = .init(0),
 
@@ -194,9 +194,8 @@ pub const CanonicalIdSlot = struct {
 
     /// Concurrent publishers must publish the same immutable answer.
     pub fn put(self: *CanonicalIdSlot, id: CheckedTypeId) void {
-        const raw = @backingInt(id);
-        if (raw == std.math.maxInt(u32)) return;
-        self.word.store(raw + 1, .release);
+        const stored = std.math.add(u32, @backingInt(id), 1) catch return;
+        self.word.store(stored, .release);
     }
 };
 

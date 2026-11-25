@@ -117,6 +117,10 @@ pub const Options = struct {
     static_helpers: []const layout.RcHelperKey = &.{},
     /// Object-file roots are immutable; execution callers leave mutable slots external.
     constant_exports: []const lir.Program.StaticDataExport = &.{},
+    /// Whether the returned fragments copy the payload bytes of the
+    /// destination's literal backings and of `constant_exports`, or borrow
+    /// them from exports the caller keeps alive as long as the fragments.
+    export_payload: Excerpt.PreparedData.ExportPayload = .copy,
 };
 
 /// An owned procedure fragment with the revision that produced it.
@@ -422,7 +426,8 @@ fn account(metrics: *Metrics, fragment: *const Excerpt.Fragment, reused: bool, h
 
 /// Compile and append demanded procedures and their explicit helper closure.
 /// On failure all accepted tasks drain; the partially appended destination must
-/// be discarded. Returned fragments own their data independently of destination.
+/// be discarded. Returned fragments own their data independently of destination,
+/// except payload bytes `options.export_payload` borrows.
 pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []const ProcId, options: Options) Allocator.Error!Retained {
     const timing = options.timing;
     if (timing) |active| {
@@ -446,7 +451,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
     // Index immutable backing once; workers capture only reached data. Execution
     // callers leave mutable static roots external, never copied placeholder values.
     std.debug.assert(contract.static_data_readonly or options.constant_exports.len == 0);
-    var data = Excerpt.PreparedData.init(allocator, destination.static_strings.exports, options.constant_exports, &.{}) catch |err| return invariant(err);
+    var data = Excerpt.PreparedData.init(allocator, destination.static_strings.exports, options.constant_exports, options.export_payload, &.{}) catch |err| return invariant(err);
     defer data.deinit();
     const specs = destination.store.getProcSpecs();
     var demanded = try std.DynamicBitSetUnmanaged.initEmpty(allocator, specs.len);
@@ -559,10 +564,15 @@ const TestExecutor = struct {
     len: usize = 0,
     submitted: usize = 0,
     received: usize = 0,
-    fail_after: usize = std.math.maxInt(usize),
+    /// Submissions accepted before every further one fails; `unlimited`
+    /// accepts every submission.
+    fail_after: usize = unlimited,
     fail_output: bool = false,
     fail_scratch: bool = false,
     lanes: usize,
+
+    /// A `fail_after` above every submission count.
+    const unlimited: usize = std.math.maxInt(usize);
 
     fn executor(self: *@This()) tasks.Executor {
         return .{ .context = self, .worker_count = self.lanes, .lane_count = self.lanes, .beginFn = begin, .submitFn = submit, .receiveFn = receive, .tryReceiveFn = tryReceive, .endFn = end };
@@ -572,7 +582,7 @@ const TestExecutor = struct {
     }
     fn submit(context: *anyopaque, _: *anyopaque, task: tasks.Task) Allocator.Error!void {
         const self: *@This() = @ptrCast(@alignCast(context));
-        if (self.submitted == self.fail_after) return error.OutOfMemory;
+        if (self.submitted >= self.fail_after) return error.OutOfMemory;
         std.debug.assert(self.len < self.lanes);
         self.pending[self.len] = task;
         self.len += 1;
@@ -696,7 +706,7 @@ test "native driver drains submission output and scratch OOM before cleanup" {
             .allocator = a,
             .lane = tasks.LaneState.init(if (failure == 2) std.testing.failing_allocator else a),
             .lanes = 4,
-            .fail_after = if (failure == 0) 0 else std.math.maxInt(usize),
+            .fail_after = if (failure == 0) 0 else TestExecutor.unlimited,
             .fail_output = failure == 1,
             .fail_scratch = failure == 2,
         };

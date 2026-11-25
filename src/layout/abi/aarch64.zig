@@ -92,18 +92,23 @@ pub fn classifyType(allocator: std.mem.Allocator, store: *const Store, start: Id
             // convention for these aggregates (generated C glue spells their vector
             // members as vector/byte unions to pin that classification), whereas
             // only C toolchains implement AAPCS64's multi-member HVA register rule.
+            //
+            // A vector member is 16 bytes and a homogeneous float aggregate holds at
+            // most four 8-byte floats, so a larger aggregate is neither.
+            if (store.layoutSize(lay) > max_hfa_floats * 8) return classifyBySize(store, lay);
             var maybe_vector_kind: ?layout.Vector = null;
             const vector_count = try countVectors(allocator, store, idx, &maybe_vector_kind);
             if (vector_count == 1) {
                 return .{ .vector = maybe_vector_kind.? };
             }
             var maybe_float_bits: ?u16 = null;
-            const float_count = try countFloats(allocator, store, idx, &maybe_float_bits);
-            if (float_count >= 1 and float_count <= max_hfa_floats) {
-                return .{ .float_array = .{
-                    .count = float_count,
-                    .elem_bits = maybe_float_bits.?,
-                } };
+            if (try countFloats(allocator, store, idx, &maybe_float_bits)) |float_count| {
+                if (float_count >= 1 and float_count <= max_hfa_floats) {
+                    return .{ .float_array = .{
+                        .count = float_count,
+                        .elem_bits = maybe_float_bits.?,
+                    } };
+                }
             }
             return classifyBySize(store, lay);
         },
@@ -116,13 +121,14 @@ pub fn classifyType(allocator: std.mem.Allocator, store: *const Store, start: Id
 }
 
 /// Count the vector members of an aggregate whose leaves are exclusively short
-/// vectors, returning `invalid_float_count` (sentinel) the moment any other
-/// member (or unnamed padding) is seen. Exactly one vector member makes the
+/// vectors, returning null the moment any other
+/// member (or unnamed padding) is seen. A zero-sized field is not a member:
+/// the struct a host declares has no such field. Exactly one vector member makes the
 /// aggregate a transparent Q-register value; two or more make it memory-class.
 /// Counting stops at two because higher counts classify identically. Members
 /// are visited in order on an explicit stack, so aggregate nesting never
 /// becomes native call depth.
-fn countVectors(allocator: std.mem.Allocator, store: *const Store, idx: Idx, maybe_kind: *?layout.Vector) std.mem.Allocator.Error!u8 {
+fn countVectors(allocator: std.mem.Allocator, store: *const Store, idx: Idx, maybe_kind: *?layout.Vector) std.mem.Allocator.Error!?u8 {
     // Aggregates classify in a few members, so the worklist starts on the stack.
     var pending_buffer: [256]u8 align(@alignOf(usize)) = undefined;
     var pending_state = std.heap.BufferFirstAllocator.init(&pending_buffer, allocator);
@@ -140,24 +146,32 @@ fn countVectors(allocator: std.mem.Allocator, store: *const Store, idx: Idx, may
                 const start = pending.items.len;
                 var i: u32 = 0;
                 while (i < field_count) : (i += 1) {
-                    if (store.getStructFieldIsPadding(struct_idx, i)) return invalid_float_count;
-                    try pending.append(pending_allocator, store.getStructFieldLayout(struct_idx, i));
+                    const field = store.getStructField(struct_idx, i);
+                    if (field.is_padding) {
+                        // Zero-sized padding reserves no bytes: it is no member of
+                        // the struct the host declares.
+                        if (store.layoutSize(store.getLayout(field.layout)) == 0) continue;
+                        return null;
+                    }
+                    try pending.append(pending_allocator, field.layout);
                 }
                 std.mem.reverse(Idx, pending.items[start..]);
             },
             .scalar => {
                 const scalar = lay.getScalar();
-                if (scalar.tag != .vector) return invalid_float_count;
+                if (scalar.tag != .vector) return null;
                 if (maybe_kind.* == null) maybe_kind.* = scalar.getVector();
                 count += 1;
                 if (count > 1) return count;
             },
             .tag_union => {
                 const info = store.getTagUnionInfo(lay);
-                if (info.variants.len != 1 or info.data.discriminant_size != 0) return invalid_float_count;
+                if (info.variants.len != 1 or info.data.discriminant_size != 0) return null;
                 try pending.append(pending_allocator, info.variants.get(0).payload_layout);
             },
-            .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .hole, .ptr, .dynamic => return invalid_float_count,
+            // A zero-sized member is no member of the struct the host declares.
+            .zst, .hole => {},
+            .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .ptr, .dynamic => return null,
         }
     }
     return count;
@@ -171,15 +185,12 @@ fn classifyBySize(store: *const Store, lay: Layout) Class {
     return .integer;
 }
 
-const invalid_float_count = std.math.maxInt(u8);
-
-/// Count the float members of an aggregate, returning `invalid_float_count` (sentinel)
-/// the moment a non-float member, a mismatched float width, or more than the HFA limit is
+/// Count the float members of an aggregate, returning null the moment a non-float member, a mismatched float width, or more than the HFA limit is
 /// seen. All members of an HFA must be the same IEEE float width; `maybe_float_bits` is
 /// threaded through to enforce that and to report the element width to the caller.
 /// Members are visited in order on an explicit stack, so aggregate nesting never
 /// becomes native call depth.
-fn countFloats(allocator: std.mem.Allocator, store: *const Store, idx: Idx, maybe_float_bits: *?u16) std.mem.Allocator.Error!u8 {
+fn countFloats(allocator: std.mem.Allocator, store: *const Store, idx: Idx, maybe_float_bits: *?u16) std.mem.Allocator.Error!?u8 {
     // Aggregates classify in a few members, so the worklist starts on the stack.
     var pending_buffer: [256]u8 align(@alignOf(usize)) = undefined;
     var pending_state = std.heap.BufferFirstAllocator.init(&pending_buffer, allocator);
@@ -197,11 +208,17 @@ fn countFloats(allocator: std.mem.Allocator, store: *const Store, idx: Idx, mayb
                 const start = pending.items.len;
                 var i: u32 = 0;
                 while (i < field_count) : (i += 1) {
-                    // Unnamed padding is opaque, alignment-1 bytes, never a float
-                    // member, so any padding makes the aggregate non-homogeneous (it
-                    // falls back to size-based integer classification).
-                    if (store.getStructFieldIsPadding(struct_idx, i)) return invalid_float_count;
-                    try pending.append(pending_allocator, store.getStructFieldLayout(struct_idx, i));
+                    const field = store.getStructField(struct_idx, i);
+                    if (field.is_padding) {
+                        // Zero-sized padding reserves no bytes: it is no member of
+                        // the struct the host declares.
+                        if (store.layoutSize(store.getLayout(field.layout)) == 0) continue;
+                        // Unnamed padding is opaque, alignment-1 bytes, never a float
+                        // member, so it makes the aggregate non-homogeneous (it
+                        // falls back to size-based integer classification).
+                        return null;
+                    }
+                    try pending.append(pending_allocator, field.layout);
                 }
                 std.mem.reverse(Idx, pending.items[start..]);
             },
@@ -209,28 +226,30 @@ fn countFloats(allocator: std.mem.Allocator, store: *const Store, idx: Idx, mayb
                 const scalar = lay.getScalar();
                 // Only IEEE floats (f32/f64) count toward an HFA. Dec is i128-backed, so it is
                 // an integer member, not a float.
-                if (scalar.tag != .frac) return invalid_float_count;
+                if (scalar.tag != .frac) return null;
                 const bits: u16 = switch (scalar.getFrac()) {
                     .f32 => 32,
                     .f64 => 64,
-                    .dec => return invalid_float_count,
+                    .dec => return null,
                 };
                 if (maybe_float_bits.*) |existing| {
-                    if (existing != bits) return invalid_float_count;
+                    if (existing != bits) return null;
                 } else {
                     maybe_float_bits.* = bits;
                 }
                 count += 1;
-                if (count > max_hfa_floats) return invalid_float_count;
+                if (count > max_hfa_floats) return null;
             },
             .tag_union => {
                 const info = store.getTagUnionInfo(lay);
-                if (info.variants.len != 1 or info.data.discriminant_size != 0) return invalid_float_count;
+                if (info.variants.len != 1 or info.data.discriminant_size != 0) return null;
                 try pending.append(pending_allocator, info.variants.get(0).payload_layout);
             },
+            // A zero-sized member is no member of the struct the host declares.
+            .zst, .hole => {},
             // Anything else (pointer, list, box, non-transparent tag union, …)
             // makes the aggregate non-homogeneous.
-            .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .hole, .ptr, .dynamic => return invalid_float_count,
+            .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .ptr, .dynamic => return null,
         }
     }
     return count;
@@ -382,6 +401,32 @@ test "aarch64 classify: unnamed padding makes an aggregate non-HFA" {
     // Contrast: with all three as real float members it IS a 3×f32 HFA.
     const hfa = try testStruct(&store, &.{ .f32, .f32, .f32 });
     try testing.expectEqual(Class{ .float_array = .{ .count = 3, .elem_bits = 32 } }, try classifyType(testing.allocator, &store, hfa));
+}
+
+test "aarch64 classify: zero-sized fields are not aggregate members" {
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // The struct a host declares for { a : {}, x : F64, y : F64 } has no `a`,
+    // so the aggregate is the 2×f64 HFA of its sized members.
+    const floats = try testStruct(&store, &.{ .zst, .f64, .f64 });
+    try testing.expectEqual(Class{ .float_array = .{ .count = 2, .elem_bits = 64 } }, try classifyType(testing.allocator, &store, floats));
+
+    // { x : F64, y : F64, _ : {} }: the zero-sized `_` only opts the record
+    // into declared order. It is not padding bytes, so the HFA stands.
+    const declared_order = try store.putNominalStructFields(&.{
+        .{ .index = 0, .layout = .f64 },
+        .{ .index = 1, .layout = .f64 },
+        .{ .index = 2, .layout = .zst, .is_padding = true },
+    });
+    try testing.expectEqual(Class{ .float_array = .{ .count = 2, .elem_bits = 64 } }, try classifyType(testing.allocator, &store, declared_order));
+
+    // One vector beside a zero-sized field is still a transparent vector, and
+    // two are still memory-class.
+    const one_vector = try testStruct(&store, &.{ .zst, .u8x16 });
+    try testing.expectEqual(Class{ .vector = .u8x16 }, try classifyType(testing.allocator, &store, one_vector));
+    const two_vectors = try testStruct(&store, &.{ .u8x16, .zst, .u8x16 });
+    try testing.expectEqual(Class.memory, try classifyType(testing.allocator, &store, two_vectors));
 }
 
 test "aarch64 classify: Bool (a one-byte enum) uses one register" {

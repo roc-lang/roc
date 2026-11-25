@@ -183,6 +183,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_10977_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10980_test.zig"));
     std.testing.refAllDecls(@import("test/llvm_inline_policy_test.zig"));
+    std.testing.refAllDecls(@import("test/llvm_str_match_table_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11004_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10991_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11103_test.zig"));
@@ -239,6 +240,8 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_13056_test.zig"));
     std.testing.refAllDecls(@import("test/issue_13140_test.zig"));
     std.testing.refAllDecls(@import("test/boxy_descriptor_demand_test.zig"));
+    std.testing.refAllDecls(@import("test/boxy_unit_dependencies_test.zig"));
+    std.testing.refAllDecls(@import("test/platform_binder_rank_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12745_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12727_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12717_test.zig"));

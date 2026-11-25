@@ -897,7 +897,7 @@ const Task = struct {
             }
             const start = page * context.page_size;
             const end = @min(start + context.page_size, context.signature_offset);
-            std.crypto.hash.sha2.Sha256.hash(context.out[@intCast(start)..@intCast(end)], slot, .{});
+            base.Sha256.hash(context.out[@intCast(start)..@intCast(end)], slot, .{});
         }
         self.bytes = range.count * 32;
     }

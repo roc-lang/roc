@@ -100,6 +100,10 @@ ProbeVectorRecord roc_probe_roundtrip_vector_record(ProbeVectorRecord arg0) { re
 ProbeVectorQuad roc_probe_roundtrip_vector_quad(ProbeVectorQuad arg0) { return arg0; }
 ProbeVectorHva roc_probe_roundtrip_vector_hva(ProbeVectorHva arg0) { return arg0; }
 ProbeVectorWrapper roc_probe_roundtrip_vector_wrapper(ProbeVectorWrapper arg0) { return arg0; }
+ProbeZeroSizedWrapper roc_probe_roundtrip_zero_sized_wrapper(ProbeZeroSizedWrapper arg0) {
+    arg0.only += 1.0;
+    return arg0;
+}
 ProbeVectorTag roc_probe_roundtrip_vector_tag(ProbeVectorTag arg0) { return arg0; }
 
 AnonStructFbe9eaebfd8c38fd roc_probe_roundtrip_vector_tuple(ProbeRoundtripVectorTupleArgs arg0) {
@@ -193,6 +197,9 @@ static void check_provided_abi(void) {
     ProbeVectorWrapper wrapper = { .only = bytes };
     ProbeVectorWrapper wrapper_back = roc_provide_vector_wrapper(wrapper);
     if (memcmp(&wrapper_back, &wrapper, sizeof(wrapper)) != 0) record_failure("provided vector wrapper mismatch");
+
+    ProbeZeroSizedWrapper zero_sized = { .only = 6.5 };
+    if (roc_provide_zero_sized_wrapper(zero_sized).only != 7.5) record_failure("provided zero-sized wrapper mismatch");
 
     ProbeVectorRecord record = { .bytes = bytes, .words = dwords, .before = 0x1020304050607080ULL, .after = 0xa0b0c0d0U };
     ProbeVectorRecord record_back = roc_provide_vector_record(record);

@@ -2896,11 +2896,12 @@ fn traceLiveFunctions(
 ) Allocator.Error![]bool {
     const gpa = self.allocator;
 
-    // Build symbol_index → function_index lookup.
-    const sym_fn_indices = try gpa.alloc(u32, self.linking.symbol_table.items.len);
+    // Build symbol_index → function_index lookup; absent for a symbol that
+    // names no function, which a direct call site never reaches.
+    const sym_fn_indices = try gpa.alloc(collections.OptionalU32, self.linking.symbol_table.items.len);
     defer gpa.free(sym_fn_indices);
     for (self.linking.symbol_table.items, 0..) |sym, i| {
-        sym_fn_indices[i] = if (sym.isFunction()) sym.index else std.math.maxInt(u32);
+        sym_fn_indices[i] = if (sym.isFunction()) .some(sym.index) else .none;
     }
 
     // Each direct call and indirect call site, by its offset in the code
@@ -2990,7 +2991,7 @@ fn traceLiveFunctions(
         while (site_index < call_sites.items.len and call_sites.items[site_index].offset < code_end) : (site_index += 1) {
             const site = call_sites.items[site_index];
             switch (site.kind) {
-                .direct => try tracer.mark(gpa, sym_fn_indices[site.target]),
+                .direct => if (sym_fn_indices[site.target].get()) |callee| try tracer.mark(gpa, callee),
                 .indirect => {
                     const type_idx = site.target;
                     if ((try traced_indirect_types.getOrPut(type_idx)).found_existing) continue;
@@ -3016,8 +3017,8 @@ pub const FinalMemoryConfig = struct {
     stack_bytes: u32,
     import_memory: bool = false,
     imported_memory_zeroed: bool = false,
-    minimum_memory: ?usize = null,
-    maximum_memory: ?usize = null,
+    minimum_memory: ?u64 = null,
+    maximum_memory: ?u64 = null,
     export_memory: bool = true,
 };
 
@@ -3044,12 +3045,12 @@ pub fn finalizeMemoryAndTableWithConfig(self: *Self, config: FinalMemoryConfig) 
     // Calculate memory pages: data + stack, rounded up to page boundary.
     const required_bytes = @as(u64, data_end) + @as(u64, config.stack_bytes);
     const configured_min = config.minimum_memory orelse 0;
-    const total_bytes: u64 = @max(required_bytes, @as(u64, configured_min));
+    const total_bytes: u64 = @max(required_bytes, configured_min);
     const page_size: u64 = 65536;
     const pages: u32 = @intCast(@max(1, (total_bytes + page_size - 1) / page_size));
     self.memory_min_pages = pages;
     self.memory_max_pages = if (config.maximum_memory) |maximum_memory|
-        @intCast(@max(1, (@as(u64, maximum_memory) + page_size - 1) / page_size))
+        @intCast(@max(1, (maximum_memory + page_size - 1) / page_size))
     else
         null;
 

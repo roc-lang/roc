@@ -364,13 +364,13 @@ const Edge = struct {
 /// on discovery, so cycles and reverse-ordered definitions cost one visit per
 /// reachable edge, rather than one whole-graph pass per propagation step.
 const EdgeIndex = struct {
-    heads: collections.DenseMap(LocalId, usize),
+    heads: collections.DenseMap(LocalId, u32),
     /// Storage for the chains; the live prefix covers the indexed edges.
-    next: []?usize,
+    next: []collections.OptionalU32,
 
     fn init(allocator: Allocator, edges: []const Edge) ResourceError!EdgeIndex {
         var self = EdgeIndex{
-            .heads = collections.DenseMap(LocalId, usize).init(allocator),
+            .heads = collections.DenseMap(LocalId, u32).init(allocator),
             .next = &.{},
         };
         errdefer self.deinit(allocator);
@@ -381,15 +381,17 @@ const EdgeIndex = struct {
     /// Index another edge list, keeping the storage already held.
     fn rebuild(self: *EdgeIndex, allocator: Allocator, edges: []const Edge) ResourceError!void {
         self.heads.clearRetainingCapacity();
+        // Every edge index, plus one in its biased form, fits a `u32`.
+        _ = try collections.nextBiasedId(edges.len);
         if (self.next.len < edges.len) {
             allocator.free(self.next);
             self.next = &.{};
-            self.next = try allocator.alloc(?usize, edges.len);
+            self.next = try allocator.alloc(collections.OptionalU32, edges.len);
         }
         for (edges, 0..) |edge, i| {
             const entry = try self.heads.getOrPut(edge.source);
-            self.next[i] = if (entry.found_existing) entry.value_ptr.* else null;
-            entry.value_ptr.* = i;
+            self.next[i] = if (entry.found_existing) .some(entry.value_ptr.*) else .none;
+            entry.value_ptr.* = @intCast(i);
         }
     }
 
@@ -408,7 +410,7 @@ const EdgeIndex = struct {
         var edge_visits: usize = 0;
         while (cursor < queue.items.len) : (cursor += 1) {
             var next = self.heads.get(queue.items[cursor]);
-            while (next) |index| : (next = self.next[index]) {
+            while (next) |index| : (next = self.next[index].get()) {
                 edge_visits += 1;
                 const target = edges[index].target;
                 const entry = try carriers.getOrPut(target);
@@ -514,7 +516,7 @@ const Pass = struct {
                 .dirty_targets = collections.DenseMap(LocalId, void).init(allocator),
                 .assigned_targets = collections.DenseMap(LocalId, u32).init(allocator),
             },
-            .edge_index = .{ .heads = collections.DenseMap(LocalId, usize).init(allocator), .next = &.{} },
+            .edge_index = .{ .heads = collections.DenseMap(LocalId, u32).init(allocator), .next = &.{} },
             .proc_args = collections.DenseMap(LocalId, void).init(allocator),
             .attempted = collections.DenseMap(LocalId, void).init(allocator),
             .candidate_carriers = collections.DenseMap(LocalId, void).init(allocator),

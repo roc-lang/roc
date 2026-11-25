@@ -156,6 +156,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/closed_operator_test.zig"));
     std.testing.refAllDecls(@import("test/closed_method_call_test.zig"));
     std.testing.refAllDecls(@import("test/deferred_literal_test.zig"));
+    std.testing.refAllDecls(@import("test/literal_typing_rule_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11245_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11587_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11621_test.zig"));
@@ -246,6 +247,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_13105_test.zig"));
     std.testing.refAllDecls(@import("test/issue_13113_test.zig"));
     std.testing.refAllDecls(@import("test/issue_13197_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_13363_test.zig"));
 
     // Cross-module monomorphization tests
     std.testing.refAllDecls(@import("test/cross_module_mono_test.zig"));

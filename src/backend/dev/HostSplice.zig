@@ -124,6 +124,16 @@ pub const HostSplice = struct {
         }
     }
 
+    /// Forget the carried data `link` copied into the image. Its records,
+    /// names, and bytes borrow their excerpts, which the caller may free
+    /// once this returns; a spliced image whose excerpts are extracted
+    /// later keeps both instead.
+    pub fn releaseCarriedData(self: *HostSplice) void {
+        self.data.clearAndFree(self.allocator);
+        self.data_names.clearAndFree();
+        self.data_offsets.clearAndFree();
+    }
+
     /// Symbolic references which this program does not define itself. These
     /// come from emitted code, carried data and materialized callable pointers;
     /// a LIR call walk cannot account for the latter two. The caller owns the
@@ -635,6 +645,57 @@ test "static data is placed in the mapping and stays writable" {
     try std.testing.expectEqual(@as(u64, 42), std.mem.readInt(u64, slots.allocation[8..16], .little));
     // Linking must not bake the mapping's address into retained source data.
     try std.testing.expectEqual(@as(usize, 0), std.mem.readInt(usize, splice.data.items[0].bytes[0..@sizeOf(usize)], .little));
+}
+
+test "a linked image outlives its released carried data" {
+    if (comptime host_isa == null) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try @import("layout").Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+    var codegen = try HostLirCodeGen.init(allocator, &store, &layouts, .{}, .default);
+    defer codegen.deinit();
+    _ = try codegen.generateHostedStub("test_unused_entry");
+
+    // The carried item's storage stands in for the excerpts that own it.
+    const name = try allocator.dupe(u8, "test_carried_pointer");
+    var name_live = true;
+    defer if (name_live) allocator.free(name);
+    const bytes = try allocator.alloc(u8, 2 * @sizeOf(usize));
+    var bytes_live = true;
+    defer if (bytes_live) allocator.free(bytes);
+    @memset(bytes[0..@sizeOf(usize)], 0x5a);
+    @memset(bytes[@sizeOf(usize)..], 0);
+    const relocations = try allocator.dupe(CodeExcerpt.DataRelocation, &.{.{ .offset = @sizeOf(usize), .name = name, .addend = 0, .function = false }});
+    var relocations_live = true;
+    defer if (relocations_live) allocator.free(relocations);
+
+    var splice = HostSplice.init(allocator);
+    defer splice.deinit();
+    try splice.addDataItems(&.{.{ .name = name, .bytes = bytes, .alignment = 8, .symbol_offset = 0, .relocations = relocations }});
+    try splice.generateHostedStubs(&codegen);
+    try codegen.finishImage();
+    var executable = try splice.link(&codegen);
+    defer executable.deinit();
+    const offset = splice.data_offsets.get(name).?;
+
+    splice.releaseCarriedData();
+    try std.testing.expectEqual(@as(usize, 0), splice.data.items.len);
+    try std.testing.expectEqual(@as(u32, 0), splice.data_names.count());
+    try std.testing.expectEqual(@as(u32, 0), splice.data_offsets.count());
+    @memset(bytes, 0xa5);
+    allocator.free(relocations);
+    relocations_live = false;
+    allocator.free(bytes);
+    bytes_live = false;
+    allocator.free(name);
+    name_live = false;
+
+    // The image holds its own copy of the item, pointing at itself.
+    const placed = executable.memory[offset..][0 .. 2 * @sizeOf(usize)];
+    try std.testing.expectEqualSlices(u8, &@as([@sizeOf(usize)]u8, @splat(0x5a)), placed[0..@sizeOf(usize)]);
+    try std.testing.expectEqual(@intFromPtr(executable.memory.ptr) + offset, std.mem.readInt(usize, placed[@sizeOf(usize)..][0..@sizeOf(usize)], .little));
 }
 
 test "linking many data items resolves each pointer through its target's own symbol offset" {

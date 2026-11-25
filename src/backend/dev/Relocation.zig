@@ -237,9 +237,7 @@ fn patchX86Rel32Operand(code: []u8, operand_offset: usize, next_instr_addr: usiz
     if (operand_offset + 4 > code.len) return error.InvalidOffset;
 
     const rel_i128 = @as(i128, @intCast(target_addr)) - @as(i128, @intCast(next_instr_addr));
-    if (rel_i128 < std.math.minInt(i32) or rel_i128 > std.math.maxInt(i32)) return error.BranchOutOfRange;
-
-    const rel: i32 = @intCast(rel_i128);
+    const rel = std.math.cast(i32, rel_i128) orelse return error.BranchOutOfRange;
     const rel_bytes: [4]u8 = @bitCast(rel);
     @memcpy(code[operand_offset..][0..4], &rel_bytes);
 }
