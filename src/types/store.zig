@@ -614,275 +614,129 @@ pub const Store = struct {
         self.tags.sealView();
     }
 
-    /// Canonicalize the solved store (`canonicalizeForSeal`), drop what no
-    /// class reaches any more (`compactForSeal`), then seal it. Checking
-    /// calls this once, when it finishes a module.
+    /// Canonicalize the solved store and drop what no class reaches any more
+    /// (`canonicalizeAndCompactForSeal`), then seal it. Checking calls this
+    /// once, when it finishes a module.
     pub fn canonicalizeAndSeal(self: *Self, idents: *const base.Ident.Store) Allocator.Error!void {
         // Canonicalization renumbers classes, and no report reads a closing
         // once checking has finished.
         self.tag_tail_closings.clearRetainingCapacity();
-        try self.canonicalizeForSeal(idents);
-        try self.compactForSeal();
+        try self.canonicalizeAndCompactForSeal(idents);
         try self.seal();
     }
 
-    /// Drop every descriptor no slot names and every pool entry no live
-    /// descriptor reaches, keeping the survivors in their order. Solving
-    /// leaves both behind: a class merge orphans one side's descriptor, and
-    /// unification, instantiation and row flattening append the rows that
-    /// replace the ones a class held before. A pool entry is reached when a
-    /// live descriptor's range, a reached tag's payload range or a nominal
-    /// declaration's formals cover it, together with the length slot before a
-    /// vars range. Every surviving range stays contiguous, so each stored
-    /// start moves to the number of surviving entries before it and every
-    /// count stays the same; ranges that shared entries still share them.
-    /// Descriptors are renumbered the same way, with the slots and the
-    /// derived-map selections that name them. Static-dispatch constraints and
-    /// their interpolation and numeral metadata stay as they are: checked
-    /// outputs (`ModuleEnv.binding_scheme_codec_requirements`) and constraints
-    /// name them by index.
-    fn compactForSeal(self: *Self) Allocator.Error!void {
-        self.debugAssertUnsealed();
-        const gpa = self.gpa;
-        const desc_count: usize = @intCast(self.descs.backing.len());
-
-        var live = try std.DynamicBitSetUnmanaged.initEmpty(gpa, desc_count);
-        defer live.deinit(gpa);
-        for (self.slots.words.items) |word| switch (SlotStore.decode(word)) {
-            .root => |desc_idx| live.set(@backingInt(desc_idx)),
-            .redirect => {},
-        };
-
-        var vars_reached = try std.DynamicBitSetUnmanaged.initEmpty(gpa, self.vars.items.len);
-        defer vars_reached.deinit(gpa);
-        var fields_reached = try std.DynamicBitSetUnmanaged.initEmpty(gpa, self.record_fields.len());
-        defer fields_reached.deinit(gpa);
-        var tags_reached = try std.DynamicBitSetUnmanaged.initEmpty(gpa, self.tags.len());
-        defer tags_reached.deinit(gpa);
-
-        const words = self.descs.backing.items(.word);
-        const payloads = self.descs.backing.items(.payload);
-        var live_descs = live.iterator(.{});
-        while (live_descs.next()) |index| {
-            const payload = payloads[index];
-            switch (words[index].kind) {
-                .flex, .rigid, .field_presence, .err, .empty_record, .empty_tag_union => {},
-                .alias, .nominal_type => self.markStoredVarRange(&vars_reached, payload[1]),
-                .tuple => self.markStoredVarRange(&vars_reached, payload[0]),
-                .fn_pure, .fn_effectful, .fn_unbound => {
-                    self.markStoredVarRange(&vars_reached, payload[0]);
-                    self.markStoredVarRange(&vars_reached, payload[2]);
-                },
-                .record => markPoolRange(&fields_reached, payload[0], payload[1]),
-                .tag_union => {
-                    markPoolRange(&tags_reached, payload[0], payload[1]);
-                    if (payload[1] != 0) {
-                        for (self.tags.items(.args)[payload[0]..][0..payload[1]]) |args| markVarRange(&vars_reached, args);
-                    }
-                },
-            }
-        }
-        for (self.nominal_decls.items()) |decl| markVarRange(&vars_reached, decl.formals);
-
-        const desc_starts = try survivorStarts(gpa, &live);
-        defer gpa.free(desc_starts);
-        const var_starts = try survivorStarts(gpa, &vars_reached);
-        defer gpa.free(var_starts);
-        const field_starts = try survivorStarts(gpa, &fields_reached);
-        defer gpa.free(field_starts);
-        const tag_starts = try survivorStarts(gpa, &tags_reached);
-        defer gpa.free(tag_starts);
-
-        // Descriptors: rewrite each survivor's ranges, then move it down.
-        live_descs = live.iterator(.{});
-        while (live_descs.next()) |index| {
-            var payload = payloads[index];
-            switch (words[index].kind) {
-                .flex, .rigid, .field_presence, .err, .empty_record, .empty_tag_union => {},
-                .alias, .nominal_type => payload[1] = var_starts[payload[1]],
-                .tuple => payload[0] = var_starts[payload[0]],
-                .fn_pure, .fn_effectful, .fn_unbound => {
-                    payload[0] = var_starts[payload[0]];
-                    payload[2] = var_starts[payload[2]];
-                },
-                .record => payload[0] = movedStart(field_starts, payload[0], payload[1]),
-                .tag_union => payload[0] = movedStart(tag_starts, payload[0], payload[1]),
-            }
-            const to = desc_starts[index];
-            words[to] = words[index];
-            payloads[to] = payload;
-            self.root_metas.set(@fromBackingInt(to), self.root_metas.get(@fromBackingInt(@intCast(index))));
-        }
-        const live_count = desc_starts[desc_count];
-        self.descs.backing.shrinkRetainingCapacity(live_count);
-        self.root_metas.shrinkRetainingCapacity(live_count);
-        for (self.slots.words.items) |*word| switch (SlotStore.decode(word.*)) {
-            .root => |desc_idx| word.* = SlotStore.encode(.{ .root = @fromBackingInt(desc_starts[@backingInt(desc_idx)]) }),
-            .redirect => {},
-        };
-
-        // Derived-map selections are sorted by class; renumbering keeps the
-        // order, and a dead class's selection has no class left to select.
-        var plans_kept: usize = 0;
-        for (self.derived_map_plans.items()) |entry| {
-            const index: usize = @backingInt(entry.class);
-            if (!live.isSet(index)) continue;
-            self.derived_map_plans.items()[plans_kept] = .{ .class = @fromBackingInt(desc_starts[index]), .plan = entry.plan };
-            plans_kept += 1;
-        }
-        self.derived_map_plans.shrinkRetainingCapacity(plans_kept);
-
-        // Pools: move each reached entry down, rewriting the vars ranges that
-        // tags and nominal declarations hold.
-        var kept: usize = 0;
-        for (self.vars.items, 0..) |entry, index| {
-            if (!vars_reached.isSet(index)) continue;
-            self.vars.items[kept] = entry;
-            kept += 1;
-        }
-        self.vars.shrinkRetainingCapacity(kept);
-
-        kept = 0;
-        for (0..self.record_fields.len()) |index| {
-            if (!fields_reached.isSet(index)) continue;
-            self.record_fields.set(@fromBackingInt(@intCast(kept)), self.record_fields.get(@fromBackingInt(@intCast(index))));
-            kept += 1;
-        }
-        self.record_fields.shrinkRetainingCapacity(kept);
-
-        kept = 0;
-        for (0..self.tags.len()) |index| {
-            if (!tags_reached.isSet(index)) continue;
-            var tag = self.tags.get(@fromBackingInt(@intCast(index)));
-            tag.args.start = @fromBackingInt(movedStart(var_starts, @backingInt(tag.args.start), tag.args.count));
-            self.tags.set(@fromBackingInt(@intCast(kept)), tag);
-            kept += 1;
-        }
-        self.tags.shrinkRetainingCapacity(kept);
-
-        for (self.nominal_decls.items()) |*decl| decl.formals.start = @fromBackingInt(movedStart(var_starts, @backingInt(decl.formals.start), decl.formals.count));
-    }
-
-    /// Where a range of `count` entries starting at `start` moves to. An
-    /// empty range addresses no entry, so only its count is kept: its start
-    /// need not lie inside the pool.
-    fn movedStart(starts: []const u32, start: u32, count: u32) u32 {
-        if (count == 0 and start >= starts.len) return 0;
-        return starts[start];
-    }
-
-    /// Mark `count` pool entries from `start`.
-    fn markPoolRange(reached: *std.DynamicBitSetUnmanaged, start: u32, count: u32) void {
-        if (count != 0) reached.setRangeValue(.{ .start = start, .end = start + count }, true);
-    }
-
-    /// Mark the vars range a stored descriptor keeps as `stored`
-    /// (`storedVarRange`) and the length slot before it.
-    fn markStoredVarRange(self: *const Self, reached: *std.DynamicBitSetUnmanaged, stored: u32) void {
-        if (stored == stored_empty_var_range) return;
-        markPoolRange(reached, stored - 1, self.varRange(stored).count + 1);
-    }
-
-    /// Mark a vars range held whole (a tag's payload, a declaration's
-    /// formals) and the length slot `appendVars` wrote before it.
-    fn markVarRange(reached: *std.DynamicBitSetUnmanaged, range: VarSafeList.Range) void {
-        if (range.count == 0) return;
-        markPoolRange(reached, @backingInt(range.start) - 1, range.count + 1);
-    }
-
-    /// For every position of a pool, and one past its end, how many reached
-    /// entries come before it: where an entry, or a range starting there,
-    /// moves to when the unreached entries are dropped.
-    fn survivorStarts(gpa: Allocator, reached: *const std.DynamicBitSetUnmanaged) Allocator.Error![]u32 {
-        const starts = try gpa.alloc(u32, reached.bit_length + 1);
-        var count: u32 = 0;
-        for (0..reached.bit_length) |index| {
-            starts[index] = count;
-            if (reached.isSet(index)) count += 1;
-        }
-        starts[reached.bit_length] = count;
-        return starts;
-    }
-
-    /// The last write to a solved store. Every slot comes to name its
-    /// class's storage root directly; every variable a descriptor, a type
-    /// argument or field pool, or a nominal declaration holds becomes its
-    /// class's checked representative; and every record and tag union row
-    /// absorbs the rows its extension chain reaches, so a row's extension is
-    /// never itself a row. A reader of the sealed store therefore receives
-    /// representatives as children and reads each row in one piece. A
-    /// static-dispatch constraint keeps its own function variable: checking
-    /// recorded that variable at the dispatch site, so it identifies the
-    /// constraint, and a reader resolves it (one slot read).
-    fn canonicalizeForSeal(self: *Self, idents: *const base.Ident.Store) Allocator.Error!void {
+    /// The last write to a solved store, in two parts done together.
+    ///
+    /// Canonicalization: every slot comes to name its class's storage root
+    /// directly; every variable a descriptor, a type argument or field pool
+    /// entry, or a nominal declaration holds becomes its class's checked
+    /// representative; and every record and tag union row absorbs the rows
+    /// its extension chain reaches, so a row's extension is never itself a
+    /// row. A reader of the sealed store therefore receives representatives
+    /// as children and reads each row in one piece. A static-dispatch
+    /// constraint keeps its own function variable: checking recorded that
+    /// variable at the dispatch site, so it identifies the constraint, and a
+    /// reader resolves it (one slot read).
+    ///
+    /// Compaction: every descriptor no slot names and every pool entry no
+    /// live descriptor reaches is dropped, and the survivors keep their
+    /// order. Solving leaves both behind: a class merge orphans one side's
+    /// descriptor, and unification, instantiation and row flattening append
+    /// the rows that replace the ones a class held before. A pool entry is
+    /// reached when a live descriptor's final range, a reached tag's payload
+    /// range or a nominal declaration's formals cover it, together with the
+    /// length slot before a vars range. Every surviving range stays
+    /// contiguous, so each stored start moves to the number of surviving
+    /// entries before it and every count stays the same; ranges that shared
+    /// entries still share them. Descriptors are renumbered the same way,
+    /// with the slots and the derived-map selections that name them.
+    /// Static-dispatch constraints and their interpolation and numeral
+    /// metadata stay as they are: checked outputs
+    /// (`ModuleEnv.binding_scheme_codec_requirements`) and constraints name
+    /// them by index.
+    ///
+    /// The passes, in order: the slots, which also find the live
+    /// descriptors; the live descriptors, canonicalizing what each holds
+    /// inline, absorbing row chains and marking the pool entries each one's
+    /// final content reaches; the reached pool entries, each canonicalized
+    /// and moved down in one step, so an entry no class reaches is never
+    /// canonicalized; and the live descriptors again, moving each down with
+    /// its ranges' new starts. Pool entries are canonicalized while slots and
+    /// descriptors still have their solved numbering, which representative
+    /// lookups read.
+    fn canonicalizeAndCompactForSeal(self: *Self, idents: *const base.Ident.Store) Allocator.Error!void {
         self.debugAssertUnsealed();
         if (std.debug.runtime_safety and self.probe_open) base.invariant("a type store was canonicalized with a probe open", .{});
+        const gpa = self.gpa;
 
-        const slot_count: usize = @intCast(self.slots.len());
-        var live_descs = try std.DynamicBitSetUnmanaged.initEmpty(self.gpa, self.descs.backing.len());
-        defer live_descs.deinit(self.gpa);
-        for (0..slot_count) |index| {
+        var live_descs = try Survivors.init(gpa, self.descs.backing.len());
+        defer live_descs.deinit(gpa);
+        for (0..self.slots.len()) |index| {
             const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(index));
-            const storage = self.resolveStorageRoot(slotIdxToVar(slot_idx));
+            const storage = self.findStorageRoot(slotIdxToVar(slot_idx));
             if (storage.storage_var != slotIdxToVar(slot_idx)) self.slots.set(slot_idx, .{ .redirect = storage.storage_var });
             // No generalization pass is running, so no stored word is marked.
             std.debug.assert(!self.descs.getWord(storage.desc_idx).marked());
             live_descs.set(@backingInt(storage.desc_idx));
         }
 
-        for (self.vars.items) |*var_| {
-            if (isRangeLengthSlot(var_.*)) continue;
-            var_.* = self.representativeVar(var_.*);
-        }
-        for (0..self.record_fields.len()) |index| {
-            var field = self.record_fields.get(@fromBackingInt(@intCast(index)));
-            field.presence.var_ = self.representativeVar(field.presence.var_);
-            if (field.presence.presenceVar()) |presence| field.presence.presence_var = .some(self.representativeVar(presence));
-            self.record_fields.set(@fromBackingInt(@intCast(index)), field);
-        }
-        for (self.nominal_decls.items()) |*decl| decl.backing = self.representativeVar(decl.backing);
+        var vars_reached = try Survivors.init(gpa, self.vars.items.len);
+        defer vars_reached.deinit(gpa);
+        var fields_reached = try Survivors.init(gpa, self.record_fields.len());
+        defer fields_reached.deinit(gpa);
+        var tags_reached = try Survivors.init(gpa, self.tags.len());
+        defer tags_reached.deinit(gpa);
 
         // One pass over the live descriptors, in index order, reading each
         // one's kind. Only a function, a record and a tag union hold a
-        // variable inline (a return or an extension), so only those are read
-        // past their word. Resolving a row's extension also tells whether it
-        // is itself a row: such a row absorbs its chain, and every other one
-        // only has its extension replaced. A chain's segments are read as
-        // stored: a segment at a lower index has absorbed its own chain
-        // already, and one at a higher index has not.
+        // variable inline (a return or an extension), so only those are
+        // canonicalized here; the variables of every other kind are pool
+        // entries. Resolving a row's extension also tells whether it is
+        // itself a row: such a row absorbs its chain into rows appended to
+        // its pool, and every other one only has its extension replaced. A
+        // chain's segments are read as stored: a segment at a lower index has
+        // absorbed its own chain already, and one at a higher index has not.
+        // Every appended row is the final content of the live descriptor that
+        // appended it, so all of them are reached.
         var row_fields: std.ArrayListUnmanaged(RecordField) = .empty;
-        defer row_fields.deinit(self.gpa);
+        defer row_fields.deinit(gpa);
         var row_tags: std.ArrayListUnmanaged(Tag) = .empty;
-        defer row_tags.deinit(self.gpa);
-        var live = live_descs.iterator(.{});
-        while (live.next()) |index| {
+        defer row_tags.deinit(gpa);
+        var live = live_descs.runs();
+        while (live.next()) |run| for (run.start..run.end) |index| {
             const desc_idx: DescStore.Idx = @fromBackingInt(@intCast(index));
+            const payload = self.descs.backing.items(.payload)[index];
             switch (self.descs.getWord(desc_idx).kind) {
-                .flex, .rigid, .alias, .field_presence, .err, .tuple, .nominal_type, .empty_record, .empty_tag_union => {},
+                .flex, .rigid, .field_presence, .err, .empty_record, .empty_tag_union => {},
+                .alias, .nominal_type => self.markStoredVarRange(&vars_reached, payload[1]),
+                .tuple => self.markStoredVarRange(&vars_reached, payload[0]),
                 .fn_pure, .fn_effectful, .fn_unbound => {
-                    const ret: Var = @fromBackingInt(self.descs.getPayloadWord(desc_idx, Desc.fn_ret_payload_word));
+                    const ret: Var = @fromBackingInt(payload[Desc.fn_ret_payload_word]);
                     self.setInlineVarForSeal(desc_idx, Desc.fn_ret_payload_word, self.representativeVar(ret));
+                    self.markStoredVarRange(&vars_reached, payload[0]);
+                    self.markStoredVarRange(&vars_reached, payload[2]);
                 },
                 .record => {
                     const record = self.recordAt(desc_idx);
                     const ext = self.findStorageRoot(record.ext);
                     if (self.descs.getWord(ext.desc_idx).kind != .record) {
                         self.setInlineVarForSeal(desc_idx, Desc.row_ext_payload_word, representativeOf(ext));
+                        fields_reached.setRange(payload[0], payload[1]);
                         continue;
                     }
                     row_fields.clearRetainingCapacity();
                     var segment = record;
-                    var guard = debug.IterationGuard.init("canonicalizeForSeal.record");
+                    var guard = debug.IterationGuard.init("canonicalizeAndCompactForSeal.record");
                     while (true) {
                         guard.tick();
                         var fields = self.record_fields.iterRange(segment.fields);
-                        while (fields.next()) |field| try row_fields.append(self.gpa, field);
+                        while (fields.next()) |field| try row_fields.append(gpa, field);
                         segment = self.extensionRecord(segment.ext) orelse break;
                     }
                     std.mem.sort(RecordField, row_fields.items, idents, RecordField.sortByNameAsc);
                     var desc = self.descAt(desc_idx);
                     desc.content = .{ .structure = .{ .record = .{
-                        .fields = try self.record_fields.appendSlice(self.gpa, row_fields.items),
+                        .fields = try self.record_fields.appendSlice(gpa, row_fields.items),
                         .ext = self.representativeVar(segment.ext),
                     } } };
                     self.descs.setRow(desc_idx, self.encodeDescWithoutIdentity(desc));
@@ -892,27 +746,162 @@ pub const Store = struct {
                     const ext = self.findStorageRoot(tag_union.ext);
                     if (self.descs.getWord(ext.desc_idx).kind != .tag_union) {
                         self.setInlineVarForSeal(desc_idx, Desc.row_ext_payload_word, representativeOf(ext));
+                        tags_reached.setRange(payload[0], payload[1]);
+                        for (self.tags.sliceRange(tag_union.tags).items(.args)) |args| markVarRange(&vars_reached, args);
                         continue;
                     }
                     row_tags.clearRetainingCapacity();
                     var segment = tag_union;
-                    var guard = debug.IterationGuard.init("canonicalizeForSeal.tag_union");
+                    var guard = debug.IterationGuard.init("canonicalizeAndCompactForSeal.tag_union");
                     while (true) {
                         guard.tick();
                         var tags = self.tags.iterRange(segment.tags);
-                        while (tags.next()) |tag| try row_tags.append(self.gpa, tag);
+                        while (tags.next()) |tag| try row_tags.append(gpa, tag);
                         segment = self.extensionTagUnion(segment.ext) orelse break;
                     }
                     std.mem.sort(Tag, row_tags.items, idents, Tag.sortByNameAsc);
+                    for (row_tags.items) |tag| markVarRange(&vars_reached, tag.args);
                     var desc = self.descAt(desc_idx);
                     desc.content = .{ .structure = .{ .tag_union = .{
-                        .tags = try self.tags.appendSlice(self.gpa, row_tags.items),
+                        .tags = try self.tags.appendSlice(gpa, row_tags.items),
                         .ext = self.representativeVar(segment.ext),
                     } } };
                     self.descs.setRow(desc_idx, self.encodeDescWithoutIdentity(desc));
                 },
             }
+        };
+        try fields_reached.extendReached(gpa, self.record_fields.len());
+        try tags_reached.extendReached(gpa, self.tags.len());
+        for (self.nominal_decls.items()) |*decl| {
+            decl.backing = self.representativeVar(decl.backing);
+            markVarRange(&vars_reached, decl.formals);
         }
+
+        const live_count = try live_descs.count(gpa);
+        const vars_kept = try vars_reached.count(gpa);
+        const fields_kept = try fields_reached.count(gpa);
+        const tags_kept = try tags_reached.count(gpa);
+
+        // Pools: canonicalize each reached entry and move it down. A vars
+        // range's length slot is not a variable; a tag's payload range moves
+        // with the vars pool.
+        {
+            const items = self.vars.items;
+            var kept: usize = 0;
+            var reached = vars_reached.runs();
+            while (reached.next()) |run| for (run.start..run.end) |index| {
+                const entry = items[index];
+                items[kept] = if (isRangeLengthSlot(entry)) entry else self.representativeVar(entry);
+                kept += 1;
+            };
+            std.debug.assert(kept == vars_kept);
+            self.vars.shrinkRetainingCapacity(kept);
+        }
+        {
+            const names = self.record_fields.items(.name);
+            const presences = self.record_fields.items(.presence);
+            var kept: usize = 0;
+            var reached = fields_reached.runs();
+            while (reached.next()) |run| {
+                if (kept != run.start) std.mem.copyForwards(base.Ident.Idx, names[kept..][0..run.len()], names[run.start..run.end]);
+                for (run.start..run.end) |index| {
+                    var presence = presences[index];
+                    presence.var_ = self.representativeVar(presence.var_);
+                    if (presence.presenceVar()) |presence_var| presence.presence_var = .some(self.representativeVar(presence_var));
+                    presences[kept] = presence;
+                    kept += 1;
+                }
+            }
+            std.debug.assert(kept == fields_kept);
+            self.record_fields.shrinkRetainingCapacity(kept);
+        }
+        {
+            const names = self.tags.items(.name);
+            const pattern_only = self.tags.items(.pattern_only);
+            const args = self.tags.items(.args);
+            var kept: usize = 0;
+            var reached = tags_reached.runs();
+            while (reached.next()) |run| {
+                if (kept != run.start) {
+                    std.mem.copyForwards(base.Ident.Idx, names[kept..][0..run.len()], names[run.start..run.end]);
+                    std.mem.copyForwards(bool, pattern_only[kept..][0..run.len()], pattern_only[run.start..run.end]);
+                }
+                for (run.start..run.end) |index| {
+                    var range = args[index];
+                    range.start = @fromBackingInt(vars_reached.movedStart(@backingInt(range.start), range.count));
+                    args[kept] = range;
+                    kept += 1;
+                }
+            }
+            std.debug.assert(kept == tags_kept);
+            self.tags.shrinkRetainingCapacity(kept);
+        }
+        for (self.nominal_decls.items()) |*decl| decl.formals.start = @fromBackingInt(vars_reached.movedStart(@backingInt(decl.formals.start), decl.formals.count));
+
+        // Descriptors: rewrite each survivor's ranges, then move it down with
+        // its root metadata.
+        {
+            const words = self.descs.backing.items(.word);
+            const payloads = self.descs.backing.items(.payload);
+            const checked_vars = self.root_metas.items(.checked_var);
+            var to: usize = 0;
+            live = live_descs.runs();
+            while (live.next()) |run| {
+                if (to != run.start) std.mem.copyForwards(Var, checked_vars[to..][0..run.len()], checked_vars[run.start..run.end]);
+                for (run.start..run.end) |index| {
+                    var payload = payloads[index];
+                    switch (words[index].kind) {
+                        .flex, .rigid, .field_presence, .err, .empty_record, .empty_tag_union => {},
+                        .alias, .nominal_type => payload[1] = vars_reached.rank(payload[1]),
+                        .tuple => payload[0] = vars_reached.rank(payload[0]),
+                        .fn_pure, .fn_effectful, .fn_unbound => {
+                            payload[0] = vars_reached.rank(payload[0]);
+                            payload[2] = vars_reached.rank(payload[2]);
+                        },
+                        .record => payload[0] = fields_reached.movedStart(payload[0], payload[1]),
+                        .tag_union => payload[0] = tags_reached.movedStart(payload[0], payload[1]),
+                    }
+                    words[to] = words[index];
+                    payloads[to] = payload;
+                    to += 1;
+                }
+            }
+            std.debug.assert(to == live_count);
+        }
+        // With every descriptor live, none moved, so the slots and the
+        // derived-map selections already name the right ones.
+        if (live_count == self.descs.backing.len()) return;
+        self.descs.backing.shrinkRetainingCapacity(live_count);
+        self.root_metas.shrinkRetainingCapacity(live_count);
+        for (self.slots.words.items) |*word| switch (SlotStore.decode(word.*)) {
+            .root => |desc_idx| word.* = SlotStore.encode(.{ .root = @fromBackingInt(live_descs.rank(@backingInt(desc_idx))) }),
+            .redirect => {},
+        };
+
+        // Derived-map selections are sorted by class; renumbering keeps the
+        // order, and a dead class's selection has no class left to select.
+        var plans_kept: usize = 0;
+        for (self.derived_map_plans.items()) |entry| {
+            const index: u32 = @backingInt(entry.class);
+            if (!live_descs.isSet(index)) continue;
+            self.derived_map_plans.items()[plans_kept] = .{ .class = @fromBackingInt(live_descs.rank(index)), .plan = entry.plan };
+            plans_kept += 1;
+        }
+        self.derived_map_plans.shrinkRetainingCapacity(plans_kept);
+    }
+
+    /// Mark the vars range a stored descriptor keeps as `stored`
+    /// (`storedVarRange`) and the length slot before it.
+    fn markStoredVarRange(self: *const Self, reached: *Survivors, stored: u32) void {
+        if (stored == stored_empty_var_range) return;
+        reached.setRange(stored - 1, self.varRange(stored).count + 1);
+    }
+
+    /// Mark a vars range held whole (a tag's payload, a declaration's
+    /// formals) and the length slot `appendVars` wrote before it.
+    fn markVarRange(reached: *Survivors, range: VarSafeList.Range) void {
+        if (range.count == 0) return;
+        reached.setRange(@backingInt(range.start) - 1, range.count + 1);
     }
 
     /// Replace the variable a function or row descriptor holds inline in
@@ -4469,6 +4458,162 @@ const SlotStore = struct {
     };
 };
 
+/// Which entries of a pool, or which descriptors, survive compaction:
+/// one bit per entry, and once counted (`count`), the number of
+/// survivors before each group of eight entries, so where an entry moves to
+/// is that count plus a table lookup for the entries before it in its group
+/// (`rank`). Bits past `len` stay clear.
+const Survivors = struct {
+    bits: []u64,
+    /// Survivors before each group of eight entries, and the total after the
+    /// last one.
+    before: []u32 = &.{},
+    len: usize,
+
+    const Run = struct {
+        start: usize,
+        end: usize,
+
+        fn len(run: Run) usize {
+            return run.end - run.start;
+        }
+    };
+
+    fn init(gpa: Allocator, len: usize) Allocator.Error!Survivors {
+        const bits = try gpa.alloc(u64, wordCount(len));
+        @memset(bits, 0);
+        return .{ .bits = bits, .len = len };
+    }
+
+    fn deinit(self: *Survivors, gpa: Allocator) void {
+        gpa.free(self.bits);
+        gpa.free(self.before);
+    }
+
+    fn wordCount(len: usize) usize {
+        return (len + 63) / 64;
+    }
+
+    fn set(self: *Survivors, index: usize) void {
+        std.debug.assert(index < self.len);
+        self.bits[index / 64] |= @as(u64, 1) << @intCast(index % 64);
+    }
+
+    fn isSet(self: *const Survivors, index: usize) bool {
+        std.debug.assert(index < self.len);
+        return self.bits[index / 64] & (@as(u64, 1) << @intCast(index % 64)) != 0;
+    }
+
+    /// Mark `amount` entries from `start`.
+    fn setRange(self: *Survivors, start: usize, amount: usize) void {
+        if (amount == 0) return;
+        const end = start + amount;
+        std.debug.assert(end <= self.len);
+        const first = start / 64;
+        const last = (end - 1) / 64;
+        const low: u64 = ~@as(u64, 0) << @intCast(start % 64);
+        const high: u64 = ~@as(u64, 0) >> @intCast(63 - (end - 1) % 64);
+        if (first == last) {
+            self.bits[first] |= low & high;
+            return;
+        }
+        self.bits[first] |= low;
+        @memset(self.bits[first + 1 .. last], ~@as(u64, 0));
+        self.bits[last] |= high;
+    }
+
+    /// Grow to `new_len` entries, every new one reached.
+    fn extendReached(self: *Survivors, gpa: Allocator, new_len: usize) Allocator.Error!void {
+        std.debug.assert(new_len >= self.len);
+        const old_len = self.len;
+        const old_words = self.bits.len;
+        self.bits = try gpa.realloc(self.bits, wordCount(new_len));
+        @memset(self.bits[old_words..], 0);
+        self.len = new_len;
+        self.setRange(old_len, new_len - old_len);
+    }
+
+    /// How many bits each byte value has set.
+    const byte_counts: [256]u8 = blk: {
+        @setEvalBranchQuota(4096);
+        var counts: [256]u8 = undefined;
+        for (&counts, 0..) |*entry, byte| entry.* = @popCount(@as(u8, @intCast(byte)));
+        break :blk counts;
+    };
+
+    /// Count the survivors before each group of eight entries, returning
+    /// the total.
+    fn count(self: *Survivors, gpa: Allocator) Allocator.Error!u32 {
+        self.before = try gpa.alloc(u32, self.bits.len * 8 + 1);
+        var total: u32 = 0;
+        for (self.bits, 0..) |word, word_index| {
+            var rest = word;
+            for (self.before[word_index * 8 ..][0..8]) |*before| {
+                before.* = total;
+                total += byte_counts[@as(u8, @truncate(rest))];
+                rest >>= 8;
+            }
+        }
+        self.before[self.bits.len * 8] = total;
+        return total;
+    }
+
+    /// How many survivors come before `index`, for `index` up to `len`:
+    /// where the entry at `index`, or a range starting there, moves to.
+    fn rank(self: *const Survivors, index: u32) u32 {
+        std.debug.assert(index <= self.len);
+        const group = index / 8;
+        const bit: u3 = @intCast(index % 8);
+        if (bit == 0) return self.before[group];
+        const byte: u8 = @truncate(self.bits[index / 64] >> (@as(u6, @intCast(group % 8)) * 8));
+        return self.before[group] + byte_counts[byte & ((@as(u8, 1) << bit) - 1)];
+    }
+
+    /// Where a range of `amount` entries starting at `start` moves to.
+    /// An empty range addresses no entry, so only its count is kept: its
+    /// start need not lie inside the pool.
+    fn movedStart(self: *const Survivors, start: u32, amount: u32) u32 {
+        if (amount == 0 and start > self.len) return 0;
+        return self.rank(start);
+    }
+
+    /// The maximal runs of survivors, in order.
+    fn runs(self: *const Survivors) Runs {
+        return .{ .survivors = self, .index = 0 };
+    }
+
+    const Runs = struct {
+        survivors: *const Survivors,
+        index: usize,
+
+        fn next(self: *Runs) ?Run {
+            const bits = self.survivors.bits;
+            const len = self.survivors.len;
+            if (self.index >= len) return null;
+            var word_index = self.index / 64;
+            var word = bits[word_index] & (~@as(u64, 0) << @intCast(self.index % 64));
+            while (word == 0) {
+                word_index += 1;
+                if (word_index == bits.len) {
+                    self.index = len;
+                    return null;
+                }
+                word = bits[word_index];
+            }
+            const start = word_index * 64 + @ctz(word);
+            var clear = ~bits[word_index] & (~@as(u64, 0) << @intCast(start % 64));
+            while (clear == 0) {
+                word_index += 1;
+                if (word_index == bits.len) break;
+                clear = ~bits[word_index];
+            }
+            const end = if (clear == 0) len else @min(word_index * 64 + @ctz(clear), len);
+            self.index = end;
+            return .{ .start = start, .end = end };
+        }
+    };
+};
+
 /// Represents a store of descriptors
 ///
 /// Indexes into the list are typesafe
@@ -4549,11 +4694,6 @@ const DescStore = struct {
     /// Overwrite the word of descriptor `idx`, keeping its payload.
     fn setWord(self: *Self, idx: Idx, word: Desc.Word) void {
         self.backing.items(.word)[@backingInt(idx)] = word;
-    }
-
-    /// One word of descriptor `idx`'s payload.
-    inline fn getPayloadWord(self: *const Self, idx: Idx, comptime word: usize) u32 {
-        return self.backing.items(.payload)[@backingInt(idx)][word];
     }
 
     /// Overwrite one word of descriptor `idx`'s payload, keeping its word
@@ -4673,6 +4813,273 @@ test "canonicalizing for seal gives children representatives and flattens rows" 
     try std.testing.expectEqual(err_name, tags.items(.name)[0]);
     try std.testing.expectEqual(ok_name, tags.items(.name)[1]);
     try std.testing.expectEqualSlices(Var, &.{elem}, store.sliceVars(tags.items(.args)[1]));
+}
+
+test "sealing drops dead descriptors and renumbers the slots and selections naming survivors" {
+    const gpa = std.testing.allocator;
+    var idents = try base.Ident.Store.initCapacity(gpa, 1);
+    defer idents.deinit(gpa);
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const rigid: Content = .{ .rigid = Rigid.init(@bitCast(@as(u32, 7))) };
+    const a = try store.fresh();
+    const b = try store.freshFromContent(rigid);
+    const c = try store.fresh();
+    const tuple = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ a, c }) } } });
+    const d = try store.fresh();
+    const plan = testDerivedMapPlan(3, 0);
+    try store.setDerivedMapPlan(d, plan);
+    // Each merge orphans the first side's descriptor: a's and c's.
+    try store.union_(a, b, .{ .content = rigid, .rank = Rank.outermost });
+    try store.union_(c, d, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
+    const descs_before = store.descs.backing.len();
+
+    try store.canonicalizeAndSeal(&idents);
+    try std.testing.expectEqual(descs_before - 2, store.descs.backing.len());
+    try std.testing.expectEqual(descs_before - 2, store.root_metas.len());
+    for (store.slots.words.items) |word| switch (SlotStore.decode(word)) {
+        .root => |desc_idx| try std.testing.expect(@backingInt(desc_idx) < store.descs.backing.len()),
+        .redirect => {},
+    };
+    try std.testing.expectEqual(rigid, store.resolveVar(a).desc.content);
+    try std.testing.expectEqual(rigid, store.resolveVar(b).desc.content);
+    try std.testing.expectEqual(store.resolveVar(a).var_, store.resolveVar(b).var_);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, store.resolveVar(c).desc.content);
+    try std.testing.expectEqual(plan, store.derivedMapPlan(c).?);
+    try std.testing.expectEqual(plan, store.derivedMapPlan(d).?);
+    const elems = store.resolveVar(tuple).desc.content.structure.tuple.elems;
+    try std.testing.expectEqualSlices(Var, &.{ store.resolveVar(a).var_, store.resolveVar(c).var_ }, store.sliceVars(elems));
+}
+
+test "sealing drops unreached vars ranges and keeps shared ones shared" {
+    const gpa = std.testing.allocator;
+    var idents = try base.Ident.Store.initCapacity(gpa, 1);
+    defer idents.deinit(gpa);
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const x = try store.fresh();
+    const y = try store.fresh();
+    _ = try store.appendVars(&.{ x, y, x });
+    const shared = try store.appendVars(&.{ x, y });
+    const first = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = shared } } });
+    const second = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = shared } } });
+    _ = try store.appendVars(&.{y});
+    const func = try store.freshFromContent(try store.mkFuncUnboundWithEffectDeps(&.{x}, y, &.{ y, x }));
+    const vars_before = store.varsPoolLen();
+
+    try store.canonicalizeAndSeal(&idents);
+    // Dropped: the first range (four entries) and `.{y}` (two).
+    try std.testing.expectEqual(vars_before - 6, store.varsPoolLen());
+    const first_elems = store.resolveVar(first).desc.content.structure.tuple.elems;
+    const second_elems = store.resolveVar(second).desc.content.structure.tuple.elems;
+    try std.testing.expectEqual(first_elems, second_elems);
+    try std.testing.expectEqual(@as(u32, 1), @backingInt(first_elems.start));
+    try std.testing.expectEqualSlices(Var, &.{ x, y }, store.sliceVars(first_elems));
+    const func_content = store.resolveVar(func).desc.content.structure.fn_unbound;
+    try std.testing.expectEqualSlices(Var, &.{x}, store.sliceVars(func_content.args));
+    try std.testing.expectEqualSlices(Var, &.{ y, x }, store.sliceVars(func_content.effect_deps));
+    try std.testing.expectEqual(y, func_content.ret);
+}
+
+test "sealing drops unreached tags and moves reached tags' payload ranges" {
+    const gpa = std.testing.allocator;
+    var idents = try base.Ident.Store.initCapacity(gpa, 2);
+    defer idents.deinit(gpa);
+    const ok_name = try idents.insert(gpa, base.Ident.for_text("Ok"));
+    const err_name = try idents.insert(gpa, base.Ident.for_text("Err"));
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const x = try store.fresh();
+    const y = try store.fresh();
+    _ = try store.appendTags(&.{.{ .name = ok_name, .args = try store.appendVars(&.{x}) }});
+    const err_args = try store.appendVars(&.{ x, y });
+    const ok_args = try store.appendVars(&.{y});
+    const tail = try store.fresh();
+    const tag_union = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{
+            .{ .name = err_name, .args = err_args },
+            .{ .name = ok_name, .args = ok_args },
+            .{ .name = ok_name, .args = Var.SafeList.Range.empty() },
+        }),
+        .ext = tail,
+    } } });
+
+    try store.canonicalizeAndSeal(&idents);
+    try std.testing.expectEqual(@as(u32, 3), store.tags.len());
+    try std.testing.expectEqual(@as(u32, 5), store.varsPoolLen());
+    const tags = store.getTagsSlice(store.resolveVar(tag_union).desc.content.structure.tag_union.tags);
+    try std.testing.expectEqual(@as(usize, 3), tags.len);
+    try std.testing.expectEqualSlices(base.Ident.Idx, &.{ err_name, ok_name, ok_name }, tags.items(.name));
+    try std.testing.expectEqualSlices(Var, &.{ x, y }, store.sliceVars(tags.items(.args)[0]));
+    try std.testing.expectEqualSlices(Var, &.{y}, store.sliceVars(tags.items(.args)[1]));
+    try std.testing.expectEqual(@as(u32, 0), tags.items(.args)[2].count);
+}
+
+test "sealing keeps absorbed rows and drops the segments only they reached" {
+    const gpa = std.testing.allocator;
+    var idents = try base.Ident.Store.initCapacity(gpa, 4);
+    defer idents.deinit(gpa);
+    const a_name = try idents.insert(gpa, base.Ident.for_text("a"));
+    const b_name = try idents.insert(gpa, base.Ident.for_text("b"));
+    const ok_name = try idents.insert(gpa, base.Ident.for_text("Ok"));
+    const err_name = try idents.insert(gpa, base.Ident.for_text("Err"));
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const elem = try store.fresh();
+    const elem_alias = try store.freshRedirect(elem);
+    const tail = try store.fresh();
+    const inner = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try store.appendRecordFields(&.{.{ .name = a_name, .presence = .required(elem_alias) }}),
+        .ext = tail,
+    } } });
+    const outer = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try store.appendRecordFields(&.{.{ .name = b_name, .presence = .required(elem_alias) }}),
+        .ext = inner,
+    } } });
+    const inner_tags = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{.{ .name = ok_name, .args = try store.appendVars(&.{elem_alias}) }}),
+        .ext = tail,
+    } } });
+    const outer_tags = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{.{ .name = err_name, .args = try store.appendVars(&.{ elem_alias, elem }) }}),
+        .ext = inner_tags,
+    } } });
+
+    try store.canonicalizeAndSeal(&idents);
+    // The inner rows stay; the outer rows' own segments are replaced by
+    // their absorbed rows.
+    try std.testing.expectEqual(@as(u32, 3), store.record_fields.len());
+    try std.testing.expectEqual(@as(u32, 3), store.tags.len());
+    try std.testing.expectEqual(@as(u32, 5), store.varsPoolLen());
+
+    const inner_record = store.resolveVar(inner).desc.content.structure.record;
+    try std.testing.expectEqualSlices(base.Ident.Idx, &.{a_name}, store.getRecordFieldsSlice(inner_record.fields).items(.name));
+    const outer_record = store.resolveVar(outer).desc.content.structure.record;
+    try std.testing.expectEqual(tail, outer_record.ext);
+    const outer_fields = store.getRecordFieldsSlice(outer_record.fields);
+    try std.testing.expectEqualSlices(base.Ident.Idx, &.{ a_name, b_name }, outer_fields.items(.name));
+    for (outer_fields.items(.presence)) |presence| try std.testing.expectEqual(elem, presence.var_);
+
+    const inner_union = store.resolveVar(inner_tags).desc.content.structure.tag_union;
+    try std.testing.expectEqualSlices(Var, &.{elem}, store.sliceVars(store.getTagsSlice(inner_union.tags).items(.args)[0]));
+    const outer_union = store.resolveVar(outer_tags).desc.content.structure.tag_union;
+    try std.testing.expectEqual(tail, outer_union.ext);
+    const outer_tag_rows = store.getTagsSlice(outer_union.tags);
+    try std.testing.expectEqualSlices(base.Ident.Idx, &.{ err_name, ok_name }, outer_tag_rows.items(.name));
+    try std.testing.expectEqualSlices(Var, &.{ elem, elem }, store.sliceVars(outer_tag_rows.items(.args)[0]));
+    try std.testing.expectEqualSlices(Var, &.{elem}, store.sliceVars(outer_tag_rows.items(.args)[1]));
+}
+
+test "sealing keeps nominal declaration formals and moves them" {
+    const gpa = std.testing.allocator;
+    var idents = try base.Ident.Store.initCapacity(gpa, 1);
+    defer idents.deinit(gpa);
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const x = try store.fresh();
+    const backing = try store.fresh();
+    const backing_alias = try store.freshRedirect(backing);
+    _ = try store.appendVars(&.{ x, x });
+    const formal = try store.fresh();
+    const formal_alias = try store.freshRedirect(formal);
+    var decl = try testNominalDecl(@fromBackingInt(1), 3, backing_alias);
+    decl.formals = try store.appendVars(&.{formal_alias});
+    const decl_idx = try store.registerNominalDecl(decl);
+
+    try store.canonicalizeAndSeal(&idents);
+    try std.testing.expectEqual(@as(u32, 2), store.varsPoolLen());
+    const sealed = store.getNominalDecl(decl_idx);
+    try std.testing.expectEqual(backing, sealed.backing);
+    try std.testing.expectEqual(@as(u32, 1), @backingInt(sealed.formals.start));
+    try std.testing.expectEqualSlices(Var, &.{formal}, store.sliceVars(sealed.formals));
+}
+
+test "sealing a store with nothing dead keeps every entry in place" {
+    const gpa = std.testing.allocator;
+    var idents = try base.Ident.Store.initCapacity(gpa, 2);
+    defer idents.deinit(gpa);
+    const a_name = try idents.insert(gpa, base.Ident.for_text("a"));
+    const ok_name = try idents.insert(gpa, base.Ident.for_text("Ok"));
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const x = try store.fresh();
+    const x_alias = try store.freshRedirect(x);
+    const tail = try store.fresh();
+    const tuple = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ x_alias, tail }) } } });
+    const record = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try store.appendRecordFields(&.{.{ .name = a_name, .presence = .required(x_alias) }}),
+        .ext = tail,
+    } } });
+    const tag_union = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{.{ .name = ok_name, .args = try store.appendVars(&.{x_alias}) }}),
+        .ext = tail,
+    } } });
+    const plan = testDerivedMapPlan(1, 0);
+    try store.setDerivedMapPlan(tail, plan);
+    const descs_before = store.descs.backing.len();
+    const vars_before = store.varsPoolLen();
+    const slots_before = try gpa.dupe(u32, store.slots.words.items);
+    defer gpa.free(slots_before);
+
+    try store.canonicalizeAndSeal(&idents);
+    try std.testing.expectEqual(descs_before, store.descs.backing.len());
+    try std.testing.expectEqual(vars_before, store.varsPoolLen());
+    try std.testing.expectEqual(@as(u32, 1), store.record_fields.len());
+    try std.testing.expectEqual(@as(u32, 1), store.tags.len());
+    try std.testing.expectEqualSlices(u32, slots_before, store.slots.words.items);
+    try std.testing.expectEqual(plan, store.derivedMapPlan(tail).?);
+    try std.testing.expectEqualSlices(Var, &.{ x, tail }, store.sliceVars(store.resolveVar(tuple).desc.content.structure.tuple.elems));
+    const fields = store.getRecordFieldsSlice(store.resolveVar(record).desc.content.structure.record.fields);
+    try std.testing.expectEqual(x, fields.items(.presence)[0].var_);
+    const tags = store.getTagsSlice(store.resolveVar(tag_union).desc.content.structure.tag_union.tags);
+    try std.testing.expectEqualSlices(Var, &.{x}, store.sliceVars(tags.items(.args)[0]));
+}
+
+test "compaction survivors count, rank and run across word boundaries" {
+    const gpa = std.testing.allocator;
+    var survivors = try Survivors.init(gpa, 200);
+    defer survivors.deinit(gpa);
+    survivors.setRange(3, 2);
+    survivors.setRange(60, 10);
+    survivors.setRange(128, 64);
+    survivors.set(199);
+    survivors.setRange(150, 0);
+    try survivors.extendReached(gpa, 260);
+    try std.testing.expect(survivors.isSet(259));
+    try std.testing.expect(!survivors.isSet(198));
+
+    const expected_runs = [_]Survivors.Run{
+        .{ .start = 3, .end = 5 },
+        .{ .start = 60, .end = 70 },
+        .{ .start = 128, .end = 192 },
+        .{ .start = 199, .end = 260 },
+    };
+    var runs = survivors.runs();
+    for (expected_runs) |expected| try std.testing.expectEqual(expected, runs.next().?);
+    try std.testing.expectEqual(@as(?Survivors.Run, null), runs.next());
+
+    try std.testing.expectEqual(@as(u32, 2 + 10 + 64 + 61), try survivors.count(gpa));
+    try std.testing.expectEqual(@as(u32, 0), survivors.rank(0));
+    try std.testing.expectEqual(@as(u32, 1), survivors.rank(4));
+    try std.testing.expectEqual(@as(u32, 6), survivors.rank(64));
+    try std.testing.expectEqual(@as(u32, 12), survivors.rank(128));
+    try std.testing.expectEqual(@as(u32, 76), survivors.rank(192));
+    try std.testing.expectEqual(@as(u32, 137), survivors.rank(260));
+    try std.testing.expectEqual(@as(u32, 137), survivors.movedStart(260, 0));
+    try std.testing.expectEqual(@as(u32, 0), survivors.movedStart(300, 0));
+
+    var empty = try Survivors.init(gpa, 0);
+    defer empty.deinit(gpa);
+    var empty_runs = empty.runs();
+    try std.testing.expectEqual(@as(?Survivors.Run, null), empty_runs.next());
+    try std.testing.expectEqual(@as(u32, 0), try empty.count(gpa));
+    try std.testing.expectEqual(@as(u32, 0), empty.rank(0));
 }
 
 test "sealing releases checker-only buffers and unused column capacity" {

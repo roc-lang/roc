@@ -7099,13 +7099,17 @@ to name its class's storage root directly; every variable a descriptor, a type
 argument or record field pool, or a nominal declaration holds becomes its
 class's checked representative; and every record and tag union row absorbs the
 rows its extension chain reaches, so a sealed row is flat and its extension is
-never itself a row. Canonicalization walks the slots once, the variable and
-field pools once, and the live descriptors once. The descriptor pass reads
-each descriptor's kind and goes further only for a function, a record or a tag
-union, the kinds that hold a variable inline: it replaces a function's return
-or a row's extension by its representative, and resolving an extension also
-tells whether the extension is itself a row, so a row that must absorb its
-chain is found and flattened in that same step. A static-dispatch constraint
+never itself a row. The same step drops what no class reaches any more (see
+below). It walks the slots once, the live descriptors once, the reached pool
+entries once, and the live descriptors a second time. The first descriptor
+pass reads each descriptor's kind and goes further only for a function, a
+record or a tag union, the kinds that hold a variable inline: it replaces a
+function's return or a row's extension by its representative, and resolving an
+extension also tells whether the extension is itself a row, so a row that must
+absorb its chain is found and flattened in that same step. That pass also
+marks the pool entries each descriptor's final content reaches, so the pool
+pass canonicalizes only reached entries, moving each to its final position as
+it goes. A static-dispatch constraint
 keeps the function variable checking recorded for it, because that variable
 identifies the constraint; a reader resolves it with one slot read. The
 checked type id of a source type is its checked representative's bit pattern,
@@ -7133,19 +7137,22 @@ ids, and borrowed slices into the solved pools remain owned by the sealed
 store until its last consumer is done. No serialized layout changes at this
 boundary, and releasing checker buffers walks no types.
 
-Between canonicalization and sealing, the store drops what no class reaches
-any more (`compactForSeal`): the descriptors no slot names, which class merges
-orphan, and the vars, record field and tag pool entries no live descriptor,
-reached tag or nominal declaration's formals covers, which unification,
-instantiation and row flattening leave behind when they append the rows that
-replace a class's earlier ones. Survivors keep their order, so every range
-stays contiguous and only its start moves; descriptor indices move the same
-way, together with the slots and derived-map selections that name them.
-Static-dispatch constraints are not compacted, because checked outputs name
-them by index (`ModuleEnv.binding_scheme_codec_requirements`). Sealing then
-moves every column into storage that holds exactly its entries: an allocated
-column is reallocated to its length and a reservation returns its unused tail
-("Table Storage Lifecycles"). When checking finishes a module it does the same
+Canonicalization also drops what no class reaches any more
+(`canonicalizeAndCompactForSeal`): the descriptors no slot names, which class
+merges orphan, and the vars, record field and tag pool entries no live
+descriptor, reached tag or nominal declaration's formals covers, which
+unification, instantiation and row flattening leave behind when they append
+the rows that replace a class's earlier ones. Survivors keep their order, so
+every range stays contiguous and only its start moves; descriptor indices move
+the same way, together with the slots and derived-map selections that name
+them. An entry's new position is the number of survivors before it, read from
+a bitset of survivors, a count of the survivors before each group of eight
+entries, and a table of how many bits each byte value has set. Static-dispatch
+constraints are not compacted, because checked outputs name them by index
+(`ModuleEnv.binding_scheme_codec_requirements`). Sealing then moves every
+column into storage that holds exactly its entries: an allocated column is
+reallocated to its length and a reservation returns its unused tail ("Table
+Storage Lifecycles"). When checking finishes a module it does the same
 for the module's CIR node store, string literal bytes and side lists
 (`ModuleEnv.releaseUnusedCapacity`), so no finished module keeps growth room
 alive for the rest of the build.
