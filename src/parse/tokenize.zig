@@ -3179,7 +3179,7 @@ test "issue 13366: every tokenizer diagnostic covers the source it reports" {
         .{ .source = "n = 007.5e2", .tag = .LeadingZero, .start = 4, .end = 11 },
         .{ .source = "n = 0_12u8", .tag = .LeadingZero, .start = 4, .end = 10 },
         .{ .source = "n = 0X1F", .tag = .UppercaseBase, .start = 5, .end = 6 },
-        .{ .source = "n = 0_B11", .tag = .UppercaseBase, .start = 6, .end = 7 },
+        .{ .source = "n = 0B_11", .tag = .UppercaseBase, .start = 5, .end = 6 },
         .{ .source = "a\rb", .tag = .MisplacedCarriageReturn, .start = 1, .end = 2 },
         .{ .source = "a \x01 b", .tag = .AsciiControl, .start = 2, .end = 3 },
         .{ .source = "s = \"a\x01b\"", .tag = .NonPrintableUnicodeInStrLiteral, .start = 6, .end = 7 },
@@ -3506,6 +3506,15 @@ test "a base prefix is contiguous" {
     try testTokenization(gpa, "0__x10", &[_]Token.Tag{.MalformedNumberBadSuffix});
     try testTokenization(gpa, "-0_x10", &[_]Token.Tag{.MalformedNumberBadSuffix});
     try testTokenization(gpa, "0_x", &[_]Token.Tag{.MalformedNumberBadSuffix});
+
+    // An uppercase letter after a separator is not a base prefix either, so
+    // the tokenizer reports nothing about its case.
+    {
+        var messages: [4]Diagnostic = undefined;
+        var cursor = Cursor.init("0_B11", &messages);
+        try std.testing.expectEqual(Token.Tag.MalformedNumberBadSuffix, cursor.chompNumber());
+        try std.testing.expectEqual(@as(u32, 0), cursor.message_count);
+    }
 
     // Separators among the digits, including right after the prefix, and
     // trailing separators keep the number.
