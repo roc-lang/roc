@@ -15,7 +15,8 @@
 //! canonical names its identifiers stand for, the checked identity and owning
 //! artifact of every module its named types come from, the checked facts of
 //! every nominal declaration it holds, and per variable whether publication
-//! reached it and through which row-tail positions. A variable's row default
+//! reached it, through which row-tail positions, and whether its type reaches
+//! a flex or rigid variable. A variable's row default
 //! is the one rendering decision that depends on more than the variable: it
 //! comes from the row-tail positions publication reached it through
 //! (`reach`).
@@ -89,13 +90,17 @@ pub const SealedCapabilityRow = struct {
     }
 };
 
-/// Per solver variable: whether publication reached it, and through which
-/// row-tail positions.
+/// Per solver variable: whether publication reached it, through which
+/// row-tail positions, and whether its type reaches a flex or rigid variable.
 pub const SealedVarFacts = packed struct(u8) {
     reached: bool = false,
     record_tail: bool = false,
     tag_tail: bool = false,
-    _padding: u5 = 0,
+    /// Whether the checked type of this class representative reaches a flex
+    /// or rigid variable through the children its payload renders
+    /// (`markIdentityVariables`). Meaningful only on representatives.
+    identity_variables: bool = false,
+    _padding: u4 = 0,
 };
 
 /// Append the variable of every one of `facts` publication reached to `out`,
@@ -227,6 +232,12 @@ pub const SealedTypeView = struct {
     /// Whether publication reached `var_`'s class.
     pub fn reaches(self: SealedTypeView, var_: Var) bool {
         return self.facts(self.representative(var_)).reached;
+    }
+
+    /// Whether `var_`'s checked type reaches a flex or rigid variable.
+    /// `var_` is its class's checked representative.
+    pub fn hasIdentityVariables(self: SealedTypeView, var_: Var) bool {
+        return self.facts(var_).identity_variables;
     }
 
     /// The kind of `var_`'s checked type: the tag `payload` returns, read
@@ -462,8 +473,9 @@ pub const SealedTypeColumns = struct {
 /// Fill `columns` for `env`, whose solver store checking sealed: intern the
 /// canonical name of every identifier the store's types use, resolve every
 /// module identity they name and every nominal declaration the store holds,
-/// and mark no variable reached. `reach` marks the variables publication
-/// reaches.
+/// mark every class representative whose type reaches a flex or rigid
+/// variable, and mark no variable reached. `reach` marks the variables
+/// publication reaches.
 pub fn buildColumns(
     allocator: Allocator,
     env: *const ModuleEnv,
@@ -486,6 +498,7 @@ pub fn buildColumns(
     defer builder.origins.deinit();
 
     try columns.var_facts.appendNTimes(allocator, .{}, @intCast(type_store.len()));
+    try markIdentityVariables(allocator, env, columns.var_facts.items());
 
     var seen = try std.DynamicBitSetUnmanaged.initEmpty(allocator, type_store.descs.backing.len());
     defer seen.deinit(allocator);
@@ -524,6 +537,134 @@ pub fn buildColumns(
                 builtin,
             ),
         });
+    }
+}
+
+/// Mark every class representative of `env`'s sealed store whose checked type
+/// reaches a flex or rigid variable: one that is one, or one with a child that
+/// reaches one, over the children `SealedTypeView.payload` renders. The facts
+/// are computed backward from the variables over reversed child edges, so a
+/// cyclic class is classified exactly and each edge is visited once. Every
+/// representative is classified, reached or not: a class's fact depends only
+/// on the sealed store, so it holds however publication later reaches it.
+fn markIdentityVariables(allocator: Allocator, env: *const ModuleEnv, var_facts: []SealedVarFacts) Allocator.Error!void {
+    const type_store = &env.types;
+    const count = var_facts.len;
+
+    // Edges into each representative, counted and then placed by child.
+    const starts = try allocator.alloc(u32, count + 1);
+    defer allocator.free(starts);
+    @memset(starts, 0);
+    var counter = IdentityEdgeCounter{ .env = env, .starts = starts };
+    for (0..count) |raw| {
+        const var_: Var = @fromBackingInt(@intCast(raw));
+        if (type_store.resolveVarWord(var_).var_ != var_) continue;
+        counter.parent = @intCast(raw);
+        identityChildren(env, var_, &counter);
+    }
+    for (1..count + 1) |index| starts[index] += starts[index - 1];
+
+    const parents = try allocator.alloc(u32, starts[count]);
+    defer allocator.free(parents);
+    const fill = try allocator.dupe(u32, starts[0..count]);
+    defer allocator.free(fill);
+    var placer = IdentityEdgePlacer{ .env = env, .fill = fill, .parents = parents };
+    var pending: std.ArrayList(u32) = .empty;
+    defer pending.deinit(allocator);
+    for (0..count) |raw| {
+        const var_: Var = @fromBackingInt(@intCast(raw));
+        if (type_store.resolveVarWord(var_).var_ != var_) continue;
+        switch (type_store.kindOf(var_)) {
+            .flex, .rigid => {
+                var_facts[raw].identity_variables = true;
+                try pending.append(allocator, @intCast(raw));
+            },
+            .err, .field_presence, .alias, .empty_record, .empty_tag_union, .record, .tuple, .nominal_type, .fn_pure, .fn_unbound, .fn_effectful, .tag_union => {},
+        }
+        placer.parent = @intCast(raw);
+        identityChildren(env, var_, &placer);
+    }
+
+    while (pending.pop()) |child| {
+        for (parents[starts[child]..starts[child + 1]]) |parent| {
+            if (var_facts[parent].identity_variables) continue;
+            var_facts[parent].identity_variables = true;
+            try pending.append(allocator, parent);
+        }
+    }
+}
+
+const IdentityEdgeCounter = struct {
+    env: *const ModuleEnv,
+    starts: []u32,
+    parent: u32 = 0,
+
+    fn child(self: *IdentityEdgeCounter, var_: Var) void {
+        self.starts[@as(usize, @backingInt(self.env.types.resolveVarWord(var_).var_)) + 1] += 1;
+    }
+};
+
+const IdentityEdgePlacer = struct {
+    env: *const ModuleEnv,
+    fill: []u32,
+    parents: []u32,
+    parent: u32 = 0,
+
+    fn child(self: *IdentityEdgePlacer, var_: Var) void {
+        const slot = &self.fill[@backingInt(self.env.types.resolveVarWord(var_).var_)];
+        self.parents[slot.*] = self.parent;
+        slot.* += 1;
+    }
+};
+
+/// Call `sink.child` for each child of the representative `var_` whose fact
+/// decides `var_`'s identity-variable fact: the children
+/// `SealedTypeView.payload` renders, read by kind from the stored descriptor.
+/// A flex or rigid variable decides its own fact, so its constraints are not
+/// children here.
+fn identityChildren(env: *const ModuleEnv, var_: Var, sink: anytype) void {
+    const type_store = &env.types;
+    const desc_idx = type_store.resolveDescIdx(var_);
+    switch (type_store.kindAt(desc_idx)) {
+        .err, .field_presence, .flex, .rigid, .empty_record, .empty_tag_union => {},
+        .alias => {
+            const alias = type_store.aliasAt(desc_idx);
+            sink.child(type_store.getAliasBackingVar(alias));
+            for (type_store.sliceAliasArgs(alias)) |arg| sink.child(arg);
+        },
+        .record => {
+            const record = type_store.recordAt(desc_idx);
+            if (record.fields.len() == 0 and checked_artifact.checkedRecordExtIsEmpty(env, record.ext)) return;
+            for (type_store.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                switch (presence.decode()) {
+                    .required => |type_var| sink.child(type_var),
+                    .unknown => |unknown| {
+                        // A presence variable renders as a child only while
+                        // it is a flex variable. Its other contents, field
+                        // presence and error, reach no variable, so listing
+                        // it either way gives the same fact.
+                        sink.child(unknown.presence);
+                        sink.child(unknown.var_);
+                    },
+                }
+            }
+            sink.child(record.ext);
+        },
+        .tuple => for (type_store.sliceVars(type_store.tupleAt(desc_idx).elems)) |elem| sink.child(elem),
+        .nominal_type => for (type_store.sliceNominalArgs(type_store.nominalAt(desc_idx))) |arg| sink.child(arg),
+        .fn_pure, .fn_effectful, .fn_unbound => {
+            const func = type_store.funcAt(desc_idx);
+            for (type_store.sliceVars(func.args)) |arg| sink.child(arg);
+            sink.child(func.ret);
+        },
+        .tag_union => {
+            const tag_union = type_store.tagUnionAt(desc_idx);
+            if (tag_union.tags.len() == 0 and checked_artifact.checkedTagUnionExtIsEmpty(env, tag_union.ext)) return;
+            for (type_store.getTagsSlice(tag_union.tags).items(.args)) |args| {
+                for (type_store.sliceVars(args)) |arg| sink.child(arg);
+            }
+            sink.child(tag_union.ext);
+        },
     }
 }
 
@@ -756,6 +897,10 @@ fn expectViewRendersPublishedTypes(source: []const u8) ViewTestError!void {
         const var_: Var = @fromBackingInt(@intCast(raw));
         if (view.representative(var_) != var_) continue;
         try expectRenders(view, var_);
+        // The published identity-variable fact agrees with a walk of the
+        // rendered types.
+        const id = type_ids.fromVar(var_);
+        try std.testing.expectEqual(try publication.store.view().walkIdentityVariablesForTest(id), try publication.store.rootContainsIdentityVariables(id));
         rendered += 1;
     }
     try std.testing.expect(rendered != 0);
