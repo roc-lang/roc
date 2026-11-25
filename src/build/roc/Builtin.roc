@@ -25736,127 +25736,73 @@ quad_swap = |items, start, len, swap, compare_items| {
 	var $reverse_head = start
 	var $count = len // 8
 	var $skip_tail_swap = False
-	# The run the previous block of eight continued, if any.
-	var $run = NoRun
+	# Whether the previous block of eight was reversed, continuing a reversed
+	# run that starts at `$reverse_head`.
+	var $reversing = False
 	var $done = False
 	# `$count` blocks of eight remain from `$block` on, so while it is not
-	# zero the eight slots from `$block` exist; in the `Reversed` state a
-	# block came before this one, so the slot before `$block` exists too.
+	# zero the eight slots from `$block` exist; while `$reversing` a block
+	# came before this one, so the slot before `$block` exists too.
 	while !$done {
 		block = $block
 		at = |k| plus_infallible(block, k)
-		match $run {
-			NoRun => {
-				if $count == 0 {
-					$done = True
-				} else {
-					$count = minus_infallible($count, 1)
-					v1 = if (sort_after($items, block, at(1), compare_items)) 1 else 0
-					v2 = if (sort_after($items, at(2), at(3), compare_items)) 1 else 0
-					v3 = if (sort_after($items, at(4), at(5), compare_items)) 1 else 0
-					v4 = if (sort_after($items, at(6), at(7), compare_items)) 1 else 0
-					pairs = plus_infallible(plus_infallible(v1, v2), plus_infallible(v3, v4))
-					if pairs == 0 {
-						if !sort_after($items, at(1), at(2), compare_items) and !sort_after($items, at(3), at(4), compare_items) and !sort_after($items, at(5), at(6), compare_items) {
-							$run = Ordered
-						} else {
-							(merged, scratch) = quad_swap_merge($items, block, $swap, compare_items)
-							$items = merged
-							$swap = scratch
-						}
-					} else if pairs == 4 and sort_after($items, at(1), at(2), compare_items) and sort_after($items, at(3), at(4), compare_items) and sort_after($items, at(5), at(6), compare_items) {
-						$reverse_head = block
-						$run = Reversed
-					} else {
-						(merged, scratch) = quad_swap_merge(quad_swap_pairs($items, block, v1, v2, v3, v4), block, $swap, compare_items)
-						$items = merged
-						$swap = scratch
+		if $count == 0 {
+			if $reversing {
+				before = minus_infallible(block, 1)
+				# Reverse the run, including the tail if it continues it. The
+				# tail holds `rem` items, so each probe exists when its `rem`
+				# test lets it run.
+				rem = len % 8
+				tail_reversed = (rem < 7 or sort_after($items, at(5), at(6), compare_items)) and (rem < 6 or sort_after($items, at(4), at(5), compare_items)) and (rem < 5 or sort_after($items, at(3), at(4), compare_items)) and (rem < 4 or sort_after($items, at(2), at(3), compare_items)) and (rem < 3 or sort_after($items, at(1), at(2), compare_items)) and (rem < 2 or sort_after($items, block, at(1), compare_items)) and (rem < 1 or sort_after($items, before, block, compare_items))
+				if tail_reversed {
+					$items = quad_reversal($items, $reverse_head, minus_infallible(at(rem), 1))
+					if $reverse_head == start {
+						return { items: $items, swap: $swap, sorted: True }
 					}
-					$block = at(8)
+					$skip_tail_swap = True
+				} else {
+					$items = quad_reversal($items, $reverse_head, before)
 				}
 			}
-			Ordered => {
-				# The previous block was ordered; see whether this one continues it.
-				if $count == 0 {
-					$done = True
+			$done = True
+		} else {
+			$count = minus_infallible($count, 1)
+			# 1 for a pair whose first item orders after its second.
+			v1 = if (sort_after($items, block, at(1), compare_items)) 1 else 0
+			v2 = if (sort_after($items, at(2), at(3), compare_items)) 1 else 0
+			v3 = if (sort_after($items, at(4), at(5), compare_items)) 1 else 0
+			v4 = if (sort_after($items, at(6), at(7), compare_items)) 1 else 0
+			pairs = plus_infallible(plus_infallible(v1, v2), plus_infallible(v3, v4))
+			if ($reversing and pairs == 4 and sort_after($items, minus_infallible(block, 1), block, compare_items) and sort_after($items, at(1), at(2), compare_items) and sort_after($items, at(3), at(4), compare_items) and sort_after($items, at(5), at(6), compare_items)) {
+				# Still reversed, across the block boundary too.
+			} else {
+				# Any reversed run ends before this block.
+				ended_reversal = $reversing
+				if ended_reversal {
+					$items = quad_reversal($items, $reverse_head, minus_infallible(block, 1))
+				}
+				if pairs == 0 and !sort_after($items, at(1), at(2), compare_items) and !sort_after($items, at(3), at(4), compare_items) and !sort_after($items, at(5), at(6), compare_items) {
+					# Already ordered.
+					$reversing = False
+				} else if pairs == 4 and sort_after($items, at(1), at(2), compare_items) and sort_after($items, at(3), at(4), compare_items) and sort_after($items, at(5), at(6), compare_items) {
+					$reverse_head = block
+					$reversing = True
 				} else {
-					$count = minus_infallible($count, 1)
-					v1 = if (sort_after($items, block, at(1), compare_items)) 1 else 0
-					v2 = if (sort_after($items, at(2), at(3), compare_items)) 1 else 0
-					v3 = if (sort_after($items, at(4), at(5), compare_items)) 1 else 0
-					v4 = if (sort_after($items, at(6), at(7), compare_items)) 1 else 0
-					pairs = plus_infallible(plus_infallible(v1, v2), plus_infallible(v3, v4))
+					# Order the block's pairs, then merge them. After a reversed
+					# run they are merged only when they do not already form a
+					# sorted run.
 					if pairs != 0 {
-						if pairs == 4 and sort_after($items, at(1), at(2), compare_items) and sort_after($items, at(3), at(4), compare_items) and sort_after($items, at(5), at(6), compare_items) {
-							$reverse_head = block
-							$run = Reversed
-						} else {
-							(merged, scratch) = quad_swap_merge(quad_swap_pairs($items, block, v1, v2, v3, v4), block, $swap, compare_items)
-							$items = merged
-							$swap = scratch
-							$run = NoRun
-						}
-					} else if (!sort_after($items, at(1), at(2), compare_items) and !sort_after($items, at(3), at(4), compare_items) and !sort_after($items, at(5), at(6), compare_items)) {
-						# Still ordered.
-					} else {
+						$items = quad_swap_pairs($items, block, v1, v2, v3, v4)
+					}
+					if !ended_reversal or sort_after($items, at(1), at(2), compare_items) or sort_after($items, at(3), at(4), compare_items) or sort_after($items, at(5), at(6), compare_items) {
 						(merged, scratch) = quad_swap_merge($items, block, $swap, compare_items)
 						$items = merged
 						$swap = scratch
-						$run = NoRun
 					}
-					$block = at(8)
+					$reversing = False
 				}
 			}
-			Reversed => {
-				# The previous block was reversed; see whether this one continues it.
-				before = minus_infallible(block, 1)
-				if $count == 0 {
-					# Reverse the run, including the tail if it continues it. The
-					# tail holds `rem` items, so each probe exists when its `rem`
-					# test lets it run.
-					rem = len % 8
-					tail_reversed = (rem < 7 or sort_after($items, at(5), at(6), compare_items)) and (rem < 6 or sort_after($items, at(4), at(5), compare_items)) and (rem < 5 or sort_after($items, at(3), at(4), compare_items)) and (rem < 4 or sort_after($items, at(2), at(3), compare_items)) and (rem < 3 or sort_after($items, at(1), at(2), compare_items)) and (rem < 2 or sort_after($items, block, at(1), compare_items)) and (rem < 1 or sort_after($items, before, block, compare_items))
-					if tail_reversed {
-						$items = quad_reversal($items, $reverse_head, minus_infallible(at(rem), 1))
-						if $reverse_head == start {
-							return { items: $items, swap: $swap, sorted: True }
-						}
-						$skip_tail_swap = True
-					} else {
-						$items = quad_reversal($items, $reverse_head, before)
-					}
-					$done = True
-				} else {
-					$count = minus_infallible($count, 1)
-					# 1 for a pair that is in order, so not reversed.
-					u1 = if (sort_after($items, block, at(1), compare_items)) 0 else 1
-					u2 = if (sort_after($items, at(2), at(3), compare_items)) 0 else 1
-					u3 = if (sort_after($items, at(4), at(5), compare_items)) 0 else 1
-					u4 = if (sort_after($items, at(6), at(7), compare_items)) 0 else 1
-					ordered_pairs = plus_infallible(plus_infallible(u1, u2), plus_infallible(u3, u4))
-					if (ordered_pairs == 0 and sort_after($items, before, block, compare_items) and sort_after($items, at(1), at(2), compare_items) and sort_after($items, at(3), at(4), compare_items) and sort_after($items, at(5), at(6), compare_items)) {
-						# Still reversed, across the block boundary too.
-					} else {
-						$items = quad_reversal($items, $reverse_head, before)
-						if ordered_pairs == 4 and !sort_after($items, at(1), at(2), compare_items) and !sort_after($items, at(3), at(4), compare_items) and !sort_after($items, at(5), at(6), compare_items) {
-							$run = Ordered
-						} else if ordered_pairs == 0 and sort_after($items, at(1), at(2), compare_items) and sort_after($items, at(3), at(4), compare_items) and sort_after($items, at(5), at(6), compare_items) {
-							$reverse_head = block
-						} else {
-							# An unordered block: order its pairs in place, then
-							# merge them unless they already form a sorted run.
-							$items = quad_swap_pairs($items, block, minus_infallible(1, u1), minus_infallible(1, u2), minus_infallible(1, u3), minus_infallible(1, u4))
-							if sort_after($items, at(1), at(2), compare_items) or sort_after($items, at(3), at(4), compare_items) or sort_after($items, at(5), at(6), compare_items) {
-								(merged, scratch) = quad_swap_merge($items, block, $swap, compare_items)
-								$items = merged
-								$swap = scratch
-							}
-							$run = NoRun
-						}
-					}
-					$block = at(8)
-				}
-			}
+			$block = at(8)
 		}
 	}
 	if !$skip_tail_swap {

@@ -27,11 +27,28 @@ pub const RenderTargetPreference = enum {
     language_server,
 };
 
+/// The working directory that displayed paths are spelled relative to.
+/// `dir` is canonical (every symlink resolved), so an absolute path is
+/// resolved the same way before the two are compared; comparing a canonical
+/// directory with a path spelled through a symlink yields a relative path that
+/// names the wrong file when read against the directory the user typed.
+pub const SourcePathBase = struct {
+    /// Canonical absolute working directory. Borrowed for the duration of
+    /// rendering.
+    dir: []const u8,
+    /// Context passed to `canonicalize`.
+    ctx: *const anyopaque,
+    /// The canonical spelling of the absolute `path`, allocated with `gpa`,
+    /// or null when `path` cannot be resolved (it does not exist yet, or it is
+    /// not accessible).
+    canonicalize: *const fn (ctx: *const anyopaque, path: []const u8, gpa: Allocator) Allocator.Error!?[]const u8,
+};
+
 /// Configuration for the reporting system.
 pub const ReportingConfig = struct {
-    /// Absolute working directory for terminal source locations. Borrowed for
-    /// the duration of rendering; null preserves the supplied paths.
-    source_path_base: ?[]const u8 = null,
+    /// Working directory for terminal source locations; null preserves the
+    /// supplied paths.
+    source_path_base: ?SourcePathBase = null,
 
     /// Color preference
     color_preference: ColorPreference,

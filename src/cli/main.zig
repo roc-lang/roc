@@ -303,8 +303,7 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     build_env.resolution_config = opts.resolution_config;
     build_env.setWatchInputTracking(opts.track_watch_inputs);
     build_env.setPostCheckPublicationMode(opts.post_check_publication_mode);
-    const object_target = roc_target.host_cpu.nativeTarget();
-    build_env.boxy_object_lowering = lowering_policy.compileTimeObjectLowering(object_target);
+    build_env.boxy_object_lowering = lowering_policy.compileTimeObjectLowering(inProcessUnitTarget());
     build_env.boxy_object_lowering.?.embedded = embeddedBoxyUnits();
     if (opts.runtime_lowering) |config| build_env.setRuntimeLowering(config);
     if (opts.source_dir_override) |source_dir| {
@@ -327,6 +326,20 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     }
 
     return build_env;
+}
+
+/// The target of every unit whose code runs in the compiler's own process:
+/// compile-time evaluation's objects, `roc test`'s test units and a glue
+/// spec's units. It is the native target at the CPU level this machine
+/// executes, so a baseline machine never runs code compiled above its level,
+/// and the three share the units they have in common.
+fn inProcessUnitTarget() RocTarget {
+    return roc_target.host_cpu.nativeTarget();
+}
+
+test "units run in the compiler's process are compiled for the CPU level this machine executes" {
+    try std.testing.expectEqual(roc_target.host_cpu.level(), inProcessUnitTarget().cpuLevel());
+    try std.testing.expectEqual(inProcessUnitTarget(), lowering_policy.compileTimeObjectLowering(inProcessUnitTarget()).target);
 }
 
 const CacheManager = compile.CacheManager;
@@ -7000,7 +7013,9 @@ fn buildRunRootImage(
         target,
         .{},
     );
-    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
+    // The pieces take the static data (`compileToPieces`).
+    var static_data_owned = true;
+    defer if (static_data_owned) compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, lowered);
     defer ctx.gpa.free(entrypoints);
 
@@ -7011,6 +7026,7 @@ fn buildRunRootImage(
     object_compiler.post_check_executor = build_env.postCheckExecutor();
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
     object_compiler.internal_entrypoints = true;
+    static_data_owned = false;
     var pieces = object_compiler.compileToPieces(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
@@ -9037,7 +9053,7 @@ fn preloadWasmObject(
     };
 }
 
-fn configuredWasmStackBytes(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) usize {
+fn configuredWasmStackBytes(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) u64 {
     if (args.wasm_stack_size) |bytes| return bytes;
     if (wasm) |config| {
         if (config.initial_stack_size) |bytes| return bytes;
@@ -9049,7 +9065,7 @@ fn configuredWasmStackBytes(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTarg
 /// platform's targets config specifies one. Null lets the linker size memory
 /// from the data segments plus the stack, which is always sufficient for
 /// those regions. The host must grow memory for its heap independently.
-fn configuredWasmMinimumMemory(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) ?usize {
+fn configuredWasmMinimumMemory(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) ?u64 {
     if (args.wasm_memory) |bytes| return bytes;
     if (wasm) |config| {
         if (config.minimum_memory) |bytes| return bytes;
@@ -9250,6 +9266,11 @@ fn staticDataFunctionPointerTargets(ctx: *CliCtx, static_data_exports: []const b
     return names.toOwnedSlice(ctx.arena);
 }
 
+/// The problem reported for a wasm memory configuration `target`'s program does not fit.
+fn wasmMemoryLayoutProblem(target: []const u8, problem: wasm_link.MemoryProblem) cli_problem.CliProblem {
+    return .{ .wasm_memory_layout = .{ .what = @tagName(problem.what), .needed = problem.needed, .configured = problem.configured, .target = target } };
+}
+
 /// Links one relocatable wasm app object against the platform's wasm inputs
 /// into `final_output_path`.
 fn linkWasmOutput(
@@ -9266,18 +9287,33 @@ fn linkWasmOutput(
     const stack_size = configuredWasmStackBytes(args, link_inputs.wasm);
     const global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null;
     const maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null;
-    switch (linker.wasmStackLayout(global_base)) {
-        .stack_first => if (maximum_memory) |bytes| {
+    const initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm);
+    // The maximum the link declares, as `linker.link` passes it to wasm-ld.
+    const declared_maximum: ?u64 = switch (linker.wasmStackLayout(global_base)) {
+        .stack_first => maximum: {
             const limit = linker.stackFirstMaximumMemory(stack_size);
-            if (bytes > limit) return ctx.fail(.{ .wasm_maximum_memory_too_large = .{
-                .target = link_inputs.target_name,
-                .maximum_memory = bytes,
-                .limit = limit,
-                .stack_size = stack_size,
-            } });
+            if (maximum_memory) |bytes| {
+                if (bytes > limit) return ctx.fail(.{ .wasm_maximum_memory_too_large = .{
+                    .target = link_inputs.target_name,
+                    .maximum_memory = bytes,
+                    .limit = limit,
+                    .stack_size = stack_size,
+                } });
+            }
+            // The stack is the lowest region of memory, so memory holds at
+            // least the stack. wasm-ld reads a maximum of 0 as no maximum at
+            // all, so a maximum the stack does not fit under never reaches it.
+            const maximum = maximum_memory orelse limit;
+            if (maximum < stack_size) return ctx.fail(wasmMemoryLayoutProblem(link_inputs.target_name, .{
+                .what = .maximum_memory_too_small,
+                .needed = stack_size,
+                .configured = maximum,
+            }));
+            break :maximum maximum;
         },
-        .data_first => {},
-    }
+        .data_first => maximum_memory,
+    };
+    var memory_problem: ?linker.WasmMemoryProblem = null;
     const link_config = linker.LinkConfig{
         .target_format = .wasm,
         .target_abi = null,
@@ -9290,8 +9326,9 @@ fn linkWasmOutput(
         .extra_args = &.{},
         .can_exit_early = false,
         .disable_output = false,
-        .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
+        .wasm_initial_memory = initial_memory,
         .wasm_maximum_memory = maximum_memory,
+        .wasm_memory_problem = &memory_problem,
         .wasm_stack_size = stack_size,
         .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
         .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
@@ -9304,6 +9341,21 @@ fn linkWasmOutput(
         .scratch_dir = scratch_dir,
     };
     linker.link(ctx, link_config) catch |err| {
+        // wasm-ld finds a size too small only when that size was passed to it.
+        if (memory_problem) |problem| {
+            const configured: ?u64 = switch (problem.what) {
+                .initial_memory_too_small => initial_memory,
+                .maximum_memory_too_small => declared_maximum,
+            };
+            if (configured) |bytes| return ctx.fail(wasmMemoryLayoutProblem(link_inputs.target_name, .{
+                .what = switch (problem.what) {
+                    .initial_memory_too_small => .initial_memory_too_small,
+                    .maximum_memory_too_small => .maximum_memory_too_small,
+                },
+                .needed = problem.needed,
+                .configured = bytes,
+            }));
+        }
         return failLink(ctx, err, link_inputs.target_name);
     };
 }
@@ -9904,7 +9956,10 @@ fn compileLlvmAppObject(
         codegen.enable_default_platform_runtime = enable_default_platform_runtime;
         codegen.enable_default_platform_hosted_calls = enable_default_platform_hosted_calls;
         codegen.enable_default_platform_diagnostics = enable_default_platform_hosted_calls and emit_debug_info;
-        codegen.optimize_for_size = llvmOptimizationLevel(args.opt) == .size;
+        codegen.optimization = switch (llvmOptimizationLevel(args.opt)) {
+            .size => .size,
+            .speed => .speed,
+        };
         codegen.stack_checks = stack_checks;
         codegen.debug_producer = "roc " ++ @import("compiler_version").compiler_version;
         defer codegen.deinit();
@@ -11830,7 +11885,7 @@ const WasmFastLink = struct {
             error.UndefinedExports => return ctx.fail(.{ .wasm_exports_undefined = .{ .symbols = outcome.undefined_exports, .target = target_name } }),
             error.ImportConflict => return ctx.fail(.{ .wasm_import_conflict = .{ .symbol = outcome.conflict.?, .target = target_name } }),
             error.EngineLimit => return ctx.fail(.{ .wasm_engine_limit = .{ .what = outcome.limit.?.what, .count = outcome.limit.?.count, .limit = outcome.limit.?.limit, .target = target_name } }),
-            error.MemoryLayout => return ctx.fail(.{ .wasm_memory_layout = .{ .what = @tagName(outcome.memory.?.what), .needed = outcome.memory.?.needed, .configured = outcome.memory.?.configured, .target = target_name } }),
+            error.MemoryLayout => return ctx.fail(wasmMemoryLayoutProblem(target_name, outcome.memory.?)),
             error.ParameterLimit => {
                 for (outcome.parameters) |problem| try ctx.addProblem(.{ .wasm_host_parameter_limit = .{
                     .symbol = problem.symbol,
@@ -12453,7 +12508,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer ctx.gpa.free(entrypoints);
 
     const static_data_exports = try buildCommandStaticData(ctx, &reporter, root_artifact, imported_artifacts, relation_artifacts, &lowered, target);
-    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
+    // Root pieces take the static data (`compileToPieces`) and keep it alive
+    // while they live; every other path releases it here.
+    var static_data_owned = true;
+    defer if (static_data_owned) compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     if (target_arch == .wasm32) {
         reporter.begin(code_generation_phase_name);
@@ -12489,6 +12547,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
 
     if (boxy_library) |library| {
+        static_data_owned = false;
         var root_pieces = object_compiler.compileToPieces(
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
@@ -15574,7 +15633,7 @@ fn runCompiledTestPlan(
 /// no unit of the app has in view.
 fn unitImageTestApplies(opt: cli_args.OptLevel, no_cache: bool, strategy: base.SpecializationStrategy, root: *const check.CheckedArtifact.CheckedModuleArtifact) bool {
     if (root.module_identity.kind == .default_app) return false;
-    return unitImageRunApplies(opt, no_cache, strategy, RocTarget.detectNative());
+    return unitImageRunApplies(opt, no_cache, strategy, inProcessUnitTarget());
 }
 
 /// Whether this compiler can load test units' images into its own process.
@@ -15595,43 +15654,36 @@ const UnitTestImage = struct {
     hosted_symbols: []const []const u8,
 };
 
-/// A `roc test` program as test units: built or restored, then loaded into
-/// the compiler's own process, where their wrappers run the test roots.
-const UnitImageTestProgram = struct {
+/// Unit images loaded into the compiler's own process. Each image's imports
+/// bind to the in-process host's symbols, the builtins' implementations, the
+/// compiler's Boxy runtime, the exports of the images loaded before it, and,
+/// for a hosted symbol, a stub that crashes exactly as a hosted call in an
+/// in-process evaluation does. Every image is loaded after everything it
+/// imports from.
+const LoadedUnitImages = struct {
     gpa: Allocator,
-    tables: RunUnitTables,
-    library: ?BoxyLibraryObjects = null,
-    /// The root unit's image, when the root pairs with a platform. Owned.
-    root_image: ?[]align(backend.dev.UnitImage.alignment.toByteUnits()) u8 = null,
     loaded: std.ArrayList(backend.dev.UnitImageLoader.Loaded) = .empty,
     /// What the loaded images export, by name: a procedure two units define
-    /// binds to the first image loaded.
+    /// binds to the first image loaded. The names borrow the images' bytes.
     exports: std.StringHashMapUnmanaged(backend.dev.UnitImageLoader.Binding) = .empty,
     /// Each hosted symbol the units call, bound to a stub that crashes as
     /// a hosted call in an in-process test does.
     hosted: std.StringHashMapUnmanaged(usize) = .empty,
     hosted_stubs: ?backend.dev.ExecutableMemory = null,
-    /// Every loaded image's expect sites, in load order: the program-wide
-    /// site table.
-    sites: std.ArrayList(compile.boxy_object_cache.ExpectSiteRecord) = .empty,
-    wrappers: std.AutoHashMapUnmanaged(UnitTestRootKey, eval.Inspected.UnitImageBoolRootEntryFn) = .empty,
+    /// What the images' code is run for, which a hosted stub's crash names.
+    hosted_unavailable_while: []const u8 = "evaluating at compile time",
 
-    fn deinit(self: *UnitImageTestProgram) void {
+    fn deinit(self: *LoadedUnitImages) void {
         for (self.loaded.items) |*image| image.unload();
         self.loaded.deinit(self.gpa);
         self.exports.deinit(self.gpa);
         self.hosted.deinit(self.gpa);
         if (self.hosted_stubs) |*stubs| stubs.deinit();
-        self.sites.deinit(self.gpa);
-        self.wrappers.deinit(self.gpa);
-        if (self.library) |library| library.deinit(self.gpa);
-        if (self.root_image) |image| self.gpa.free(image);
-        self.tables.deinit();
     }
 
     /// Binds one image's imports while it loads.
     const LoadContext = struct {
-        program: *UnitImageTestProgram,
+        images: *LoadedUnitImages,
         site_base: u32,
 
         fn resolve(context: *anyopaque, name: []const u8) ?backend.dev.UnitImageLoader.Binding {
@@ -15641,26 +15693,34 @@ const UnitImageTestProgram = struct {
             // code calls it.
             if (builtins_registry.BuiltinFn.fromSymbolName(name)) |builtin_fn| return .{ .address = builtin_fn.wrapperAddress(), .function = true };
             if (backend.dev.HostSplice.hostFunction(name)) |address| return .{ .address = address, .function = true };
-            if (self.program.exports.get(name)) |binding| return binding;
-            if (self.program.hosted.get(name)) |address| return .{ .address = address, .function = true };
+            if (self.images.exports.get(name)) |binding| return binding;
+            if (self.images.hosted.get(name)) |address| return .{ .address = address, .function = true };
             return null;
         }
     };
 
-    /// Load `image`, whose sites start at the next program-wide site id.
-    fn load(self: *UnitImageTestProgram, image: UnitTestImage) CliMainError!void {
-        const view = backend.dev.UnitImage.View.init(image.bytes) catch |err| base.invariant("roc test invariant violated: an admitted test unit image does not read: {s}", .{@errorName(err)});
-        var context: LoadContext = .{ .program = self, .site_base = @intCast(self.sites.items.len) };
+    /// Load the image in `bytes`, which outlives it, binding its expect-site
+    /// base to `site_base`, and record what it exports. `code_locations` is
+    /// the image's `CodeLocations`, or empty. The returned image is valid
+    /// until the next load.
+    fn load(
+        self: *LoadedUnitImages,
+        bytes: []align(backend.dev.UnitImage.alignment.toByteUnits()) const u8,
+        site_base: u32,
+        code_locations: []const u8,
+    ) CliMainError!*const backend.dev.UnitImageLoader.Loaded {
+        const view = backend.dev.UnitImage.View.init(bytes) catch |err| base.invariant("unit image invariant violated: an admitted unit image does not read: {s}", .{@errorName(err)});
+        var context: LoadContext = .{ .images = self, .site_base = site_base };
         var diagnostic: backend.dev.UnitImageLoader.Diagnostic = .{};
         try self.loaded.ensureUnusedCapacity(self.gpa, 1);
         var loaded = backend.dev.UnitImageLoader.load(self.gpa, view, .{ .context = &context, .resolve = LoadContext.resolve }, &diagnostic) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.FlushInstructionCacheFailed => return error.FlushInstructionCacheFailed,
-            error.UndefinedImport => base.invariant("roc test invariant violated: a test unit's image imports {s}, which nothing loaded defines", .{diagnostic.name}),
-            error.SiteOutOfRange => base.invariant("roc test invariant violated: a test unit's image has a reference to '{s}' out of its field's reach", .{diagnostic.name}),
+            error.UndefinedImport => base.invariant("unit image invariant violated: a unit's image imports {s}, which nothing loaded defines", .{diagnostic.name}),
+            error.SiteOutOfRange => base.invariant("unit image invariant violated: a unit's image has a reference to '{s}' out of its field's reach", .{diagnostic.name}),
         };
         errdefer loaded.unload();
-        (backend.dev.CodeLocations{ .bytes = image.tests.code_locations }).dumpAllocationMap(@intFromPtr(loaded.text().ptr));
+        (backend.dev.CodeLocations{ .bytes = code_locations }).dumpAllocationMap(@intFromPtr(loaded.text().ptr));
         const symbols = view.symbols();
         try self.exports.ensureUnusedCapacity(self.gpa, @intCast(view.exports().len));
         for (view.exports()) |index| {
@@ -15669,26 +15729,21 @@ const UnitImageTestProgram = struct {
             if (entry.found_existing) continue;
             entry.value_ptr.* = .{ .address = loaded.symbolAddress(symbol), .function = symbol.type == @backingInt(backend.dev.UnitImage.SymbolType.func) };
         }
-        try self.wrappers.ensureUnusedCapacity(self.gpa, @intCast(image.tests.test_roots.len));
-        for (image.tests.test_roots) |root| {
-            if (root.symbol >= symbols.len) base.invariant("roc test invariant violated: a test unit's wrapper names symbol {d} of {d}", .{ root.symbol, symbols.len });
-            self.wrappers.putAssumeCapacity(.{ .module = root.module, .root_index = root.root_index }, @ptrFromInt(loaded.symbolAddress(symbols[root.symbol])));
-        }
-        try self.sites.appendSlice(self.gpa, image.tests.expect_sites);
         self.loaded.appendAssumeCapacity(loaded);
+        return &self.loaded.items[self.loaded.items.len - 1];
     }
 
     /// Bind every one of `names` the units call to a stub that reports the
     /// call as a crash, as a hosted call in an in-process test does. The
     /// stub calls `roc_crashed(message, length)` in the host's own calling
     /// convention and traps after it.
-    fn bindHostedStubs(self: *UnitImageTestProgram, arena: Allocator, names: []const []const u8) CliMainError!void {
+    fn bindHostedStubs(self: *LoadedUnitImages, arena: Allocator, names: []const []const u8) CliMainError!void {
         if (names.len == 0) return;
         const stub_size: usize = if (builtin.cpu.arch == .aarch64) 15 * 4 else 4 + 10 + 10 + 10 + 2 + 2;
         const crashed = @import("builtins").in_process_host.Symbol.roc_crashed.address();
         const code = try arena.alloc(u8, names.len * stub_size);
         for (names, 0..) |name, index| {
-            const message = try std.fmt.allocPrint(arena, "hosted function `{s}` is not available while evaluating at compile time", .{name});
+            const message = try std.fmt.allocPrint(arena, "hosted function `{s}` is not available while {s}", .{ name, self.hosted_unavailable_while });
             const stub = code[index * stub_size ..][0..stub_size];
             if (builtin.cpu.arch == .aarch64) {
                 // movz/movk x0, message; movz/movk x1, length; movz/movk
@@ -15730,6 +15785,44 @@ const UnitImageTestProgram = struct {
     }
 };
 
+/// A `roc test` program as test units: built or restored, then loaded into
+/// the compiler's own process, where their wrappers run the test roots.
+const UnitImageTestProgram = struct {
+    gpa: Allocator,
+    tables: RunUnitTables,
+    library: ?BoxyLibraryObjects = null,
+    /// The root unit's image, when the root pairs with a platform. Owned.
+    root_image: ?[]align(backend.dev.UnitImage.alignment.toByteUnits()) u8 = null,
+    images: LoadedUnitImages,
+    /// Every loaded image's expect sites, in load order: the program-wide
+    /// site table.
+    sites: std.ArrayList(compile.boxy_object_cache.ExpectSiteRecord) = .empty,
+    wrappers: std.AutoHashMapUnmanaged(UnitTestRootKey, eval.Inspected.UnitImageBoolRootEntryFn) = .empty,
+
+    fn deinit(self: *UnitImageTestProgram) void {
+        self.images.deinit();
+        self.sites.deinit(self.gpa);
+        self.wrappers.deinit(self.gpa);
+        if (self.library) |library| library.deinit(self.gpa);
+        if (self.root_image) |image| self.gpa.free(image);
+        self.tables.deinit();
+    }
+
+    /// Load `image`, whose sites start at the next program-wide site id.
+    fn load(self: *UnitImageTestProgram, image: UnitTestImage) CliMainError!void {
+        try self.wrappers.ensureUnusedCapacity(self.gpa, @intCast(image.tests.test_roots.len));
+        try self.sites.ensureUnusedCapacity(self.gpa, image.tests.expect_sites.len);
+        const loaded = try self.images.load(image.bytes, @intCast(self.sites.items.len), image.tests.code_locations);
+        const view = backend.dev.UnitImage.View.init(image.bytes) catch unreachable; // `LoadedUnitImages.load` read the same bytes
+        const symbols = view.symbols();
+        for (image.tests.test_roots) |root| {
+            if (root.symbol >= symbols.len) base.invariant("roc test invariant violated: a test unit's wrapper names symbol {d} of {d}", .{ root.symbol, symbols.len });
+            self.wrappers.putAssumeCapacity(.{ .module = root.module, .root_index = root.root_index }, @ptrFromInt(loaded.symbolAddress(symbols[root.symbol])));
+        }
+        self.sites.appendSliceAssumeCapacity(image.tests.expect_sites);
+    }
+};
+
 /// Build or restore `roc test`'s test units and load them: a test unit
 /// per module the planned roots need (design.md "Unit-Image Test
 /// Execution"), each restored from the per-module cache or lowered and
@@ -15743,8 +15836,8 @@ fn prepareUnitImageTests(
 ) CliMainError!UnitImageTestProgram {
     if (comptime !unit_image_tests_supported) unreachable; // unitImageTestApplies holds only on a compiler that loads unit images
     const Artifact = check.CheckedArtifact.CheckedModuleArtifact;
-    const target = RocTarget.detectNative();
-    var program: UnitImageTestProgram = .{ .gpa = ctx.gpa, .tables = RunUnitTables.init(ctx) };
+    const target = inProcessUnitTarget();
+    var program: UnitImageTestProgram = .{ .gpa = ctx.gpa, .tables = RunUnitTables.init(ctx), .images = .{ .gpa = ctx.gpa } };
     errdefer program.deinit();
     program.tables.digests = try build_env.boxyLinkDigests();
     const cache_manager = build_env.cache_manager orelse base.invariant("roc test invariant violated: a test run from unit images has no cache manager", .{});
@@ -15810,7 +15903,7 @@ fn prepareUnitImageTests(
     var seen_hosted = std.StringHashMap(void).init(ctx.arena);
     for (library.hosted_symbols) |name| if (!(try seen_hosted.getOrPut(name)).found_existing) try hosted_names.append(ctx.arena, name);
     if (root_unit) |unit| for (unit.hosted_symbols) |name| if (!(try seen_hosted.getOrPut(name)).found_existing) try hosted_names.append(ctx.arena, name);
-    try program.bindHostedStubs(ctx.arena, hosted_names.items);
+    try program.images.bindHostedStubs(ctx.arena, hosted_names.items);
     // Every unit's dependencies are loaded before it: the builtins, then
     // the rest after everything they depend on, then the root unit.
     const order = try unitLoadOrder(ctx.gpa, build_env, library.artifacts);
@@ -15819,7 +15912,7 @@ fn prepareUnitImageTests(
     if (root_unit) |unit| try program.load(unit);
     reporter.end();
     reporter.recordCounters("Test units", &.{
-        .{ .name = "Images loaded", .count = program.loaded.items.len },
+        .{ .name = "Images loaded", .count = program.images.loaded.items.len },
         .{ .name = "Expect sites", .count = program.sites.items.len },
         .{ .name = "Test root wrappers", .count = program.wrappers.count() },
     });
@@ -15959,7 +16052,9 @@ fn unitTestRootImage(
     finishPostCheckLowering(reporter, &spec_timing, .boxy);
 
     const static_data = try compile.static_data_exports.buildStaticData(ctx.gpa, .{ .root = modules.root, .imports = imported_artifacts }, &lowered, target, .{});
-    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
+    // The pieces take the static data (`compileToPieces`).
+    var static_data_owned = true;
+    defer if (static_data_owned) compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
     var wrappers = try compile.boxy_unit.testEntrypoints(ctx.gpa, &lowered, module_digests.items, root_indices.items);
     defer wrappers.deinit(ctx.gpa);
     reporter.begin(devBackendPhaseName(target));
@@ -15970,6 +16065,7 @@ fn unitTestRootImage(
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
     object_compiler.internal_entrypoints = true;
     object_compiler.relocatable_expect_sites = true;
+    static_data_owned = false;
     var pieces = object_compiler.compileToPieces(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
@@ -18756,16 +18852,167 @@ fn replReportingConfig(ctx: *CliCtx, mode: ReplMode) reporting.ReportingConfig {
 
 const glue = @import("glue");
 
-const RocGlueError = glue.GlueError || CliError || SourceRefResolveError || error{InvalidArguments};
+const RocGlueError = glue.GlueError || CliMainError || SourceRefResolveError || error{InvalidArguments};
+
+/// Whether `roc glue` runs its glue spec from unit images loaded into the
+/// compiler's own process (design.md "Unit-Image Glue Execution"): the same
+/// switch on optimization, strategy, cache presence and host as a composed
+/// dev run of a program for this machine. Every other glue run compiles the
+/// spec to a plugin object.
+fn unitImageGlueApplies(opt: cli_args.OptLevel, no_cache: bool, strategy: base.SpecializationStrategy) bool {
+    return unitImageRunApplies(opt, no_cache, strategy, inProcessUnitTarget());
+}
+
+/// A glue spec as unit images: its units built as a composed dev run builds
+/// them, each restored from the per-module cache or lowered and filed there,
+/// then loaded into the compiler's own process, where the root unit's
+/// `roc_make_glue` wrapper runs the spec. Everything the loaded generator
+/// borrows lives here, so this outlives the glue run.
+const UnitImageGlueGenerator = struct {
+    ctx: *CliCtx,
+    glue_spec: []const u8,
+    /// What the units lower against. The build environment's compile-time
+    /// evaluation records into it, so it outlives the build environment.
+    tables: ?RunUnitTables = null,
+    build_env: ?BuildEnv = null,
+    units: ?RunUnits = null,
+    imported_artifacts: []check.CheckedArtifact.ImportedModuleView = &.{},
+    relation_artifacts: []check.CheckedArtifact.ImportedModuleView = &.{},
+    boundary: ?lir.CheckedPipeline.BoxyEntrypointBoundary = null,
+    images: LoadedUnitImages,
+    /// Why `load` failed, which the command returns in place of the glue
+    /// module's summary of it.
+    failure: ?CliMainError = null,
+
+    fn init(ctx: *CliCtx, glue_spec: []const u8) UnitImageGlueGenerator {
+        return .{ .ctx = ctx, .glue_spec = glue_spec, .images = .{ .gpa = ctx.gpa, .hosted_unavailable_while = "running a glue spec" } };
+    }
+
+    fn deinit(self: *UnitImageGlueGenerator) void {
+        const gpa = self.ctx.gpa;
+        self.images.deinit();
+        if (self.boundary) |*boundary| boundary.deinit();
+        gpa.free(self.relation_artifacts);
+        gpa.free(self.imported_artifacts);
+        if (self.units) |*units| units.deinit(gpa);
+        if (self.build_env) |*build_env| build_env.deinit();
+        if (self.tables) |*tables| tables.deinit();
+    }
+
+    /// What the cache served of the glue spec and what this run built, as
+    /// `roc build --verbose` reports them.
+    fn printCacheStats(self: *UnitImageGlueGenerator) std.Io.Writer.Error!void {
+        const build_env = if (self.build_env) |*env| env else return;
+        const stats = build_env.getBuildStats();
+        const stdout = self.ctx.io.stdout();
+        try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{ stats.modules_total, stats.cache_hits, stats.modules_compiled });
+        try stdout.print("    Boxy objects: {} cached, {} built\n", .{ stats.boxy_objects_restored, stats.boxy_objects_built });
+    }
+
+    fn source(self: *UnitImageGlueGenerator) glue.GeneratorSource {
+        return .{ .context = self, .load = load };
+    }
+
+    fn load(context: *anyopaque) glue.GlueError!glue.LoadedGenerator {
+        const self: *UnitImageGlueGenerator = @ptrCast(@alignCast(context));
+        return self.prepare() catch |err| {
+            self.failure = err;
+            return error.CompilationFailed;
+        };
+    }
+
+    fn notGlueSpec(self: *UnitImageGlueGenerator, reporter: *progress.Reporter, comptime reason: []const u8) CliMainError {
+        reporter.fail();
+        const display_path = try reporting.displayPath(self.ctx.gpa, self.glue_spec, self.ctx.reportConfig(.stderr).source_path_base);
+        defer self.ctx.gpa.free(display_path);
+        self.ctx.io.stderr().print("Error: '{s}' is not a glue spec: " ++ reason ++ "\n", .{display_path}) catch {};
+        return error.InvalidArguments;
+    }
+
+    fn prepare(self: *UnitImageGlueGenerator) CliMainError!glue.LoadedGenerator {
+        if (comptime !unit_image_tests_supported) unreachable; // unitImageGlueApplies holds only on a compiler that loads unit images
+        const ctx = self.ctx;
+        const target = inProcessUnitTarget();
+        var reporter = makeReporter(ctx, "roc glue", false);
+        defer reporter.deinit();
+        reporter.start();
+        errdefer reporter.fail();
+
+        self.tables = RunUnitTables.init(ctx);
+        const tables = &self.tables.?;
+        self.build_env = try initRunBuildEnv(ctx, .{
+            .source_dir_override = null,
+            .synthetic_default_app = null,
+            .max_threads = null,
+            .resolution_config = .{},
+            .enable_checked_cache = true,
+            .reporter = &reporter,
+            .specialization_strategy = .boxy,
+        });
+        const build_env = &self.build_env.?;
+        try discoverRunDependencies(ctx, build_env, self.glue_spec, self.glue_spec, &reporter);
+        self.units = try lowerRunUnits(ctx, build_env, tables, target, self.glue_spec, &reporter, false);
+        const units = &self.units.?;
+        const root_artifact = units.root_artifact;
+
+        const selected_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(ctx.gpa, root_artifact.root_requests.runtime_requests.items());
+        defer ctx.gpa.free(selected_roots);
+        const request = for (selected_roots) |root| {
+            if (std.mem.eql(u8, nativeEntrypointSymbolName(root_artifact, root), shim_symbols.roc_make_glue)) break root;
+        } else return self.notGlueSpec(&reporter, "its platform does not provide `" ++ shim_symbols.roc_make_glue ++ "`.");
+
+        self.imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
+        self.relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
+        // Restored or built, the units leave this run no lowered program to
+        // read the entrypoint's layouts from; its host boundary commits them.
+        self.boundary = try lir.CheckedPipeline.BoxyEntrypointBoundary.init(
+            ctx.gpa,
+            .{ .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, self.relation_artifacts), .imports = self.imported_artifacts },
+            request,
+            base.target.TargetUsize.native,
+        );
+        const boundary = &self.boundary.?;
+        if (boundary.argLayouts().len != 1) return self.notGlueSpec(&reporter, "`" ++ shim_symbols.roc_make_glue ++ "` must take exactly one argument.");
+
+        reporter.begin("Unit Image Load");
+        const library = &units.library.?;
+        var hosted_names: std.ArrayList([]const u8) = .empty;
+        var seen_hosted = std.StringHashMap(void).init(ctx.arena);
+        for (library.hosted_symbols) |name| if (!(try seen_hosted.getOrPut(name)).found_existing) try hosted_names.append(ctx.arena, name);
+        for (units.hosted_symbols) |name| if (!(try seen_hosted.getOrPut(name)).found_existing) try hosted_names.append(ctx.arena, name);
+        try self.images.bindHostedStubs(ctx.arena, hosted_names.items);
+        // Every unit's dependencies are loaded before it: the builtins, then
+        // the rest after everything they depend on, then the root unit.
+        const order = try unitLoadOrder(ctx.gpa, build_env, library.artifacts);
+        defer ctx.gpa.free(order);
+        for (order) |index| _ = try self.images.load(library.images[index], 0, &.{});
+        _ = try self.images.load(units.root_image.?, 0, &.{});
+        reporter.end();
+        reporter.finish();
+
+        const entry = self.images.exports.get(shim_symbols.roc_make_glue) orelse
+            base.invariant("roc glue invariant violated: the root unit's image exports no `{s}` wrapper", .{shim_symbols.roc_make_glue});
+        return .{
+            .entry = @ptrFromInt(entry.address),
+            .boundary = .{
+                .layouts = boundary.layouts(),
+                .schemas = &boundary.runtime_value_schemas,
+                .types_layout = boundary.argLayouts()[0],
+                .ret_layout = boundary.retLayout(),
+            },
+        };
+    }
+};
 
 fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
     // The glue spec accepts a local path, a bundle URL, or an installed
     // shorthand. An installed glue entry also carries the plugin object that
-    // was built with --opt=speed at install time, so it is loaded directly
-    // instead of compiling a plugin on the fly.
+    // was built specialized with --opt=speed at install time. It is already
+    // compiled, so `--opt` does not apply to it and it is loaded directly;
+    // only an explicit `--specialize=no` compiles the installed source.
     var glue_spec = args.glue_spec;
     var installed_plugin_path: ?[]const u8 = null;
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt);
+    var specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt);
     switch (install_store.classifySourceRef(args.glue_spec)) {
         .local_path => {},
         .url => glue_spec = (try resolveUrlBundle(ctx, args.glue_spec)).source_path,
@@ -18779,14 +19026,28 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
                 return error.InvalidArguments;
             }
             glue_spec = entry.paths.main_roc_path;
-            if (specialization_strategy == .lss) {
+            if ((args.specialization_strategy orelse .lss) == .lss) {
                 installed_plugin_path = entry.artifact_path;
+                specialization_strategy = .lss;
             }
         },
     }
     const platform_path = (try resolveSourceArg(ctx, args.platform_path, false)).path;
 
-    return glue.rocGlue(ctx.gpa, ctx.io.stderr(), ctx.io.stdout(), .{
+    // An installed plugin is the only generator considered for its shorthand.
+    var unit_generator: if (unit_image_tests_supported) ?UnitImageGlueGenerator else ?void = null;
+    defer if (comptime unit_image_tests_supported) if (unit_generator) |*generator| generator.deinit();
+    if (comptime unit_image_tests_supported) {
+        if (installed_plugin_path == null and unitImageGlueApplies(args.opt, args.no_cache, specialization_strategy)) {
+            unit_generator = UnitImageGlueGenerator.init(ctx, glue_spec);
+        }
+    }
+    const generator_source: ?glue.GeneratorSource = if (comptime unit_image_tests_supported)
+        (if (unit_generator) |*generator| generator.source() else null)
+    else
+        null;
+
+    glue.rocGlue(ctx.gpa, ctx.io.stderr(), ctx.io.stdout(), .{
         .glue_spec = glue_spec,
         .output_dir = args.output_dir,
         .platform_path = platform_path,
@@ -18794,6 +19055,7 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
         .specialization_strategy = specialization_strategy,
         .no_cache = args.no_cache,
         .installed_plugin_path = installed_plugin_path,
+        .generator = generator_source,
         .opt = switch (args.opt) {
             .dev => .dev,
             .size => .size,
@@ -18801,6 +19063,9 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
             .interpreter => unreachable, // the glue command's --opt accepts only dev, size, and speed
         },
     }, ctx.io.std_io) catch |err| {
+        if (comptime unit_image_tests_supported) {
+            if (unit_generator) |*generator| if (generator.failure) |failure| return failure;
+        }
         switch (err) {
             error.GluePluginStampMismatch, error.GluePluginUnavailable => if (installed_plugin_path != null) {
                 try ctx.io.stderr().print(
@@ -18824,6 +19089,9 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
         }
         return err;
     };
+    if (comptime unit_image_tests_supported) {
+        if (args.verbose) if (unit_generator) |*generator| try generator.printCacheStats();
+    }
 }
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.

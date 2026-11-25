@@ -18,6 +18,7 @@ const UnderlineRegion = @import("document.zig").UnderlineRegion;
 const ColorPalette = @import("style.zig").ColorPalette;
 const ColorUtils = @import("style.zig").ColorUtils;
 pub const ReportingConfig = @import("config.zig").ReportingConfig;
+const SourcePathBase = @import("config.zig").SourcePathBase;
 
 /// TODO find a better solution this is temporary to make CI happy
 ///
@@ -39,12 +40,15 @@ pub fn sanitisePathForSnapshots(path: []const u8) []const u8 {
 }
 
 /// Spell a file path the way every report shows it: relative to the caller's
-/// absolute working directory `working_dir`. Relative paths and virtual source
-/// names already have their display spelling.
-pub fn displayPath(gpa: Allocator, path: []const u8, working_dir: ?[]const u8) Allocator.Error![]u8 {
+/// working directory `working_dir`, comparing the canonical spellings of both.
+/// An absolute path that cannot be resolved is shown as given. Relative paths
+/// and virtual source names already have their display spelling.
+pub fn displayPath(gpa: Allocator, path: []const u8, working_dir: ?SourcePathBase) Allocator.Error![]u8 {
     if (working_dir) |base| {
         if (std.fs.path.isAbsolute(path)) {
-            return std.fs.path.relative(gpa, base, null, base, path);
+            const canonical = try base.canonicalize(base.ctx, path, gpa) orelse return gpa.dupe(u8, path);
+            defer gpa.free(canonical);
+            return std.fs.path.relative(gpa, base.dir, null, base.dir, canonical);
         }
         return gpa.dupe(u8, path);
     }
@@ -1616,7 +1620,7 @@ test "terminal source locations are relative to the configured working directory
     };
     inline for (cases) |case| {
         var config = ReportingConfig.initColorTerminal();
-        config.source_path_base = base;
+        config.source_path_base = canonicalTestPathBase(base);
         config.color_preference = .never;
         var report = try Report.init(gpa, "Type Mismatch", "The types do not match.", .runtime_error);
         defer report.deinit();
@@ -1682,7 +1686,7 @@ test "every target shows annotated paths relative to the working directory" {
     const relative = "src" ++ sep ++ "main.roc";
     inline for (.{ ReportingConfig.initColorTerminal(), ReportingConfig.initMarkdown(), ReportingConfig.initHtml(), ReportingConfig.initLsp() }) |initial| {
         var config = initial;
-        config.source_path_base = base;
+        config.source_path_base = canonicalTestPathBase(base);
         config.color_preference = .never;
         var report = try Report.initWithPath(gpa, "File Not Found", "I could not find the file ", path, ".", .fatal);
         defer report.deinit();
@@ -1695,6 +1699,45 @@ test "every target shows annotated paths relative to the working directory" {
         try renderReportWithConfig(&report, &out.writer, config);
         try testing.expect(std.mem.find(u8, out.written(), base) == null);
         try testing.expectEqual(@as(usize, 3), std.mem.count(u8, out.written(), relative));
+    }
+}
+
+/// A working directory for tests whose absolute paths are already spelled
+/// canonically.
+fn canonicalTestPathBase(dir: []const u8) SourcePathBase {
+    const Identity = struct {
+        const ctx: u8 = 0;
+        fn canonicalize(_: *const anyopaque, path: []const u8, gpa: Allocator) Allocator.Error!?[]const u8 {
+            return try gpa.dupe(u8, path);
+        }
+    };
+    return .{ .dir = dir, .ctx = &Identity.ctx, .canonicalize = Identity.canonicalize };
+}
+
+test "a path spelled through a symlink is shown relative to the canonical working directory" {
+    if (builtin.os.tag == .windows) return;
+    // `/link` is a symlink to `/real/deep/tree`; the working directory is
+    // `/real/deep/tree/app`, spelled canonically.
+    const Resolver = struct {
+        const ctx: u8 = 0;
+        fn canonicalize(_: *const anyopaque, path: []const u8, gpa: Allocator) Allocator.Error!?[]const u8 {
+            const link = "/link/";
+            if (std.mem.startsWith(u8, path, link)) return try std.mem.concat(gpa, u8, &.{ "/real/deep/tree/", path[link.len..] });
+            if (std.mem.startsWith(u8, path, "/missing/")) return null;
+            return try gpa.dupe(u8, path);
+        }
+    };
+    const base: SourcePathBase = .{ .dir = "/real/deep/tree/app", .ctx = &Resolver.ctx, .canonicalize = Resolver.canonicalize };
+    const cases = .{
+        .{ "/link/out/bundle.tar.zst", "../out/bundle.tar.zst" },
+        .{ "/link/app/main.roc", "main.roc" },
+        .{ "/real/deep/tree/out/bundle.tar.zst", "../out/bundle.tar.zst" },
+        .{ "/missing/out/bundle.tar.zst", "/missing/out/bundle.tar.zst" },
+    };
+    inline for (cases) |case| {
+        const displayed = try displayPath(testing.allocator, case[0], base);
+        defer testing.allocator.free(displayed);
+        try testing.expectEqualStrings(case[1], displayed);
     }
 }
 

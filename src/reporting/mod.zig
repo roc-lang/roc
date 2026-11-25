@@ -13,6 +13,7 @@ pub const ColorPalette = @import("style.zig").ColorPalette;
 pub const ColorUtils = @import("style.zig").ColorUtils;
 pub const ColorPreference = @import("config.zig").ColorPreference;
 pub const ReportingConfig = @import("config.zig").ReportingConfig;
+pub const SourcePathBase = @import("config.zig").SourcePathBase;
 pub const Severity = @import("severity.zig").Severity;
 pub const RenderTarget = @import("renderer.zig").RenderTarget;
 pub const RenderTargetPreference = @import("config.zig").RenderTargetPreference;

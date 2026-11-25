@@ -280,7 +280,7 @@ pub const CoffWriter = struct {
 
     // Borrowed section contents, valid until write completes
     text: []const u8,
-    rdata: []const u8,
+    rdata: UnitImage.PiecedBytes,
     /// Size of `.bss`, which the file declares without storing bytes.
     zero_fill_size: u64,
 
@@ -316,7 +316,7 @@ pub const CoffWriter = struct {
             .allocator = allocator,
             .arch = arch,
             .text = &.{},
-            .rdata = &.{},
+            .rdata = .{},
             .zero_fill_size = 0,
             .symbols = .empty,
             .text_relocs = .empty,
@@ -350,7 +350,7 @@ pub const CoffWriter = struct {
         self.zero_fill_size = size;
     }
 
-    pub fn setRodata(self: *Self, rodata: []const u8) void {
+    pub fn setRodata(self: *Self, rodata: UnitImage.PiecedBytes) void {
         self.rdata = rodata;
     }
 
@@ -906,7 +906,8 @@ pub const CoffWriter = struct {
         try sections.append(arena, .{ .class = .text, .bytes = self.text, .size = self.text.len, .addralign = 16 });
         var rdata_index: ?u32 = null;
         if (has_rdata) {
-            const rdata = try arena.dupe(u8, self.rdata);
+            const rdata = try arena.alloc(u8, @intCast(self.rdata.len));
+            self.rdata.writeTo(rdata);
             for (self.rdata_relocs.items) |rel| std.mem.writeInt(i64, rdata[rel.offset..][0..8], rel.addend, .little);
             rdata_index = @intCast(sections.items.len);
             try sections.append(arena, .{ .class = .rodata, .bytes = rdata, .size = rdata.len, .addralign = 16 });
@@ -1366,7 +1367,7 @@ pub const CoffWriter = struct {
         output.appendSliceAssumeCapacity(self.text);
 
         if (has_rdata) {
-            output.appendSliceAssumeCapacity(self.rdata);
+            self.rdata.appendAssumeCapacity(output);
             for (self.rdata_relocs.items) |rel| {
                 std.mem.writeInt(i64, output.items[@as(usize, rdata_offset) + rel.offset ..][0..8], rel.addend, .little);
             }
@@ -1569,7 +1570,8 @@ test "coff records more than 0xffff relocations in the extended form" {
     const rdata = try std.testing.allocator.alloc(u8, count * 8);
     defer std.testing.allocator.free(rdata);
     @memset(rdata, 0);
-    writer.setRodata(rdata);
+    const rdata_piece = [1]UnitImage.SectionPiece{.{ .offset = 0, .bytes = rdata }};
+    writer.setRodata(.whole(&rdata_piece));
     for (0..count) |idx| {
         try writer.addRdataRelocation(@intCast(idx * 8), target, 0);
     }
