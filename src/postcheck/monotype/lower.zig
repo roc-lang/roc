@@ -18094,7 +18094,7 @@ const DraftDeferredConstUse = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftDeferredConstUse) == 888);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftDeferredConstUse) == 896);
 }
 
 /// A pending compile-time callable root currently being expanded into the
@@ -18368,7 +18368,7 @@ const DraftDeferredStoredCodecRestore = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftDeferredStoredCodecRestore) == 1280);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftDeferredStoredCodecRestore) == 1296);
 }
 
 const DraftCodecLocalProcContext = struct {
@@ -19114,7 +19114,7 @@ const DraftNestedSpec = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftNestedSpec) == 488);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftNestedSpec) == 496);
 }
 
 /// Coordinator intent for one fully graph-sealed nested specialization.
@@ -49155,16 +49155,18 @@ const BodyContext = struct {
         // specialization entered names it by its closed type instead.
         var arg = args[own];
         var frame = self.evidence;
-        const root_id = while (true) switch (arg) {
-            .root => |root_id| break root_id,
-            .forwarded => |requirement| {
-                const entry = frame.entered_by orelse return null;
-                const entry_args = self.view.templates.literalEdgeArgs(entry.edge);
-                if (requirement >= entry_args.len) Common.invariant("a scope's use supplies fewer literal arguments than the scope forwards");
-                arg = entry_args[requirement];
-                frame = entry.use_frame;
-            },
-            .unbound => Common.invariant("a polymorphic constant's use names an unbound instance"),
+        const root_id = named: {
+            while (true) switch (arg) {
+                .root => |root_id| break :named root_id,
+                .forwarded => |requirement| {
+                    const entry = frame.entered_by orelse return null;
+                    const entry_args = self.view.templates.literalEdgeArgs(entry.edge);
+                    if (requirement >= entry_args.len) Common.invariant("a scope's use supplies fewer literal arguments than the scope forwards");
+                    arg = entry_args[requirement];
+                    frame = entry.use_frame;
+                },
+                .unbound => Common.invariant("a polymorphic constant's use names an unbound instance"),
+            };
         };
         const root = self.view.compile_time_roots.root(root_id);
         const argument = root.literal_argument orelse Common.invariant("a use's constant instance names a root that is no instance");

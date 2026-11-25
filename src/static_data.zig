@@ -8,7 +8,6 @@ const builtin = @import("builtin");
 const invariant = @import("base").invariant;
 const collections = @import("collections");
 
-const builtin = @import("builtin");
 const builtins = @import("builtins");
 const check = @import("check");
 const layout = @import("layout");
