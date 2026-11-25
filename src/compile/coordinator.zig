@@ -2375,9 +2375,9 @@ pub const Coordinator = struct {
     /// evaluation of this compilation completes.
     early_reports: EarlyReportDestinations = .{},
     debug_observer: ?eval.CompileTimeFinalization.DebugObserver = null,
-    /// Instrumentation only: reads each `.boxy` compile-time program the
+    /// Instrumentation only: reads each compile-time program the
     /// compilation lowers.
-    boxy_program_observer: ?eval.CompileTimeFinalization.BoxyProgramObserver = null,
+    compile_time_program_observer: ?eval.CompileTimeFinalization.CompileTimeProgramObserver = null,
     /// Keep compile-time evaluation artifacts so tests can compare them
     /// with the code emitted by a build.
     keep_compile_time_artifacts: bool = false,
@@ -4134,7 +4134,7 @@ pub const Coordinator = struct {
         options.discovery_roots = .{ .requests = discovery_requests.items, .source_modules = discovery_sources.items };
         options.defer_debug_replay = !replay_cached_debug;
         options.debug_observer = self.debug_observer;
-        options.boxy_program_observer = self.boxy_program_observer;
+        options.compile_time_program_observer = self.compile_time_program_observer;
         var runtime_target: ?lir.CheckedPipeline.TargetConfig = if (self.runtime_lowering) |config| config.target else null;
         // An explicitly empty test execution subset has no runtime consumer.
         // Checking still finalizes every pending compile-time obligation.
@@ -4392,7 +4392,7 @@ pub const Coordinator = struct {
         options.cancel_request = self.cancel_request;
         options.value_form_roots = self.value_form_roots;
         options.debug_observer = self.debug_observer;
-        options.boxy_program_observer = self.boxy_program_observer;
+        options.compile_time_program_observer = self.compile_time_program_observer;
         options.unfinalized_reports = .{ .context = &self.early_reports, .module = EarlyReportDestinations.module };
         self.early_evaluation = try eval.CompileTimeFinalization.EarlyEvaluation.create(self.gpa, options);
         // The modules checked before every module was known.
@@ -14028,20 +14028,23 @@ test "shared CTFE and runtime requests specialize once per evaluation across wor
             try coord.finishCheckedProgram(.none);
             try std.testing.expect(!coord.hasUserErrors());
             const session = &coord.program_session.?;
-            // The `.boxy` evaluator completed `answer` before the Solved
-            // program was specialized, so that program restores the stored
-            // value and is specialized once, and the runtime consumer
-            // continues it: it registers no literal root.
-            try std.testing.expect(session.runtime_stages == .evaluation);
+            // The Solved program evaluates the pending `answer`, so the
+            // runtime consumer continues a program specialized once more from
+            // the stored value, which registers no literal root: one
+            // specialization for the evaluation and one for the runtime
+            // program, whatever the workers and target width.
+            try std.testing.expect(session.runtime_stages == .respecialized);
+            try std.testing.expect(session.runtime_stages.respecialized == null);
             const stage_count: u32 = if (session.completed) |*completed| @intCast(completed.programs().len) else 0;
+            try std.testing.expect(stage_count != 0);
             try std.testing.expect(session.runtime_prepared != null);
-            try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
-            try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
+            try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
+            try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
             try std.testing.expectEqual(stage_count, metrics.lir_continuations);
             var runtime = try session.takeRuntime(allocator, requests, target);
             defer runtime.deinit();
-            try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
-            try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
+            try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
+            try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
             try std.testing.expectEqual(stage_count + 1, metrics.lir_continuations);
             try std.testing.expectEqual(@as(usize, 1), runtime.lir_result.root_procs.items.len);
             // The runtime consumer lowers its own continuation, where the

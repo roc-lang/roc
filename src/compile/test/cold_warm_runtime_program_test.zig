@@ -247,14 +247,12 @@ const ExpectError = BuildError ||
 /// Which program a cold build's runtime consumer continues (design.md
 /// "Compile-Time Evaluation Under `.lss`").
 const ColdProgram = enum {
-    /// Every compile-time root reads no function value, so the `.boxy`
-    /// evaluator completes them all before the Solved program is
-    /// specialized, and that program restores their stored values exactly
-    /// as a warm build's does: it is specialized once.
+    /// Every compile-time root completes in value form, with no program,
+    /// so the Solved program restores their stored values exactly as a
+    /// warm build's does: it is specialized once.
     specialized_once,
-    /// The Solved program evaluates a root holding a function value, so
-    /// the runtime consumer continues a program specialized again from the
-    /// stored values.
+    /// The Solved program evaluates a pending root, so the runtime consumer
+    /// continues a program specialized again from the stored values.
     respecialized,
 };
 
@@ -372,7 +370,7 @@ test "issue 12930: a program's expects stay out of its runtime program whether e
 }
 
 test "a hoisted string a body computes lowers the same whether evaluated or read from the cache" {
-    try expectColdEqualsWarm(.specialized_once,
+    try expectColdEqualsWarm(.respecialized,
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
         \\main! = |_args| {
@@ -385,7 +383,7 @@ test "a hoisted string a body computes lowers the same whether evaluated or read
 }
 
 test "top-level constants of every shape lower the same whether evaluated or read from the cache" {
-    try expectColdEqualsWarm(.specialized_once,
+    try expectColdEqualsWarm(.respecialized,
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
         \\small = "ab".concat("c")
@@ -603,7 +601,7 @@ test "a mutable variable assigned inside an operand lowers the same whether eval
     // operand's consumer, where the later read of the variable is in its
     // scope, and an operand ahead of it is named at its own position first;
     // debug builds verify the sequenced form of every lifted body.
-    try expectColdEqualsWarm(.specialized_once,
+    try expectColdEqualsWarm(.respecialized,
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
         \\identity : U64 -> U64

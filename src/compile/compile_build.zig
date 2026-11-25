@@ -235,8 +235,8 @@ pub const BuildEnv = struct {
     /// compile-time roots (`Coordinator.specialization_strategy`).
     specialization_strategy: base.SpecializationStrategy,
     debug_observer: ?eval.CompileTimeFinalization.DebugObserver = null,
-    /// Instrumentation only (`Coordinator.boxy_program_observer`).
-    boxy_program_observer: ?eval.CompileTimeFinalization.BoxyProgramObserver = null,
+    /// Instrumentation only (`Coordinator.compile_time_program_observer`).
+    compile_time_program_observer: ?eval.CompileTimeFinalization.CompileTimeProgramObserver = null,
     /// Instrumentation only; never participates in checked or object identity.
     detailed_monotype_diagnostics: bool = false,
     /// The lowering of the module objects a `.boxy` compile-time evaluation
@@ -977,7 +977,7 @@ pub const BuildEnv = struct {
         coord.cancel_request = self.cancel_request;
         coord.runtime_lowering = self.runtime_lowering;
         coord.debug_observer = self.debug_observer;
-        coord.boxy_program_observer = self.boxy_program_observer;
+        coord.compile_time_program_observer = self.compile_time_program_observer;
         coord.setDetailedLoweringTiming(self.detailed_lowering_timing);
         coord.boxy_object_lowering = self.boxy_object_lowering;
         if (self.detailed_monotype_diagnostics) {

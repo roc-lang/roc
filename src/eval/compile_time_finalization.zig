@@ -56,11 +56,12 @@ pub const DebugObserver = struct {
     observe: *const fn (*anyopaque, []const u8) Allocator.Error!void,
 };
 
-/// Reads each `.boxy` compile-time program once it is lowered, before it
-/// runs: instrumentation that measures the programs compile-time evaluation
+/// Reads each compile-time program once it is lowered, before it runs: each
+/// `.boxy` program and each stage of a Solved program's evaluation.
+/// Instrumentation that measures the programs compile-time evaluation
 /// builds. A program can be lowered on any thread of the post-check
 /// executor, so `observe` synchronizes whatever it shares.
-pub const BoxyProgramObserver = struct {
+pub const CompileTimeProgramObserver = struct {
     context: *anyopaque,
     observe: *const fn (*anyopaque, *const lir.Program.Result) Allocator.Error!void,
 };
@@ -92,7 +93,7 @@ pub const Options = struct {
     stderr: ?StderrWriter = null,
     event_callback: ?EventCallback = null,
     debug_observer: ?DebugObserver = null,
-    boxy_program_observer: ?BoxyProgramObserver = null,
+    compile_time_program_observer: ?CompileTimeProgramObserver = null,
     debug_events: ?*DebugEvents = null,
     /// Artifact copies store results independently; shared slots publish once.
     publish_shared_slots: bool = true,
@@ -3450,7 +3451,7 @@ const ProgramBuild = struct {
         Timing.finishStep(self.build_options.timing, lowering_started, .program_lowering);
         const lowered = &self.lowered.?;
         if (lowered.lir_result.const_roots.items.len != pending.len) finalizationInvariant("the Boxy evaluator's lowering published a different count of compile-time roots than it was asked for");
-        if (self.build_options.boxy_program_observer) |observer| try observer.observe(observer.context, &lowered.lir_result);
+        if (self.build_options.compile_time_program_observer) |observer| try observer.observe(observer.context, &lowered.lir_result);
         self.owners = try ModuleOwners.init(allocator, lowered.lir_result.lowering_modules.items, self.modules);
         self.owners.?.unfinalized = self.build_options.unfinalized_reports;
         self.program = try initEvaluationProgram(ProgramPtr, allocator, self.lowering_modules, lowered, self.build_options);
@@ -3979,6 +3980,7 @@ fn evaluateStaged(
         }, stage_producers.items, producers, lifted.loweringModules());
         if (stage.lir_result.root_procs.items.len != stage_roots.items.len)
             finalizationInvariant("compile-time stage lowering changed its requested root count");
+        if (options.compile_time_program_observer) |observer| try observer.observe(observer.context, &stage.lir_result);
         var program_storage = try initEvaluationProgram(ProgramPtr, allocator, lowering_modules, stage, options);
         defer program_storage.deinit();
         const program = program_storage.ptr();
