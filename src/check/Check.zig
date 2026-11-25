@@ -1805,6 +1805,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .types = .input,
     .cir = .input,
     .var_regions = .keyed,
+    .canonical_vars = .input,
     .imported_modules = .input,
     .owner_modules = .input,
     .owner_envs_by_identity = .keyed,

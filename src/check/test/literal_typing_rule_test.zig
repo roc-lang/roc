@@ -38,7 +38,9 @@ test "literal typing rule: a fully known list of records creates no type variabl
     for ([_]usize{ 4, 12 }, 0..) |count, size_index| {
         var source = try rowsSource(gpa, count);
         defer source.deinit(gpa);
-        var env = try TestEnv.init("Rows", source.items);
+        // The store stays open, so it counts every variable checking made,
+        // including those sealing would drop.
+        var env = try TestEnv.initOpen("Rows", source.items);
         defer env.deinit();
         try env.assertNoErrors();
         // Each row is a record, a number, a string, a record and two numbers;
