@@ -1105,8 +1105,21 @@ generator the object is encoded from (`arrange`, `assembleArranged`):
   excerpt's location) and every helper with a frame, whether the program
   declares it or only spliced code reaches it.
 
-A prepared data catalog owns one immutable copy of its payload bytes, names,
-and relocations. It records exact outgoing data and code-symbol edges once;
+A prepared data catalog owns one immutable copy of its items' names and
+relocations. Payload bytes have one owner, and every later holder borrows
+them: each item names the owner keeping its bytes alive (`DataItem.
+payload_owner`), and a catalog, set or unit's pieces holding an item retains
+that owner instead of copying the bytes. A catalog built from exports either
+copies their bytes into its own storage, when the exports go away first, or
+borrows them from exports a keeper owns (`DataOwner.initKeeper`), which the
+catalog retains: a unit's pieces borrow the bytes of the unit's literal
+backings and frozen constants this way, and the keeper frees those exports
+with the last catalog retaining it. Object writers are given the read-only
+data as pieces borrowed from the data items (`UnitImage.PiecedBytes`), and a
+unit image writes its block and writable data straight from the sections
+into the image, patching the block's in-place references there, so each
+datum's bytes are copied once, into the encoded object or image. The
+catalog records exact outgoing data and code-symbol edges once;
 each catalog entry holds both its datum and its edges. Fragments carry only dense
 root indices into this shared graph, and an excerpt set retains each graph owner
 once. Copying, pruning and object assembly preserve these graph references.
@@ -1116,8 +1129,9 @@ The graph producer propagates the code-pointer property along reverse data edges
 once, including cycles.
 The catalog, workers, and copied sets can be destroyed independently. This is
 compiler-storage ownership; it changes no generated reference-count operation.
-Renaming data first gives the new set its own metadata and backing, preserving
-the catalog's immutable contents. Catalogs belong to one program's symbol
+Renaming data first gives the new set its own metadata, preserving the
+catalog's immutable contents; the renamed items share the catalog's payload
+bytes and retain its owner. Catalogs belong to one program's symbol
 domain; equal program-local names from other programs never establish sharing.
 
 ### Read-Only Type Analysis
@@ -2447,7 +2461,10 @@ CIR kinds (as the checked body reader presents them) and checked types:
   (`exact_numeral.fits`; a float literal always converts, to its nearest
   value);
 - a string literal whose quote dispatches to no `from_quote`, made of literal
-  segments only, whose checked type is the builtin `Str`;
+  segments only, whose checked type is the builtin `Str`, and a file imported
+  as `Str`, which is one such segment on its own;
+- a bytes literal (`import "file" as bytes : List(U8)`), whose checked type is
+  always `List(U8)`;
 - an empty list, a tag with no payload, or an empty record whose checked
   type is the empty record (at a record type of optional fields it builds
   each field's presence slot);
@@ -2527,7 +2544,10 @@ where a value's parts come from differs: an evaluator's result memory, the
 checked expression's parts, or the stored value of a constant the expression
 reads. A numeral's bytes are the bytes lowering gives the literal
 (`exact_numeral.encodeBits`), and a literal list or string has no capacity
-beyond its items (Static Lists And Strings Keep Their Capacity). A read of a
+beyond its items (Static Lists And Strings Keep Their Capacity). A string of
+one segment and a bytes literal are stored as blobs borrowed from the
+module's string literal store, with no copy ("Constant Storage"); a bytes
+literal is the packed items of its `List(U8)`. A read of a
 constant is the constant's stored value, capacity included: the writer
 copies the read root's nodes into the reading root's store under the
 reading root's own plan, choosing each tag's variant by name, so a read at a
@@ -12090,7 +12110,15 @@ allocation.
 
 Strings and flat scalar or fixed-product lists use one shared content-interned blob store.
 `List(U8)` therefore has the same constant-storage cost as a `Str` containing
-the same bytes, and equal string/list contents reuse one blob. A packed list
+the same bytes, and equal string/list contents reuse one blob. A blob the
+checked-value writer stores from a literal of the store's own module (a string
+of one segment, or a file imported as bytes) is borrowed from the module's
+string literal store rather than copied (`ConstStore.BlobBacking`): those
+bytes never change once the module is canonicalized and live as long as the
+store, so the literal's bytes are resident once. A borrowed blob occupies its
+offsets in the blob bytes as if it were stored there, so serialization writes
+it in place and a serialized store is the same whichever of its blobs are
+borrowed; a loaded store owns all of them. A packed list
 view records its scalar encoding or fixed-product width and item count separately
 from its byte view. Fixed products are records, tuples, and nominal wrappers
 composed entirely of scalars, discriminant-only tag unions and zero-sized
@@ -20566,10 +20594,17 @@ owner returns the error once it has received every task. Without an executor,
 the items run and commit in order on one sequential lane through the same
 callbacks.
 
-Each lane lends every item it runs one scratch arena, registered in the lane's
-state and reset after each item to a single retained chunk of at most
+A run gives every lane that runs its items a lane state of the run's own,
+created by the lane's first item and destroyed when the run returns, so the
+scratch a pass keeps per lane (its lane buffers, the item arena below) serves
+every procedure that lane runs in the run and none of it outlives the run: an
+idle worker holds no capacity grown by a pass that finished. Each lane lends
+every item it runs one scratch arena, registered in that lane state and reset
+after each item to a single retained chunk of at most
 `lane_scratch_retain_limit` (4 MiB), so a lane's steady-state items allocate
 nothing from the backing allocator and idle scratch is bounded per lane.
+Without an executor the items run on the caller's sequential lane, whose
+lifetime the caller chooses.
 
 A commit runs while lanes run later items, so it may change nothing an item
 reads. Native code generation commits in the run: lanes read only the frozen
@@ -28074,7 +28109,15 @@ its plan requests no variant. A variant reads its base procedure's prepared
 source, so a wave holds base owners or variants, never both, and every base
 wave precedes every variant wave. The wave then reserves its variants in owner
 order, emits the owners whose plans requested any in a second run, and
-appends every shard in owner order. A shard emitted before the wave's
+appends every shard in owner order. A source's prepared data and an owner's
+plan live only as long as an emission reads them: an owner frees its plan as
+soon as its shard is emitted, a base owner's task frees its source once the
+owner is emitted, a variant wave first prepares, in one ordered run, each
+source its variants read that is not prepared, and after the wave frees every
+source no queued variant names, and each shard is freed once it is appended.
+Preparation reads only the ownership-neutral body and the frozen solution and
+dismantle results, so a source prepared again for a variant wave is the one
+its base wave prepared. A shard emitted before the wave's
 reservations names the shorter procedure prefix it was cloned from; appending
 relocates it exactly like one emitted after them. Proving uniqueness settles
 against every source's prepared projections, so that schedule prepares every

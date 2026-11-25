@@ -7013,7 +7013,9 @@ fn buildRunRootImage(
         target,
         .{},
     );
-    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
+    // The pieces take the static data (`compileToPieces`).
+    var static_data_owned = true;
+    defer if (static_data_owned) compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, lowered);
     defer ctx.gpa.free(entrypoints);
 
@@ -7024,6 +7026,7 @@ fn buildRunRootImage(
     object_compiler.post_check_executor = build_env.postCheckExecutor();
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
     object_compiler.internal_entrypoints = true;
+    static_data_owned = false;
     var pieces = object_compiler.compileToPieces(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
@@ -12505,7 +12508,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer ctx.gpa.free(entrypoints);
 
     const static_data_exports = try buildCommandStaticData(ctx, &reporter, root_artifact, imported_artifacts, relation_artifacts, &lowered, target);
-    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
+    // Root pieces take the static data (`compileToPieces`) and keep it alive
+    // while they live; every other path releases it here.
+    var static_data_owned = true;
+    defer if (static_data_owned) compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     if (target_arch == .wasm32) {
         reporter.begin(code_generation_phase_name);
@@ -12541,6 +12547,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
 
     if (boxy_library) |library| {
+        static_data_owned = false;
         var root_pieces = object_compiler.compileToPieces(
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
@@ -16045,7 +16052,9 @@ fn unitTestRootImage(
     finishPostCheckLowering(reporter, &spec_timing, .boxy);
 
     const static_data = try compile.static_data_exports.buildStaticData(ctx.gpa, .{ .root = modules.root, .imports = imported_artifacts }, &lowered, target, .{});
-    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
+    // The pieces take the static data (`compileToPieces`).
+    var static_data_owned = true;
+    defer if (static_data_owned) compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
     var wrappers = try compile.boxy_unit.testEntrypoints(ctx.gpa, &lowered, module_digests.items, root_indices.items);
     defer wrappers.deinit(ctx.gpa);
     reporter.begin(devBackendPhaseName(target));
@@ -16056,6 +16065,7 @@ fn unitTestRootImage(
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
     object_compiler.internal_entrypoints = true;
     object_compiler.relocatable_expect_sites = true;
+    static_data_owned = false;
     var pieces = object_compiler.compileToPieces(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
