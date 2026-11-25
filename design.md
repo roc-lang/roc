@@ -7077,15 +7077,26 @@ sealed. It consists of exactly these parts:
 write before sealing it (`types.Store.canonicalizeAndSeal`). Every slot comes
 to name its class's storage root directly; every variable a descriptor, a type
 argument or record field pool, or a nominal declaration holds becomes its
-class's checked representative; and every record and tag union row absorbs the
-rows its extension chain reaches, so a sealed row is flat and its extension is
-never itself a row. Canonicalization walks the slots once, the variable and
-field pools once, and the live descriptors once. The descriptor pass reads
-each descriptor's kind and goes further only for a function, a record or a tag
-union, the kinds that hold a variable inline: it replaces a function's return
-or a row's extension by its representative, and resolving an extension also
-tells whether the extension is itself a row, so a row that must absorb its
-chain is found and flattened in that same step. A static-dispatch constraint
+class's checked representative; and every record and tag union row a reader
+can name absorbs the rows its extension chain reaches, so such a row is flat
+and its extension is never itself a row. Canonicalization walks the slots
+once, the variable and field pools once, and the live descriptors once. The
+descriptor pass reads each descriptor's kind and goes further only for a
+function, a record or a tag union, the kinds that hold a variable inline: it
+replaces a function's return or a row's extension by its representative, and
+resolving an extension also tells whether the extension is itself a row.
+
+When some row's extension is a row, sealing traces the store from its roots
+and flattens each row the trace reaches, before reading that row's children.
+The roots are every variable a reader may start from: each CIR node's own
+variable, each variable a node or a recorded checker output names besides
+(`Check.SealRoots`), and each nominal declaration's backing. Every root
+publication or a later producer reaches is one of these, so no root is added
+after sealing. A row no root reaches keeps its chain and is never read: the
+solver's superseded row parts, such as the tails an inferred union outgrew,
+cost nothing to seal. Reading a sealed row whose extension is a row is a
+compiler bug, asserted in debug builds. When no row's extension is a row,
+there is nothing to flatten and no trace runs. A static-dispatch constraint
 keeps the function variable checking recorded for it, because that variable
 identifies the constraint; a reader resolves it with one slot read. The
 checked type id of a source type is its checked representative's bit pattern,
@@ -13694,6 +13705,20 @@ A value's record follows the same rule through its uncommitted tail
 (Uncommitted Record Tails): every use shares it, a use that lifts the record
 into a nominal type does so for every use, and the tail commits to the empty record when the module finishes
 checking.
+
+A field access or direct tag pattern demands a member, not a remainder. Its
+fresh, unnamed tail is existential: when relating the member merely binds its
+payload to the receiver's slot, the joined type is the receiver's row itself.
+No other use observes a copy of its remaining labels. This does not apply to
+a rest binder, a shared extension, or a relation that changes field kind or
+tag provenance.
+
+When a pattern introduces a previously absent tag into an inferred open
+row, every existing reference to the old extension must see the new tag.
+The row may combine adjacent disjoint tag runs, but an absorbed part remains
+valid in isolation, and a marked entry copied out of it remains the same
+diagnostic fact (Pattern-Only Tags). A bounded or rigid tail cannot be
+extended by this rule.
 
 A use of a top-level value is therefore never a widening of the value: no
 row coercion and no `ModuleEnv` record exist for value uses. Where a

@@ -9269,7 +9269,7 @@ fn unifyOwnedRelation(
     ctx: problem.Context,
     row_width_relation: unifier.RowWidthRelation,
 ) std.mem.Allocator.Error!unifier.Result {
-    return self.unifyOwnedRootRelation(expected, actual, env, ctx, row_width_relation, .ordinary, .none);
+    return self.unifyOwnedRootRelation(expected, actual, env, ownedRelationOptions(ctx, row_width_relation, .ordinary, .none));
 }
 
 fn unifyOwnedRecordRelation(
@@ -9278,9 +9278,11 @@ fn unifyOwnedRecordRelation(
     actual: Var,
     env: *Env,
     ctx: problem.Context,
-    row_width_relation: unifier.RowWidthRelation,
+    access_tail: Var,
 ) std.mem.Allocator.Error!unifier.Result {
-    return self.unifyOwnedRootRelation(expected, actual, env, ctx, row_width_relation, .ordinary, .actual);
+    var opts = ownedRelationOptions(ctx, .construction, .ordinary, .actual);
+    opts.member_tail = access_tail;
+    return self.unifyOwnedRootRelation(expected, actual, env, opts);
 }
 
 /// How an owned relation unifies: a rejection leaves the operands unpoisoned
@@ -9308,19 +9310,11 @@ fn unifyOwnedRootRelation(
     expected: Var,
     actual: Var,
     env: *Env,
-    ctx: problem.Context,
-    row_width_relation: unifier.RowWidthRelation,
-    root_relation: unifier.RootRelation,
-    nominal_record_mismatch_role: unifier.NominalRecordMismatchRole,
+    opts: unifier.Options,
 ) std.mem.Allocator.Error!unifier.Result {
-    const result = try self.runUnifyOftenRelated(expected, actual, env, ownedRelationOptions(
-        ctx,
-        row_width_relation,
-        root_relation,
-        nominal_record_mismatch_role,
-    ));
+    const result = try self.runUnifyOftenRelated(expected, actual, env, opts);
     if (result.isAccepted()) return result;
-    return .{ .problem = try self.appendTypeMismatch(expected, actual, self.mismatchContext(ctx, actual)) };
+    return .{ .problem = try self.appendTypeMismatch(expected, actual, self.mismatchContext(opts.context, actual)) };
 }
 
 /// Record a type mismatch between two vars under a context. Every caller that
@@ -9574,10 +9568,7 @@ fn unifyNominalConstructorBacking(
         expected_backing,
         actual_backing,
         env,
-        .{ .nominal_constructor = ctx },
-        row_width_relation,
-        .nominal_constructor_backing,
-        .none,
+        ownedRelationOptions(.{ .nominal_constructor = ctx }, row_width_relation, .nominal_constructor_backing, .none),
     );
 }
 
@@ -15763,8 +15754,57 @@ const PendingRecordDestruct = struct {
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     try self.checkFileInternal(false);
     self.printSpeculationStats();
-    try self.types.canonicalizeAndSeal(self.cir.getIdentStoreConst());
+    try self.sealTypes();
 }
+
+/// Canonicalize and seal the solved type store, flattening the rows the
+/// module's checked output can name (design.md "Sealing").
+pub fn sealTypes(self: *Self) std.mem.Allocator.Error!void {
+    try self.types.canonicalizeAndSealReached(self.cir.getIdentStoreConst(), SealRoots{ .env = self.cir });
+}
+
+/// Every variable a reader of the module's sealed type store may start from:
+/// each CIR node's own variable, and each variable a node or a recorded
+/// checker output names besides.
+const SealRoots = struct {
+    env: *const ModuleEnv,
+
+    pub fn forEach(self: SealRoots, visitor: anytype) std.mem.Allocator.Error!void {
+        const env = self.env;
+        const node_count: u32 = @intCast(env.store.nodes.len());
+        try visitor.visitLeading(node_count);
+        var node_idx: u32 = CIR.Node.first_idx;
+        while (node_idx < node_count) : (node_idx += 1) {
+            const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
+            switch (env.store.nodes.get(@fromBackingInt(@intCast(node_idx))).tag) {
+                .expr_call, .expr_field_access => try output_type_roots.forEachCallTypeRoot(env, expr_idx, visitor),
+                .expr_dispatch_call,
+                .expr_interpolation,
+                .expr_type_dispatch_call,
+                .expr_type_dispatch_call_dispatcher,
+                .expr_method_eq,
+                => try output_type_roots.forEachStaticDispatchTypeRoot(env, expr_idx, visitor),
+                else => {},
+            }
+        }
+        for (env.for_loop_dispatch_plans.items()) |plan| try output_type_roots.forEachForLoopDispatchTypeRoot(plan, visitor);
+        try output_type_roots.forEachLiteralDispatchTypeRoot(env, visitor);
+        try output_type_roots.forEachRecordedTypeRoot(env, visitor);
+        try output_type_roots.forEachSchemeUseTypeRoot(env, visitor);
+        for (env.scheme_uses.items()) |record| try visitor.visit(@fromBackingInt(@intCast(record.scheme_root)));
+        for (env.row_coerced_results.items()) |result| try visitor.visit(@fromBackingInt(@intCast(result.wide_var)));
+        for (env.inspect_override_instances.items()) |instance| try visitor.visit(instance.callableVar());
+        for (env.dispatch_relation_merges.items()) |merge| {
+            try visitor.visit(@fromBackingInt(@intCast(merge.dropped_fn_var)));
+            try visitor.visit(@fromBackingInt(@intCast(merge.retained_fn_var)));
+        }
+        for (env.generated_codec_recurrences.items()) |recurrence| {
+            try visitor.visit(@fromBackingInt(@intCast(recurrence.constraint_fn_var)));
+            try visitor.visit(@fromBackingInt(@intCast(recurrence.derivation_source_fn_var)));
+        }
+        for (env.rejected_static_dispatches.items()) |rejected| try visitor.visit(@fromBackingInt(@intCast(rejected.constraint_fn_var)));
+    }
+};
 
 /// The checker's probe sites (`checker_speculation_stats`).
 const SpeculationSite = enum {
@@ -27412,8 +27452,6 @@ fn commitUncommittedTails(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 const PatternOnlyCandidate = struct {
     record: MatchTagPattern,
     tag: Ident.Idx,
-    /// The row part that lists the tag.
-    row_part: Var,
 };
 
 /// Warn about every match branch alternative that needs a tag no producer
@@ -27434,11 +27472,29 @@ fn reportPatternOnlyMatchTags(self: *Self) std.mem.Allocator.Error!void {
     var copies: PatternOnlyTagCopyGroups = .{};
     defer copies.deinit(self.gpa);
     var copies_grouped = false;
+    var produced_walk_done = false;
+    var has_producer: collections.DenseMapUnmanaged(Var, bool) = .empty;
+    defer has_producer.deinit(self.gpa);
+    // Nested matches can interleave the recorded patterns of an outer match.
+    // The verdict is stable here, after deferred errors have settled.
+    var rejected_matches: collections.DenseMapUnmanaged(CIR.Expr.Idx, bool) = .empty;
+    defer rejected_matches.deinit(self.gpa);
     for (self.match_tag_patterns.items) |record| {
-        if (self.matchHadTypeError(record.alternative.match_expr)) continue;
+        if (self.erroneous_value_exprs.count() != 0) {
+            const verdict = try rejected_matches.getOrPut(self.gpa, record.alternative.match_expr);
+            if (!verdict.found_existing) verdict.value_ptr.* = self.matchHadTypeError(record.alternative.match_expr);
+            if (verdict.value_ptr.*) continue;
+        }
         const tag_name = self.cir.store.getPattern(record.pattern).applied_tag.name;
         const found = self.findRowTag(ModuleEnv.varFrom(record.pattern), tag_name) orelse continue;
         if (!found.pattern_only) continue;
+        // A caller-supplied row needs no per-entry provenance inspection.
+        // The settled roots in var_set stay valid through this judgment.
+        if (!produced_walk_done) {
+            try self.markProducedTagRows();
+            produced_walk_done = true;
+        }
+        if (self.var_set.contains(self.types.resolveVar(found.row_part).var_)) continue;
         // The mark read above is one stored entry's. A producer may have met
         // another entry for the same tag instead.
         if (!copies_grouped) {
@@ -27449,15 +27505,14 @@ fn reportPatternOnlyMatchTags(self: *Self) std.mem.Allocator.Error!void {
         // A row no producer gave any tag is the type of a value the module
         // never produces at all, such as a stub's result. No single pattern
         // of its match is the mistaken one.
-        if (!self.rowHasProducedTag(ModuleEnv.varFrom(record.pattern), &copies)) continue;
-        try candidates.append(self.gpa, .{ .record = record, .tag = tag_name, .row_part = found.row_part });
+        const root = self.types.resolveVar(ModuleEnv.varFrom(record.pattern)).var_;
+        const production = try has_producer.getOrPut(self.gpa, root);
+        if (!production.found_existing) production.value_ptr.* = self.rowHasProducedTag(root, &copies);
+        if (!production.value_ptr.*) continue;
+        try candidates.append(self.gpa, .{ .record = record, .tag = tag_name });
     }
     if (candidates.items.len == 0) return;
 
-    try self.markProducedTagRows();
-
-    // `var_set` holds every row a caller or a derived parser produces until
-    // the next walk clears it; nothing below walks types.
     var start: usize = 0;
     while (start < candidates.items.len) {
         const first = candidates.items[start].record.alternative;
@@ -27489,7 +27544,6 @@ fn reportPatternOnlyBranchTags(self: *Self, candidates: []const PatternOnlyCandi
     defer unmatchable_tags.deinit(self.gpa);
     var reported_alternatives: usize = 0;
     for (candidates) |candidate| {
-        if (self.var_set.contains(self.types.resolveVar(candidate.row_part).var_)) continue;
         const alternative = candidate.record.alternative.alternative_index;
         const already = for (unmatchable_tags.items) |entry| {
             if (entry.alternative == alternative) break true;
@@ -27656,8 +27710,8 @@ fn rowTagOccurrence(self: *const Self, var_: Var, tag_name: Ident.Idx) ?FoundRow
             .structure => |flat| switch (flat) {
                 .tag_union => |tag_union| {
                     const tags = self.types.getTagsSlice(tag_union.tags);
-                    for (tags.items(.name), tags.items(.pattern_only)) |name, pattern_only| {
-                        if (name.eql(tag_name)) return .{ .row_part = current.var_, .pattern_only = pattern_only };
+                    if (types_mod.Tag.findName(self.cir.getIdentStoreConst(), tags.items(.name), tag_name)) |i| {
+                        return .{ .row_part = current.var_, .pattern_only = tags.items(.pattern_only)[i] };
                     }
                     current = self.types.resolveThroughAliases(tag_union.ext);
                 },
@@ -31064,6 +31118,9 @@ const RowOpenness = enum { open, closed };
 /// parameter.
 const PatternCtx = struct {
     row_openness: RowOpenness,
+    /// A direct match alternative can demand just its tag: unlike a row
+    /// pattern binding a rest, nothing in the program binds its fresh tail.
+    member_demand: ?struct { pattern: CIR.Pattern.Idx, tail: *?Var } = null,
     inferred_parameter: bool = false,
     failure_owner: CIR.Node.Idx,
     /// Whether the pattern's owner relates it to the value it matches and
@@ -31347,6 +31404,9 @@ fn stepPatternCheck(
 
             // A match branch's tag pattern asks for its tag without producing
             // it, so its tag is pattern-only (design.md "Pattern-Only Tags").
+            if (ctx.member_demand) |demand| if (pattern_idx == demand.pattern) {
+                demand.tail.* = ext_var;
+            };
             const tag = types_mod.Tag{ .name = applied_tag.name, .args = arg_vars_slice, .pattern_only = ctx.match_alternative != null };
             const tag_union_content = try self.types.mkTagUnion(&[_]types_mod.Tag{tag}, ext_var);
 
@@ -36662,7 +36722,7 @@ fn resumeFieldAccessCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck
                 .required => .required,
                 .optional => .optional,
             },
-        } }, .construction);
+        } }, record_ext_var);
         // Suppression preserves the receiver's original diagnostic, but
         // establishes no record relation or field value type.
         if (!access_result.isEstablished()) {
@@ -38109,8 +38169,10 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
         for (branch_ptrn_idxs, 0..) |other_branch_ptrn_idx, other_cur_ptrn_index| {
             // Check the pattern's sub types
             const other_branch_ptrn = self.cir.store.getMatchBranchPattern(other_branch_ptrn_idx);
+            var member_tail: ?Var = null;
             const valid_pattern = try self.checkPattern(other_branch_ptrn.pattern, .{
                 .row_openness = .open,
+                .member_demand = .{ .pattern = other_branch_ptrn.pattern, .tail = &member_tail },
                 .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx),
                 .literals = .settled_by_owner,
                 .match_alternative = matchAlternative(match, state, expr_idx, branch_cur_index, other_cur_ptrn_index),
@@ -38121,7 +38183,7 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
             // Check the pattern against the cond. A rejected pattern is
             // never related: its class is `.err`.
             if (valid_pattern and !state.cond_always_crashes) {
-                try self.relateBranchPatternToScrutinee(state, other_branch_ptrn.pattern, env, .{ .match_pattern = .{
+                try self.relateBranchPatternToScrutinee(state, other_branch_ptrn.pattern, member_tail, env, .{ .match_pattern = .{
                     .branch_index = @intCast(branch_cur_index),
                     .pattern_index = @intCast(other_cur_ptrn_index),
                     .num_branches = @intCast(match.branches.span.len),
@@ -38141,8 +38203,10 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
     // type.
     for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
+        var member_tail: ?Var = null;
         const valid_pattern = try self.checkPattern(branch_ptrn.pattern, .{
             .row_openness = .open,
+            .member_demand = .{ .pattern = branch_ptrn.pattern, .tail = &member_tail },
             .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx),
             .literals = .settled_by_owner,
             .match_alternative = matchAlternative(match, state, expr_idx, branch_cur_index, cur_ptrn_index),
@@ -38155,7 +38219,7 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
         // error into the scrutinee's class, which the scrutinee shares with
         // whatever produced it.
         if (valid_pattern and !state.cond_always_crashes) {
-            try self.relateBranchPatternToScrutinee(state, branch_ptrn.pattern, env, .{ .match_pattern = .{
+            try self.relateBranchPatternToScrutinee(state, branch_ptrn.pattern, member_tail, env, .{ .match_pattern = .{
                 .branch_index = @intCast(branch_cur_index),
                 .pattern_index = @intCast(cur_ptrn_index),
                 .num_branches = @intCast(match.branches.span.len),
@@ -38192,12 +38256,15 @@ fn relateBranchPatternToScrutinee(
     self: *Self,
     state: *MatchCheck,
     pattern: CIR.Pattern.Idx,
+    member_tail: ?Var,
     env: *Env,
     ctx: problem.Context,
 ) std.mem.Allocator.Error!void {
     if (state.pattern_relation_rejected) return;
     const pattern_var = ModuleEnv.varFrom(pattern);
-    const result = try self.runUnify(state.ptrn_target_var, pattern_var, env, unifyOptionsForContext(ctx, .write_no_report));
+    var opts = unifyOptionsForContext(ctx, .write_no_report);
+    opts.member_tail = member_tail;
+    const result = try self.runUnify(state.ptrn_target_var, pattern_var, env, opts);
     if (result.isEstablished()) return;
     state.had_type_error = true;
     if (result.isAccepted()) return;
