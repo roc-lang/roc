@@ -63,6 +63,9 @@ const corpus_imports = [_]SourceFile{
     \\point : { x : I32, y : I32 }
     \\point = { x: -3, y: 9 }
     },
+    .{ .path = "embedded.bin", .source = "\x00\x01\x02\xfe\xff bytes a file import embeds, long enough that no target holds them inline" },
+    .{ .path = "empty.bin", .source = "" },
+    .{ .path = "embedded.txt", .source = "text a file import embeds, long enough that no target holds it inline" },
 };
 
 /// Every kind of value-form root: each builtin number type at its extremes,
@@ -70,7 +73,8 @@ const corpus_imports = [_]SourceFile{
 /// lists of numbers, strings, records, tuples, tags and zero-sized values,
 /// records, tuples, single-tag, enum-like and payload unions, `Try`,
 /// nominal tags and records, a recursive nominal, repeated equal long
-/// literals, and a local binding a kept root reads. Each kind also reads
+/// literals, files imported as bytes (one of them empty) and as a string,
+/// and a local binding a kept root reads. Each kind also reads
 /// other constants of its own module and of an imported one: bare, ahead of
 /// their definitions, through a chain of such reads, and as items of packed
 /// and unpacked lists, fields, payloads, and nominal backings. The lists
@@ -80,6 +84,9 @@ const corpus =
     \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
     \\import pf.Echo
     \\import Consts
+    \\import "embedded.bin" as embedded_bytes : List(U8)
+    \\import "empty.bin" as empty_bytes : List(U8)
+    \\import "embedded.txt" as embedded_text : Str
     \\
     \\Color := [Red, Green, Blue(U8)]
     \\Point := { x : I32, y : I32 }
@@ -242,6 +249,8 @@ const corpus =
     \\imported_reading = { limit: Consts.limit, names: Consts.names }
     \\imported_alias : List(Str)
     \\imported_alias = Consts.names
+    \\embedded_reading : { raw : List(U8), none : List(U8), text : Str }
+    \\embedded_reading = { raw: embedded_bytes, none: empty_bytes, text: embedded_text }
     \\
     \\parse : List(U8) -> Try({ x : U8, y : U8 }, [Empty, Long])
     \\parse = |input| {
@@ -576,14 +585,14 @@ fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) WriterMat
             return err;
         };
     }
-    try std.testing.expectEqual(@as(usize, 79), constants + polymorphic);
+    try std.testing.expectEqual(@as(usize, 83), constants + polymorphic);
     // `base` and `read_base` in `measure`, which the root computing `total`
     // reads.
     try std.testing.expectEqual(@as(usize, 2), hoisted);
     // The top-level constants and `read_base` that read other constants in
-    // value form: 21 and `read_base`, but for the three that read a
+    // value form: 22 and `read_base`, but for the three that read a
     // polymorphic constant, whose instance is evaluated.
-    try std.testing.expectEqual(@as(usize, 19), readers);
+    try std.testing.expectEqual(@as(usize, 20), readers);
     if (written.rootsCompletedDirectly() < constants + hoisted) {
         std.debug.print("{d} roots were completed directly, fewer than {d}\n", .{ written.rootsCompletedDirectly(), constants + hoisted });
         return error.TooFewRootsCompletedDirectly;
@@ -672,6 +681,44 @@ test "a literal at a custom type, interpolation, an update, an optional field, a
         seen += 1;
     }
     try std.testing.expectEqual(@as(usize, 18), seen);
+}
+
+test "a value-form literal's image holds the module's literal bytes" {
+    if (is_freestanding) return error.SkipZigTest;
+    const embedded = "bytes a file import embeds, long enough that no target holds them inline";
+    const long_text = "a string long enough that no target holds it inline";
+    var checked = try checkApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\import "embedded.bin" as embedded_bytes : List(U8)
+        \\long_text = "a string long enough that no target holds it inline"
+        \\main! = |_args| {
+        \\    Echo.line!(Str.inspect(List.len(embedded_bytes)))
+        \\    Echo.line!(long_text)
+        \\    Ok({})
+        \\}
+    , &.{.{ .path = "embedded.bin", .source = embedded }}, .boxy, .write);
+    defer checked.deinit();
+    try checked.expectErrors(false);
+    const app = checked.app();
+    var seen: usize = 0;
+    for (app.compile_time_roots.roots.items()) |root| {
+        const name = rootName(app, root) orelse continue;
+        try std.testing.expectEqual(check.CheckedArtifact.CompileTimeRootCompletion.write_value, root.completion);
+        // A value-form root is data alone, stored as its image (design.md
+        // "Stored Images"), whose allocation holds the literal's bytes.
+        const image = app.const_store.image(app.const_store.imageOf(root.payload.const_node) orelse return error.TestUnexpectedResult);
+        if (std.mem.eql(u8, name, "long_text")) {
+            try std.testing.expectEqualStrings(long_text, image.strAt(0));
+        } else {
+            // `RocList`'s 64-bit words: bytes, length, capacity.
+            const start = std.mem.readInt(u64, image.bytes[0..8], .little);
+            const len = std.mem.readInt(u64, image.bytes[8..16], .little);
+            try std.testing.expectEqualStrings(embedded, image.bytes[@intCast(start)..][0..@intCast(len)]);
+        }
+        seen += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), seen);
 }
 
 test "constants of one type that one writer stores share one stored type" {

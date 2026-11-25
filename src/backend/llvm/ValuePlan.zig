@@ -52,8 +52,16 @@ pub const Rep = enum(u8) {
 /// A memory value can name an immutable byte range in another local instead
 /// of owning another slot. Offsets come only from committed LIR layouts.
 pub const View = struct { source: LocalId, offset: u32 };
-/// The storage used by a memory local in the current procedure.
-pub const Place = union(enum) { slot, parameter, view: View };
+/// Where a record or tag construction stores one operand: record field
+/// `field` (its original index), or the payload of the tag whose
+/// discriminant is `payload`.
+pub const Construction = union(enum) { field: u32, payload: u32 };
+/// The storage used by a memory local in the current procedure. A `view`'s
+/// definition writes nothing: it names bytes its owner already holds. A
+/// `part` is an operand of a record or tag construction whose own definition
+/// writes its bytes where the construction stores them, inside the storage
+/// owner, so the construction leaves them in place instead of copying them.
+pub const Place = union(enum) { slot, parameter, view: View, part: View };
 
 /// How the emitter accesses one operand.
 pub const Access = enum {
@@ -659,6 +667,24 @@ places: std.ArrayList(Place) = .empty,
 inventory: std.ArrayList(LocalId) = .empty,
 view_states: std.ArrayList(ViewState) = .empty,
 view_work: std.ArrayList(LocalId) = .empty,
+/// Locals taking part in deferred string-match captures, which the emitter
+/// materializes outside the statements that LIR says access them.
+deferred: std.AutoHashMapUnmanaged(u32, void) = .empty,
+/// Whole-value copies between locals, as (source, target).
+copies: std.ArrayList([2]LocalId) = .empty,
+/// Construction operands the emitter could define in place, in walk order.
+part_candidates: std.ArrayList(PartCandidate) = .empty,
+/// The most parts any `str_from_parts` of the procedure concatenates.
+max_str_parts: u32 = 0,
+/// By local id, the next member of its storage owner's group, or
+/// `no_member`. Meaningful only while parts are placed.
+group_next: std.ArrayList(u32) = .empty,
+/// By storage owner, the last member of its group.
+group_tail: std.ArrayList(u32) = .empty,
+/// By storage owner, the part whose definition writes the owner first.
+group_first: std.AutoHashMapUnmanaged(u32, LocalId) = .empty,
+/// Parts whose definitions are the first writes of their owners' bytes.
+first_parts: std.AutoHashMapUnmanaged(u32, void) = .empty,
 /// Whether some operand of the current procedure needs the local's address,
 /// by local id. Cleared from the procedure's inventory.
 addressed: std.ArrayList(bool) = .empty,
@@ -673,13 +699,30 @@ planned: std.ArrayList(CFStmtId) = .empty,
 value_accesses: std.ArrayList(ValueAccesses) = .empty,
 merge_nodes: std.ArrayList(MergeNode) = .empty,
 pairs: std.ArrayList(MergePair) = .empty,
+/// The locals that hold one string literal wherever they are read, in the
+/// order their definitions were walked. During planning, every local a string
+/// literal assignment or a copy of such a local defines.
+str_literal_defs: std.ArrayList(StrLiteralDef) = .empty,
+/// By local: one more than its index in `str_literal_defs`, or zero.
+str_literal_slots: std.ArrayList(u32) = .empty,
 
 const ValueAccesses = struct { start: u32, end: u32, definition: ?u32 = null };
 
 const ViewState = enum { untracked, candidate, pending, visiting, resolved, parameter };
+const no_member = std.math.maxInt(u32);
+const PartCandidate = struct { target: LocalId, part: LocalId, offset: u32 };
 
 const MergeNode = struct { position: u32, node: u32, stmt: u32 };
 const MergePair = struct { stmt: u32, local: LocalId };
+
+/// A local whose one definition assigns a string literal, so every read of
+/// it reads that literal.
+const StrLiteralDef = struct {
+    local: LocalId,
+    literal: lir.LIR.StrLiteral,
+    /// The local this one copies, for a copy.
+    source: ?LocalId,
+};
 
 pub fn init(allocator: Allocator) Self {
     return .{ .allocator = allocator, .indexes = StackPlan.Indexes.init(allocator) };
@@ -688,10 +731,19 @@ pub fn init(allocator: Allocator) Self {
 pub fn deinit(self: *Self) void {
     self.indexes.deinit();
     self.reps.deinit(self.allocator);
+    self.str_literal_defs.deinit(self.allocator);
+    self.str_literal_slots.deinit(self.allocator);
     self.places.deinit(self.allocator);
     self.inventory.deinit(self.allocator);
     self.view_states.deinit(self.allocator);
     self.view_work.deinit(self.allocator);
+    self.deferred.deinit(self.allocator);
+    self.copies.deinit(self.allocator);
+    self.part_candidates.deinit(self.allocator);
+    self.group_next.deinit(self.allocator);
+    self.group_tail.deinit(self.allocator);
+    self.group_first.deinit(self.allocator);
+    self.first_parts.deinit(self.allocator);
     self.addressed.deinit(self.allocator);
     self.ssa_locals.deinit(self.allocator);
     self.merges.deinit(self.allocator);
@@ -720,8 +772,35 @@ pub fn place(self: *const Self, local: LocalId) Place {
 /// The local owning the bytes read through `local`, after view flattening.
 pub fn storageRoot(self: *const Self, local: LocalId) LocalId {
     return switch (self.place(local)) {
-        .view => |view| view.source,
+        .view, .part => |view| view.source,
         .slot, .parameter => local,
+    };
+}
+
+/// Where `local`'s bytes start in its `storageRoot`'s.
+pub fn storageOffset(self: *const Self, local: LocalId) u32 {
+    return switch (self.place(local)) {
+        .view, .part => |view| view.offset,
+        .slot, .parameter => 0,
+    };
+}
+
+/// Whether `local` takes part in a deferred string-match capture: the
+/// emitter writes its bytes, or reads them, outside the statements LIR says
+/// access it, so it neither shares nor lends storage and keeps its slot for
+/// the whole activation.
+pub fn isDeferredCapture(self: *const Self, local: LocalId) bool {
+    return self.deferred.contains(@backingInt(local));
+}
+
+/// How `local`'s definition writes the bytes of its `storageRoot`, for
+/// lifetime solving over storage owners. A view's definition writes none of
+/// them. A part's writes its own range: the owner's first part makes the
+/// owner's bytes live, and every later part keeps the bytes before it live.
+pub fn ownerDefinition(self: *const Self, local: LocalId) StackPlan.AliasDefinition {
+    return switch (self.place(local)) {
+        .part => if (self.first_parts.contains(@backingInt(local))) .writes else .updates,
+        .slot, .parameter, .view => .reads,
     };
 }
 
@@ -737,6 +816,27 @@ pub fn ssaLocals(self: *const Self) []const LocalId {
     return self.ssa_locals.items;
 }
 
+/// The string literal `local` holds wherever it is read: its only definition
+/// assigns that literal, or copies a local that holds it. Null for a local
+/// defined any other way. While the procedure is being planned, it answers
+/// for every local some statement defines either way.
+pub fn strLiteral(self: *const Self, local: LocalId) ?lir.LIR.StrLiteral {
+    const raw = @backingInt(local);
+    if (raw >= self.str_literal_slots.items.len) return null;
+    const slot = self.str_literal_slots.items[raw];
+    return if (slot == 0) null else self.str_literal_defs.items[slot - 1].literal;
+}
+
+/// Record that a statement defines `local` as `literal`, directly or by
+/// copying `source`.
+fn noteStrLiteralDef(self: *Self, local: LocalId, literal: lir.LIR.StrLiteral, source: ?LocalId) Allocator.Error!void {
+    const slot = &self.str_literal_slots.items[@backingInt(local)];
+    // A second definition disqualifies the local once definitions are counted.
+    if (slot.* != 0) return;
+    try self.str_literal_defs.append(self.allocator, .{ .local = local, .literal = literal, .source = source });
+    slot.* = @intCast(self.str_literal_defs.items.len);
+}
+
 /// Forget the planned procedure.
 pub fn clear(self: *Self) void {
     for (self.inventory.items) |local| {
@@ -744,6 +844,14 @@ pub fn clear(self: *Self) void {
         self.view_states.items[@backingInt(local)] = .untracked;
     }
     self.inventory.clearRetainingCapacity();
+    for (self.str_literal_defs.items) |def| self.str_literal_slots.items[@backingInt(def.local)] = 0;
+    self.str_literal_defs.clearRetainingCapacity();
+    self.deferred.clearRetainingCapacity();
+    self.copies.clearRetainingCapacity();
+    self.part_candidates.clearRetainingCapacity();
+    self.max_str_parts = 0;
+    self.group_first.clearRetainingCapacity();
+    self.first_parts.clearRetainingCapacity();
     for (self.ssa_locals.items) |local| self.reps.items[@backingInt(local)] = .memory;
     self.ssa_locals.clearRetainingCapacity();
     self.merges.clearRetainingCapacity();
@@ -759,8 +867,11 @@ pub fn clear(self: *Self) void {
 /// (how a direct call passes argument `operand.arg` or receives its result),
 /// `isShared(stmt)` (the emitter enters `stmt` through a shared block),
 /// `borrowParam(index)` (the ABI supplies stable parameter storage),
-/// `memoryView(assign)` (the committed byte range of an aggregate alias), and
-/// `returnAccess()` (how a `ret` reads its value).
+/// `memoryView(assign)` (the committed byte range of an aggregate alias),
+/// `partOffset(target, operand, construction)` (where a record or tag
+/// construction stores one operand in its target's own slot), `slotSize(local)` (the bytes of a
+/// memory local's storage), and `returnAccess()` (how a `ret` reads its
+/// value).
 pub fn plan(
     self: *Self,
     store: *const LirStore,
@@ -777,6 +888,11 @@ pub fn plan(
         @memset(self.reps.items[old_len..], .memory);
         try self.addressed.resize(self.allocator, local_count);
         @memset(self.addressed.items[old_len..], false);
+    }
+    if (self.str_literal_slots.items.len < local_count) {
+        const old_len = self.str_literal_slots.items.len;
+        try self.str_literal_slots.resize(self.allocator, local_count);
+        @memset(self.str_literal_slots.items[old_len..], 0);
     }
     if (self.places.items.len < local_count) {
         const old_len = self.places.items.len;
@@ -814,13 +930,78 @@ pub fn plan(
         if ((try self.visited.getOrPut(self.allocator, @backingInt(id))).found_existing) continue;
         const stmt = store.getCFStmt(id);
         self.noteAddressedOperands(store, stmt, ops);
-        if (stmt == .assign_ref) {
-            if (ops.memoryView(stmt.assign_ref)) |view| {
-                self.view_states.items[@backingInt(stmt.assign_ref.target)] = .candidate;
-                self.view_states.items[@backingInt(view.source)] = .candidate;
-            }
+        switch (stmt) {
+            .assign_ref => |assign| {
+                if (ops.memoryView(assign)) |view| {
+                    self.view_states.items[@backingInt(assign.target)] = .candidate;
+                    self.view_states.items[@backingInt(view.source)] = .candidate;
+                }
+                switch (assign.op.kind) {
+                    .local, .list_reinterpret, .nominal => try self.copies.append(self.allocator, .{ assign.op.source, assign.target }),
+                    .discriminant, .field, .tag_payload, .tag_payload_struct => {},
+                }
+                // Only a copy walked after its source's definition is
+                // recorded.
+                if (assign.op.kind == .local) {
+                    if (self.strLiteral(assign.op.source)) |literal| try self.noteStrLiteralDef(assign.target, literal, assign.op.source);
+                }
+            },
+            .set_local => |assign| try self.copies.append(self.allocator, .{ assign.value, assign.target }),
+            .str_match => |s| try self.noteDeferredCaptures(store, s.source, store.stmtRow(s.data).steps),
+            .str_match_set => |s| {
+                const arms = store.getStrMatchArms(s.arms);
+                for (0..arms.len) |i| try self.noteDeferredCaptures(store, s.source, GuardedList.at(arms, i).steps);
+            },
+            .assign_low_level => |assign| if (assign.op == .str_from_parts) {
+                self.max_str_parts = @max(self.max_str_parts, @as(u32, @intCast(assign.args.len)));
+            },
+            .assign_struct => |assign| {
+                const fields = store.getLocalSpan(assign.fields);
+                for (0..fields.len) |i| {
+                    try self.notePartCandidate(assign.target, GuardedList.at(fields, i), .{ .field = @intCast(i) }, ops);
+                }
+            },
+            .assign_tag => |assign| if (assign.payload) |payload| {
+                try self.notePartCandidate(assign.target, payload, .{ .payload = assign.discriminant }, ops);
+            },
+            .assign_literal => |assign| switch (assign.value) {
+                .str_literal => |literal| try self.noteStrLiteralDef(assign.target, literal, null),
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .static_data, .bytes_literal, .proc_ref => {},
+            },
+            .init_uninitialized,
+            .dyn,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_list,
+            .store_struct,
+            .store_tag,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => {},
         }
         try lir.BodyClone.appendSuccessors(store, &self.work, id, self.allocator);
+    }
+    // A copy of a deferred capture defers too (the emitter's `copyLocal`).
+    var changed = self.deferred.count() != 0;
+    while (changed) {
+        changed = false;
+        for (self.copies.items) |copy| {
+            if (self.deferred.contains(@backingInt(copy[0])) and !(try self.deferred.getOrPut(self.allocator, @backingInt(copy[1]))).found_existing) changed = true;
+        }
     }
 
     var param_count: usize = 0;
@@ -837,15 +1018,32 @@ pub fn plan(
     const has_memory_candidates = for (self.inventory.items) |local| {
         if (self.view_states.items[@backingInt(local)] == .candidate) break true;
     } else false;
-    if (self.ssa_locals.items.len == 0 and !has_memory_candidates) return;
+    if (self.ssa_locals.items.len == 0 and !has_memory_candidates and self.str_literal_defs.items.len == 0) return;
     try self.classify(store, params, param_count, root, ops);
+}
+
+fn notePartCandidate(self: *Self, target: LocalId, part: LocalId, construction: Construction, ops: anytype) Allocator.Error!void {
+    const offset = ops.partOffset(target, part, construction) orelse return;
+    self.view_states.items[@backingInt(target)] = .candidate;
+    self.view_states.items[@backingInt(part)] = .candidate;
+    try self.part_candidates.append(self.allocator, .{ .target = target, .part = part, .offset = offset });
+}
+
+fn noteDeferredCaptures(self: *Self, store: *const LirStore, source: LocalId, steps: lir.LIR.StrMatchStepSpan) Allocator.Error!void {
+    try self.deferred.put(self.allocator, @backingInt(source), {});
+    const captures = store.getStrMatchSteps(steps);
+    for (0..captures.len) |i| switch (GuardedList.at(captures, i).capture) {
+        .discard => {},
+        .view => |view| try self.deferred.put(self.allocator, @backingInt(view), {}),
+    };
 }
 
 const Tracked = struct {
     plan: *const Self,
 
     pub fn tracks(self: Tracked, local: LocalId) bool {
-        return self.plan.rep(local) != .memory or self.plan.view_states.items[@backingInt(local)] != .untracked;
+        return self.plan.rep(local) != .memory or self.plan.view_states.items[@backingInt(local)] != .untracked or
+            self.plan.strLiteral(local) != null;
     }
 
     pub fn statement(_: Tracked, _: *StackPlan, _: u32, _: lir.LIR.CFStmt) Allocator.Error!void {}
@@ -884,6 +1082,9 @@ fn planMemory(self: *Self, store: *const LirStore, stack: *StackPlan, params: Lo
         // A layout can also have an SSA carrier (Bool is a tag union). An
         // addressed alias must materialize that value, not borrow its address.
         if (self.rep(view.source) != .memory) continue;
+        // The emitter writes a deferred capture's bytes when it first needs
+        // them, not at its definition.
+        if (self.isDeferredCapture(target) or self.isDeferredCapture(view.source)) continue;
         const t = stack.localIndex(target).?;
         const s = stack.localIndex(view.source).?;
         if (stack.values.items[t].definitions != 1 or stack.values.items[t].mutable or
@@ -936,6 +1137,117 @@ fn planMemory(self: *Self, store: *const LirStore, stack: *StackPlan, params: Lo
             self.view_states.items[raw] = .resolved;
         }
     }
+    try self.placeParts(store, stack, ops);
+}
+
+/// Define construction operands in place, inside the storage their record or
+/// tag construction stores them in.
+///
+/// A part shares its owner's bytes from its own definition on, so the part's
+/// definition and its owner's must both be the only definitions of
+/// immutable, non-parameter locals, and no local that reads the bytes the
+/// part's definitions write may be live on entry to any of those
+/// definitions: neither the owner, nor a view of it, nor an enclosing
+/// aggregate the owner is itself a part of. Every definition that writes an
+/// owner's bytes lies in the owner's definition's block, so the earliest of
+/// them is the first write on every path that reaches the owner's (see
+/// `ownerDefinition`).
+fn placeParts(self: *Self, store: *const LirStore, stack: *StackPlan, ops: anytype) Allocator.Error!void {
+    const local_count = store.localCount();
+    if (self.group_next.items.len < local_count) {
+        try self.group_next.resize(self.allocator, local_count);
+        try self.group_tail.resize(self.allocator, local_count);
+    }
+    if (self.part_candidates.items.len == 0) return;
+    for (self.inventory.items) |local| {
+        self.group_next.items[@backingInt(local)] = no_member;
+        self.group_tail.items[@backingInt(local)] = @backingInt(local);
+    }
+    for (self.inventory.items) |local| {
+        if (self.place(local) != .view) continue;
+        self.appendMember(self.storageRoot(local), local);
+    }
+    for (self.part_candidates.items) |candidate| {
+        try self.placePart(stack, candidate.target, candidate.part, candidate.offset, ops);
+    }
+    var firsts = self.group_first.valueIterator();
+    while (firsts.next()) |first| try self.first_parts.put(self.allocator, @backingInt(first.*), {});
+}
+
+fn appendMember(self: *Self, root: LocalId, member: LocalId) void {
+    const tail = self.group_tail.items[@backingInt(root)];
+    self.group_next.items[tail] = @backingInt(member);
+    self.group_tail.items[@backingInt(root)] = self.group_tail.items[@backingInt(member)];
+}
+
+/// The definition node of `local`, which has exactly one.
+fn definitionNode(self: *const Self, stack: *const StackPlan, local: LocalId) u32 {
+    return self.value_accesses.items[stack.localIndex(local).?].definition.?;
+}
+
+/// Whether `local` may share storage it does not own the definition of:
+/// a memory local defined once, never replaced, and not captured lazily.
+fn singleDefinitionMemory(self: *const Self, stack: *const StackPlan, local: LocalId) bool {
+    if (self.rep(local) != .memory or self.isDeferredCapture(local)) return false;
+    if (self.view_states.items[@backingInt(local)] == .parameter) return false;
+    const index = stack.localIndex(local) orelse return false;
+    const value = stack.values.items[index];
+    return value.definitions == 1 and !value.mutable;
+}
+
+fn placePart(self: *Self, stack: *StackPlan, target: LocalId, part: LocalId, offset: u32, ops: anytype) Allocator.Error!void {
+    if (part == target or self.place(part) != .slot) return;
+    switch (self.place(target)) {
+        .slot, .part => {},
+        .parameter, .view => return,
+    }
+    if (!self.singleDefinitionMemory(stack, part) or !self.singleDefinitionMemory(stack, target)) return;
+    const root = self.storageRoot(target);
+    if (root == part) return;
+    const base = self.storageOffset(target) + offset;
+    const part_definition = self.definitionNode(stack, part);
+    const root_definition = self.definitionNode(stack, root);
+    if (stack.nodeBlock(part_definition) != stack.nodeBlock(root_definition)) return;
+
+    // No reader of the bytes the part's group writes may be live where one
+    // of the group's definitions writes them.
+    const accesses = stack.sortedAccesses();
+    const end = base + ops.slotSize(part);
+    var member = @backingInt(root);
+    while (member != no_member) : (member = self.group_next.items[member]) {
+        const reader: LocalId = @fromBackingInt(@intCast(member));
+        const start = self.storageOffset(reader);
+        if (start >= end or base >= start + ops.slotSize(reader)) continue;
+        const reader_index = stack.localIndex(reader).?;
+        const span = self.value_accesses.items[reader_index];
+        var writer = @backingInt(part);
+        while (writer != no_member) : (writer = self.group_next.items[writer]) {
+            const local: LocalId = @fromBackingInt(@intCast(writer));
+            if (local != part and self.place(local) != .part) continue;
+            if (stack.liveIn(reader_index, accesses[span.start..span.end], self.definitionNode(stack, local))) return;
+        }
+    }
+
+    var cursor = @backingInt(part);
+    while (cursor != no_member) : (cursor = self.group_next.items[cursor]) {
+        const place_ptr = &self.places.items[cursor];
+        place_ptr.* = switch (place_ptr.*) {
+            .slot => .{ .part = .{ .source = root, .offset = base } },
+            .view => |view| .{ .view = .{ .source = root, .offset = base + view.offset } },
+            .part => |view| .{ .part = .{ .source = root, .offset = base + view.offset } },
+            .parameter => unreachable, // the part's group holds only the part (a slot) and its views and parts
+        };
+    }
+    self.appendMember(root, part);
+
+    const part_first = self.group_first.get(@backingInt(part)) orelse part;
+    _ = self.group_first.remove(@backingInt(part));
+    const entry = try self.group_first.getOrPut(self.allocator, @backingInt(root));
+    if (!entry.found_existing or
+        stack.nodePosition(self.definitionNode(stack, part_first)) < stack.nodePosition(self.definitionNode(stack, entry.value_ptr.*)))
+    {
+        entry.value_ptr.* = part_first;
+    }
 }
 
 /// Split the SSA locals into dominating and merged ones, and give every merge
@@ -967,6 +1279,14 @@ fn classify(self: *Self, store: *const LirStore, params: LocalSpan, param_count:
     }
 
     try self.planMemory(store, &stack_plan, params, root, ops);
+
+    // Keep the locals whose candidate definition is their only one, and
+    // whose copied local, walked before them, was kept.
+    for (self.str_literal_defs.items) |def| {
+        const value = stack_plan.values.items[stack_plan.localIndex(def.local).?];
+        const copies_literal = if (def.source) |source| self.strLiteral(source) != null else true;
+        if (value.definitions != 1 or value.mutable or !copies_literal) self.str_literal_slots.items[@backingInt(def.local)] = 0;
+    }
 
     const entry = self.indexes.nodeOf(root).?;
     var any_merged = false;
@@ -1134,6 +1454,9 @@ fn noteAddressedOperands(self: *Self, store: *const LirStore, stmt: lir.LIR.CFSt
 const TestOps = struct {
     store: *const LirStore,
     local_alias_views: bool = false,
+    /// Construction operands that are not scalar carriers are stored at
+    /// 8 bytes per operand index.
+    parts: bool = false,
 
     pub fn isCandidate(self: TestOps, local: LocalId) bool {
         return switch (self.store.getLocal(local).layout_idx) {
@@ -1153,6 +1476,18 @@ const TestOps = struct {
     pub fn memoryView(self: TestOps, assign: @FieldType(lir.LIR.CFStmt, "assign_ref")) ?View {
         if (self.local_alias_views and assign.op.kind == .local and !self.isCandidate(assign.target)) return .{ .source = assign.op.source, .offset = 0 };
         return null;
+    }
+
+    pub fn partOffset(self: TestOps, _: LocalId, operand: LocalId, construction: Construction) ?u32 {
+        if (!self.parts or self.isCandidate(operand)) return null;
+        return switch (construction) {
+            .field => |index| index * 8,
+            .payload => 0,
+        };
+    }
+
+    pub fn slotSize(_: TestOps, _: LocalId) u32 {
+        return 8;
     }
 
     pub fn callAccess(_: TestOps, _: @FieldType(lir.LIR.CFStmt, "assign_call"), _: CallOperand) Access {
@@ -1339,6 +1674,12 @@ test "a local live into a shared continuation from two arms merges there" {
         pub fn memoryView(self: @This(), assign: @FieldType(lir.LIR.CFStmt, "assign_ref")) ?View {
             return self.inner.memoryView(assign);
         }
+        pub fn partOffset(self: @This(), target: LocalId, operand: LocalId, construction: Construction) ?u32 {
+            return self.inner.partOffset(target, operand, construction);
+        }
+        pub fn slotSize(self: @This(), local: LocalId) u32 {
+            return self.inner.slotSize(local);
+        }
         pub fn callAccess(self: @This(), call: @FieldType(lir.LIR.CFStmt, "assign_call"), operand: CallOperand) Access {
             return self.inner.callAccess(call, operand);
         }
@@ -1360,8 +1701,8 @@ test "issue 12505 memory aliases share immutable parameters but retain mutable s
     const gpa = std.testing.allocator;
     var store = LirStore.init(gpa);
     defer store.deinit();
-    // The test policy admits aliases of an addressable layout. Production
-    // admission uses committed struct and inline tag layouts instead.
+    // The test policy admits whole-value aliases of an addressable layout,
+    // as production admission does for strings.
     const input = try store.addLocal(.{ .layout_idx = .str });
     const replacement = try store.addLocal(.{ .layout_idx = .str });
     const snapshot = try store.addLocal(.{ .layout_idx = .str });
@@ -1443,4 +1784,68 @@ test "issue 12819 single-definition join views are refreshed on each loop iterat
     try value_plan.plan(&store, try store.addLocalSpan(&.{ input, done }), try store.addLocalSpan(&.{ joined, alias, chained }), body, TestOps{ .store = &store, .local_alias_views = true });
     try std.testing.expectEqual(joined, value_plan.place(alias).view.source);
     try std.testing.expectEqual(joined, value_plan.place(chained).view.source);
+}
+
+test "construction operands are defined in place inside the aggregate that stores them" {
+    const gpa = std.testing.allocator;
+    var store = LirStore.init(gpa);
+    defer store.deinit();
+    const input = try store.addLocal(.{ .layout_idx = .str });
+    const first = try store.addLocal(.{ .layout_idx = .str });
+    const second = try store.addLocal(.{ .layout_idx = .str });
+    const record = try store.addLocal(.{ .layout_idx = .str });
+    const callee_param = try store.addLocal(.{ .layout_idx = .str });
+    const callee = try store.addProcSpec(.{ .name = .fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(1), .args = try store.addLocalSpan(&.{callee_param}), .ret_layout = .str }, .none);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = record } }, .test_fixture);
+    const build = try store.addCFStmt(.{ .assign_struct = .{ .target = record, .fields = try store.addLocalSpan(&.{ first, second }), .next = ret } }, .test_fixture);
+    const make_second = try store.addCFStmt(.{ .assign_call = .{ .target = second, .proc = callee, .args = try store.addLocalSpan(&.{input}), .next = build } }, .test_fixture);
+    const make_first = try store.addCFStmt(.{ .assign_call = .{ .target = first, .proc = callee, .args = try store.addLocalSpan(&.{input}), .next = make_second } }, .test_fixture);
+    var value_plan = Self.init(gpa);
+    defer value_plan.deinit();
+    try value_plan.plan(&store, try store.addLocalSpan(&.{input}), try store.addLocalSpan(&.{ first, second, record }), make_first, TestOps{ .store = &store, .parts = true });
+    try std.testing.expectEqual(View{ .source = record, .offset = 0 }, value_plan.place(first).part);
+    try std.testing.expectEqual(View{ .source = record, .offset = 8 }, value_plan.place(second).part);
+    try std.testing.expect(value_plan.place(record) == .slot);
+    // The first part's definition begins the record's bytes; the second
+    // keeps the first's alive.
+    try std.testing.expectEqual(StackPlan.AliasDefinition.writes, value_plan.ownerDefinition(first));
+    try std.testing.expectEqual(StackPlan.AliasDefinition.updates, value_plan.ownerDefinition(second));
+    try std.testing.expectEqual(StackPlan.AliasDefinition.reads, value_plan.ownerDefinition(record));
+}
+
+test "a construction operand keeps its own slot while the previous aggregate is still read" {
+    const gpa = std.testing.allocator;
+    var store = LirStore.init(gpa);
+    defer store.deinit();
+    const input = try store.addLocal(.{ .layout_idx = .str });
+    const done = try store.addLocal(.{ .layout_idx = .bool });
+    const field = try store.addLocal(.{ .layout_idx = .str });
+    const previous = try store.addLocal(.{ .layout_idx = .str });
+    const record = try store.addLocal(.{ .layout_idx = .str });
+    const callee_param = try store.addLocal(.{ .layout_idx = .str });
+    const callee = try store.addProcSpec(.{ .name = .fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(1), .args = try store.addLocalSpan(&.{callee_param}), .ret_layout = .str }, .none);
+    var join_points = JoinPointIds{};
+    const join_id = join_points.fresh();
+    // Each iteration defines the field, then reads the record the previous
+    // iteration built, then builds a new one: the field's definition must
+    // not write into bytes the read still needs.
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = previous } }, .test_fixture);
+    const branch = try store.addCFStmt(.{ .switch_stmt = .{ .cond = done, .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = ret }}), .default_branch = jump } }, .test_fixture);
+    const build = try store.addCFStmt(.{ .assign_struct = .{ .target = record, .fields = try store.addLocalSpan(&.{field}), .next = branch } }, .test_fixture);
+    const read_previous = try store.addCFStmt(.{ .assign_call = .{ .target = previous, .proc = callee, .args = try store.addLocalSpan(&.{record}), .next = build } }, .test_fixture);
+    const make_field = try store.addCFStmt(.{ .assign_call = .{ .target = field, .proc = callee, .args = try store.addLocalSpan(&.{input}), .next = read_previous } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .join = .{ .id = join_id, .params = .empty(), .body = make_field, .remainder = jump } }, .test_fixture);
+    var value_plan = Self.init(gpa);
+    defer value_plan.deinit();
+    try value_plan.plan(&store, try store.addLocalSpan(&.{ input, done }), try store.addLocalSpan(&.{ field, previous, record }), body, TestOps{ .store = &store, .parts = true });
+    try std.testing.expect(value_plan.place(field) == .slot);
+
+    // Reading the record only after it is rebuilt lets the field live in it.
+    const read_after = try store.addCFStmt(.{ .assign_call = .{ .target = previous, .proc = callee, .args = try store.addLocalSpan(&.{record}), .next = branch } }, .test_fixture);
+    const build_first = try store.addCFStmt(.{ .assign_struct = .{ .target = record, .fields = try store.addLocalSpan(&.{field}), .next = read_after } }, .test_fixture);
+    const make_field_first = try store.addCFStmt(.{ .assign_call = .{ .target = field, .proc = callee, .args = try store.addLocalSpan(&.{input}), .next = build_first } }, .test_fixture);
+    const reordered = try store.addCFStmt(.{ .join = .{ .id = join_id, .params = .empty(), .body = make_field_first, .remainder = jump } }, .test_fixture);
+    try value_plan.plan(&store, try store.addLocalSpan(&.{ input, done }), try store.addLocalSpan(&.{ field, previous, record }), reordered, TestOps{ .store = &store, .parts = true });
+    try std.testing.expectEqual(View{ .source = record, .offset = 0 }, value_plan.place(field).part);
 }

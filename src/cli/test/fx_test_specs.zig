@@ -140,6 +140,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Boxed iterators and streams retain captured state across a shared host round trip (issue #12887)",
     },
     .{
+        .roc_file = "test/fx/boxy_boxable_field_take.roc",
+        .io_spec = "0<seed|1>unique: seed tag 2|1>shared: seed kept tag 1 seed kept tag 2|1>items only: 2|1>tag only: seed taken tag|1>nested: seed inner/1 1|1>payload: 3 0|1>plain: seed plain 2",
+        .description = "Generic functions move fields and tag payloads out of slots that are recursion boxes, releasing the boxes",
+    },
+    .{
         .roc_file = "test/fx/var_reassign_in_nested_block_expr.roc",
         .io_spec = "1>in_call_arg: 8|1>in_operand: 9|1>in_record: 8|1>bound_first: 8|1>constant: 8|1>branch_constant: 9|1>list_constant: 3|1>zero_call: 1|1>zero_operand: 1|1>zero_record: 0|1>statement: 8|1>loop: 5|1>list: 3|1>left|1>right|1>ordered: 23|1>early: 7",
         .description = "Nested mutable variable versions remain in scope through operands and compile-time evaluation (issue #11821)",

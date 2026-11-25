@@ -37017,6 +37017,31 @@ const BodyContext = struct {
         };
     }
 
+    /// A record update's result has its base's type, so every field the update
+    /// neither supplies nor unsets is the base's field. The result row and the
+    /// base row are instantiated from different checked types, so relate each
+    /// such field's result slot to the base slot's field before the base
+    /// lowers: the carried value and the result field then share one graph
+    /// class, and a representation the base produces there reaches the result
+    /// through the update's witness selection.
+    fn relateRecordUpdateCarriedFields(
+        self: *BodyContext,
+        record: CheckedRecordConstruction,
+        result_node: NodeId,
+        base_node: NodeId,
+    ) Allocator.Error!void {
+        var labels = try self.recordExprLabels(record);
+        defer labels.deinit(self.allocator);
+        var result = try self.constructionFields(result_node);
+        defer result.deinit(self.allocator);
+        var base_fields = try self.constructionFields(base_node);
+        defer base_fields.deinit(self.allocator);
+        for (result.fields) |field| {
+            if (labels.values.contains(field.name) or labels.unsets.contains(field.name)) continue;
+            try relateRequestComponent(self.graph, base_fields.get(field.name).ty, field.ty);
+        }
+    }
+
     /// Compute every child's slot, relate each child to its slot, and
     /// allocate the child results. Returns the lambda and closure children
     /// to draft at their slots, owned.
@@ -37052,7 +37077,9 @@ const BodyContext = struct {
             .record => |record| {
                 var slot_index: usize = 0;
                 if (record.record.ext) |ext| {
-                    task.slots[slot_index] = try self.instNode(checkedExpr(self.view, ExprSite.read(ext)).ty);
+                    const base_slot = try self.instNode(checkedExpr(self.view, ExprSite.read(ext)).ty);
+                    try self.relateRecordUpdateCarriedFields(record.record, task.node, base_slot);
+                    task.slots[slot_index] = base_slot;
                     slot_index += 1;
                 }
                 var construction = try self.constructionFields(task.node);
@@ -52930,8 +52957,7 @@ const BodyContext = struct {
         const wanted = self.nameStore().recordFieldLabelText(field_name);
         // A hoisted validation's unit result omits no field.
         const record_expr = exprSourceNode(self.view, checked_expr) orelse return null;
-        for (self.view.bodies.recordOmittedDefaults()) |omitted| {
-            if (omitted.expr != record_expr) continue;
+        for (self.view.bodies.recordOmittedDefaultsOf(record_expr)) |omitted| {
             const entry = self.view.bodies.recordOmittedDefault(omitted);
             if (Ident.textEql(self.view.names.recordFieldLabelText(entry.field_name), wanted)) {
                 return entry.default;

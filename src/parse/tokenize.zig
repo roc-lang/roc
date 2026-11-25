@@ -786,6 +786,9 @@ pub const Cursor = struct {
     messages: []Diagnostic,
     message_count: u32,
     has_non_carriage_return_errors: bool = false,
+    /// Where the first diagnostic that did not fit in `messages` points.
+    /// Meaningful only once `message_count` exceeds `messages.len`.
+    first_dropped_region: base.Region = base.Region.zero(),
     tab_width: u8 = 4, // TODO: make this configurable
     /// The value facts of the number token `chompNumber` scanned last.
     number: NumberScanner = .{},
@@ -800,17 +803,17 @@ pub const Cursor = struct {
         };
     }
 
-    fn pushMessageHere(self: *Cursor, tag: Diagnostic.Tag) void {
-        self.pushMessage(tag, self.pos, self.pos);
-    }
-
+    /// Record a diagnostic for the source bytes `begin..end`. Every
+    /// diagnostic covers at least one byte, so a report always has source
+    /// text to point at.
     fn pushMessage(self: *Cursor, tag: Diagnostic.Tag, begin: u32, end: u32) void {
+        std.debug.assert(begin < end and end <= self.buf.len);
         if (tag != .MisplacedCarriageReturn) self.has_non_carriage_return_errors = true;
+        const region = base.Region.from_raw_offsets(begin, end);
         if (self.message_count < self.messages.len) {
-            self.messages[self.message_count] = Diagnostic{
-                .tag = tag,
-                .region = base.Region.from_raw_offsets(begin, end),
-            };
+            self.messages[self.message_count] = Diagnostic{ .tag = tag, .region = region };
+        } else if (self.message_count == self.messages.len) {
+            self.first_dropped_region = region;
         }
         self.message_count += 1;
     }
@@ -855,7 +858,7 @@ pub const Cursor = struct {
                 if (self.pos < self.buf.len and self.buf[self.pos] == '\n') {
                     self.pos += 1;
                 } else {
-                    self.pushMessageHere(.MisplacedCarriageReturn);
+                    self.pushMessage(.MisplacedCarriageReturn, self.pos - 1, self.pos);
                 }
             } else if (b == '#') {
                 self.pos += 1;
@@ -863,7 +866,7 @@ pub const Cursor = struct {
                     self.pos += 1;
                 }
             } else if (b >= 0 and b <= 31) {
-                self.pushMessageHere(.AsciiControl);
+                self.pushMessage(.AsciiControl, self.pos, self.pos + 1);
                 self.pos += 1;
             } else {
                 break;
@@ -874,7 +877,8 @@ pub const Cursor = struct {
     /// Chomp a number token starting at its first digit, recording its value
     /// facts in `self.number`.
     pub fn chompNumber(self: *Cursor) Token.Tag {
-        const initialDigit = self.buf[self.pos];
+        const start = self.pos;
+        const initialDigit = self.buf[start];
         self.pos += 1;
         self.number = .{};
         self.number.decimalDigit(initialDigit - '0');
@@ -884,19 +888,20 @@ pub const Cursor = struct {
             var saw_separator = false;
             while (true) {
                 const c = self.peek() orelse 0;
-                if (self.chompBasePrefixedInteger(c)) |prefixed| {
-                    // `parseInto` reads a base prefix only right after the
-                    // leading `0`, so a separator before it spells a
-                    // different number there.
-                    if (saw_separator) self.number.scanned.flags.exact = false;
-                    tok = prefixed;
-                    break;
+                // A base prefix is the two characters `0x`, `0o` or `0b`
+                // with nothing between them. After a separator the letter
+                // is not a prefix, so `0_x10` ends in the bad suffix `x10`.
+                if (!saw_separator) {
+                    if (self.chompBasePrefixedInteger(c)) |prefixed| {
+                        tok = prefixed;
+                        break;
+                    }
                 }
                 switch (c) {
                     '0'...'9' => {
-                        self.pushMessageHere(.LeadingZero);
                         tok = self.chompNumberBase10();
                         tok = self.chompNumberSuffix(tok);
+                        self.pushMessage(.LeadingZero, start, self.pos);
                         break;
                     },
                     NumericLiteral.digit_separator => {
@@ -930,7 +935,7 @@ pub const Cursor = struct {
         inline for (NumericLiteral.base_prefixes) |prefix| {
             if (c == prefix.lower or c == prefix.upper) {
                 if (c == prefix.upper) {
-                    self.pushMessageHere(.UppercaseBase);
+                    self.pushMessage(.UppercaseBase, self.pos, self.pos + 1);
                 }
                 self.pos += 1;
                 var tok = Token.Tag.Int;
@@ -1281,26 +1286,26 @@ pub const Cursor = struct {
             // Single-byte UTF-8 (ASCII)
             // Allow tab (0x09) in addition to standard printable ASCII
             if (!std.ascii.isPrint(c) and c != '\t') {
-                self.pushMessageHere(.NonPrintableUnicodeInStrLiteral);
+                self.pushMessage(.NonPrintableUnicodeInStrLiteral, self.pos, self.pos + 1);
             }
             self.pos += 1;
             return c;
         }
 
         const utf8_len = std.unicode.utf8ByteSequenceLength(c) catch {
-            self.pushMessageHere(.InvalidUtf8InSource);
+            self.pushMessage(.InvalidUtf8InSource, self.pos, self.pos + 1);
             self.pos += 1;
             return null;
         };
         if (self.pos + utf8_len > self.buf.len) {
             // Incomplete UTF-8 sequence at end of input
-            self.pushMessageHere(.InvalidUtf8InSource);
+            self.pushMessage(.InvalidUtf8InSource, self.pos, self.pos + 1);
             self.pos += 1;
             return null;
         }
         const utf8_bytes = self.buf[self.pos .. self.pos + utf8_len];
         const codepoint = std.unicode.utf8Decode(utf8_bytes) catch {
-            self.pushMessageHere(.InvalidUtf8InSource);
+            self.pushMessage(.InvalidUtf8InSource, self.pos, self.pos + 1);
             self.pos += 1;
             return null;
         };
@@ -1312,7 +1317,7 @@ pub const Cursor = struct {
             (codepoint >= 0xD800 and codepoint <= 0xDFFF) or // Surrogate pairs (invalid in UTF-8)
             codepoint == 0xFFFE or codepoint == 0xFFFF) // Non-characters
         {
-            self.pushMessageHere(.NonPrintableUnicodeInStrLiteral);
+            self.pushMessage(.NonPrintableUnicodeInStrLiteral, self.pos, self.pos + utf8_len);
         }
 
         // Valid UTF-8 sequence - advance by the full sequence length
@@ -1326,6 +1331,9 @@ pub const TokenOutput = struct {
     tokens: TokenizedBuffer,
     messages: []Diagnostic,
     extra_messages_dropped: usize,
+    /// Where the first dropped diagnostic points. Meaningful only when
+    /// `extra_messages_dropped` is nonzero.
+    first_dropped_region: base.Region,
     /// Fatal status survives diagnostic buffer exhaustion.
     has_errors: bool,
     /// Formatting eligibility is independent of the diagnostic buffer capacity.
@@ -1342,6 +1350,8 @@ const StringKind = enum {
 const StringInterpolationState = struct {
     kind: StringKind,
     curly_depth: u32,
+    /// Where the string literal this interpolation interrupts begins.
+    opening_quote_pos: u32,
 };
 
 /// The tokenizer that uses a Cursor and produces a TokenizedBuffer.
@@ -1379,6 +1389,7 @@ pub const Tokenizer = struct {
             .tokens = self.output,
             .messages = self.cursor.messages[0..actual_message_count],
             .extra_messages_dropped = self.cursor.message_count - actual_message_count,
+            .first_dropped_region = self.cursor.first_dropped_region,
             .has_errors = self.cursor.message_count != 0,
             .has_non_carriage_return_errors = self.cursor.has_non_carriage_return_errors,
             .source_rejected = self.source_rejected,
@@ -1786,9 +1797,7 @@ pub const Tokenizer = struct {
 
                         const last = self.string_interpolation_stack.pop() orelse unreachable; // the enclosing branch checked the stack is non-empty
                         try self.pushTokenNormalHere(gpa, .CloseStringInterpolation, start);
-                        // For string interpolations, we don't have the original opening quote position
-                        // so we use the current position as a fallback
-                        try self.tokenizeStringLikeLiteralBody(gpa, last.kind, self.cursor.pos);
+                        try self.tokenizeStringLikeLiteralBody(gpa, last.kind, last.opening_quote_pos);
                     } else {
                         try self.pushTokenNormalHere(gpa, .CloseCurly, start);
                     }
@@ -1966,7 +1975,7 @@ pub const Tokenizer = struct {
     const open_curly = '{';
     const close_curly = '}';
 
-    pub fn tokenizeStringLikeLiteralBody(self: *Tokenizer, gpa: std.mem.Allocator, kind: StringKind, opening_quote_pos: usize) std.mem.Allocator.Error!void {
+    pub fn tokenizeStringLikeLiteralBody(self: *Tokenizer, gpa: std.mem.Allocator, kind: StringKind, opening_quote_pos: u32) std.mem.Allocator.Error!void {
         const start = self.cursor.pos;
         var string_part_tag: Token.Tag = .StringPart;
         while (self.cursor.pos < self.cursor.buf.len) {
@@ -1976,13 +1985,13 @@ pub const Tokenizer = struct {
                 const dollar_start = self.cursor.pos;
                 self.cursor.pos += 2;
                 try self.pushTokenNormalHere(gpa, .OpenStringInterpolation, dollar_start);
-                try self.string_interpolation_stack.append(.{ .kind = kind, .curly_depth = 0 });
+                try self.string_interpolation_stack.append(.{ .kind = kind, .curly_depth = 0, .opening_quote_pos = opening_quote_pos });
                 return;
             } else if (c == '\n') {
                 try self.pushTokenNormalHere(gpa, string_part_tag, start);
                 if (kind == .single_line) {
                     // Include the opening quote in the error region
-                    self.cursor.pushMessage(.UnclosedString, @intCast(opening_quote_pos), @intCast(self.cursor.pos));
+                    self.cursor.pushMessage(.UnclosedString, opening_quote_pos, self.cursor.pos);
                     try self.pushTokenNormalHere(gpa, .StringEnd, self.cursor.pos);
                 }
                 return;
@@ -2006,7 +2015,7 @@ pub const Tokenizer = struct {
         }
         if (kind == .single_line) {
             // Include the opening quote in the error region
-            self.cursor.pushMessage(.UnclosedString, @intCast(opening_quote_pos), @intCast(self.cursor.pos));
+            self.cursor.pushMessage(.UnclosedString, opening_quote_pos, self.cursor.pos);
         }
         try self.pushTokenNormalHere(gpa, string_part_tag, start);
     }
@@ -2816,9 +2825,9 @@ test "tokenizer number records at the edges of the exact form" {
         .{ .text = "1_000_000", .outcome = .exact },
         .{ .text = "0_1", .outcome = .exact },
         .{ .text = "1_.5_0", .outcome = .exact },
-        // A separator before a base prefix: the text parser reads `0_`.
-        .{ .text = "0_x10", .outcome = .inexact },
-        .{ .text = "0_b1", .outcome = .inexact },
+        // A separator before a base letter leaves no base prefix.
+        .{ .text = "0_x10", .outcome = .not_a_number },
+        .{ .text = "0_b1", .outcome = .not_a_number },
         // Base prefixes up to and past 64 bits.
         .{ .text = "0xFFFF_FFFF_FFFF_FFFF", .outcome = .exact },
         .{ .text = "0x1_0000_0000_0000_0000", .outcome = .inexact },
@@ -3163,6 +3172,58 @@ test "tokenizer with invalid UTF-8" {
     }
 }
 
+test "issue 13366: every tokenizer diagnostic covers the source it reports" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { source: []const u8, tag: Diagnostic.Tag, start: u32, end: u32 }{
+        .{ .source = "n = 0000", .tag = .LeadingZero, .start = 4, .end = 8 },
+        .{ .source = "n = 007.5e2", .tag = .LeadingZero, .start = 4, .end = 11 },
+        .{ .source = "n = 0_12u8", .tag = .LeadingZero, .start = 4, .end = 10 },
+        .{ .source = "n = 0X1F", .tag = .UppercaseBase, .start = 5, .end = 6 },
+        .{ .source = "n = 0B_11", .tag = .UppercaseBase, .start = 5, .end = 6 },
+        .{ .source = "a\rb", .tag = .MisplacedCarriageReturn, .start = 1, .end = 2 },
+        .{ .source = "a \x01 b", .tag = .AsciiControl, .start = 2, .end = 3 },
+        .{ .source = "s = \"a\x01b\"", .tag = .NonPrintableUnicodeInStrLiteral, .start = 6, .end = 7 },
+        .{ .source = "s = \"a\u{85}b\"", .tag = .NonPrintableUnicodeInStrLiteral, .start = 6, .end = 8 },
+        .{ .source = "s = \"a\xffb\"", .tag = .InvalidUtf8InSource, .start = 6, .end = 7 },
+        .{ .source = "s = \"a\xc3", .tag = .InvalidUtf8InSource, .start = 6, .end = 7 },
+        .{ .source = "s = \"a${x}\nt = 1", .tag = .UnclosedString, .start = 4, .end = 10 },
+        .{ .source = "s = \"a${x}", .tag = .UnclosedString, .start = 4, .end = 10 },
+        .{ .source = "s = \"${\"${x} b\n", .tag = .UnclosedString, .start = 7, .end = 14 },
+    };
+    for (cases) |case| {
+        var diagnostics: [4]Diagnostic = undefined;
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, case.source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(case.tag, messages[0].tag);
+        try std.testing.expectEqual(case.start, messages[0].region.start.offset);
+        try std.testing.expectEqual(case.end, messages[0].region.end.offset);
+    }
+}
+
+test "the first diagnostic past the buffer's capacity records where it points" {
+    const gpa = std.testing.allocator;
+    var diagnostics: [1]Diagnostic = undefined;
+    var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+    defer env.deinit(gpa);
+
+    var tokenizer = try Tokenizer.init(&env, gpa, "a = 01\nb = 0X2\nc = 03\n", &diagnostics);
+    try tokenizer.tokenize(gpa);
+    var output = tokenizer.finishAndDeinit();
+    defer output.tokens.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 1), output.messages.len);
+    try std.testing.expectEqual(@as(usize, 2), output.extra_messages_dropped);
+    try std.testing.expectEqual(@as(u32, 12), output.first_dropped_region.start.offset);
+    try std.testing.expectEqual(@as(u32, 13), output.first_dropped_region.end.offset);
+}
+
 test "single quote around invalid UTF-8 is malformed" {
     const gpa = std.testing.allocator;
     try testTokenization(gpa, &.{ '\'', 0xFF, '\'' }, &[_]Token.Tag{.MalformedSingleQuote});
@@ -3431,6 +3492,63 @@ test "number suffixes" {
     // malformed token so the digit prefix cannot become a tuple access.
     try testTokenization(gpa, "x.70000c", &[_]Token.Tag{ .LowerIdent, .MalformedNumberBadSuffix });
     try testTokenization(gpa, "x.0u8", &[_]Token.Tag{ .LowerIdent, .MalformedNumberBadSuffix });
+}
+
+test "a base prefix is contiguous" {
+    const gpa = std.testing.allocator;
+
+    // A separator between the `0` and the base letter leaves the letter and
+    // the digits after it as a suffix the number does not accept.
+    try testTokenization(gpa, "0_x10", &[_]Token.Tag{.MalformedNumberBadSuffix});
+    try testTokenization(gpa, "0_X10", &[_]Token.Tag{.MalformedNumberBadSuffix});
+    try testTokenization(gpa, "0_b1", &[_]Token.Tag{.MalformedNumberBadSuffix});
+    try testTokenization(gpa, "0_o7", &[_]Token.Tag{.MalformedNumberBadSuffix});
+    try testTokenization(gpa, "0__x10", &[_]Token.Tag{.MalformedNumberBadSuffix});
+    try testTokenization(gpa, "-0_x10", &[_]Token.Tag{.MalformedNumberBadSuffix});
+    try testTokenization(gpa, "0_x", &[_]Token.Tag{.MalformedNumberBadSuffix});
+
+    // An uppercase letter after a separator is not a base prefix either, so
+    // the tokenizer reports nothing about its case.
+    {
+        var messages: [4]Diagnostic = undefined;
+        var cursor = Cursor.init("0_B11", &messages);
+        try std.testing.expectEqual(Token.Tag.MalformedNumberBadSuffix, cursor.chompNumber());
+        try std.testing.expectEqual(@as(u32, 0), cursor.message_count);
+    }
+
+    // Separators among the digits, including right after the prefix, and
+    // trailing separators keep the number.
+    try testTokenization(gpa, "0x_10", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, "0x1_0", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, "1_0", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, "0_", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, "0_1", &[_]Token.Tag{.Int});
+
+    // A minus before an underscore is not part of a number.
+    try testTokenization(gpa, "-_1", &[_]Token.Tag{ .OpUnaryMinus, .NamedUnderscore });
+
+    // The tokenizer's value for each accepted spelling is the one the text
+    // parser derives.
+    const values = [_]struct { text: []const u8, value: u64 }{
+        .{ .text = "0x_10", .value = 16 },
+        .{ .text = "0x1_0", .value = 16 },
+        .{ .text = "0b1_0", .value = 2 },
+        .{ .text = "0o1_7", .value = 15 },
+        .{ .text = "1_0", .value = 10 },
+        .{ .text = "0_", .value = 0 },
+        .{ .text = "0_1", .value = 1 },
+    };
+    for (values) |case| {
+        errdefer std.debug.print("number text: '{s}'\n", .{case.text});
+        var messages: [4]Diagnostic = undefined;
+        var cursor = Cursor.init(case.text, &messages);
+        try std.testing.expectEqual(Token.Tag.Int, cursor.chompNumber());
+        try std.testing.expectEqual(case.text.len, cursor.pos);
+        try std.testing.expect(cursor.number.scanned.flags.exact);
+        try std.testing.expectEqual(case.value, cursor.number.scanned.significand);
+        try std.testing.expectEqual(@as(i32, 0), cursor.number.scanned.exponent10);
+        try std.testing.expectEqual(ScannedOutcome.exact, try expectScannedMatchesText(gpa, case.text));
+    }
 }
 
 test "malformed unicode identifiers" {

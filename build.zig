@@ -1614,6 +1614,7 @@ const fixture_target_aliases = [_]FixtureTargetAlias{
     .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/static-lib-platform/targets" },
     .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/field_default_root_order/platform/targets" },
     .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/target_config_not_constant/platform/targets" },
+    .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/target_config_memory_size_invalid/platform/targets" },
     .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/issue_12554_reserved_low_memory/platform/targets" },
     .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/target_config_unknown_field/platform/targets" },
     .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/stack_first_maximum_memory_too_large/platform/targets" },
@@ -1824,6 +1825,16 @@ fn setupTestPlatforms(
         .imports = host_alloc_imports,
         .bundle_compiler_rt = false,
         .dest_paths = &.{"test/wasm/wasm_import_conflict/platform/targets/wasm32/host.wasm"},
+    }));
+
+    // A wasm host whose export reaches one of its platform's two provides,
+    // and which defines nothing else.
+    prepared_hosts_step.dependOn(buildAndCopyWasmHostObject(b, wasm_target, optimize, strip, omit_frame_pointer, .{
+        .name = "unreached_provide_host",
+        .root_source_file = "test/wasm/issue_13195_unreached_provide/wasm_host.zig",
+        .imports = &.{},
+        .bundle_compiler_rt = false,
+        .dest_paths = &.{"test/wasm/issue_13195_unreached_provide/platform/targets/wasm32/host.wasm"},
     }));
 
     for (glibc_cross_targets) |cross_target| {

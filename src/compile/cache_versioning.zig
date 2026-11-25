@@ -96,8 +96,11 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// use of a name a destructuring scheme alias binds, the variables of the
 /// name's scheme, and a constant's instances at the substitutions checking
 /// recorded for those uses and for dispatches to methods bound to
-/// polymorphic callable bindings.
-const checked_envelope_version: u32 = 61;
+/// polymorphic callable bindings. Version 62 adds, for each `to_inspect`
+/// override whose inspection instance is closed, that use's edge and the
+/// constant instances it names, and stores value-form bytes literals and
+/// files imported as `Str` as images.
+const checked_envelope_version: u32 = 62;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment. Version 5 rejects builtin-conflicting import
@@ -199,8 +202,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x38, 0x9F, 0x94, 0x05, 0x6E, 0xF7, 0xDA, 0x6E, 0xAC, 0x14, 0xCD, 0xC4, 0x11, 0x21, 0x6B, 0xD2,
-        0xD9, 0xAE, 0xFC, 0xEB, 0xCE, 0x12, 0x65, 0xE6, 0x1C, 0x3B, 0xE6, 0x90, 0x68, 0x22, 0x23, 0x80,
+        0x24, 0xA6, 0xBB, 0x32, 0x7C, 0x5C, 0x44, 0xA5, 0xF0, 0xE9, 0x1B, 0xA9, 0x7B, 0xE2, 0xAC, 0x61,
+        0xB2, 0x6F, 0x0A, 0x3C, 0x4C, 0x4D, 0x73, 0x68, 0xDF, 0x1F, 0xB7, 0x65, 0x40, 0xC5, 0xE6, 0x63,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

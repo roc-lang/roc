@@ -793,7 +793,10 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
 
     const static_data_started = PipelineTiming.startDetail(unit.config.timing);
     const static_data = try static_data_exports.buildStaticData(gpa, .{ .root = modules.root, .imports = unit.views }, &lowered, unit.target, .{});
-    defer static_data_exports.deinitStaticData(gpa, static_data);
+    // Native pieces take the static data, whose payload bytes their
+    // constants share; every other path releases it here.
+    var static_data_owned = true;
+    defer if (static_data_owned) static_data_exports.deinitStaticData(gpa, static_data);
     PipelineTiming.finishUnitStep(unit.config.timing, static_data_started, .static_data);
 
     var codegen_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_codegen);
@@ -850,6 +853,7 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     object_compiler.relocatable_expect_sites = unit.test_unit;
     const pieces = try gpa.create(backend.dev.UnitPieces.Pieces);
     errdefer gpa.destroy(pieces);
+    static_data_owned = false;
     pieces.* = object_compiler.compileToPieces(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,

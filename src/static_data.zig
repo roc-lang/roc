@@ -8,6 +8,7 @@ const builtin = @import("builtin");
 const invariant = @import("base").invariant;
 const collections = @import("collections");
 
+const builtin = @import("builtin");
 const builtins = @import("builtins");
 const check = @import("check");
 const layout = @import("layout");
@@ -156,10 +157,17 @@ const SymbolicValue = struct {
 };
 
 const SymbolicAllocation = struct {
+    /// Views the payload of `node`.
     payload: SymbolicValue,
     alignment: u32,
     contains_refcounted: bool,
     list_element_count: ?usize,
+    /// The allocation laid out as its frozen node holds it: `data_offset`
+    /// bytes of header, then the payload. Allocated from the machine's child
+    /// allocator, so freezing the allocation moves this buffer into its node
+    /// rather than copying the payload; null once moved.
+    node: ?[]u8,
+    data_offset: u32,
 };
 
 /// One running initializer's locals, indexed by LIR local id. Frames are
@@ -476,6 +484,9 @@ const StaticInitializerMachine = struct {
     fn deinit(self: *StaticInitializerMachine) void {
         var plans = self.packed_plans.valueIterator();
         while (plans.next()) |plan| plan.deinit();
+        for (self.allocations.items) |allocation| {
+            if (allocation.node) |node| self.arena.child_allocator.free(node);
+        }
         self.arena.deinit();
     }
 
@@ -1890,23 +1901,25 @@ const StaticInitializerMachine = struct {
         contains_refcounted: bool,
         list_element_count: ?usize,
     ) Allocator.Error!NewAllocation {
-        const payload = try self.allocator().create(SymbolicValue);
-        const bytes = try self.allocator().alloc(u8, payload_size);
-        @memset(bytes, 0);
-        payload.* = .{
-            .layout_idx = payload_layout,
-            .bytes = bytes,
-            .relocations = .empty,
-        };
         const allocation = try self.allocator().create(SymbolicAllocation);
+        try self.allocations.ensureUnusedCapacity(self.allocator(), 1);
+        const data_offset = staticDataPtrOffset(self.word_size, alignment, contains_refcounted);
+        const node = try self.arena.child_allocator.alloc(u8, data_offset + payload_size);
+        @memset(node, 0);
         allocation.* = .{
-            .payload = payload.*,
+            .payload = .{
+                .layout_idx = payload_layout,
+                .bytes = node[data_offset..],
+                .relocations = .empty,
+            },
             .alignment = alignment,
             .contains_refcounted = contains_refcounted,
             .list_element_count = list_element_count,
+            .node = node,
+            .data_offset = data_offset,
         };
         const id: SymbolicAllocationId = @fromBackingInt(@intCast(@as(u32, @intCast(self.allocations.items.len))));
-        try self.allocations.append(self.allocator(), allocation);
+        self.allocations.appendAssumeCapacity(allocation);
         return .{ .id = id, .payload = &allocation.payload };
     }
 
@@ -3137,11 +3150,14 @@ const StaticDataBuilder = struct {
         var node_appended = false;
         errdefer if (!node_appended) self.allocator.free(symbol_name);
         self.owner_node += 1;
-        const data_offset = staticDataPtrOffset(self.word_size, allocation.alignment, allocation.contains_refcounted);
-        const bytes = try self.allocator.alloc(u8, data_offset + allocation.payload.bytes.len);
+        const data_offset = allocation.data_offset;
+        if (builtin.mode == .debug) std.debug.assert(data_offset == staticDataPtrOffset(self.word_size, allocation.alignment, allocation.contains_refcounted));
+        // The node takes the allocation's buffer, whose header bytes are
+        // still zero; the payload is frozen where it was computed.
+        const bytes = allocation.node orelse staticDataInvariant("a static allocation was frozen twice");
+        if (builtin.mode == .debug) std.debug.assert(self.allocator.ptr == self.initializer_machine.arena.child_allocator.ptr);
+        allocation.node = null;
         errdefer if (!node_appended) self.allocator.free(bytes);
-        @memset(bytes, 0);
-        @memcpy(bytes[data_offset..][0..allocation.payload.bytes.len], allocation.payload.bytes);
         if (allocation.contains_refcounted) {
             self.writeTargetWord(
                 bytes,

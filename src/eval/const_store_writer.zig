@@ -962,16 +962,18 @@ pub const Writer = struct {
             writerInvariant("a value-form numeral does not fit its type");
     }
 
-    /// A value-form string's bytes: its segments in order.
-    fn checkedStrText(self: *Writer, expr: CIR.Expr.Idx) Allocator.Error![]const u8 {
+    /// A value-form string's bytes: `segments` in order.
+    fn checkedStrText(self: *Writer, segments: []const CIR.Expr.Idx) Allocator.Error![]const u8 {
         const bodies = self.checkedValues().bodies;
         self.checked_text.clearRetainingCapacity();
-        for (checkedStrSegments(bodies, expr)) |segment| {
-            const data = bodies.exprData(segment);
-            if (data != .str_segment) writerInvariant("a value-form string's part is not a literal segment");
-            try self.checked_text.appendSlice(self.allocator, bodies.text(data.str_segment));
-        }
+        for (segments) |segment| try self.checked_text.appendSlice(self.allocator, checkedSegmentText(bodies, segment));
         return self.checked_text.items;
+    }
+
+    fn checkedSegmentText(bodies: checked.CheckedBodies, segment: CIR.Expr.Idx) []const u8 {
+        const data = bodies.exprData(segment);
+        if (data != .str_segment) writerInvariant("a value-form string's part is not a literal segment");
+        return bodies.text(data.str_segment);
     }
 
     /// The items of a value-form list.
@@ -981,6 +983,16 @@ pub const Writer = struct {
         if (data == .empty_list) return &.{};
         if (data != .list) writerInvariant("a value-form list is not a list literal");
         return data.list;
+    }
+
+    /// The bytes of value-form list `expr` when it is a bytes literal: the
+    /// module's string literal store's bytes, which are the items of a list
+    /// of `U8`.
+    fn checkedListBytes(self: *const Writer, expr: CIR.Expr.Idx) ?[]const u8 {
+        const bodies = self.checkedValues().bodies;
+        const data = bodies.exprData(checked.valueFormValueExpr(bodies, expr));
+        if (data != .bytes_literal) return null;
+        return bodies.text(data.bytes_literal);
     }
 
     /// The part of a value-form value a named plan's backing stores: a
@@ -1626,7 +1638,14 @@ const ValueFormImage = struct {
             .str => {
                 // A literal has no capacity beyond its bytes (design.md
                 // "Static Lists And Strings Keep Their Capacity").
-                const text = try writer.checkedStrText(expr);
+                const bodies = writer.checkedValues().bodies;
+                const value_expr = checked.valueFormValueExpr(bodies, expr);
+                // A file imported as `Str` is one segment on its own.
+                const segments: []const CIR.Expr.Idx = if (bodies.exprData(value_expr) == .str_segment)
+                    @as(*const [1]CIR.Expr.Idx, &value_expr)
+                else
+                    checkedStrSegments(bodies, expr);
+                const text = if (segments.len == 1) Writer.checkedSegmentText(bodies, segments[0]) else try writer.checkedStrText(segments);
                 if (text.len < size) {
                     const descriptor = self.graph.bytes(job.dest, size);
                     @memcpy(descriptor[0..text.len], text);
@@ -1640,6 +1659,17 @@ const ValueFormImage = struct {
                 try self.graph.writeWord(job.dest.offsetBy(2 * word), text.len);
             },
             .list => |elem_plan| {
+                // A bytes literal's bytes are the items of its `List(U8)`.
+                if (writer.checkedListBytes(expr)) |literal| {
+                    try self.graph.writeWord(job.dest.offsetBy(word), literal.len);
+                    try self.graph.writeWord(job.dest.offsetBy(2 * word), RocList.encodeCapacityForWidth(literal.len));
+                    if (literal.len == 0) return;
+                    const elem_layout = physical.getIdx();
+                    if (builtin.mode == .debug) std.debug.assert(self.graph.size(elem_layout) == 1);
+                    const elements = try self.allocation(job.dest, elem_plan, elem_layout, literal.len, 1, false, literal.len);
+                    @memcpy(self.graph.bytes(elements, literal.len), literal);
+                    return;
+                }
                 const items = writer.checkedListItems(expr);
                 // `RocList`'s words: bytes, length, capacity.
                 try self.graph.writeWord(job.dest.offsetBy(word), items.len);

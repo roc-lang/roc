@@ -166,7 +166,7 @@ expect {
 }
 ~~~
 # EXPECTED
-LEADING ZERO - :0:0:0:0
+LEADING ZERO - fuzz_crash_027.md:69:1:69:3
 UNCLOSED STRING - fuzz_crash_027.md:118:8:118:22
 TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_027.md:40:5:40:6
 UNEXPECTED STATEMENT - fuzz_crash_027.md:40:7:40:8
@@ -267,9 +267,11 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 	(report
 		(severity runtime_error)
 		(title "Leading Zero")
+		(region (start 69 1) (end 69 3))
 		(headline
 			(reflow "Numbers cannot have leading zeros."))
-		(document))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 69 1) (end 69 3) (annotation error) (line-text "00"))))
 	(report
 		(severity runtime_error)
 		(title "Unclosed String")

@@ -309,8 +309,9 @@ pub const PolymorphicValueAnnotation = struct {
     name_region: ?base.Region,
     /// The whole annotation, name included.
     region: base.Region,
-    /// The annotated type alone, for the suggested thunk signature.
-    type_region: base.Region,
+    /// The annotated type's text as the suggested thunk's result, without
+    /// each `..` that would be redundant there.
+    thunk_result: ExtraStringIdx,
     /// The annotation's where clause, from the end of its type through the
     /// end of its last clause (the closing `]` is not included), for the
     /// suggested thunk signature.

@@ -12,7 +12,7 @@ foo =
     "on        (string 'onmo %')))
 ~~~
 # EXPECTED
-ASCII CONTROL CHARACTER - :0:0:0:0
+ASCII CONTROL CHARACTER - fuzz_crash_010.md:2:3:2:4
 UNCLOSED STRING - fuzz_crash_010.md:5:5:5:35
 TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_010.md:1:2:1:3
 UNEXPECTED STATEMENT - fuzz_crash_010.md:1:3:1:4
@@ -24,9 +24,11 @@ UNEXPECTED STATEMENT - fuzz_crash_010.md:2:6:2:7
 	(report
 		(severity runtime_error)
 		(title "ASCII Control Character")
+		(region (start 2 3) (end 2 4))
 		(headline
 			(reflow "ASCII control characters are not allowed in Roc source code."))
-		(document))
+		(document
+			(source-region (file "fuzz_crash_010.md") (start 2 3) (end 2 4) (annotation error) (line-text "  \u{1f}  ]"))))
 	(report
 		(severity runtime_error)
 		(title "Unclosed String")
