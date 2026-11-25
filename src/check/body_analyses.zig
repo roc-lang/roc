@@ -199,6 +199,8 @@ pub const ModuleIndex = struct {
     binding_statements: []StatementId = &.{},
     /// The reached lambdas (`e_lambda`), in no particular order.
     lambda_exprs: []ExprId = &.{},
+    /// The reached closures (`e_closure`), in no particular order.
+    closure_exprs: []ExprId = &.{},
     /// Per node: the node whose children include it, or zero for a unit's
     /// root and an unreached node.
     parent_of: []u32 = &.{},
@@ -234,6 +236,7 @@ pub const ModuleIndex = struct {
         allocator.free(self.lookup_exprs);
         allocator.free(self.binding_statements);
         allocator.free(self.lambda_exprs);
+        allocator.free(self.closure_exprs);
         allocator.free(self.parent_of);
         self.inert_exprs.deinit(allocator);
         self.* = .{};
@@ -295,6 +298,11 @@ pub const ModuleIndex = struct {
     /// The reached lambdas (`e_lambda`), in no particular order.
     pub fn lambdaExprs(self: *const ModuleIndex) []const ExprId {
         return self.lambda_exprs;
+    }
+
+    /// The reached closures (`e_closure`), in no particular order.
+    pub fn closureExprs(self: *const ModuleIndex) []const ExprId {
+        return self.closure_exprs;
     }
 
     /// The node whose children include a reached node, or null for a unit's
@@ -414,6 +422,7 @@ pub const ModuleIndex = struct {
         lookup_exprs: std.ArrayList(u32) = .empty,
         binding_statements: std.ArrayList(StatementId) = .empty,
         lambda_exprs: std.ArrayList(ExprId) = .empty,
+        closure_exprs: std.ArrayList(ExprId) = .empty,
         parent_of: []u32,
         inert_exprs: std.DynamicBitSetUnmanaged,
         /// The node whose children are being marked, or zero while a unit's
@@ -467,6 +476,7 @@ pub const ModuleIndex = struct {
             self.lookup_exprs.deinit(self.allocator);
             self.binding_statements.deinit(self.allocator);
             self.lambda_exprs.deinit(self.allocator);
+            self.closure_exprs.deinit(self.allocator);
             self.allocator.free(self.parent_of);
             self.inert_exprs.deinit(self.allocator);
         }
@@ -507,6 +517,8 @@ pub const ModuleIndex = struct {
             const binding_statements = try self.binding_statements.toOwnedSlice(allocator);
             errdefer allocator.free(binding_statements);
             const lambda_exprs = try self.lambda_exprs.toOwnedSlice(allocator);
+            errdefer allocator.free(lambda_exprs);
+            const closure_exprs = try self.closure_exprs.toOwnedSlice(allocator);
             return .{
                 .has_expects = self.has_expects,
                 .has_runtime_errors = self.has_runtime_errors,
@@ -524,6 +536,7 @@ pub const ModuleIndex = struct {
                 .lookup_exprs = lookup_exprs,
                 .binding_statements = binding_statements,
                 .lambda_exprs = lambda_exprs,
+                .closure_exprs = closure_exprs,
                 .parent_of = self.parent_of,
                 .inert_exprs = self.inert_exprs,
             };
@@ -718,6 +731,7 @@ pub const ModuleIndex = struct {
                 .e_nominal => |nominal| try self.mark(.{ .expr = nominal.backing_expr }, id),
                 .e_nominal_external => |nominal| try self.mark(.{ .expr = nominal.backing_expr }, id),
                 .e_closure => |closure| {
+                    try self.closure_exprs.append(self.allocator, expr_idx);
                     try self.mark(.{ .expr = closure.lambda_idx }, id);
                     for (store.sliceCaptures(closure.captures)) |capture_idx| {
                         try self.mark(.{ .pattern = store.getCapture(capture_idx).pattern_idx }, id);
