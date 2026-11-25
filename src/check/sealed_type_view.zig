@@ -98,7 +98,8 @@ pub const SealedVarFacts = packed struct(u8) {
     tag_tail: bool = false,
     /// Whether the checked type of this class representative reaches a flex
     /// or rigid variable through the children its payload renders
-    /// (`markIdentityVariables`). Meaningful only on representatives.
+    /// (`markIdentityVariables`), marked when publication first reaches it.
+    /// Meaningful only on reached representatives.
     identity_variables: bool = false,
     _padding: u4 = 0,
 };
@@ -473,9 +474,8 @@ pub const SealedTypeColumns = struct {
 /// Fill `columns` for `env`, whose solver store checking sealed: intern the
 /// canonical name of every identifier the store's types use, resolve every
 /// module identity they name and every nominal declaration the store holds,
-/// mark every class representative whose type reaches a flex or rigid
-/// variable, and mark no variable reached. `reach` marks the variables
-/// publication reaches.
+/// and mark no variable reached. `reach` marks the variables publication
+/// reaches, and which of them reach a flex or rigid variable.
 pub fn buildColumns(
     allocator: Allocator,
     env: *const ModuleEnv,
@@ -498,7 +498,6 @@ pub fn buildColumns(
     defer builder.origins.deinit();
 
     try columns.var_facts.appendNTimes(allocator, .{}, @intCast(type_store.len()));
-    try markIdentityVariables(allocator, env, columns.var_facts.items());
 
     var seen = try std.DynamicBitSetUnmanaged.initEmpty(allocator, type_store.descs.backing.len());
     defer seen.deinit(allocator);
@@ -540,80 +539,123 @@ pub fn buildColumns(
     }
 }
 
-/// Mark every class representative of `env`'s sealed store whose checked type
-/// reaches a flex or rigid variable: one that is one, or one with a child that
-/// reaches one, over the children `SealedTypeView.payload` renders. The facts
-/// are computed backward from the variables over reversed child edges, so a
-/// cyclic class is classified exactly and each edge is visited once. Every
-/// representative is classified, reached or not: a class's fact depends only
-/// on the sealed store, so it holds however publication later reaches it.
-fn markIdentityVariables(allocator: Allocator, env: *const ModuleEnv, var_facts: []SealedVarFacts) Allocator.Error!void {
-    const type_store = &env.types;
-    const count = var_facts.len;
+/// Scratch for `reach`, kept by the caller with its capacity between walks;
+/// empty between walks.
+pub const ReachScratch = struct {
+    /// The walk's work list.
+    pending: std.ArrayList(Var) = .empty,
+    /// The representatives the walk reached for the first time.
+    newly_reached: std.ArrayList(Var) = .empty,
+    /// Each newly reached representative's position in `newly_reached`.
+    positions: collections.DenseMapUnmanaged(Var, u32) = .empty,
+    /// Edges between newly reached representatives, as child and parent
+    /// positions, and the parents of each position once placed.
+    edge_children: std.ArrayList(u32) = .empty,
+    edge_parents: std.ArrayList(u32) = .empty,
+    parent_starts: std.ArrayList(u32) = .empty,
+    parents: std.ArrayList(u32) = .empty,
+    work: std.ArrayList(u32) = .empty,
 
-    // Edges into each representative, counted and then placed by child.
-    const starts = try allocator.alloc(u32, count + 1);
-    defer allocator.free(starts);
-    @memset(starts, 0);
-    var counter = IdentityEdgeCounter{ .env = env, .starts = starts };
-    for (0..count) |raw| {
-        const var_: Var = @fromBackingInt(@intCast(raw));
-        if (type_store.resolveVarWord(var_).var_ != var_) continue;
-        counter.parent = @intCast(raw);
-        identityChildren(env, var_, &counter);
+    pub fn deinit(self: *ReachScratch, allocator: Allocator) void {
+        self.pending.deinit(allocator);
+        self.newly_reached.deinit(allocator);
+        self.positions.deinit(allocator);
+        self.edge_children.deinit(allocator);
+        self.edge_parents.deinit(allocator);
+        self.parent_starts.deinit(allocator);
+        self.parents.deinit(allocator);
+        self.work.deinit(allocator);
     }
-    for (1..count + 1) |index| starts[index] += starts[index - 1];
 
-    const parents = try allocator.alloc(u32, starts[count]);
-    defer allocator.free(parents);
-    const fill = try allocator.dupe(u32, starts[0..count]);
-    defer allocator.free(fill);
-    var placer = IdentityEdgePlacer{ .env = env, .fill = fill, .parents = parents };
-    var pending: std.ArrayList(u32) = .empty;
-    defer pending.deinit(allocator);
-    for (0..count) |raw| {
-        const var_: Var = @fromBackingInt(@intCast(raw));
-        if (type_store.resolveVarWord(var_).var_ != var_) continue;
-        switch (type_store.kindOf(var_)) {
+    fn clear(self: *ReachScratch) void {
+        self.pending.clearRetainingCapacity();
+        self.newly_reached.clearRetainingCapacity();
+        self.positions.clearRetainingCapacity();
+        self.edge_children.clearRetainingCapacity();
+        self.edge_parents.clearRetainingCapacity();
+        self.parent_starts.clearRetainingCapacity();
+        self.parents.clearRetainingCapacity();
+        self.work.clearRetainingCapacity();
+    }
+};
+
+/// Mark each representative a walk newly reached whose checked type reaches
+/// a flex or rigid variable: one that is one, or one with a child that
+/// reaches one, over the children `SealedTypeView.payload` renders. Every
+/// child of a reached representative is reached, so each child is either
+/// newly reached too or was reached by an earlier walk, whose fact is
+/// already marked. The new facts are computed backward from the variables
+/// and the earlier facts over the reversed edges between the newly reached
+/// representatives, so cycles among them are classified exactly and each
+/// edge is visited once.
+fn markIdentityVariables(allocator: Allocator, env: *const ModuleEnv, var_facts: []SealedVarFacts, scratch: *ReachScratch) Allocator.Error!void {
+    const reached = scratch.newly_reached.items;
+    if (reached.len == 0) return;
+    for (reached, 0..) |var_, position| try scratch.positions.put(allocator, var_, @intCast(position));
+
+    var lister = IdentityEdgeLister{ .allocator = allocator, .env = env, .var_facts = var_facts, .scratch = scratch };
+    for (reached, 0..) |var_, position| {
+        switch (env.types.kindOf(var_)) {
             .flex, .rigid => {
-                var_facts[raw].identity_variables = true;
-                try pending.append(allocator, @intCast(raw));
+                var_facts[@backingInt(var_)].identity_variables = true;
+                try scratch.work.append(allocator, @intCast(position));
+                continue;
             },
             .err, .field_presence, .alias, .empty_record, .empty_tag_union, .record, .tuple, .nominal_type, .fn_pure, .fn_unbound, .fn_effectful, .tag_union => {},
         }
-        placer.parent = @intCast(raw);
-        identityChildren(env, var_, &placer);
+        lister.parent = @intCast(position);
+        lister.reaches = false;
+        try identityChildren(env, var_, &lister);
+        if (lister.reaches) {
+            var_facts[@backingInt(var_)].identity_variables = true;
+            try scratch.work.append(allocator, @intCast(position));
+        }
     }
 
-    while (pending.pop()) |child| {
-        for (parents[starts[child]..starts[child + 1]]) |parent| {
-            if (var_facts[parent].identity_variables) continue;
-            var_facts[parent].identity_variables = true;
-            try pending.append(allocator, parent);
+    // Parents of each newly reached representative, placed by child.
+    const starts = &scratch.parent_starts;
+    try starts.appendNTimes(allocator, 0, reached.len + 1);
+    for (scratch.edge_children.items) |child| starts.items[child + 1] += 1;
+    for (1..reached.len + 1) |position| starts.items[position] += starts.items[position - 1];
+    try scratch.parents.resize(allocator, scratch.edge_children.items.len);
+    for (scratch.edge_children.items, scratch.edge_parents.items) |child, parent| {
+        // `starts[child]` serves as the fill cursor and ends at the start of
+        // `child + 1`'s parents, so each is restored after placing below.
+        scratch.parents.items[starts.items[child]] = parent;
+        starts.items[child] += 1;
+    }
+    var position = reached.len;
+    while (position > 0) : (position -= 1) starts.items[position] = starts.items[position - 1];
+    starts.items[0] = 0;
+
+    while (scratch.work.pop()) |child| {
+        for (scratch.parents.items[starts.items[child]..starts.items[child + 1]]) |parent| {
+            const facts = &var_facts[@backingInt(reached[parent])];
+            if (facts.identity_variables) continue;
+            facts.identity_variables = true;
+            try scratch.work.append(allocator, parent);
         }
     }
 }
 
-const IdentityEdgeCounter = struct {
+/// Lists the edges between newly reached representatives, and whether one
+/// has a child an earlier walk marked as reaching a variable.
+const IdentityEdgeLister = struct {
+    allocator: Allocator,
     env: *const ModuleEnv,
-    starts: []u32,
+    var_facts: []const SealedVarFacts,
+    scratch: *ReachScratch,
     parent: u32 = 0,
+    reaches: bool = false,
 
-    fn child(self: *IdentityEdgeCounter, var_: Var) void {
-        self.starts[@as(usize, @backingInt(self.env.types.resolveVarWord(var_).var_)) + 1] += 1;
-    }
-};
-
-const IdentityEdgePlacer = struct {
-    env: *const ModuleEnv,
-    fill: []u32,
-    parents: []u32,
-    parent: u32 = 0,
-
-    fn child(self: *IdentityEdgePlacer, var_: Var) void {
-        const slot = &self.fill[@backingInt(self.env.types.resolveVarWord(var_).var_)];
-        self.parents[slot.*] = self.parent;
-        slot.* += 1;
+    fn child(self: *IdentityEdgeLister, var_: Var) Allocator.Error!void {
+        const representative = self.env.types.resolveVarWord(var_).var_;
+        if (self.scratch.positions.get(representative)) |position| {
+            try self.scratch.edge_children.append(self.allocator, position);
+            try self.scratch.edge_parents.append(self.allocator, self.parent);
+        } else if (self.var_facts[@backingInt(representative)].identity_variables) {
+            self.reaches = true;
+        }
     }
 };
 
@@ -622,48 +664,46 @@ const IdentityEdgePlacer = struct {
 /// `SealedTypeView.payload` renders, read by kind from the stored descriptor.
 /// A flex or rigid variable decides its own fact, so its constraints are not
 /// children here.
-fn identityChildren(env: *const ModuleEnv, var_: Var, sink: anytype) void {
+fn identityChildren(env: *const ModuleEnv, var_: Var, sink: anytype) Allocator.Error!void {
     const type_store = &env.types;
     const desc_idx = type_store.resolveDescIdx(var_);
     switch (type_store.kindAt(desc_idx)) {
         .err, .field_presence, .flex, .rigid, .empty_record, .empty_tag_union => {},
         .alias => {
             const alias = type_store.aliasAt(desc_idx);
-            sink.child(type_store.getAliasBackingVar(alias));
-            for (type_store.sliceAliasArgs(alias)) |arg| sink.child(arg);
+            try sink.child(type_store.getAliasBackingVar(alias));
+            for (type_store.sliceAliasArgs(alias)) |arg| try sink.child(arg);
         },
         .record => {
             const record = type_store.recordAt(desc_idx);
             if (record.fields.len() == 0 and checked_artifact.checkedRecordExtIsEmpty(env, record.ext)) return;
             for (type_store.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
                 switch (presence.decode()) {
-                    .required => |type_var| sink.child(type_var),
+                    .required => |type_var| try sink.child(type_var),
                     .unknown => |unknown| {
-                        // A presence variable renders as a child only while
-                        // it is a flex variable. Its other contents, field
-                        // presence and error, reach no variable, so listing
-                        // it either way gives the same fact.
-                        sink.child(unknown.presence);
-                        sink.child(unknown.var_);
+                        // A presence variable renders as a child only
+                        // while it is undetermined.
+                        if (type_store.kindOf(unknown.presence) == .flex) try sink.child(unknown.presence);
+                        try sink.child(unknown.var_);
                     },
                 }
             }
-            sink.child(record.ext);
+            try sink.child(record.ext);
         },
-        .tuple => for (type_store.sliceVars(type_store.tupleAt(desc_idx).elems)) |elem| sink.child(elem),
-        .nominal_type => for (type_store.sliceNominalArgs(type_store.nominalAt(desc_idx))) |arg| sink.child(arg),
+        .tuple => for (type_store.sliceVars(type_store.tupleAt(desc_idx).elems)) |elem| try sink.child(elem),
+        .nominal_type => for (type_store.sliceNominalArgs(type_store.nominalAt(desc_idx))) |arg| try sink.child(arg),
         .fn_pure, .fn_effectful, .fn_unbound => {
             const func = type_store.funcAt(desc_idx);
-            for (type_store.sliceVars(func.args)) |arg| sink.child(arg);
-            sink.child(func.ret);
+            for (type_store.sliceVars(func.args)) |arg| try sink.child(arg);
+            try sink.child(func.ret);
         },
         .tag_union => {
             const tag_union = type_store.tagUnionAt(desc_idx);
             if (tag_union.tags.len() == 0 and checked_artifact.checkedTagUnionExtIsEmpty(env, tag_union.ext)) return;
             for (type_store.getTagsSlice(tag_union.tags).items(.args)) |args| {
-                for (type_store.sliceVars(args)) |arg| sink.child(arg);
+                for (type_store.sliceVars(args)) |arg| try sink.child(arg);
             }
-            sink.child(tag_union.ext);
+            try sink.child(tag_union.ext);
         },
     }
 }
@@ -755,22 +795,24 @@ const ColumnBuilder = struct {
 };
 
 /// Mark every variable reachable from `root` reached, recording the row-tail
-/// positions each is reached through. Each representative this reaches for
-/// the first time is appended to `newly_reached` when one is given.
-/// `pending` is the caller's scratch for the walk's work list, empty on entry
-/// and on return.
-pub fn reach(allocator: Allocator, env: *const ModuleEnv, var_facts: []SealedVarFacts, pending: *std.ArrayList(Var), root: Var, newly_reached: ?*std.ArrayList(Var)) Allocator.Error!void {
-    std.debug.assert(pending.items.len == 0);
-    errdefer pending.clearRetainingCapacity();
-    var walker = ReachWalker{ .env = env, .var_facts = var_facts, .newly_reached = newly_reached, .pending = pending };
+/// positions each is reached through, and mark each representative this
+/// reaches for the first time that reaches a flex or rigid variable. Each
+/// such representative is also appended to `newly_reached` when one is
+/// given. `scratch` is the caller's, empty on entry and on return.
+pub fn reach(allocator: Allocator, env: *const ModuleEnv, var_facts: []SealedVarFacts, scratch: *ReachScratch, root: Var, newly_reached: ?*std.ArrayList(Var)) Allocator.Error!void {
+    std.debug.assert(scratch.pending.items.len == 0 and scratch.newly_reached.items.len == 0);
+    defer scratch.clear();
+    var walker = ReachWalker{ .env = env, .var_facts = var_facts, .newly_reached = &scratch.newly_reached, .pending = &scratch.pending };
     try walker.reach(allocator, root, null);
     while (walker.pending.pop()) |var_| try walker.expand(allocator, var_);
+    try markIdentityVariables(allocator, env, var_facts, scratch);
+    if (newly_reached) |list| try list.appendSlice(allocator, scratch.newly_reached.items);
 }
 
 const ReachWalker = struct {
     env: *const ModuleEnv,
     var_facts: []SealedVarFacts,
-    newly_reached: ?*std.ArrayList(Var),
+    newly_reached: *std.ArrayList(Var),
     pending: *std.ArrayList(Var),
 
     fn reach(self: *ReachWalker, allocator: Allocator, var_: Var, tail: ?RowDefault) Allocator.Error!void {
@@ -778,7 +820,7 @@ const ReachWalker = struct {
         const var_facts = &self.var_facts[@backingInt(resolved.var_)];
         if (!var_facts.reached) {
             var_facts.reached = true;
-            if (self.newly_reached) |list| try list.append(allocator, resolved.var_);
+            try self.newly_reached.append(allocator, resolved.var_);
             try self.pending.append(allocator, resolved.var_);
         }
         switch (tail orelse return) {
