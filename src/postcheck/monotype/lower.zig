@@ -2200,6 +2200,10 @@ const MethodLookup = struct {
     /// binder ids identify source syntax, not the specialization-local capture
     /// environment in which that declaration was lowered.
     local_proc_context: ?DraftLocalProcContextId = null,
+    /// For inspection's lookup of an owner's `to_inspect` override, the
+    /// checked `T -> Str` instance inspection calls it at, in `view`
+    /// (`MethodRegistry.inspectOverride`).
+    inspect_override: ?checked.CheckedTypeId = null,
 };
 
 /// One resolved dispatch requirement supplied to a specialization: either a
@@ -2876,6 +2880,10 @@ const EvidenceChain = struct {
     schema: ?SchemeRequirements = null,
     subst: SpecSubstitution = &.{},
     parent: ?*const EvidenceChain = null,
+    /// For a generalized local scope lowered at one use of it (a scheme
+    /// alias's use), that use: its edge's literal arguments name what this
+    /// frame's forwarded literal requirements are at the use.
+    entered_by: ?*const ScopeEntry = null,
 
     fn atScope(self: *const EvidenceChain, scope: EvidenceScope) ?EvidenceChain {
         var chain: ?*const EvidenceChain = self;
@@ -2903,6 +2911,22 @@ const EvidenceChain = struct {
         if (ref.index >= chain.vector.len) return null;
         return chain.vector[ref.index];
     }
+};
+
+/// A destructuring scheme alias's lookup and the use of a name it binds that
+/// its declaration is lowered at.
+const DestructuredAliasUse = struct {
+    lookup: CIR.Expr.Idx,
+    use: CIR.Expr.Idx,
+};
+
+/// The use a generalized local scope's frame was entered at: the use's
+/// literal edge, in the scope owner's module, and the frame the use itself
+/// was lowered in, whose literal requirements the edge's forwarded
+/// arguments name.
+const ScopeEntry = struct {
+    edge: checked.LiteralEdge,
+    use_frame: EvidenceChain,
 };
 
 fn rootEvidence(owner: names.ProcTemplate, vector: []const SpecEvidence) EvidenceChain {
@@ -8541,6 +8565,7 @@ const Builder = struct {
                 root_node,
                 &.{},
                 null,
+                .named,
             );
             const completed_fn = try graph.functionNodes(root_node);
             const completed_ret = DraftTypeCell.fromGraphNode(completed_fn.ret);
@@ -8760,7 +8785,7 @@ const Builder = struct {
             arg.* = .{ .local = local, .ty = arg_cell };
             arg_expr.* = try ctx.addExprWithTypeCell(arg_cell, .{ .local = local });
         }
-        const callee = try ctx.lowerCallableEvalBindingValueAtNode(view, template_id, try ctx.activeNodeFromType(fn_ty), evidence, null);
+        const callee = try ctx.lowerCallableEvalBindingValueAtNode(view, template_id, try ctx.activeNodeFromType(fn_ty), evidence, null, .named);
         const body = try ctx.addExprWithTypeCell(DraftTypeCell.fromSealed(fn_data.ret), .{ .call_value = .{
             .callee = callee,
             .args = try body_draft.addExprSpan(arg_exprs),
@@ -13417,7 +13442,9 @@ const Builder = struct {
         }
 
         pub fn found(views: InspectOverrideViews, candidate: ModuleView, _: static_dispatch.MethodKey, override: static_dispatch.InspectOverride) MethodLookup {
-            return views.builder.registryMethodLookup(candidate, override.target);
+            var lookup = views.builder.registryMethodLookup(candidate, override.target);
+            lookup.inspect_override = override.callable_ty;
+            return lookup;
         }
     };
 
@@ -16940,6 +16967,22 @@ const DraftCallableBindingCallee = struct {
     module: names.CheckedModuleDigest,
     template: checked.CallableEvalTemplateId,
     fn_node: NodeId,
+    read: InstanceRead = .named,
+};
+
+/// How a read of a polymorphic constant finds the instance it reads
+/// (`restoredConstantInstance`).
+const InstanceRead = enum {
+    /// A compile-time root names the instance: the read's edge, or the
+    /// read's closed type.
+    named,
+    /// Inspection's call of a `to_inspect` override whose `T -> Str`
+    /// instance mentions the owner's type arguments: inspection reaches the
+    /// owner at whatever arguments the inspected value has, generic code
+    /// included, where no checked edge names them, so no root holds the
+    /// instance and the read computes the binding in place (design.md
+    /// "Polymorphic Constants").
+    open_inspect_override,
 };
 
 const ClosedDirectDraftSpecialization = struct {
@@ -22836,6 +22879,10 @@ const BodyContext = struct {
     /// the root id travels through template requests into other modules'
     /// body contexts, where the same integer names an unrelated root.
     current_entry_root: ?EntryRoot = null,
+    /// While a destructuring scheme alias's declaration is lowered at a use
+    /// of a name it binds, the declaration's lookup and that use: the use's
+    /// edge instantiates the lookup (design.md "Polymorphic Constants").
+    destructured_alias_use: ?DestructuredAliasUse = null,
     /// Whether this context lowers a lambda body nested inside the current
     /// entry root. Such a body runs only when the lambda is called, after the
     /// root's value exists, so a constant of the root's own scrutinee (a
@@ -34435,6 +34482,7 @@ const BodyContext = struct {
 
     const DestructuredAliasSavedScope = struct {
         instantiation: TypeInstantiationContext,
+        destructured_alias_use: ?DestructuredAliasUse,
         /// The block's one statement.
         declaration: CIR.Statement.Idx,
         /// The declaration's binders as the enclosing body had them. Owned.
@@ -40405,6 +40453,7 @@ const BodyContext = struct {
         request_fn_node: NodeId,
         evidence: []const SpecEvidence,
         use_edge: ?checked.LiteralEdge,
+        read: InstanceRead,
     ) Allocator.Error!DraftExprId {
         const raw = @backingInt(template_id);
         if (raw >= view.callable_eval_templates.templates.len) {
@@ -40416,11 +40465,12 @@ const BodyContext = struct {
             .fn_value => |fn_id| try self.restoreConstFnAt(view, fn_id, .{ .node = request_fn_node }, null),
             .const_node => |node| try self.restoreConstNodeAtNode(view, view, node, request_fn_node),
             // A polymorphic binding's use reads its stored instance
-            // (`restoredConstantInstance` lists the reads that find none); a
-            // program that does not evaluate a root no compilation evaluated
-            // yet computes the callable in place.
+            // (`restoredConstantInstance` lists the reads that compute it
+            // instead); a program that does not evaluate a root no
+            // compilation evaluated yet computes a monomorphic callable in
+            // place.
             .pending, .unevaluated => {
-                if (try self.restoredConstantInstance(view, template.root, request_fn_node, use_edge)) |restored| return restored;
+                if (try self.restoredConstantInstance(view, template.root, request_fn_node, use_edge, read)) |restored| return restored;
                 return try self.lowerPendingCallableEvalBindingValueAtNode(view, template, root, request_fn_node, evidence);
             },
             .discarded, .expect, .runtime => Common.invariant("callable eval binding root output a non-callable payload"),
@@ -48206,9 +48256,10 @@ const BodyContext = struct {
             const saved_binders = try binders.toOwnedSlice(self.allocator);
             errdefer self.allocator.free(saved_binders);
             const instantiation = try TypeInstantiationContext.initPooled(self.builder, self.builder.allocateInstantiationScope(), self.view.key.bytes);
-            saved.* = .{ .instantiation = self.instantiation, .declaration = declaration, .binders = saved_binders };
+            saved.* = .{ .instantiation = self.instantiation, .destructured_alias_use = self.destructured_alias_use, .declaration = declaration, .binders = saved_binders };
             task.saved = saved;
             self.instantiation = instantiation;
+            self.destructured_alias_use = .{ .lookup = decl.expr, .use = task.use_expr };
         }
         const saved = task.saved.?;
         try relateRequestComponent(self.graph, try self.instNode(checkedBinderType(self.view, task.binder)), task.expected_node);
@@ -48226,8 +48277,18 @@ const BodyContext = struct {
         self.allocator.free(saved.binders);
         self.instantiation.deinit();
         self.instantiation = saved.instantiation;
+        self.destructured_alias_use = saved.destructured_alias_use;
         self.allocator.destroy(saved);
         task.saved = null;
+    }
+
+    /// The expression whose literal edge a read of a constant at lookup
+    /// `use_expr` instantiates: the use of the bound name for a
+    /// destructuring scheme alias's lookup lowered at that use, and the
+    /// lookup itself otherwise.
+    fn constUseEdgeExpr(self: *const BodyContext, use_expr: CIR.Expr.Idx) CIR.Expr.Idx {
+        if (self.destructured_alias_use) |alias_use| if (alias_use.lookup == use_expr) return alias_use.use;
+        return use_expr;
     }
 
     fn stepSchemeAlias(self: *BodyContext, task: *SchemeAliasTask, input: ?LowerResult) Allocator.Error!LowerStep {
@@ -48239,7 +48300,10 @@ const BodyContext = struct {
         const scope_id = alias.dispatch_scope orelse
             Common.invariant("generalized callable alias has no checked scheme scope");
         const edge = try self.evidenceForUseSiteAtNode(task.use_expr, task.expected_node);
-        const evidence = try enterEvidenceScope(self.builder, self.evidence, scope_id, alias.expr, edge);
+        var evidence = try enterEvidenceScope(self.builder, self.evidence, scope_id, alias.expr, edge);
+        const entry = try self.builder.evidence_arena.allocator().create(ScopeEntry);
+        entry.* = .{ .edge = .{ .use = task.use_expr }, .use_frame = self.evidence };
+        evidence.entered_by = entry;
         const scope = self.view.templates.dispatch_scopes.items()[@backingInt(scope_id)];
         const saved = try self.allocator.create(SchemeAliasSavedScope);
         saved.* = .{ .instantiation = self.instantiation, .evidence = self.evidence };
@@ -48503,7 +48567,7 @@ const BodyContext = struct {
             .provenance = provenance,
             .context_evidence = self.evidence,
             .use_evidence = use_evidence,
-            .use_expr = use_expr,
+            .use_expr = self.constUseEdgeExpr(use_expr),
             .current_fn_key = self.current_fn_key,
             .active_const_binding = .of(self.active_const_binding),
             .lexical = lexical,
@@ -48528,6 +48592,7 @@ const BodyContext = struct {
                 request_fn_node,
                 edge.vector,
                 .{ .use = site_expr },
+                .named,
             );
         }
         const edge = try self.evidenceForProcedureUseAtNode(proc, site_expr, root_evidence, request_fn_node, .body_lowering);
@@ -48808,7 +48873,7 @@ const BodyContext = struct {
             .reserved => Common.invariant("reserved checked const template reached Monotype"),
             .eval_template => |eval| blk: {
                 try self.constrainTypeToMono(requested_ty, ty);
-                break :blk try self.lowerConstEvalTemplateUse(store_view, eval, const_use.const_ref, ty, null, null, use_evidence, .{ .use = use_expr });
+                break :blk try self.lowerConstEvalTemplateUse(store_view, eval, const_use.const_ref, ty, null, null, use_evidence, .{ .use = self.constUseEdgeExpr(use_expr) });
             },
             .unimplemented => |declaration| blk: {
                 try self.constrainTypeToMono(requested_ty, ty);
@@ -48873,7 +48938,7 @@ const BodyContext = struct {
                     null,
                     null,
                     use_evidence,
-                    .{ .use = use_expr },
+                    .{ .use = self.constUseEdgeExpr(use_expr) },
                 );
             },
             .unimplemented => |declaration| blk: {
@@ -48979,23 +49044,19 @@ const BodyContext = struct {
         }
     }
 
-    /// The stored value of the polymorphic constant whose compile-time root
-    /// is `constant` of `view` at the closed type of `request_node`, when
-    /// some module's `constant_instance` root stores it (design.md
-    /// "Polymorphic Constants"): every use the checker recorded an edge for
-    /// reads it, as a literal's root is read (`restoredLiteralArgument`).
-    /// Null, and the reader lowers the constant's body at the read, in
-    /// exactly these cases: the read's edge forwards the instance and the
-    /// request's type is fixed only when the body's graph is sealed (an
-    /// open annotation row of a generic body defaulted at sealing, as in
-    /// `pick : [Purple, Mauve]` reading `color = Purple` inside `main!`);
-    /// the matching instance root is pending in the program evaluating the
-    /// reader and is not a declared read (an instance forwarded into a
-    /// polymorphic callable binding's instance, which the root graph does
-    /// not order before it); and a read with no edge (a `Str.inspect`
-    /// override bound to a polymorphic callable binding) whose request
-    /// type differs from every instance root's (issue 12739's program).
-    fn restoredConstantInstance(self: *BodyContext, view: ModuleView, constant: checked.ComptimeRootId, request_node: NodeId, edge: ?checked.LiteralEdge) Allocator.Error!?DraftExprId {
+    /// The stored value of the constant whose compile-time root is
+    /// `constant` of `view`, read at `request_node`, when the constant is
+    /// polymorphic (design.md "Polymorphic Constants"): the instance root
+    /// the read's edge names, through the edges of the scopes it forwards
+    /// the instance to, or the one the read's closed type names, as a
+    /// literal's root is read (`restoredLiteralArgument`). Null, and the
+    /// reader computes the constant at the read, exactly for a monomorphic
+    /// constant (which has no instances), for the instance root's own
+    /// evaluation, and for a `.open_inspect_override` read. Any other read
+    /// that finds no instance is a compiler bug.
+    fn restoredConstantInstance(self: *BodyContext, view: ModuleView, constant: checked.ComptimeRootId, request_node: NodeId, edge: ?checked.LiteralEdge, read: InstanceRead) Allocator.Error!?DraftExprId {
+        const wrapper = view.entry_wrappers.lookupByRoot(constant) orelse return null;
+        if (view.templates.constantInstanceRequirement(&view.templates.get(wrapper.template.template)) == null) return null;
         // An instance root's own evaluation computes the constant; it reads
         // no other root of it, which may be computing it too.
         if (self.current_entry_root) |entry| {
@@ -49008,18 +49069,21 @@ const BodyContext = struct {
         // root, in this body's module, whatever the request's type is
         // resolved to yet.
         if (edge) |use_edge| if (try self.restoredEdgeConstantInstance(view, constant, request_node, use_edge)) |restored| return restored;
-        const candidates = self.builder.literalArgumentRootIndex().instanceRootsOf(.{ .module = view.key.bytes, .node = @backingInt(constant), .kind = .constant_instance });
-        if (candidates.len == 0) return null;
-        if (!try self.graph.typeIsResolved(request_node)) return null;
-        const ty = try self.activeTypeFromNode(request_node);
-        for (candidates) |candidate| {
-            const root_view = &self.builder.moduleViews()[candidate.view];
-            const argument = root_view.compile_time_roots.root(candidate.root).literal_argument orelse Common.invariant("a constant instance index entry named a root that is no instance");
-            const root_ty = try self.closedCheckedMonoOf(root_view, argument.ty);
-            if (root_ty != ty and !try self.typeStore().typeEql(self.nameStore(), root_ty, ty)) continue;
-            if (try self.readConstantInstanceRoot(root_view, candidate.root, request_node)) |restored| return restored;
+        if (try self.graph.typeIsResolved(request_node)) {
+            const ty = try self.activeTypeFromNode(request_node);
+            for (self.builder.literalArgumentRootIndex().instanceRootsOf(.{ .module = view.key.bytes, .node = @backingInt(constant), .kind = .constant_instance })) |candidate| {
+                const root_view = &self.builder.moduleViews()[candidate.view];
+                const argument = root_view.compile_time_roots.root(candidate.root).literal_argument orelse Common.invariant("a constant instance index entry named a root that is no instance");
+                const root_ty = try self.closedCheckedMonoOf(root_view, argument.ty);
+                if (root_ty != ty and !try self.typeStore().typeEql(self.nameStore(), root_ty, ty)) continue;
+                if (try self.readConstantInstanceRoot(root_view, candidate.root, request_node)) |restored| return restored;
+                Common.invariant("a polymorphic constant's instance root is not evaluated before a program that reads it");
+            }
         }
-        return null;
+        return switch (read) {
+            .open_inspect_override => null,
+            .named => Common.invariantFmt("a read of polymorphic constant root {d} names no instance (edge {s})", .{ @backingInt(constant), if (edge) |use_edge| @tagName(use_edge) else "none" }),
+        };
     }
 
     /// The value of instance root `root_id` of `root_view` at `request_node`:
@@ -49058,9 +49122,22 @@ const BodyContext = struct {
         const own = view.templates.constantInstanceRequirement(&view.templates.get(wrapper.template.template)) orelse return null;
         const args = self.view.templates.literalEdgeArgs(edge);
         if (own >= args.len) return null;
-        const root_id = switch (args[own]) {
-            .root => |root_id| root_id,
-            .forwarded, .unbound => return null,
+        // A forwarded instance is the literal requirement of the scope the
+        // edge is in; where that scope was entered at a use, the use's edge
+        // names it, outward until an edge names a root. A scope a
+        // specialization entered names it by its closed type instead.
+        var arg = args[own];
+        var frame = self.evidence;
+        const root_id = while (true) switch (arg) {
+            .root => |root_id| break root_id,
+            .forwarded => |requirement| {
+                const entry = frame.entered_by orelse return null;
+                const entry_args = self.view.templates.literalEdgeArgs(entry.edge);
+                if (requirement >= entry_args.len) Common.invariant("a scope's use supplies fewer literal arguments than the scope forwards");
+                arg = entry_args[requirement];
+                frame = entry.use_frame;
+            },
+            .unbound => Common.invariant("a polymorphic constant's use names an unbound instance"),
         };
         const root = self.view.compile_time_roots.root(root_id);
         const argument = root.literal_argument orelse Common.invariant("a use's constant instance names a root that is no instance");
@@ -49112,7 +49189,7 @@ const BodyContext = struct {
         if (self.builder.comptimeValueReadDeclared(store_view, body.root)) {
             return self.declaredComptimeValueRead(store_view, body.root, DraftTypeCell.fromGraphNode(request_node), const_use);
         }
-        if (try self.restoredConstantInstance(store_view, body.root, request_node, use_edge)) |restored| return restored;
+        if (try self.restoredConstantInstance(store_view, body.root, request_node, use_edge, .named)) |restored| return restored;
         return try self.lowerConstBodyAtNode(store_view, eval, const_use, request_node, source_region_override, current_entry_root, evidence);
     }
 
@@ -57130,7 +57207,11 @@ const BodyContext = struct {
         defer target_ctx.deinit();
         const target_root_node = try target_ctx.instNode(source_fn_ty);
         try self.relateEvidenceTargetRootToRequest(lookup.view, source_fn_ty, target_root_node, request_fn_node);
-        return .{ .callable_binding = .{ .module = binding.module, .template = binding.template, .fn_node = request_fn_node } };
+        const read: InstanceRead = if (lookup.inspect_override) |override_ty|
+            if (try lookup.view.types.rootHasIdentityVariables(override_ty)) .open_inspect_override else .named
+        else
+            .named;
+        return .{ .callable_binding = .{ .module = binding.module, .template = binding.template, .fn_node = request_fn_node, .read = read } };
     }
 
     /// The procedure callee a call of `slot` names. A computed callable's
@@ -57144,6 +57225,7 @@ const BodyContext = struct {
                 binding.fn_node,
                 &.{},
                 null,
+                binding.read,
             ) },
         };
     }

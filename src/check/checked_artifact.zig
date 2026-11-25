@@ -22267,6 +22267,7 @@ fn publishLiteralArgumentRoots(
     requirement_solutions: []const ModuleEnv.PlatformRequirementSolution,
     requirement_root_substs: []const artifact_serialize.Span,
     platform_identities: []const CheckedTypeId,
+    method_registry: *const static_dispatch.MethodRegistry,
 ) Allocator.Error!void {
     const store = &checked_types.store;
     const template_count = templates.templates.items().len;
@@ -23014,6 +23015,22 @@ fn publishLiteralArgumentRoots(
             const parent = scopes[@backingInt(site.scope)].parent.get();
             try collector.scopeSite(site, if (parent) |p| .{ .template = null, .scope = @backingInt(p) } else null);
         }
+    }
+
+    // Inspection's use of each `to_inspect` override this module declares is
+    // a dispatch edge at the override's `T -> Str` instance (design.md
+    // "Inspect Overrides"), held by no template. Where `T` takes no type
+    // argument the instance is closed, and a polymorphic binding the
+    // override is bound to has its instance there as a root. Where `T` takes
+    // type arguments, inspection reaches the owner at whatever arguments the
+    // inspected value has, in generic code too, so no edge names that
+    // instance (design.md "Polymorphic Constants").
+    for (method_registry.entries.items()) |entry| {
+        const node = entry.inspect_evidence.get() orelse continue;
+        const callable_ty = entry.inspect_override.get() orelse continue;
+        if (try store.rootContainsIdentityVariables(callable_ty)) continue;
+        const target = entry.target orelse checkedArtifactInvariant("an inspect override has no method target", .{});
+        try collector.nodes(node, null, module.def(target.def_idx).expr.idx);
     }
 
     // The platform's invocation of each app procedure that satisfies a
@@ -38169,6 +38186,7 @@ pub fn publishFromTypedModule(
         requirement_solutions,
         platform_requirement_root_substs,
         platform_type_inputs.identities.items(),
+        &method_registry,
     );
     clock.lap(.literal_roots);
     try classifyTemplateDispatchPlanRefs(
