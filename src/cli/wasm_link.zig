@@ -1272,7 +1272,7 @@ fn planMemory(plan: *Layout, config: ModuleConfig, outcome: *Outcome) LinkError!
     }
     memory.initial_pages = initial / page_size;
     const maximum: ?u64 = switch (linker.wasmStackLayout(config.global_base)) {
-        .stack_first => config.maximum_memory orelse linker.stackFirstMaximumMemory(@intCast(config.stack_size)),
+        .stack_first => config.maximum_memory orelse linker.stackFirstMaximumMemory(config.stack_size),
         .data_first => config.maximum_memory,
     };
     if (maximum) |bytes| {

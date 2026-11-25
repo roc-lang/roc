@@ -2170,7 +2170,7 @@ pub fn generateModule(
     try self.module.finalizeMemoryAndTableWithConfig(.{
         .stack_bytes = self.wasm_stack_bytes,
         .minimum_memory = if (self.wasm_memory_pages > 0)
-            @as(usize, self.wasm_memory_pages) * 65536
+            @as(u64, self.wasm_memory_pages) * 65536
         else
             null,
         .export_memory = true,

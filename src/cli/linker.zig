@@ -109,7 +109,7 @@ pub const WasmOptimizeMode = enum {
 };
 
 /// Default WASM stack size: 8MB
-pub const DEFAULT_WASM_STACK_SIZE: usize = 8 * 1024 * 1024;
+pub const DEFAULT_WASM_STACK_SIZE: u64 = 8 * 1024 * 1024;
 
 const wasm_memory_limit = roc_target.wasm_memory.limit;
 const wasm_page_size = roc_target.wasm_memory.page_size;
@@ -136,9 +136,9 @@ pub fn wasmStackLayout(global_base: ?u32) WasmStackLayout {
 /// The largest maximum memory a stack-first module may declare. A stack
 /// pointer that wraps below 0 lands at most `stack_size` bytes below 4 GiB, so
 /// memory must never reach those addresses for the first write to trap.
-pub fn stackFirstMaximumMemory(stack_size: usize) usize {
-    const usable = wasm_memory_limit - @min(@as(u64, stack_size), wasm_memory_limit);
-    return @intCast(usable - usable % wasm_page_size);
+pub fn stackFirstMaximumMemory(stack_size: u64) u64 {
+    const usable = wasm_memory_limit - @min(stack_size, wasm_memory_limit);
+    return usable - usable % wasm_page_size;
 }
 
 /// The names a linked wasm module exports so its host can tell a stack
@@ -230,10 +230,10 @@ pub const LinkConfig = struct {
     /// Initial memory size for WASM targets (bytes). This is the amount of linear memory
     /// available to the WASM module at runtime. Must be a multiple of 64KB (WASM page size).
     /// Null lets wasm-ld size memory itself from the data segments plus the stack.
-    wasm_initial_memory: ?usize = null,
+    wasm_initial_memory: ?u64 = null,
 
     /// Maximum memory size for WASM targets (bytes), when the runtime contract needs one.
-    wasm_maximum_memory: ?usize = null,
+    wasm_maximum_memory: ?u64 = null,
 
     /// Where a link that fails because wasm-ld found a configured memory
     /// size too small for the program says which size and what it needs.
@@ -242,7 +242,7 @@ pub const LinkConfig = struct {
 
     /// Stack size for WASM targets (bytes). This is the amount of memory reserved for the
     /// call stack within the WASM linear memory. Must be a multiple of 16 (stack alignment).
-    wasm_stack_size: usize = DEFAULT_WASM_STACK_SIZE,
+    wasm_stack_size: u64 = DEFAULT_WASM_STACK_SIZE,
 
     /// Whether the final WASM module imports `env.memory` instead of defining memory.
     wasm_import_memory: bool = false,

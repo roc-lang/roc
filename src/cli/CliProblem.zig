@@ -240,9 +240,9 @@ pub const CliProblem = union(enum) {
     /// memory instead of trapping.
     wasm_maximum_memory_too_large: struct {
         target: []const u8,
-        maximum_memory: usize,
-        limit: usize,
-        stack_size: usize,
+        maximum_memory: u64,
+        limit: u64,
+        stack_size: u64,
     },
 
     /// The requested optimization level is not implemented for this command
