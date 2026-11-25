@@ -204,7 +204,7 @@ pub const CheckArgs = struct {
     root_source_url: ?[]const u8 = null, // internal: bundle URL provenance when the source was a URL or installed shorthand
     main_source_url: ?[]const u8 = null, // internal: bundle URL provenance when --main was a URL or installed shorthand
     opt: OptLevel = default_dev_opt, // accepted so one command line serves every command; checking ignores it
-    specialization_strategy: ?SpecializationStrategy = null, // accepted so one command line serves every command; checking ignores it
+    specialization_strategy: ?SpecializationStrategy = null, // explicit CTFE override; checking defaults to Boxy
 };
 
 /// How a build that `roc` runs starts its published executable: the
@@ -807,7 +807,7 @@ const specialize_flag: Flag = .{
     .form = .attached,
     .field = "specialization_strategy",
     .value_name = "<yes|no>",
-    .help = "Use lambda-set specialization (yes, the --opt=speed default) or boxy lowering (no, the default otherwise)",
+    .help = "Select compile-time and runtime lowering: lambda-set specialization (yes, the --opt=speed default) or boxy (no); check defaults to no",
 };
 
 const target_flag: Flag = .{

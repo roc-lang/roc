@@ -268,9 +268,9 @@ const CliBuildEnvOptions = struct {
     source_dir_override: ?[]const u8 = null,
     post_check_publication_mode: compile.build.PostCheckPublicationMode = .executable_artifacts,
     runtime_lowering: ?compile.build.RuntimeLoweringConfig = null,
-    /// The strategy the command's runtime program lowers under
-    /// (`Coordinator.specialization_strategy`), which every command names: a
-    /// command with no runtime consumer names `.boxy`, as `roc check` does.
+    /// The command's compile-time and runtime strategy
+    /// (`Coordinator.specialization_strategy`). Commands without a runtime
+    /// consumer default to `.boxy` but may explicitly select `.lss`.
     specialization_strategy: base.SpecializationStrategy,
     /// The bundle URL a URL/installed root came from; becomes the root's
     /// package identity in place of the extracted path.
@@ -17068,6 +17068,7 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
     switch (command) {
         .check => |args| {
             try argv.append(ctx.gpa, "check");
+            if (args.specialization_strategy) |strategy| try argv.append(ctx.gpa, if (strategy == .lss) "--specialize=yes" else "--specialize=no");
             if (args.main) |main_path| try appendOwnedArg(ctx.gpa, &argv, &owned, "--main={s}", .{main_path});
             if (args.time) try argv.append(ctx.gpa, "--time");
             if (args.timings) try argv.append(ctx.gpa, "--timings");
@@ -17114,6 +17115,21 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
         .argv = try argv.toOwnedSlice(ctx.gpa),
         .owned = try owned.toOwnedSlice(ctx.gpa),
     };
+}
+
+test "watch check child argv preserves the compile-time strategy" {
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, std.testing.allocator, &io, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    for ([_]?base.SpecializationStrategy{ null, .boxy, .lss }) |strategy| {
+        var child_argv = try buildWatchChildArgv(&ctx, "roc", .{ .check = .{ .specialization_strategy = strategy } }, "watch-inputs");
+        defer child_argv.deinit(std.testing.allocator);
+        const parsed = try cli_args.parse(std.testing.allocator, std.testing.io, child_argv.argv[1..]);
+        defer parsed.deinit(std.testing.allocator);
+        try std.testing.expectEqual(strategy, parsed.check.specialization_strategy);
+    }
 }
 
 test "watch child argv forwards every dependency replacement" {
@@ -21030,6 +21046,7 @@ fn checkFileWithBuildEnvPreserved(
     main_source_url: ?[]const u8,
     timings: bool,
     cache_config: CacheConfig,
+    specialization_strategy: base.SpecializationStrategy,
     max_threads: ?usize,
     resolution_config: compile.package_resolution.Config,
     source_dir_override: ?[]const u8,
@@ -21049,8 +21066,7 @@ fn checkFileWithBuildEnvPreserved(
         .timings = timings,
         .resolution_config = resolution_config,
         .track_watch_inputs = track_watch_inputs,
-        // A check has no runtime consumer.
-        .specialization_strategy = .boxy,
+        .specialization_strategy = specialization_strategy,
         .source_dir_override = source_dir_override,
         .root_source_url = root_source_url,
         .main_source_url = main_source_url,
@@ -21082,6 +21098,7 @@ fn checkFileWithBuildEnv(
     main_source_url: ?[]const u8,
     timings: bool,
     cache_config: CacheConfig,
+    specialization_strategy: base.SpecializationStrategy,
     max_threads: ?usize,
     resolution_config: compile.package_resolution.Config,
     source_dir_override: ?[]const u8,
@@ -21097,8 +21114,7 @@ fn checkFileWithBuildEnv(
         .verbose_cache = cache_config.verbose,
         .timings = timings,
         .resolution_config = resolution_config,
-        // A check has no runtime consumer.
-        .specialization_strategy = .boxy,
+        .specialization_strategy = specialization_strategy,
         .source_dir_override = source_dir_override,
         .root_source_url = root_source_url,
         .main_source_url = main_source_url,
@@ -21264,6 +21280,7 @@ fn rocCheckDefaultApp(
         null,
         args.timings,
         cache_config,
+        args.specialization_strategy orelse .boxy,
         args.max_threads,
         resolutionConfigFromLimits(args.resolve_limits),
         original_source_dir,
@@ -21310,6 +21327,7 @@ fn rocCheckDefaultAppPreserved(
         null,
         args.timings,
         cache_config,
+        args.specialization_strategy orelse .boxy,
         args.max_threads,
         resolutionConfigFromLimits(args.resolve_limits),
         original_source_dir,
@@ -21410,6 +21428,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             args.main_source_url,
             args.timings,
             cache_config,
+            args.specialization_strategy orelse .boxy,
             args.max_threads,
             resolutionConfigFromLimits(args.resolve_limits),
             null,
@@ -21450,6 +21469,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             args.main_source_url,
             args.timings,
             cache_config,
+            args.specialization_strategy orelse .boxy,
             args.max_threads,
             resolutionConfigFromLimits(args.resolve_limits),
             null,
@@ -21849,6 +21869,7 @@ fn bumpCheckSide(
         null,
         false,
         cache_config,
+        .boxy,
         null,
         resolutionConfigFromLimits(args.resolve_limits),
         null,
@@ -22401,6 +22422,7 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
         args.main_source_url,
         false,
         cache_config,
+        .boxy,
         null, // max_threads: use default (single-threaded for now)
         resolutionConfigFromLimits(args.resolve_limits),
         null,

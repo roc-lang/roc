@@ -660,6 +660,7 @@ const CustomCase = enum {
     ctfe_static_cache_runtime,
     ctfe_evaluation_order,
     ctfe_cache_mixing,
+    ctfe_strategy_cache,
     ctfe_cached_nominal_anchor,
     ctfe_cached_function_units,
     ctfe_stored_scoped_captures,
@@ -4324,6 +4325,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "CTFE static cache: a helper read at compile time and at runtime prints the same result uncached, cold and warm", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_static_cache_runtime } },
     .{ .id = 0, .suite = .subcommands, .name = "compile-time evaluation order keeps values and diagnostics across uncached, seeded, repeated and edited compilations", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_evaluation_order } },
     .{ .id = 0, .suite = .subcommands, .name = "CTFE cache mixing: warm callable tests and compile-time failures after a runtime build match uncached results", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_cache_mixing } },
+    .{ .id = 0, .suite = .subcommands, .name = "CTFE strategies share ordinary values and retain both callable representations", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_strategy_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "Boxy CTFE resolves a cached nominal anchor after editing another test module", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_cached_nominal_anchor } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports a specialization's rejected literal on every build, cached or not", .timeout_ms = 600_000, .body = .{ .custom = .literal_root_rejected_every_build } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports a rejected literal whose type holds a callable", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/cli/literal_root_rejected/CallableLiteral.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "invalid string" }}, .occurrences = &.{.{ .stream = .stderr, .text = "invalid string", .count = 1 }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
@@ -4348,13 +4350,13 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc repl shows a definition whose type keeps an unpinned part", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "empty = []\nempty\npair = ([], Ok([]))\npair\nfirst = List.first([])\nfirst\n", .exit = .success, .stdout_exact = "assigned `empty`\n[]\nassigned `pair`\n([], Ok([]))\nassigned `first`\nErr(ListWasEmpty)\n", .stderr_exact = "" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl shows a definition whose type keeps an unpinned part (specialize=yes)", .body = .{ .command = .{ .args = &.{ "repl", "--specialize=yes" }, .stdin = "empty = []\nempty\npair = ([], Ok([]))\npair\nfirst = List.first([])\nfirst\n", .exit = .success, .stdout_exact = "assigned `empty`\n[]\nassigned `pair`\n([], Ok([]))\nassigned `first`\nErr(ListWasEmpty)\n", .stderr_exact = "" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl shows a definition whose type keeps an unpinned part (specialize=no)", .body = .{ .command = .{ .args = &.{ "repl", "--specialize=no" }, .stdin = "empty = []\nempty\npair = ([], Ok([]))\npair\nfirst = List.first([])\nfirst\n", .exit = .success, .stdout_exact = "assigned `empty`\n[]\nassigned `pair`\n([], Ok([]))\nassigned `first`\nErr(ListWasEmpty)\n", .stderr_exact = "" } } },
-    // A command with no runtime consumer hands every compile-time root to the
-    // Boxy evaluator, one holding functions and one calling them included,
-    // whatever `--specialize` says: the Boxy trace names the root, and the
-    // Solved program's demand trace stays empty.
+    // REPL evaluation remains Boxy; check honors its explicit CTFE strategy.
     .{ .id = 0, .suite = .subcommands, .name = "roc repl evaluates an expression calling stored functions with the Boxy evaluator", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "table = [|x| x + 1.I64, |x| x * 2.I64]\ntable.fold(40.I64, |acc, f| f(acc))\n", .env = &.{ .{ .name = "ROC_TRACE_BOXY_WORK", .value = "1" }, .{ .name = "ROC_CTFE_DEMAND_TRACE", .value = "1" } }, .exit = .success, .stdout_exact = "assigned `table`\n82\n", .contains = if (build_options.dev_diagnostics) &.{.{ .stream = .stderr, .text = "Test repl_expr #0" }} else &.{}, .not_contains = &.{.{ .stream = .stderr, .text = "ctfe-demand" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl evaluates an expression calling stored functions with the Boxy evaluator (specialize=yes)", .body = .{ .command = .{ .args = &.{ "repl", "--specialize=yes" }, .stdin = "table = [|x| x + 1.I64, |x| x * 2.I64]\ntable.fold(40.I64, |acc, f| f(acc))\n", .env = &.{ .{ .name = "ROC_TRACE_BOXY_WORK", .value = "1" }, .{ .name = "ROC_CTFE_DEMAND_TRACE", .value = "1" } }, .exit = .success, .stdout_exact = "assigned `table`\n82\n", .contains = if (build_options.dev_diagnostics) &.{.{ .stream = .stderr, .text = "Test repl_expr #0" }} else &.{}, .not_contains = &.{.{ .stream = .stderr, .text = "ctfe-demand" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc check evaluates constants holding functions with the Boxy evaluator (specialize=yes)", .body = .{ .command = .{ .args = &.{ "check", "--no-cache", "--specialize=yes" }, .roc_file = "test/cli/BoxyStoredValues.roc", .env = &.{ .{ .name = "ROC_TRACE_BOXY_WORK", .value = "1" }, .{ .name = "ROC_CTFE_DEMAND_TRACE", .value = "1" } }, .exit = .success, .contains = if (build_options.dev_diagnostics) &.{.{ .stream = .stderr, .text = "boxy-work: function roots" }} else &.{}, .not_contains = &.{.{ .stream = .stderr, .text = "ctfe-demand" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check evaluates constants holding functions with the specialized evaluator (specialize=yes)", .body = .{ .command = .{ .args = &.{ "check", "--no-cache", "--specialize=yes" }, .roc_file = "test/cli/BoxyStoredValues.roc", .env = &.{ .{ .name = "ROC_TRACE_BOXY_WORK", .value = "1" }, .{ .name = "ROC_CTFE_DEMAND_TRACE", .value = "1" } }, .exit = .success, .contains = if (build_options.dev_diagnostics) &.{.{ .stream = .stderr, .text = "ctfe-demand" }} else &.{}, .not_contains = &.{.{ .stream = .stderr, .text = "boxy-work: function roots" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check specializes ordinary CTFE (specialize=yes)", .body = .{ .command = .{ .args = &.{ "check", "--no-cache", "--specialize=yes" }, .roc_file = "test/cli/CtfeSpecialization.roc", .env = &.{.{ .name = "ROC_TRACE_BOXY_WORK", .value = "1" }}, .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "boxy-work: pending root" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check keeps ordinary CTFE Boxy (specialize=no)", .body = .{ .command = .{ .args = &.{ "check", "--no-cache", "--specialize=no" }, .roc_file = "test/cli/CtfeSpecialization.roc", .env = &.{.{ .name = "ROC_TRACE_BOXY_WORK", .value = "1" }}, .exit = .success, .contains = if (build_options.dev_diagnostics) &.{.{ .stream = .stderr, .text = "boxy-work: compile-time program of CtfeSpecialization" }} else &.{} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check defaults ordinary CTFE to Boxy even with opt=speed", .body = .{ .command = .{ .args = &.{ "check", "--no-cache", "--opt=speed" }, .roc_file = "test/cli/CtfeSpecialization.roc", .env = &.{.{ .name = "ROC_TRACE_BOXY_WORK", .value = "1" }}, .exit = .success, .contains = if (build_options.dev_diagnostics) &.{.{ .stream = .stderr, .text = "boxy-work: compile-time program of CtfeSpecialization" }} else &.{} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check evaluates constants holding functions with the Boxy evaluator (specialize=no)", .body = .{ .command = .{ .args = &.{ "check", "--no-cache", "--specialize=no" }, .roc_file = "test/cli/BoxyStoredValues.roc", .env = &.{ .{ .name = "ROC_TRACE_BOXY_WORK", .value = "1" }, .{ .name = "ROC_CTFE_DEMAND_TRACE", .value = "1" } }, .exit = .success, .contains = if (build_options.dev_diagnostics) &.{.{ .stream = .stderr, .text = "boxy-work: function roots" }} else &.{}, .not_contains = &.{.{ .stream = .stderr, .text = "ctfe-demand" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl evaluates final stdin line without trailing newline", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "1 + 1", .contains = &.{.{ .stream = .stdout, .text = "2" }}, .stderr_exact = "" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl accepts unused loop over unconstrained empty list", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "unused = { for _ in [] {} }\n", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "assigned `unused`" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -7448,6 +7450,7 @@ fn runCustomCase(
         .ctfe_static_cache_runtime => customCtfeStaticCacheRuntime(io, allocator, &env, &timer, timeout_ms),
         .ctfe_evaluation_order => customCtfeEvaluationOrder(io, allocator, &env, &timer, timeout_ms),
         .ctfe_cache_mixing => customCtfeCacheMixing(io, allocator, &env, &timer, timeout_ms),
+        .ctfe_strategy_cache => customCtfeStrategyCache(io, allocator, &env, &timer, timeout_ms),
         .ctfe_cached_nominal_anchor => customCtfeCachedNominalAnchor(io, allocator, &env, &timer, timeout_ms),
         .ctfe_cached_function_units => customCtfeCachedFunctionUnits(io, allocator, &env, &timer, timeout_ms),
         .ctfe_stored_scoped_captures => customCtfeStoredScopedCaptures(io, allocator, &env, &timer, timeout_ms),
@@ -14012,6 +14015,14 @@ fn customCtfeEvaluationOrder(
     timeout_ms: u64,
 ) ?TestResult {
     const fixtures = [_][]const u8{ "Forward.roc", "Functions.roc", "Guarded.roc", "FailedGuard.roc", "Cycle.roc" };
+    const checks = [_][]const []const u8{
+        &.{ "check", "--specialize=yes", "--no-cache", "--no-color" },
+        &.{ "check", "--specialize=yes", "--no-color" },
+        &.{ "check", "--specialize=yes", "--no-color" },
+        &.{ "check", "--specialize=no", "--no-cache", "--no-color" },
+        &.{ "check", "--specialize=no", "--no-color" },
+        &.{ "check", "--specialize=no", "--no-color" },
+    };
     var sources: [fixtures.len][]const u8 = undefined;
     for (fixtures, &sources) |name, *source| {
         source.* = std.fmt.allocPrint(allocator, "test/cli/ctfe_evaluation_order/{s}", .{name}) catch |err|
@@ -14040,7 +14051,7 @@ fn customCtfeEvaluationOrder(
     for (fixtures[0..3]) |name| {
         const path = std.fs.path.join(allocator, &.{ dir, name }) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate fixture path: {}", .{err});
-        for ([_][]const []const u8{ &.{ "check", "--no-cache", "--no-color" }, &.{ "check", "--no-color" }, &.{ "check", "--no-color" } }) |args| {
+        for (checks) |args| {
             if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{ .args = args, .roc_file = path })) |failure| return failure;
         }
         // Editing the module makes its evaluation run again rather than
@@ -14066,7 +14077,7 @@ fn customCtfeEvaluationOrder(
         const path = std.fs.path.join(allocator, &.{ dir, entry.name }) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate fixture path: {}", .{err});
         var baseline: ?std.process.RunResult = null;
-        for ([_][]const []const u8{ &.{ "check", "--no-cache", "--no-color" }, &.{ "check", "--no-color" }, &.{ "check", "--no-color" } }) |args| {
+        for (checks) |args| {
             const run = switch (captureRocRun(io, allocator, &isolated, timer, timeout_ms, .{ .args = args, .roc_file = path, .exit = .failure })) {
                 .result => |run| run,
                 .failure => |failure| return failure,
@@ -14304,6 +14315,42 @@ fn customCtfeCachedNominalAnchor(
             .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }},
             .stderr_exact = "",
         })) |failure| return failure;
+    }
+    return null;
+}
+
+/// Switching check's strategy reuses ordinary values and completes any
+/// missing callable representation without corrupting the other one.
+fn customCtfeStrategyCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    // Each order starts cold; subsequent checks and runs reuse this cache.
+    for ([_]bool{ false, true }) |lss_first| {
+        var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "clone environment: {}", .{err}) };
+        defer isolated.env_map.deinit();
+        const cache = std.fmt.allocPrint(allocator, "{s}/ctfe-strategy-{s}", .{ env.dirs.work_dir, if (lss_first) "lss" else "boxy" }) catch |err|
+            return customInfraFailure(allocator, timer, "cache path: {}", .{err});
+        isolated.env_map.put("ROC_CACHE_DIR", cache) catch |err|
+            return customInfraFailure(allocator, timer, "cache environment: {}", .{err});
+        for (0..4) |step| {
+            const strategy = if ((step % 2 == 0) == lss_first) "--specialize=yes" else "--specialize=no";
+            for ([_][]const u8{ "test/cli/CtfeSpecialization.roc", "test/cli/BoxyStoredValues.roc" }) |fixture| {
+                if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
+                    .args = &.{ "check", strategy, "--jobs=2" },
+                    .roc_file = fixture,
+                })) |failure| return failure;
+            }
+            if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
+                .args = &.{ "--opt=dev", strategy, "--jobs=2" },
+                .roc_file = "test/cli/BoxyStoredValues.roc",
+                .stdout_exact = "6 6\n8 8\n2 NamedJust(2)\n6 NamedJust(4)\n2 4\n4 6\n",
+            })) |failure| return failure;
+        }
     }
     return null;
 }
