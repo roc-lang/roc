@@ -381,7 +381,9 @@ pub const Writer = struct {
         box: checked.ConstNodeId,
         tuple: checked.ConstNodeId,
         record: checked.ConstNodeId,
-        nominal: struct { node: checked.ConstNodeId, named: *const @FieldType(LirProgram.ConstPlan, "named") },
+        /// The nominal's plan, by id: the plan table may grow while the
+        /// frame's components are stored.
+        nominal: struct { node: checked.ConstNodeId, plan: LirProgram.ConstPlanId },
         tag: struct { node: checked.ConstNodeId, name: []const u8 },
         /// A function value; `node` is null for a callable root, whose
         /// function id is the store's result.
@@ -558,9 +560,9 @@ pub const Writer = struct {
                 try self.appendTagPayloadRequests(children, selected.payloads, payload_layout, tag_base.value);
                 break :blk .{ .tag = .{ .node = node, .name = selected.name } };
             },
-            .named => |*named| blk: {
+            .named => |named| blk: {
                 try children.append(self.allocator, .{ .plan = named.backing, .layout_idx = layout_idx, .value = part });
-                break :blk .{ .nominal = .{ .node = node, .named = named } };
+                break :blk .{ .nominal = .{ .node = node, .plan = request.plan } };
             },
             .fn_value => |set| return self.pushFnValue(node, set, layout_idx, part),
             .erased_fn => |set| return self.pushErasedFn(node, set, part),
@@ -648,7 +650,7 @@ pub const Writer = struct {
             .tuple => |node| self.store.fill(node, .{ .tuple = nodes }),
             .record => |node| self.store.fill(node, .{ .record = nodes }),
             .nominal => |nominal| self.store.fill(nominal.node, .{ .nominal = .{
-                .named_type = nominal.named.named_type,
+                .named_type = self.constPlan(nominal.plan).named.named_type,
                 .backing = nodes[0],
             } }),
             .tag => |tag| {

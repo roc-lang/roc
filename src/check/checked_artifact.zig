@@ -1564,8 +1564,13 @@ fn collectCompileTimeRootRequests(
     for (requests) |request| {
         if (request.abi != .compile_time and !(include_expects and request.abi == .test_expect)) continue;
         const root_id = compileTimeRootIdForRequest(compile_time_roots, request);
+        var scheduled = request;
+        // A root whose type mentions a platform's abstract type is evaluated
+        // where the platform is paired with an app (design.md "Polymorphic
+        // Constants").
+        if (compile_time_roots.root(root_id).pairing_typed) scheduled.requires_pairing = true;
         try entries.append(allocator, .{
-            .request = request,
+            .request = scheduled,
             .root_id = root_id,
             .original_order = @intCast(entries.items.len),
         });
@@ -2208,6 +2213,9 @@ fn checkedTypeIsConcreteCompileTimeRoot(
 /// of the key. Complete recursive components share one exact answer.
 const NonConcreteRootScan = struct {
     checked_types: *const CheckedTypeStore,
+    /// Variables read as closed: a platform's abstract types, which its
+    /// pairing with an app binds.
+    closed_vars: []const CheckedTypeId = &.{},
     const Key = struct { walk: ConcreteRootWalk, id: CheckedTypeId };
 
     fn addSpan(items: anytype, walk: ConcreteRootWalk, ids: []const CheckedTypeId) Allocator.Error!void {
@@ -2221,8 +2229,8 @@ const NonConcreteRootScan = struct {
         switch (checked_types.payload(ty.id)) {
             .pending => checkedArtifactInvariant("compile-time root checked type was pending", .{}),
             .field_kind, .err => return true,
-            .flex => return true,
-            .rigid => return walk != .decl_template,
+            .flex => return !sliceContains(CheckedTypeId, scan.closed_vars, ty.id),
+            .rigid => return walk != .decl_template and !sliceContains(CheckedTypeId, scan.closed_vars, ty.id),
             .empty_record,
             .empty_tag_union,
             => return false,
@@ -14054,6 +14062,8 @@ const EvidencePass = struct {
     callable_contract_buckets: std.AutoHashMapUnmanaged(u64, u32) = .empty,
     callable_contracts: std.ArrayListUnmanaged(CallableContractRow) = .empty,
     site_evidence: std.ArrayList(static_dispatch.SiteEvidenceEntry),
+    /// Each use of a name a destructuring scheme alias binds.
+    destructured_uses: std.ArrayList(static_dispatch.DestructuredUse) = .empty,
     evidence_params_pool: std.ArrayList(static_dispatch.EvidenceParamRecord),
     evidence_path_nodes: std.ArrayList(static_dispatch.EvidencePathNode),
     /// Scheme path node -> published path node, for the scheme being published.
@@ -14218,6 +14228,7 @@ const EvidencePass = struct {
         self.callable_contract_buckets.deinit(self.allocator);
         self.callable_contracts.deinit(self.allocator);
         self.site_evidence.deinit(self.allocator);
+        self.destructured_uses.deinit(self.allocator);
         self.record_spans_by_substitution.deinit(self.allocator);
         self.evidence_params_pool.deinit(self.allocator);
         self.evidence_path_nodes.deinit(self.allocator);
@@ -14480,11 +14491,24 @@ const EvidencePass = struct {
         self.recordForwardedRequirements();
 
         std.mem.sort(static_dispatch.SiteEvidenceEntry, self.site_evidence.items, {}, siteEvidenceLessThan);
+        std.mem.sort(static_dispatch.DestructuredUse, self.destructured_uses.items, {}, destructuredUseLessThan);
+        {
+            // A use whose evidence waited for a later chain was visited once
+            // per chain; its formals are the same each time.
+            var kept: usize = 0;
+            for (self.destructured_uses.items) |entry| {
+                if (kept != 0 and self.destructured_uses.items[kept - 1].key == entry.key) continue;
+                self.destructured_uses.items[kept] = entry;
+                kept += 1;
+            }
+            self.destructured_uses.shrinkRetainingCapacity(kept);
+        }
 
         self.plan_table.evidence_nodes = .fromOwnedSlice(try self.evidence_nodes.toOwnedSlice(self.allocator));
         self.plan_table.evidence_refs = .fromOwnedSlice(try self.evidence_refs.toOwnedSlice(self.allocator));
         self.plan_table.site_evidence = .fromOwnedSlice(try self.site_evidence.toOwnedSlice(self.allocator));
         self.plan_table.site_substitutions = .fromOwnedSlice(try self.site_substitutions.toOwnedSlice(self.allocator));
+        self.plan_table.destructured_uses = .fromOwnedSlice(try self.destructured_uses.toOwnedSlice(self.allocator));
         self.plan_table.template_root_evidence = .fromOwnedSlice(try self.allocator.dupe(?artifact_serialize.Span, self.template_root_evidence));
         try @import("codec_identity.zig").intern(self.allocator, self.checked_types.store.view(), self.plan_table);
         try @import("codec_identity.zig").digestContents(self.allocator, self.import_views.current_owner, &self.checked_types.store, self.names, self.plan_table);
@@ -17176,6 +17200,18 @@ const EvidencePass = struct {
         const source_node = site_key;
 
         if (self.value_use_by_node.get(source_node)) |record_idx| {
+            // A use of a name a destructuring scheme alias binds
+            // instantiates the name's scheme; the declaration's lookup is
+            // instantiated there through those variables (design.md
+            // "Polymorphic Constants").
+            switch (rec.ref) {
+                .pattern_binder, .local_value => |binding| if (self.module_index.destructuredAliasDecl(binding.binder) != null) {
+                    const record = self.module.moduleEnvConst().scheme_uses.items()[record_idx];
+                    const formals = try self.appendSiteSubstitution(@fromBackingInt(@intCast(record.scheme_root)), &.{}, &.{});
+                    try self.destructured_uses.append(self.allocator, .{ .key = site_key, .formals_start = formals.start, .formals_len = formals.len });
+                },
+                .local_param, .local_mutable_version, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => {},
+            }
             const procedure_value = switch (rec.ref) {
                 .top_level_proc,
                 .imported_proc,
@@ -17544,6 +17580,10 @@ test "procedure evidence schema positively classifies callable paths and pathles
 }
 
 fn siteEvidenceLessThan(_: void, a: static_dispatch.SiteEvidenceEntry, b: static_dispatch.SiteEvidenceEntry) bool {
+    return a.key < b.key;
+}
+
+fn destructuredUseLessThan(_: void, a: static_dispatch.DestructuredUse, b: static_dispatch.DestructuredUse) bool {
     return a.key < b.key;
 }
 
@@ -21912,7 +21952,7 @@ fn publishLiteralConversionRoots(
     const added = roots.roots.items()[first_root..];
     @memcpy(added, root_list.items);
     for (added, first_root..) |*root, index| root.id = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-    try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, added, &.{});
+    try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, added, &.{}, &.{});
 
     const first_template = templates.templates.items().len;
     try templates.appendEntryWrappersForRoots(allocator, module, names, owner_artifact, &checked_types.store, wrappers, added);
@@ -22190,6 +22230,23 @@ fn sealDecidedVariables(
 /// requirement of the scope the edge is in, forwarded in turn.
 /// Literal requirements are computed to a fixpoint over this module's schemes;
 /// imported schemes' literal requirements come published with their artifacts.
+/// The substitution each destructured use instantiates its declaration's
+/// lookup at, once per use, in the order the uses were collected.
+const DestructuredSubsts = struct {
+    entries: std.ArrayListUnmanaged(struct { use: CIR.Expr.Idx, subst: []const CheckedTypeId }) = .empty,
+    seen: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empty,
+
+    fn record(self: *DestructuredSubsts, allocator: Allocator, use: CIR.Expr.Idx, subst: []const CheckedTypeId) Allocator.Error!void {
+        if ((try self.seen.getOrPut(allocator, use)).found_existing) return;
+        try self.entries.append(allocator, .{ .use = use, .subst = subst });
+    }
+
+    fn deinit(self: *DestructuredSubsts, allocator: Allocator) void {
+        self.entries.deinit(allocator);
+        self.seen.deinit(allocator);
+    }
+};
+
 fn publishLiteralArgumentRoots(
     allocator: Allocator,
     module: TypedCIR.Module,
@@ -22317,15 +22374,33 @@ fn publishLiteralArgumentRoots(
     const PolymorphicConstant = struct { template: u32, requirement: u32, root: ComptimeRootId, ty: CheckedTypeId, owner_expr: CIR.Expr.Idx };
     var polymorphic_constants = std.ArrayListUnmanaged(PolymorphicConstant).empty;
     defer polymorphic_constants.deinit(allocator);
+    // An unannotated top-level value that always crashes binds nothing: its
+    // valueless-binding root is the one evaluation of its right-hand side,
+    // so the value has no instance to evaluate.
+    var valueless_bindings = collections.DenseMapUnmanaged(CIR.Pattern.Idx, void).empty;
+    defer valueless_bindings.deinit(allocator);
+    for (roots.roots.items()) |root| {
+        const body = root.hoisted_body orelse continue;
+        if (body == .valueless_binding) try valueless_bindings.put(allocator, body.valueless_binding, {});
+    }
     for (roots.roots.items()) |root| {
         switch (root.kind) {
-            .constant => {},
+            .constant => if (root.pattern.get()) |pattern| if (valueless_bindings.contains(pattern)) continue,
             .callable_binding => if (callableEvalTemplateIsAlias(callable_eval_templates, root.id)) continue,
-            // A hoisted constant's variables are those of the generic body
-            // it was hoisted from, whose instantiation fixes them; the body
-            // computes it in place.
+            // A hoisted constant is a local value binding, which is weak
+            // (design.md "Value Bindings Generalize By Expression"): every
+            // read shares its one type, so its own root is its one value.
             .hoisted_constant, .hoisted_validation, .expect, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => continue,
         }
+        // Only a binding checking generalized is polymorphic: a weak value
+        // (one a platform requirement types, or whose variables carry a
+        // requirement) is one value, however many variables its type still
+        // mentions (design.md "Polymorphic Constants").
+        const def_idx = switch (root.source) {
+            .def => |def_idx| def_idx,
+            .expr, .statement, .hoisted, .required_binding, .literal, .literal_argument => continue,
+        };
+        if (module.typeStoreConst().resolveVar(ModuleEnv.varFrom(module.def(def_idx).pattern.idx)).desc.rank != .generalized) continue;
         const wrapper = wrappers.lookupByRoot(root.id) orelse continue;
         if (!wrapper.template.artifact.eql(owner_artifact)) continue;
         const template_index = @backingInt(wrapper.template.template);
@@ -22381,13 +22456,6 @@ fn publishLiteralArgumentRoots(
         /// The scope the edge is in; null inside a defaulted field expression.
         scope: ?ScopeKey,
         owner_expr: CIR.Expr.Idx,
-        /// For a dispatch to a method bound to a polymorphic callable binding
-        /// (`to_inspect = plain`), which checking instantiates at no
-        /// substitution: the method's callable at the dispatch, which is the
-        /// binding's value at this edge (design.md "Polymorphic Constants").
-        /// The binding's own value is the only requirement such an edge
-        /// instantiates.
-        value_ty: ?CheckedTypeId = null,
     };
     var edges = std.ArrayListUnmanaged(EdgeRec).empty;
     defer edges.deinit(allocator);
@@ -22398,6 +22466,15 @@ fn publishLiteralArgumentRoots(
         for (edge_templates.items) |*list| list.deinit(allocator);
         edge_templates.deinit(allocator);
     }
+    var destructured_lookups = collections.DenseMapUnmanaged(CIR.Expr.Idx, void).empty;
+    defer destructured_lookups.deinit(allocator);
+    var destructured_substs = DestructuredSubsts{};
+    defer destructured_substs.deinit(allocator);
+
+    for (bodies.index().destructured_aliases) |alias| switch (bodies.statement(alias.statement).data) {
+        .decl => |decl| try destructured_lookups.put(allocator, decl.expr, {}),
+        .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .rejected_method_decl, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => checkedArtifactInvariant("a destructuring scheme alias is not a declaration", .{}),
+    };
     const Collector = struct {
         allocator: Allocator,
         plans: *const static_dispatch.StaticDispatchPlanTable,
@@ -22423,6 +22500,14 @@ fn publishLiteralArgumentRoots(
         templates: *const CheckedProcedureTemplateTable,
         store: *CheckedTypeStore,
         names: *canonical.CanonicalNameStore,
+        bodies: CheckedBodies,
+        /// The lookup of each destructuring scheme alias (`(twice, _) =
+        /// doubling`): it is instantiated at each use of a name the
+        /// destructuring binds, never at its own site.
+        destructured_lookups: *const collections.DenseMapUnmanaged(CIR.Expr.Idx, void),
+        /// The substitution each destructured use instantiates its
+        /// declaration's lookup at, published once the edges are done.
+        destructured_substs: *DestructuredSubsts,
 
         fn add(self: *@This(), edge: EdgeRec) Allocator.Error!void {
             const seen = try self.keys.getOrPut(self.allocator, edge.key);
@@ -22463,15 +22548,16 @@ fn publishLiteralArgumentRoots(
                         .owner_expr = owner_expr,
                     }),
                     // A method bound to a polymorphic callable binding is the
-                    // binding's value at the dispatch's callable.
+                    // binding's value at the dispatch: checking instantiated
+                    // the binding's scheme there and recorded the
+                    // substitution (`Check.instantiateDispatchTargetMethodVar`).
                     .callable_binding => |binding| if (self.callableBindingWrapper(binding)) |wrapper| switch (node.instantiation) {
-                        .callable => |callable| try self.add(.{
+                        .callable => try self.add(.{
                             .key = .{ .node = id },
                             .callee = .{ .template = wrapper },
-                            .subst = &.{},
+                            .subst = self.plans.site_substitutions.items()[node.subst.start..][0..node.subst.len],
                             .scope = scope,
                             .owner_expr = owner_expr,
-                            .value_ty = callable,
                         }),
                         .monomorphic, .alias, .derived_from_callable => {},
                     },
@@ -22761,17 +22847,49 @@ fn publishLiteralArgumentRoots(
 
         fn valueRef(self: *@This(), record: ResolvedValueRefRecord, scope: ?ScopeKey) Allocator.Error!void {
             try self.siteNodes(record.expr, scope);
-            const callee: CalleeRef = switch (record.ref) {
-                .local_proc => |local| .{ .scope = local.dispatch_scope orelse return },
-                .top_level_proc, .imported_proc, .promoted_top_level_proc, .platform_required_proc, .hosted_proc, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_const, .local_param, .local_value, .local_mutable_version, .pattern_binder, .platform_required_declaration, .platform_required_checked_error => .{ .template = self.templateOfValueRef(record.ref) orelse return },
-            };
+            if (self.destructured_lookups.contains(record.expr)) return;
+            const instantiation = try self.useInstantiation(record) orelse return;
             try self.add(.{
                 .key = .{ .use = record.expr },
-                .callee = callee,
-                .subst = self.plans.siteSubstitution(record.expr) orelse &.{},
+                .callee = instantiation.callee,
+                .subst = instantiation.subst,
                 .scope = scope,
                 .owner_expr = record.expr,
             });
+        }
+
+        const UseInstantiation = struct { callee: CalleeRef, subst: []const CheckedTypeId };
+
+        /// The scheme a value reference instantiates and its substitution.
+        /// A use of a name a destructuring scheme alias binds instantiates
+        /// the declaration's lookup: the lookup's substitution, whose types
+        /// mention the declaration's variables, with the name's variables
+        /// at the use's types (design.md "Polymorphic Constants"). A
+        /// variable of the declaration the name does not mention stays.
+        fn useInstantiation(self: *@This(), record: ResolvedValueRefRecord) Allocator.Error!?UseInstantiation {
+            const binder: CIR.Pattern.Idx = switch (record.ref) {
+                .pattern_binder, .local_value => |binding| binding.binder,
+                .local_proc => |local| return .{ .callee = .{ .scope = local.dispatch_scope orelse return null }, .subst = self.plans.siteSubstitution(record.expr) orelse &.{} },
+                .top_level_proc, .imported_proc, .promoted_top_level_proc, .platform_required_proc, .hosted_proc, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_const, .local_param, .local_mutable_version, .platform_required_declaration, .platform_required_checked_error => return .{ .callee = .{ .template = self.templateOfValueRef(record.ref) orelse return null }, .subst = self.plans.siteSubstitution(record.expr) orelse &.{} },
+            };
+            const formals = self.plans.destructuredUseFormals(record.expr) orelse return null;
+            const statement = self.bodies.index().destructuredAliasDecl(binder) orelse checkedArtifactInvariant("a destructured use's name is bound by no destructuring scheme alias", .{});
+            const lookup = switch (self.bodies.statement(statement).data) {
+                .decl => |decl| decl.expr,
+                .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .rejected_method_decl, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => checkedArtifactInvariant("a destructuring scheme alias is not a declaration", .{}),
+            };
+            const lookup_ref = self.resolved_value_refs.lookupIdByExpr(lookup) orelse return null;
+            const inner = try self.useInstantiation(self.resolved_value_refs.records.items()[@backingInt(lookup_ref)]) orelse return null;
+            const actuals = self.plans.siteSubstitution(record.expr) orelse return null;
+            if (actuals.len != formals.len) checkedArtifactInvariant("a destructured use's substitution differs from its name's scheme", .{});
+            var substitution = CheckedTypeSubstitution.init(self.allocator, formals, actuals);
+            defer substitution.deinit();
+            const composed = try self.allocator.alloc(CheckedTypeId, inner.subst.len);
+            errdefer self.allocator.free(composed);
+            for (inner.subst, composed) |ty, *out| out.* = try self.store.cloneCheckedTypeRootSubstituting(self.allocator, ty, &substitution);
+            try self.composed_substs.append(self.allocator, composed);
+            try self.destructured_substs.record(self.allocator, record.expr, composed);
+            return .{ .callee = inner.callee, .subst = composed };
         }
 
         fn scopeSite(self: *@This(), site: CollectedScopeConstructionSite, scope: ?ScopeKey) Allocator.Error!void {
@@ -22801,6 +22919,9 @@ fn publishLiteralArgumentRoots(
         .templates = templates,
         .store = store,
         .names = names,
+        .bodies = bodies,
+        .destructured_lookups = &destructured_lookups,
+        .destructured_substs = &destructured_substs,
     };
     defer collector.edge_template_pairs.deinit(allocator);
     defer collector.stack.deinit(allocator);
@@ -23062,10 +23183,8 @@ fn publishLiteralArgumentRoots(
             if (args.items.len >= callee.obligations.len) continue;
             if (edge.subst.len != 0 and edge.subst.len != callee.vars.len) checkedArtifactInvariant("an edge's substitution differs from its callee's scheme", .{});
             // A use with no recorded instantiation of a scheme with
-            // variables instantiates nothing, but for a dispatch to a method
-            // bound to a polymorphic callable binding, whose one requirement
-            // is the binding's value at the dispatch's callable.
-            if (callee.vars.len != 0 and edge.subst.len == 0 and edge.value_ty == null) continue;
+            // variables instantiates nothing.
+            if (callee.vars.len != 0 and edge.subst.len == 0) continue;
             var projector: ?*CheckedTypeStoreImportProjector = null;
             if (callee.artifact) |artifact| {
                 const slot = try projectors.getOrPut(allocator, artifact.bytes);
@@ -23085,14 +23204,8 @@ fn publishLiteralArgumentRoots(
             // A self-recursive edge appends to the list it instantiates.
             while (j < liveObligations(callee, &scope_states).len) : (j += 1) {
                 const obligation = liveObligations(callee, &scope_states)[j];
-                const instantiated = if (edge.value_ty) |value_ty| blk: {
-                    if (j != 0 or obligation.edge != .literal or obligation.site.kind != .constant_instance or liveObligations(callee, &scope_states).len != 1)
-                        checkedArtifactInvariant("a method bound to a polymorphic callable binding requires more than the binding's value", .{});
-                    break :blk value_ty;
-                } else blk: {
-                    const projected = if (projector) |p| try p.project(obligation.ty) else obligation.ty;
-                    break :blk if (substitution) |*s| try store.cloneCheckedTypeRootSubstituting(allocator, projected, s) else projected;
-                };
+                const projected = if (projector) |p| try p.project(obligation.ty) else obligation.ty;
+                const instantiated = if (substitution) |*s| try store.cloneCheckedTypeRootSubstituting(allocator, projected, s) else projected;
                 // A type that names no variable is closed, and so is one
                 // whose every variable is decided at the edge: its root
                 // converts the literal at the type those variables seal to.
@@ -23112,13 +23225,10 @@ fn publishLiteralArgumentRoots(
                 // nothing converts the literal. Otherwise the variable seals:
                 // the edge converts the literal at the sealed type.
                 const unfixed = !closed and instance.? == .unbound;
-                // A polymorphic constant read at a type whose variables no
-                // scheme around the edge quantifies (a destructuring value
-                // alias's own variables, which no checked scheme records)
-                // has no instance this edge could name: the reader computes
-                // it at the type it reads it at (design.md "Polymorphic
-                // Constants").
-                if (unfixed and (constant_instance or store.payload(instantiated) == .flex)) {
+                // A polymorphic constant read at such a type is its
+                // instance at the sealed type, as a literal is converted
+                // there (design.md "Polymorphic Constants").
+                if (unfixed and !constant_instance and store.payload(instantiated) == .flex) {
                     try args.append(allocator, .unbound);
                     continue;
                 }
@@ -23258,7 +23368,7 @@ fn publishLiteralArgumentRoots(
         const added = roots.roots.items()[first_root..];
         @memcpy(added, root_list.items);
         for (added, first_root..) |*root, index| root.id = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-        try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, added, &.{});
+        try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, added, &.{}, platform_identities);
 
         // The roots' entry wrappers, each a template of its own with no
         // plan: its body is the conversion its root names.
@@ -23352,6 +23462,23 @@ fn publishLiteralArgumentRoots(
         }
         templates.literal_argument_demand_pool.deinit(allocator);
         templates.literal_argument_demand_pool = .fromOwnedSlice(try demand_pool.toOwnedSlice(allocator));
+    }
+
+    // Each destructured use's substitution of its declaration's lookup, which
+    // its edge instantiates and lowering reads back. Appended last: the edges
+    // borrowed the substitution pool until here.
+    for (destructured_substs.entries.items) |entry| {
+        const key = @backingInt(entry.use);
+        const subst = entry.subst;
+        const range = try plans.site_substitutions.appendSlice(allocator, subst);
+        const uses = plans.destructured_uses.items();
+        const index = std.sort.binarySearch(static_dispatch.DestructuredUse, uses, key, struct {
+            fn order(target: u32, item: static_dispatch.DestructuredUse) std.math.Order {
+                return std.math.order(target, item.key);
+            }
+        }.order) orelse checkedArtifactInvariant("a destructured use's substitution has no destructured use entry", .{});
+        uses[index].subst_start = @intCast(@backingInt(range.start));
+        uses[index].subst_len = @intCast(subst.len);
     }
 }
 
@@ -25903,6 +26030,11 @@ pub const CompileTimeRoot = struct {
     expr: OptionalId(CIR.Expr.Idx),
     checked_type: CheckedTypeId,
     request_eligibility: CompileTimeRootRequestEligibility,
+    /// The root's type is closed but for a platform's abstract types
+    /// (`[Model : model] for main`), which pairing the platform with an app
+    /// binds: its request waits for the pairing, which evaluates it at the
+    /// app's types.
+    pairing_typed: bool = false,
     payload: CompileTimeRootPayload,
     /// A hoisted root reached only through a branch, guard, loop body, or
     /// expect body. Its evaluation failure is not a diagnostic; finalization
@@ -26526,6 +26658,7 @@ pub const CompileTimeRootTable = struct {
         bodies: CheckedBodies,
         imports: []const PublishImportArtifact,
         available_artifacts: []const ImportedModuleView,
+        platform_identities: []const CheckedTypeId,
     ) Allocator.Error!CompileTimeRootTable {
         var roots = std.ArrayList(CompileTimeRoot).empty;
         errdefer roots.deinit(allocator);
@@ -26674,7 +26807,7 @@ pub const CompileTimeRootTable = struct {
                         const read_root = switch (target) {
                             .local => |index| local: {
                                 if (index >= eligibility_published) {
-                                    try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, roots.items[eligibility_published..], selected_hoisted_roots);
+                                    try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, roots.items[eligibility_published..], selected_hoisted_roots, platform_identities);
                                     eligibility_published = roots.items.len;
                                 }
                                 break :local roots.items[index];
@@ -26721,7 +26854,7 @@ pub const CompileTimeRootTable = struct {
             );
         }
 
-        try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, roots.items[eligibility_published..], selected_hoisted_roots);
+        try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, roots.items[eligibility_published..], selected_hoisted_roots, platform_identities);
         if (validations.items.len != 0) {
             // Only a published owner getting a request evaluates the match.
             // Pattern extractions cannot forward: even a callable extraction
@@ -27008,10 +27141,14 @@ fn publishCompileTimeRootRequestEligibility(
     checked_types: *const CheckedTypePublication,
     roots: []CompileTimeRoot,
     selected: []const hoist_roots.SelectedHoistedRoot,
+    platform_identities: []const CheckedTypeId,
 ) Allocator.Error!void {
     var concrete_context = NonConcreteRootScan{ .checked_types = &checked_types.store };
     var concrete = NonConcreteRootTraversal.init(allocator, &concrete_context);
     defer concrete.deinit();
+    var paired_context = NonConcreteRootScan{ .checked_types = &checked_types.store, .closed_vars = platform_identities };
+    var paired = NonConcreteRootTraversal.init(allocator, &paired_context);
+    defer paired.deinit();
     var callable_context = CallableRootScan.init(allocator, &checked_types.store);
     defer callable_context.reach.deinit();
     var callable = CallableRootTraversal.init(allocator, &callable_context);
@@ -27044,9 +27181,14 @@ fn publishCompileTimeRootRequestEligibility(
         };
         // A validate-only root's value is never read from its slot, so no
         // reader needs its callable representation fixed by its producer.
-        const context_free = !try concrete.visit(.{ .walk = .value_graph, .id = root.checked_type }) and
-            (producer_callable_type_is_fixed or root.validateOnly() or !try callable.visit(root.checked_type));
-        root.request_eligibility = if (context_free) .eligible else .ineligible;
+        const callable_fixed = producer_callable_type_is_fixed or root.validateOnly() or !try callable.visit(root.checked_type);
+        const context_free = callable_fixed and !try concrete.visit(.{ .walk = .value_graph, .id = root.checked_type });
+        // A type closed but for the platform's abstract types is closed
+        // once the platform is paired with an app.
+        const pairing_typed = !context_free and callable_fixed and platform_identities.len != 0 and
+            !try paired.visit(.{ .walk = .value_graph, .id = root.checked_type });
+        root.pairing_typed = pairing_typed;
+        root.request_eligibility = if (context_free or pairing_typed) .eligible else .ineligible;
     }
 }
 
@@ -33907,7 +34049,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 237);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 238);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -37757,6 +37899,7 @@ pub fn publishFromTypedModule(
         publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, value_form_tables),
         inputs.imports,
         inputs.available_artifacts,
+        platform_type_inputs.identities.items(),
     );
     errdefer compile_time_roots.deinit(allocator);
     clock.lap(.compile_time_roots);
@@ -40119,8 +40262,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xF4, 0x1B, 0x82, 0x35, 0xC4, 0xA0, 0x25, 0x66, 0x6C, 0x7C, 0x26, 0x89, 0x49, 0x6B, 0xA0, 0xC8,
-        0x2D, 0xCF, 0x35, 0xBF, 0x7F, 0x38, 0xB8, 0x76, 0x71, 0xF3, 0xD0, 0x64, 0x0D, 0xF9, 0x31, 0x64,
+        0x64, 0xDD, 0xBC, 0x90, 0x8A, 0xB6, 0xC7, 0xB2, 0xC5, 0x24, 0xEF, 0x69, 0xC6, 0xE7, 0xF9, 0xC4,
+        0x43, 0xD2, 0xE2, 0x49, 0xDC, 0xAA, 0xEC, 0x2F, 0x35, 0xC1, 0x72, 0xB1, 0x79, 0x30, 0xC9, 0x2C,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

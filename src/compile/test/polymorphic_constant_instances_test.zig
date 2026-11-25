@@ -109,3 +109,69 @@ test "a use at the canonical instance shares the canonical root" {
         try std.testing.expectEqual(@as(usize, 1), instances.stored);
     }
 }
+
+const destructured_use =
+    \\module [pair, sizes]
+    \\pair = ([], 1.U64)
+    \\sizes : (U64, U64)
+    \\sizes = {
+    \\    (items, _) = pair
+    \\    (List.len(List.append(items, 1.U8)), List.len(List.append(items, "s")))
+    \\}
+;
+
+test "each use of a name a destructuring binds reads the instance at the use's type" {
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        // `items` is read at `List(U8)` and at `List(Str)`: each use is an
+        // instantiation of `pair` through the destructuring.
+        const instances = try instancesOf(destructured_use, strategy);
+        try std.testing.expectEqual(@as(usize, 3), instances.count);
+        try std.testing.expectEqual(@as(usize, 1), instances.canonical);
+        try std.testing.expectEqual(@as(usize, 3), instances.stored);
+    }
+}
+
+const callable_binding_method =
+    \\module [empty, Wrap, sizes]
+    \\empty : List(_a)
+    \\empty = []
+    \\Wrap := [W].{
+    \\    wrap = mk(empty)
+    \\}
+    \\mk : List(a) -> (Wrap, a -> List(a))
+    \\mk = |items| |_w, x| List.append(items, x)
+    \\w : Wrap
+    \\w = W
+    \\sizes : (U64, U64)
+    \\sizes = (List.len(w.wrap(1.U8)), List.len(w.wrap("s")))
+;
+
+test "a dispatch to a method bound to a polymorphic callable binding instantiates what the binding reads" {
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        // `wrap` reads `empty` at its own variable, which each dispatch
+        // fixes from the substitution checking recorded for it.
+        const instances = try instancesOf(callable_binding_method, strategy);
+        try std.testing.expectEqual(@as(usize, 3), instances.count);
+        try std.testing.expectEqual(@as(usize, 1), instances.canonical);
+        try std.testing.expectEqual(@as(usize, 3), instances.stored);
+    }
+}
+
+const weak_record =
+    \\module [Counter, shared, c, d]
+    \\Counter := { count : U64 }.{
+    \\    describe : Counter -> Str
+    \\    describe = |r| r.count.to_str()
+    \\}
+    \\shared = { count: 1.U64 }
+    \\c : Counter
+    \\c = shared
+    \\d = shared.describe()
+;
+
+test "a record literal's uncommitted tail keeps a constant weak: its uses share one lift and it has no instances" {
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        const instances = try instancesOf(weak_record, strategy);
+        try std.testing.expectEqual(@as(usize, 0), instances.count);
+    }
+}

@@ -92,8 +92,12 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// it was stored at, and files each strategy's entry under its own key.
 /// Version 60 stores each closed instance of a polymorphic constant as a
 /// `constant_instance` root of its own, with the canonical instantiation's
-/// roots. Platform-pairing entries share it.
-const checked_envelope_version: u32 = 60;
+/// roots. Platform-pairing entries share it. Version 61 records, for each
+/// use of a name a destructuring scheme alias binds, the variables of the
+/// name's scheme, and a constant's instances at the substitutions checking
+/// recorded for those uses and for dispatches to methods bound to
+/// polymorphic callable bindings.
+const checked_envelope_version: u32 = 61;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment. Version 5 rejects builtin-conflicting import

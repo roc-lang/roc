@@ -7047,6 +7047,17 @@ Pinned on both sides by `value_binding_generalization_test.zig`,
 `issue_11246_test.zig`, `test/echo/polymorphic_constant_empty.roc` and
 `test/echo/polymorphic_constant_parser.roc`.
 
+Only a binding checking generalized is a polymorphic constant: literal
+argument publication reads that decision from the binding's solved
+variable (its rank is `generalized`), never from how many variables its
+entry wrapper's type still mentions. A weak value whose type keeps a
+variable (one a platform requirement types, an unresolved requirement
+checking reported, an uncommitted record tail no use committed) is one
+value, evaluated once at its own root. An unannotated top-level value that
+always crashes binds nothing (`hoist_roots.Body.valueless_binding`): its
+valueless-binding root is the one evaluation of its right-hand side, which
+reports its `dbg`, `expect` and `crash`, so it has no instances either.
+
 **Polymorphic recursion cannot reach a constant at a growing type.** A use of
 a constant inside a generic function gives the constant's quantified
 variables types over the function's variables; nothing flows back, so a
@@ -7069,9 +7080,13 @@ root of the edge's module holding the instance, and an edge at an open type
 inside a generic function forwards the instance as a literal requirement of
 that function's scheme, up the call chain to the call site where the type is
 closed. A dispatch to a method bound to a polymorphic callable binding
-(`to_inspect = plain`) is checked at no substitution of the binding's
-scheme; its edge instantiates the binding's own value at the dispatch's
-callable (`EdgeRec.value_ty`), the one requirement such a binding may have.
+(`wrap = mk(empty)`) instantiates the binding's scheme where checking
+resolves the dispatch (`Check.instantiateDispatchTargetMethodVar`), which
+records that instantiation as the dispatch's scheme use; the evidence node
+carries it as its substitution, and the edge instantiates every literal
+requirement of the binding's entry wrapper at it: the binding's own value
+and every instance the binding's body forwards (`empty` at the binding's
+variable).
 A use whose instance no edge names (a frame that derives its literal
 arguments from its types, a dictionary entry) reads the root of some module
 holding that constant at that closed type (`Program.constantInstance`,
@@ -7109,18 +7124,32 @@ configuration's) reads the canonical instance. N instances cost N
 compile-time evaluations and N copies in the binary, and an unannotated
 constant can gain instances silently; both are accepted.
 
-Three reads still compute a constant where it is read, each because no
-checked data names an instance there. A constant whose type mentions a
-platform's abstract type (`[Model : model] for main`) has the type of the
-app it is paired with, which checking the platform does not know, so no
-instance can be evaluated where the platform is checked; it is its entry
-procedure's value at the app's type. A constant hoisted out of a generic
-body (Compile-Time Constants and Hoisted Roots) has the body's variables,
-and the body computes it in place. A read whose type mentions variables
-that no scheme around it quantifies and that are not decided (the own
-variables of a destructuring value alias, `(f, _) = Hooks.pair`, which no
-checked scheme records) has an `.unbound` instance argument, and the read
-computes the constant at the type it is lowered at.
+A use of a name a destructuring scheme alias binds (`(f, _) = Hooks.pair`,
+`{ twice } = rec`) instantiates the declaration's lookup at that use: the
+evidence pass records the quantified variables of the name's scheme beside
+the use's site substitution (`StaticDispatchPlanTable.destructured_uses`),
+and the use's edge (`LiteralEdge.use` at the use) instantiates the lookup's
+callee at the lookup's substitution with those variables at the use's
+types. The lookup itself is no edge. Boxy lowers the declaration at each use
+and reads the lookup's literal arguments from the use's edge
+(`Builder.destructured_use`); Monotype reads the instance its closed type
+names. A variable of the declaration the name does not mention, and any
+variable no scheme around an edge quantifies and that is not decided, is
+fixed by no use: the instance at such a type is a sealed root, as a literal
+there is converted at the sealed type, so every read names an instance.
+
+A constant hoisted out of a function body is never polymorphic: it is a
+local value binding, which is weak (Value Bindings Generalize By
+Expression), so every read shares its one type, its own root is its one
+value, and every read restores it.
+
+A constant whose type mentions a platform's abstract type (`[Model : model]
+for main`) has the type of the app it is paired with, which checking the
+platform does not know. Its type is closed but for those types, so its root
+is requested (`CompileTimeRoot.pairing_typed`) with a request that waits for
+the pairing (`RootRequest.requires_pairing`), and the pairing evaluates it at
+the app's types (Platform/App Composition) and stores it. Every read restores
+that value; such a constant has no other instance.
 
 ## Checked Boundary
 
@@ -19007,7 +19036,9 @@ strategy).
   the variable, which no value of the program has, so compile-time
   evaluation runs it once and reports its rejection, and the runtime program
   converts the literal through the root's wrapper. A sealed root is always
-  requested, although its type is not concrete. A
+  requested, although its type is not concrete. A polymorphic constant's
+  instance at such a type is a sealed root too, but stored like every other
+  instance, and reads restore it: a constant is never `.unbound`. A
   template's `literal_argument_demand` lists the
   roots its edges read, so compile-time evaluation orders them before any
   evaluation of the template.

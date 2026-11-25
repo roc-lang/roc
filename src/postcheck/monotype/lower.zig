@@ -1502,6 +1502,21 @@ const BinderId = checked_bodies.BinderId;
 ///   through the pattern itself as its binder.
 /// - `literal_conversion`: a custom literal pattern's literal converted at
 ///   the pattern's type.
+/// The lookup of the destructuring scheme alias that binds the name a use
+/// `expr` of `view` reads.
+fn destructuredUseLookup(view: ModuleView, expr: CIR.Expr.Idx) CIR.Expr.Idx {
+    const ref_id = view.resolved_refs.lookupIdByExpr(expr) orelse Common.invariant("a destructured use has no resolved reference");
+    const binder = switch (view.resolved_refs.records.items()[@backingInt(ref_id)].ref) {
+        .pattern_binder, .local_value => |binding| binding.binder,
+        .local_param, .local_mutable_version, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => Common.invariant("a destructured use reads no local binder"),
+    };
+    const statement = view.bodies.index().destructuredAliasDecl(binder) orelse Common.invariant("a destructured use's name is bound by no destructuring scheme alias");
+    return switch (view.bodies.statement(statement).data) {
+        .decl => |decl| decl.expr,
+        .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .rejected_method_decl, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => Common.invariant("a destructured alias binder's declaration is not a declaration"),
+    };
+}
+
 const ExprSite = enum(u32) {
     _,
 
@@ -48958,7 +48973,7 @@ const BodyContext = struct {
         const previous_restore_evidence = self.restore_evidence;
         defer self.restore_evidence = previous_restore_evidence;
         switch (argument.edge) {
-            .use => |use_expr| self.restore_evidence = rootEvidence(self.owner_template, (try self.evidenceForUseSiteAtNode(use_expr, request_node)).vector),
+            .use => |use_expr| self.restore_evidence = rootEvidence(self.owner_template, (try self.evidenceForInstanceUse(use_expr, request_node)).vector),
             .literal, .node, .requirement, .canonical => {},
         }
         const view = self.builder.moduleForDigest(site.module);
@@ -49113,7 +49128,7 @@ const BodyContext = struct {
         defer body_ctx.deinit();
         try body_ctx.inheritActiveConstBinding(self);
         const schema = templateSchemaIn(store_view, &entry_template);
-        const root_evidence: EdgeEvidence = if (self.restore_evidence.vector.len < entry_template.evidence_params.len)
+        const root_evidence: EdgeEvidence = if (self.restore_evidence.vector.len != entry_template.evidence_params.len)
             try body_ctx.rootEdgeEvidence(store_view, eval.entry_template, entry_template)
         else
             .{
@@ -55056,6 +55071,28 @@ const BodyContext = struct {
     /// `evidenceForUseSite` for a use whose request interface is live at
     /// `request_node`: a use checking recorded no instantiation for derives
     /// its edge from that request.
+    /// The evidence of the use `expr` whose edge names a constant's instance
+    /// root. A use of a name a destructuring scheme alias binds instantiates
+    /// the declaration's lookup at the substitution checking composed for it
+    /// (design.md "Polymorphic Constants").
+    fn evidenceForInstanceUse(self: *BodyContext, expr: CIR.Expr.Idx, request_node: NodeId) Allocator.Error!EdgeEvidence {
+        const plans = self.view.static_dispatch_plans;
+        if (plans.destructuredUseFormals(expr) == null) return try self.evidenceForUseSiteAtNode(expr, request_node);
+        const lookup = destructuredUseLookup(self.view, expr);
+        const tys = plans.destructuredUseSubstitution(expr) orelse return try self.evidenceForUseSiteAtNode(lookup, request_node);
+        const schema = try self.useSiteSchema(lookup);
+        if (tys.len != schema.scheme_vars.len) Common.invariant("a destructured use's substitution differs from its lookup's scheme");
+        const subst = try self.substitutionFromCheckedTypes(self.view, tys);
+        const refs = plans.siteEvidence(lookup);
+        return .{
+            .subst = subst,
+            .vector = if (refs) |site_refs|
+                try self.deriveSiteEvidenceVector(schema, subst, self.view, site_refs, tys, .body_lowering)
+            else
+                try self.deriveEvidenceVector(schema, subst, self.view, refs, .body_lowering),
+        };
+    }
+
     fn evidenceForUseSiteAtNode(self: *BodyContext, expr: CIR.Expr.Idx, request_node: NodeId) Allocator.Error!EdgeEvidence {
         return self.evidenceForUseSiteForPurposeAtNode(expr, .body_lowering, request_node);
     }
@@ -55177,6 +55214,13 @@ const BodyContext = struct {
         purpose: EvidenceMaterializationPurpose,
         request_node: ?NodeId,
     ) Allocator.Error!EdgeEvidence {
+        // A use of a stored value instantiates no scheme (a constant whose
+        // type mentions a platform's abstract type, stored by the pairing,
+        // keeps a variable its checked use still substitutes).
+        if (schema.root == null and schema.params.len == 0) return .{
+            .subst = try self.substitutionFromCheckedTypes(site_view, &.{}),
+            .vector = &.{},
+        };
         const subst = try self.recordedSiteSubstitution(site_view, expr, schema) orelse {
             // Checking recorded no instantiation at this use (the edge is
             // compiler-generated): the request interface alone determines

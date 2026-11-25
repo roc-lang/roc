@@ -160,6 +160,8 @@ pub const Task = union(enum) {
     /// Leave the instantiation a destructured alias use lowered its
     /// declaration at.
     restore_env: types.Env,
+    /// Leave a destructured alias use (`Builder.destructured_use`).
+    restore_destructured_use: ?DestructuredUse,
     /// Lower the forwarded lookup `expr` of a generalized scheme alias, in
     /// the alias's scope, at the function type `ty` of the alias's use
     /// (`Builder.lowerAliasUse`).
@@ -492,6 +494,10 @@ const LocalProcScope = struct {
 /// A `literal_argument` root of a module, whose thunk a body composes once.
 const RootThunkKey = struct { module: ModuleIndex, root: checked.ComptimeRootId };
 
+/// A destructuring scheme alias's lookup being lowered at a use of a name it
+/// binds (`Builder.destructured_use`).
+const DestructuredUse = struct { module: ModuleIndex, lookup: ExprId, use: ExprId };
+
 /// The lowering state a literal chain restores once its tasks have run.
 const SavedScope = struct {
     module: ModuleIndex,
@@ -582,6 +588,10 @@ pub const Builder = struct {
     layout: Tables.InputLayout = .{},
     /// The thunk composed for each `literal_argument` root this body reads.
     root_thunks: std.AutoHashMapUnmanaged(RootThunkKey, Word) = .empty,
+    /// While lowering a destructuring scheme alias's declaration at a use
+    /// of a name it binds: its lookup is instantiated at that use, whose
+    /// edge checking recorded (design.md "Polymorphic Constants").
+    destructured_use: ?DestructuredUse = null,
     /// While lowering a literal thunk's or literal argument root's chain:
     /// where its frames start in `alias_scopes`. An edge argument or
     /// dictionary naming a scope outside them is one the chain never reads.
@@ -3507,6 +3517,7 @@ pub const Builder = struct {
             },
             .read_binder => |binder| try self.pushValue(self.binders.get(binder) orelse invariant("a destructured alias's declaration did not bind the binder its use reads")),
             .restore_env => |saved| self.env = saved,
+            .restore_destructured_use => |saved| self.destructured_use = saved,
             .forwarded_lookup => |lookup| if (self.hole == null) {
                 try self.pushValue(try self.localOf(lookup.ty, .frame));
             } else {
@@ -3566,7 +3577,7 @@ pub const Builder = struct {
                         // entry), the root of its instance at the read's
                         // closed type (design.md "Polymorphic Constants").
                         if (self.constantInstanceRequirement(callee)) |own| {
-                            if (eval.use) |use| return try self.readConstantInstance(callee, .{ .use = use }, eval.ty);
+                            if (eval.use) |use| return try self.readConstantInstance(callee, self.useEdge(use), eval.ty);
                             const site = self.program.worker(callee).literal_scopes[0][own].site;
                             const instance = try self.program.constantInstance(site, eval.ty) orelse
                                 invariant("a polymorphic callable binding is read at a closed instance no compile-time root evaluates");
@@ -4710,7 +4721,7 @@ pub const Builder = struct {
     /// scheme, from the checked edge arguments (`literalEdgeArgs`).
     pub fn fillLiteralArgs(self: *Builder, callee: ?WorkerId, edge: checked.LiteralEdge, out: []Word) Allocator.Error!void {
         if (out.len == 0) return;
-        const args = self.view.view.checked_procedure_templates.literalEdgeArgs(edge);
+        const args = self.edgeArgs(edge);
         if (args.len != out.len) invariantFmt("an edge's {d} literal arguments do not cover its callee's {d} literal requirements (caller {s}, callee {s}{s})", .{
             args.len,
             out.len,
@@ -5062,9 +5073,21 @@ pub const Builder = struct {
         const callee = try self.program.templateRefWorker(wrapper);
         const callee_worker = self.program.worker(callee).*;
         if (callee_worker.params.len != 0) invariant("a polymorphic constant's entry wrapper takes arguments");
-        const owned = try self.relateWorkerVariables(callee, callee_worker.ret, result_ty);
-        defer self.allocator.free(owned);
-        const bound = try self.program.arena.allocator().dupe(TypeId, owned);
+        // The entered frame is the wrapper's scheme at the instance: each
+        // variable takes the frame's type for it, including one the value's
+        // type does not mention, and each row node its position in the
+        // value's type.
+        const bound = try self.program.arena.allocator().alloc(TypeId, callee_worker.scheme_vars.len);
+        const row_node_start = callee_worker.scheme_vars.len - callee_worker.row_nodes.len;
+        for (callee_worker.scheme_vars[0..row_node_start], bound[0..row_node_start]) |variable, *slot| slot.* = try self.convert(variable);
+        const captured = try self.allocator.alloc(lower.Related, callee_worker.row_nodes.len);
+        defer self.allocator.free(captured);
+        @memset(captured, .none);
+        if (callee_worker.row_nodes.len != 0) {
+            const related = try self.program.relateVariablesCapturing(self.allocator, &.{.{ callee_worker.ret, result_ty }}, callee_worker.scheme_vars.len, null, callee_worker.row_nodes, captured);
+            self.allocator.free(related);
+        }
+        try self.program.fillRowNodes(callee, bound, captured);
         const dictionaries = callee_worker.dictionary_params.len;
         const hidden = try self.allocator.alloc(Word, bound.len + dictionaries + callee_worker.literal_params);
         defer self.allocator.free(hidden);
@@ -5090,8 +5113,8 @@ pub const Builder = struct {
                 const procedure = switch (node.target.kind) {
                     .procedure => |procedure| procedure,
                     // A method bound to a polymorphic callable binding: the
-                    // binding's entry wrapper at the dispatch's callable,
-                    // its literal arguments derived from those types.
+                    // binding's entry wrapper at the substitution checking
+                    // recorded for the dispatch.
                     .callable_binding => |target| {
                         const binding = self.program.callableEvalBinding(target);
                         const callee = try self.callableEvalWrapper(binding.module, binding.template);
@@ -5099,11 +5122,8 @@ pub const Builder = struct {
                             .callable => |callable| callable,
                             .monomorphic, .alias, .derived_from_callable => invariant("a literal argument's edge to a callable binding has no callable"),
                         };
-                        const owned = try self.relateWorkerVariables(callee, self.program.worker(callee).ret, try self.convert(callable));
-                        defer self.allocator.free(owned);
-                        try self.enterDerivedFrame(callee, try self.program.arena.allocator().dupe(TypeId, owned));
-                        const worker = self.program.worker(callee).*;
-                        return if (worker.literal_scopes.len == 0) &.{} else worker.literal_scopes[0];
+                        const subst = table.site_substitutions.items()[node.subst.start..][0..node.subst.len];
+                        return try self.enterSubstitutedWorkerFrame(callee, subst, table.nestedEvidence(node), edge, .{ .value = callable });
                     },
                     .local_proc, .structural => invariant("a literal argument's edge instantiates no procedure template"),
                 };
@@ -5158,6 +5178,14 @@ pub const Builder = struct {
                 return if (worker.literal_scopes.len == 0) &.{} else worker.literal_scopes[0];
             },
             .use => |expr| {
+                // A use of a name a destructuring scheme alias binds
+                // instantiates the declaration's lookup at that use.
+                if (self.destructuredLookup(expr)) |lookup| {
+                    const saved = self.destructured_use;
+                    defer self.destructured_use = saved;
+                    self.destructured_use = .{ .module = self.module, .lookup = lookup, .use = if (saved) |outer| outer.use else expr };
+                    return try self.enterEdge(.{ .use = lookup });
+                }
                 if (self.view.view.resolved_value_refs.lookupIdByExpr(expr)) |ref_id| {
                     const record = self.view.view.resolved_value_refs.records.items()[@backingInt(ref_id)];
                     switch (record.ref) {
@@ -5220,7 +5248,7 @@ pub const Builder = struct {
         dictionaries.callable = callable;
         dictionaries.substitution = subst;
         const literal_requirements: []const checked.LiteralRequirement = if (target.literal_scopes.len == 0) &.{} else target.literal_scopes[0];
-        const args = self.view.view.checked_procedure_templates.literalEdgeArgs(edge);
+        const args = self.edgeArgs(edge);
         if (args.len != target.literal_params) invariant("an edge's literal arguments do not cover its callee's literal requirements");
         const deferred: DeferredLiterals = .{ .edge = .{ .args = args, .module = self.module, .view = self.view, .env = self.env } };
         self.module = target.module;
@@ -5292,7 +5320,7 @@ pub const Builder = struct {
         const env = try types.LazySubstitution.init(self.program.arena.allocator(), alias_step.module, alias_step.vars, self.siteSubstitution(site), self.module, self.env, .{ .module = alias_step.module, .vars = &.{}, .bound = &.{} });
         const requirements: ParamContext = .{ .module = alias_step.module, .params = alias_step.params, .env = env };
         const deferred_dicts = try self.deferredDictionaries(evidence, requirements, alias_step.params.len);
-        const args = self.view.view.checked_procedure_templates.literalEdgeArgs(.{ .use = site });
+        const args = self.view.view.checked_procedure_templates.literalEdgeArgs(self.useEdge(site));
         if (args.len != alias_step.literal_requirements.len) invariant("an alias's use has no literal arguments for its literal_requirements");
         const deferred: DeferredLiterals = .{ .edge = .{ .args = args, .module = self.module, .view = self.view, .env = self.env } };
         self.module = alias_step.module;
@@ -5323,7 +5351,7 @@ pub const Builder = struct {
         };
         const evidence = self.view.view.static_dispatch_plans.siteEvidence(site) orelse &.{};
         const deferred_dicts = try self.deferredDictionaries(evidence, context, scheme.dictionaries.len);
-        const args = self.view.view.checked_procedure_templates.literalEdgeArgs(.{ .use = site });
+        const args = self.view.view.checked_procedure_templates.literalEdgeArgs(self.useEdge(site));
         if (args.len != scheme.literal_requirements.len) invariant("a local scope's site has no literal arguments for its literal_requirements");
         const deferred: DeferredLiterals = .{ .edge = .{ .args = args, .module = self.module, .view = self.view, .env = self.env } };
         self.env = context.env;
@@ -5618,6 +5646,15 @@ pub const Builder = struct {
         @memcpy(bound[own.items.len..], self.env.bound);
         try self.push(.{ .restore_env = self.env });
         self.env = .{ .module = self.module, .vars = vars, .bound = bound };
+        // A use nested in an outer destructured use's declaration is
+        // instantiated at the outer use, whose edge composes both.
+        const outer_use = self.destructured_use;
+        try self.push(.{ .restore_destructured_use = outer_use });
+        self.destructured_use = .{
+            .module = self.module,
+            .lookup = decl.expr,
+            .use = if (outer_use) |outer| outer.use else expr_id,
+        };
         try self.push(.{ .read_binder = binder });
         try self.push(.{ .bind = .{ .pattern = decl.pattern, .ty = try self.valueType(decl.expr) } });
         try self.push(.{ .expr = decl.expr });
@@ -5667,7 +5704,7 @@ pub const Builder = struct {
             dict.* = try self.paramDictionary(evidence, param_index, context);
         }
         const literals = try self.program.arena.allocator().alloc(Word, scheme.literal_requirements.len);
-        const literal_args = self.view.view.checked_procedure_templates.literalEdgeArgs(.{ .use = expr_id });
+        const literal_args = self.view.view.checked_procedure_templates.literalEdgeArgs(self.useEdge(expr_id));
         if (literal_args.len != literals.len) invariant("an alias use has no literal arguments for its scheme's literal_requirements");
         for (literal_args, literals) |source, *word| word.* = try self.literalArg(source);
         try self.alias_scopes.append(self.allocator, .{ .params = scheme.dictionaries, .requirements = context, .dicts = dicts, .literals = literals, .literal_requirements = scheme.literal_requirements, .saved_env = self.env });
@@ -6891,6 +6928,16 @@ pub const Builder = struct {
         try self.push(.{ .restore = .{ .source = source, .node = stored.node, .ty = stored_ty, .root = root } });
     }
 
+    /// The edge a use `expr` of this body's module instantiates its scheme
+    /// at: its own, or, for a destructuring scheme alias's lookup lowered at
+    /// a use of a name it binds, that use's.
+    fn useEdge(self: *const Builder, expr: ExprId) checked.LiteralEdge {
+        if (self.destructured_use) |destructured| {
+            if (destructured.module == self.module and destructured.lookup == expr) return .{ .use = destructured.use };
+        }
+        return .{ .use = expr };
+    }
+
     /// The literal requirement of the scheme of `wrapper`, a polymorphic
     /// constant's entry wrapper, that is the constant's own value.
     fn constantInstanceRequirement(self: *Builder, wrapper: WorkerId) ?u32 {
@@ -6909,7 +6956,7 @@ pub const Builder = struct {
     /// Constants"). Nothing computes the constant here.
     fn readConstantInstance(self: *Builder, wrapper: WorkerId, edge: checked.LiteralEdge, ty: TypeId) Allocator.Error!void {
         const own = self.constantInstanceRequirement(wrapper) orelse invariant("a read of a polymorphic constant names an entry wrapper that carries no instance");
-        const args = self.view.view.checked_procedure_templates.literalEdgeArgs(edge);
+        const args = self.edgeArgs(edge);
         if (own >= args.len) invariant("a read of a polymorphic constant has no instance argument");
         switch (args[own]) {
             .root => |root| switch (self.view.view.compile_time_roots.root(root).payloadFor(.boxy)) {
@@ -6917,18 +6964,8 @@ pub const Builder = struct {
                 .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => {},
             },
             .forwarded => {},
-            // A read at variables no checked scheme records (a destructuring
-            // value alias's own) computes the constant at the read's type.
-            .unbound => {
-                const expr_id: ExprId = switch (edge) {
-                    .use => |use_expr| use_expr,
-                    .literal, .node, .requirement, .canonical => invariant("a polymorphic constant's unbound instance is read through no use"),
-                };
-                const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = ty, .effectful = false } });
-                const instance = try self.callInstanceAt(wrapper, self.siteSubstitution(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{}, fn_ty, edge);
-                defer self.allocator.free(instance.hidden);
-                return try self.finishCall(wrapper, instance.hidden, instance.bound, &.{}, instance.ret, ty);
-            },
+            // An instance whose variables no use fixes is a sealed root.
+            .unbound => invariant("a polymorphic constant's instance is unbound"),
         }
         try self.callInstanceThunk(try self.literalArg(args[own]), ty);
     }
@@ -6976,7 +7013,7 @@ pub const Builder = struct {
             // evaluation of the platform could produce.
             .eval_template => |eval| {
                 const wrapper = try self.program.templateRefWorker(eval.entry_template);
-                if (self.constantInstanceRequirement(wrapper) != null) return try self.readConstantInstance(wrapper, .{ .use = expr_id }, ty);
+                if (self.constantInstanceRequirement(wrapper) != null) return try self.readConstantInstance(wrapper, self.useEdge(expr_id), ty);
                 if (rootOfConstRef(owner, use.const_ref)) |root| if (try self.program.readsRootSlot(owner.index, root)) return try self.pendingValueRead(owner.index, root, ty);
                 const read_ty = try self.exprType(expr_id);
                 const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = read_ty, .effectful = false } });
@@ -9085,7 +9122,41 @@ pub const Builder = struct {
     }
 
     pub fn siteSubstitution(self: *Builder, site: ExprId) []const checked.CheckedTypeId {
+        // A destructuring scheme alias's lookup lowered at a use of a name it
+        // binds is instantiated at that use (`destructured_use`), when the
+        // lookup instantiates a scheme at all.
+        if (self.destructured_use) |destructured| {
+            if (destructured.module == self.module and destructured.lookup == site) {
+                if (self.view.view.static_dispatch_plans.destructuredUseSubstitution(destructured.use)) |subst| return subst;
+            }
+        }
         return self.view.view.static_dispatch_plans.siteSubstitution(site) orelse &.{};
+    }
+
+    /// The lookup of the destructuring scheme alias that binds the name a
+    /// use `expr` reads, when `expr` is such a use.
+    fn destructuredLookup(self: *Builder, expr: ExprId) ?ExprId {
+        if (self.view.view.static_dispatch_plans.destructuredUseFormals(expr) == null) return null;
+        const ref_id = self.view.view.resolved_value_refs.lookupIdByExpr(expr) orelse invariant("a destructured use has no resolved reference");
+        const binder = switch (self.view.view.resolved_value_refs.records.items()[@backingInt(ref_id)].ref) {
+            .pattern_binder, .local_value => |binding| binding.binder,
+            .local_param, .local_mutable_version, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => invariant("a destructured use reads no local binder"),
+        };
+        const statement = self.bodies().index().destructuredAliasDecl(binder) orelse invariant("a destructured use's name is bound by no destructuring scheme alias");
+        return switch (self.bodies().statement(statement).data) {
+            .decl => |decl| decl.expr,
+            .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .rejected_method_decl, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => invariant("a destructured alias binder's declaration is not a declaration"),
+        };
+    }
+
+    /// The checked literal arguments of edge `edge` of this body's module,
+    /// a destructuring scheme alias's lookup's being its use's.
+    fn edgeArgs(self: *const Builder, edge: checked.LiteralEdge) []const checked.LiteralArgSource {
+        const mapped: checked.LiteralEdge = switch (edge) {
+            .use => |expr| self.useEdge(expr),
+            .literal, .node, .requirement, .canonical => edge,
+        };
+        return self.view.view.checked_procedure_templates.literalEdgeArgs(mapped);
     }
 
     /// Redirect an immediately returned call or constructor from its fresh
