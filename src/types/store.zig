@@ -238,6 +238,85 @@ const SettledDescs = struct {
     }
 };
 
+/// Which entries of one column of a store survive sealing, and where each
+/// lands when the column closes its gaps: survivors keep their order, so an
+/// entry's new index is the number of survivors before it (`rankOf`), read
+/// as the running count kept per mask word plus a population count within
+/// the word. The bit set holds one spare entry past the column, so a range
+/// that ends at the column's end, or an empty range that starts there,
+/// ranks like any other.
+const SealSurvivors = struct {
+    bits: std.DynamicBitSetUnmanaged = .{},
+    /// For each mask word of `bits`, the survivors in the words before it.
+    before: []u32 = &.{},
+    /// The surviving entries in all, once `finish` has counted them.
+    count: u32 = 0,
+
+    const MaskInt = std.DynamicBitSetUnmanaged.MaskInt;
+    const mask_bits = @bitSizeOf(MaskInt);
+
+    /// No survivor yet, over a column of `len` entries.
+    fn init(gpa: Allocator, len: usize) Allocator.Error!SealSurvivors {
+        return .{ .bits = try std.DynamicBitSetUnmanaged.initEmpty(gpa, len + 1) };
+    }
+
+    fn deinit(self: *SealSurvivors, gpa: Allocator) void {
+        self.bits.deinit(gpa);
+        gpa.free(self.before);
+        self.* = .{};
+    }
+
+    /// The column grew to `len` entries while survivors were being marked,
+    /// and every entry it gained survives.
+    fn growSurviving(self: *SealSurvivors, gpa: Allocator, len: usize) Allocator.Error!void {
+        const old_len = self.bits.bit_length - 1;
+        if (len == old_len) return;
+        try self.bits.resize(gpa, len + 1, false);
+        self.bits.setRangeValue(.{ .start = old_len, .end = len }, true);
+    }
+
+    inline fn keep(self: *SealSurvivors, index: usize) void {
+        self.bits.set(index);
+    }
+
+    inline fn keepRange(self: *SealSurvivors, start: usize, count: usize) void {
+        if (count == 0) return;
+        self.bits.setRangeValue(.{ .start = start, .end = start + count }, true);
+    }
+
+    inline fn survives(self: *const SealSurvivors, index: usize) bool {
+        return self.bits.isSet(index);
+    }
+
+    /// Count the survivors before each mask word; marking is over.
+    fn finish(self: *SealSurvivors, gpa: Allocator) Allocator.Error!void {
+        const words = (self.bits.bit_length + mask_bits - 1) / mask_bits;
+        self.before = try gpa.alloc(u32, words);
+        var running: u32 = 0;
+        for (self.before, self.bits.masks[0..words]) |*before, mask| {
+            before.* = running;
+            running += @popCount(mask);
+        }
+        self.count = running;
+    }
+
+    /// The number of survivors before `index`: a survivor's index once the
+    /// column has closed its gaps, and where an empty range at `index` goes.
+    inline fn rankOf(self: *const SealSurvivors, index: usize) u32 {
+        const word = index / mask_bits;
+        const below: MaskInt = (@as(MaskInt, 1) << @intCast(index % mask_bits)) -% 1;
+        return self.before[word] + @popCount(self.bits.masks[word] & below);
+    }
+
+    /// The index survivor `index` moves to.
+    inline fn rankOfSurvivor(self: *const SealSurvivors, index: usize) u32 {
+        if (std.debug.runtime_safety and !self.survives(index)) {
+            base.invariant("sealing renumbered entry {d}, which does not survive", .{index});
+        }
+        return self.rankOf(index);
+    }
+};
+
 /// Reperents either type data *or* a symlink to another type variable
 pub const Slot = union(SlotKind) {
     root: DescStore.Idx,
@@ -617,28 +696,21 @@ pub const Store = struct {
         if (std.debug.runtime_safety and self.probe_open) base.invariant("a type store was canonicalized with a probe open", .{});
 
         const slot_count: usize = @intCast(self.slots.len());
-        var live_descs = try std.DynamicBitSetUnmanaged.initEmpty(self.gpa, self.descs.backing.len());
-        defer live_descs.deinit(self.gpa);
+        var survivors = try SealColumns.init(self);
+        defer survivors.deinit(self.gpa);
         for (0..slot_count) |index| {
             const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(index));
             const storage = self.resolveStorageRoot(slotIdxToVar(slot_idx));
             if (storage.storage_var != slotIdxToVar(slot_idx)) self.slots.set(slot_idx, .{ .redirect = storage.storage_var });
             // No generalization pass is running, so no stored word is marked.
             std.debug.assert(!self.descs.getWord(storage.desc_idx).marked());
-            live_descs.set(@backingInt(storage.desc_idx));
+            survivors.descs.keep(@backingInt(storage.desc_idx));
         }
 
-        for (self.vars.items) |*var_| {
-            if (isRangeLengthSlot(var_.*)) continue;
-            var_.* = self.representativeVar(var_.*);
+        for (self.nominal_decls.items()) |*decl| {
+            decl.backing = self.representativeVar(decl.backing);
+            survivors.vars.keepRange(@backingInt(decl.formals.start), decl.formals.count);
         }
-        for (0..self.record_fields.len()) |index| {
-            var field = self.record_fields.get(@fromBackingInt(@intCast(index)));
-            field.presence.var_ = self.representativeVar(field.presence.var_);
-            if (field.presence.presenceVar()) |presence| field.presence.presence_var = .some(self.representativeVar(presence));
-            self.record_fields.set(@fromBackingInt(@intCast(index)), field);
-        }
-        for (self.nominal_decls.items()) |*decl| decl.backing = self.representativeVar(decl.backing);
 
         // One pass over the live descriptors, in index order, reading each
         // one's kind. Only a function, a record and a tag union hold a
@@ -647,14 +719,16 @@ pub const Store = struct {
         // is itself a row: such a row absorbs its chain, and every other one
         // only has its extension replaced. A chain's segments are read as
         // stored: a segment at a lower index has absorbed its own chain
-        // already, and one at a higher index has not.
+        // already, and one at a higher index has not. Each descriptor, once
+        // canonical, keeps the pool rows and identity row it names.
         var row_fields: std.ArrayListUnmanaged(RecordField) = .empty;
         defer row_fields.deinit(self.gpa);
         var row_tags: std.ArrayListUnmanaged(Tag) = .empty;
         defer row_tags.deinit(self.gpa);
-        var live = live_descs.iterator(.{});
+        var live = survivors.descs.bits.iterator(.{});
         while (live.next()) |index| {
             const desc_idx: DescStore.Idx = @fromBackingInt(@intCast(index));
+            defer survivors.keepRowsOf(self, desc_idx);
             switch (self.descs.getWord(desc_idx).kind) {
                 .flex, .rigid, .alias, .field_presence, .err, .tuple, .nominal_type, .empty_record, .empty_tag_union => {},
                 .fn_pure, .fn_effectful, .fn_unbound => {
@@ -711,7 +785,241 @@ pub const Store = struct {
                 },
             }
         }
+
+        try survivors.finish(self);
+        self.closeSealGaps(&survivors);
     }
+
+    /// Close the gaps the dead entries of every column `survivors` covers
+    /// leave, sliding each survivor down to its rank (`SealSurvivors`). Pool
+    /// entries are rewritten to their classes' representatives as they move,
+    /// and every index a moved entry holds is renumbered with it. Each column
+    /// is walked once; the pools go first, while slots and descriptors still
+    /// resolve variables at their old indices.
+    fn closeSealGaps(self: *Self, survivors: *const SealColumns) void {
+        {
+            const items = self.vars.items;
+            var next: usize = 0;
+            var kept = survivors.vars.bits.iterator(.{});
+            while (kept.next()) |index| : (next += 1) {
+                const entry = items[index];
+                items[next] = if (isRangeLengthSlot(entry)) entry else self.representativeVar(entry);
+            }
+            self.vars.shrinkRetainingCapacity(next);
+        }
+        {
+            var next: u32 = 0;
+            var kept = survivors.record_fields.bits.iterator(.{});
+            while (kept.next()) |index| : (next += 1) {
+                var field = self.record_fields.get(@fromBackingInt(@intCast(index)));
+                field.presence.var_ = self.representativeVar(field.presence.var_);
+                if (field.presence.presenceVar()) |presence| field.presence.presence_var = .some(self.representativeVar(presence));
+                self.record_fields.set(@fromBackingInt(next), field);
+            }
+            self.record_fields.shrinkRetainingCapacity(next);
+        }
+        {
+            var next: u32 = 0;
+            var kept = survivors.tags.bits.iterator(.{});
+            while (kept.next()) |index| : (next += 1) {
+                var tag = self.tags.get(@fromBackingInt(@intCast(index)));
+                tag.args.start = @fromBackingInt(survivors.vars.rankOf(@backingInt(tag.args.start)));
+                self.tags.set(@fromBackingInt(next), tag);
+            }
+            self.tags.shrinkRetainingCapacity(next);
+        }
+        for (self.nominal_decls.items()) |*decl| {
+            decl.formals.start = @fromBackingInt(survivors.vars.rankOf(@backingInt(decl.formals.start)));
+        }
+        slideSurvivors(NominalIdentity, self.nominal_identities.items(), &survivors.nominal_identities);
+        self.nominal_identities.shrinkRetainingCapacity(survivors.nominal_identities.count);
+        slideSurvivors(AliasIdentity, self.alias_identities.items(), &survivors.alias_identities);
+        self.alias_identities.shrinkRetainingCapacity(survivors.alias_identities.count);
+
+        {
+            var next: u32 = 0;
+            var kept = survivors.descs.bits.iterator(.{});
+            while (kept.next()) |index| : (next += 1) {
+                const old: DescStore.Idx = @fromBackingInt(@intCast(index));
+                const new: DescStore.Idx = @fromBackingInt(next);
+                var row = self.descs.getRow(old);
+                survivors.renumberRow(&row);
+                self.descs.setRow(new, row);
+                self.root_metas.set(rootMetaIdx(new), self.getRootMeta(old));
+            }
+            self.descs.backing.shrinkRetainingCapacity(next);
+            self.root_metas.shrinkRetainingCapacity(next);
+        }
+        {
+            // A plan belongs to a class, so a dead class's plan dies with it,
+            // and renumbering keeps the entries sorted by class.
+            const entries = self.derived_map_plans.items();
+            var next: usize = 0;
+            for (entries) |entry| {
+                const class: u32 = @backingInt(entry.class);
+                if (!survivors.descs.survives(class)) continue;
+                entries[next] = .{ .class = @fromBackingInt(survivors.descs.rankOf(class)), .plan = entry.plan };
+                next += 1;
+            }
+            self.derived_map_plans.shrinkRetainingCapacity(next);
+        }
+        for (self.slots.kinds.items, self.slots.payloads.items) |kind, *payload| {
+            switch (kind) {
+                .root => payload.* = survivors.descs.rankOfSurvivor(payload.*),
+                .redirect => {},
+            }
+        }
+
+        if (std.debug.runtime_safety) {
+            for (0..self.descs.backing.len()) |index| {
+                const desc_idx: DescStore.Idx = @fromBackingInt(@intCast(index));
+                const row = self.descs.getRow(desc_idx);
+                const identity: u32 = switch (row.word.kind) {
+                    .alias, .nominal_type => row.payload[0],
+                    .flex, .rigid, .field_presence, .err, .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => 0,
+                };
+                if (!std.meta.eql(row, self.descAt(desc_idx).encode(identity, self))) {
+                    base.invariant("sealing left descriptor {d}'s stored row unlike its descriptor's encoding", .{index});
+                }
+            }
+        }
+    }
+
+    /// Slide the survivors of a column of plain rows down to their ranks.
+    fn slideSurvivors(comptime T: type, items: []T, survivors: *const SealSurvivors) void {
+        var next: usize = 0;
+        var kept = survivors.bits.iterator(.{});
+        while (kept.next()) |index| : (next += 1) items[next] = items[index];
+    }
+
+    /// The survivors of every column sealing closes the gaps of, and how each
+    /// descriptor's rows are kept and renumbered.
+    const SealColumns = struct {
+        descs: SealSurvivors,
+        vars: SealSurvivors,
+        record_fields: SealSurvivors,
+        tags: SealSurvivors,
+        nominal_identities: SealSurvivors,
+        alias_identities: SealSurvivors,
+        /// The record field and tag rows before sealing appended flattened
+        /// rows, every one of which survives.
+        record_fields_before: u32,
+        tags_before: u32,
+
+        fn init(store: *const Self) Allocator.Error!SealColumns {
+            const gpa = store.gpa;
+            var columns: SealColumns = undefined;
+            columns.record_fields_before = store.record_fields.len();
+            columns.tags_before = store.tags.len();
+            columns.descs = try .init(gpa, store.descs.backing.len());
+            errdefer columns.descs.deinit(gpa);
+            columns.vars = try .init(gpa, store.vars.items.len);
+            errdefer columns.vars.deinit(gpa);
+            columns.record_fields = try .init(gpa, columns.record_fields_before);
+            errdefer columns.record_fields.deinit(gpa);
+            columns.tags = try .init(gpa, columns.tags_before);
+            errdefer columns.tags.deinit(gpa);
+            columns.nominal_identities = try .init(gpa, store.nominal_identities.items().len);
+            errdefer columns.nominal_identities.deinit(gpa);
+            columns.alias_identities = try .init(gpa, store.alias_identities.items().len);
+            return columns;
+        }
+
+        fn deinit(self: *SealColumns, gpa: Allocator) void {
+            self.descs.deinit(gpa);
+            self.vars.deinit(gpa);
+            self.record_fields.deinit(gpa);
+            self.tags.deinit(gpa);
+            self.nominal_identities.deinit(gpa);
+            self.alias_identities.deinit(gpa);
+        }
+
+        /// Marking is over: the flattened rows survive, and every column
+        /// counts its survivors.
+        fn finish(self: *SealColumns, store: *const Self) Allocator.Error!void {
+            const gpa = store.gpa;
+            try self.record_fields.growSurviving(gpa, store.record_fields.len());
+            try self.tags.growSurviving(gpa, store.tags.len());
+            try self.descs.finish(gpa);
+            try self.vars.finish(gpa);
+            try self.record_fields.finish(gpa);
+            try self.tags.finish(gpa);
+            try self.nominal_identities.finish(gpa);
+            try self.alias_identities.finish(gpa);
+        }
+
+        /// Keep the vars range a stored descriptor keeps as `stored`
+        /// (`varRange`), with the length slot before it.
+        fn keepStoredVarRange(self: *SealColumns, store: *const Self, stored: u32) void {
+            if (stored == stored_empty_var_range) return;
+            const count = @backingInt(store.vars.items[stored - 1]) & ~range_length_bit;
+            self.vars.keepRange(stored - 1, count + 1);
+        }
+
+        /// Keep every pool row and identity row the canonical descriptor
+        /// `desc_idx` names. A record or tag union whose row sealing
+        /// flattened names rows appended after marking began, which survive
+        /// without marking.
+        fn keepRowsOf(self: *SealColumns, store: *const Self, desc_idx: DescStore.Idx) void {
+            const row = store.descs.getRow(desc_idx);
+            const p = row.payload;
+            switch (row.word.kind) {
+                .flex, .rigid, .field_presence, .err, .empty_record, .empty_tag_union => {},
+                .alias => {
+                    self.alias_identities.keep(p[0]);
+                    self.keepStoredVarRange(store, p[1]);
+                },
+                .nominal_type => {
+                    self.nominal_identities.keep(p[0]);
+                    self.keepStoredVarRange(store, p[1]);
+                },
+                .tuple => self.keepStoredVarRange(store, p[0]),
+                .fn_pure, .fn_effectful, .fn_unbound => {
+                    self.keepStoredVarRange(store, p[0]);
+                    self.keepStoredVarRange(store, p[2]);
+                },
+                .record => {
+                    const fields = Desc.decodeRecord(row).fields;
+                    if (@backingInt(fields.start) < self.record_fields_before) self.record_fields.keepRange(@backingInt(fields.start), fields.count);
+                },
+                .tag_union => {
+                    const tags = Desc.decodeTagUnion(row).tags;
+                    for (store.tags.sliceRange(tags).items(.args)) |args| self.vars.keepRange(@backingInt(args.start), args.count);
+                    if (@backingInt(tags.start) < self.tags_before) self.tags.keepRange(@backingInt(tags.start), tags.count);
+                },
+            }
+        }
+
+        /// What a stored descriptor keeps of a vars range `stored`
+        /// (`storedVarRange`) once the vars pool has closed its gaps.
+        fn renumberStoredVarRange(self: *const SealColumns, stored: u32) u32 {
+            if (stored == stored_empty_var_range) return stored_empty_var_range;
+            return self.vars.rankOfSurvivor(stored - 1) + 1;
+        }
+
+        /// Renumber every pool and identity index a stored descriptor holds.
+        fn renumberRow(self: *const SealColumns, row: *Desc.Row) void {
+            const p = &row.payload;
+            switch (row.word.kind) {
+                .flex, .rigid, .field_presence, .err, .empty_record, .empty_tag_union => {},
+                .alias => {
+                    p[0] = self.alias_identities.rankOfSurvivor(p[0]);
+                    p[1] = self.renumberStoredVarRange(p[1]);
+                },
+                .nominal_type => {
+                    p[0] = self.nominal_identities.rankOfSurvivor(p[0]);
+                    p[1] = self.renumberStoredVarRange(p[1]);
+                },
+                .tuple => p[0] = self.renumberStoredVarRange(p[0]),
+                .fn_pure, .fn_effectful, .fn_unbound => {
+                    p[0] = self.renumberStoredVarRange(p[0]);
+                    p[2] = self.renumberStoredVarRange(p[2]);
+                },
+                .record => p[0] = self.record_fields.rankOf(p[0]),
+                .tag_union => p[0] = self.tags.rankOf(p[0]),
+            }
+        }
+    };
 
     /// Replace the variable a function or row descriptor holds inline in
     /// `payload_word`, leaving the rest of its stored row as it is: the row
@@ -4481,6 +4789,40 @@ test "canonicalizing for seal gives children representatives and flattens rows" 
     try std.testing.expectEqual(err_name, tags.items(.name)[0]);
     try std.testing.expectEqual(ok_name, tags.items(.name)[1]);
     try std.testing.expectEqualSlices(Var, &.{elem}, store.sliceVars(tags.items(.args)[1]));
+}
+
+test "sealing closes the gaps dead descriptors and pool rows leave" {
+    const gpa = std.testing.allocator;
+    var idents = try base.Ident.Store.initCapacity(gpa, 2);
+    defer idents.deinit(gpa);
+    const ok_name = try idents.insert(gpa, base.Ident.for_text("Ok"));
+
+    var store = try Store.init(gpa);
+    defer store.deinit();
+    const arg = try store.fresh();
+    // A tuple whose class a merge orphans: its descriptor and vars range die.
+    const dead_tuple = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ arg, arg }) } } });
+    const elem = try store.fresh();
+    const func = try store.freshFromContent(try store.mkFuncPure(&.{elem}, arg));
+    const tags = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{try store.mkTag(ok_name, &.{elem})}),
+        .ext = try store.fresh(),
+    } } });
+    try store.union_(dead_tuple, func, store.resolveVar(func).desc);
+    const live_classes = 5;
+    try std.testing.expect(store.descs.backing.len() > live_classes);
+
+    try store.canonicalizeAndSeal(&idents);
+    try std.testing.expectEqual(@as(u32, live_classes), store.descs.backing.len());
+    try std.testing.expectEqual(@as(u32, live_classes), store.root_metas.len());
+    // The function's argument range with the length slot a descriptor reads,
+    // and the tag's argument range, whose tag holds its length itself.
+    try std.testing.expectEqual(@as(usize, 3), store.vars.items.len);
+    const resolved = store.resolveVar(dead_tuple).desc.content.structure.fn_pure;
+    try std.testing.expectEqualSlices(Var, &.{elem}, store.sliceVars(resolved.args));
+    try std.testing.expectEqual(arg, resolved.ret);
+    const tag = store.getTagsSlice(store.resolveVar(tags).desc.content.structure.tag_union.tags).get(0);
+    try std.testing.expectEqualSlices(Var, &.{elem}, store.sliceVars(tag.args));
 }
 
 test "sealing releases checker-only buffers without allocating" {

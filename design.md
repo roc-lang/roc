@@ -7087,8 +7087,28 @@ or a row's extension by its representative, and resolving an extension also
 tells whether the extension is itself a row, so a row that must absorb its
 chain is found and flattened in that same step. A static-dispatch constraint
 keeps the function variable checking recorded for it, because that variable
-identifies the constraint; a reader resolves it with one slot read. The
-checked type id of a source type is its checked representative's bit pattern,
+identifies the constraint; a reader resolves it with one slot read.
+
+Canonicalization then closes the gaps the store's dead entries leave. The
+sealed store is the same store with its gaps closed, not a second
+representation. A descriptor survives when a slot names it; a vars, record
+field or tag pool row, or an identity row, survives when a surviving
+descriptor names it, directly or through a tag's argument range, or when a
+nominal declaration's formals name it; a derived-map selection survives with
+its class. Every column keeps its survivors in their original order and slides
+each down to its rank: the number of survivors before it, read from the
+column's liveness bit set as a running count per mask word plus a population
+count within the word. No translation table is built, a survivor only ever
+moves down, so each column closes in place in one forward pass, a range shared
+by two descriptors stays shared, and anything sorted by index stays sorted.
+Marking folds into the descriptor pass above; closing then walks each column
+once, the pools first, rewriting their variables to representatives as they
+move, then the descriptors, then the descriptor index of every root slot. The
+static-dispatch constraint rows and the numeral and interpolation rows they
+name keep their indices, because checking records constraint indices outside
+the store.
+
+The checked type id of a source type is its checked representative's bit pattern,
 so a rendered payload's children
 alias the store's own variable pools and every reader receives
 representatives. Five columns beside the module's synthesized-type store
