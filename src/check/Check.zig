@@ -214,7 +214,6 @@ shared_subtrees_scratch: std.ArrayListUnmanaged(Instantiator.SharedSubtree) = .e
 snapshot_ground_copies: collections.DenseMapUnmanaged(Var, collections.OptionalId(Var)) = .empty,
 snapshot_ground_epoch: u64 = 0,
 /// A map from one var to another. Used in instantiation and var copying
-var_set: collections.DenseMap(Var, void),
 /// Explicit visit stack for `varContainsError`'s heap-worklist type-graph
 /// walk. Entries are base-relative: each entry point operates only on the
 /// slots it pushed and drains back to its entry length, so the walk may nest
@@ -1355,9 +1354,12 @@ scratch_use_owned: std.ArrayListUnmanaged(Var) = .empty,
 instantiated_requirements_stack: std.ArrayListUnmanaged(InstantiatedSchemeDispatchRequirement) = .empty,
 scratch_ground_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// The visited roots of one closed walk over the type graph: a walk that
-/// reads the store and calls nothing that walks types itself
-/// (`typeHasGeneralizedVar`, `varIsGround`, `varIsGroundWith`). Each such walk
-/// holds the set from `beginTraversal` to `endTraversal`, so two never overlap.
+/// reads (or marks) the store and calls nothing that walks types itself, such
+/// as `typeHasGeneralizedVar`, `varIsGround`, `varReachesError`, the
+/// structural-derive and host-boundary checks, and the unresolved-constraint
+/// scans. Each such walk holds the set from `beginTraversal` to
+/// `endTraversal`, so two never overlap. A walk that relates types while it
+/// walks takes a set from `reach_marks` instead.
 closed_walk_seen: collections.EpochBitSet(Var, .unlisted),
 scratch_replay_sources: std.ArrayListUnmanaged(u32) = .empty,
 scratch_replay_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
@@ -1848,7 +1850,6 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .shared_subtrees_scratch = .scratch,
     .snapshot_ground_copies = .keyed,
     .snapshot_ground_epoch = .keyed,
-    .var_set = .scratch,
     .type_visit_stack = .scratch,
     .ground_hash_pending = .scratch,
     .ground_hash_seen = .scratch,
@@ -5002,7 +5003,6 @@ fn initAssumePrepared(
         .try_return_conditions = collections.DenseMap(Var, CIR.Expr.Idx).init(gpa),
         .try_lambda_host_origins = collections.DenseMap(CIR.Expr.Idx, Ident.Idx).init(gpa),
         .try_return_rows = TryReturnRows.init(gpa),
-        .var_set = collections.DenseMap(Var, void).init(gpa),
         .ground_hash_seen = collections.DenseMap(Var, u32).init(gpa),
         .type_decl_generation_states = try initNodeSlots(TypeDeclGenerationState, gpa, node_count, .not_generated),
         .type_decl_dense_indices = try initNodeSlots(collections.OptionalU32, gpa, node_count, .none),
@@ -7058,8 +7058,7 @@ fn emitComptimeCondition(self: *Self, expr: CIR.Expr.Idx, kind: @FieldType(probl
     // A rejected condition, such as an `and` whose operand is not a `Bool`,
     // has no value to know at compile time; its own problem is reported.
     if (self.erroneous_value_exprs.contains(expr)) return;
-    self.var_set.clearRetainingCapacity();
-    if (try self.varContainsError(ModuleEnv.varFrom(expr), &self.var_set)) return;
+    if (try self.varReachesError(ModuleEnv.varFrom(expr))) return;
 
     _ = try self.problems.appendProblem(.{ .comptime_condition = .{
         .expr = expr,
@@ -9854,7 +9853,7 @@ test "settled row reachability uses caller-owned scratch across all seeds" {
     defer test_env.deinit();
     const checker = &test_env.checker;
     const store = checker.types;
-    const shared_capacity = checker.var_set.capacity();
+    const shared_words = checker.closed_walk_seen.words.len;
     var owners: collections.DenseMapUnmanaged(Var, Var) = .empty;
     defer owners.deinit(std.testing.allocator);
     var root = try store.fresh();
@@ -9869,7 +9868,7 @@ test "settled row reachability uses caller-owned scratch across all seeds" {
     try std.testing.expectEqual(@as(usize, 257), walk.visited.count());
     try checker.walkSettledRoot(root, &walk, &owners);
     try std.testing.expectEqual(@as(usize, 257), walk.visited.count());
-    try std.testing.expectEqual(shared_capacity, checker.var_set.capacity());
+    try std.testing.expectEqual(shared_words, checker.closed_walk_seen.words.len);
     try std.testing.expectEqual(@as(usize, 0), walk.stack.items.len);
     try std.testing.expectEqual(@as(usize, 0), walk.cycles.items.len);
 }
@@ -10966,11 +10965,12 @@ fn appendRuntimeTypeVars(self: *Self, root: Var, out: *std.ArrayListUnmanaged(Va
     const stack = &self.type_visit_stack;
     const stack_base = stack.items.len;
     defer stack.items.len = stack_base;
-    self.var_set.clearRetainingCapacity();
+    self.closed_walk_seen.beginTraversal();
+    defer self.closed_walk_seen.endTraversal();
     try stack.append(self.gpa, root);
     while (stack.items.len > stack_base) {
         const resolved = self.types.resolveVar(stack.pop().?);
-        if ((try self.var_set.getOrPut(resolved.var_)).found_existing) continue;
+        if (try self.closed_walk_seen.testAndInsert(resolved.var_)) continue;
         try out.append(self.gpa, resolved.var_);
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => {},
@@ -16995,8 +16995,7 @@ fn hoistedRootTypeIsConcrete(
         .var_ = self.types.resolveVarWord(var_).var_,
     });
     if (builtin.mode == .debug) {
-        self.var_set.clearRetainingCapacity();
-        if (concrete != try self.varIsConcreteHoistedConstTypeInternal(purpose, var_, &self.var_set)) {
+        if (concrete != try self.varIsConcreteHoistedConstType(purpose, var_)) {
             hoistSelectionInvariant("a hoisted root type's shared concreteness answer differs from its own scan's");
         }
     }
@@ -17007,8 +17006,14 @@ fn hoistedRootTypeIsConcrete(
 /// Closes concrete recursive dispatch while solving is still changing types,
 /// so it scans the type as it stands at each call.
 fn varHasConcreteType(self: *Self, var_: Var) Allocator.Error!bool {
-    self.var_set.clearRetainingCapacity();
-    return try self.varIsConcreteHoistedConstTypeInternal(.callable_binding, var_, &self.var_set);
+    return try self.varIsConcreteHoistedConstType(.callable_binding, var_);
+}
+
+/// `varIsConcreteHoistedConstTypeInternal` in a closed walk of its own.
+fn varIsConcreteHoistedConstType(self: *Self, purpose: HoistedRootTypePurpose, var_: Var) Allocator.Error!bool {
+    self.closed_walk_seen.beginTraversal();
+    defer self.closed_walk_seen.endTraversal();
+    return try self.varIsConcreteHoistedConstTypeInternal(purpose, var_, &self.closed_walk_seen);
 }
 
 /// Resolve a nominal application's declaration backing TEMPLATE for read-only
@@ -17072,7 +17077,7 @@ fn varIsConcreteHoistedConstTypeInternal(
     self: *Self,
     purpose: HoistedRootTypePurpose,
     var_: Var,
-    visited: *collections.DenseMap(Var, void),
+    visited: *collections.EpochBitSet(Var, .unlisted),
 ) Allocator.Error!bool {
     var scan = HoistedConstTypeScan{ .check = self, .purpose = purpose, .visited = visited };
     return HoistedConstTypeScan.Eval.run(self.gpa, &scan, .{ .walk = .value_graph, .var_ = var_ });
@@ -17149,7 +17154,7 @@ fn hoistedConstTypeComponents(
 const HoistedConstTypeScan = struct {
     check: *Self,
     purpose: HoistedRootTypePurpose,
-    visited: *collections.DenseMap(Var, void),
+    visited: *collections.EpochBitSet(Var, .unlisted),
 
     const Leaf = struct { walk: HoistedConstWalk, var_: Var };
     const Eval = collections.AnyAll.Evaluation(Leaf, HoistedConstTypeScan);
@@ -17165,8 +17170,7 @@ const HoistedConstTypeScan = struct {
     pub fn enter(scan: *HoistedConstTypeScan, items: Eval.Items, leaf: Leaf) Allocator.Error!Eval.Expansion {
         const self = scan.check;
         const resolved = self.types.resolveVar(leaf.var_);
-        if (scan.visited.contains(resolved.var_)) return .{ .value = true };
-        try scan.visited.put(resolved.var_, {});
+        if (try scan.visited.testAndInsert(resolved.var_)) return .{ .value = true };
         const decided = try self.hoistedConstTypeComponents(
             scan.purpose,
             leaf.walk,
@@ -17231,11 +17235,12 @@ fn varHoldsFunction(self: *Self, var_: Var) Allocator.Error!bool {
         .alias => {},
     }
     if (self.types.isFunctionFree(resolved.var_)) return false;
-    self.var_set.clearRetainingCapacity();
-    var scan = HeldFunctionScan{ .check = self, .visited = &self.var_set };
+    var reached = self.reach_sets.acquire();
+    defer self.reach_sets.release(&reached);
+    var scan = HeldFunctionScan{ .check = self, .visited = &reached };
     const holds = try HeldFunctionScan.Eval.runWith(self.gpa, &self.held_function_scan_scratch, &scan, var_);
     if (!holds) {
-        var visited = self.var_set.keyIterator();
+        var visited = reached.keyIterator();
         while (visited.next()) |reached| try self.types.markFunctionFree(&.{reached.*});
     }
     return holds;
@@ -17243,7 +17248,7 @@ fn varHoldsFunction(self: *Self, var_: Var) Allocator.Error!bool {
 
 const HeldFunctionScan = struct {
     check: *Self,
-    visited: *collections.DenseMap(Var, void),
+    visited: *collections.EpochBitSet(Var, .insertion),
 
     const Eval = collections.AnyAll.Evaluation(Var, HeldFunctionScan);
 
@@ -17383,8 +17388,7 @@ test "hoisted root concreteness shares answers across roots and settles a recurs
     };
     for (purposes, expected) |purpose, answers| {
         for (vars, answers) |var_, answer| {
-            self.var_set.clearRetainingCapacity();
-            try std.testing.expectEqual(answer, try self.varIsConcreteHoistedConstTypeInternal(purpose, var_, &self.var_set));
+            try std.testing.expectEqual(answer, try self.varIsConcreteHoistedConstType(purpose, var_));
         }
     }
 
@@ -19248,8 +19252,7 @@ fn replaceExprWithRuntimeErrorAfterOperands(
     for (recorded) |operand| {
         const retired = self.cir.store.getExpr(operand) == .e_runtime_error or self.erroneous_value_exprs.contains(operand);
         if (!retired) {
-            self.var_set.clearRetainingCapacity();
-            if (try self.varContainsError(ModuleEnv.varFrom(operand), &self.var_set)) break;
+            if (try self.varReachesError(ModuleEnv.varFrom(operand))) break;
         }
         kept_len += 1;
     }
@@ -21024,8 +21027,7 @@ fn reportPolymorphicTopLevelValues(self: *Self) std.mem.Allocator.Error!void {
         // `requires` type unifies it to a concrete type anyway.)
         if (self.varIsFunctionType(def_var)) continue;
 
-        self.var_set.clearRetainingCapacity();
-        if (!try self.varHasUnresolvedStaticDispatchConstraints(def_var, &self.var_set)) continue;
+        if (!try self.varHasUnresolvedStaticDispatchConstraintsAlone(def_var)) continue;
 
         try self.reportPolymorphicValueProblem(def_var, ModuleEnv.varFrom(def.pattern), self.getPatternIdent(def.pattern));
     }
@@ -21038,8 +21040,12 @@ fn reportPolymorphicExecutableRootResults(self: *Self) std.mem.Allocator.Error!v
 
         const result_var = self.zeroArgFunctionReturnVar(ModuleEnv.varFrom(def_idx)) orelse continue;
 
-        self.var_set.clearRetainingCapacity();
-        if (!try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(result_var, &self.var_set)) continue;
+        const unresolved = blk: {
+            self.closed_walk_seen.beginTraversal();
+            defer self.closed_walk_seen.endTraversal();
+            break :blk try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(result_var, &self.closed_walk_seen);
+        };
+        if (!unresolved) continue;
 
         try self.reportPolymorphicValueProblem(result_var, ModuleEnv.varFrom(def.pattern), self.getPatternIdent(def.pattern));
     }
@@ -21060,8 +21066,7 @@ fn reportPolymorphicConstrainedExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem
     const expr_var = ModuleEnv.varFrom(expr_idx);
     if (self.varIsFunctionType(expr_var)) return;
 
-    self.var_set.clearRetainingCapacity();
-    if (!try self.varHasUnresolvedStaticDispatchConstraints(expr_var, &self.var_set)) return;
+    if (!try self.varHasUnresolvedStaticDispatchConstraintsAlone(expr_var)) return;
 
     try self.reportPolymorphicValueProblem(expr_var, expr_var, null);
 }
@@ -21438,10 +21443,17 @@ fn checkEffectfulFunctionName(self: *Self, pattern_idx: CIR.Pattern.Idx, expr_id
     } });
 }
 
+/// `varHasUnresolvedStaticDispatchConstraints` in a closed walk of its own.
+fn varHasUnresolvedStaticDispatchConstraintsAlone(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
+    self.closed_walk_seen.beginTraversal();
+    defer self.closed_walk_seen.endTraversal();
+    return try self.varHasUnresolvedStaticDispatchConstraints(var_, &self.closed_walk_seen);
+}
+
 fn varHasUnresolvedStaticDispatchConstraints(
     self: *Self,
     var_: Var,
-    visited: *collections.DenseMap(Var, void),
+    visited: *collections.EpochBitSet(Var, .unlisted),
 ) std.mem.Allocator.Error!bool {
     var scan = UnresolvedConstraintScan{ .check = self, .visited = visited, .constraints = .any };
     return UnresolvedConstraintScan.Eval.run(self.gpa, &scan, .{ .var_ = var_ });
@@ -21450,7 +21462,7 @@ fn varHasUnresolvedStaticDispatchConstraints(
 fn varHasUnresolvedNonLiteralStaticDispatchConstraints(
     self: *Self,
     var_: Var,
-    visited: *collections.DenseMap(Var, void),
+    visited: *collections.EpochBitSet(Var, .unlisted),
 ) std.mem.Allocator.Error!bool {
     var scan = UnresolvedConstraintScan{ .check = self, .visited = visited, .constraints = .non_literal };
     return UnresolvedConstraintScan.Eval.run(self.gpa, &scan, .{ .var_ = var_ });
@@ -21461,7 +21473,7 @@ fn varHasUnresolvedNonLiteralStaticDispatchConstraints(
 /// Each var is visited once, in the order a left-to-right walk reaches it.
 const UnresolvedConstraintScan = struct {
     check: *Self,
-    visited: *collections.DenseMap(Var, void),
+    visited: *collections.EpochBitSet(Var, .unlisted),
     constraints: enum { any, non_literal },
 
     const Item = struct { var_: Var, row_tail: bool = false };
@@ -25401,12 +25413,12 @@ fn pinReachableVarsAtRank(self: *Self, root: Var, boundary_rank: Rank, env: *Env
     const stack = &self.type_visit_stack;
     const stack_base = stack.items.len;
     defer stack.items.len = stack_base;
-    self.var_set.clearRetainingCapacity();
+    self.closed_walk_seen.beginTraversal();
+    defer self.closed_walk_seen.endTraversal();
     try stack.append(self.gpa, root);
     while (stack.items.len > stack_base) {
         const resolved = self.types.resolveVar(stack.pop().?);
-        if (self.var_set.contains(resolved.var_)) continue;
-        try self.var_set.put(resolved.var_, {});
+        if (try self.closed_walk_seen.testAndInsert(resolved.var_)) continue;
         if (resolved.desc.rank == .generalized or resolved.desc.content == .rigid) continue;
         try self.pinVarAtRank(resolved.var_, boundary_rank, env);
         switch (resolved.desc.content) {
@@ -25905,16 +25917,18 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
     // anything to it. A where clause's method signature is part of the type
     // the annotation generates, so an error there makes the annotation
     // erroneous too.
-    self.var_set.clearRetainingCapacity();
-    if (try self.varContainsError(annotation_var, &self.var_set) or
-        try self.whereSignaturesContainError(annotation.where))
-    {
-        self.cir.store.markAnnotationErroneous(annotation_idx);
-    }
+    const erroneous = blk: {
+        self.closed_walk_seen.beginTraversal();
+        defer self.closed_walk_seen.endTraversal();
+        break :blk try self.varContainsError(annotation_var, &self.closed_walk_seen) or
+            try self.whereSignaturesContainError(annotation.where);
+    };
+    if (erroneous) self.cir.store.markAnnotationErroneous(annotation_idx);
 }
 
 /// Whether a method signature or where alias application an annotation's
-/// where clause generated holds an erroneous type.
+/// where clause generated holds an erroneous type, continuing the closed walk
+/// `generateAnnotationType` began over the annotation.
 fn whereSignaturesContainError(self: *Self, where: ?CIR.WhereClause.Span) Allocator.Error!bool {
     const where_span = where orelse return false;
     for (self.cir.store.sliceWhereClauses(where_span)) |where_idx| {
@@ -25923,7 +25937,7 @@ fn whereSignaturesContainError(self: *Self, where: ?CIR.WhereClause.Span) Alloca
             .w_alias => |alias| alias.alias,
             .w_malformed => continue,
         };
-        if (try self.varContainsError(ModuleEnv.varFrom(generated), &self.var_set)) return true;
+        if (try self.varContainsError(ModuleEnv.varFrom(generated), &self.closed_walk_seen)) return true;
     }
     return false;
 }
@@ -26866,12 +26880,12 @@ fn markHostFixedRows(self: *Self, root: Var) std.mem.Allocator.Error!void {
     const stack = &self.type_visit_stack;
     const stack_base = stack.items.len;
     defer stack.items.len = stack_base;
-    self.var_set.clearRetainingCapacity();
+    self.closed_walk_seen.beginTraversal();
+    defer self.closed_walk_seen.endTraversal();
     try stack.append(self.gpa, root);
     while (stack.items.len > stack_base) {
         const resolved = self.types.resolveVar(stack.pop().?);
-        if (self.var_set.contains(resolved.var_)) continue;
-        try self.var_set.put(resolved.var_, {});
+        if (try self.closed_walk_seen.testAndInsert(resolved.var_)) continue;
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => {},
             .alias => |alias| {
@@ -26912,12 +26926,12 @@ fn varReachesHostFixedRow(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
     const stack = &self.type_visit_stack;
     const stack_base = stack.items.len;
     defer stack.items.len = stack_base;
-    self.var_set.clearRetainingCapacity();
+    self.closed_walk_seen.beginTraversal();
+    defer self.closed_walk_seen.endTraversal();
     try stack.append(self.gpa, var_);
     while (stack.items.len > stack_base) {
         const resolved = self.types.resolveVar(stack.pop().?);
-        if (self.var_set.contains(resolved.var_)) continue;
-        try self.var_set.put(resolved.var_, {});
+        if (try self.closed_walk_seen.testAndInsert(resolved.var_)) continue;
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => {},
             .alias => |alias| try stack.append(self.gpa, self.types.getAliasBackingVar(alias)),
@@ -27230,12 +27244,11 @@ fn closeTopLevelValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         tails.clearRetainingCapacity();
         const stack_base = stack.items.len;
         defer stack.items.len = stack_base;
-        self.var_set.clearRetainingCapacity();
+        self.closed_walk_seen.beginTraversal();
         try stack.append(self.gpa, pattern_var);
         while (stack.items.len > stack_base) {
             const resolved = self.types.resolveVar(stack.pop().?);
-            if (self.var_set.contains(resolved.var_)) continue;
-            try self.var_set.put(resolved.var_, {});
+            if (try self.closed_walk_seen.testAndInsert(resolved.var_)) continue;
             switch (resolved.desc.content) {
                 .flex, .rigid, .field_presence, .err => {},
                 .alias => |alias| {
@@ -27272,6 +27285,7 @@ fn closeTopLevelValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
                 },
             }
         }
+        self.closed_walk_seen.endTraversal();
         for (tails.items) |tail| {
             const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, self.getRegionAt(tail));
             _ = try self.unify(tail, empty_tu_var, env);
@@ -27401,10 +27415,12 @@ fn reportPatternOnlyMatchTags(self: *Self) std.mem.Allocator.Error!void {
     }
     if (candidates.items.len == 0) return;
 
+    // `closed_walk_seen` holds every row a caller or a derived parser
+    // produces until every branch is reported; nothing below walks types.
+    self.closed_walk_seen.beginTraversal();
+    defer self.closed_walk_seen.endTraversal();
     try self.markProducedTagRows();
 
-    // `var_set` holds every row a caller or a derived parser produces until
-    // the next walk clears it; nothing below walks types.
     var start: usize = 0;
     while (start < candidates.items.len) {
         const first = candidates.items[start].record.alternative;
@@ -27436,7 +27452,7 @@ fn reportPatternOnlyBranchTags(self: *Self, candidates: []const PatternOnlyCandi
     defer unmatchable_tags.deinit(self.gpa);
     var reported_alternatives: usize = 0;
     for (candidates) |candidate| {
-        if (self.var_set.contains(self.types.resolveVar(candidate.row_part).var_)) continue;
+        if (self.closed_walk_seen.contains(self.types.resolveVar(candidate.row_part).var_)) continue;
         const alternative = candidate.record.alternative.alternative_index;
         const already = for (unmatchable_tags.items) |entry| {
             if (entry.alternative == alternative) break true;
@@ -27615,8 +27631,9 @@ fn rowTagOccurrence(self: *const Self, var_: Var, tag_name: Ident.Idx) ?FoundRow
     }
 }
 
-/// Collect in `var_set` every type reachable from a value the module does not
-/// produce itself (design.md "Pattern-Only Tags"): the parameters of each
+/// Collect in `closed_walk_seen`, which the caller holds, every type
+/// reachable from a value the module does not produce itself (design.md
+/// "Pattern-Only Tags"): the parameters of each
 /// lambda whose body matches tag patterns (`matching_lambda_params`), whose
 /// values come from callers the module may not see, each derived parser's
 /// shape, whose values the parser builds from its input, and each rejected
@@ -27630,7 +27647,6 @@ fn markProducedTagRows(self: *Self) std.mem.Allocator.Error!void {
     const stack = &self.type_visit_stack;
     const stack_base = stack.items.len;
     defer stack.items.len = stack_base;
-    self.var_set.clearRetainingCapacity();
     for (self.matching_lambda_params.items) |params| {
         for (self.cir.store.slicePatterns(params)) |param| try stack.append(self.gpa, ModuleEnv.varFrom(param));
     }
@@ -27645,8 +27661,7 @@ fn markProducedTagRows(self: *Self) std.mem.Allocator.Error!void {
     while (erroneous.next()) |expr| try stack.append(self.gpa, ModuleEnv.varFrom(expr));
     while (stack.items.len > stack_base) {
         const resolved = self.types.resolveVar(stack.pop().?);
-        if (self.var_set.contains(resolved.var_)) continue;
-        try self.var_set.put(resolved.var_, {});
+        if (try self.closed_walk_seen.testAndInsert(resolved.var_)) continue;
         switch (resolved.desc.content) {
             .field_presence, .err => {},
             .flex => |flex| for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
@@ -30277,8 +30292,9 @@ fn whereAliasLocalDecl(self: *Self, alias_anno_idx: CIR.TypeAnno.Idx) ?CIR.State
 }
 
 fn validateAliasRows(self: *Self, var_: Var, env: *Env, region: Region) Allocator.Error!bool {
-    self.var_set.clearRetainingCapacity();
-    return self.validateAliasRowsHelp(var_, env, region, &self.var_set);
+    self.closed_walk_seen.beginTraversal();
+    defer self.closed_walk_seen.endTraversal();
+    return self.validateAliasRowsHelp(var_, env, region, &self.closed_walk_seen);
 }
 
 /// Which kind of row a bad-row diagnostic is about.
@@ -30346,7 +30362,7 @@ fn validateAliasRowsHelp(
     root_var: Var,
     env: *Env,
     region: Region,
-    visited: *collections.DenseMap(Var, void),
+    visited: *collections.EpochBitSet(Var, .unlisted),
 ) Allocator.Error!bool {
     // The whole walk—constructor spines and row payloads alike—runs on an
     // explicit heap stack, so a type of any depth can be validated without a
@@ -30405,11 +30421,10 @@ fn validateAliasRowsHelp(
 fn stepAliasRowNode(
     self: *Self,
     var_: Var,
-    visited: *collections.DenseMap(Var, void),
+    visited: *collections.EpochBitSet(Var, .unlisted),
 ) Allocator.Error!void {
     const resolved = self.types.resolveVar(var_);
-    if (visited.contains(resolved.var_)) return;
-    try visited.put(resolved.var_, {});
+    if (try visited.testAndInsert(resolved.var_)) return;
 
     switch (resolved.desc.content) {
         .alias => |alias| {
@@ -32096,9 +32111,7 @@ fn projectExpectedTagPayload(
         try self.borrowExpectedRecordField(aggregate_type.var_, field, env) orelse return null
     else
         aggregate_type.var_;
-    self.var_set.clearRetainingCapacity();
-    const contains_error = try self.varContainsError(source, &self.var_set);
-    self.var_set.clearRetainingCapacity();
+    const contains_error = try self.varReachesError(source);
     if (contains_error) return null;
     const payload = self.borrowExpectedTagPayload(source, name) orelse return null;
     if (payload.args.len() != arity) return null;
@@ -32253,9 +32266,7 @@ fn projectExpectedAggregateShape(
         // have related an error into a shared cell, which is diagnostic
         // recovery exactly as for a copied source.
         if (self.types.mayContainErrorState()) {
-            self.var_set.clearRetainingCapacity();
-            const cell_contains_error = try self.varContainsError(aggregate_type.var_, &self.var_set);
-            self.var_set.clearRetainingCapacity();
+            const cell_contains_error = try self.varReachesError(aggregate_type.var_);
             if (cell_contains_error) return false;
         }
         const result = try commit_probe.unifyInContext(aggregate_type.var_, shape_var, aggregate_type.context);
@@ -32271,9 +32282,7 @@ fn projectExpectedAggregateShape(
     // Error context is diagnostic recovery, never construction evidence. No
     // variable can reach the error state before one has been written.
     if (self.types.mayContainErrorState()) {
-        self.var_set.clearRetainingCapacity();
-        const expected_contains_error = try self.varContainsError(source, &self.var_set);
-        self.var_set.clearRetainingCapacity();
+        const expected_contains_error = try self.varReachesError(source);
         if (expected_contains_error) return false;
     }
 
@@ -32384,8 +32393,7 @@ const ExprCheckFrame = struct {
 
         // Check if we have an annotation
         if (self.mb_anno_vars) |anno_vars| {
-            checker.var_set.clearRetainingCapacity();
-            const expr_is_erroneous = try checker.varContainsError(self.expr_var, &checker.var_set);
+            const expr_is_erroneous = try checker.varReachesError(self.expr_var);
             // Unify the anno with the expr var. An erroneous value already owns
             // its report, so, like any other consumer of an erroneous value, the
             // annotation relates to it without reporting a mismatch of its own.
@@ -32408,8 +32416,7 @@ const ExprCheckFrame = struct {
             // type for the pattern instead of the expression type. This preserves
             // the annotation type for other code that references this identifier,
             // even when the expression has errors.
-            checker.var_set.clearRetainingCapacity();
-            if (try checker.varContainsError(self.expr_var, &checker.var_set)) {
+            if (try checker.varReachesError(self.expr_var)) {
                 // A method's callable wrapper is explicit input to method-template
                 // publication, so keep that wrapper around its already-erroneous
                 // child. The kept wrapper's checked type is the annotation's, so
@@ -32453,9 +32460,8 @@ const ExprCheckFrame = struct {
             }
         }
 
-        checker.var_set.clearRetainingCapacity();
         if (self.mb_anno_vars == null) {
-            if (try checker.varContainsError(self.expr_var, &checker.var_set)) {
+            if (try checker.varReachesError(self.expr_var)) {
                 try checker.markErroneousValueExpr(self.expr_idx);
                 checker.call_operand_type_error_exprs.items[nodeSlot(self.expr_idx)] = true;
                 try checker.recordRetiredOperandSequence(self.expr_idx);
@@ -35038,8 +35044,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                 } else {
                     try self.generateAnnotationType(annotation_idx, env);
                     const annotation_var = ModuleEnv.varFrom(annotation_idx);
-                    self.var_set.clearRetainingCapacity();
-                    if (try self.varContainsError(annotation_var, &self.var_set)) {
+                    if (try self.varReachesError(annotation_var)) {
                         // The annotation's error is already reported, and it
                         // gives the binder no instantiable type. With no
                         // initializer to type it either, the declaration
@@ -40776,9 +40781,7 @@ fn seedLambdaParamsFromContext(
     if (contextual.record_field != null and !self.varResolvesToKnownType(source)) return null;
     // Error context is diagnostic recovery, never construction evidence.
     if ((contextual.projected_cell or contextual.record_field != null) and self.types.mayContainErrorState()) {
-        self.var_set.clearRetainingCapacity();
-        const source_contains_error = try self.varContainsError(source, &self.var_set);
-        self.var_set.clearRetainingCapacity();
+        const source_contains_error = try self.varReachesError(source);
         if (source_contains_error) return null;
     }
     const expected_fn = if (contextual.record_field != null) try self.copyExpectedShape(source, env) else source;
@@ -49016,8 +49019,9 @@ fn encoderForConstraintEncodingVar(self: *Self, constraint: StaticDispatchConstr
 }
 
 fn deferredHasPendingOpenLiteral(self: *Self, direction: DerivedCodecDirection, deferred: DeferredConstraintCheck) Allocator.Error!bool {
-    self.var_set.clearRetainingCapacity();
-    return try self.varHasPendingOpenLiteralForDerived(direction, deferred.var_, &self.var_set);
+    self.closed_walk_seen.beginTraversal();
+    defer self.closed_walk_seen.endTraversal();
+    return try self.varHasPendingOpenLiteralForDerived(direction, deferred.var_, &self.closed_walk_seen);
 }
 
 const DerivedCodecDirection = enum { parse, encode };
@@ -49031,7 +49035,7 @@ fn varHasPendingOpenLiteralForDerived(
     self: *Self,
     direction: DerivedCodecDirection,
     root: Var,
-    visited: *collections.DenseMap(Var, void),
+    visited: *collections.EpochBitSet(Var, .unlisted),
 ) Allocator.Error!bool {
     const Item = union(enum) {
         var_: Var,
@@ -49046,8 +49050,7 @@ fn varHasPendingOpenLiteralForDerived(
         const structure = switch (item) {
             .var_ => |var_| blk: {
                 const resolved = self.types.resolveVar(var_);
-                if (visited.contains(resolved.var_)) continue;
-                try visited.put(resolved.var_, {});
+                if (try visited.testAndInsert(resolved.var_)) continue;
                 switch (resolved.desc.content) {
                     .structure => |structure| break :blk structure,
                     .alias => |alias| {
@@ -50177,12 +50180,12 @@ fn varReachesAny(self: *Self, root: Var, targets: []const Var) std.mem.Allocator
     const stack = &self.type_visit_stack;
     const stack_base = stack.items.len;
     defer stack.items.len = stack_base;
-    self.var_set.clearRetainingCapacity();
+    self.closed_walk_seen.beginTraversal();
+    defer self.closed_walk_seen.endTraversal();
     try stack.append(self.gpa, root);
     while (stack.items.len > stack_base) {
         const resolved = self.types.resolveVar(stack.pop().?);
-        if (self.var_set.contains(resolved.var_)) continue;
-        try self.var_set.put(resolved.var_, {});
+        if (try self.closed_walk_seen.testAndInsert(resolved.var_)) continue;
         for (targets) |target| {
             if (self.types.resolveVar(target).var_ == resolved.var_) return true;
         }
@@ -57116,7 +57119,7 @@ fn typeSupportsStructuralDeriveInternal(
     self: *Self,
     flat_type: types_mod.FlatType,
     derivation: EqHashDerivation,
-    visited: *collections.DenseMap(Var, void),
+    visited: *collections.EpochBitSet(Var, .unlisted),
 ) std.mem.Allocator.Error!bool {
     var pending: std.ArrayList(Var) = .empty;
     defer pending.deinit(self.gpa);
@@ -57180,12 +57183,11 @@ fn drainStructuralDerive(
     self: *Self,
     pending: *std.ArrayList(Var),
     derivation: EqHashDerivation,
-    visited: *collections.DenseMap(Var, void),
+    visited: *collections.EpochBitSet(Var, .unlisted),
 ) std.mem.Allocator.Error!bool {
     while (pending.pop()) |var_| {
         const resolved = self.types.resolveVar(var_);
-        if (visited.contains(resolved.var_)) continue;
-        try visited.put(resolved.var_, {});
+        if (try visited.testAndInsert(resolved.var_)) continue;
 
         switch (resolved.desc.content) {
             .structure => |flat_type| if (!try self.pushStructuralDeriveComponents(pending, flat_type, derivation)) return false,
@@ -57200,8 +57202,9 @@ fn drainStructuralDerive(
 /// Check if a structural type supports is_eq or to_hash. See
 /// `typeSupportsStructuralDeriveInternal`.
 fn typeSupportsStructuralDerive(self: *Self, derivation: EqHashDerivation, flat_type: types_mod.FlatType) std.mem.Allocator.Error!bool {
-    self.var_set.clearRetainingCapacity();
-    return try self.typeSupportsStructuralDeriveInternal(flat_type, derivation, &self.var_set);
+    self.closed_walk_seen.beginTraversal();
+    defer self.closed_walk_seen.endTraversal();
+    return try self.typeSupportsStructuralDeriveInternal(flat_type, derivation, &self.closed_walk_seen);
 }
 
 /// Whether `nominal_type` is the builtin declaration `decl`.
@@ -57426,14 +57429,15 @@ const HostBoundaryRule = enum {
 };
 
 fn varViolatesHostBoundaryRule(self: *Self, rule: HostBoundaryRule, var_: Var) std.mem.Allocator.Error!bool {
-    self.var_set.clearRetainingCapacity();
-    return try self.varViolatesHostBoundaryRuleInternal(var_, &self.var_set, rule);
+    self.closed_walk_seen.beginTraversal();
+    defer self.closed_walk_seen.endTraversal();
+    return try self.varViolatesHostBoundaryRuleInternal(var_, &self.closed_walk_seen, rule);
 }
 
 fn varViolatesHostBoundaryRuleInternal(
     self: *Self,
     var_: Var,
-    visited: *collections.DenseMap(Var, void),
+    visited: *collections.EpochBitSet(Var, .unlisted),
     rule: HostBoundaryRule,
 ) std.mem.Allocator.Error!bool {
     var scan = HostBoundaryScan{ .check = self, .visited = visited, .rule = rule };
@@ -57445,7 +57449,7 @@ fn varViolatesHostBoundaryRuleInternal(
 /// every alias and row along the chain is checked on the way.
 const HostBoundaryScan = struct {
     check: *Self,
-    visited: *collections.DenseMap(Var, void),
+    visited: *collections.EpochBitSet(Var, .unlisted),
     rule: HostBoundaryRule,
 
     const Leaf = union(enum) {
@@ -57484,8 +57488,7 @@ const HostBoundaryScan = struct {
                     .field_presence => |presence| return .{ .value = scan.rule == .no_optional_fields and presence == .optional },
                     .alias, .structure => {},
                 }
-                if (scan.visited.contains(resolved.var_)) return .{ .value = false };
-                try scan.visited.put(resolved.var_, {});
+                if (try scan.visited.testAndInsert(resolved.var_)) return .{ .value = false };
 
                 switch (resolved.desc.content) {
                     .structure => |flat_type| switch (flat_type) {
@@ -57527,8 +57530,7 @@ const HostBoundaryScan = struct {
             },
             .record_ext_open => |ext_var| {
                 const resolved = self.types.resolveVar(ext_var);
-                if (scan.visited.contains(resolved.var_)) return .{ .value = false };
-                try scan.visited.put(resolved.var_, {});
+                if (try scan.visited.testAndInsert(resolved.var_)) return .{ .value = false };
                 switch (resolved.desc.content) {
                     .alias => |alias| {
                         try addVars(items, self.types.sliceAliasArgs(alias));
@@ -57556,8 +57558,7 @@ const HostBoundaryScan = struct {
             },
             .tag_ext_open => |ext_var| {
                 const resolved = self.types.resolveVar(ext_var);
-                if (scan.visited.contains(resolved.var_)) return .{ .value = false };
-                try scan.visited.put(resolved.var_, {});
+                if (try scan.visited.testAndInsert(resolved.var_)) return .{ .value = false };
                 switch (resolved.desc.content) {
                     .alias => |alias| {
                         try addVars(items, self.types.sliceAliasArgs(alias));
@@ -57593,7 +57594,7 @@ fn varSupportsStructuralDeriveInternal(
     self: *Self,
     var_: Var,
     derivation: EqHashDerivation,
-    visited: *collections.DenseMap(Var, void),
+    visited: *collections.EpochBitSet(Var, .unlisted),
 ) std.mem.Allocator.Error!bool {
     var pending: std.ArrayList(Var) = .empty;
     defer pending.deinit(self.gpa);
@@ -57621,12 +57622,13 @@ fn nominalEqHashMethod(self: *Self, nominal_type: types_mod.NominalType, derivat
 fn nominalSupportsStructuralDerive(self: *Self, nominal_type: types_mod.NominalType, derivation: EqHashDerivation) std.mem.Allocator.Error!bool {
     if (self.nominalIsBuiltinNumberType(nominal_type)) return true;
     if (self.nominalIsBuiltinDecl(nominal_type, .box)) return false;
-    self.var_set.clearRetainingCapacity();
+    self.closed_walk_seen.beginTraversal();
+    defer self.closed_walk_seen.endTraversal();
     for (self.types.sliceNominalArgs(nominal_type)) |arg_var| {
-        if (!try self.varSupportsStructuralDeriveInternal(arg_var, derivation, &self.var_set)) return false;
+        if (!try self.varSupportsStructuralDeriveInternal(arg_var, derivation, &self.closed_walk_seen)) return false;
     }
     const template = self.nominalDeclBackingTemplate(nominal_type) orelse return true;
-    return try self.varSupportsStructuralDeriveInternal(template, derivation, &self.var_set);
+    return try self.varSupportsStructuralDeriveInternal(template, derivation, &self.closed_walk_seen);
 }
 
 /// Decompose a supported derived `is_eq`/`to_hash` comparison into
@@ -57657,15 +57659,16 @@ fn deriveStructuralEqHashComponentObligations(
     const saved_scheme_root = self.active_scheme_root;
     self.active_scheme_root = self.dispatchRelationOwner(parent_constraint.fn_var);
     defer self.active_scheme_root = saved_scheme_root;
-    self.var_set.clearRetainingCapacity();
-    try self.varDeriveComponentObligations(dispatcher_var, derivation, &self.var_set, env, parent_constraint, false, owner);
+    var visited = self.reach_marks.acquire();
+    defer self.reach_marks.release(&visited);
+    try self.varDeriveComponentObligations(dispatcher_var, derivation, &visited, env, parent_constraint, false, owner);
 }
 
 fn varDeriveComponentObligations(
     self: *Self,
     root: Var,
     derivation: EqHashDerivation,
-    visited: *collections.DenseMap(Var, void),
+    visited: *collections.EpochBitSet(Var, .unlisted),
     env: *Env,
     parent_constraint: StaticDispatchConstraint,
     root_admits_rigids: bool,
@@ -57685,8 +57688,7 @@ fn varDeriveComponentObligations(
     while (pending.pop()) |item| {
         const admit_rigids = item.admit_rigids;
         const resolved = self.types.resolveVar(item.var_);
-        if (visited.contains(resolved.var_)) continue;
-        try visited.put(resolved.var_, {});
+        if (try visited.testAndInsert(resolved.var_)) continue;
 
         const start = pending.items.len;
         switch (resolved.desc.content) {
@@ -57854,8 +57856,9 @@ fn mkDerivedComponentConstraint(
 /// Check if a type variable supports is_eq or to_hash. See
 /// `varSupportsStructuralDeriveInternal`.
 fn varSupportsStructuralDerive(self: *Self, derivation: EqHashDerivation, var_: Var) std.mem.Allocator.Error!bool {
-    self.var_set.clearRetainingCapacity();
-    return try self.varSupportsStructuralDeriveInternal(var_, derivation, &self.var_set);
+    self.closed_walk_seen.beginTraversal();
+    defer self.closed_walk_seen.endTraversal();
+    return try self.varSupportsStructuralDeriveInternal(var_, derivation, &self.closed_walk_seen);
 }
 
 fn varSupportsStringRenderedDictKey(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
@@ -58090,9 +58093,10 @@ fn rememberGroundTypes(self: *Self, roots: []const Var) Allocator.Error!void {
 /// Returns whether an inferred flexible tail remains, so its codec can wait
 /// for the finalization boundary without repeatedly traversing the shape.
 fn closeTagRowsForDerivation(self: *Self, var_: Var, env: *Env, mode: DerivationRowClosure) Allocator.Error!bool {
-    self.var_set.clearRetainingCapacity();
+    var visited = self.reach_marks.acquire();
+    defer self.reach_marks.release(&visited);
     var inferred_open = false;
-    try self.closeTagRowsForDerivationHelp(var_, env, &self.var_set, mode, &inferred_open);
+    try self.closeTagRowsForDerivationHelp(var_, env, &visited, mode, &inferred_open);
     try self.rememberGroundTypes(&.{var_});
     return inferred_open;
 }
@@ -58101,7 +58105,7 @@ fn closeTagRowsForDerivationHelp(
     self: *Self,
     root: Var,
     env: *Env,
-    visited: *collections.DenseMap(Var, void),
+    visited: *collections.EpochBitSet(Var, .unlisted),
     mode: DerivationRowClosure,
     inferred_open: *bool,
 ) Allocator.Error!void {
@@ -58157,8 +58161,7 @@ fn closeTagRowsForDerivationHelp(
             },
             .var_ => |var_| {
                 const resolved = self.types.resolveVar(var_);
-                if (visited.contains(resolved.var_)) continue;
-                try visited.put(resolved.var_, {});
+                if (try visited.testAndInsert(resolved.var_)) continue;
                 // A variable-free type has no row left to close.
                 if (self.knownGround(resolved.var_)) continue;
 
@@ -66331,7 +66334,22 @@ fn branchRelationOwner(ctx: problem.Context) problem.RelationOwner {
 /// depth cannot exhaust the native stack. The answer is existential over the
 /// reachable graph—the visited set only prunes—so no particular visit order
 /// is required.
-fn varContainsError(self: *Self, root_var: Var, visited: *collections.DenseMap(Var, void)) std.mem.Allocator.Error!bool {
+/// Mark `var_` in `visited`, a `DenseMap(Var, void)` or an `EpochBitSet`,
+/// returning whether it was already marked.
+fn visitOnce(visited: anytype, var_: Var) std.mem.Allocator.Error!bool {
+    const Set = @typeInfo(@TypeOf(visited)).pointer.child;
+    if (comptime @hasDecl(Set, "testAndInsert")) return visited.testAndInsert(var_);
+    return (try visited.getOrPut(var_)).found_existing;
+}
+
+/// Whether `root_var` reaches an error, in a closed walk of its own.
+fn varReachesError(self: *Self, root_var: Var) std.mem.Allocator.Error!bool {
+    self.closed_walk_seen.beginTraversal();
+    defer self.closed_walk_seen.endTraversal();
+    return self.varContainsError(root_var, &self.closed_walk_seen);
+}
+
+fn varContainsError(self: *Self, root_var: Var, visited: anytype) std.mem.Allocator.Error!bool {
     // A store that has never held error content or an invalid declaration
     // has no error for any variable to reach.
     if (!self.types.mayContainErrorState()) return false;
@@ -66345,8 +66363,7 @@ fn varContainsError(self: *Self, root_var: Var, visited: *collections.DenseMap(V
         const resolved = self.types.resolveVar(var_);
 
         // Check if we've already visited this var (cycle detection)
-        if (visited.contains(resolved.var_)) continue;
-        try visited.put(resolved.var_, {});
+        if (try visitOnce(visited, resolved.var_)) continue;
 
         switch (resolved.desc.content) {
             .err => return true,
