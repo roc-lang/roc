@@ -19137,17 +19137,17 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
 
         elapsed = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - timer_start_ns));
         if (unformatted_files.items.len > 0) {
-            try stdout.print("The following file(s) failed `roc fmt --check`:", .{});
+            try stdout.print("The following file(s) failed `roc fmt --check`:\n", .{});
             for (unformatted_files.items) |file_name| {
                 try stdout.print("    {f}\n", .{base.bidi.Display{ .bytes = try ctx.displayPath(file_name) }});
             }
-            try stdout.print("You can fix this with `roc fmt FILENAME.roc`.", .{});
+            try stdout.print("You can fix this with `roc fmt FILENAME.roc`.\n", .{});
             had_errors = true;
         } else if (failure_count == 0) {
             try stdout.print("All formatting valid.\n", .{});
         }
         if (failure_count > 0) {
-            try stdout.print("Failed to check {} files.", .{failure_count});
+            try stdout.print("Failed to check {} files.\n", .{failure_count});
             had_errors = true;
         }
     } else {
