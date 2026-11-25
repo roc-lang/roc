@@ -57,8 +57,8 @@ fn IndexValue(comptime Id: type, comptime reserved_zero: bool) type {
 /// also fits a `u32`. A table past that range has exhausted the
 /// representable ids, which is `error.OutOfMemory`.
 pub inline fn nextBiasedId(len: usize) error{OutOfMemory}!u32 {
-    const biased = std.math.cast(u32, len + 1) orelse return error.OutOfMemory;
-    return biased - 1;
+    if (len >= std.math.maxInt(u32)) return error.OutOfMemory;
+    return @intCast(len);
 }
 
 /// The payload of a compact optional form from this file, or null for any
@@ -242,7 +242,9 @@ test "nextBiasedId leaves room for the biased form" {
     try std.testing.expectEqual(@as(u32, 0), try nextBiasedId(0));
     try std.testing.expectEqual(std.math.maxInt(u32) - 1, try nextBiasedId(std.math.maxInt(u32) - 1));
     try std.testing.expectError(error.OutOfMemory, nextBiasedId(std.math.maxInt(u32)));
-    try std.testing.expectError(error.OutOfMemory, nextBiasedId(@as(usize, std.math.maxInt(u32)) + 5));
+    if (@bitSizeOf(usize) > 32) {
+        try std.testing.expectError(error.OutOfMemory, nextBiasedId(@as(usize, std.math.maxInt(u32)) + 5));
+    }
 }
 
 test "optional raw values, enums and structs fit their payload width" {

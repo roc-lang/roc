@@ -126,3 +126,67 @@ test "row union - a repeated tag with a different payload count is rejected" {
     defer env.deinit();
     try env.assertHasTypeError("Conflicting Tag");
 }
+
+// A row whose repeated label conflicts can reach normalization from a
+// relation the checker makes speculatively; each of these places the
+// conflicting row inside one such relation.
+const conflicting_row_prelude =
+    \\step! : {} => Try({}, [Oops(U64)])
+    \\step! = |_| Ok({})
+    \\call! = |operation| {
+    \\    step!({})?
+    \\    operation({})
+    \\}
+    \\
+;
+
+test "row union - a conflicting repeated tag in a branch is rejected" {
+    const source = conflicting_row_prelude ++
+        \\outer! : Bool => Try({}, [Oops(U64)])
+        \\outer! = |b| if b Ok({}) else call!(|{}| Err(Oops("not a U64")))
+    ;
+    var env = try TestEnv.init("Test", source);
+    defer env.deinit();
+    try env.assertHasTypeError("Type Mismatch");
+}
+
+test "row union - a conflicting repeated tag in an expected record field is rejected" {
+    const source = conflicting_row_prelude ++
+        \\outer! : {} => { x : Try({}, [Oops(U64)]) }
+        \\outer! = |{}| { x: call!(|{}| Err(Oops("not a U64"))) }
+    ;
+    var env = try TestEnv.init("Test", source);
+    defer env.deinit();
+    try env.assertHasTypeError("Type Mismatch");
+}
+
+test "row union - a conflicting repeated tag reaching a method dispatcher is rejected" {
+    const source = conflicting_row_prelude ++
+        \\outer! = |{}| call!(|{}| Err(Oops("not a U64"))).map_err(|e| e)
+    ;
+    var env = try TestEnv.init("Test", source);
+    defer env.deinit();
+    try env.assertHasTypeError("Type Mismatch");
+}
+
+test "row union - a conflicting repeated tag under a question mark is rejected" {
+    const source = conflicting_row_prelude ++
+        \\outer! : {} => Try({}, [Oops(U64)])
+        \\outer! = |{}| {
+        \\    call!(|{}| Err(Oops("not a U64")))?
+        \\    Ok({})
+        \\}
+    ;
+    var env = try TestEnv.init("Test", source);
+    defer env.deinit();
+    try env.assertHasTypeError("Type Mismatch");
+}
+
+test "row union - a conflicting repeated tag in an unannotated branch is rejected" {
+    const source = conflicting_row_prelude ++
+        \\outer! = |b| if b Err(Oops(1)) else call!(|{}| Err(Oops("not a U64")))
+    ;
+    var env = try TestEnv.init("Test", source);
+    defer env.deinit();
+    try env.assertHasTypeError("Type Mismatch");
+}

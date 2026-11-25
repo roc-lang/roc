@@ -2170,7 +2170,7 @@ pub fn generateModule(
     try self.module.finalizeMemoryAndTableWithConfig(.{
         .stack_bytes = self.wasm_stack_bytes,
         .minimum_memory = if (self.wasm_memory_pages > 0)
-            @as(usize, self.wasm_memory_pages) * 65536
+            @as(u64, self.wasm_memory_pages) * 65536
         else
             null,
         .export_memory = true,
@@ -8393,8 +8393,21 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         .assign_ref => |assign| {
             if (assign.op.kind == .field and self.localDyn(assign.op.source) != null) {
                 try self.generateDyn(assign.target, .{ .field_addr = .{ .base = assign.op.source, .desc = self.localDyn(assign.op.source).?.desc, .field_index = .{ .immediate = assign.op.index } } });
+                // Release the slot a stamped field take left
+                // (`LIR.RefExtra.releases_recursion_box`).
+                if (self.store.stmtRowOrDefault(assign.extra).releases_recursion_box) {
+                    try self.emitProcLocal(self.localDyn(assign.op.source).?.desc);
+                    try self.emitBytesAddress(assign.op.source);
+                    try self.emitI32Const(@bitCast(assign.op.index));
+                    try self.emitBoxyRuntimeCall(.field_release_box);
+                }
             } else if (assign.op.kind == .tag_payload_struct and self.localDyn(assign.op.source) != null) {
                 try self.generateDyn(assign.target, .{ .tag_payload_addr = .{ .base = assign.op.source, .desc = self.localDyn(assign.op.source).?.desc, .payload_index = 0 } });
+                if (self.store.stmtRowOrDefault(assign.extra).releases_recursion_box) {
+                    try self.emitProcLocal(self.localDyn(assign.op.source).?.desc);
+                    try self.emitBytesAddress(assign.op.source);
+                    try self.emitBoxyRuntimeCall(.tag_payload_release_box);
+                }
             } else if (assign.op.kind == .local and self.localDyn(assign.target) != null) {
                 try self.generateDyn(assign.target, .{ .copy = .{ .src = assign.op.source, .desc = self.localDyn(assign.target).?.desc } });
             } else if (assign.op.kind == .local and self.backing_aliases.contains(assign.target)) {

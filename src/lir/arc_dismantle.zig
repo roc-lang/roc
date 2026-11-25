@@ -109,6 +109,8 @@ pub const ProductFields = struct {
         layout: layout_mod.Idx,
         is_padding: bool = false,
         desc: ?LIR.LocalId = null,
+        /// The field's stored slot can be a recursion box (`ProductShape.boxable`).
+        boxable: bool = false,
     };
 
     pub fn of(store: *const LirStore, layouts: *const layout_mod.Store, local: LIR.LocalId) ?ProductFields {
@@ -127,6 +129,7 @@ pub const ProductFields = struct {
             .index = index,
             .layout = @fromBackingInt(@intCast(GuardedList.at(self.store.getU32Span(shape.layouts), index))),
             .desc = GuardedList.at(self.store.getLocalSpan(shape.descriptors), index),
+            .boxable = shape.boxable.len != 0 and GuardedList.at(self.store.getU32Span(shape.boxable), index) != 0,
         };
         const field = self.layouts.getStructInfo(self.layouts.getLayout(self.layout_idx)).fields.get(index);
         return .{ .index = field.index, .layout = field.layout, .is_padding = field.is_padding };
@@ -202,7 +205,10 @@ pub fn projectionOwnsAllRc(
                     const field = fields.at(@intCast(i));
                     if (!layouts.layoutContainsRefcounted(layouts.getLayout(field.layout))) continue;
                     rc_count += 1;
-                    if (field.index == projection.first and field.layout == target_layout_idx) selected = true;
+                    // A boxable field's value is not its whole slot: the
+                    // slot can hold a recursion box, which only a stamped
+                    // take releases.
+                    if (field.index == projection.first and field.layout == target_layout_idx and !field.boxable) selected = true;
                 }
                 return selected and rc_count == 1;
             }

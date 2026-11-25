@@ -1950,10 +1950,12 @@ pub const Program = struct {
         return try self.listIntTemplateWorker(module_index, template_id, item);
     }
 
-    /// The worker of a procedure template as the scope of the lambdas it
-    /// contains, lowered only when something calls the template itself. The
-    /// owner of a closure that compile-time evaluation stored is such a
-    /// scope: its body ran at compile time.
+    /// The worker of a procedure template as a scope: of the lambdas it
+    /// contains, or of a literal chain frame converting a literal there. It
+    /// is lowered only when something calls the template itself or a type
+    /// table names it (`demandBody`). The owner of a closure that
+    /// compile-time evaluation stored is such a scope: its body ran at
+    /// compile time.
     pub fn templateScope(self: *Program, module_index: ModuleIndex, template_id: checked_names.CheckedProcedureTemplateId) Allocator.Error!WorkerId {
         const key: WorkerKey = .{ .template = .{ .module = module_index, .template = template_id } };
         if (self.worker_ids.get(key)) |existing| return existing;
@@ -2422,6 +2424,27 @@ pub const Program = struct {
             if (exported.const_ref.template == const_ref.template) return;
         }
         invariant("a lowering read a constant of another module that the module does not expose");
+    }
+
+    /// `templateScope` of the template `ref` names.
+    pub fn templateRefScope(self: *Program, ref: checked_names.ProcedureTemplateRef) Allocator.Error!WorkerId {
+        const view = self.moduleByKey(.{ .bytes = ref.artifact.bytes });
+        return try self.templateScope(view.index, ref.template);
+    }
+
+    /// Queue the body of worker `id`, which a type table names, when only
+    /// its scope was reached so far: a table is filled from the needs its
+    /// worker's lowering declares.
+    pub fn demandBody(self: *Program, id: WorkerId) Allocator.Error!void {
+        const target = self.worker(id);
+        if (target.queued or target.imported) return;
+        switch (target.key) {
+            .template => |template| switch (template.binding) {
+                .generic => _ = try self.templateWorker(template.module, template.template),
+                .list_int => |item| _ = try self.listIntTemplateWorker(template.module, template.template, item),
+            },
+            .adapter, .default, .lambda, .method_entry, .literal_thunk, .root_slot, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .callable_eval_entry, .convert => {},
+        }
     }
 
     /// `templateScopeWorker` of the template `ref` names.

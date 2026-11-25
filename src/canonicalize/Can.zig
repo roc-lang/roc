@@ -21888,6 +21888,13 @@ fn injectEchoPlatform(self: *Self) std.mem.Allocator.Error!void {
         .kind = .let,
     }, synthetic_region);
 
+    // The def is this module's one hosted declaration. Recording it is what
+    // gives the hosted lambda its host symbol and dispatch slot in later
+    // stages.
+    const hosted_defs_start = self.env.store.scratchDefTop();
+    try self.env.store.addScratchDef(def_idx);
+    self.env.hosted_defs = try self.env.store.defSpanFrom(hosted_defs_start);
+
     // Add the def to scratch so it's included in all_defs
     try self.env.store.addScratchDef(def_idx);
     try self.recordGlobalValueDef(def_idx);

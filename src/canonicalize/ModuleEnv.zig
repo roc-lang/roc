@@ -1162,7 +1162,8 @@ top_level_value_defs: CIR.Def.Span,
 /// shadowed definitions retain their exact identities; annotation-only
 /// declarations superseded by an implementation are excluded.
 value_binding_defs: CIR.Def.Span,
-/// Exact definitions rewritten from annotation-only declarations to hosted lambdas.
+/// Every definition whose value is a hosted lambda: the annotation-only
+/// declarations the hosted transform rewrote, or a default app's `echo!`.
 hosted_defs: CIR.Def.Span,
 /// Diagnostic-only host origins of callable results, indexed by definition node.
 /// Names are owned by this module; NONE means no established origin.

@@ -156,9 +156,9 @@ h == foo
 }
 ~~~
 # EXPECTED
-ASCII CONTROL CHARACTER - :0:0:0:0
-ASCII CONTROL CHARACTER - :0:0:0:0
-LEADING ZERO - :0:0:0:0
+ASCII CONTROL CHARACTER - fuzz_crash_028.md:10:9:10:10
+ASCII CONTROL CHARACTER - fuzz_crash_028.md:48:5:48:6
+LEADING ZERO - fuzz_crash_028.md:69:1:69:3
 UNCLOSED STRING - fuzz_crash_028.md:111:8:111:14
 INCOMPLETE IMPORT - fuzz_crash_028.md:10:1:10:7
 TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_028.md:12:12:12:14
@@ -272,21 +272,27 @@ DECLARATION HAS NO VALUE - fuzz_crash_028.md:144:1:144:13
 	(report
 		(severity runtime_error)
 		(title "ASCII Control Character")
+		(region (start 10 9) (end 10 10))
 		(headline
 			(reflow "ASCII control characters are not allowed in Roc source code."))
-		(document))
+		(document
+			(source-region (file "fuzz_crash_028.md") (start 10 9) (end 10 10) (annotation error) (line-text "import p\u{01}"))))
 	(report
 		(severity runtime_error)
 		(title "ASCII Control Character")
+		(region (start 48 5) (end 48 6))
 		(headline
 			(reflow "ASCII control characters are not allowed in Roc source code."))
-		(document))
+		(document
+			(source-region (file "fuzz_crash_028.md") (start 48 5) (end 48 6) (annotation error) (line-text "add_\u{12}ne = |num| {"))))
 	(report
 		(severity runtime_error)
 		(title "Leading Zero")
+		(region (start 69 1) (end 69 3))
 		(headline
 			(reflow "Numbers cannot have leading zeros."))
-		(document))
+		(document
+			(source-region (file "fuzz_crash_028.md") (start 69 1) (end 69 3) (annotation error) (line-text "00"))))
 	(report
 		(severity runtime_error)
 		(title "Unclosed String")

@@ -987,6 +987,71 @@ test "record construction initializes gaps and omitted fields without touching s
     }
 }
 
+test "a field take releases its recursion box and leaves the moved value owned" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    const boxed = env.descs.recursiveBox(desc_mod.strDesc());
+    const desc = env.descs.nominal(env.descs.args(&.{ desc_mod.strDesc(), boxed }), null, false);
+    const baseline = env.allocations();
+    for ([_]bool{ false, true }) |shared| {
+        const plain = bigStr("a heap string stored directly in its record field", ops);
+        const inside = bigStr("a heap string stored behind a recursion box field", ops);
+        var record: Slot = .{};
+        compiled.buildRecord(desc, record.ptr(), &.{ @ptrCast(&plain), @ptrCast(&inside) }, ops);
+        try testing.expectEqual(baseline + 3, env.allocations());
+        if (shared) walk.incref(desc, record.ptr(), 1, ops);
+
+        // A slot that is the value itself holds nothing once it has moved.
+        const moved_plain: RocStr = @as(*const RocStr, @ptrCast(@alignCast(compiled.fieldAddr(desc, record.ptr(), 0, ops)))).*;
+        compiled.fieldReleaseBox(desc, record.ptr(), 0, ops);
+        try testing.expectEqual(baseline + 3, env.allocations());
+
+        const moved_inside: RocStr = @as(*const RocStr, @ptrCast(@alignCast(compiled.fieldAddr(desc, record.ptr(), 1, ops)))).*;
+        compiled.fieldReleaseBox(desc, record.ptr(), 1, ops);
+        // The last reference frees the box; another holder keeps it.
+        try testing.expectEqual(baseline + @as(usize, if (shared) 3 else 2), env.allocations());
+        try testing.expectEqualStrings("a heap string stored behind a recursion box field", moved_inside.asSlice());
+        moved_inside.decref(ops);
+        if (shared) {
+            // The other holder still reads both values, and releases them.
+            const kept: *const RocStr = @ptrCast(@alignCast(compiled.fieldAddr(desc, record.ptr(), 1, ops)));
+            try testing.expectEqualStrings("a heap string stored behind a recursion box field", kept.asSlice());
+            walk.decref(desc, record.ptr(), ops);
+        }
+        moved_plain.decref(ops);
+        try testing.expectEqual(baseline, env.allocations());
+    }
+}
+
+test "a tag payload take releases its recursion box and leaves the moved value owned" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    const payloads = [_]*const TypeDesc{env.descs.recursiveBox(desc_mod.strDesc())};
+    const desc = env.descs.nominal(env.descs.tagUnion(&.{
+        .{ .name = &name_a, .payloads = &.{} },
+        .{ .name = &name_b, .payloads = &payloads },
+    }), null, false);
+    const baseline = env.allocations();
+    for ([_]bool{ false, true }) |shared| {
+        const text = bigStr("a heap string stored behind a recursion box payload", ops);
+        var value: Slot = .{};
+        compiled.buildTag(desc, 1, value.ptr(), &.{@ptrCast(&text)}, ops);
+        try testing.expectEqual(baseline + 2, env.allocations());
+        if (shared) walk.incref(desc, value.ptr(), 1, ops);
+
+        const moved: RocStr = @as(*const RocStr, @ptrCast(@alignCast(compiled.tagPayloadAddr(desc, value.ptr(), 0, ops)))).*;
+        compiled.tagPayloadReleaseBox(desc, value.ptr(), ops);
+        // The last reference frees the box; another holder keeps it.
+        try testing.expectEqual(baseline + @as(usize, if (shared) 2 else 1), env.allocations());
+        try testing.expectEqualStrings("a heap string stored behind a recursion box payload", moved.asSlice());
+        moved.decref(ops);
+        if (shared) walk.decref(desc, value.ptr(), ops);
+        try testing.expectEqual(baseline, env.allocations());
+    }
+}
+
 test "record construction and updates preserve boxed fields and initialize all padding" {
     var env = Env.init();
     defer env.deinit();

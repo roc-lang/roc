@@ -59,7 +59,7 @@ fn runTokenDispatch(gpa: Allocator, env: *CommonEnv, parserCall: *const fn (*Par
     var tokenize_diagnostics = std.ArrayList(tokenize.Diagnostic).fromOwnedSlice(tokenize_diagnostics_slice);
     errdefer tokenize_diagnostics.deinit(gpa);
     if (result.extra_messages_dropped != 0) {
-        try tokenize_diagnostics.append(gpa, .{ .tag = .TooManyTokenizationErrors, .region = base.Region.from_raw_offsets(0, 0) });
+        try tokenize_diagnostics.append(gpa, .{ .tag = .TooManyTokenizationErrors, .region = result.first_dropped_region });
     }
 
     // Heap-allocate AST for unified ownership model
@@ -1336,6 +1336,10 @@ test "bidi source rejection and omitted diagnostics survive the parser boundary"
     try std.testing.expectEqual(@as(usize, 129), ast.tokenize_diagnostics.items.len);
     try std.testing.expectEqual(tokenize.Diagnostic.Tag.BidiControlInSource, ast.tokenize_diagnostics.items[0].tag);
     try std.testing.expectEqual(tokenize.Diagnostic.Tag.TooManyTokenizationErrors, ast.tokenize_diagnostics.items[128].tag);
+    // The omission marker points at the first diagnostic it stands for.
+    const first_omitted_offset: u32 = "# ".len + 128 * "\u{202e}".len;
+    try std.testing.expectEqual(first_omitted_offset, ast.tokenize_diagnostics.items[128].region.start.offset);
+    try std.testing.expectEqual(first_omitted_offset + "\u{202e}".len, ast.tokenize_diagnostics.items[128].region.end.offset);
     var report = try ast.tokenizeDiagnosticToReport(ast.tokenize_diagnostics.items[0], gpa, "Probe.roc");
     defer report.deinit();
 }

@@ -10,6 +10,7 @@ const testing = std.testing;
 const mem = std.mem;
 const install = @import("install.zig");
 const linker = @import("linker.zig");
+const wasm_memory = @import("roc_target").wasm_memory;
 const RocTarget = @import("target.zig").RocTarget;
 const ResolutionConfig = @import("compile").package_resolution.Config;
 const AnsiStreams = @import("CliCtx.zig").AnsiStreams;
@@ -230,8 +231,8 @@ pub const BuildArgs = struct {
     watch_inputs_file: ?[]const u8 = null, // internal: write watch input paths and byte states here
     watch_ansi: AnsiStreams = .{},
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
-    wasm_memory: ?usize = null, // initial memory size for WASM targets (default: sized from data segments plus the stack)
-    wasm_stack_size: ?usize = null, // stack size for WASM targets (default: 8MB)
+    wasm_memory: ?u64 = null, // initial memory size for WASM targets (default: sized from data segments plus the stack)
+    wasm_stack_size: ?u64 = null, // stack size for WASM targets (default: 8MB)
     require_executable_output: bool = false, // reject static/shared library targets
     require_host_runnable_output: bool = false, // internal: reject targets that cannot run on this host
     suppress_build_status: bool = false, // suppress "Built..." output (used by `roc` execution)
@@ -348,6 +349,7 @@ pub const GlueArgs = struct {
     opt: OptLevel = default_dev_opt,
     specialization_strategy: ?SpecializationStrategy = null,
     no_cache: bool = false, // disable compilation caching
+    verbose: bool = false, // enable verbose output including cache statistics
 };
 
 /// How a flag is written on the command line, which is also the comparison
@@ -394,13 +396,11 @@ const Flag = struct {
     value_name: []const u8 = "",
     /// The flag's description in help. Null keeps the flag out of help. Help
     /// appends what the declaration already states: the accepted `levels`,
-    /// the `range`, and the field's default.
+    /// the bounds of `int`, and the field's default.
     help: ?[]const u8 = null,
-    /// What an integer value must be, as the end of "The value must be ...",
-    /// for the problem reported when it is not.
-    valid: []const u8 = "",
-    /// Inclusive bounds of an integer value.
-    range: ?[2]i32 = null,
+    /// What an integer value must be. Every flag that sets an integer field
+    /// declares one.
+    int: ?IntRule = null,
     /// The optimization levels an `OptLevel` field accepts.
     levels: []const OptLevel = std.enums.values(OptLevel),
 
@@ -420,12 +420,87 @@ const Flag = struct {
         const path = flag.field orelse return text;
         const field = fieldInfoAt(Parsed, path);
         if (field.type == OptLevel) text = text ++ " " ++ optLevelHelp(flag.levels);
-        if (flag.range) |range| text = text ++ std.fmt.comptimePrint(" ({d}-{d})", .{ range[0], range[1] });
+        if (flag.int) |rule| text = text ++ rule.helpNote();
         const default = field.defaultValue() orelse return text;
         if (field.type == OptLevel) return text ++ " [default: " ++ @tagName(default) ++ "]";
         if (field.type == []const u8) return text ++ " [default: " ++ default ++ "]";
         if (@typeInfo(field.type) == .int) return text ++ std.fmt.comptimePrint(" [default: {d}]", .{default});
         return text;
+    }
+};
+
+/// What an integer flag's value must be. Parsing accepts exactly the values
+/// the rule admits, and the problem reported for any other value states the
+/// rule, so what a flag accepts and what it says it accepts are one declaration.
+const IntRule = struct {
+    /// The smallest value accepted.
+    min: u64,
+    /// The largest value accepted. Null accepts everything the flag's field holds.
+    max: ?u64 = null,
+    /// Accepted values are whole multiples of this.
+    multiple_of: u64 = 1,
+    /// What the value counts, such as "bytes".
+    unit: ?[]const u8 = null,
+    /// What a value of 0 means, for a rule under which 0 is not a quantity.
+    zero_means: ?[]const u8 = null,
+
+    /// The rule for a flag that overrides a wasm size a platform header sets.
+    fn bytes(comptime size: wasm_memory.SizeRule) IntRule {
+        return .{ .min = size.min, .max = size.max, .multiple_of = size.multiple_of, .unit = "bytes" };
+    }
+
+    /// The largest value of `Int` the rule accepts.
+    fn largest(comptime rule: IntRule, comptime Int: type) Int {
+        const widest: u64 = std.math.maxInt(Int);
+        return @intCast(@min(rule.max orelse widest, widest));
+    }
+
+    fn accepts(comptime rule: IntRule, comptime Int: type, number: Int) bool {
+        if (number < rule.min or number > rule.largest(Int)) return false;
+        return @rem(number, @as(Int, @intCast(rule.multiple_of))) == 0;
+    }
+
+    /// The rule as a sentence, for the problem reported when a value breaks
+    /// it. `past_field` is for a value too large for `Int` under a rule with
+    /// no `max`: the sentence then names the bound the value exceeded.
+    fn sentence(comptime rule: IntRule, comptime Int: type, comptime past_field: bool) []const u8 {
+        if (rule.multiple_of == 0) @compileError("an integer flag's values cannot be multiples of 0");
+        if (rule.zero_means != null and rule.min != 0) @compileError("an integer flag that gives 0 a meaning must accept 0");
+        if (rule.min > rule.largest(Int) or rule.min % rule.multiple_of != 0) @compileError("an integer flag's smallest value must be one it accepts");
+
+        const multiple = rule.multiple_of > 1;
+        var text: []const u8 = "The value must be ";
+        var bounded = multiple;
+        if (multiple) {
+            text = text ++ std.fmt.comptimePrint("a {s}multiple of {d}", .{ if (rule.min == 0 and rule.max == null) "non-negative " else "", rule.multiple_of });
+        } else if (rule.max != null) {
+            text = text ++ "an integer";
+        } else {
+            text = text ++ switch (rule.min) {
+                0 => "a non-negative integer",
+                1 => "a positive integer",
+                else => "an integer",
+            };
+        }
+        if (rule.max != null) {
+            text = text ++ std.fmt.comptimePrint(" between {d} and {d}", .{ rule.min, rule.largest(Int) });
+            bounded = true;
+        } else if (rule.min > 1 or (multiple and rule.min > 0)) {
+            text = text ++ std.fmt.comptimePrint(" no smaller than {d}", .{rule.min});
+            bounded = true;
+        }
+        if (rule.unit) |unit| text = text ++ (if (bounded) " " else " number of ") ++ unit;
+        if (past_field) text = text ++ std.fmt.comptimePrint(" no larger than {d}", .{rule.largest(Int)});
+        if (rule.zero_means) |meaning| text = text ++ " (0 for " ++ meaning ++ ")";
+        return text ++ ".";
+    }
+
+    /// The bounds as help shows them after a flag's description, for a rule
+    /// that is nothing but a range of integers.
+    fn helpNote(comptime rule: IntRule) []const u8 {
+        const max = rule.max orelse return "";
+        if (rule.multiple_of != 1) return "";
+        return std.fmt.comptimePrint(" ({d}-{d})", .{ rule.min, max });
     }
 };
 
@@ -686,7 +761,7 @@ const limit_flags = [_]Flag{
         .form = .attached,
         .field = "resolve_limits.max_package_mb",
         .value_name = "<N>",
-        .valid = "a size in MB (0 for unlimited)",
+        .int = .{ .min = 0, .unit = "MB", .zero_means = "unlimited" },
         .help = std.fmt.comptimePrint("Per-package decompressed size limit in MB (default: {d}, 0 for unlimited)", .{
             ResolutionConfig.default_max_package_expanded_bytes / bytes_per_mb,
         }),
@@ -696,7 +771,7 @@ const limit_flags = [_]Flag{
         .form = .attached,
         .field = "resolve_limits.max_transitive_mb",
         .value_name = "<N>",
-        .valid = "a size in MB (0 for unlimited)",
+        .int = .{ .min = 0, .unit = "MB", .zero_means = "unlimited" },
         .help = std.fmt.comptimePrint(
             \\Combined size limit in MB for each direct dependency's transitive packages
             \\(defaults: packages {d}, platforms {d}; 0 for unlimited)
@@ -757,7 +832,7 @@ const watch_child_flags = [_]Flag{
 };
 
 fn jobsFlag(comptime help: []const u8) Flag {
-    return .{ .name = "--jobs", .short = "-j", .form = .attached, .field = "max_threads", .value_name = "<N>", .valid = "a positive integer", .help = help };
+    return .{ .name = "--jobs", .short = "-j", .form = .attached, .field = "max_threads", .value_name = "<N>", .int = .{ .min = 1 }, .help = help };
 }
 
 const jobs_flag = jobsFlag("Max worker threads for parallel compilation (default: auto-detect CPU count)");
@@ -846,8 +921,8 @@ const commands = [_]Command{
             .{ .name = "--no-cache", .field = "no_cache", .help = "Disable compilation caching" },
             .{ .name = "--watch", .field = "watch", .help = "Rebuild when source inputs change" },
             jobs_flag,
-            .{ .name = "--wasm-memory", .form = .attached, .field = "wasm_memory", .value_name = "<bytes>", .valid = "a positive integer number of bytes", .help = "Initial memory size for WASM targets in bytes (default: sized from data segments plus the stack)" },
-            .{ .name = "--wasm-stack-size", .form = .attached, .field = "wasm_stack_size", .value_name = "<bytes>", .valid = "a positive integer number of bytes", .help = std.fmt.comptimePrint("Stack size for WASM targets in bytes (default: {d} = {d}MB)", .{ linker.DEFAULT_WASM_STACK_SIZE, linker.DEFAULT_WASM_STACK_SIZE / bytes_per_mb }) },
+            .{ .name = "--wasm-memory", .form = .attached, .field = "wasm_memory", .value_name = "<bytes>", .int = IntRule.bytes(wasm_memory.memory_size), .help = std.fmt.comptimePrint("Initial memory size for WASM targets in bytes, a multiple of {d} (default: sized from data segments plus the stack)", .{wasm_memory.memory_size.multiple_of}) },
+            .{ .name = "--wasm-stack-size", .form = .attached, .field = "wasm_stack_size", .value_name = "<bytes>", .int = IntRule.bytes(wasm_memory.stack_size), .help = std.fmt.comptimePrint("Stack size for WASM targets in bytes, a multiple of {d} (default: {d} = {d}MB)", .{ wasm_memory.stack_size.multiple_of, linker.DEFAULT_WASM_STACK_SIZE, linker.DEFAULT_WASM_STACK_SIZE / bytes_per_mb }) },
         }),
         .resolve = .limits_and_replace_deps,
         .min_column = 37,
@@ -875,7 +950,7 @@ const commands = [_]Command{
         .arguments = "  [ROC_FILES]...  The .roc files to bundle [default: " ++ default_roc_file ++ "]",
         .flags = &.{
             .{ .name = "--output-dir", .form = .separate, .field = "output_dir", .value_name = "<PATH>", .help = "Directory to output the bundle to [default: current directory]" },
-            .{ .name = "--compression", .form = .separate, .field = "compression_level", .value_name = "<N>", .range = .{ 1, 22 }, .help = "Compression level" },
+            .{ .name = "--compression", .form = .separate, .field = "compression_level", .value_name = "<N>", .int = .{ .min = 1, .max = 22 }, .help = "Compression level" },
         },
         .rest = "paths",
         .rest_default = default_roc_file,
@@ -964,6 +1039,7 @@ const commands = [_]Command{
             .{ .name = "--opt", .form = .attached, .field = "opt", .value_name = "<opt>", .levels = &.{ .dev, .size, .speed }, .help = "Compile and run the glue spec with" },
             specialize_flag,
             .{ .name = "--no-cache", .field = "no_cache", .help = "Disable compilation caching" },
+            .{ .name = "--verbose", .field = "verbose", .help = "Enable verbose output including cache statistics" },
         },
         .positionals = &.{
             .{ .field = "glue_spec", .missing = "Error: Missing required argument <GLUE_SPEC>\n\n" },
@@ -1388,16 +1464,6 @@ fn parseArgsFor(comptime cmd: Command, alloc: mem.Allocator, globals: *Globals, 
 /// the field accepts; `written` is the spelling of the flag to report.
 fn setFlagValue(comptime flag: Flag, field: anytype, written: []const u8, value: []const u8) ?ArgProblem {
     const Field = @TypeOf(field.*);
-    const expected: ExpectedValue = comptime if (Field == OptLevel)
-        .{ .choices = optLevelChoices(flag.levels) }
-    else if (Field == ?SpecializationStrategy)
-        .{ .choices = &specialization_choices }
-    else if (flag.range) |range|
-        .{ .stated = std.fmt.comptimePrint("The value must be an integer between {d} and {d}.", .{ range[0], range[1] }) }
-    else
-        .{ .stated = "The value must be " ++ flag.valid ++ "." };
-    const invalid: ArgProblem = .{ .invalid_flag_value = .{ .flag = written, .value = value, .expected = expected } };
-
     if (Field == []const u8 or Field == ?[]const u8) {
         field.* = value;
     } else if (Field == OptLevel) {
@@ -1407,19 +1473,31 @@ fn setFlagValue(comptime flag: Flag, field: anytype, written: []const u8, value:
                 return null;
             }
         }
-        return invalid;
+        return invalidFlagValue(written, value, .{ .choices = comptime optLevelChoices(flag.levels) });
     } else if (Field == ?SpecializationStrategy) {
-        field.* = SpecializationStrategy.fromCliValue(value) orelse return invalid;
+        field.* = SpecializationStrategy.fromCliValue(value) orelse
+            return invalidFlagValue(written, value, .{ .choices = &specialization_choices });
     } else {
-        if (comptime flag.range == null and flag.valid.len == 0) @compileError(flag.name ++ " takes an integer, so it must state what the integer must be");
+        const rule = comptime flag.int orelse @compileError(flag.name ++ " takes an integer, so it must declare what the integer must be");
         const Int = if (@typeInfo(Field) == .optional) @typeInfo(Field).optional.child else Field;
-        const number = std.fmt.parseInt(Int, value, 10) catch return invalid;
-        if (flag.range) |range| {
-            if (number < range[0] or number > range[1]) return invalid;
-        }
+        const broken: ExpectedValue = .{ .stated = comptime rule.sentence(Int, false) };
+        const number = std.fmt.parseInt(Int, value, 10) catch |err| switch (err) {
+            error.InvalidCharacter => return invalidFlagValue(written, value, broken),
+            // No rule accepts a negative value, so one breaks the rule
+            // itself. Any other value is past what the field holds.
+            error.Overflow => return invalidFlagValue(written, value, if (rule.max != null or value[0] == '-')
+                broken
+            else
+                .{ .stated = comptime rule.sentence(Int, true) }),
+        };
+        if (!rule.accepts(Int, number)) return invalidFlagValue(written, value, broken);
         field.* = number;
     }
     return null;
+}
+
+fn invalidFlagValue(written: []const u8, value: []const u8, expected: ExpectedValue) ArgProblem {
+    return .{ .invalid_flag_value = .{ .flag = written, .value = value, .expected = expected } };
 }
 
 fn parseRun(comptime cmd: Command, alloc: mem.Allocator, globals: *Globals, args: []const []const u8) mem.Allocator.Error!CliArgs {
@@ -2866,7 +2944,7 @@ test "every flag sets the field its table entry names" {
                             try testing.expectEqualStrings("old", value.items[0].old);
                             try testing.expectEqualStrings("new", value.items[0].new);
                         } else {
-                            try testing.expectEqual(@as(Field, 7), value);
+                            try testing.expectEqual(@as(Field, comptime sampleInt(flag)), value);
                         }
                         if (flag.marks) |name| try testing.expect(@field(args, name));
                     }
@@ -2874,6 +2952,12 @@ test "every flag sets the field its table entry names" {
             }
         }
     }
+}
+
+/// The smallest value above 0 that the integer `flag` accepts.
+fn sampleInt(comptime flag: Flag) u64 {
+    const rule = flag.int.?;
+    return @max(rule.min, rule.multiple_of);
 }
 
 /// A command line that gives `flag` a value its field accepts, spelled `written`.
@@ -2886,8 +2970,10 @@ fn flagSample(comptime cmd: Command, comptime flag: Flag, comptime written: []co
         "no"
     else if (Field == []const u8 or Field == ?[]const u8)
         "sample"
+    else if (flag.int != null)
+        std.fmt.comptimePrint("{d}", .{sampleInt(flag)})
     else
-        "7";
+        "";
     return switch (flag.form) {
         .toggle => &.{written},
         .attached => &.{written ++ (if (mem.eql(u8, written, flag.name)) "=" else "") ++ sample},
@@ -2968,10 +3054,19 @@ test "numeric flag values report what they must be" {
         .{ .args = &.{ "bundle", "--compression", "23" }, .flag = "--compression", .stated = "The value must be an integer between 1 and 22." },
         .{ .args = &.{ "bundle", "--compression", "0" }, .flag = "--compression", .stated = "The value must be an integer between 1 and 22." },
         .{ .args = &.{ "bundle", "--compression", "x" }, .flag = "--compression", .stated = "The value must be an integer between 1 and 22." },
-        .{ .args = &.{ "build", "--wasm-memory=x" }, .flag = "--wasm-memory", .stated = "The value must be a positive integer number of bytes." },
-        .{ .args = &.{ "build", "--wasm-stack-size=-1" }, .flag = "--wasm-stack-size", .stated = "The value must be a positive integer number of bytes." },
-        .{ .args = &.{ "check", "--max-package-mb=x" }, .flag = "--max-package-mb", .stated = "The value must be a size in MB (0 for unlimited)." },
+        .{ .args = &.{ "bundle", "--compression", "99999999999" }, .flag = "--compression", .stated = "The value must be an integer between 1 and 22." },
+        .{ .args = &.{ "build", "--wasm-memory=x" }, .flag = "--wasm-memory", .stated = "The value must be a multiple of 65536 between 65536 and 4294967296 bytes." },
+        .{ .args = &.{ "build", "--wasm-memory=0" }, .flag = "--wasm-memory", .stated = "The value must be a multiple of 65536 between 65536 and 4294967296 bytes." },
+        .{ .args = &.{ "build", "--wasm-stack-size=-1" }, .flag = "--wasm-stack-size", .stated = "The value must be a multiple of 16 between 16 and 4294967280 bytes." },
+        .{ .args = &.{ "build", "--wasm-stack-size=0" }, .flag = "--wasm-stack-size", .stated = "The value must be a multiple of 16 between 16 and 4294967280 bytes." },
+        .{ .args = &.{ "check", "--max-package-mb=x" }, .flag = "--max-package-mb", .stated = "The value must be a non-negative integer number of MB (0 for unlimited)." },
+        .{ .args = &.{ "check", "--max-package-mb=-1" }, .flag = "--max-package-mb", .stated = "The value must be a non-negative integer number of MB (0 for unlimited)." },
+        .{ .args = &.{ "check", "--max-transitive-mb=4294967296" }, .flag = "--max-transitive-mb", .stated = "The value must be a non-negative integer number of MB no larger than 4294967295 (0 for unlimited)." },
         .{ .args = &.{ "check", "--jobs=x" }, .flag = "--jobs", .stated = "The value must be a positive integer." },
+        .{ .args = &.{ "check", "--jobs=0" }, .flag = "--jobs", .stated = "The value must be a positive integer." },
+        .{ .args = &.{ "check", "--jobs=-1" }, .flag = "--jobs", .stated = "The value must be a positive integer." },
+        .{ .args = &.{ "check", "--jobs=" }, .flag = "--jobs", .stated = "The value must be a positive integer." },
+        .{ .args = &.{ "check", "--jobs=99999999999999999999" }, .flag = "--jobs", .stated = std.fmt.comptimePrint("The value must be a positive integer no larger than {d}.", .{std.math.maxInt(usize)}) },
     };
     for (cases) |case| {
         const result = try parse(gpa, testing.io, case.args);
@@ -2984,6 +3079,51 @@ test "numeric flag values report what they must be" {
         defer result.deinit(gpa);
         try testing.expectEqual(@as(i32, 22), result.bundle.compression_level);
         try testing.expectEqualStrings("out", result.bundle.output_dir.?);
+    }
+}
+
+test "issue 13368: integer flags reject every value their stated requirement excludes" {
+    const gpa = testing.allocator;
+    const rejected = [_]struct { args: []const []const u8, flag: []const u8 }{
+        .{ .args = &.{ "check", "--jobs=0" }, .flag = "--jobs" },
+        .{ .args = &.{ "check", "-j0" }, .flag = "-j" },
+        .{ .args = &.{ "build", "--wasm-memory=0" }, .flag = "--wasm-memory" },
+        .{ .args = &.{ "build", "--wasm-memory=1" }, .flag = "--wasm-memory" },
+        .{ .args = &.{ "build", "--wasm-memory=65537" }, .flag = "--wasm-memory" },
+        .{ .args = &.{ "build", "--wasm-memory=4295032832" }, .flag = "--wasm-memory" },
+        .{ .args = &.{ "build", "--wasm-stack-size=0" }, .flag = "--wasm-stack-size" },
+        .{ .args = &.{ "build", "--wasm-stack-size=1" }, .flag = "--wasm-stack-size" },
+        .{ .args = &.{ "build", "--wasm-stack-size=24" }, .flag = "--wasm-stack-size" },
+        .{ .args = &.{ "build", "--wasm-stack-size=4294967296" }, .flag = "--wasm-stack-size" },
+    };
+    for (rejected) |case| {
+        const result = try parse(gpa, testing.io, case.args);
+        defer result.deinit(gpa);
+        try testing.expect(result == .problem);
+        try testing.expectEqualStrings(case.flag, result.problem.invalid_flag_value.flag);
+    }
+    {
+        const result = try parse(gpa, testing.io, &.{ "check", "--jobs=1" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(?usize, 1), result.check.max_threads);
+    }
+    {
+        const result = try parse(gpa, testing.io, &.{ "build", "--wasm-memory=65536", "--wasm-stack-size=16" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(?u64, 65536), result.build.wasm_memory);
+        try testing.expectEqual(@as(?u64, 16), result.build.wasm_stack_size);
+    }
+    {
+        const result = try parse(gpa, testing.io, &.{ "build", "--wasm-memory=4294967296", "--wasm-stack-size=4294967280" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(?u64, 4294967296), result.build.wasm_memory);
+        try testing.expectEqual(@as(?u64, 4294967280), result.build.wasm_stack_size);
+    }
+    {
+        const result = try parse(gpa, testing.io, &.{ "check", "--max-package-mb=0", "--max-transitive-mb=0" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(?u32, 0), result.check.resolve_limits.max_package_mb);
+        try testing.expectEqual(@as(?u32, 0), result.check.resolve_limits.max_transitive_mb);
     }
 }
 
@@ -3155,8 +3295,8 @@ test "golden help: roc build --help" {
         \\      --no-cache                     Disable compilation caching
         \\      --watch                        Rebuild when source inputs change
         \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
-        \\      --wasm-memory=<bytes>          Initial memory size for WASM targets in bytes (default: sized from data segments plus the stack)
-        \\      --wasm-stack-size=<bytes>      Stack size for WASM targets in bytes (default: 8388608 = 8MB)
+        \\      --wasm-memory=<bytes>          Initial memory size for WASM targets in bytes, a multiple of 65536 (default: sized from data segments plus the stack)
+        \\      --wasm-stack-size=<bytes>      Stack size for WASM targets in bytes, a multiple of 16 (default: 8388608 = 8MB)
         \\      --replace-dep OLD NEW    Load NEW wherever a dependency declares exactly OLD, for this invocation only.
         \\                               Each is a complete package URL or a path to a root .roc file; repeatable.
         \\                               Run `roc deps` to see the declared sources
@@ -3286,6 +3426,7 @@ test "golden help: roc glue --help" {
         \\      --opt=<opt>            Compile and run the glue spec with dev (native dev backend, fast compilation), size (LLVM, optimized for binary size), or speed (LLVM, optimized for execution speed) [default: dev]
         \\      --specialize=<yes|no>  Use lambda-set specialization (yes, the --opt=speed default) or boxy lowering (no, the default otherwise)
         \\      --no-cache             Disable compilation caching
+        \\      --verbose              Enable verbose output including cache statistics
         \\  -h, --help                 Print help
         \\
     );

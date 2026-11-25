@@ -2980,6 +2980,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .layouts = shape.layouts,
                 .slots = shape.slots,
                 .descriptors = try self.mapLocalSpan(shape.descriptors),
+                .boxable = shape.boxable,
             });
             try self.product_map.put(self.allocator, old, mapped);
             return mapped;
