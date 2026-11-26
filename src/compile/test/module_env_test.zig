@@ -8,7 +8,6 @@ const types = @import("types");
 
 const CIR = can.CIR;
 const CompactWriter = collections.CompactWriter;
-const Expr = CIR.Expr;
 const Ident = base.Ident;
 const ModuleEnv = can.ModuleEnv;
 const testing = std.testing;
@@ -375,7 +374,8 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     const builtin_ident = try env.internModuleIdentity(&(@as([32]u8, @splat(0x66))), Ident.Idx.NONE);
 
     const segment_idx = try env.addExpr(.{ .e_str_segment = .{ .literal = str_literal_idx } }, base.Region.from_raw_offsets(0, 5));
-    const expr_idx = try env.addExpr(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @backingInt(segment_idx), .len = 1 } } } }, base.Region.from_raw_offsets(0, 5));
+    const segments = try env.store.appendExprSpan(&.{segment_idx});
+    const expr_idx = try env.addExpr(.{ .e_str = .{ .span = segments } }, base.Region.from_raw_offsets(0, 5));
 
     // Type variables are indexed by node, and node zero is the store's
     // reserved node.

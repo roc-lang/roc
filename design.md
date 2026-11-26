@@ -5994,6 +5994,30 @@ associated values named through a local type alias (Associated Item Lookup
 Through Aliases). It is transient checking input computed from canonicalization output when
 checking starts and freed with the checker; a checked module never stores it.
 
+The walk that collects a def's name references does not enter a
+literal-only subtree. Canonicalization decides, as it adds each expression
+from its kind and its already-added children, whether the expression's whole
+subtree is literals and structural constructions (numeric, string and bytes
+literals, empty and payload-free constructions, and lists, tuples, tags and
+records without an update base built from such subtrees), and records it in
+a bit column of the node store (`NodeStore.exprIsLiteralOnly`), serialized
+with the module. Nominal constructions are never literal-only, because the
+defaults a construction omits contribute references. Such a subtree names
+no definition. Checking rewrites no node of it into a lookup, call,
+procedure or nominal construction: its in-place rewrites target lookups,
+operators, method and dispatch calls, interpolations and nominal
+constructions, and the one that can reach a literal replaces it with a
+runtime error whose evaluated operands are its own literal-only children.
+So skipping the subtree leaves every def's references unchanged, including
+when the order is computed again after strict cycles reject definitions.
+
+Top-level demand dependencies (`buildCheckedDependencyGraph`) walk every
+body without that skip. A literal that converts through a custom or
+specialized `from_numeral` or `from_quote` is a demand edge
+(`DemandAnalyzer.visitLiteralNode`), and checking decides which literals do
+only after canonicalization, inside literal-only subtrees; with no parent
+links, the checker cannot clear the bit of the subtrees that hold one.
+
 Because groups are checked in dependency order, a name reference between
 groups always points at an already-checked def. There is no re-entrant
 `checkDef` from inside an expression walk, and no code path exists for a name
@@ -7745,11 +7769,11 @@ of a node's shape costs what reading the node costs:
   declaration and its binders, a scheme-alias binder, a field default).
   While it visits each reached node it also lists, by kind, the nodes
   publication looks for: calls, statically dispatched expressions, value
-  lookups, binding statements and lambdas, and whether a runtime error
-  node is reached. Publication's retired-call, dispatch-plan,
-  dispatch-constraint, dispatch-type-root, resolved-reference and
-  local-pattern-role passes read those lists instead of scanning every node
-  of the module.
+  lookups, binding statements, lambdas and closures, and whether a runtime
+  error node is reached. Publication's retired-call, dispatch-plan,
+  dispatch-constraint, dispatch-type-root, resolved-reference,
+  local-pattern-role and callable-derived-scheme passes read those lists
+  instead of scanning every node of the module.
   The index also records each reached node's parent and, bottom up as it
   finishes each unit, which expressions have a subtree made only of
   literals and constructions (`ModuleIndex.inertExprs`). Template
