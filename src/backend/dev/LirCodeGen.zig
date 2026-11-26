@@ -43,6 +43,9 @@ const CallingConventionMod = @import("CallingConvention.zig");
 const roc_target_mod = @import("roc_target");
 const RocTarget = roc_target_mod.RocTarget;
 const isaOf = @import("isa.zig").isaOf;
+const Abi = @import("isa.zig").Abi;
+const abiOf = @import("isa.zig").abiOf;
+const abiOfOrNull = @import("isa.zig").abiOfOrNull;
 const host_isa = @import("isa.zig").host;
 const CpuLevel = roc_target_mod.CpuLevel;
 
@@ -352,16 +355,14 @@ pub const StmtHistogram = struct {
     }
 };
 
-/// Code generator for statement-only LIR procs
-/// Parameterized by RocTarget for cross-compilation support
-pub fn LirCodeGen(comptime target: RocTarget) type {
-    // The instruction set; `isaOf` rejects every other architecture at
-    // compile time.
-    const isa = isaOf(target);
-    // Every dev-backend target is little-endian (`isaOf` admits no big-endian
-    // architecture), so `num_from_le_bytes_unchecked` reads its bytes with a
-    // plain load.
-    comptime std.debug.assert(target.toCpuArch().endian() == .little);
+/// Code generator for statement-only LIR procs.
+/// Parameterized by the `Abi` of the code it emits, not by `RocTarget`: every
+/// target with the same ABI shares one instantiation (see `isa.Abi`).
+pub fn LirCodeGen(comptime machine_abi: Abi) type {
+    const isa = machine_abi.isa();
+    // Every dev-backend ABI is little-endian (`isa.isaOfOrNull` admits no
+    // big-endian architecture), so `num_from_le_bytes_unchecked` reads its
+    // bytes with a plain load.
 
     // ── Target-specific representation constants ──
     // RocStr and RocList layouts come from the builtins structs, scaled to the
@@ -370,8 +371,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
     // Size of a pointer on the target architecture. RocStr/RocList words are
     // moved with 64-bit loads and stores.
-    const target_ptr_size: u32 = target.ptrBitWidth() / 8;
-    comptime std.debug.assert(target_ptr_size == 8);
+    // Every dev-backend ABI is 64-bit.
+    const target_ptr_size: u32 = 8;
 
     const roc_str_size: u32 = RocStr.word_count * target_ptr_size;
     const small_str_max_len: u32 = roc_str_size - 1;
@@ -398,8 +399,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
     // Select architecture-specific types based on target
     const CodeGen = switch (isa) {
-        .x86_64 => x86_64.CodeGen(target),
-        .aarch64 => aarch64.CodeGen(target),
+        .x86_64 => x86_64.CodeGen(machine_abi),
+        .aarch64 => aarch64.CodeGen(machine_abi),
     };
 
     const GeneralReg = switch (isa) {
@@ -413,22 +414,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
     };
 
     const Condition = switch (isa) {
-        .x86_64 => x86_64.Emit(target).Condition,
-        .aarch64 => aarch64.Emit(target).Condition,
+        .x86_64 => x86_64.Emit(machine_abi).Condition,
+        .aarch64 => aarch64.Emit(machine_abi).Condition,
     };
 
     return struct {
         const Self = @This();
         const call_stack_alignment: u32 = switch (isa) {
             .aarch64 => aarch64.Call.STACK_ALIGNMENT,
-            .x86_64 => if (target.isWindows())
+            .x86_64 => if (machine_abi.isWindows())
                 x86_64.WindowsFastcall.STACK_ALIGNMENT
             else
                 x86_64.SystemV.STACK_ALIGNMENT,
         };
 
-        /// The target this LirCodeGen was instantiated for
-        pub const roc_target = target;
+        /// The ABI this LirCodeGen was instantiated for
+        pub const code_abi = machine_abi;
 
         /// Frame pointer register for the target architecture
         const frame_ptr: GeneralReg = switch (isa) {
@@ -1192,7 +1193,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Errors that can occur during code generation
         /// Initialize the code generator for a program whose erased callables
         /// reserve no capture prefix.
-        /// Target is determined at compile time via the LirCodeGen(target) parameter
         pub fn init(
             allocator: Allocator,
             store: *const LirStore,
@@ -1712,7 +1712,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const arg0_reg = switch (isa) {
                 .aarch64 => aarch64.GeneralReg.X0,
-                .x86_64 => if (comptime target.isWindows())
+                .x86_64 => if (comptime machine_abi.isWindows())
                     x86_64.GeneralReg.RCX
                 else
                     x86_64.GeneralReg.RDI,
@@ -1856,7 +1856,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.callee_saved_used |= @as(u32, 1) << @backingInt(aarch64.GeneralReg.X19);
                     self.codegen.callee_saved_used |= @as(u32, 1) << @backingInt(aarch64.GeneralReg.X20);
                 },
-                .x86_64 => if (comptime target.isWindows()) {
+                .x86_64 => if (comptime machine_abi.isWindows()) {
                     // Windows x64: Clear RCX and RDX from the free register mask
                     const rcx_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.RCX);
                     const rdx_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.RDX);
@@ -14935,13 +14935,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Lower the call to the platform C ABI (shared classifier, same as the LLVM
             // backend and interpreter trampoline).
-            const abi_target: layout.abi.Target = switch (isa) {
-                .aarch64 => layout.abi.aarch64Target(target.toOsTag()),
-                .x86_64 => if (comptime roc_target.isWindows())
-                    .x86_64_windows
-                else
-                    .x86_64_sysv,
-            };
+            const abi_target: layout.abi.Target = comptime machine_abi.cAbi();
             const lowered = layout.abi.lower(abi_alloc, self.layout_store, abi_target, arg_layouts, ret_layout, false) catch return error.OutOfMemory;
             const physical = layout.abi.assignPhysicalArgs(abi_alloc, self.layout_store, abi_target, lowered, arg_layouts) catch return error.OutOfMemory;
 
@@ -15294,16 +15288,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// symbol (`LIR.LirProcSpec.linked`).
         fn emitCallToLinkedProc(self: *Self, identity: lir.ProcIdentity) Allocator.Error!void {
             const symbol = try self.linkedProcSymbol(identity);
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emitExternCall(symbol);
-            } else {
-                const code_offset = self.codegen.currentOffset();
-                try self.codegen.emit.call(@bitCast(@as(i32, 0)));
-                try self.codegen.relocations.append(self.allocator, .{ .linked_function = .{
-                    .offset = @intCast(code_offset + 1),
-                    .symbol = symbol,
-                    .kind = .x86_call_rel32,
-                } });
+            switch (isa) {
+                .aarch64 => try self.codegen.emitExternCall(symbol),
+                .x86_64 => {
+                    const code_offset = self.codegen.currentOffset();
+                    try self.codegen.emit.call(@bitCast(@as(i32, 0)));
+                    try self.codegen.relocations.append(self.allocator, .{ .linked_function = .{
+                        .offset = @intCast(code_offset + 1),
+                        .symbol = symbol,
+                        .kind = .x86_call_rel32,
+                    } });
+                },
             }
         }
 
@@ -18194,15 +18189,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const back = try self.codegen.emitJump();
             try self.codegen.patchJump(back, loop);
             try self.codegen.patchJump(tail, self.codegen.currentOffset());
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.subRegRegReg(.w64, stack_ptr, stack_ptr, total);
-                try self.emitLoad(.w64, field, stack_ptr, 0);
-                try self.codegen.emit.movRegReg(.w64, total, stack_ptr);
-            } else {
-                try self.codegen.emit.subRegReg(.w64, stack_ptr, total);
-                try self.emitLoad(.w64, field, stack_ptr, 0);
-                try self.codegen.emit.movRegReg(.w64, total, stack_ptr);
+            switch (isa) {
+                .aarch64 => try self.codegen.emit.subRegRegReg(.w64, stack_ptr, stack_ptr, total),
+                .x86_64 => try self.codegen.emit.subRegReg(.w64, stack_ptr, total),
             }
+            try self.emitLoad(.w64, field, stack_ptr, 0);
+            try self.codegen.emit.movRegReg(.w64, total, stack_ptr);
 
             // Each local's offset becomes its address in the region.
             for (0..locals.len) |i| {
@@ -18886,7 +18878,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Emit.pcRelAddrSequence) starting at instr_offset. The registers
                     // the emitter chose are read back out of the existing ADR and MOVZ
                     // words so the rewritten sequence targets the same ones.
-                    const EmitT = aarch64.Emit(target);
+                    const EmitT = aarch64.Emit(machine_abi);
                     const adr_existing: u32 = @bitCast(buf[instr_offset..][0..4].*);
                     const movz_existing: u32 = @bitCast(buf[instr_offset + 4 ..][0..4].*);
                     const dst: GeneralReg = @fromBackingInt(@intCast(@as(u5, @truncate(adr_existing & 0x1F))));
@@ -18977,7 +18969,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.fragment_context;
         }
 
-        pub fn getFragmentContract(self: *const Self) FragmentContract {
+        /// The contract of the fragments this generator emits for `target`,
+        /// whose ABI must be this generator's.
+        pub fn getFragmentContract(self: *const Self, target: RocTarget) FragmentContract {
+            std.debug.assert(abiOfOrNull(target) == machine_abi);
             const mode = if (self.fragment_mode) self.fragment_source_mode else self.generation_mode;
             return .{
                 .target = target.defaultCpuTarget(),
@@ -19504,8 +19499,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// pointer itself.
         fn emitReleaseDynRegion(self: *Self) Allocator.Error!void {
             if (!self.proc_has_dyn_region) return;
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.addRegRegImm12(.w64, stack_ptr, frame_ptr, 0);
+            switch (isa) {
+                .aarch64 => try self.codegen.emit.addRegRegImm12(.w64, stack_ptr, frame_ptr, 0),
+                .x86_64 => {},
             }
         }
 
@@ -22831,7 +22827,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (self.generation_mode.internalEntrypoints()) {
                         // The compiler and the shim call the wrapper with the
                         // (ret_ptr, args_ptr) convention.
-                        if (target.isWindows()) {
+                        if (machine_abi.isWindows()) {
                             try self.codegen.emit.movRegReg(.w64, .RBX, .RCX);
                             try self.codegen.emit.movRegReg(.w64, .R13, .RDX);
                         } else {
@@ -23087,13 +23083,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 );
             }
 
-            const abi_target: layout.abi.Target = switch (isa) {
-                .aarch64 => layout.abi.aarch64Target(target.toOsTag()),
-                .x86_64 => if (comptime roc_target.isWindows())
-                    .x86_64_windows
-                else
-                    .x86_64_sysv,
-            };
+            const abi_target: layout.abi.Target = comptime machine_abi.cAbi();
             var arena_state = base.SingleThreadArena.init(self.allocator);
             defer arena_state.deinit();
             const lowered = layout.abi.lower(arena_state.allocator(), self.layout_store, abi_target, arg_layouts, ret_layout, false) catch return error.OutOfMemory;
@@ -23965,7 +23955,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub fn normalizeExcerptRefSite(bytes: []u8, site: usize, form: CodeRefForm, veneer: ?usize) void {
             switch (isa) {
                 .aarch64 => {
-                    const EmitT = aarch64.Emit(target);
+                    const EmitT = aarch64.Emit(machine_abi);
                     switch (form) {
                         .call, .inline_call => {
                             const word = std.mem.readInt(u32, bytes[site..][0..4], .little);
@@ -24078,7 +24068,7 @@ pub const host_lir_codegen_available = host_isa != null;
 
 /// Host LirCodeGen for the target this compiler build runs on.
 pub const HostLirCodeGen = if (host_lir_codegen_available)
-    LirCodeGen(host_lir_codegen_target)
+    LirCodeGen(abiOf(host_lir_codegen_target))
 else
     void;
 
@@ -24094,7 +24084,7 @@ test "issue 13186: x64mac inline expect site survives unit image construction" {
     defer store.deinit();
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
-    var codegen = try LirCodeGen(.x64mac).init(allocator, &store, &test_state.layout_store, .{}, .default);
+    var codegen = try LirCodeGen(abiOf(.x64mac)).init(allocator, &store, &test_state.layout_store, .{}, .default);
     defer codegen.deinit();
     try codegen.emitRelocatableExpectSite(.RAX, 7);
     const writer = @import("ObjectWriter.zig");
@@ -24142,7 +24132,7 @@ test "x86_64 expect sites are zero-extended 32-bit fields in every object format
         defer store.deinit();
         var test_state = try TestLayoutState.init(allocator);
         defer test_state.deinit();
-        var codegen = try LirCodeGen(target).init(allocator, &store, &test_state.layout_store, .{}, .default);
+        var codegen = try LirCodeGen(abiOf(target)).init(allocator, &store, &test_state.layout_store, .{}, .default);
         defer codegen.deinit();
         // mov eax, imm32 then mov r13d, imm32, which takes a REX.B prefix.
         try codegen.emitRelocatableExpectSite(.RAX, 0);
@@ -24319,7 +24309,7 @@ fn compileProcSpecsInOrder(cg: anytype, demand: []const lir.LIR.LirProcSpecId) A
             if (registered.code_start != .none) continue;
         }
         std.debug.assert(!proc.external);
-        switch (comptime isaOf(@TypeOf(cg.*).roc_target)) {
+        switch (comptime @TypeOf(cg.*).code_abi.isa()) {
             .aarch64 => {
                 try cg.emitBranchIslandIfNeeded();
                 try cg.codegen.compactBranchSites();
@@ -24487,7 +24477,7 @@ test "aggregate entrypoint wrappers own independent register scopes" {
     } }, .test_fixture);
     const root = try addNoArgProc(&store, entry, record_layout);
     inline for (.{ RocTarget.x64linux, RocTarget.x64win, RocTarget.arm64mac, RocTarget.arm64win }) |target| {
-        var cg = try LirCodeGen(target).init(allocator, &store, &state.layout_store, .{}, .default);
+        var cg = try LirCodeGen(abiOf(target)).init(allocator, &store, &state.layout_store, .{}, .default);
         defer cg.deinit();
         try cg.compileAllProcSpecs(store.getProcSpecs());
         // Reservations in another function are neither available temporaries
@@ -24537,7 +24527,7 @@ test "aggregate parameter copy preserves following argument registers" {
     } }, .test_fixture);
     const root = try addNoArgProc(&store, entry, .u64);
     inline for (.{ RocTarget.x64linux, RocTarget.x64win, RocTarget.arm64mac, RocTarget.arm64win }) |target| {
-        var cg = try LirCodeGen(target).init(allocator, &store, &state.layout_store, .{}, .default);
+        var cg = try LirCodeGen(abiOf(target)).init(allocator, &store, &state.layout_store, .{}, .default);
         defer cg.deinit();
         try cg.compileAllProcSpecs(store.getProcSpecs());
     }
@@ -24554,7 +24544,7 @@ test "aggregate copies have bounded native code size at large frame offsets" {
             defer store.deinit();
             var state = try TestLayoutState.init(allocator);
             defer state.deinit();
-            var cg = try LirCodeGen(target).init(allocator, &store, &state.layout_store, .{}, .default);
+            var cg = try LirCodeGen(abiOf(target)).init(allocator, &store, &state.layout_store, .{}, .default);
             defer cg.deinit();
             try cg.copyStackRange(0x110000, 0x70000, size);
             try std.testing.expect(cg.codegen.getCode().len < 192);
@@ -24740,7 +24730,7 @@ test "stack reuse bounds locals and call scratch on both native architectures" {
                 var state = try TestLayoutState.init(allocator);
                 defer state.deinit();
                 const proc = if (calls) try addSineChainProc(&store, allocator, count) else try addDeadTempChainProc(&store, allocator, count, 3);
-                var cg = try LirCodeGen(target).init(allocator, &store, &state.layout_store, .{}, .default);
+                var cg = try LirCodeGen(abiOf(target)).init(allocator, &store, &state.layout_store, .{}, .default);
                 defer cg.deinit();
                 try cg.compileAllProcSpecs(store.getProcSpecs());
                 size.* = cg.proc_registry.get(@backingInt(proc)).?.frame_size;
@@ -25209,7 +25199,7 @@ test "issue 12819: dev reads a single-definition join parameter in place" {
         const join = try store.addCFStmt(.{ .join = .{ .id = join_id, .params = try store.addLocalSpan(&.{joined}), .body = read, .remainder = initialize } }, .test_fixture);
         const body = try store.addCFStmt(.{ .assign_literal = .{ .target = source, .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } }, .next = join } }, .test_fixture);
         const proc = try addNoArgProc(&store, body, .u64);
-        var codegen = try LirCodeGen(target).init(gpa, &store, &state.layout_store, .{}, .default);
+        var codegen = try LirCodeGen(abiOf(target)).init(gpa, &store, &state.layout_store, .{}, .default);
         defer codegen.deinit();
         try codegen.ensureStableLocationsForStmtLocals(body);
         try std.testing.expectEqualDeep(codegen.local_locations.get(@backingInt(joined)).?, codegen.local_locations.get(@backingInt(alias)).?);
@@ -25301,7 +25291,7 @@ test "Windows internal proc ABI reads stack arguments after shadow space" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    const WinCodeGen = LirCodeGen(.x64win);
+    const WinCodeGen = LirCodeGen(abiOf(.x64win));
     try std.testing.expectEqual(@as(i32, 48), WinCodeGen.incoming_stack_arg_base_offset);
     try std.testing.expectEqual(@as(i32, 32), WinCodeGen.outgoing_stack_arg_base_offset);
 
@@ -25333,7 +25323,7 @@ test "Windows erased callable ABI reads reuse pointer from caller stack" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    const WinCodeGen = LirCodeGen(.x64win);
+    const WinCodeGen = LirCodeGen(abiOf(.x64win));
     const explicit_arg = try addLocal(&store, .u64);
     const capture_arg = try addLocal(&store, .opaque_ptr);
     const reuse_arg = try addLocal(&store, .opaque_ptr);
@@ -25368,7 +25358,7 @@ test "AArch64 internal proc ABI uses caller stack arg base for stack arguments" 
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    const ArmCodeGen = LirCodeGen(.arm64mac);
+    const ArmCodeGen = LirCodeGen(abiOf(.arm64mac));
     try std.testing.expectEqual(@as(i32, 0), ArmCodeGen.incoming_stack_arg_base_offset);
 
     const a0 = try addLocal(&store, .u64);
@@ -25405,7 +25395,7 @@ test "AArch64 compare immediate accepts large bit masks" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    const ArmCodeGen = LirCodeGen(.arm64mac);
+    const ArmCodeGen = LirCodeGen(abiOf(.arm64mac));
     var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, .{}, .default);
     defer codegen.deinit();
 
@@ -26230,7 +26220,7 @@ test "entrypoint param slots round aggregates to ABI word width" {
 }
 
 test "aarch64 hosted HFA and HVA returns expose V0 through V3" {
-    const ArmCodeGen = LirCodeGen(.arm64linux);
+    const ArmCodeGen = LirCodeGen(abiOf(.arm64linux));
     try std.testing.expectEqual(aarch64.FloatReg.V0, ArmCodeGen.hostedFloatResultReg(0));
     try std.testing.expectEqual(aarch64.FloatReg.V1, ArmCodeGen.hostedFloatResultReg(1));
     try std.testing.expectEqual(aarch64.FloatReg.V2, ArmCodeGen.hostedFloatResultReg(2));
@@ -26463,7 +26453,7 @@ test "symbol producer caches reuse identities and reset with generated code" {
     inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {
         var strings = try StaticStringData.build(allocator, &store, target);
         defer strings.deinit();
-        var codegen = try LirCodeGen(target).init(allocator, &store, &test_state.layout_store, strings.view(), .default);
+        var codegen = try LirCodeGen(abiOf(target)).init(allocator, &store, &test_state.layout_store, strings.view(), .default);
         defer codegen.deinit();
         try std.testing.expectEqual(@as(usize, 0), codegen.getSymbolNames().len);
         const data_id: lir.LIR.StaticDataId = @fromBackingInt(@intCast(7));
@@ -26531,7 +26521,7 @@ test "independent fragment emits only requested procedure with unresolved self a
             .body = .some(call),
             .ret_layout = .i64,
         }, .none);
-        var cg = try LirCodeGen(target).init(allocator, &store, &layouts.layout_store, .{}, .default);
+        var cg = try LirCodeGen(abiOf(target)).init(allocator, &store, &layouts.layout_store, .{}, .default);
         defer cg.deinit();
         try cg.emitProcFragment(proc);
         try std.testing.expectEqual(@as(usize, 1), cg.proc_registry.count());
@@ -26583,7 +26573,7 @@ test "independent fragment defers shared RC helper demand" {
 test "independent fragment symbolic calls resolve after all procedures are placed" {
     const allocator = std.testing.allocator;
     inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {
-        const CG = LirCodeGen(target);
+        const CG = LirCodeGen(abiOf(target));
         var store = LirStore.init(allocator);
         defer store.deinit();
         var layouts = try TestLayoutState.init(allocator);
@@ -26634,7 +26624,7 @@ test "independent fragment symbolic calls resolve after all procedures are place
 test "AArch64 finalized excerpts preserve external calls across changed placement" {
     const Excerpt = @import("CodeExcerpt.zig");
     const allocator = std.testing.allocator;
-    const CG = LirCodeGen(.arm64linux);
+    const CG = LirCodeGen(abiOf(.arm64linux));
     var store = LirStore.init(allocator);
     defer store.deinit();
     var layouts = try TestLayoutState.init(allocator);
@@ -26828,7 +26818,7 @@ fn expectSingleByteResultStoreIsOneStore(comptime target: roc_target_mod.RocTarg
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    const CG = LirCodeGen(target);
+    const CG = LirCodeGen(abiOf(target));
 
     var expected_cg = try CG.init(allocator, &store, &test_state.layout_store, .{}, .default);
     defer expected_cg.deinit();

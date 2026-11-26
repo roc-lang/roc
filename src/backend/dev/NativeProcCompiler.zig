@@ -440,10 +440,9 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
     defer {
         if (options.metrics_out) |out| out.* = metrics;
     }
-    const contract = destination.getFragmentContract();
-    // Baseline targets share their platform's code generator. CPU-level reuse
-    // checks use the generator's explicit instruction floor, not this dispatch tag.
-    std.debug.assert(contract.target == options.target.defaultCpuTarget());
+    // Baseline targets share their platform's contract target. CPU-level reuse
+    // checks use the generator's explicit instruction floor, not this tag.
+    const contract = destination.getFragmentContract(options.target);
     var retained = Retained{ .allocator = allocator, .contract = contract };
     errdefer retained.deinit();
     var sequential_lane = tasks.LaneState.init(allocator);
@@ -653,7 +652,7 @@ test "native driver serial reverse lanes own identical executable excerpts and r
         defer cg.deinit();
         var metrics: Metrics = .{};
         var retained = try run(CG, a, &cg, &demand, .{
-            .target = cg.getFragmentContract().target,
+            .target = Emitter.host_lir_codegen_target,
             .executor = if (lanes == 0) null else executor.executor(),
             .metrics_out = &metrics,
         });
@@ -678,7 +677,7 @@ test "native driver serial reverse lanes own identical executable excerpts and r
     var cg = try CG.init(a, &store, &layouts, .{}, .default);
     defer cg.deinit();
     var metrics: Metrics = .{};
-    var reused = try run(CG, a, &cg, &demand, .{ .target = cg.getFragmentContract().target, .reuse_same_program = &cache.?, .metrics_out = &metrics });
+    var reused = try run(CG, a, &cg, &demand, .{ .target = Emitter.host_lir_codegen_target, .reuse_same_program = &cache.?, .metrics_out = &metrics });
     defer reused.deinit();
     cache.?.deinit();
     cache = null;
@@ -715,7 +714,7 @@ test "native driver drains submission output and scratch OOM before cleanup" {
         defer cg.deinit();
         var metrics: Metrics = .{};
         try std.testing.expectError(error.OutOfMemory, run(CG, a, &cg, &demand, .{
-            .target = cg.getFragmentContract().target,
+            .target = Emitter.host_lir_codegen_target,
             .executor = executor.executor(),
             .metrics_out = &metrics,
         }));
@@ -781,7 +780,7 @@ test "native driver reuse survives procedure compaction and rejects changed revi
     var cache = blk: {
         var cg = try CG.init(a, store, &program.layouts, .{}, .default);
         defer cg.deinit();
-        break :blk try run(CG, a, &cg, &.{original}, .{ .target = cg.getFragmentContract().target });
+        break :blk try run(CG, a, &cg, &.{original}, .{ .target = Emitter.host_lir_codegen_target });
     };
     defer cache.deinit();
     try lir.ReachableProcs.run(&program);
@@ -793,7 +792,7 @@ test "native driver reuse survives procedure compaction and rejects changed revi
         defer cg.deinit();
         var metrics: Metrics = .{};
         var retained = try run(CG, a, &cg, &.{ compacted, compacted }, .{
-            .target = cg.getFragmentContract().target,
+            .target = Emitter.host_lir_codegen_target,
             .reuse_same_program = &cache,
             .metrics_out = &metrics,
         });
@@ -830,7 +829,7 @@ test "native driver owns and reuses complete static helper closure" {
         defer executor.lane.deinit();
         var metrics: Metrics = .{};
         var retained = try run(CG, a, &cg, &.{}, .{
-            .target = cg.getFragmentContract().target,
+            .target = Emitter.host_lir_codegen_target,
             .static_helpers = &roots,
             .executor = executor.executor(),
             .reuse_same_program = if (cache) |*owner| owner else null,
@@ -882,7 +881,7 @@ test "native driver helper runs keep the serial queue order at every lane count"
         defer cg.deinit();
         var metrics: Metrics = .{};
         var retained = try run(CG, a, &cg, &.{}, .{
-            .target = cg.getFragmentContract().target,
+            .target = Emitter.host_lir_codegen_target,
             .static_helpers = &roots,
             .executor = if (lanes == 0) null else executor.executor(),
             .metrics_out = &metrics,
@@ -923,7 +922,7 @@ fn testCoordinatorAllocationFailure(a: Allocator) Allocator.Error!void {
     defer executor.lane.deinit();
     defer std.debug.assert(executor.submitted == executor.received);
     var retained = try run(CG, a, &cg, &.{id}, .{
-        .target = cg.getFragmentContract().target,
+        .target = Emitter.host_lir_codegen_target,
         .executor = executor.executor(),
     });
     defer retained.deinit();
@@ -967,7 +966,7 @@ test "native driver shared literal data outlives source and reused fragment owne
         var executor = TestExecutor{ .allocator = a, .lane = tasks.LaneState.init(a), .lanes = 2 };
         defer executor.lane.deinit();
         break :blk try run(CG, a, &cg, &demand, .{
-            .target = cg.getFragmentContract().target,
+            .target = Emitter.host_lir_codegen_target,
             .executor = executor.executor(),
         });
     };
@@ -977,7 +976,7 @@ test "native driver shared literal data outlives source and reused fragment owne
     defer cg.deinit();
     var metrics: Metrics = .{};
     var retained = try run(CG, a, &cg, &demand, .{
-        .target = cg.getFragmentContract().target,
+        .target = Emitter.host_lir_codegen_target,
         .reuse_same_program = &cache,
         .metrics_out = &metrics,
     });
@@ -1012,7 +1011,7 @@ test "native driver lanes on real threads append identical code at every worker 
         var cg = try CG.init(a, &store, &layouts, .{}, .default);
         defer cg.deinit();
         var retained = try run(CG, a, &cg, &demand, .{
-            .target = cg.getFragmentContract().target,
+            .target = Emitter.host_lir_codegen_target,
             .executor = if (maybe_threads != null) pool.executor() else null,
         });
         defer retained.deinit();
@@ -1044,12 +1043,12 @@ test "native driver lane generators emit what fresh generators emit" {
     // per procedure gives each a fresh one.
     var reused_cg = try CG.init(a, &store, &layouts, .{}, .default);
     defer reused_cg.deinit();
-    var reused = try run(CG, a, &reused_cg, &demand, .{ .target = reused_cg.getFragmentContract().target, .static_helpers = &roots });
+    var reused = try run(CG, a, &reused_cg, &demand, .{ .target = Emitter.host_lir_codegen_target, .static_helpers = &roots });
     defer reused.deinit();
     for (demand, 0..) |id, index| {
         var fresh_cg = try CG.init(a, &store, &layouts, .{}, .default);
         defer fresh_cg.deinit();
-        var fresh = try run(CG, a, &fresh_cg, &.{id}, .{ .target = fresh_cg.getFragmentContract().target });
+        var fresh = try run(CG, a, &fresh_cg, &.{id}, .{ .target = Emitter.host_lir_codegen_target });
         defer fresh.deinit();
         try std.testing.expectEqual(@as(usize, 1), fresh.procedures.items.len);
         const expected = fresh.procedures.items[0].fragment.set.excerpts;

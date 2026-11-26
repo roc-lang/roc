@@ -27,7 +27,6 @@ const RocList = builtins.list.RocList;
 
 const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
-const isaOf = @import("isa.zig").isaOf;
 
 const Relocation = @import("Relocation.zig").IndexedRelocation;
 const SymbolTable = @import("SymbolTable.zig");
@@ -91,16 +90,17 @@ pub fn CallBuilder(comptime EmitType: type) type {
     const CC_EMIT = EmitType.CC;
     const GeneralReg = EmitType.GeneralReg;
     const FloatReg = EmitType.FloatReg;
-    const roc_target = EmitType.roc_target;
-    const isa = isaOf(roc_target);
-    const is_windows = roc_target.isWindows();
+    const machine_abi = EmitType.code_abi;
+    const isa = machine_abi.isa();
+    const is_windows = machine_abi.isWindows();
     const uses_position_based_float_args = switch (isa) {
         .x86_64 => is_windows,
         .aarch64 => false,
     };
 
     // RocStr/RocList field offsets for passing their words as separate arguments.
-    const target_word_size: u32 = roc_target.ptrBitWidth() / 8;
+    // Every dev-backend ABI is 64-bit.
+    const target_word_size: u32 = 8;
     const str_bytes_offset: i32 = @intCast(RocStr.targetFieldOffset(.bytes, target_word_size));
     const str_capacity_offset: i32 = @intCast(RocStr.targetFieldOffset(.capacity_or_alloc_ptr, target_word_size));
     const str_len_offset: i32 = @intCast(RocStr.targetFieldOffset(.length, target_word_size));
@@ -1040,28 +1040,28 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
 // Tests
 test "CC constants for Windows x64" {
-    const WinEmit = x86_64.Emit(.x64win);
+    const WinEmit = x86_64.Emit(.x86_64_windows);
     try std.testing.expect(WinEmit.CC.PARAM_REGS.len >= 4);
     try std.testing.expect(WinEmit.CC.RETURN_REGS.len >= 1);
     try std.testing.expectEqual(@as(u8, 32), WinEmit.CC.SHADOW_SPACE);
 }
 
 test "CC constants for Linux x64" {
-    const LinuxEmit = x86_64.Emit(.x64glibc);
+    const LinuxEmit = x86_64.Emit(.x86_64_sysv);
     try std.testing.expect(LinuxEmit.CC.PARAM_REGS.len >= 4);
     try std.testing.expect(LinuxEmit.CC.RETURN_REGS.len >= 1);
     try std.testing.expectEqual(@as(u8, 0), LinuxEmit.CC.SHADOW_SPACE);
 }
 
 test "CC constants for aarch64" {
-    const Arm64Emit = aarch64.Emit(.arm64linux);
+    const Arm64Emit = aarch64.Emit(.aarch64_aapcs);
     try std.testing.expect(Arm64Emit.CC.PARAM_REGS.len >= 4);
     try std.testing.expect(Arm64Emit.CC.RETURN_REGS.len >= 1);
     try std.testing.expectEqual(@as(u8, 0), Arm64Emit.CC.SHADOW_SPACE);
 }
 
 test "CallBuilder with automatic R12 save/restore on Windows x64" {
-    const WinEmit = x86_64.Emit(.x64win);
+    const WinEmit = x86_64.Emit(.x86_64_windows);
     const Builder = CallBuilder(WinEmit);
 
     var emit = WinEmit.init(std.testing.allocator);
@@ -1081,7 +1081,7 @@ test "CallBuilder with automatic R12 save/restore on Windows x64" {
 }
 
 test "CallBuilder with automatic R12 save/restore on Linux x64" {
-    const LinuxEmit = x86_64.Emit(.x64glibc);
+    const LinuxEmit = x86_64.Emit(.x86_64_sysv);
     const Builder = CallBuilder(LinuxEmit);
 
     var emit = LinuxEmit.init(std.testing.allocator);
@@ -1100,7 +1100,7 @@ test "CallBuilder with automatic R12 save/restore on Linux x64" {
 }
 
 test "CallBuilder call restores R12 on Windows x64" {
-    const WinEmit = x86_64.Emit(.x64win);
+    const WinEmit = x86_64.Emit(.x86_64_windows);
     const Builder = CallBuilder(WinEmit);
 
     var emit = WinEmit.init(std.testing.allocator);
@@ -1128,7 +1128,7 @@ test "CallBuilder call restores R12 on Windows x64" {
 }
 
 test "CallBuilder on Linux x64 doesn't allocate R12 slot" {
-    const LinuxEmit = x86_64.Emit(.x64glibc);
+    const LinuxEmit = x86_64.Emit(.x86_64_sysv);
     const Builder = CallBuilder(LinuxEmit);
 
     var emit = LinuxEmit.init(std.testing.allocator);
@@ -1147,7 +1147,7 @@ test "CallBuilder on Linux x64 doesn't allocate R12 slot" {
 }
 
 test "CallBuilder 4-arg call with immediates on Linux x64" {
-    const LinuxEmit = x86_64.Emit(.x64glibc);
+    const LinuxEmit = x86_64.Emit(.x86_64_sysv);
     const Builder = CallBuilder(LinuxEmit);
 
     var emit = LinuxEmit.init(std.testing.allocator);
@@ -1181,7 +1181,7 @@ test "CallBuilder 4-arg call with immediates on Linux x64" {
 }
 
 test "CallBuilder 4-arg call with immediates on Windows x64" {
-    const WinEmit = x86_64.Emit(.x64win);
+    const WinEmit = x86_64.Emit(.x86_64_windows);
     const Builder = CallBuilder(WinEmit);
 
     var emit = WinEmit.init(std.testing.allocator);
@@ -1851,56 +1851,6 @@ test "CallBuilder stack args at correct offsets on Windows" {
     try std.testing.expect(emit.buf.items.len > 50);
 }
 
-test "macOS x64 CC matches Linux x64 (both System V)" {
-    const LinuxEmit = x86_64.Emit(.x64glibc);
-    const MacEmit = x86_64.Emit(.x64mac);
-
-    // macOS and Linux both use System V ABI - verify they're identical
-    try std.testing.expectEqual(LinuxEmit.CC.PARAM_REGS.len, MacEmit.CC.PARAM_REGS.len);
-    try std.testing.expectEqual(LinuxEmit.CC.RETURN_REGS.len, MacEmit.CC.RETURN_REGS.len);
-    try std.testing.expectEqual(LinuxEmit.CC.FLOAT_PARAM_REGS.len, MacEmit.CC.FLOAT_PARAM_REGS.len);
-    try std.testing.expectEqual(LinuxEmit.CC.SHADOW_SPACE, MacEmit.CC.SHADOW_SPACE);
-}
-
-test "CallBuilder macOS 6-arg call - all args in registers (System V)" {
-    const MacEmit = x86_64.Emit(.x64mac);
-    const Builder = CallBuilder(MacEmit);
-
-    var emit = MacEmit.init(std.testing.allocator);
-    defer emit.deinit();
-
-    var stack_offset: i32 = 0;
-    var builder = try Builder.init(&emit, &stack_offset);
-    defer builder.deinit();
-
-    // System V: 6 register args (RDI, RSI, RDX, RCX, R8, R9)
-    try builder.addImmArg(1);
-    try builder.addImmArg(2);
-    try builder.addImmArg(3);
-    try builder.addImmArg(4);
-    try builder.addImmArg(5);
-    try builder.addImmArg(6);
-
-    try builder.call(0x12345678);
-
-    const mac_code = emit.buf.items;
-
-    // Verify code matches Linux (both System V)
-    var linux_emit = x86_64.Emit(.x64glibc).init(std.testing.allocator);
-    defer linux_emit.deinit();
-    var linux_stack: i32 = 0;
-    var linux_builder = try CallBuilder(x86_64.Emit(.x64glibc)).init(&linux_emit, &linux_stack);
-    try linux_builder.addImmArg(1);
-    try linux_builder.addImmArg(2);
-    try linux_builder.addImmArg(3);
-    try linux_builder.addImmArg(4);
-    try linux_builder.addImmArg(5);
-    try linux_builder.addImmArg(6);
-    try linux_builder.call(0x12345678);
-
-    try std.testing.expectEqualSlices(u8, linux_emit.buf.items, mac_code);
-}
-
 // Helper: search for a 3-byte pattern in a buffer, returning its position or null
 fn findPattern3(buf: []const u8, b0: u8, b1: u8, b2: u8) ?usize {
     if (buf.len < 3) return null;
@@ -2106,7 +2056,7 @@ test "aarch64 explicit register assignments preserve ABI alignment holes" {
 }
 
 test "aarch64 outgoing stack assignments preserve compact byte offsets" {
-    const Emit = aarch64.Emit(.arm64mac);
+    const Emit = aarch64.Emit(.aarch64_apple);
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -2464,7 +2414,7 @@ test "parallel move: callReg also resolves deferred args" {
 }
 
 test "x86_64 by-value stack arguments of any size copy every piece" {
-    const LinuxEmit = x86_64.Emit(.x64glibc);
+    const LinuxEmit = x86_64.Emit(.x86_64_sysv);
     const Builder = CallBuilder(LinuxEmit);
 
     var emit = LinuxEmit.init(std.testing.allocator);

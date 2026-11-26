@@ -221,7 +221,7 @@ test "base tests" {
     std.testing.refAllDecls(@import("DataSpan.zig"));
     std.testing.refAllDecls(@import("eval_stack.zig"));
     std.testing.refAllDecls(@import("death_test.zig"));
-    std.testing.refAllDecls(@import("stale_borrow_test.zig"));
+    if (StaleBorrowAllocator.available) std.testing.refAllDecls(@import("stale_borrow_test.zig"));
     std.testing.refAllDecls(@import("Ident.zig"));
     std.testing.refAllDecls(@import("ice_context.zig"));
     std.testing.refAllDecls(@import("InternedBytes.zig"));
