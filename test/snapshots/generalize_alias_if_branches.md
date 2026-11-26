@@ -12,7 +12,7 @@ picked = if Bool.True id else id
 main = (picked(1), picked("a"))
 ~~~
 # EXPECTED
-TYPE MISMATCH - generalize_alias_if_branches.md:5:27:5:30
+NIL
 # PROBLEMS
 NIL
 # TOKENS

@@ -15,7 +15,7 @@ bag = { run: FooBar.myfunc }
 main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 ~~~
 # EXPECTED
-TYPE MISMATCH - generalize_alias_assoc_fn_record.md:8:42:8:45
+NIL
 # PROBLEMS
 NIL
 # TOKENS

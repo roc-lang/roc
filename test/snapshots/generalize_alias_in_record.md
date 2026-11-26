@@ -12,7 +12,7 @@ r = { f: id }
 main = ((r.f)(1), (r.f)("a"))
 ~~~
 # EXPECTED
-TYPE MISMATCH - generalize_alias_in_record.md:5:25:5:28
+NIL
 # PROBLEMS
 NIL
 # TOKENS
