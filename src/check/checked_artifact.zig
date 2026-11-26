@@ -39960,8 +39960,8 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     // an empty default container, which still serializes/relocates correctly.
     var const_store_src = ConstStore.init(gpa);
     defer const_store_src.deinit();
-    const c0 = try const_store_src.append(.{ .scalar = .{ .u64 = 7 } });
-    const c1 = try const_store_src.append(.{ .scalar = .{ .i32 = -3 } });
+    const c0 = try const_store_src.append(.{ .list = .{ .items = .empty, .capacity = 7 } });
+    const c1 = try const_store_src.append(.{ .list = .{ .items = .empty, .capacity = 3 } });
 
     var checked_types_src = CheckedTypeStore{};
     defer checked_types_src.deinit(gpa);
@@ -40068,8 +40068,8 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     try std.testing.expectEqual(ModuleEnv.ModuleKind.module, loaded.module_identity.kind);
 
     // const_store entries survive.
-    try std.testing.expectEqual(@as(u64, 7), loaded.const_store.get(c0).scalar.u64);
-    try std.testing.expectEqual(@as(i32, -3), loaded.const_store.get(c1).scalar.i32);
+    try std.testing.expectEqual(@as(u64, 7), loaded.const_store.get(c0).list.capacity);
+    try std.testing.expectEqual(@as(u64, 3), loaded.const_store.get(c1).list.capacity);
 
     // checked_types roots survive.
     try std.testing.expectEqual(@as(usize, 2), loaded.checked_types.roots.items().len);
@@ -40289,8 +40289,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xB1, 0xD1, 0x30, 0x7C, 0x31, 0x8F, 0x52, 0xFF, 0x0A, 0x8E, 0x07, 0x8C, 0x63, 0xAC, 0xD1, 0x45,
-        0xAD, 0x0C, 0x54, 0x76, 0xD7, 0xDC, 0xCF, 0xAB, 0x52, 0x39, 0x35, 0x48, 0xB4, 0x04, 0x1C, 0xF2,
+        0xDD, 0x32, 0xE2, 0x58, 0x6B, 0xAD, 0x08, 0xA7, 0x92, 0x61, 0xF5, 0x30, 0x31, 0xBE, 0xBC, 0x36,
+        0x0D, 0x76, 0x4F, 0xFF, 0xF9, 0xA2, 0x63, 0x6D, 0xB0, 0xA3, 0xF5, 0xB8, 0x7A, 0x13, 0x71, 0xA6,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

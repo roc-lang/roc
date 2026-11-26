@@ -19439,8 +19439,10 @@ from its type table where the literal is (`Body.literalThunkLocal`), not in
 its entry chain: only that literal reads the word, so a body holds each of
 its literal arguments only across the call that converts it, and the
 ownership facts of a body with many literals do not carry every one of them
-across every join. The callable is the root's entry wrapper composed as a
-dictionary entry (`Body.rootThunk`): its body restores the stored value
+across every join. For a polymorphic constant's stored instance the
+callable is the reading program's own restore thunk (`WorkerKey.root_restore`,
+Polymorphic Constants). For any other root it is the root's entry wrapper
+composed as a dictionary entry (`Body.rootThunk`): its body restores the stored value
 (`CompileTimeRootPayload.const_node`), or, where none is stored (the root is
 being evaluated, or holds a function), converts the literal in the frames of
 the schemes its edge instantiates (`Body.lowerLiteralArgumentRoot`,
@@ -20832,6 +20834,23 @@ a type by its structure. A function value's table names its inputs instead:
 in a program that stores function values, each table's word past its needs
 holds its position among the program's tables, whose inputs the lowering
 kept as the static words they were filled with.
+
+Every reader restores a stored value where it reads it, so a module unit
+emits no procedure that restores a stored value for other objects: the
+entry wrapper of a constant, of a callable binding, or of a polymorphic
+constant's instance whose value is stored is not emitted for that purpose
+(`unitEmitsTemplate`). The unit instead sets up the workers each stored
+function value's recipe names exactly as a reader's restore does
+(`seedStoredValueWorkers`, `StoredFn.recipeWorkers`): the recipe's worker
+and the workers of its capture graph's callables and tables, which it
+lowers and exports, each importer-visible (`recordExports`), since a reader
+restoring the value names them. Restoring a lambda reads its owner as a
+scope (`Decoder.workerAs(.scope)`), which lowers the owner in the program
+that defines it, so a lambda written in a constant's own body still has
+that constant's entry wrapper lowered and emitted beside it, as its owner;
+a stored value whose functions are owned elsewhere has no wrapper in its
+unit. A compile-time program evaluating a root enters it through its own
+root procedure, never through another object's wrapper.
 
 A function value has no slot for another root to read, so a module's roots
 holding one, with every pending root they read, run first in their own
