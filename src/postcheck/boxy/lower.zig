@@ -5257,7 +5257,17 @@ fn recordExports(program: *Program) Allocator.Error!void {
         };
         for (view.view.compile_time_roots.roots.items()) |root| switch (root.kind) {
             .callable_binding => if (program.wrapper_by_root.get(.{ .module = module_index, .root = root.id })) |wrapper| try visit.template(module_index, wrapper),
-            .constant, .hoisted_constant, .hoisted_validation, .expect, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => {},
+            // An importer whose frame derives a polymorphic constant's
+            // instance from its types reads the instance root of any module
+            // holding it at that type (`Program.constantInstance`), through
+            // the root's wrapper.
+            .literal_argument => {
+                const argument = root.literal_argument orelse invariant("a literal argument root records no literal argument");
+                if (argument.site.kind == .constant_instance and !argument.sealed) {
+                    if (program.wrapper_by_root.get(.{ .module = module_index, .root = root.id })) |wrapper| try visit.template(module_index, wrapper);
+                }
+            },
+            .constant, .hoisted_constant, .hoisted_validation, .expect, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr => {},
         };
     }
     for (program.workers.items, 0..) |worker, index| switch (worker.key) {
