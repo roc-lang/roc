@@ -44,6 +44,15 @@ const reservation_growth_factor: usize = 4;
 /// The most entries a column holds: indices and range counts are `u32`.
 const max_len: usize = std.math.maxInt(u32);
 
+/// Whether this build hunts stale borrows. A Debug build moves a column on
+/// every growth step: an allocated column to a fresh allocation instead of
+/// growing it in place, and a reserved column to a fresh reservation whose
+/// predecessor is made inaccessible (`Reservation.retire`) instead of
+/// committing more of the one it has. A slice or pointer held across a growth
+/// then reads memory that is gone. It also overwrites the entries a shrink
+/// drops with `undefined`.
+const hunt_stale_borrows = @import("builtin").mode == .debug;
+
 const Storage = enum {
     /// Grows through the allocator passed to each growing call.
     allocated,
@@ -168,7 +177,8 @@ pub fn ReservedList(comptime T: type, comptime density: Density) type {
                     new_capacity = @min(new_capacity, max_len);
                     const old_len = self.items.len;
                     const old_block = self.items.ptr[0..self.capacity];
-                    const block = if (gpa.remap(old_block, new_capacity)) |remapped| remapped else blk: {
+                    const remapped: ?[]T = if (hunt_stale_borrows) null else gpa.remap(old_block, new_capacity);
+                    const block = if (remapped) |in_place| in_place else blk: {
                         const fresh = try gpa.alloc(T, new_capacity);
                         @memcpy(fresh[0..old_len], self.items);
                         storage_work.add(.bytes_copied, old_len * @sizeOf(T));
@@ -179,6 +189,10 @@ pub fn ReservedList(comptime T: type, comptime density: Density) type {
                     self.capacity = block.len;
                 },
                 .reserved => {
+                    if (hunt_stale_borrows and self.reservation.bytes.len != 0) {
+                        storage_work.add(.relocations, 1);
+                        return self.moveToReservation(gpa, needed_bytes);
+                    }
                     if (needed_bytes > self.reservation.bytes.len and self.reservation.bytes.len != 0) {
                         if (comptime zeroed_pages.can_remap_reservations) {
                             try self.reservation.relocateLinux(try reservationBytes(needed_bytes), density);
@@ -215,7 +229,7 @@ pub fn ReservedList(comptime T: type, comptime density: Density) type {
             storage_work.add(.bytes_copied, self.items.len * @sizeOf(T));
             switch (self.storage) {
                 .allocated => if (self.capacity != 0) gpa.free(self.items.ptr[0..self.capacity]),
-                .reserved => self.reservation.release(),
+                .reserved => if (hunt_stale_borrows) self.reservation.retire() else self.reservation.release(),
                 .borrowed => {},
             }
             self.storage = .reserved;
@@ -265,6 +279,8 @@ pub fn ReservedList(comptime T: type, comptime density: Density) type {
         /// appended again are written in full.
         pub fn shrinkRetainingCapacity(self: *Self, new_len: usize) void {
             std.debug.assert(new_len <= self.items.len);
+            // A borrowed column's entries belong to the serialized bytes.
+            if (hunt_stale_borrows and self.storage != .borrowed) @memset(self.items[new_len..], undefined);
             self.items.len = new_len;
         }
 

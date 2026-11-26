@@ -17,7 +17,7 @@ const type_roles = .{ "source_constructor_ty", "source_runtime_ty", "source_shap
 /// select candidates; exact comparison of the proof graph is the equality
 /// authority. A nested contract interned earlier in the order is reached
 /// through its identity, so a comparison never walks a nested chain again.
-pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: *dispatch.StaticDispatchPlanTable) Allocator.Error!void {
+pub fn intern(allocator: Allocator, types: *const checked.CheckedTypeStoreView, table: *dispatch.StaticDispatchPlanTable) Allocator.Error!void {
     var buckets = std.AutoHashMap(u64, u32).init(allocator);
     defer buckets.deinit();
     const next = try allocator.alloc(?u32, table.generated_codec_derivations.items().len);
@@ -485,7 +485,7 @@ const ContentDigester = struct {
 /// allocations with the same content.
 pub fn callsEquivalent(
     allocator: Allocator,
-    types: checked.CheckedTypeStoreView,
+    types: *const checked.CheckedTypeStoreView,
     table: *const dispatch.StaticDispatchPlanTable,
     left: dispatch.GeneratedCodecCall,
     right: dispatch.GeneratedCodecCall,
@@ -509,7 +509,7 @@ pub fn callsEquivalent(
 const Pair = struct { kind: enum { codec, evidence }, left: u32, right: u32 };
 const Comparer = struct {
     allocator: Allocator,
-    types: checked.CheckedTypeStoreView,
+    types: *const checked.CheckedTypeStoreView,
     table: *const dispatch.StaticDispatchPlanTable,
     /// Specialization identity is exact; agreement between repeated
     /// occurrences of one role is modulo transparent aliases, like the role.
@@ -726,7 +726,7 @@ test "codec identity preserves cross-root sharing, method roles, and recursive s
         .generated_codec_derivations = .fromBorrowedSlice(&derivations),
         .generated_codec_calls = .fromBorrowedSlice(&calls),
     };
-    try intern(gpa, types.view(), &table);
+    try intern(gpa, &types.view(), &table);
     try std.testing.expectEqual(derivations[0].identity, derivations[1].identity);
     for (derivations[2..], 2..) |derivation, i| try std.testing.expectEqual(@as(CodecId, @fromBackingInt(@intCast(@as(u32, @intCast(i))))), derivation.identity);
 }
@@ -784,7 +784,7 @@ fn digestTestContract(padding: usize, shared: bool) (Allocator.Error || error{No
         .generated_codec_derivations = .fromBorrowedSlice(&derivations),
         .generated_codec_calls = .fromBorrowedSlice(&calls),
     };
-    try intern(gpa, types.view(), &table);
+    try intern(gpa, &types.view(), &table);
     try digestContents(gpa, .{}, &types, &names, &table);
     return derivations[0].content;
 }

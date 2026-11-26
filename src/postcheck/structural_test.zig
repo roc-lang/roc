@@ -1180,7 +1180,7 @@ test "Monotype iterator One bodies preserve explicit reachability guard frames" 
         "fn beginIteratorOneBranch(",
         "fn finishIteratorLoop(",
     );
-    try expectContains(iterator, "self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(for_.pattern).ty, item_cell)");
+    try expectContains(iterator, "self.constrainCheckedInterfaceToCell(self.view.bodies.patternType(for_.pattern), item_cell)");
     try expectContains(iterator, "self.withIteratorOneRuntimeDemandGuardFrame(for_.pattern, step)");
     try expectContains(iterator, "task.one_guard_frames = self.runtime_demand_guard_frames");
     try expectContains(lower_source, "self.runtime_demand_guard_frames = task.one_guard_frames");
@@ -1278,10 +1278,10 @@ test "Monotype recursive materialization predicate stays paired with graph shell
         "fn patternNeedsExplicitBinding(",
         "const CheckedPatternRefutabilityAdapter",
     );
-    try expectContains(predicate, ".as => |as| try children.append(self.allocator, as.pattern)");
-    try expectContains(predicate, ".applied_tag => |tag|");
-    try expectContains(predicate, ".nominal => |nominal| try children.append(self.allocator, nominal.backing_pattern)");
-    try expectContains(predicate, ".tuple => |items|");
+    try expectContains(predicate, ".as => try children.append(self.allocator, self.view.bodies.patternDataOf(pattern_id, .as).pattern)");
+    try expectContains(predicate, ".applied_tag => try children.appendSlice(self.allocator, self.view.bodies.patternDataOf(pattern_id, .applied_tag).args)");
+    try expectContains(predicate, ".nominal => try children.append(self.allocator, self.view.bodies.patternDataOf(pattern_id, .nominal).backing_pattern)");
+    try expectContains(predicate, ".tuple => try children.appendSlice(self.allocator, self.view.bodies.patternDataOf(pattern_id, .tuple))");
     try expectContains(predicate, "patternRequiresOwnMaterialization");
     try expectContains(predicate, "recordDestructsHaveOptionalField");
 

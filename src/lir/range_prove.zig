@@ -592,7 +592,7 @@ test "range prove gives threaded Bool joins identities unused by joins in unreac
     // not, has its own identity.
     var join_ids = collections.DenseMap(LIR.JoinPointId, CFStmtId).init(testing.allocator);
     defer join_ids.deinit();
-    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpec(proc).body.get().?, testing.allocator);
+    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.get().?, testing.allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt| {
         const cf = store.getCFStmt(stmt);

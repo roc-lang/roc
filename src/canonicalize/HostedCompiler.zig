@@ -38,13 +38,13 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) Allocator.Error!void {
     for (0..env.value_binding_defs.span.len) |def_offset| {
         const def_idx = env.store.defAt(env.value_binding_defs, def_offset);
         const def = env.store.getDef(def_idx);
-        const expr = env.store.getExpr(def.expr);
+        const expr = env.store.exprAs(def.expr, .e_anno_only);
 
         // Check if this is an anno-only def (e_anno_only expression)
-        if (expr == .e_anno_only and def.annotation != null) {
+        if (expr != null and def.annotation != null) {
             // Get the identifier directly from the e_anno_only expression
             // (no need to access the pattern, which could have cross-module index issues)
-            const full_ident = expr.e_anno_only.ident;
+            const full_ident = expr.?.ident;
 
             // Get the region from the original def for better error messages
             const def_node_idx: @TypeOf(env.store.nodes).Idx = @fromBackingInt(@intCast(@backingInt(def_idx)));
@@ -71,9 +71,9 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) Allocator.Error!void {
 
                 // Check if single argument is empty tuple () - if so, create 0 params
                 if (args_slice.len == 1) {
-                    const first_arg = env.store.getTypeAnno(args_slice[0]);
-                    if (first_arg == .tuple) {
-                        if (first_arg.tuple.elems.span.len == 0) {
+                    const first_arg = env.store.typeAnnoAs(args_slice[0], .tuple);
+                    if (first_arg != null) {
+                        if (first_arg.?.elems.span.len == 0) {
                             break :blk 0; // () means 0 parameters
                         }
                     }
