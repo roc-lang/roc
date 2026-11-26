@@ -190,9 +190,9 @@ NO CHANGE
 	(defs
 		(patt (type "Try(ok, _err), ok -> ok"))
 		(patt (type "() -> Try({}, _err)"))
-		(patt (type "Try({}, [])")))
+		(patt (type "Try({}, _err)")))
 	(expressions
 		(expr (type "Try(ok, _err), ok -> ok"))
 		(expr (type "() -> Try({}, _err)"))
-		(expr (type "Try({}, [])"))))
+		(expr (type "Try({}, _err)"))))
 ~~~

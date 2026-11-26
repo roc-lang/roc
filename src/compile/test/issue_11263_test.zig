@@ -159,10 +159,10 @@ test "issue 11263: a rejected field access preserves independent compile-time ro
         if (!std.mem.eql(u8, text, "40.U64 + 2")) continue;
         try std.testing.expectEqual(.eligible, root.request_eligibility);
         try std.testing.expect(root.payload == .const_node);
-        const value = artifact.const_store.get(root.payload.const_node);
-        try std.testing.expect(value == .scalar);
-        try std.testing.expect(value.scalar == .u64);
-        try std.testing.expectEqual(@as(u64, 42), value.scalar.u64);
+        const image = artifact.const_store.imageOf(root.payload.const_node) orelse return error.TestUnexpectedResult;
+        const literal = artifact.const_store.imageLiteral(image) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(literal == .scalar and literal.scalar == .u64);
+        try std.testing.expectEqual(@as(u64, 42), literal.scalar.u64);
         found_independent = true;
     }
     try std.testing.expect(found_independent);

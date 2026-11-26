@@ -271,7 +271,10 @@ pub const Walker = struct {
         const wrapper = root.request.procedure_template orelse
             base.invariant("compile-time finalization invariant violated: a compile-time root has no checked wrapper template", .{});
         try self.pushTemplate(wrapper);
-        if (self.modules[root.module].compile_time_roots.root(root.root).literal_argument) |argument| try self.walkLiteralEdge(root.module, argument.edge);
+        if (self.modules[root.module].compile_time_roots.root(root.root).literal_argument) |argument| {
+            try self.walkLiteralEdge(root.module, argument.edge);
+            if (argument.site.kind == .constant_instance) try self.walkConstantInstance(root.module, argument);
+        }
         while (self.pending.pop()) |next| try self.walkTemplate(next);
         std.sort.pdq(u32, self.reads.items, {}, std.sort.asc(u32));
         var out = std.ArrayList(u32).empty;
@@ -291,9 +294,111 @@ pub const Walker = struct {
 
     /// A dispatch to a method bound to a computed callable reads the root
     /// that evaluates the callable.
+    /// A polymorphic binding is read as the instance the dispatch's edge
+    /// names (design.md "Polymorphic Constants"); its own root is never
+    /// evaluated.
     fn readCallableBinding(self: *Walker, binding: static_dispatch.CallableBindingTarget) Allocator.Error!void {
         const module = self.moduleOf(binding.module) orelse return;
-        try self.readRoot(module, self.modules[module].callable_eval_templates.templates[@backingInt(binding.template)].root);
+        const root = self.modules[module].callable_eval_templates.templates[@backingInt(binding.template)].root;
+        if (self.modules[module].entry_wrappers.lookupByRoot(root)) |wrapper| if (self.modules[module].checked_procedure_templates.isPolymorphicConstantWrapper(wrapper.template.template)) return;
+        try self.readRoot(module, root);
+    }
+
+    /// A polymorphic constant's instance root `argument` of `module`: its
+    /// evaluation runs the constant's entry wrapper in the frame of the
+    /// scheme its edge instantiates. When that scheme is the constant's own,
+    /// the wrapper's body reads the other instances the edge supplies, the
+    /// ones it forwards (`mk(empty)` for `wrap = mk(empty)`), so the root
+    /// reads every other root the edge names. An instance the edge supplies
+    /// to a scheme it is forwarded through reads none of its siblings.
+    fn walkConstantInstance(self: *Walker, module: u32, argument: checked.LiteralArgumentRoot) Allocator.Error!void {
+        const site_module = self.moduleOf(argument.site.module) orelse return;
+        const wrapper = self.rootWrapper(site_module, argument.site.constantRoot()) orelse return;
+        try self.pending.append(self.allocator, wrapper);
+        const callee = self.edgeCallee(module, argument.edge) orelse return;
+        if (callee.module != wrapper.module or callee.template != wrapper.template) return;
+        for (self.modules[module].checked_procedure_templates.literalEdgeArgs(argument.edge)) |arg| switch (arg) {
+            .root => |id| try self.readRoot(module, id),
+            .forwarded, .unbound => {},
+        };
+    }
+
+    /// The template of a listed module that `ref` names.
+    fn templateKey(self: *const Walker, ref: canonical.ProcedureTemplateRef) ?TemplateKey {
+        return .{ .module = self.moduleOf(ref.artifact) orelse return null, .template = ref.template };
+    }
+
+    /// The entry wrapper of `module`'s compile-time root `root`.
+    fn rootWrapper(self: *const Walker, module: u32, root: checked.ComptimeRootId) ?TemplateKey {
+        const wrapper = self.modules[module].entry_wrappers.lookupByRoot(root) orelse return null;
+        return self.templateKey(wrapper.template);
+    }
+
+    /// The template whose scheme literal edge `edge` of `module`
+    /// instantiates, when a listed module holds it.
+    fn edgeCallee(self: *const Walker, module: u32, edge: checked.LiteralEdge) ?TemplateKey {
+        const artifact = self.modules[module];
+        return switch (edge) {
+            .literal => null,
+            .canonical => |template| .{ .module = module, .template = template },
+            .requirement => |requirement| .{ .module = module, .template = requirement.template },
+            .node => |id| switch (artifact.static_dispatch_plans.evidenceNode(id).target.kind) {
+                .procedure => |procedure| self.templateKey(procedure.template),
+                .callable_binding => |binding| blk: {
+                    const binding_module = self.moduleOf(binding.module) orelse break :blk null;
+                    break :blk self.rootWrapper(binding_module, self.modules[binding_module].callable_eval_templates.templates[@backingInt(binding.template)].root);
+                },
+                .local_proc, .structural => null,
+            },
+            .use => |expr| blk: {
+                const ref_id = artifact.resolved_value_refs.lookupIdByExpr(expr) orelse break :blk null;
+                break :blk switch (artifact.resolved_value_refs.records.items()[@backingInt(ref_id)].ref) {
+                    .top_level_const, .imported_const => |const_use| self.constWrapper(const_use),
+                    .selected_hoisted_const => |selected| self.constWrapper(selected.const_use),
+                    .platform_required_const => |required| self.constWrapper(required.const_use),
+                    .top_level_proc, .imported_proc, .promoted_top_level_proc => |proc_use| self.procedureCallee(proc_use),
+                    .platform_required_proc => |required| self.procedureCallee(required.procedure),
+                    .hosted_proc, .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .platform_required_declaration, .platform_required_checked_error => null,
+                };
+            },
+        };
+    }
+
+    /// The entry wrapper of the constant `const_use` reads.
+    fn constWrapper(self: *const Walker, const_use: checked.ConstUseTemplate) ?TemplateKey {
+        const module = self.moduleOf(const_use.const_ref.artifact) orelse return null;
+        const artifact = self.modules[module];
+        const root: checked.ComptimeRootId = switch (const_use.const_ref.owner) {
+            .top_level_binding => |top_level| artifact.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse return null,
+            .hoisted_root => |hoisted| (artifact.hoisted_constants.lookupByRoot(hoisted.root) orelse return null).root,
+        };
+        return self.rootWrapper(module, root);
+    }
+
+    /// The template a use of a procedure binding instantiates: the
+    /// procedure, or a computed callable's entry wrapper.
+    fn procedureCallee(self: *const Walker, proc_use: checked.ProcedureUseTemplate) ?TemplateKey {
+        const module: u32, const binding: checked.TopLevelProcedureBindingRef = switch (proc_use.binding) {
+            .top_level => |top_level| .{ self.moduleOf(top_level.artifact) orelse return null, top_level.binding },
+            .imported => |imported| blk: {
+                const module = self.moduleOf(imported.artifact) orelse return null;
+                const entry = self.modules[module].top_level_values.lookupByDef(imported.def) orelse return null;
+                break :blk switch (entry.value) {
+                    .procedure_binding => |procedure_binding| .{ module, procedure_binding },
+                    .const_ref => |const_ref| return self.constWrapper(.{ .const_ref = const_ref, .requested_source_ty_payload = proc_use.source_fn_ty_payload }),
+                };
+            },
+            .platform_required => |required| .{ self.moduleOf(required.artifact) orelse return null, required.procedure_binding },
+            .hosted => return null,
+        };
+        return switch (self.modules[module].top_level_procedure_bindings.get(binding).body) {
+            .direct_template => |direct| switch (direct.template) {
+                .checked => |template| self.templateKey(template),
+                .lifted, .synthetic => null,
+            },
+            .callable_eval_template => |template_id| self.rootWrapper(module, self.modules[module].callable_eval_templates.templates[@backingInt(template_id)].root),
+            .checked_error => null,
+        };
     }
 
     fn pushTemplate(self: *Walker, ref: canonical.ProcedureTemplateRef) Allocator.Error!void {
@@ -436,6 +541,7 @@ pub const Walker = struct {
                 try self.walkRef(artifact.resolved_value_refs.records.items()[@backingInt(ref_id)].ref);
             },
             .requirement => |requirement| try self.pushTemplate(artifact.checked_procedure_templates.templateRef(artifact.key.digest(), requirement.template)),
+            .canonical => |template| try self.pushTemplate(artifact.checked_procedure_templates.templateRef(artifact.key.digest(), template)),
         }
     }
 
@@ -464,10 +570,10 @@ pub const Walker = struct {
         switch (artifact.const_templates.get(const_ref).state) {
             // A declaration with no implementation evaluates nothing.
             .unimplemented => return,
-            // A value holding function values is restored by lowering its
-            // body inline, so a reader reads everything that body reads,
-            // its literal arguments included.
-            .eval_template => |eval| try self.pushTemplate(eval.entry_template),
+            // A polymorphic constant is read as the instance its use's edge
+            // names, a root the reader's template demands (design.md
+            // "Polymorphic Constants"); its own root is never evaluated.
+            .eval_template => |eval| if (artifact.checked_procedure_templates.isPolymorphicConstantWrapper(eval.entry_template.template)) return else try self.pushTemplate(eval.entry_template),
             .stored_const, .reserved => {},
         }
         const root: checked.ComptimeRootId = switch (const_ref.owner) {
@@ -503,7 +609,13 @@ pub const Walker = struct {
                 .checked => |template| try self.pushTemplate(template),
                 .lifted, .synthetic => base.invariant("compile-time finalization invariant violated: a checked procedure dependency named a post-check template", .{}),
             },
-            .callable_eval_template => |template_id| try self.readRoot(module, artifact.callable_eval_templates.templates[@backingInt(template_id)].root),
+            .callable_eval_template => |template_id| {
+                const root = artifact.callable_eval_templates.templates[@backingInt(template_id)].root;
+                // A polymorphic binding is read as the instance its use's
+                // edge names (design.md "Polymorphic Constants").
+                if (artifact.entry_wrappers.lookupByRoot(root)) |wrapper| if (artifact.checked_procedure_templates.isPolymorphicConstantWrapper(wrapper.template.template)) return;
+                try self.readRoot(module, root);
+            },
             .checked_error => {},
         }
     }

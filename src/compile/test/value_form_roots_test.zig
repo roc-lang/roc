@@ -537,12 +537,20 @@ fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) WriterMat
     // One source checked twice: the roots line up by id.
     try std.testing.expectEqual(left_roots.len, right_roots.len);
     var constants: usize = 0;
+    var polymorphic: usize = 0;
     var hoisted: usize = 0;
     var readers: usize = 0;
     for (left_roots, right_roots) |left_root, right_root| {
         try std.testing.expectEqual(left_root.kind, right_root.kind);
         try std.testing.expectEqual(left_root.completion, right_root.completion);
-        // Every top-level constant of the corpus is in value form.
+        // A polymorphic constant's own root is never evaluated: each of its
+        // instances is (design.md "Polymorphic Constants").
+        if (right.compile_time_roots.canonicalInstance(right_root.id) != null) {
+            polymorphic += 1;
+            if (right_root.reads_constants) readers += 1;
+            continue;
+        }
+        // Every other top-level constant of the corpus is in value form.
         if (rootName(right, right_root)) |name| if (right_root.completion != .write_value) {
             std.debug.print("corpus constant {s} is not in value form\n", .{name});
             return error.CorpusConstantNotValueForm;
@@ -577,12 +585,14 @@ fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) WriterMat
             return err;
         };
     }
-    try std.testing.expectEqual(@as(usize, 83), constants);
+    try std.testing.expectEqual(@as(usize, 83), constants + polymorphic);
     // `base` and `read_base` in `measure`, which the root computing `total`
     // reads.
     try std.testing.expectEqual(@as(usize, 2), hoisted);
-    // The 22 top-level constants and `read_base` that read other constants.
-    try std.testing.expectEqual(@as(usize, 23), readers);
+    // The top-level constants and `read_base` that read other constants in
+    // value form: 22 and `read_base`, but for the three that read a
+    // polymorphic constant, whose instance is evaluated.
+    try std.testing.expectEqual(@as(usize, 20), readers);
     if (written.rootsCompletedDirectly() < constants + hoisted) {
         std.debug.print("{d} roots were completed directly, fewer than {d}\n", .{ written.rootsCompletedDirectly(), constants + hoisted });
         return error.TooFewRootsCompletedDirectly;
@@ -673,8 +683,10 @@ test "a literal at a custom type, interpolation, an update, an optional field, a
     try std.testing.expectEqual(@as(usize, 18), seen);
 }
 
-test "a value-form literal's stored bytes are the module's literal itself" {
+test "a value-form literal's image holds the module's literal bytes" {
     if (is_freestanding) return error.SkipZigTest;
+    const embedded = "bytes a file import embeds, long enough that no target holds them inline";
+    const long_text = "a string long enough that no target holds it inline";
     var checked = try checkApp(std.testing.allocator,
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
@@ -685,26 +697,25 @@ test "a value-form literal's stored bytes are the module's literal itself" {
         \\    Echo.line!(long_text)
         \\    Ok({})
         \\}
-    , &.{.{ .path = "embedded.bin", .source = "bytes a file import embeds, long enough that no target holds them inline" }}, .boxy, .write);
+    , &.{.{ .path = "embedded.bin", .source = embedded }}, .boxy, .write);
     defer checked.deinit();
     try checked.expectErrors(false);
     const app = checked.app();
-    const literals = app.moduleEnvConst().common.strings.buffer.items();
     var seen: usize = 0;
     for (app.compile_time_roots.roots.items()) |root| {
-        if (rootName(app, root) == null) continue;
+        const name = rootName(app, root) orelse continue;
         try std.testing.expectEqual(check.CheckedArtifact.CompileTimeRootCompletion.write_value, root.completion);
-        const blob = switch (app.const_store.get(root.payload.const_node)) {
-            .str => |string| string.bytes,
-            .list => |list| list.items.packed_bytes.bytes,
-            .pending, .zst, .scalar, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => return error.UnexpectedStoredValue,
-        };
-        const stored = app.const_store.strBytes(blob);
-        try std.testing.expect(stored.len != 0);
-        // The store holds a view of the module's string literal store, not
-        // bytes of its own.
-        const start = @intFromPtr(literals.ptr);
-        try std.testing.expect(@intFromPtr(stored.ptr) >= start and @intFromPtr(stored.ptr) + stored.len <= start + literals.len);
+        // A value-form root is data alone, stored as its image (design.md
+        // "Stored Images"), whose allocation holds the literal's bytes.
+        const image = app.const_store.image(app.const_store.imageOf(root.payload.const_node) orelse return error.TestUnexpectedResult);
+        if (std.mem.eql(u8, name, "long_text")) {
+            try std.testing.expectEqualStrings(long_text, image.strAt(0));
+        } else {
+            // `RocList`'s 64-bit words: bytes, length, capacity.
+            const start = std.mem.readInt(u64, image.bytes[0..8], .little);
+            const len = std.mem.readInt(u64, image.bytes[8..16], .little);
+            try std.testing.expectEqualStrings(embedded, image.bytes[@intCast(start)..][0..@intCast(len)]);
+        }
         seen += 1;
     }
     try std.testing.expectEqual(@as(usize, 2), seen);

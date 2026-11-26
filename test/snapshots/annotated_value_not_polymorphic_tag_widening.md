@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=An explicit `..` on a value annotation is rejected, since a value cannot quantify a row; a value alias of it still reports its own redundant `..`
+description=An explicit `..` on a top-level constant's annotation is redundant, since the constant quantifies its implicitly opened row; a value alias of it reports its own redundant `..`
 type=file
 ~~~
 # SOURCE
@@ -16,56 +16,30 @@ g = f
 main! = |_| {}
 ~~~
 # EXPECTED
-VALUE IS NOT POLYMORPHIC - annotated_value_not_polymorphic_tag_widening.md:3:1:3:21
+REDUNDANT OPEN TAG UNION - annotated_value_not_polymorphic_tag_widening.md:3:18:3:20
 REDUNDANT OPEN TAG UNION - annotated_value_not_polymorphic_tag_widening.md:6:24:6:26
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
-		(severity runtime_error)
-		(title "Value Is Not Polymorphic")
-		(region (start 3 1) (end 3 21))
+		(severity warning)
+		(title "Redundant Open Tag Union")
+		(region (start 3 18) (end 3 20))
 		(headline
-			(reflow "The type annotation on")
-			(reflow " ")
-			(annotated code "f")
-			(reflow " ")
-			(reflow "says it can be used at many types, but")
-			(reflow " ")
-			(annotated code "f")
-			(reflow " ")
-			(reflow "isn't defined as a function (like")
-			(reflow " ")
-			(annotated code "|x| ...")
-			(reflow "), so it can only have one type."))
+			(reflow "This tag union has an explicit `..`, but it is already implicitly open."))
 		(document
-			(source-region (file "annotated_value_not_polymorphic_tag_widening.md") (start 3 1) (end 3 21) (annotation error) (line-text "f : [Red, Green, ..]"))
+			(source-region (file "annotated_value_not_polymorphic_tag_widening.md") (start 3 18) (end 3 20) (annotation warning) (line-text "f : [Red, Green, ..]"))
 			(line-break)
 			(line-break)
-			(reflow "If you want me to infer its type, remove each")
+			(reflow "Tag unions in output positions, like the return type of a function, are automatically open. Remove the")
 			(reflow " ")
 			(annotated code "..")
-			(reflow ", or write a concrete type.")
-			(line-break)
-			(line-break)
-			(reflow "If you want to use it at many types, make it a function that takes")
 			(reflow " ")
-			(annotated code "{}")
-			(reflow ":")
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "f : {} -> [Red, Green]")
-			(line-break)
-			(indent 1)
-			(text "f = |{}| Red")
-			(annotation-end)
-			(line-break)
-			(reflow "Then call it as")
+			(reflow "or bind it to a named type variable like")
 			(reflow " ")
-			(annotated code "f({})")
+			(annotated code "..others")
 			(reflow " ")
-			(reflow "wherever you use it.")))
+			(reflow "if you want to refer to the extension elsewhere.")))
 	(report
 		(severity warning)
 		(title "Redundant Open Tag Union")
@@ -146,7 +120,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "f"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-tag (name "Red"))
 		(annotation
 			(ty-tag-union
 				(ty-tag-name (name "Red"))
@@ -154,7 +128,8 @@ NO CHANGE
 				(ty-rigid-var (name "#others")))))
 	(d-let
 		(p-assign (ident "g"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-lookup-local
+			(p-assign (ident "f")))
 		(annotation
 			(ty-tag-union
 				(ty-tag-name (name "Red"))
@@ -172,11 +147,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[Red]"))
+		(patt (type "[Green, Red]"))
 		(patt (type "[Blue, Green, Red]"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "[Red]"))
+		(expr (type "[Green, Red]"))
 		(expr (type "[Blue, Green, Red]"))
 		(expr (type "_arg -> {}"))))
 ~~~
