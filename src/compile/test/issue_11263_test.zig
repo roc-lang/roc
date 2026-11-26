@@ -135,7 +135,6 @@ test "issue 11263: a rejected field access preserves independent compile-time ro
     try std.testing.expectEqual(@as(usize, 1), name_errors);
 
     const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
-    const bodies = artifact.bodies();
     const store = &artifact.moduleEnvConst().store;
     var found_independent = false;
     for (artifact.compile_time_roots.roots.items()) |root| {
@@ -147,16 +146,16 @@ test "issue 11263: a rejected field access preserves independent compile-time ro
             .def, .expr, .statement, .required_binding, .hoisted => @backingInt(root.rootExpr()),
         };
         const region = store.getNodeRegion(@fromBackingInt(root_node));
+        const text = source[region.start.offset..region.end.offset];
         // A root evaluated at compile time whose own body contains the
         // rejected code reaches it and stores the crash, without reporting the
         // problem a second time.
-        if (try bodies.rootContainsDiagnosticError(root) and root.kind != .expect and
+        if (std.mem.find(u8, text, "missing.ec") != null and root.kind != .expect and
             root.request_eligibility == .eligible)
         {
             try std.testing.expect(root.payload == .const_node);
             try std.testing.expect(artifact.const_store.get(root.payload.const_node) == .checked_error);
         }
-        const text = source[region.start.offset..region.end.offset];
         if (!std.mem.eql(u8, text, "40.U64 + 2")) continue;
         try std.testing.expectEqual(.eligible, root.request_eligibility);
         try std.testing.expect(root.payload == .const_node);
