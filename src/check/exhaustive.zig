@@ -375,21 +375,21 @@ pub const Pattern = union(enum) {
     /// Check if this pattern can ever match a value (is inhabited).
     /// A pattern is uninhabited if it matches a type with no possible values,
     /// such as an empty tag union or a constructor with uninhabited arguments.
-    pub fn isInhabited(self: Pattern, type_store: *TypeStore, builtin_idents: BuiltinIdents) error{OutOfMemory}!bool {
+    pub fn isInhabited(self: *const Pattern, type_store: *TypeStore, builtin_idents: BuiltinIdents) error{OutOfMemory}!bool {
         return self.isInhabitedWithKnownEmpty(type_store, builtin_idents, &.{});
     }
 
     /// Every node of the pattern must be inhabited; nodes are checked in
     /// source order from an explicit work list.
     pub fn isInhabitedWithKnownEmpty(
-        self: Pattern,
+        self: *const Pattern,
         type_store: *TypeStore,
         builtin_idents: BuiltinIdents,
         known_empty_vars: []const Var,
     ) error{OutOfMemory}!bool {
         var pending: std.ArrayList(Pattern) = .empty;
         defer pending.deinit(type_store.gpa);
-        try pending.append(type_store.gpa, self);
+        try pending.append(type_store.gpa, self.*);
         while (pending.pop()) |pattern| {
             const children: []const Pattern = switch (pattern) {
                 .anything => |maybe_type| {
@@ -1367,6 +1367,9 @@ const InhabitedGraph = struct {
     /// Nodes of argument-less applications this query expands, whose settled
     /// values `query` keeps for their declarations.
     argless_nodes: std.ArrayList(struct { nominal: types.NominalType, index: usize }) = .empty,
+    /// The row walk of `rowNode`, kept with its capacity for the next row;
+    /// empty between rows.
+    row_path: std.ArrayList(RowItem) = .empty,
     stats: if (builtin.is_test) Stats else void = if (builtin.is_test) .{} else {},
 
     const Stats = struct { expanded: usize = 0, rows: usize = 0, edges: usize = 0, propagated: usize = 0 };
@@ -1437,6 +1440,7 @@ const InhabitedGraph = struct {
         self.false_nodes.deinit(self.gpa);
         self.settled_false_parents.deinit(self.gpa);
         self.argless_nodes.deinit(self.gpa);
+        self.row_path.deinit(self.gpa);
     }
 
     fn node(self: *InhabitedGraph) Allocator.Error!usize {
@@ -1499,8 +1503,10 @@ const InhabitedGraph = struct {
     /// graph's SCCs before adding payload dependencies: row cycles alone are
     /// not coinductive witnesses, while explicit recursive payloads are.
     fn rowNode(self: *InhabitedGraph, initial: RowKey) Allocator.Error!usize {
-        var path: std.ArrayList(RowItem) = .empty;
-        defer path.deinit(self.gpa);
+        // Nothing below walks another row, so one path serves every row.
+        const path = &self.row_path;
+        std.debug.assert(path.items.len == 0);
+        defer path.clearRetainingCapacity();
         const conjunction = initial.role == .record_row;
         var key = initial;
         var tail: ?usize = null;

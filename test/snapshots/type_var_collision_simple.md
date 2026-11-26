@@ -235,7 +235,7 @@ main! = |_| {
 							(p-assign (ident "result1")))
 						(e-lookup-local
 							(p-assign (ident "result2")))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 276)
+				(e-dispatch-call (method "plus") (constraint-fn-var 275)
 					(receiver
 						(e-dispatch-call (method "plus") (constraint-fn-var 274)
 							(receiver

@@ -198,7 +198,7 @@ main! = |_| {
 							(e-literal (string "hello")))))
 				(s-let
 					(p-assign (ident "lst"))
-					(e-call (constraint-fn-var 259)
+					(e-call (constraint-fn-var 257)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-list

@@ -3786,22 +3786,25 @@ pub const BuildEnv = struct {
         regions: *std.ArrayList(base.Region),
         statement_idx: CIR.Statement.Idx,
     ) Allocator.Error!void {
-        switch (env.store.getStatement(statement_idx)) {
-            inline .s_decl, .s_var, .s_reassign, .s_expr => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
+        switch (env.store.statementKind(statement_idx)) {
+            inline .s_decl, .s_var, .s_reassign, .s_expr => |kind| try collectDbgRegionsInExpr(allocator, env, regions, @field(env.store.statementView(statement_idx), @tagName(kind)).get(.expr)),
             .s_expect => {},
-            .s_dbg => |stmt| {
+            .s_dbg => {
+                const stmt = env.store.statementView(statement_idx).s_dbg.decode();
                 try regions.append(allocator, env.store.getStatementRegion(statement_idx));
                 try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr);
             },
-            .s_for => |stmt| {
+            .s_for => {
+                const stmt = env.store.statementView(statement_idx).s_for.decode();
                 try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr);
                 try collectDbgRegionsInExpr(allocator, env, regions, stmt.body);
             },
-            inline .s_while, .s_infinite_loop, .s_breakable_loop => |stmt| {
+            inline .s_while, .s_infinite_loop, .s_breakable_loop => |kind| {
+                const stmt = @field(env.store.statementView(statement_idx), @tagName(kind)).decode();
                 try collectDbgRegionsInExpr(allocator, env, regions, stmt.cond);
                 try collectDbgRegionsInExpr(allocator, env, regions, stmt.body);
             },
-            .s_return => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
+            .s_return => try collectDbgRegionsInExpr(allocator, env, regions, env.store.statementView(statement_idx).s_return.get(.expr)),
             .s_crash,
             .s_var_uninitialized,
             .s_break,
@@ -3833,24 +3836,27 @@ pub const BuildEnv = struct {
         regions: *std.ArrayList(base.Region),
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
-        switch (env.store.getExpr(expr_idx)) {
-            .e_str => |str| try collectDbgRegionsInExprSpan(allocator, env, regions, str.span),
-            .e_list => |list| try collectDbgRegionsInExprSpan(allocator, env, regions, list.elems),
-            .e_tuple => |tuple| try collectDbgRegionsInExprSpan(allocator, env, regions, tuple.elems),
-            .e_record => |record| {
+        switch (env.store.exprKind(expr_idx)) {
+            .e_str => try collectDbgRegionsInExprSpan(allocator, env, regions, env.store.exprView(expr_idx).e_str.get(.span)),
+            .e_list => try collectDbgRegionsInExprSpan(allocator, env, regions, env.store.exprView(expr_idx).e_list.get(.elems)),
+            .e_tuple => try collectDbgRegionsInExprSpan(allocator, env, regions, env.store.exprView(expr_idx).e_tuple.get(.elems)),
+            .e_record => {
+                const record = env.store.exprView(expr_idx).e_record.decode();
                 if (record.ext) |ext| try collectDbgRegionsInExpr(allocator, env, regions, ext);
                 for (env.store.sliceRecordFields(record.fields)) |field_idx| {
                     try collectDbgRegionsInExpr(allocator, env, regions, env.store.getRecordField(field_idx).value);
                 }
             },
-            .e_block => |block| {
+            .e_block => {
+                const block = env.store.exprView(expr_idx).e_block.decode();
                 var offset: usize = 0;
                 while (offset < block.stmts.span.len) : (offset += 1) {
                     try collectDbgRegionsInStatement(allocator, env, regions, env.store.statementAt(block.stmts, offset));
                 }
                 try collectDbgRegionsInExpr(allocator, env, regions, block.final_expr);
             },
-            .e_if => |if_expr| {
+            .e_if => {
+                const if_expr = env.store.exprView(expr_idx).e_if.decode();
                 for (env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                     const branch = env.store.getIfBranch(branch_idx);
                     try collectDbgRegionsInExpr(allocator, env, regions, branch.cond);
@@ -3858,7 +3864,8 @@ pub const BuildEnv = struct {
                 }
                 try collectDbgRegionsInExpr(allocator, env, regions, if_expr.final_else);
             },
-            .e_match => |match_expr| {
+            .e_match => {
+                const match_expr = env.store.exprView(expr_idx).e_match.decode();
                 try collectDbgRegionsInExpr(allocator, env, regions, match_expr.cond);
                 for (env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
                     const branch = env.store.getMatchBranch(branch_idx);
@@ -3866,56 +3873,65 @@ pub const BuildEnv = struct {
                     try collectDbgRegionsInExpr(allocator, env, regions, branch.value);
                 }
             },
-            .e_call => |call| {
+            .e_call => {
+                const call = env.store.exprView(expr_idx).e_call.decode();
                 try collectDbgRegionsInExpr(allocator, env, regions, call.func);
                 try collectDbgRegionsInExprSpan(allocator, env, regions, call.args);
             },
-            .e_lambda => |lambda| try collectDbgRegionsInExpr(allocator, env, regions, lambda.body),
-            .e_closure => |closure| try collectDbgRegionsInExpr(allocator, env, regions, closure.lambda_idx),
-            .e_nominal => |nominal| try collectDbgRegionsInExpr(allocator, env, regions, nominal.backing_expr),
-            .e_nominal_external => |nominal| try collectDbgRegionsInExpr(allocator, env, regions, nominal.backing_expr),
-            .e_binop => |binop| {
+            .e_lambda => try collectDbgRegionsInExpr(allocator, env, regions, env.store.exprView(expr_idx).e_lambda.get(.body)),
+            .e_closure => try collectDbgRegionsInExpr(allocator, env, regions, env.store.exprView(expr_idx).e_closure.get(.lambda_idx)),
+            .e_nominal => try collectDbgRegionsInExpr(allocator, env, regions, env.store.exprView(expr_idx).e_nominal.get(.backing_expr)),
+            .e_nominal_external => try collectDbgRegionsInExpr(allocator, env, regions, env.store.exprView(expr_idx).e_nominal_external.get(.backing_expr)),
+            .e_binop => {
+                const binop = env.store.exprView(expr_idx).e_binop.decode();
                 try collectDbgRegionsInExpr(allocator, env, regions, binop.lhs);
                 try collectDbgRegionsInExpr(allocator, env, regions, binop.rhs);
             },
-            .e_unary_minus => |unary| try collectDbgRegionsInExpr(allocator, env, regions, unary.expr),
-            .e_field_access => |field| try collectDbgRegionsInExpr(allocator, env, regions, field.receiver),
-            inline .e_method_call, .e_dispatch_call => |call| {
+            .e_unary_minus => try collectDbgRegionsInExpr(allocator, env, regions, env.store.exprView(expr_idx).e_unary_minus.get(.expr)),
+            .e_field_access => try collectDbgRegionsInExpr(allocator, env, regions, env.store.exprView(expr_idx).e_field_access.get(.receiver)),
+            inline .e_method_call, .e_dispatch_call => |kind| {
+                const call = @field(env.store.exprView(expr_idx), @tagName(kind)).decode();
                 try collectDbgRegionsInExpr(allocator, env, regions, call.receiver);
                 try collectDbgRegionsInExprSpan(allocator, env, regions, call.args);
             },
-            .e_interpolation => |interpolation| {
+            .e_interpolation => {
+                const interpolation = env.store.exprView(expr_idx).e_interpolation.decode();
                 try collectDbgRegionsInExpr(allocator, env, regions, interpolation.first);
                 try collectDbgRegionsInExprSpan(allocator, env, regions, interpolation.parts);
             },
-            .e_structural_eq => |eq| {
+            .e_structural_eq => {
+                const eq = env.store.exprView(expr_idx).e_structural_eq.decode();
                 try collectDbgRegionsInExpr(allocator, env, regions, eq.lhs);
                 try collectDbgRegionsInExpr(allocator, env, regions, eq.rhs);
             },
-            .e_structural_hash => |hash| {
+            .e_structural_hash => {
+                const hash = env.store.exprView(expr_idx).e_structural_hash.decode();
                 try collectDbgRegionsInExpr(allocator, env, regions, hash.value);
                 try collectDbgRegionsInExpr(allocator, env, regions, hash.hasher);
             },
-            .e_method_eq => |eq| {
+            .e_method_eq => {
+                const eq = env.store.exprView(expr_idx).e_method_eq.decode();
                 try collectDbgRegionsInExpr(allocator, env, regions, eq.lhs);
                 try collectDbgRegionsInExpr(allocator, env, regions, eq.rhs);
             },
-            .e_type_method_call => |call| try collectDbgRegionsInExprSpan(allocator, env, regions, call.args),
-            .e_type_dispatch_call => |call| try collectDbgRegionsInExprSpan(allocator, env, regions, call.args),
-            .e_tuple_access => |access| try collectDbgRegionsInExpr(allocator, env, regions, access.tuple),
-            .e_dbg => |dbg| {
+            .e_type_method_call => try collectDbgRegionsInExprSpan(allocator, env, regions, env.store.exprView(expr_idx).e_type_method_call.get(.args)),
+            .e_type_dispatch_call => try collectDbgRegionsInExprSpan(allocator, env, regions, env.store.exprView(expr_idx).e_type_dispatch_call.get(.args)),
+            .e_tuple_access => try collectDbgRegionsInExpr(allocator, env, regions, env.store.exprView(expr_idx).e_tuple_access.get(.tuple)),
+            .e_dbg => {
+                const dbg = env.store.exprView(expr_idx).e_dbg.decode();
                 try regions.append(allocator, env.store.getExprRegion(expr_idx));
                 try collectDbgRegionsInExpr(allocator, env, regions, dbg.expr);
             },
-            .e_expect_err => |expect_err| try collectDbgRegionsInExpr(allocator, env, regions, expect_err.expr),
+            .e_expect_err => try collectDbgRegionsInExpr(allocator, env, regions, env.store.exprView(expr_idx).e_expect_err.get(.expr)),
             .e_expect => {},
-            .e_return => |ret| try collectDbgRegionsInExpr(allocator, env, regions, ret.expr),
-            .e_for => |for_expr| {
+            .e_return => try collectDbgRegionsInExpr(allocator, env, regions, env.store.exprView(expr_idx).e_return.get(.expr)),
+            .e_for => {
+                const for_expr = env.store.exprView(expr_idx).e_for.decode();
                 try collectDbgRegionsInExpr(allocator, env, regions, for_expr.expr);
                 try collectDbgRegionsInExpr(allocator, env, regions, for_expr.body);
             },
-            .e_run_low_level => |run| try collectDbgRegionsInExprSpan(allocator, env, regions, run.args),
-            .e_tag => |tag| try collectDbgRegionsInExprSpan(allocator, env, regions, tag.args),
+            .e_run_low_level => try collectDbgRegionsInExprSpan(allocator, env, regions, env.store.exprView(expr_idx).e_run_low_level.get(.args)),
+            .e_tag => try collectDbgRegionsInExprSpan(allocator, env, regions, env.store.exprView(expr_idx).e_tag.get(.args)),
             .e_num,
             .e_frac_f32,
             .e_frac_f64,

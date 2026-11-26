@@ -46,9 +46,9 @@ pub fn renderTypeAnno(
     type_anno_idx: TypeAnno.Idx,
     needs_parens: bool,
 ) Allocator.Error!void {
-    const anno = module_env.store.getTypeAnno(type_anno_idx);
-    switch (anno) {
-        .apply => |a| {
+    switch (module_env.store.typeAnnoKind(type_anno_idx)) {
+        .apply => {
+            const a = module_env.store.typeAnnoView(type_anno_idx).apply.decode();
             const name = module_env.getIdentText(a.name);
             try buf.appendSlice(gpa, name);
             const args_slice = module_env.store.sliceTypeAnnos(a.args);
@@ -61,19 +61,23 @@ pub fn renderTypeAnno(
                 try buf.append(gpa, ')');
             }
         },
-        .rigid_var => |tv| {
+        .rigid_var => {
+            const tv = module_env.store.typeAnnoView(type_anno_idx).rigid_var.decode();
             try buf.appendSlice(gpa, module_env.getIdentText(tv.name));
         },
-        .rigid_var_lookup => |rv| {
+        .rigid_var_lookup => {
+            const rv = module_env.store.typeAnnoView(type_anno_idx).rigid_var_lookup.decode();
             try renderTypeAnno(buf, gpa, module_env, rv.ref, needs_parens);
         },
         .underscore => {
             try buf.append(gpa, '_');
         },
-        .lookup => |t| {
+        .lookup => {
+            const t = module_env.store.typeAnnoView(type_anno_idx).lookup.decode();
             try buf.appendSlice(gpa, module_env.getIdentText(t.name));
         },
-        .tag_union => |tu| {
+        .tag_union => {
+            const tu = module_env.store.typeAnnoView(type_anno_idx).tag_union.decode();
             try buf.append(gpa, '[');
             const tags_slice = module_env.store.sliceTypeAnnos(tu.tags);
             for (tags_slice, 0..) |tag_idx, i| {
@@ -85,7 +89,8 @@ pub fn renderTypeAnno(
                 try renderTypeAnno(buf, gpa, module_env, ext_idx, false);
             }
         },
-        .tag => |t| {
+        .tag => {
+            const t = module_env.store.typeAnnoView(type_anno_idx).tag.decode();
             try buf.appendSlice(gpa, module_env.getIdentText(t.name));
             const args_slice = module_env.store.sliceTypeAnnos(t.args);
             if (args_slice.len > 0) {
@@ -97,7 +102,8 @@ pub fn renderTypeAnno(
                 try buf.append(gpa, ')');
             }
         },
-        .tuple => |t| {
+        .tuple => {
+            const t = module_env.store.typeAnnoView(type_anno_idx).tuple.decode();
             try buf.append(gpa, '(');
             const elems_slice = module_env.store.sliceTypeAnnos(t.elems);
             for (elems_slice, 0..) |elem_idx, i| {
@@ -106,7 +112,8 @@ pub fn renderTypeAnno(
             }
             try buf.append(gpa, ')');
         },
-        .record => |r| {
+        .record => {
+            const r = module_env.store.typeAnnoView(type_anno_idx).record.decode();
             const fields_slice = module_env.store.sliceAnnoRecordFields(r.fields);
             if (fields_slice.len == 0) {
                 try buf.appendSlice(gpa, "{}");
@@ -142,7 +149,8 @@ pub fn renderTypeAnno(
                 try renderTypeAnno(buf, gpa, module_env, ext_idx, false);
             }
         },
-        .@"fn" => |f| {
+        .@"fn" => {
+            const f = module_env.store.typeAnnoView(type_anno_idx).@"fn".decode();
             if (needs_parens) try buf.append(gpa, '(');
             const args_slice = module_env.store.sliceTypeAnnos(f.args);
             for (args_slice, 0..) |arg_idx, i| {
@@ -157,7 +165,8 @@ pub fn renderTypeAnno(
             try renderTypeAnno(buf, gpa, module_env, f.ret, false);
             if (needs_parens) try buf.append(gpa, ')');
         },
-        .parens => |p| {
+        .parens => {
+            const p = module_env.store.typeAnnoView(type_anno_idx).parens.decode();
             try buf.append(gpa, '(');
             try renderTypeAnno(buf, gpa, module_env, p.anno, false);
             try buf.append(gpa, ')');

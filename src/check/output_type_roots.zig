@@ -304,11 +304,11 @@ pub fn nodeTypeRoots(tag: CIR.Node.Tag) NodeTypeRoots {
 
 /// The roots a call or field-access expression publishes beyond its own type.
 pub fn forEachCallTypeRoot(module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx, visitor: anytype) Allocator.Error!void {
-    const expr = module_env.store.getExpr(expr_idx);
-    if (expr == .e_call) {
-        if (expr.e_call.constraint_fn_var) |constraint_fn_var| try visitor.visit(constraint_fn_var);
-    } else if (expr == .e_field_access) {
-        const field_access = expr.e_field_access;
+    const kind = module_env.store.exprKind(expr_idx);
+    if (kind == .e_call) {
+        if (module_env.store.exprView(expr_idx).e_call.get(.constraint_fn_var)) |constraint_fn_var| try visitor.visit(constraint_fn_var);
+    } else if (kind == .e_field_access) {
+        const field_access = module_env.store.exprView(expr_idx).e_field_access.decode();
         var position: u32 = 0;
         while (position < field_access.segments.len) : (position += 1) {
             try visitor.visit(ModuleEnv.varFrom(module_env.store.fieldAccessSegmentAt(field_access.segments, position)));
@@ -318,12 +318,13 @@ pub fn forEachCallTypeRoot(module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx,
 
 /// The roots a statically dispatched expression publishes.
 pub fn forEachStaticDispatchTypeRoot(module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx, visitor: anytype) Allocator.Error!void {
-    const expr = module_env.store.getExpr(expr_idx);
-    if (expr == .e_dispatch_call) {
-        try visitor.visit(ModuleEnv.varFrom(expr.e_dispatch_call.receiver));
-        try visitor.visit(expr.e_dispatch_call.constraint_fn_var);
-    } else if (expr == .e_interpolation) {
-        const interpolation = expr.e_interpolation;
+    const kind = module_env.store.exprKind(expr_idx);
+    if (kind == .e_dispatch_call) {
+        const dispatch_call = module_env.store.exprView(expr_idx).e_dispatch_call.decode();
+        try visitor.visit(ModuleEnv.varFrom(dispatch_call.receiver));
+        try visitor.visit(dispatch_call.constraint_fn_var);
+    } else if (kind == .e_interpolation) {
+        const interpolation = module_env.store.exprView(expr_idx).e_interpolation.decode();
         try visitor.visit(ModuleEnv.varFrom(expr_idx));
         // An interpolation introduced as the builtin `Str` has no dispatch
         // (design.md "Concrete Builtin Interpolation Introduction").
@@ -332,12 +333,14 @@ pub fn forEachStaticDispatchTypeRoot(module_env: *const ModuleEnv, expr_idx: CIR
             try visitor.visitRequired(interpolation.constraint_fn_var, "checked interpolation expression had no static dispatch constraint type");
             try visitor.visitRequired(interpolation.assembler_fn_var, "checked interpolation expression had no assembler function type");
         }
-    } else if (expr == .e_type_dispatch_call) {
-        try visitor.visit(typeDispatchCallDispatcherVar(&module_env.store, expr.e_type_dispatch_call.owner));
-        try visitor.visit(expr.e_type_dispatch_call.constraint_fn_var);
-    } else if (expr == .e_method_eq) {
-        try visitor.visit(ModuleEnv.varFrom(expr.e_method_eq.lhs));
-        try visitor.visit(expr.e_method_eq.constraint_fn_var);
+    } else if (kind == .e_type_dispatch_call) {
+        const type_dispatch_call = module_env.store.exprView(expr_idx).e_type_dispatch_call.decode();
+        try visitor.visit(typeDispatchCallDispatcherVar(&module_env.store, type_dispatch_call.owner));
+        try visitor.visit(type_dispatch_call.constraint_fn_var);
+    } else if (kind == .e_method_eq) {
+        const method_eq = module_env.store.exprView(expr_idx).e_method_eq.decode();
+        try visitor.visit(ModuleEnv.varFrom(method_eq.lhs));
+        try visitor.visit(method_eq.constraint_fn_var);
     }
 }
 

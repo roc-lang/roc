@@ -78,7 +78,7 @@ pub const DeferredCallable = struct {
 pub fn instantiateNominalBacking(
     store: *TypesStore,
     idents: *const base.Ident.Store,
-    var_map: *@import("collections").DenseMap(Var, Var),
+    var_map: *collections.EpochMap(Var, Var),
     decl: types_mod.NominalDecl,
     args: []const Var,
     current_rank: Rank,
@@ -98,7 +98,7 @@ const BackingWalk = struct {
 fn walkNominalBacking(
     store: *TypesStore,
     idents: *const base.Ident.Store,
-    var_map: *@import("collections").DenseMap(Var, Var),
+    var_map: *collections.EpochMap(Var, Var),
     decl: types_mod.NominalDecl,
     args: []const Var,
     current_rank: Rank,
@@ -169,7 +169,7 @@ pub const BackingOpening = struct {
 pub fn openNominalBackingRecorded(
     store: *TypesStore,
     idents: *const base.Ident.Store,
-    var_map: *DenseMap(Var, Var),
+    var_map: *collections.EpochMap(Var, Var),
     decl_idx: types_mod.NominalDecl.Idx,
     decl: types_mod.NominalDecl,
     application_args: []const Var,
@@ -328,7 +328,7 @@ pub const BackingOpenings = struct {
     fn record(
         self: *BackingOpenings,
         store: *TypesStore,
-        var_map: *DenseMap(Var, Var),
+        var_map: *collections.EpochMap(Var, Var),
         decl_idx: types_mod.NominalDecl.Idx,
         decl: types_mod.NominalDecl,
         args: []const Var,
@@ -798,7 +798,7 @@ pub const Instantiator = struct {
     // not owned
     store: *TypesStore,
     idents: *const base.Ident.Store,
-    var_map: *@import("collections").DenseMap(Var, Var),
+    var_map: *collections.EpochMap(Var, Var),
 
     current_rank: Rank,
     rigid_behavior: RigidBehavior,

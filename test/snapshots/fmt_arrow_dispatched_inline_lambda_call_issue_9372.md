@@ -42,7 +42,7 @@ test1 = 10 |> (|x| x + 1)
 (can-ir
 	(d-let
 		(p-assign (ident "test1"))
-		(e-call (constraint-fn-var 219)
+		(e-call (constraint-fn-var 218)
 			(e-lambda
 				(args
 					(p-assign (ident "x")))

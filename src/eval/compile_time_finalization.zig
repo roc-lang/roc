@@ -2366,7 +2366,7 @@ fn valueFormReaderOrder(allocator: Allocator, module: *const checked.CheckedModu
     for (readers, runs) |request, *run| {
         const root = module.compile_time_roots.root(compileTimeRootForRequest(module, request));
         lookups.clearRetainingCapacity();
-        try checked.appendValueFormConstReads(allocator, bodies, root.rootExpr(), &stack, &lookups);
+        try checked.appendValueFormConstReads(allocator, &bodies, root.rootExpr(), &stack, &lookups);
         run.* = .{ .start = @intCast(reads.items.len), .len = 0 };
         for (lookups.items) |lookup| {
             const const_ref = bodies.constLookupRef(lookup) orelse finalizationInvariant("a value-form root reads a lookup that names no constant");
@@ -5012,7 +5012,7 @@ fn finalize(
     const requests = module.root_requests.compile_time_requests.items();
     const total_started_ns = if (requests.len != 0) if (options.timing) |timing| timing.start() else 0 else 0;
     if (requests.len != 0) {
-        const lowering_imports = try finalizationImports(allocator, checked.importedView(module), imports, available_modules);
+        const lowering_imports = try finalizationImports(allocator, &checked.importedView(module), imports, available_modules);
         defer allocator.free(lowering_imports);
 
         if (options.strategy == .boxy) {
@@ -8210,7 +8210,7 @@ const ComptimeFailureSite = struct {
 /// files as its link names them (`ModuleNames`), a whole program by content.
 fn fileIsModule(file: base.SourceFileEntry, module: *const checked.CheckedModuleArtifact) bool {
     if (base.byte_encoding.digestsEql(&file.module_identity, &module.module_identity.stable_hash)) return true;
-    return base.byte_encoding.digestsEql(&file.module_identity, &ModuleNames.stableName(checked.importedView(module)));
+    return base.byte_encoding.digestsEql(&file.module_identity, &ModuleNames.stableName(&checked.importedView(module)));
 }
 
 fn comptimeFailureSiteFrom(
@@ -8271,17 +8271,17 @@ fn comptimeFailureOrigin(
 
 fn finalizationImports(
     allocator: Allocator,
-    root: checked.ImportedModuleView,
+    root: *const checked.ImportedModuleView,
     imports: []const checked.PublishImportArtifact,
     available_modules: []const checked.ImportedModuleView,
 ) Allocator.Error![]checked.ImportedModuleView {
     var out = std.ArrayList(checked.ImportedModuleView).empty;
     errdefer out.deinit(allocator);
 
-    for (imports) |import| {
-        try appendUniqueImport(allocator, root, &out, import.view);
+    for (imports) |*import| {
+        try appendUniqueImport(allocator, root, &out, &import.view);
     }
-    for (available_modules) |module| {
+    for (available_modules) |*module| {
         try appendUniqueImport(allocator, root, &out, module);
     }
 
@@ -8290,18 +8290,18 @@ fn finalizationImports(
 
 fn appendUniqueImport(
     allocator: Allocator,
-    root: checked.ImportedModuleView,
+    root: *const checked.ImportedModuleView,
     out: *std.ArrayList(checked.ImportedModuleView),
-    module: checked.ImportedModuleView,
+    module: *const checked.ImportedModuleView,
 ) Allocator.Error!void {
     if (sameModuleIdentity(root, module)) return;
-    for (out.items) |existing| {
+    for (out.items) |*existing| {
         if (sameModuleIdentity(existing, module)) return;
     }
-    try out.append(allocator, module);
+    try out.append(allocator, module.*);
 }
 
-fn sameModuleIdentity(a: checked.ImportedModuleView, b: checked.ImportedModuleView) bool {
+fn sameModuleIdentity(a: *const checked.ImportedModuleView, b: *const checked.ImportedModuleView) bool {
     return std.meta.eql(a.module_identity.stable_hash, b.module_identity.stable_hash);
 }
 
