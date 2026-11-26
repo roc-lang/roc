@@ -164,7 +164,7 @@ pub const Result = union(enum) {
     /// A mismatch recorded as a diagnostic.
     problem: Problem.Idx,
     /// A mismatch detected under `write_no_report`, or under
-    /// `repeated_label_rows = .return_row` when a row's repeated label stopped
+    /// `RepeatedLabelRows.return_row` when a row's repeated label stopped
     /// the relation (`Scratch.repeatedLabelRow`): nothing recorded and the
     /// top-level operands are not poisoned. Successful child unifications that
     /// completed before the mismatch remain committed.
@@ -335,9 +335,6 @@ pub const Options = struct {
     /// type, so a mismatch is reported as that type needing two different
     /// methods of one name.
     method_requirements: ?MethodRequirements = null,
-    /// What a relation does when a row repeats a label whose occurrences do
-    /// not relate.
-    repeated_label_rows: RepeatedLabelRows = .mismatch,
     /// The region of the actual operand, which a reported mismatch records,
     /// when the caller has it at hand. A caller that leaves it unset gives
     /// the mismatch its region once one is reported.
@@ -367,7 +364,10 @@ pub const MethodRequirements = struct {
 /// * Resolves type variables & compresses paths
 /// * Compares variable contents for equality
 /// * Merges unified variables so 1 is "root" and the other is "redirect"
-pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.Error!Result {
+///
+/// `opts` is read in place, so a caller relating the same operands again
+/// passes the same options without copying them.
+pub fn unify(env: *const Env, a: Var, b: Var, opts: *const Options, repeated_label_rows: RepeatedLabelRows) std.mem.Allocator.Error!Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -414,7 +414,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
             error.TypeMismatch => {},
         }
 
-        if (opts.repeated_label_rows == .return_row and env.unify_scratch.repeatedLabelRow() != null) {
+        if (repeated_label_rows == .return_row and env.unify_scratch.repeatedLabelRow() != null) {
             return Result.mismatch;
         }
 

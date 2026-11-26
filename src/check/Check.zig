@@ -9094,21 +9094,19 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     defer trace.end();
 
     const unify_env = self.unifyEnv();
+    const saved_fresh_region_var = self.unify_fresh_region_var;
+    self.unify_fresh_region_var = b;
+    defer self.unify_fresh_region_var = saved_fresh_region_var;
     // A row repeating a label whose occurrences do not relate conflicts on
     // its own, whatever it is related to: normalizing it reports that
     // conflict once (design.md "Row Union Normalization"), and the operands
     // are related again with the row normalized or poisoned.
-    var unify_opts = opts;
-    unify_opts.repeated_label_rows = .return_row;
-    const saved_fresh_region_var = self.unify_fresh_region_var;
-    self.unify_fresh_region_var = b;
-    defer self.unify_fresh_region_var = saved_fresh_region_var;
-    var result = try unifier.unify(&unify_env, a, b, unify_opts);
-    while (unify_opts.repeated_label_rows == .return_row and result == .mismatch) {
+    var result = try unifier.unify(&unify_env, a, b, &opts, .return_row);
+    while (result == .mismatch) {
         const row = self.unify_scratch.repeatedLabelRow() orelse break;
         try self.adoptUnifyScratch(env, b, owner);
         try self.normalizeRowUnionOrReport(row, b, env);
-        result = try unifier.unify(&unify_env, a, b, unify_opts);
+        result = try unifier.unify(&unify_env, a, b, &opts, .return_row);
     }
     try self.finishUnify(result, b, env, owner);
     return result;
@@ -33323,7 +33321,7 @@ fn beginExprCheckFrame(
         .expr_var_raw = expr_var_raw,
         .expr_var = undefined,
         .mb_anno_vars = null,
-        .nested_expected = expected.*,
+        .nested_expected = undefined,
         .is_call_arg = false,
         .is_immediate_callee = false,
         .is_forwarded_result = false,
@@ -33338,6 +33336,10 @@ fn beginExprCheckFrame(
         .rank_pushed = false,
         .hoist_frame_open = false,
     };
+    // Copied on its own, so the copy goes straight from `expected` into the
+    // frame: as a field of the initializer above it would first be copied to
+    // a temporary, because `expected` could point into `frame`.
+    frame.nested_expected = expected.*;
     errdefer frame.deinit(self, env);
 
     // Attribute any dispatcher instantiated while checking this expression to it,
@@ -44838,11 +44840,10 @@ fn probeRelate(self: *Self, probe: *Probe, a: Var, b: Var, opts: unifier.Options
     const unify_env = self.unifyEnv();
     var unify_opts = opts;
     unify_opts.on_mismatch = .write_no_report;
-    unify_opts.repeated_label_rows = .return_row;
     const saved_fresh_region_var = self.unify_fresh_region_var;
     self.unify_fresh_region_var = b;
     defer self.unify_fresh_region_var = saved_fresh_region_var;
-    const result = try unifier.unify(&unify_env, a, b, unify_opts);
+    const result = try unifier.unify(&unify_env, a, b, &unify_opts, .return_row);
     if (result == .mismatch and probe.repeated_label_row == null) {
         if (self.unify_scratch.repeatedLabelRow()) |row| {
             if (self.types.predatesProbe(row)) probe.repeated_label_row = .{ .row = row, .actual = b };
