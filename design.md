@@ -31677,8 +31677,8 @@ a function (an empty list of functions, `None` of `[Some(a -> a), None]`),
 whose layout is its lambda sets', which its type does not decide, and a part
 of a `.boxy` capture of a polymorphic function whose type holds a variable
 in the type of a function it could hold. No list is stored as packed bytes,
-and no node is a number, a string or a zero-sized value on its own: those
-are only ever parts of an image, and `ConstValue` has no node form for them. Every
+and `ConstValue` has no number, string or zero-sized form: a number or a
+string is only ever part of an image. Every
 reader takes an image child as it takes a root's image: Boxy restores it
 through `restoreImageStep`, static data freezes or re-encodes it into the
 value holding it (`StaticInitializerMachine.writeStored`), and Monotype
