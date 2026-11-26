@@ -5873,6 +5873,7 @@ const Lowerer = struct {
                 const module: check.CheckedModule.ModuleId, const node: check.CheckedModule.ConstNodeId = switch (self.solved.lifted.static_data_values.get(@backingInt(candidate.static_data))) {
                     .stored => |stored| .{ check.CheckedModule.constModuleId(stored.const_locator), stored.node orelse Common.invariant("a stored list's static data request named no stored node") },
                     .stored_root => |root| .{ root.module, root.node },
+                    .stored_image => |image| .{ image.module, image.node },
                     .inline_literal => Common.invariant("a stored list's static data request named a value-form expression"),
                 };
                 const result_id: LIR.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(self.result.static_data_values.items.len))));

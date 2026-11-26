@@ -62,7 +62,56 @@ pub const Binding = struct {
 pub const Resolver = struct {
     context: *anyopaque,
     resolve: *const fn (context: *anyopaque, name: []const u8) ?Binding,
+    /// Where the image's pool imports (`UnitImage.import_pool`) bind; an
+    /// image that names none may be loaded without one.
+    pool: ?*Pool = null,
 };
+
+/// The stored constants' images loaded images name (design.md "Constant
+/// Pool"), each placed in this process once, at the first load naming it,
+/// with its pointer words holding the addresses they point at. Not
+/// thread-safe: its owner serializes loads.
+pub const Pool = struct {
+    gpa: std.mem.Allocator,
+    source: UnitImage.PoolSource,
+    placed: std.AutoHashMapUnmanaged([32]u8, []align(placed_alignment.toByteUnits()) u8) = .empty,
+
+    /// The alignment every placed image gets, at least any stored type's.
+    const placed_alignment: std.mem.Alignment = .@"16";
+
+    pub fn deinit(self: *Pool) void {
+        var blocks = self.placed.valueIterator();
+        while (blocks.next()) |block| self.gpa.free(block.*);
+        self.placed.deinit(self.gpa);
+        self.* = undefined;
+    }
+
+    /// The address of the image the pool import `name` names, placing it
+    /// the first time.
+    fn bind(self: *Pool, name: []const u8) error{OutOfMemory}!Binding {
+        const digest = UnitImage.poolDigestOfName(name) orelse invariant("a pool import names no image digest");
+        const gop = try self.placed.getOrPut(self.gpa, digest);
+        if (!gop.found_existing) {
+            errdefer self.placed.removeByPtr(gop.key_ptr);
+            const image = try self.source.find(self.source.context, digest) orelse invariant("no checked module of the compilation stores an image a unit names");
+            if (builtin.mode == .debug) std.debug.assert(image.alignment <= placed_alignment.toByteUnits());
+            const block = try self.gpa.alignedAlloc(u8, placed_alignment, image.bytes.len);
+            @memcpy(block, image.bytes);
+            const start = @intFromPtr(block.ptr);
+            for (image.pointers) |pointer| {
+                const target = std.mem.readInt(u64, block[pointer..][0..8], .little);
+                std.mem.writeInt(u64, block[pointer..][0..8], start + target, .little);
+            }
+            gop.value_ptr.* = block;
+        }
+        return .{ .address = @intFromPtr(gop.value_ptr.ptr), .function = false };
+    }
+};
+
+fn invariant(comptime message: []const u8) noreturn {
+    if (builtin.mode == .debug) std.debug.panic("unit image loader invariant violated: " ++ message, .{});
+    unreachable; // a compiler invariant: only a compiler bug reaches this, which debug builds report above
+}
 
 /// Why an image could not be loaded.
 pub const LoadError = error{
@@ -159,6 +208,11 @@ pub fn load(gpa: std.mem.Allocator, view: UnitImage.View, resolver: Resolver, di
     @memset(stubs, null);
     for (imports, bindings) |import, *binding| {
         const name = view.name(import.name);
+        if (import.flags & UnitImage.import_pool != 0) {
+            const pool = resolver.pool orelse invariant("an image names a pool image and its loader has no pool");
+            binding.* = try pool.bind(name);
+            continue;
+        }
         binding.* = resolver.resolve(resolver.context, name) orelse binding: {
             if (import.flags & UnitImage.symbol_weak == 0) {
                 diagnostic.name = name;

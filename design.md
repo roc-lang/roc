@@ -745,6 +745,7 @@ reads that distinction, or anything else, back out of the spelling:
 | `roc__d{N}` | the value owner `N` holds | program |
 | `roc__d{N}_{k}` | the `k`th further node (from 1) of owner `N`'s value | program |
 | `roc__h{hash}` | a datum named by content: a string literal's backing, a carried constant, or a constant a wasm unit defines for itself (`UnitCompile.contentNamedStaticData`) | shared |
+| `roc__i{digest}` | a stored constant's image, by its digest in hex (`lir.Program.poolImageSymbolName`; design "Constant Pool") | shared |
 | `roc__p{hash}` | a procedure, by its `ProcIdentity` | shared |
 | `roc__p{hash}.{k}` | the `k`th fragment function (from 1) of a procedure's wasm code ("Wasm Function Limits") | shared |
 
@@ -762,8 +763,11 @@ another kept value still points into its data, so compaction renames every kept
 node after the first kept value in export order whose data graph reaches it, in
 the order a walk from that value finds them. `lir.Program`
 (`staticDataSymbolName`, `staticDataNodeSymbolName`,
-`content_data_symbol_prefix`) and `ProcIdentity.symbol_name_prefix` are the
-only places these forms are spelled.
+`content_data_symbol_prefix`, `pool_image_symbol_prefix`) and
+`ProcIdentity.symbol_name_prefix` are the only places these forms are
+spelled; a unit image reads the pool form back
+(`UnitImage.poolDigestOfName`), and the backend asserts at compile time that
+its prefix is `lir.Program`'s.
 
 Debug information shows a procedure by its source name and states its
 `roc__p{hash}` symbol as the linkage name ("Procedure Source Names"), so
@@ -2831,12 +2835,12 @@ retain and remap both child slots and referenced procedures. Identical frozen
 nodes can share storage by their contents and relocations.
 
 A stored value that is data alone, holding no function value and no failed
-value anywhere inside it, is one slot naming its ConstStore node
-(`Program.storedDataAlone`), whatever it holds: a root's image (Stored
-Images), which the data encoder copies as one block, or a data part of a
-stored function value, which it writes from the store through its type's
-plan, so the work of every pass and backend is independent of how many
-values it holds, and only the encoder's is proportional to them. The encoder writes each stored value straight into
+value anywhere inside it, is an image (Stored Images), and is one slot naming
+its ConstStore node whatever it holds: a root's image, or the image of a
+part of a stored function value, which the data encoder copies as one block,
+or re-encodes at a reader's other layout, so the work of every pass and
+backend is independent of how many values it holds, and only the encoder's
+is proportional to them. The encoder writes each stored value straight into
 the bytes of the value holding it, and shares among its readers the frozen
 descriptor of every value that owns an allocation (a stored list, a box, an
 allocated string, and a product or tag a recursive type keeps behind a box),
@@ -7203,18 +7207,18 @@ arguments. Under `.boxy` a use reads the stored instance its edge names, and
 a forwarded use reads its own literal argument, a word of its type table
 holding an immortal callable that restores the stored instance; a value of a
 type the body does not know cannot be one table word, so the word is the
-callable, which never recomputes. For an instance whose value is data alone
-the callable's code is a generated worker of the reading program
-(`WorkerKey.root_restore`, `Program.rootRestoreWorker`) that restores the
-stored value where it is read, named by that value's content (its digest and
-type), so every unit restoring one instance defines one procedure, which a
-link keeps once; no unit emits such an instance's entry wrapper, so an
-instance no runtime code reads (one only an `expect` reads) puts nothing in
-any object. For an instance holding a function the callable is the root's
-entry wrapper, whose restore lowers the workers the value names. A unit
-reading an instance another module holds embeds the value, so a module's
-importer-facing digest covers the stored value of each of its unsealed
-instance roots (`boxy_interface.Digests.hashStoredValues`). Under `.lss` a use
+callable, which never recomputes. The callable's code is a generated worker
+of the reading program (`WorkerKey.root_restore`, `Program.rootRestoreWorker`),
+not the root's entry wrapper: it restores the root's stored value where it
+is read, and is named by that value's content (the stored value's digest
+and its type), so every unit restoring one instance defines one procedure,
+which a link keeps once. No unit emits the wrapper of a stored instance, and
+a unit reading an instance another module holds embeds the value, so a
+module's importer-facing digest covers the stored value of each of its
+unsealed instance roots (`boxy_interface.Digests.hashStoredValues`): a
+program deriving an instance from its types reads whichever module's root
+holds it. In a compile-time program evaluating the instance, the word reads
+the root's slot instead (`WorkerKey.root_slot`). Under `.lss` a use
 reads the stored instance its edge names, or, in a compile-time program
 evaluating that instance, the instance's slot. A forwarded use inside a
 generalized local scope that a use of the scope lowers (a scheme alias, `pick
@@ -12500,63 +12504,24 @@ have zero runtime list allocation in a size cart even though the eval allocation
 harness, which does not perform final constant hoisting, observes one base-list
 allocation.
 
-Strings and flat scalar or fixed-product lists use one shared content-interned blob store.
-`List(U8)` therefore has the same constant-storage cost as a `Str` containing
-the same bytes, and equal string/list contents reuse one blob. A value-form
-literal (a string, or a file imported as bytes) is data alone, so its root is
-stored as its image (Stored Images), whose allocation holds a copy of the
-literal's bytes. A packed list
-view records its scalar encoding or fixed-product width and item count separately
-from its byte view. Fixed products are records, tuples, and nominal wrappers
-composed entirely of scalars, discriminant-only tag unions and zero-sized
-products; a list of a discriminant-only tag union is a list of such products
-with one leaf. A tag union is discriminant-only when its const plan's
-payloads are all fixed products and its committed layout is its
-discriminant alone on every target (`PackedData.Plan.discriminantOnly`):
-every payload is zero-sized, as `{}`, a record or tuple of zero-sized
-fields, a union of one tag, or a nominal wrapping one is, so `Bool`, `[A,
-B]` and `[A({}), B]` are, and `[A(U8), B]` is not. Their existing checked
-types define checked field order; bytes concatenate leaves in that order
-without host padding. A discriminant-only union's leaf is as wide as its
-discriminant (one byte up to 256 tags, two up to 65536) and holds the index
-of the item's tag among its union's tags in byte-wise name order, which is
-the order that assigns discriminants, so it is the discriminant's
-little-endian bytes and every reader lays it out as it lays out a scalar;
-the payloads have no bytes to store or restore, and a union of one tag is
-zero-sized and has no leaf. The tag a leaf holds is read through the
-checked type, as a scalar's bits are, and a value's reads share its type,
-tags included (Value Rows: Uses Share One Row). Lists containing other value shapes retain explicit
-child nodes so their graph edges and sharing stay visible. A restored list of
-such values that is data alone is a stored list (see "Compile-Time Evaluation
-And Static Storage"), which no stage represents item by item.
+A stored value that is data alone is an image (Stored Images), whatever it
+holds: a list of scalars or products is one block holding its items as the
+evaluation's memory held them, at the 64-bit layout, with every F32 or F64
+NaN Roc's one quiet NaN. A value-form literal (a string, or a file imported
+as bytes) is data alone, so its root is stored as its image, whose allocation
+holds a copy of the literal's bytes: an image is one block, which a read
+copies whole and a digest covers whole, so its bytes are the image's own. A
+list holding a function is stored as nodes, its items one node each; a
+restored list of values that is data alone is a stored list (see
+"Compile-Time Evaluation And Static Storage"), which no stage represents item
+by item.
 
 Constant writing and target lowering compile a field-copy plan once per explicit
 representation. Plans use committed layout field indexes and offsets, preserve
 stored scalar bits, and initialize target padding. Compatible contiguous
 regions use bulk copies.
 
-The constant store writer stores an evaluated list of scalars or fixed
-products with one decision per list, never one per item. A packed item is its
-leaves' little-endian bits, except that every F32 or F64 NaN is Roc's one
-quiet NaN whatever bits the evaluation produced, as a stored scalar's is. A
-discriminant is little-endian in memory on every host. On a
-little-endian host an integer, `Dec` or vector list's memory, and a product
-list's memory when its layout has no padding and no float leaf (a list of
-`Bool`s or of other discriminant-only tag unions among them), already is that
-encoding and is stored as it is. A float list is copied in one vectorized pass
-that replaces NaN lanes, and a product list with float leaves is copied by its
-plan's regions and then has each float leaf's NaN replaced. A big-endian host
-packs each item on its own. A value-form list of numerals that reads no
-constant encodes its numerals at the item type, decided once for the list,
-into the memory a list of them occupies, and packs that memory as an
-evaluated list's. A value-form list of products writes each item's leaves,
-a discriminant-only tag union as the discriminant of the variant its plan
-names, into
-the memory the list occupies and packs that memory as an evaluated list's, so
-a literal list and an evaluated one store the same bytes. Debug builds check a
-bulk-stored scalar list, and every tag leaf of a packed product
-list, against storing each item on its own, and check every tag leaf a
-packing plan encodes or decodes names one of its union's tags. Packed data remains a literal through specialization;
+A packed list literal (below) remains a literal through specialization;
 list length must not create per-item LIR statements, including in static
 initializers. Literal backings are shared by explicit owner-relative identity
 through IR stages. Boxy consumes its committed layout without unrolling the
@@ -19638,8 +19603,10 @@ from its type table where the literal is (`Body.literalThunkLocal`), not in
 its entry chain: only that literal reads the word, so a body holds each of
 its literal arguments only across the call that converts it, and the
 ownership facts of a body with many literals do not carry every one of them
-across every join. The callable is the root's entry wrapper composed as a
-dictionary entry (`Body.rootThunk`): its body restores the stored value
+across every join. For a polymorphic constant's stored instance the
+callable is the reading program's own restore thunk (`WorkerKey.root_restore`,
+Polymorphic Constants). For any other root it is the root's entry wrapper
+composed as a dictionary entry (`Body.rootThunk`): its body restores the stored value
 (`CompileTimeRootPayload.const_node`), or, where none is stored (the root is
 being evaluated, or holds a function), converts the literal in the frames of
 the schemes its edge instantiates (`Body.lowerLiteralArgumentRoot`,
@@ -20096,12 +20063,15 @@ Nothing a module emits depends on a module that imports it:
   not, since every use of a converted literal restores the root's stored
   value or converts the literal in place, and neither is a validation root's,
   which has no value for any body to read;
-  nor is the wrapper of a constant whose stored value is data alone
-  (`Program.storedDataAlone`) and whose template no longer names an entry
-  procedure, because every read of such a constant restores the stored value
-  into the reading body, so a constant no body reads puts no data in any
-  object; a stored function value's wrapper is emitted, since its restore
-  lowers the workers the value names, which other objects link against;
+  nor is the wrapper of a constant whose value is stored and whose
+  template no longer names an entry procedure, of a callable binding whose
+  value is stored, or of a polymorphic constant's stored instance, because
+  every read of such a value restores it into the reading body, so a
+  constant no body reads puts no data in any object, and an object imports
+  an image a body reads from the constant pool rather than carrying it
+  (Constant Pool); the workers a stored function value names, which
+  readers restoring it link against, are set up by the unit directly
+  (Stored Function Values), without lowering the lambdas' owner;
 - its conversion workers are its own and memoized within it alone;
 - ARC solves each of its procedures' ownership signatures from the procedure's
   body and its callees, and a call from another module demands no ownership
@@ -21030,6 +21000,26 @@ a type by its structure. A function value's table names its inputs instead:
 in a program that stores function values, each table's word past its needs
 holds its position among the program's tables, whose inputs the lowering
 kept as the static words they were filled with.
+
+Every reader restores a stored value where it reads it, so a module unit
+emits no procedure that restores a stored value for other objects: the
+entry wrapper of a constant, of a callable binding, or of a polymorphic
+constant's instance whose value is stored is not emitted for that purpose
+(`unitEmitsTemplate`). The unit instead sets up the workers each stored
+function value's recipe names exactly as a reader's restore does
+(`seedStoredValueWorkers`, `StoredFn.recipeWorkers`): the recipe's worker
+and the workers of its capture graph's callables and tables, which it
+lowers and exports, each importer-visible (`recordExports`), since a reader
+restoring the value names them. Restoring a lambda reads its owner's scope
+alone (`Decoder.workerAs(.lambda_owner)`, `Program.templateScope`): the
+owner's body ran at compile time, and a lambda reads only the variables,
+dictionaries and literal requirements its owner's worker record holds before
+any lowering. So a lambda written in a constant's own body has the
+constant's entry wrapper as its owner's scope, and the wrapper is neither
+lowered nor emitted for it. A unit defines and exports exactly the workers it
+lowers (`seedUnitWorkers`), so a scope no body of the unit lowers is no
+procedure of its object. A compile-time program evaluating a root enters it
+through its own root procedure, never through another object's wrapper.
 
 A function value has no slot for another root to read, so a module's roots
 holding one, with every pending root they read, run first in their own
@@ -31867,7 +31857,27 @@ carry static refcount headers, lists and strings keep their capacity (Static
 Lists And Strings Keep Their Capacity), every NaN is Roc's one NaN, and no
 list or string is a seamless slice. The producer decides the form: a root
 whose const plan can hold no function is data alone. A value holding a
-function or a failure is stored as nodes, and so is every part of it.
+function or a failure is stored as nodes, and each of its parts whose value
+holds no function is an image of its own, the child node's value
+(`ConstStoreWriter.fillPartImage`), at the type the part has in the value's
+stored type, whenever the part's layout is a function of that type alone:
+its const plan holds no function, or holds `.boxy` functions, which every
+layout holds as erased callables, and its type is closed. Two kinds of
+function-free part therefore stay nodes: one of an `.lss` type that can hold
+a function (an empty list of functions, `None` of `[Some(a -> a), None]`),
+whose layout is its lambda sets', which its type does not decide, and a part
+of a `.boxy` capture of a polymorphic function whose type holds a variable
+in the type of a function it could hold. No list is stored as packed bytes,
+and `ConstValue` has no number, string or zero-sized form: a number or a
+string is only ever part of an image. Every
+reader takes an image child as it takes a root's image: Boxy restores it
+through `restoreImageStep`, static data freezes or re-encodes it into the
+value holding it (`StaticInitializerMachine.writeStored`), and Monotype
+restores it as its literal or as one stored static data candidate named by
+the image's node (`BodyContext.restoredImagePart`,
+`StaticDataValue.stored_image`). Whether a root is data alone is whether
+its node is an image (a root's type is closed, and a root holding no
+`.lss` function has a layout its type decides).
 
 Every producer of a data root writes its image. An evaluated root's image is
 written by one copying pass over evaluator memory guided by the root's const
@@ -31945,6 +31955,76 @@ every 64-bit target.
 Compiler hosts are little-endian, as the checked cache's raw-byte format
 already requires (a big-endian host fails to compile), so an image's bytes
 are the evaluation's own.
+
+### Constant Pool
+
+A stored image is named by its digest wherever it is emitted: static data
+materialization emits a read image's block as one node named
+`roc__i{digest}` (`StaticDataExport.pool_image`), with its pointer words
+relocated to itself, so every program and every unit carrying one image
+names it alike and the name is exact, the digest being the image's identity
+(Stored Images). A whole-program object (`--specialize=yes`, `--opt=speed`
+or `--opt=size`, a pieces composition) defines each image it reads once,
+since one static-data build keeps one block per digest and a composition
+keeps one datum per name.
+
+A `.boxy` unit image holds no image. Its composition leaves every image its
+kept code names out of the unit's data and imports it by name instead, the
+import marked as the pool's (`UnitImage.import_pool`), so a unit's cache
+entry records the digests of the images it reads and none of their bytes.
+The images live in the checked modules' constant stores, which the
+compilation already holds; a consumer finds one by digest through an index
+over the stores (`ConstStore.ImageIndex`). A digest no store holds is a
+compiler invariant: a unit's key covers the stored values its lowering read.
+
+Every consumer of unit images places the images their atoms name:
+
+- A link that places images (the ELF, Mach-O and COFF fast dev links and a
+  dev run's composed run image) resolves pool imports during its atom walk
+  (`unit_walk.Pool`), keeps an image exactly when an edge of a reached atom
+  names it, lays the kept images out in digest order after the placed
+  images' writable data, copies each kept image once, writing its pointer
+  words as the absolute addresses they point at in the same pass, and adds
+  one loader relocation per pointer word (an ELF relative relocation, a
+  Mach-O rebase, a COFF base relocation, a run image rebase). An image no
+  reached atom names is never read.
+- An in-process loader (compile-time evaluation's, `roc test`'s and a glue
+  run's) places an image the first time a loaded image names it, once for
+  the loader's lifetime (`UnitImageLoader.Pool`).
+
+What a link keeps is decided by the atoms of the images, built with each
+unit's image in parallel and exact. A unit's writable data divides into
+atoms like its block: one per datum of the static data a format keeps
+writable (an ELF object's pointer-bearing `.data.rel.ro`, Mach-O's
+`__DATA,__const`), each reached only through an edge of a reached atom, and
+roots for the rest of the writable data (the global offset table, data an
+object keeps outside its static data), which a placed image always reaches.
+A field in writable data reaches its target from its own atom. Writable
+data is still placed whole; a site in an unreached data atom is neither
+written nor given a loader relocation. So a constant is kept exactly when a
+kept function references it, directly or through another kept datum: the
+walk starts from the `provides`, follows every call, address and datum, and
+never consults the checked program's own reachability walk
+(`compile.boxy_reach`), which may miss what only the images know.
+
+The wasm link keeps its own form: a wasm unit defines each image it reads
+as a weak data segment under the image's name (`contentNamedStaticData`),
+and its atom walk keeps one definition of a name, and only the segments
+reached code names. A wasm unit therefore still carries the bytes of the
+images it reads; the walk decides what the module holds exactly as above,
+so a linked wasm module holds each reached image once, as a pooled native
+link does. What the pool would add for wasm is only a smaller unit cache
+entry, and it is not built: a wasm unit's data pointers are not absolute
+words a link writes and a loader rebases but relocations of the unit's
+own module form (`__memory_base` plus an offset, kept as the unit image's
+sites, `UnitCompile.imageOfModule`), and a wasm unit image's data imports
+resolve only to data another linked unit defines (it has no pool marking
+like `UnitImage.import_pool`). Pooling wasm images would take a pool import
+in `WasmUnitImage` and a wasm-side placement emitting those relocations for
+each kept image's pointer words.
+
+`--timings` reports, per fast dev link and composed run image, the images
+the units name, the ones placed, and their bytes.
 
 ## Test Root Ownership
 
@@ -32397,18 +32477,14 @@ tuple, record, and tag-payload fields are slices.
 const ConstStr = ConstBlobDataId;
 ```
 
-A stored string or packed list is a whole blob, never a view into a longer
-one. How evaluation's allocations shared bytes (a seamless slice of a longer
-allocation) is runtime representation and does not enter `ConstStore`; the writer stores each string's own bytes, and equal
-contents share a blob because interning is by content. Capacity is not
+A stored string is a whole blob, never a view into a longer one. How
+evaluation's allocations shared bytes (a seamless slice of a longer
+allocation) is runtime representation and does not enter `ConstStore`; an
+image holds each string's own bytes (Stored Images). Capacity is not
 representation: `ConstList.capacity` records a list's beside its items, which
-may be nodes, a packed blob, or nothing, and `ConstString.capacity` records a
-string's beside its blob (Static Lists And Strings Keep Their Capacity).
-Strings and packed scalar lists intern into the same exact-content namespace.
-Packed multi-byte scalars use little-endian checked-value bytes;
-this is target-independent `ConstStore` data, not a captured host allocation or
-backend-owned byte sequence. Post-check lowering validates the byte count
-against the scalar layout before making a runtime static-data view.
+are nodes or nothing, and `ConstString.capacity` records a string's beside its
+blob (Static Lists And Strings Keep Their Capacity). A string node has no
+producer: a string is data alone, so it is part of an image.
 
 `ConstScalar` is a closed checked scalar representation:
 
@@ -32689,8 +32765,8 @@ expression is read outside its owner.
   parent holds, becomes a read of that local. Each later read is a fresh read
   of the local. Static-data candidates and parts reached again in one restore
   are promoted the same way.
-- A leaf (scalar, string, empty or packed list, zero-sized value, crash) is
-  never bound. Each read restores its own literal, which costs nothing where
+- A leaf (an image, an empty list, a crash) is
+  never bound. Each read restores its own literal or static datum, which costs nothing where
   a shared local would cost a reference count.
 - The let of a promoted node goes around the restore's result, outermost first
   in node completion order, so each let follows the lets its value reads. A
@@ -34062,7 +34138,11 @@ inside its atom, after the header), each recording what it references and,
 for every reference the image resolved between two of its atoms (and every
 page-relative one inside an atom), where the field is and how it encodes
 its target: an x86_64 displacement, an arm64 branch, page or page offset, or
-the arm64 dev backend's PC-relative address sequence. A link writes only the
+the arm64 dev backend's PC-relative address sequence. The writable data
+divides into atoms too, one per datum of the static data a format keeps
+writable, which decide what is reached but are placed with the rest of the
+writable data (Constant Pool). An image's stored constants are no part of
+it: it imports each from the constant pool. A link writes only the
 atoms the program reaches. An ELF link packs each image's reached atoms
 together in image order and fixes a resolved reference again only when the
 atoms it left out changed what the field encodes; a Mach-O or COFF link

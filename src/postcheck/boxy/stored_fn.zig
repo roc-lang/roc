@@ -38,6 +38,7 @@ const types = @import("types.zig");
 const Tables = @import("tables.zig");
 const lower = @import("lower.zig");
 const const_schema = @import("const_schema.zig");
+const const_store = check.ConstStore;
 const Codec = @import("codec.zig");
 const body = @import("body.zig");
 const StaticDescs = @import("static_descs.zig").StaticDescs;
@@ -122,6 +123,10 @@ fn captureBinding(allocator: Allocator, graph: []const CaptureNode, roots: []con
 pub const Capture = struct {
     plan: LirProgram.ConstPlanId,
     layout_idx: layout.Idx,
+    /// The captured value's type, which the const store writer steps into
+    /// the types of its parts (`partType`) and stores a part holding no
+    /// function at (`storedType`).
+    ty: TypeId,
     ptr: [*]u8,
 };
 
@@ -405,6 +410,68 @@ pub const Retained = struct {
         return try self.describeCapture(allocator, self.program.moduleByKey(store_module).index, function.shape, .{ .imported = .{ .metadata = imported, .function = function } }, capture);
     }
 
+    /// The type of a captured value (`Capture.ty`) and of its parts.
+    pub const PartTypeId = TypeId;
+
+    /// How a part of a stored value is reached from the value holding it,
+    /// as the value's const plan reaches the part's plan
+    /// (`const_schema.constPlanOf`).
+    pub const PartStep = union(enum) {
+        list_item,
+        box_payload,
+        /// A record's field, as its storage slot, or a tuple's item.
+        component: u32,
+        /// Payload `index` of the tag at position `variant` among its
+        /// type's tags, the variant's discriminant in the type's plan.
+        tag_payload: struct { variant: u32, index: u32 },
+        nominal_backing,
+    };
+
+    /// The type of the part `step` reaches of a value of type `ty`.
+    pub fn partType(self: *Retained, result: *LirProgram.Result, ty: TypeId, step: PartStep) Allocator.Error!TypeId {
+        const program = self.program;
+        program.result = result.*;
+        defer result.* = program.result;
+        const store = &program.store;
+        return switch (step) {
+            .nominal_backing => try program.layouts.converter.backing(ty),
+            .list_item => switch (store.get(ty)) {
+                .list => |item| item,
+                .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => invariant("a stored list's type is no list"),
+            },
+            .box_payload => switch (store.get(ty)) {
+                .box => |payload| payload,
+                .primitive, .empty_record, .record, .tuple, .tag_union, .list, .nominal, .function, .variable => invariant("a stored box's type is no box"),
+            },
+            .component => |index| switch (store.get(ty)) {
+                .tuple => |items| store.span(items)[index],
+                .record => |record| try program.layouts.fieldStorage(store.fieldSpan(record.fields)[index]),
+                .primitive, .empty_record, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a stored product's type is no product"),
+            },
+            .tag_payload => |payload| switch (store.get(ty)) {
+                .tag_union => |tag_union| store.span(store.tagSpan(tag_union.tags)[payload.variant].payloads)[payload.index],
+                .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a stored tag's type is no tag union"),
+            },
+        };
+    }
+
+    /// Whether `ty` holds no type variable.
+    pub fn typeIsClosed(self: *Retained, result: *LirProgram.Result, ty: TypeId) bool {
+        const program = self.program;
+        program.result = result.*;
+        defer result.* = program.result;
+        return program.store.isClosed(ty);
+    }
+
+    /// The stored type of a part of type `ty` holding no function, in
+    /// `result`'s types.
+    pub fn storedType(self: *Retained, result: *LirProgram.Result, ty: TypeId) Allocator.Error!const_store.ConstTypeId {
+        const program = self.program;
+        program.result = result.*;
+        defer result.* = program.result;
+        return try const_schema.constTypeOf(program, ty);
+    }
+
     fn importMetadata(self: *Retained, owner: [32]u8) Allocator.Error!*ImportedMetadata {
         if (self.imported.get(owner)) |loaded| return loaded;
         const source = self.metadata orelse invariant("a cached function has no metadata source");
@@ -530,6 +597,7 @@ pub const Retained = struct {
             slot.* = .{
                 .plan = try const_schema.constPlanOf(program, concrete),
                 .layout_idx = try program.layouts.layoutOf(concrete),
+                .ty = concrete,
                 .ptr = capture + offset,
             };
         }
@@ -1795,10 +1863,13 @@ const Decoder = struct {
     }
 
     /// How a decoded worker is used: as the value the encoding stands for,
-    /// or as the scope of another worker it names (a lambda's outer worker,
-    /// an entry's or a thunk's target, an adapter's outer worker), which
-    /// nothing here calls directly, so an imported one binds no interface.
-    const Role = enum { value, scope };
+    /// or as the scope of another worker it names (an entry's or a thunk's
+    /// target, an adapter's outer worker), which nothing here calls
+    /// directly, so an imported one binds no interface, or as a stored
+    /// lambda's owner, whose scope alone the lambda reads: the owner's body
+    /// ran at compile time, and restoring the lambda lowers none of it (a
+    /// constant's entry wrapper owns the lambdas of its value).
+    const Role = enum { value, scope, lambda_owner };
 
     fn workerAs(self: *Decoder, role: Role) Allocator.Error!WorkerId {
         const program = self.program;
@@ -1810,6 +1881,7 @@ const Decoder = struct {
                 return switch (role) {
                     .value => try program.templateWorker(module_index, template_id),
                     .scope => try program.templateScopeWorker(module_index, template_id),
+                    .lambda_owner => try program.templateScope(module_index, template_id),
                 };
             },
             .template_list_int => {
@@ -1818,13 +1890,14 @@ const Decoder = struct {
                 return switch (role) {
                     .value => try program.listIntTemplateWorker(module_index, ref.id, ref.item),
                     .scope => try program.listIntTemplateScopeWorker(module_index, ref.id, ref.item),
+                    .lambda_owner => try program.listIntTemplateScope(module_index, ref.id, ref.item),
                 };
             },
             .lambda => {
                 const owner = try self.siteOwner();
                 const expr = try program.lambdaAt(owner, self.word());
                 const captured_scheme = self.word() != 0;
-                const outer = try self.workerAs(.scope);
+                const outer = try self.workerAs(.lambda_owner);
                 var builder = try body.Builder.init(program, outer);
                 defer builder.deinit();
                 return try builder.storedLambdaWorker(outer, expr, captured_scheme);
@@ -1849,15 +1922,15 @@ const Decoder = struct {
                 return try program.literalThunkWorker(try self.workerAs(.scope), try program.arena.allocator().dupe(TypeId, bound), requirement);
             },
             // The compile-time program read the root's slot; its value is
-            // stored now: a polymorphic constant's instance that is data
-            // alone is restored by the reader's own thunk, any other root's
-            // value by its wrapper.
+            // stored now: a polymorphic constant's instance is restored by
+            // the reader's own thunk, any other root's by its wrapper.
             .root_slot => {
                 const module_index = self.module();
                 const root: checked.ComptimeRootId = @fromBackingInt(self.word());
                 const ty = self.typeOf();
-                if (try program.instanceRestoredByReaders(module_index, program.module(module_index).view.compile_time_roots.root(root)))
-                    return try program.rootRestoreWorker(module_index, root, ty);
+                const compile_time_root = program.module(module_index).view.compile_time_roots.root(root);
+                const argument = compile_time_root.literal_argument orelse invariant("a root slot thunk's root records no literal argument");
+                if (argument.site.kind == .constant_instance) return try program.rootRestoreWorker(module_index, root, ty);
                 const wrapper = program.wrapper_by_root.get(.{ .module = module_index, .root = root }) orelse
                     invariant("a literal argument root has no entry wrapper");
                 return try program.methodEntryWorker(try program.templateRefScopeWorker(wrapper));
@@ -1967,6 +2040,23 @@ pub fn decode(b: *body.Builder, recipe: []const u8) Allocator.Error!Decoded {
         try b.recipes.set(word.recipe, recipe_node);
     }
     return .{ .worker = worker, .bound = bound, .inputs = try captureOperands(arena, words, inputs), .capture_descs = try captureOperands(arena, words, capture_descs) };
+}
+
+/// Set up every worker stored function `recipe` names, exactly as restoring
+/// it does (`decode`): its own worker and the workers of its capture
+/// graph's callables and tables, appended to `out`. A unit whose module
+/// stored the value lowers them for the readers that restore it.
+pub fn recipeWorkers(program: *Program, recipe: []const u8, out: *std.ArrayList(WorkerId)) Allocator.Error!void {
+    var decoder = Decoder{ .program = program, .bytes = recipe };
+    decoder.readModules();
+    try decoder.readTable();
+    defer program.allocator.free(decoder.table);
+    try out.append(program.allocator, try decoder.worker());
+    for (try decodeCaptureGraph(&decoder)) |node| switch (node) {
+        .callable => |callable| try out.append(program.allocator, try callable.worker.resolve(program)),
+        .table => |table| try out.append(program.allocator, try table.worker.resolve(program)),
+        .desc, .zero => {},
+    };
 }
 
 test "stored type metadata preserves field defaults across module reindexing" {

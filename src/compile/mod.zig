@@ -223,6 +223,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/source_single_use_inline_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11249_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11263_test.zig"));
+    std.testing.refAllDecls(@import("test/stored_image_parts_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11286_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11299_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11290_test.zig"));

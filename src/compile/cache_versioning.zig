@@ -104,8 +104,12 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// is closed, that use's edge and the constant instances it names are
 /// recorded; and value-form bytes literals and files imported as `Str` are
 /// stored as images.
+/// Version 66 combines version 61 with these: each part holding no function
+/// of a stored value holding one is stored as an image of its own, no stored
+/// list is stored as packed bytes, and the `zst`, `scalar` and `str`
+/// constant store node forms, which no producer writes, are gone.
 /// Platform-pairing entries share it.
-const checked_envelope_version: u32 = 61;
+const checked_envelope_version: u32 = 66;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment. Version 5 rejects builtin-conflicting import

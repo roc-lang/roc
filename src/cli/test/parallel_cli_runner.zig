@@ -724,6 +724,7 @@ const CustomCase = enum {
     boxy_padded_records_wasm_size,
     issue_10827_private_compiler_support,
     issue_13195_wasm_unreached_provide,
+    constant_pool_keeps_reached_constants_once,
     issue_11134_wasm_post_llvm_pipeline,
     macos_output_basename_reproducible,
     default_platform_crash_x64musl,
@@ -5791,6 +5792,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: LLVM speed wasm32 links the Boxy runtime", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=speed", "--no-cache", "--output=boxed_closure_speed.wasm" }, .roc_file = "test/wasm/boxed_closure_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "UnresolvedBuiltinImport" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10827: Roc compiler support is private from a strong-intrinsic wasm host", .backend = .dev, .body = .{ .custom = .issue_10827_private_compiler_support } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 13195: a wasm32 module leaves out a provide its exports do not reach and the hosted import it calls", .backend = .dev, .body = .{ .custom = .issue_13195_wasm_unreached_provide } },
+    .{ .id = 0, .suite = .subcommands, .name = "a dev build keeps a stored constant only when kept code reads it, and once however many modules read it", .backend = .dev, .timeout_ms = 600_000, .body = .{ .custom = .constant_pool_keeps_reached_constants_once } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11134: wasm speed uses explicit post-LLVM passes", .backend = .speed, .body = .{ .custom = .issue_11134_wasm_post_llvm_pipeline } },
     // issue 10951: https://github.com/roc-lang/roc/issues/10951
     // The wasm32 linker exports exactly what the platform header's `exports:`
@@ -6019,6 +6021,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD runtime smoke passes (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Mismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD runtime smoke passes (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Mismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD runtime smoke passes (LLVM speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Mismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "a Windows dev build links an app that keeps no stored constant", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache", "--target=x64win" }, .roc_file = "test/cli/no_stored_constants.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "reached unreachable code" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD Windows cross-build links without an LLVM panic", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--no-cache", "--target=x64win" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "reached unreachable code" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "match extension fixture runs (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/match_extension_codegen.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "match extension fixture runs (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/match_extension_codegen.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -7522,6 +7525,7 @@ fn runCustomCase(
         .boxy_padded_records_wasm_size => customBoxyPaddedRecordsWasm(io, allocator, &env, &timer, timeout_ms, "--opt=size"),
         .issue_10827_private_compiler_support => customIssue10827PrivateCompilerSupport(io, allocator, &env, &timer, timeout_ms),
         .issue_13195_wasm_unreached_provide => customIssue13195WasmUnreachedProvide(io, allocator, &env, &timer, timeout_ms),
+        .constant_pool_keeps_reached_constants_once => customConstantPoolKeepsReachedConstantsOnce(io, allocator, &env, &timer, timeout_ms),
         .issue_11134_wasm_post_llvm_pipeline => customWasmPostLlvmPipeline(io, allocator, &env, &timer, timeout_ms),
         .macos_output_basename_reproducible => customMacosOutputBasenameReproducible(io, allocator, &env, &timer, timeout_ms),
         .default_platform_crash_x64musl => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .x64musl, .crash),
@@ -15999,6 +16003,286 @@ fn customIssue10827PrivateCompilerSupport(
         return customFailure(allocator, timer, "final wasm exposed the compiler-rt __multi3 name", .{});
     }
 
+    return null;
+}
+
+/// Copies a binary holds of the constant pool test app's table whose first
+/// two items are `first` and `first + 1` (test/echo/constant_pool).
+fn constantPoolTableCopies(binary: []const u8, first: u64) usize {
+    var pattern: [16]u8 = undefined;
+    std.mem.writeInt(u64, pattern[0..8], first, .little);
+    std.mem.writeInt(u64, pattern[8..16], first + 1, .little);
+    return std.mem.count(u8, binary, &pattern);
+}
+
+/// A loaded executable's mapping of file bytes to addresses and the
+/// addresses its loader relocates, read from a Mach-O or PE file.
+const LoaderFixups = struct {
+    /// Each mapped run of the file: its file offset, size and address.
+    runs: std.ArrayList(Run) = .empty,
+    /// The address of every word the loader relocates, sorted.
+    fixups: std.ArrayList(u64) = .empty,
+
+    const Run = struct { file_offset: u64, size: u64, address: u64 };
+
+    fn deinit(self: *LoaderFixups, allocator: Allocator) void {
+        self.runs.deinit(allocator);
+        self.fixups.deinit(allocator);
+    }
+
+    fn runOf(self: *const LoaderFixups, file_offset: u64) ?Run {
+        for (self.runs.items) |run| {
+            if (file_offset >= run.file_offset and file_offset < run.file_offset + run.size) return run;
+        }
+        return null;
+    }
+
+    fn relocates(self: *const LoaderFixups, address: u64) bool {
+        return std.sort.binarySearch(u64, self.fixups.items, address, struct {
+            fn order(key: u64, item: u64) std.math.Order {
+                return std.math.order(key, item);
+            }
+        }.order) != null;
+    }
+
+    fn uleb(bytes: []const u8, at: *usize) error{Malformed}!u64 {
+        var result: u64 = 0;
+        var shift: u6 = 0;
+        while (true) {
+            if (at.* >= bytes.len) return error.Malformed;
+            const byte = bytes[at.*];
+            at.* += 1;
+            result |= @as(u64, byte & 0x7f) << shift;
+            if (byte & 0x80 == 0) return result;
+            if (shift >= 57) return error.Malformed;
+            shift += 7;
+        }
+    }
+
+    /// A 64-bit Mach-O executable's segments and the addresses its dyld
+    /// rebase opcodes rebase.
+    fn macho(allocator: Allocator, bytes: []const u8) (Allocator.Error || error{Malformed})!LoaderFixups {
+        var out: LoaderFixups = .{};
+        errdefer out.deinit(allocator);
+        if (bytes.len < 32 or std.mem.readInt(u32, bytes[0..4], .little) != 0xfeedfacf) return error.Malformed;
+        const ncmds = std.mem.readInt(u32, bytes[16..20], .little);
+        var at: usize = 32;
+        var segment_addresses: std.ArrayList(u64) = .empty;
+        defer segment_addresses.deinit(allocator);
+        var rebase: ?[]const u8 = null;
+        for (0..ncmds) |_| {
+            if (at + 8 > bytes.len) return error.Malformed;
+            const cmd = std.mem.readInt(u32, bytes[at..][0..4], .little);
+            const size = std.mem.readInt(u32, bytes[at + 4 ..][0..4], .little);
+            if (size < 8 or at + size > bytes.len) return error.Malformed;
+            const command = bytes[at..][0..size];
+            switch (cmd) {
+                0x19 => {
+                    if (size < 56) return error.Malformed;
+                    const vmaddr = std.mem.readInt(u64, command[24..32], .little);
+                    const fileoff = std.mem.readInt(u64, command[40..48], .little);
+                    const filesize = std.mem.readInt(u64, command[48..56], .little);
+                    try segment_addresses.append(allocator, vmaddr);
+                    if (filesize != 0) try out.runs.append(allocator, .{ .file_offset = fileoff, .size = filesize, .address = vmaddr });
+                },
+                0x22, 0x80000022 => {
+                    if (size < 16) return error.Malformed;
+                    const offset = std.mem.readInt(u32, command[8..12], .little);
+                    const length = std.mem.readInt(u32, command[12..16], .little);
+                    if (offset + length > bytes.len) return error.Malformed;
+                    rebase = bytes[offset..][0..length];
+                },
+                else => {},
+            }
+            at += size;
+        }
+        const stream = rebase orelse return error.Malformed;
+        var address: u64 = 0;
+        var i: usize = 0;
+        while (i < stream.len) {
+            const byte = stream[i];
+            i += 1;
+            const imm = byte & 0x0f;
+            switch (byte & 0xf0) {
+                0x00 => break,
+                0x10 => {},
+                0x20 => {
+                    if (imm >= segment_addresses.items.len) return error.Malformed;
+                    address = segment_addresses.items[imm] + try uleb(stream, &i);
+                },
+                0x30 => address +%= try uleb(stream, &i),
+                0x40 => address += @as(u64, imm) * 8,
+                0x50 => for (0..imm) |_| {
+                    try out.fixups.append(allocator, address);
+                    address += 8;
+                },
+                0x60 => {
+                    const count: usize = @intCast(try uleb(stream, &i));
+                    for (0..count) |_| {
+                        try out.fixups.append(allocator, address);
+                        address += 8;
+                    }
+                },
+                0x70 => {
+                    try out.fixups.append(allocator, address);
+                    address +%= try uleb(stream, &i) + 8;
+                },
+                0x80 => {
+                    const count: usize = @intCast(try uleb(stream, &i));
+                    const skip = try uleb(stream, &i);
+                    for (0..count) |_| {
+                        try out.fixups.append(allocator, address);
+                        address +%= skip + 8;
+                    }
+                },
+                else => return error.Malformed,
+            }
+        }
+        std.mem.sort(u64, out.fixups.items, {}, std.sort.asc(u64));
+        return out;
+    }
+
+    /// A PE32+ image's sections and the addresses its `DIR64` base
+    /// relocations relocate, both at the image's preferred base.
+    fn pe(allocator: Allocator, bytes: []const u8) (Allocator.Error || error{Malformed})!LoaderFixups {
+        var out: LoaderFixups = .{};
+        errdefer out.deinit(allocator);
+        if (bytes.len < 0x40) return error.Malformed;
+        const pe_at = std.mem.readInt(u32, bytes[0x3c..0x40], .little);
+        if (pe_at + 24 > bytes.len or !std.mem.eql(u8, bytes[pe_at..][0..4], "PE\x00\x00")) return error.Malformed;
+        const coff = pe_at + 4;
+        const section_count = std.mem.readInt(u16, bytes[coff + 2 ..][0..2], .little);
+        const optional_size = std.mem.readInt(u16, bytes[coff + 16 ..][0..2], .little);
+        const optional = coff + 20;
+        if (optional + optional_size > bytes.len or optional_size < 112 + 6 * 8) return error.Malformed;
+        if (std.mem.readInt(u16, bytes[optional..][0..2], .little) != 0x20b) return error.Malformed;
+        const image_base = std.mem.readInt(u64, bytes[optional + 24 ..][0..8], .little);
+        const reloc_rva = std.mem.readInt(u32, bytes[optional + 112 + 5 * 8 ..][0..4], .little);
+        const reloc_size = std.mem.readInt(u32, bytes[optional + 112 + 5 * 8 + 4 ..][0..4], .little);
+        const sections = optional + optional_size;
+        if (sections + @as(usize, section_count) * 40 > bytes.len) return error.Malformed;
+        for (0..section_count) |index| {
+            const header = bytes[sections + index * 40 ..][0..40];
+            const virtual_address = std.mem.readInt(u32, header[12..16], .little);
+            const raw_size = std.mem.readInt(u32, header[16..20], .little);
+            const raw_offset = std.mem.readInt(u32, header[20..24], .little);
+            if (raw_size != 0) try out.runs.append(allocator, .{ .file_offset = raw_offset, .size = raw_size, .address = image_base + virtual_address });
+        }
+        var reloc_file: ?u64 = null;
+        for (out.runs.items) |run| {
+            const rva_start = run.address - image_base;
+            if (reloc_rva >= rva_start and reloc_rva < rva_start + run.size) reloc_file = run.file_offset + (reloc_rva - rva_start);
+        }
+        const start = reloc_file orelse return error.Malformed;
+        if (start + reloc_size > bytes.len) return error.Malformed;
+        const blocks = bytes[@intCast(start)..][0..reloc_size];
+        var at: usize = 0;
+        while (at + 8 <= blocks.len) {
+            const page = std.mem.readInt(u32, blocks[at..][0..4], .little);
+            const block_size = std.mem.readInt(u32, blocks[at + 4 ..][0..4], .little);
+            if (block_size < 8 or at + block_size > blocks.len) return error.Malformed;
+            var entry_at = at + 8;
+            while (entry_at + 2 <= at + block_size) : (entry_at += 2) {
+                const entry = std.mem.readInt(u16, blocks[entry_at..][0..2], .little);
+                switch (entry >> 12) {
+                    0 => {},
+                    10 => try out.fixups.append(allocator, image_base + page + (entry & 0xfff)),
+                    else => return error.Malformed,
+                }
+            }
+            at += block_size;
+        }
+        std.mem.sort(u64, out.fixups.items, {}, std.sort.asc(u64));
+        return out;
+    }
+};
+
+/// Check that the one copy of a constant pool test table (`first` and
+/// `first + 1` its first items) is pointed at by at least one word of its
+/// mapped run, and that every such word is one the loader relocates: the
+/// list's descriptor, whose pointer a relocatable executable must fix up.
+/// Null when it holds, else what failed.
+fn constantPoolTablePointersRelocated(binary: []const u8, loader: *const LoaderFixups, first: u64) ?[]const u8 {
+    var pattern: [16]u8 = undefined;
+    std.mem.writeInt(u64, pattern[0..8], first, .little);
+    std.mem.writeInt(u64, pattern[8..16], first + 1, .little);
+    const items_at = std.mem.find(u8, binary, &pattern) orelse return "the table is missing";
+    const run = loader.runOf(items_at) orelse return "the table is in no mapped run";
+    const items_address = run.address + (items_at - run.file_offset);
+    var pointers: usize = 0;
+    var at: u64 = std.mem.alignForward(u64, run.file_offset, 8);
+    while (at + 8 <= run.file_offset + run.size and at + 8 <= binary.len) : (at += 8) {
+        if (std.mem.readInt(u64, binary[@intCast(at)..][0..8], .little) != items_address) continue;
+        pointers += 1;
+        if (!loader.relocates(run.address + (at - run.file_offset))) return "a word pointing at the table has no loader relocation";
+    }
+    if (pointers == 0) return "no word points at the table";
+    return null;
+}
+
+/// The constant pool test app (test/echo/constant_pool) built under each
+/// strategy for every object format a dev build links: the table only an
+/// uncalled function reads is absent, the table two modules read is present
+/// once, and the table only a method reached through a dispatch reads is
+/// present (design.md "Constant Pool"). The Linux build runs where the
+/// compiler runs on x86_64 Linux.
+fn customConstantPoolKeepsReachedConstantsOnce(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const targets = [_][]const u8{ "x64musl", "x64mac", "arm64mac", "x64win" };
+    const strategies = [_][]const u8{ "--specialize=no", "--specialize=yes" };
+    for (strategies) |strategy| for (targets) |target| {
+        const exe_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, target }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate constant pool output path: {}", .{err});
+        defer allocator.free(exe_path);
+        const output_arg = outputArg(allocator, exe_path) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate constant pool output argument: {}", .{err});
+        defer allocator.free(output_arg);
+        const target_arg = std.fmt.allocPrint(allocator, "--target={s}", .{target}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate constant pool target argument: {}", .{err});
+        defer allocator.free(target_arg);
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "build", "--opt=dev", strategy, "--no-cache", target_arg, output_arg },
+            .roc_file = "test/echo/constant_pool/main.roc",
+            .exit = .success,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+            .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+        })) |failure| return failure;
+        const binary = std.Io.Dir.cwd().readFileAlloc(io, exe_path, allocator, .unlimited) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read the constant pool build for {s}: {}", .{ target, err });
+        defer allocator.free(binary);
+        const uncalled = constantPoolTableCopies(binary, 0x51A7_0000_0000_0A00);
+        const shared = constantPoolTableCopies(binary, 0x51A7_0000_0000_0B00);
+        const method = constantPoolTableCopies(binary, 0x51A7_0000_0000_0C00);
+        if (uncalled != 0 or shared != 1 or method != 1) {
+            return customFailure(allocator, timer, "{s} {s}: the uncalled table has {d} copies (expected 0), the shared table {d} (expected 1), the method's table {d} (expected 1)", .{ target, strategy, uncalled, shared, method });
+        }
+        // The Mach-O and PE builds cannot run here: check their loader
+        // fixups structurally. Each kept table's descriptor points into the
+        // table, and the loader must relocate that word.
+        const is_macho = std.mem.endsWith(u8, target, "mac");
+        const is_pe = std.mem.eql(u8, target, "x64win");
+        if (is_macho or is_pe) {
+            var loader = (if (is_macho) LoaderFixups.macho(allocator, binary) else LoaderFixups.pe(allocator, binary)) catch |err|
+                return customFailure(allocator, timer, "{s} {s}: the executable's load commands or relocations could not be read: {}", .{ target, strategy, err });
+            defer loader.deinit(allocator);
+            for ([_]u64{ 0x51A7_0000_0000_0B00, 0x51A7_0000_0000_0C00 }) |first| {
+                if (constantPoolTablePointersRelocated(binary, &loader, first)) |problem| {
+                    return customFailure(allocator, timer, "{s} {s}: table {x}: {s}", .{ target, strategy, first, problem });
+                }
+            }
+        }
+        if (builtin.os.tag == .linux and builtin.cpu.arch == .x86_64 and std.mem.eql(u8, target, "x64musl")) {
+            if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe_path}, project_root_path, .{
+                .args = &.{},
+                .stdout_exact = "5883671438182845184 5883671438182845185 5883671438182845440\n",
+            })) |failure| return failure;
+        }
+    };
     return null;
 }
 

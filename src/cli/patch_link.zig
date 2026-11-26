@@ -74,6 +74,8 @@ pub const Inputs = struct {
     /// Symbols the host must provide when the app imports them: the
     /// platform's hosted symbols and the runtime set. Sorted.
     host_required: []const []const u8,
+    /// Where the stored images the units' pool imports name are.
+    pool: unit_walk.PoolSource,
 };
 
 /// Where the time went, for `--timings`.
@@ -90,6 +92,11 @@ pub const Timing = struct {
     refs_fixed: u64 = 0,
     /// Bytes of unreached atoms the output does without.
     hole_bytes: u64 = 0,
+    /// Stored images the units name, the ones the link placed, and their
+    /// bytes (design.md "Constant Pool").
+    pool_named: u64 = 0,
+    pool_placed: u64 = 0,
+    pool_bytes: u64 = 0,
 };
 
 /// Why a patch link failed.
@@ -132,7 +139,9 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     // only the reached atoms' bytes are written. Every import of a reached
     // image is resolved, the app region first, then the host.
     const host_view = inputs.host;
-    var walk: unit_walk.Walk = .{ .gpa = gpa, .images = images.items, .resolver = .{ .exports = &exports, .host = .{ .context = &host_view, .find = findHostSymbol }, .host_required = inputs.host_required } };
+    var pool: unit_walk.Pool = .{ .source = inputs.pool };
+    defer pool.deinit(gpa);
+    var walk: unit_walk.Walk = .{ .gpa = gpa, .images = images.items, .resolver = .{ .exports = &exports, .host = .{ .context = &host_view, .find = findHostSymbol }, .host_required = inputs.host_required, .pool = &pool } };
     defer walk.deinit();
     try walk.init();
     // The checked program defines every `provides` symbol (the checker
@@ -152,6 +161,12 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     const reached = try gpa.alloc(bool, images.items.len);
     defer gpa.free(reached);
     for (walk.states, reached) |state, *placed| placed.* = state != null;
+    // The stored images reached atoms name, each placed once.
+    pool.markKept(walk.states);
+    try pool.layOut(gpa);
+    timing.pool_named = pool.entries.items.len;
+    timing.pool_placed = pool.kept.items.len;
+    timing.pool_bytes = pool.size;
 
     // Placement order: the support image, then the units by content digest.
     var order: std.ArrayList(u32) = .empty;
@@ -226,6 +241,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     if (host.positionIndependent()) {
         var count: u64 = 0;
         for (order.items) |index| count += relativeSiteCount(images.items[index].view, reached_atoms[index], null);
+        count += pool.pointerCount();
         for (provided, host.windows()) |found, window| {
             if (window.kind != @backingInt(host_prelink.ProvideKind.data)) continue;
             const view = images.items[found.image].view;
@@ -247,6 +263,10 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         places[index].data = rw_base + rw_file_size;
         rw_file_size += view.data().len;
     }
+    // The constant pool follows the images' data.
+    rw_file_size = std.mem.alignForward(u64, rw_file_size, pool.alignment);
+    const pool_base = rw_base + rw_file_size;
+    rw_file_size += pool.size;
     var rw_mem_size = rw_file_size;
     for (order.items) |index| {
         const view = images.items[index].view;
@@ -387,6 +407,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
                 },
                 .host => |vaddr| vaddr,
                 .missing => unreachable, // a missing host symbol failed the link above
+                .pool => |entry| pool.address(entry, pool_base),
             };
         }
     }
@@ -426,9 +447,9 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     for (order.items) |index| {
         const view = images.items[index].view;
         const place = places[index];
-        // Only reached atoms are written, each run of them to where the
-        // compacted block puts it.
-        const atoms_reached = reached_atoms[index];
+        // Only reached atoms of the block are written, each run of them to
+        // where the compacted block puts it.
+        const atoms_reached = reached_atoms[index][0..view.atoms().len];
         var atom: u32 = 0;
         while (atom < atoms_reached.len) {
             if (!atoms_reached[atom]) {
@@ -451,6 +472,9 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         try fanout.addRanges(gpa, &ref_ranges, index, view.atoms().len);
     }
     if (host_symtab) |symtab| try fanout.addCopies(gpa, &copy_list, hostBytes(host, symtab.offset + sym_size, symtab.size -| sym_size), symtab_offset + (1 + app_symbol_count) * sym_size);
+    // Each kept stored image, once, its pointer words relocated as it is
+    // copied.
+    pool.write(mapped[@intCast(context.fileOffsetOf(pool_base))..][0..@intCast(pool.size)], pool_base);
     for (debug_host_index, 0..) |host_index, slot| {
         if (host_index != 0) try fanout.addCopies(gpa, &copy_list, hostBytes(host, host.section(host_index).offset, host.section(host_index).size), debug_offsets[slot]);
     }
@@ -517,6 +541,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         for (order.items) |index| {
             at = writeRelatives(table, at, r_type, images.items[index].view, places[index], resolved[index], reached_atoms[index], null, 0);
         }
+        at = writePoolRelatives(table, at, r_type, &pool, pool_base);
         for (provided, host.windows()) |found, window| {
             if (window.kind != @backingInt(host_prelink.ProvideKind.data)) continue;
             const view = images.items[found.image].view;
@@ -779,7 +804,7 @@ const Task = struct {
         const addresses = context.resolved[range.image];
         const atoms_reached = context.reached_atoms[range.image];
         for (view.sites()[range.first..][0..range.count]) |site| {
-            if (site.atom.get()) |atom| if (!atoms_reached[atom]) continue;
+            if (view.siteAtom(site)) |atom| if (!atoms_reached[atom]) continue;
             const region: UnitImage.Region = @fromBackingInt(site.region);
             const kind: UnitImage.SiteKind = @fromBackingInt(site.kind);
             // A field in the block sits where its atom moved to.
@@ -867,9 +892,9 @@ fn valueRange(view: UnitImage.View, found: SymbolRef, window: host_prelink.Windo
 
 /// Whether `site` is an absolute word the loader or PIE startup relocates:
 /// one in a reached atom's data, within `range` when there is one.
-fn relativeSite(site: UnitImage.Site, atoms_reached: []const bool, range: ?[2]u64) bool {
+fn relativeSite(view: UnitImage.View, site: UnitImage.Site, atoms_reached: []const bool, range: ?[2]u64) bool {
     if (@as(UnitImage.SiteKind, @fromBackingInt(site.kind)) != .abs64) return false;
-    if (site.atom.get()) |atom| if (!atoms_reached[atom]) return false;
+    if (view.siteAtom(site)) |atom| if (!atoms_reached[atom]) return false;
     switch (@as(UnitImage.Region, @fromBackingInt(site.region))) {
         .data => {},
         // The object writer keeps pointer-bearing read-only data writable.
@@ -884,7 +909,7 @@ fn relativeSite(site: UnitImage.Site, atoms_reached: []const bool, range: ?[2]u6
 
 fn relativeSiteCount(view: UnitImage.View, atoms_reached: []const bool, range: ?[2]u64) u64 {
     var count: u64 = 0;
-    for (view.sites()) |site| count += @intFromBool(relativeSite(site, atoms_reached, range));
+    for (view.sites()) |site| count += @intFromBool(relativeSite(view, site, atoms_reached, range));
     return count;
 }
 
@@ -895,7 +920,7 @@ fn relativeSiteCount(view: UnitImage.View, atoms_reached: []const bool, range: ?
 fn writeRelatives(table: []u8, at_start: usize, r_type: u64, view: UnitImage.View, place: Place, resolved: []const u64, atoms_reached: []const bool, range: ?[2]u64, window_address: u64) usize {
     var at = at_start;
     for (view.sites()) |site| {
-        if (!relativeSite(site, atoms_reached, range)) continue;
+        if (!relativeSite(view, site, atoms_reached, range)) continue;
         // A block target names its atom, which sits where the compaction
         // moved it; a word in writable data names a reached atom.
         const target: u64 = if (site.target_region == UnitImage.import_target)
@@ -910,6 +935,24 @@ fn writeRelatives(table: []u8, at_start: usize, r_type: u64, view: UnitImage.Vie
         std.mem.writeInt(u64, entry[8..16], r_type, .little);
         std.mem.writeInt(i64, entry[16..24], @as(i64, @intCast(target)) + site.addend, .little);
         at += @intCast(rela_size_bytes);
+    }
+    return at;
+}
+
+/// Write the relative relocations of the kept stored images' pointer words
+/// at `table[at..]`, the pool region being at `pool_base`. Returns the end
+/// of the entries written.
+fn writePoolRelatives(table: []u8, at_start: usize, r_type: u64, pool: *const unit_walk.Pool, pool_base: u64) usize {
+    var at = at_start;
+    for (pool.kept.items) |index| {
+        const entry = pool.entries.items[index];
+        for (entry.image.pointers) |pointer| {
+            const record = table[at..][0..@intCast(rela_size_bytes)];
+            std.mem.writeInt(u64, record[0..8], pool_base + entry.offset + pointer, .little);
+            std.mem.writeInt(u64, record[8..16], r_type, .little);
+            std.mem.writeInt(i64, record[16..24], @intCast(pool_base + unit_walk.Pool.pointerTarget(entry, pointer)), .little);
+            at += @intCast(rela_size_bytes);
+        }
     }
     return at;
 }
