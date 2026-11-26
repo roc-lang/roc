@@ -16205,7 +16205,7 @@ fn constantPoolTablePointersRelocated(binary: []const u8, loader: *const LoaderF
     var pattern: [16]u8 = undefined;
     std.mem.writeInt(u64, pattern[0..8], first, .little);
     std.mem.writeInt(u64, pattern[8..16], first + 1, .little);
-    const items_at = std.mem.indexOf(u8, binary, &pattern) orelse return "the table is missing";
+    const items_at = std.mem.find(u8, binary, &pattern) orelse return "the table is missing";
     const run = loader.runOf(items_at) orelse return "the table is in no mapped run";
     const items_address = run.address + (items_at - run.file_offset);
     var pointers: usize = 0;
