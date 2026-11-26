@@ -290,7 +290,7 @@ const Pass = struct {
                 var next_write = self.first_write.get(param);
                 while (next_write) |cursor| : (next_write = self.writes.items[cursor].next.get()) {
                     const write = self.writes.items[cursor].stmt;
-                    const stmt = store.getCFStmt(write).set_local;
+                    const stmt = store.getCFStmtImmediate(write).set_local;
                     try self.deleted.put(write, stmt.next);
                     try self.orphans.append(self.allocator, stmt.value);
                 }

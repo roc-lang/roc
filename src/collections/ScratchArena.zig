@@ -129,6 +129,13 @@ fn alloc(ctx: *anyopaque, len: usize, alignment: Alignment, _: usize) ?[*]u8 {
     return ptr;
 }
 
+/// Whether this build hunts stale borrows. A Debug scratch arena never
+/// changes an allocation's length in place and never reclaims a freed
+/// allocation, so a list in the arena moves on every growth, and the backing
+/// it left keeps the `undefined` bytes `Allocator.free` filled it with until
+/// the arena resets.
+const hunt_stale_borrows = @import("builtin").mode == .debug;
+
 fn isLast(self: *const ScratchArena, memory: []u8) bool {
     if (self.blocks.items.len == 0) return false;
     const block = self.blocks.items[self.blocks.items.len - 1];
@@ -137,6 +144,7 @@ fn isLast(self: *const ScratchArena, memory: []u8) bool {
 
 fn resize(ctx: *anyopaque, memory: []u8, _: Alignment, new_len: usize, _: usize) bool {
     const self: *ScratchArena = @ptrCast(@alignCast(ctx));
+    if (hunt_stale_borrows) return new_len == memory.len;
     if (new_len <= memory.len) {
         if (self.isLast(memory)) self.used -= memory.len - new_len;
         return true;
@@ -157,6 +165,7 @@ fn remap(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, re
 
 fn free(ctx: *anyopaque, memory: []u8, _: Alignment, _: usize) void {
     const self: *ScratchArena = @ptrCast(@alignCast(ctx));
+    if (hunt_stale_borrows) return;
     if (self.isLast(memory)) self.used -= memory.len;
 }
 

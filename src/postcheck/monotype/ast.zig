@@ -2126,17 +2126,17 @@ pub const ProgramView = struct {
     local_name_table: *const LocalNameTable,
     next_symbol: u32,
 
-    pub fn getComptimeValueRoot(self: ProgramView, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
+    pub fn getComptimeValueRoot(self: *const ProgramView, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
         return self.comptime_value_roots[@backingInt(id)];
     }
 
-    pub fn fnSource(self: ProgramView, id: FnId) FnTemplate {
+    pub fn fnSource(self: *const ProgramView, id: FnId) FnTemplate {
         const raw = @backingInt(id);
         if (raw >= self.fns.len) Common.invariant("Monotype function id referenced a missing specialization");
         return self.fns[raw].source;
     }
 
-    pub fn constFnEvidence(self: ProgramView, spans: ConstEvidenceSpans) check.ConstStore.ConstFnEvidenceVector {
+    pub fn constFnEvidence(self: *const ProgramView, spans: ConstEvidenceSpans) check.ConstStore.ConstFnEvidenceVector {
         return .{
             .nodes = self.const_fn_evidence[spans.nodes.start..][0..spans.nodes.len],
             .targets = self.const_fn_evidence_targets[spans.targets.start..][0..spans.targets.len],
@@ -2144,11 +2144,11 @@ pub const ProgramView = struct {
         };
     }
 
-    pub fn constFnEvidenceFrames(self: ProgramView, span: Span(check.ConstStore.ConstFnEvidenceFrame)) []const check.ConstStore.ConstFnEvidenceFrame {
+    pub fn constFnEvidenceFrames(self: *const ProgramView, span: Span(check.ConstStore.ConstFnEvidenceFrame)) []const check.ConstStore.ConstFnEvidenceFrame {
         return self.const_fn_evidence_frames[span.start..][0..span.len];
     }
 
-    pub fn procDebugName(self: ProgramView, symbol: Common.Symbol) ?names.ExportNameId {
+    pub fn procDebugName(self: *const ProgramView, symbol: Common.Symbol) ?names.ExportNameId {
         return self.proc_debug_names.get(symbol);
     }
 
@@ -2156,7 +2156,7 @@ pub const ProgramView = struct {
     /// ids. Active snapshots are rejected by graph-scoped sealing while the
     /// graph maps still exist; completed views must additionally be frozen and
     /// contain only in-bounds final type ids.
-    pub fn verifyCompletedTypeIds(self: ProgramView) ?CompletedTypeIdVerifyError {
+    pub fn verifyCompletedTypeIds(self: *const ProgramView) ?CompletedTypeIdVerifyError {
         if (!self.types.frozen) return .type_store_not_frozen;
 
         for (self.specs) |spec| {
@@ -2201,7 +2201,7 @@ pub const ProgramView = struct {
         return null;
     }
 
-    pub fn verifyCallTargets(self: ProgramView) ?CallTargetVerifyError {
+    pub fn verifyCallTargets(self: *const ProgramView) ?CallTargetVerifyError {
         for (self.defs) |def| {
             if (def.fn_id.get()) |fn_id| {
                 if (self.verifyFnDefinition(fn_id, def.args)) |err| return err;
@@ -2232,11 +2232,11 @@ pub const ProgramView = struct {
         return null;
     }
 
-    fn typeRefInBounds(self: ProgramView, ty: Type.TypeId) bool {
+    fn typeRefInBounds(self: *const ProgramView, ty: Type.TypeId) bool {
         return @backingInt(ty) < self.types.types.len;
     }
 
-    fn verifyFnDefinition(self: ProgramView, fn_id: FnId, args: Span(TypedLocal)) ?CallTargetVerifyError {
+    fn verifyFnDefinition(self: *const ProgramView, fn_id: FnId, args: Span(TypedLocal)) ?CallTargetVerifyError {
         const raw_fn = @backingInt(fn_id);
         if (raw_fn >= self.fns.len) return .local_fn_out_of_bounds;
         const raw_ty = @backingInt(self.fns[raw_fn].source.mono_fn_ty);

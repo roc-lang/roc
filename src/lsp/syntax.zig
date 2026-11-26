@@ -2035,14 +2035,14 @@ pub const SyntaxChecker = struct {
     }
 
     fn findTagInTypeAnno(store: *const can.NodeStore, common: *const base.CommonEnv, type_anno_idx: CIR.TypeAnno.Idx, tag_name: []const u8) ?Region {
-        const type_anno = store.getTypeAnno(type_anno_idx);
-        switch (type_anno) {
-            .tag_union => |tu| {
+        switch (store.typeAnnoKind(type_anno_idx)) {
+            .tag_union => {
+                const tu = store.typeAnnoView(type_anno_idx).tag_union.decode();
                 const tags_slice = store.sliceTypeAnnos(tu.tags);
                 for (tags_slice) |tag_idx| {
-                    const tag = store.getTypeAnno(tag_idx);
-                    if (tag == .tag) {
-                        const name = common.idents.getText(tag.tag.name);
+                    const tag = store.typeAnnoAs(tag_idx, .tag);
+                    if (tag != null) {
+                        const name = common.idents.getText(tag.?.name);
                         if (std.mem.eql(u8, name, tag_name)) {
                             return store.getTypeAnnoRegion(tag_idx);
                         }
@@ -2052,7 +2052,8 @@ pub const SyntaxChecker = struct {
                     if (findTagInTypeAnno(store, common, ext_idx, tag_name)) |r| return r;
                 }
             },
-            .tag => |t| {
+            .tag => {
+                const t = store.typeAnnoView(type_anno_idx).tag.decode();
                 const name = common.idents.getText(t.name);
                 if (std.mem.eql(u8, name, tag_name)) {
                     return store.getTypeAnnoRegion(type_anno_idx);
@@ -2340,9 +2341,9 @@ pub const SyntaxChecker = struct {
         const region = module_env.store.getTypeAnnoRegion(type_anno_idx);
         if (!cir_queries.regionContainsOffset(region, target_offset)) return null;
 
-        const type_anno = module_env.store.getTypeAnno(type_anno_idx);
-        switch (type_anno) {
-            .lookup => |lookup| {
+        switch (module_env.store.typeAnnoKind(type_anno_idx)) {
+            .lookup => {
+                const lookup = module_env.store.typeAnnoView(type_anno_idx).lookup.decode();
                 const type_name = module_env.common.idents.getText(lookup.name);
                 self.logDebug(.build, "[DEF] TypeAnno.lookup: type='{s}', base={s}", .{
                     type_name,
@@ -2350,7 +2351,8 @@ pub const SyntaxChecker = struct {
                 });
                 return self.resolveTypeBase(build_env, module_env, doc_path, current_uri, lookup.base, oom);
             },
-            .apply => |apply| {
+            .apply => {
+                const apply = module_env.store.typeAnnoView(type_anno_idx).apply.decode();
                 // Type with args like `List(Str)` - check args first, then the base type
                 const args_slice = module_env.store.sliceTypeAnnos(apply.args);
                 for (args_slice) |arg_idx| {
@@ -2366,7 +2368,8 @@ pub const SyntaxChecker = struct {
                 });
                 return self.resolveTypeBase(build_env, module_env, doc_path, current_uri, apply.base, oom);
             },
-            .record => |rec| {
+            .record => {
+                const rec = module_env.store.typeAnnoView(type_anno_idx).record.decode();
                 // Check record field types
                 const fields_slice = module_env.store.sliceAnnoRecordFields(rec.fields);
                 for (fields_slice) |field_idx| {
@@ -2377,7 +2380,8 @@ pub const SyntaxChecker = struct {
                 }
                 return null;
             },
-            .tag_union => |tu| {
+            .tag_union => {
+                const tu = module_env.store.typeAnnoView(type_anno_idx).tag_union.decode();
                 // Check tag types
                 const tags_slice = module_env.store.sliceTypeAnnos(tu.tags);
                 for (tags_slice) |tag_idx| {
@@ -2392,7 +2396,8 @@ pub const SyntaxChecker = struct {
                 }
                 return null;
             },
-            .tag => |t| {
+            .tag => {
+                const t = module_env.store.typeAnnoView(type_anno_idx).tag.decode();
                 // Check tag argument types
                 const args_slice = module_env.store.sliceTypeAnnos(t.args);
                 for (args_slice) |arg_idx| {
@@ -2402,7 +2407,8 @@ pub const SyntaxChecker = struct {
                 }
                 return null;
             },
-            .@"fn" => |f| {
+            .@"fn" => {
+                const f = module_env.store.typeAnnoView(type_anno_idx).@"fn".decode();
                 // Check function argument and return types
                 const args_slice = module_env.store.sliceTypeAnnos(f.args);
                 for (args_slice) |arg_idx| {
@@ -2415,7 +2421,8 @@ pub const SyntaxChecker = struct {
                 }
                 return null;
             },
-            .tuple => |t| {
+            .tuple => {
+                const t = module_env.store.typeAnnoView(type_anno_idx).tuple.decode();
                 // Check tuple element types
                 const elems_slice = module_env.store.sliceTypeAnnos(t.elems);
                 for (elems_slice) |elem_idx| {
@@ -2425,7 +2432,8 @@ pub const SyntaxChecker = struct {
                 }
                 return null;
             },
-            .parens => |p| {
+            .parens => {
+                const p = module_env.store.typeAnnoView(type_anno_idx).parens.decode();
                 // Unwrap and recurse
                 return self.findTypeAnnoAtOffset(build_env, module_env, doc_path, current_uri, p.anno, target_offset, oom);
             },
