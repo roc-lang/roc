@@ -5263,7 +5263,7 @@ test "sealing renumbers the variables above the canonical ones and what holders 
     try std.testing.expectEqual(method, constraint.fn_name);
     // Nothing names the redirect to the node, so it dies with the gaps.
     try std.testing.expect(store.len() <= 8);
-    for (0..store.len()) |index| {
+    for (0..@intCast(store.len())) |index| {
         switch (store.getSlot(@fromBackingInt(@intCast(index)))) {
             .root => |desc_idx| try std.testing.expectEqual(@as(u32, @intCast(index)), @backingInt(store.getRootMeta(desc_idx).checked_var)),
             .redirect => |target| try std.testing.expect(store.getSlot(target) == .root),
