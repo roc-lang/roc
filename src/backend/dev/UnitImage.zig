@@ -3657,7 +3657,10 @@ test "issue 13221: a local Mach-O SIGNED_1 retains the atom at the effective add
     defer allocator.free(image);
     const view = try View.init(image);
     try std.testing.expectEqualSlices(u32, &.{ 0, 8 }, view.atoms());
-    try std.testing.expectEqualSlices(u32, &.{1}, view.roots());
+    // The writable data holds no datum of the static data, so its one atom
+    // is a root, and it reaches the second text atom.
+    try std.testing.expectEqualSlices(u32, &.{edge_data | 0}, view.roots());
+    try std.testing.expectEqualSlices(u32, &.{1}, view.atomEdges(view.dataAtomOf(0)));
     const site = view.localSites()[0];
     try std.testing.expectEqual(@as(u32, 1), site.target);
     try std.testing.expectEqual(@as(i64, 8 - 5), site.addend);
@@ -3800,7 +3803,10 @@ test "atoms by symbol record every reference between them" {
     try std.testing.expectEqualSlices(u32, &.{ 3, edge_import | 0 }, view.atomEdges(1));
     try std.testing.expectEqualSlices(u32, &.{0}, view.atomEdges(2));
     try std.testing.expectEqualSlices(u32, &.{}, view.atomEdges(3));
-    try std.testing.expectEqualSlices(u32, &.{2}, view.roots());
+    // The writable data holds no datum of the static data (it is in the
+    // block), so its one atom is a root, which reaches third's atom.
+    try std.testing.expectEqualSlices(u32, &.{edge_data | 0}, view.roots());
+    try std.testing.expectEqualSlices(u32, &.{2}, view.atomEdges(view.dataAtomOf(0)));
     try std.testing.expectEqual(@as(?u32, 1), view.importSites(view.imports()[0])[0].atom.get());
     try std.testing.expectEqual(@as(?u32, null), view.localSites()[0].atom.get());
     // The data word refers into third's atom.

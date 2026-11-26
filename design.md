@@ -2834,12 +2834,12 @@ retain and remap both child slots and referenced procedures. Identical frozen
 nodes can share storage by their contents and relocations.
 
 A stored value that is data alone, holding no function value and no failed
-value anywhere inside it, is one slot naming its ConstStore node
-(`Program.storedDataAlone`), whatever it holds: a root's image (Stored
-Images), which the data encoder copies as one block, or a data part of a
-stored function value, which it writes from the store through its type's
-plan, so the work of every pass and backend is independent of how many
-values it holds, and only the encoder's is proportional to them. The encoder writes each stored value straight into
+value anywhere inside it, is an image (Stored Images), and is one slot naming
+its ConstStore node whatever it holds: a root's image, or the image of a
+part of a stored function value, which the data encoder copies as one block,
+or re-encodes at a reader's other layout, so the work of every pass and
+backend is independent of how many values it holds, and only the encoder's
+is proportional to them. The encoder writes each stored value straight into
 the bytes of the value holding it, and shares among its readers the frozen
 descriptor of every value that owns an allocation (a stored list, a box, an
 allocated string, and a product or tag a recursive type keeps behind a box),
@@ -12344,63 +12344,24 @@ have zero runtime list allocation in a size cart even though the eval allocation
 harness, which does not perform final constant hoisting, observes one base-list
 allocation.
 
-Strings and flat scalar or fixed-product lists use one shared content-interned blob store.
-`List(U8)` therefore has the same constant-storage cost as a `Str` containing
-the same bytes, and equal string/list contents reuse one blob. A value-form
-literal (a string, or a file imported as bytes) is data alone, so its root is
-stored as its image (Stored Images), whose allocation holds a copy of the
-literal's bytes. A packed list
-view records its scalar encoding or fixed-product width and item count separately
-from its byte view. Fixed products are records, tuples, and nominal wrappers
-composed entirely of scalars, discriminant-only tag unions and zero-sized
-products; a list of a discriminant-only tag union is a list of such products
-with one leaf. A tag union is discriminant-only when its const plan's
-payloads are all fixed products and its committed layout is its
-discriminant alone on every target (`PackedData.Plan.discriminantOnly`):
-every payload is zero-sized, as `{}`, a record or tuple of zero-sized
-fields, a union of one tag, or a nominal wrapping one is, so `Bool`, `[A,
-B]` and `[A({}), B]` are, and `[A(U8), B]` is not. Their existing checked
-types define checked field order; bytes concatenate leaves in that order
-without host padding. A discriminant-only union's leaf is as wide as its
-discriminant (one byte up to 256 tags, two up to 65536) and holds the index
-of the item's tag among its union's tags in byte-wise name order, which is
-the order that assigns discriminants, so it is the discriminant's
-little-endian bytes and every reader lays it out as it lays out a scalar;
-the payloads have no bytes to store or restore, and a union of one tag is
-zero-sized and has no leaf. The tag a leaf holds is read through the
-checked type, as a scalar's bits are, and a value's reads share its type,
-tags included (Value Rows: Uses Share One Row). Lists containing other value shapes retain explicit
-child nodes so their graph edges and sharing stay visible. A restored list of
-such values that is data alone is a stored list (see "Compile-Time Evaluation
-And Static Storage"), which no stage represents item by item.
+A stored value that is data alone is an image (Stored Images), whatever it
+holds: a list of scalars or products is one block holding its items as the
+evaluation's memory held them, at the 64-bit layout, with every F32 or F64
+NaN Roc's one quiet NaN. A value-form literal (a string, or a file imported
+as bytes) is data alone, so its root is stored as its image, whose allocation
+holds a copy of the literal's bytes: an image is one block, which a read
+copies whole and a digest covers whole, so its bytes are the image's own. A
+list holding a function is stored as nodes, its items one node each; a
+restored list of values that is data alone is a stored list (see
+"Compile-Time Evaluation And Static Storage"), which no stage represents item
+by item.
 
 Constant writing and target lowering compile a field-copy plan once per explicit
 representation. Plans use committed layout field indexes and offsets, preserve
 stored scalar bits, and initialize target padding. Compatible contiguous
 regions use bulk copies.
 
-The constant store writer stores an evaluated list of scalars or fixed
-products with one decision per list, never one per item. A packed item is its
-leaves' little-endian bits, except that every F32 or F64 NaN is Roc's one
-quiet NaN whatever bits the evaluation produced, as a stored scalar's is. A
-discriminant is little-endian in memory on every host. On a
-little-endian host an integer, `Dec` or vector list's memory, and a product
-list's memory when its layout has no padding and no float leaf (a list of
-`Bool`s or of other discriminant-only tag unions among them), already is that
-encoding and is stored as it is. A float list is copied in one vectorized pass
-that replaces NaN lanes, and a product list with float leaves is copied by its
-plan's regions and then has each float leaf's NaN replaced. A big-endian host
-packs each item on its own. A value-form list of numerals that reads no
-constant encodes its numerals at the item type, decided once for the list,
-into the memory a list of them occupies, and packs that memory as an
-evaluated list's. A value-form list of products writes each item's leaves,
-a discriminant-only tag union as the discriminant of the variant its plan
-names, into
-the memory the list occupies and packs that memory as an evaluated list's, so
-a literal list and an evaluated one store the same bytes. Debug builds check a
-bulk-stored scalar list, and every tag leaf of a packed product
-list, against storing each item on its own, and check every tag leaf a
-packing plan encodes or decodes names one of its union's tags. Packed data remains a literal through specialization;
+A packed list literal (below) remains a literal through specialization;
 list length must not create per-item LIR statements, including in static
 initializers. Literal backings are shared by explicit owner-relative identity
 through IR stages. Boxy consumes its committed layout without unrolling the
@@ -19926,7 +19887,7 @@ Nothing a module emits depends on a module that imports it:
   value or converts the literal in place, and neither is a validation root's,
   which has no value for any body to read;
   nor is the wrapper of a constant whose stored value is data alone
-  (`Program.storedDataAlone`) and whose template no longer names an entry
+  (an image) and whose template no longer names an entry
   procedure, because every read of such a constant restores the stored value
   into the reading body, so a constant no body reads puts no data in any
   object, and an object imports a constant a body reads from the constant
@@ -31694,7 +31655,21 @@ carry static refcount headers, lists and strings keep their capacity (Static
 Lists And Strings Keep Their Capacity), every NaN is Roc's one NaN, and no
 list or string is a seamless slice. The producer decides the form: a root
 whose const plan can hold no function is data alone. A value holding a
-function or a failure is stored as nodes, and so is every part of it.
+function or a failure is stored as nodes, and each of its parts whose value
+holds no function (a list, string, number, record or tag of data, including
+a value of a type that could hold a function and does not, such as an empty
+list of functions) is an image of its own, the child node's value
+(`ConstStoreWriter.fillPartImage`), at the type the part has in the value's
+stored type. So every node a value stores holds a function, except a
+failure's, and nothing else is stored as nodes: no list is stored as packed
+bytes, and the node forms `scalar`, `str` and `zst` have no producer. Every
+reader takes an image child as it takes a root's image: Boxy restores it
+through `restoreImageStep`, static data freezes or re-encodes it into the
+value holding it (`StaticInitializerMachine.writeStored`), and Monotype
+restores it as its literal or as one stored static data candidate named by
+the image's node (`BodyContext.restoredImagePart`,
+`StaticDataValue.stored_image`). A walk asking whether a stored value is data
+alone reads whether its node is an image.
 
 Every producer of a data root writes its image. An evaluated root's image is
 written by one copying pass over evaluator memory guided by the root's const
@@ -32284,18 +32259,14 @@ tuple, record, and tag-payload fields are slices.
 const ConstStr = ConstBlobDataId;
 ```
 
-A stored string or packed list is a whole blob, never a view into a longer
-one. How evaluation's allocations shared bytes (a seamless slice of a longer
-allocation) is runtime representation and does not enter `ConstStore`; the writer stores each string's own bytes, and equal
-contents share a blob because interning is by content. Capacity is not
+A stored string is a whole blob, never a view into a longer one. How
+evaluation's allocations shared bytes (a seamless slice of a longer
+allocation) is runtime representation and does not enter `ConstStore`; an
+image holds each string's own bytes (Stored Images). Capacity is not
 representation: `ConstList.capacity` records a list's beside its items, which
-may be nodes, a packed blob, or nothing, and `ConstString.capacity` records a
-string's beside its blob (Static Lists And Strings Keep Their Capacity).
-Strings and packed scalar lists intern into the same exact-content namespace.
-Packed multi-byte scalars use little-endian checked-value bytes;
-this is target-independent `ConstStore` data, not a captured host allocation or
-backend-owned byte sequence. Post-check lowering validates the byte count
-against the scalar layout before making a runtime static-data view.
+are nodes or nothing, and `ConstString.capacity` records a string's beside its
+blob (Static Lists And Strings Keep Their Capacity). A string node has no
+producer: a string is data alone, so it is part of an image.
 
 `ConstScalar` is a closed checked scalar representation:
 
@@ -32576,8 +32547,8 @@ expression is read outside its owner.
   parent holds, becomes a read of that local. Each later read is a fresh read
   of the local. Static-data candidates and parts reached again in one restore
   are promoted the same way.
-- A leaf (scalar, string, empty or packed list, zero-sized value, crash) is
-  never bound. Each read restores its own literal, which costs nothing where
+- A leaf (an image, an empty list, a crash) is
+  never bound. Each read restores its own literal or static datum, which costs nothing where
   a shared local would cost a reference count.
 - The let of a promoted node goes around the restore's result, outermost first
   in node completion order, so each let follows the lets its value reads. A
