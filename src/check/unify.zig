@@ -41,6 +41,7 @@
 //! subsequent unification runs.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
@@ -4813,6 +4814,13 @@ const Unifier = struct {
             return a_constraints;
         }
 
+        {
+            const a_longer = a_len >= b_len;
+            const longer = if (a_longer) a_constraints else b_constraints;
+            const shorter = if (a_longer) b_constraints else a_constraints;
+            if (try self.appendConstraintsInOrder(longer, shorter)) |joined| return joined;
+        }
+
         // Partition constraints
         const partitioned = try self.partitionStaticDispatchConstraints(a_constraints, b_constraints);
 
@@ -4863,6 +4871,97 @@ const Unifier = struct {
         }
 
         return self.types_store.static_dispatch_constraints.rangeToEnd(top);
+    }
+
+    /// Join `shorter`'s requirements to the end of `longer`, a long list in
+    /// evidence order, when every one of them belongs there: none is a
+    /// literal's conversion, each is named like the requirement before it or
+    /// later than it, and none joins a group holding a literal's conversion.
+    /// The partition would keep both lists whole and append one to the
+    /// other; this reads `shorter` and what is remembered of `longer`
+    /// (`ConstraintListSummary`) and never the rest of `longer`. Null leaves
+    /// the relation to the partition.
+    fn appendConstraintsInOrder(
+        self: *Self,
+        longer: StaticDispatchConstraint.SafeList.Range,
+        shorter: StaticDispatchConstraint.SafeList.Range,
+    ) Error!?StaticDispatchConstraint.SafeList.Range {
+        const store = self.types_store;
+        if (longer.len() < min_summarized_constraints or store.probeOpen()) return null;
+        {
+            const list = store.static_dispatch_constraints.sliceRange(longer);
+            var last_name = list[list.len - 1].fn_name;
+            for (store.static_dispatch_constraints.sliceRange(shorter)) |joining| {
+                if (isFixedLiteralOrigin(joining.origin)) return null;
+                if (joining.fn_name.eql(last_name)) continue;
+                if (!Ident.textLessThan(self.getTypeIdentText(last_name), self.getTypeIdentText(joining.fn_name))) return null;
+                last_name = joining.fn_name;
+            }
+        }
+        if (builtin.is_test) self.scratch.test_constraint_reads += shorter.len();
+        const summary = try self.constraintListSummary(longer) orelse return null;
+
+        // The partition holds a group both lists share to one arity and one
+        // known effect mode. A group only one list holds is not compared
+        // until the other gains a requirement of its name.
+        var group = summary.last_group;
+        var shared = true;
+        const top: usize = @intCast(self.scratch.only_in_b_static_dispatch_constraints.len());
+        defer self.scratch.only_in_b_static_dispatch_constraints.shrinkRetainingCapacity(top);
+        for (0..shorter.len()) |index| {
+            const joining = store.static_dispatch_constraints.sliceRange(shorter)[index];
+            if (!joining.fn_name.eql(group.name)) {
+                group = .{ .name = joining.fn_name };
+                shared = false;
+            } else if (group.has_literal) return null;
+            const agrees = group.note(self.staticDispatchCallableHead(joining));
+            if (shared) {
+                if (!agrees) return error.TypeMismatch;
+            } else if (!agrees) {
+                group.conflict = true;
+            }
+            _ = try self.scratch.only_in_b_static_dispatch_constraints.append(self.scratch.gpa, joining);
+        }
+
+        const joined = try store.unifierAppendStaticDispatchConstraintsAfter(
+            longer,
+            self.scratch.only_in_b_static_dispatch_constraints.items()[top..],
+        );
+        _ = self.scratch.constraint_list_summaries.remove(@backingInt(longer.start));
+        try self.scratch.constraint_list_summaries.put(self.scratch.gpa, @backingInt(joined.start), .{
+            .count = joined.len(),
+            .last_group = group,
+        });
+        return joined;
+    }
+
+    /// What is remembered of `range`, a requirement list in evidence order,
+    /// reading the list only when nothing is. Null when the list is not in
+    /// evidence order.
+    fn constraintListSummary(
+        self: *Self,
+        range: StaticDispatchConstraint.SafeList.Range,
+    ) std.mem.Allocator.Error!?ConstraintListSummary {
+        if (self.scratch.constraint_list_summaries.get(@backingInt(range.start))) |known| {
+            if (known.count == range.len()) return known;
+        }
+        const list = self.types_store.static_dispatch_constraints.sliceRange(range);
+        if (builtin.is_test) self.scratch.test_constraint_reads += list.len;
+        for (list[0 .. list.len - 1], list[1..]) |before, after| {
+            if (before.fn_name.eql(after.fn_name)) {
+                if (isFixedLiteralOrigin(after.origin) and !isFixedLiteralOrigin(before.origin)) return null;
+            } else if (!Ident.textLessThan(self.getTypeIdentText(before.fn_name), self.getTypeIdentText(after.fn_name))) return null;
+        }
+        var group: ConstraintGroupSummary = .{ .name = list[list.len - 1].fn_name };
+        var index = list.len;
+        while (index > 0 and list[index - 1].fn_name.eql(group.name)) {
+            index -= 1;
+            if (isFixedLiteralOrigin(list[index].origin)) group.has_literal = true;
+            if (!group.note(self.staticDispatchCallableHead(list[index]))) group.conflict = true;
+        }
+        const summary: ConstraintListSummary = .{ .count = range.len(), .last_group = group };
+        try self.scratch.constraint_list_summaries.put(self.scratch.gpa, @backingInt(range.start), summary);
+        return summary;
     }
 
     /// Whether a partition kept every constraint of `range`, unchanged and in
@@ -4983,6 +5082,7 @@ const Unifier = struct {
 
         const a_constraints = self.types_store.static_dispatch_constraints.sliceRange(a_constraints_range);
         const b_constraints = self.types_store.static_dispatch_constraints.sliceRange(b_constraints_range);
+        if (builtin.is_test) scratch.test_constraint_reads += a_constraints.len + b_constraints.len;
 
         // Get the start of index of the new range
         const a_constraints_start: u32 = @intCast(scratch.only_in_a_static_dispatch_constraints.len());
@@ -5650,6 +5750,45 @@ fn GrowthPath(comptime kind: RowKind) type {
     return std.ArrayList(struct { part: Var, entries: kind.Entry().SafeMultiList.Range });
 }
 
+/// The shortest requirement list `appendConstraintsInOrder` remembers.
+const min_summarized_constraints = 16;
+
+/// What the unifier remembers of a requirement list in evidence order, by
+/// the list's start in the store: how many requirements it summarized, and
+/// the last same-name group, the only one a requirement can join at the end.
+const ConstraintListSummary = struct {
+    count: u32,
+    last_group: ConstraintGroupSummary,
+};
+
+/// One same-name group of a requirement list.
+const ConstraintGroupSummary = struct {
+    name: Ident.Idx,
+    /// Whether the group holds a literal's conversion.
+    has_literal: bool = false,
+    /// The arity and effect mode of the group's callables whose heads were
+    /// known when they were noted.
+    arity: ?u32 = null,
+    effectful: ?bool = null,
+    /// Whether two of those heads disagreed.
+    conflict: bool = false,
+
+    /// Note a member's callable head. False when it disagrees with the heads
+    /// already noted, or two of those disagreed.
+    fn note(self: *ConstraintGroupSummary, mb_head: ?Unifier.StaticDispatchCallableHead) bool {
+        if (self.conflict) return false;
+        const head = mb_head orelse return true;
+        if (self.arity) |arity| {
+            if (arity != head.arity) return false;
+        } else self.arity = head.arity;
+        const effectful = head.effectful orelse return true;
+        if (self.effectful) |known| {
+            if (known != effectful) return false;
+        } else self.effectful = effectful;
+        return true;
+    }
+};
+
 /// An entry that reappears further along its row's extension chain.
 fn ChainDuplicate(comptime kind: RowKind) type {
     return struct {
@@ -5784,6 +5923,9 @@ pub const Scratch = struct {
     /// the literal would have been deferred on. The literal can now be
     /// decided.
     determined_literals: VarSafeList,
+    constraint_list_summaries: std.AutoHashMapUnmanaged(u32, ConstraintListSummary) = .empty,
+    /// How many requirements relating two requirement lists read.
+    test_constraint_reads: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
     only_in_a_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
     only_in_b_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
     in_both_static_dispatch_constraints: TwoStaticDispatchConstraints.SafeList,
@@ -6001,6 +6143,7 @@ pub const Scratch = struct {
         self.pure_demands.deinit(self.gpa);
         self.unify_work_stack.deinit(self.gpa);
         self.mismatch_flags.deinit(self.gpa);
+        self.constraint_list_summaries.deinit(self.gpa);
         self.gathered_fields.deinit(self.gpa);
         self.only_in_a_fields.deinit(self.gpa);
         self.only_in_b_fields.deinit(self.gpa);
