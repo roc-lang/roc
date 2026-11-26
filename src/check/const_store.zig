@@ -607,16 +607,6 @@ pub const FnDef = union(enum) {
 /// so equal strings share it and no string is a view into a longer one.
 pub const ConstStr = ConstBlobDataId;
 
-/// A string: its bytes and the capacity it was evaluated with.
-pub const ConstString = struct {
-    bytes: ConstStr,
-    /// How many bytes the string had room for when its evaluation finished,
-    /// never fewer than it holds. A string held inline in its descriptor, or
-    /// viewing another string's bytes, has none beyond its length. Capacity
-    /// is part of the value, as a list's is (`ConstList.capacity`).
-    capacity: u64,
-};
-
 /// A list's items: its child nodes, or none. A list holding no function is
 /// part of an image, so a list stored as nodes holds a function.
 pub const ConstListItems = union(enum) {
@@ -747,9 +737,6 @@ pub const ConstValue = union(enum) {
     /// own node is one: a value holding a function or a failure is the only
     /// value stored as other nodes.
     image: ConstImageId,
-    zst,
-    scalar: ConstScalar,
-    str: ConstString,
     list: ConstList,
     box: ConstNodeId,
     tuple: []const ConstNodeId,
@@ -783,9 +770,6 @@ pub const ConstValue = union(enum) {
 const StoredValue = union(enum) {
     pending,
     image: ConstImageId,
-    zst,
-    scalar: ConstScalar,
-    str: ConstString,
     list: struct {
         items: union(enum) {
             nodes: ConstRange,
@@ -1580,7 +1564,7 @@ pub const ConstStore = struct {
     pub fn imageOf(self: *const ConstStore, node: ConstNodeId) ?ConstImageId {
         return switch (self.values.items()[@backingInt(node)]) {
             .image => |image_id| image_id,
-            .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => null,
+            .pending, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => null,
         };
     }
 
@@ -1712,12 +1696,6 @@ pub const ConstStore = struct {
             // a concrete value, so filling a node *with* `.pending` is an invariant break.
             .pending => constStoreInvariant("cannot fill a const node with a pending value"),
             .image => constStoreInvariant("an image is stored by appendImage, which computes its digest"),
-            .zst => .zst,
-            .scalar => |s| .{ .scalar = s },
-            .str => |s| blk: {
-                if (s.capacity < self.blobData(s.bytes).len) constStoreInvariant("string capacity is below its length");
-                break :blk .{ .str = s };
-            },
             .crash => |s| .{ .crash = s },
             .checked_error => |s| .{ .checked_error = s },
             .box => |n| .{ .box = n },
@@ -1957,9 +1935,6 @@ pub const ConstStore = struct {
         return switch (self.values.items()[@backingInt(id)]) {
             .pending => .pending,
             .image => |image_id| .{ .image = image_id },
-            .zst => .zst,
-            .scalar => |s| .{ .scalar = s },
-            .str => |s| .{ .str = s },
             .crash => |s| .{ .crash = s },
             .checked_error => |s| .{ .checked_error = s },
             .box => |n| .{ .box = n },
@@ -2079,9 +2054,6 @@ pub const ConstStore = struct {
                     if (function.captures.len != right_function.captures.len) return false;
                     for (function.captures, right_function.captures) |l, r| try pending.append(scratch, .{ .left = l, .right = r });
                 },
-                .zst => {},
-                .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
-                .str => |str| if (str.capacity != right.str.capacity or !sameBytes(self.blobData(str.bytes), other.blobData(right.str.bytes))) return false,
                 .crash => |str| if (!sameBytes(self.blobData(str), other.blobData(right.crash))) return false,
                 .checked_error => |str| if (!sameBytes(self.blobData(str), other.blobData(right.checked_error))) return false,
                 .box => |payload| try pending.append(scratch, .{ .left = payload, .right = right.box }),
@@ -2168,14 +2140,9 @@ pub const ConstStore = struct {
             hasher.update(@tagName(std.meta.activeTag(value)));
             hasher.update(&[_]u8{0});
             switch (value) {
-                .pending, .zst => {},
+                .pending => {},
                 .image => |id| hasher.update(&self.image(id).digest),
                 .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
-                .scalar => |scalar| hashScalar(hasher, scalar),
-                .str => |str| {
-                    hasher.update(std.mem.asBytes(&str.capacity));
-                    hashBytes(hasher, self.blobData(str.bytes));
-                },
                 inline .crash, .checked_error => |str| hashBytes(hasher, self.blobData(str)),
                 .box => |payload| try pending.append(scratch, payload),
                 .nominal => |nominal| {
@@ -2322,10 +2289,7 @@ pub const ConstStore = struct {
                 const mark = pending.items.len;
                 switch (self.get(node.id)) {
                     .pending => constStoreInvariant("completed store contains a pending node"),
-                    .image, .zst, .scalar => {},
-                    .str => |str| {
-                        _ = self.strBytes(str.bytes);
-                    },
+                    .image => {},
                     .crash, .checked_error => |str| {
                         _ = self.strBytes(str);
                     },
@@ -2446,9 +2410,9 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     var store = ConstStore.init(gpa);
     defer store.deinit();
 
-    // Scalars + a list + a tag (exercises node_pool + tag_name_pool).
-    const a = try store.append(.{ .scalar = .{ .u64 = 7 } });
-    const b = try store.append(.{ .scalar = .{ .i32 = -3 } });
+    // Leaves + a list + a tag (exercises node_pool + tag_name_pool).
+    const a = try store.append(.{ .list = .{ .items = .empty, .capacity = 7 } });
+    const b = try store.append(.{ .list = .{ .items = .empty, .capacity = 3 } });
     // The store copies inputs into its pools and never frees them, so this test
     // owns and frees the slices it hands to `append`/`appendFn`.
     const list_items = try gpa.dupe(ConstNodeId, &.{ a, b });
@@ -2463,7 +2427,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     const sd = try store.addBlobData("hello world");
     try std.testing.expectEqual(sd, try store.addBlobData("hello world"));
     const hello = try store.addBlobData("hello");
-    const str = try store.append(.{ .str = .{ .bytes = hello, .capacity = 40 } });
+    const str = try store.append(.{ .crash = hello });
     const empty_list = try store.append(.{ .list = .{ .items = .empty, .capacity = 4096 } });
     // A function value with a capture (exercises capture_pool).
     const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
@@ -2558,8 +2522,8 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     defer loaded.deinit();
 
     // Scalars
-    try std.testing.expectEqual(@as(u64, 7), loaded.get(a).scalar.u64);
-    try std.testing.expectEqual(@as(i32, -3), loaded.get(b).scalar.i32);
+    try std.testing.expectEqual(@as(u64, 7), loaded.get(a).list.capacity);
+    try std.testing.expectEqual(@as(u64, 3), loaded.get(b).list.capacity);
     // List range resolves to the same node ids
     try std.testing.expectEqualSlices(ConstNodeId, &.{ a, b }, loaded.get(list).list.items.nodes);
     try std.testing.expectEqual(@as(u64, 8), loaded.get(list).list.capacity);
@@ -2568,8 +2532,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expectEqualStrings("Ok", loaded_tag.tag_name);
     try std.testing.expectEqualSlices(ConstNodeId, &.{a}, loaded_tag.payloads);
     // String backing
-    try std.testing.expectEqualStrings("hello", loaded.strBytes(loaded.get(str).str.bytes));
-    try std.testing.expectEqual(@as(u64, 40), loaded.get(str).str.capacity);
+    try std.testing.expectEqualStrings("hello", loaded.strBytes(loaded.get(str).crash));
     try std.testing.expectEqualStrings("hello world", loaded.blobData(sd));
     try std.testing.expect(loaded.get(empty_list).list.items == .empty);
     try std.testing.expectEqual(@as(u64, 4096), loaded.get(empty_list).list.capacity);
@@ -2887,7 +2850,7 @@ test "ConstStore.appendFn: no leak or double-free under allocation failure" {
         fn run(allocator: Allocator) Allocator.Error!void {
             var store = ConstStore.init(allocator);
             defer store.deinit();
-            const a = try store.append(.{ .scalar = .{ .u64 = 7 } });
+            const a = try store.append(.{ .list = .{ .items = .empty, .capacity = 7 } });
             const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
             const caps = try allocator.dupe(ConstCapture, &.{
                 .{ .id = CaptureId.fromBinder(@fromBackingInt(@intCast(1))), .kind = .lexical, .ty = capture_ty, .value = a },
@@ -2916,14 +2879,6 @@ fn hashBytes(hasher: *base.Sha256, bytes: []const u8) void {
     hasher.update(bytes);
 }
 
-fn hashScalar(hasher: *base.Sha256, scalar: ConstScalar) void {
-    hasher.update(@tagName(std.meta.activeTag(scalar)));
-    hasher.update(&[_]u8{0});
-    switch (scalar) {
-        inline .i8, .i16, .i32, .i64, .i128, .u8, .u16, .u32, .u64, .u128, .f32_bits, .f64_bits, .dec_bits => |value| hasher.update(std.mem.asBytes(&value)),
-    }
-}
-
 test "ConstStore.hashGraph: walks in the caller's scratch, not the store's allocator" {
     // A completed store is hashed from several threads at once while its own
     // allocator can be a single-threaded arena owned by its module. The store
@@ -2932,7 +2887,7 @@ test "ConstStore.hashGraph: walks in the caller's scratch, not the store's alloc
     const gpa = std.testing.allocator;
     var store = ConstStore.init(gpa);
     defer store.deinit();
-    const a = try store.append(.{ .scalar = .{ .u64 = 7 } });
+    const a = try store.append(.{ .list = .{ .items = .empty, .capacity = 7 } });
     const b = try store.append(.{ .box = a });
     const payloads = [_]ConstNodeId{ a, b };
     const tag = try store.append(.{ .tag = .{ .tag_name = "Pair", .payloads = &payloads } });

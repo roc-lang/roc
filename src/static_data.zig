@@ -1196,25 +1196,6 @@ const StaticInitializerMachine = struct {
             .pending => staticDataInvariant("stored static data reached a pending ConstStore node"),
             .image, .fn_value, .boxy_fn, .crash, .checked_error => staticDataInvariant("stored static data reached a node that is not data"),
             .nominal => unreachable, // unwrapStoredNominal stepped past every nominal layer
-            .zst => {},
-            .scalar => |scalar| {
-                if (size > 16) staticDataInvariant("stored scalar layout was wider than any scalar");
-                var encoded: [16]u8 = undefined;
-                std.mem.writeInt(u128, &encoded, scalarBits(scalar), .little);
-                @memcpy(write.dest.bytes[write.offset..][0..size], encoded[0..size]);
-            },
-            .str => |str| {
-                const bytes = store_.strBytes(str.bytes);
-                if (!shared) {
-                    if (str.capacity < bytes.len) staticDataInvariant("stored string capacity was below its length");
-                    const descriptor = write.dest.bytes[write.offset..][0..size];
-                    @memcpy(descriptor[0..bytes.len], bytes);
-                    descriptor[size - 1] = builtins.str.RocStr.smallStrFlagByte(bytes.len);
-                    return;
-                }
-                const value = try self.rememberStored(key, try self.storedStr(bytes, str.capacity, request.layout_idx));
-                try self.copyInto(write.dest, write.offset, value, size);
-            },
             .list => |list| {
                 const elem_plan = switch (plans[@backingInt(request.plan)]) {
                     .list => |elem| elem,
@@ -1363,7 +1344,7 @@ const StaticInitializerMachine = struct {
                     request.node = nominal.backing;
                     changed = true;
                 },
-                .image, .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .fn_value, .boxy_fn => {},
+                .image, .pending, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .fn_value, .boxy_fn => {},
             }
             switch (self.lowered.lir_result.const_plans.items[@backingInt(request.plan)]) {
                 .named => |named| {
@@ -1384,8 +1365,7 @@ const StaticInitializerMachine = struct {
     fn sharesStored(self: *const StaticInitializerMachine, node: check.ConstStore.ConstValue, layout_idx: layout.Idx) bool {
         return switch (node) {
             .list, .box => true,
-            .str => |str| str.capacity >= self.word_size * builtins.str.RocStr.word_count,
-            .image, .pending, .zst, .scalar, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => self.layoutValue(layout_idx).tag == .box,
+            .image, .pending, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => self.layoutValue(layout_idx).tag == .box,
         };
     }
 
@@ -1463,17 +1443,6 @@ const StaticInitializerMachine = struct {
     fn rememberStored(self: *StaticInitializerMachine, key: StoredValueKey, value: *SymbolicValue) Allocator.Error!*SymbolicValue {
         try self.stored_values.put(self.allocator(), key, value);
         return value;
-    }
-
-    /// The bits of a stored scalar, low byte first in a little-endian word.
-    fn scalarBits(scalar: check.ConstStore.ConstScalar) u128 {
-        return switch (scalar) {
-            inline .i8, .i16, .i32, .i64, .i128 => |int| @bitCast(@as(i128, int)),
-            inline .u8, .u16, .u32, .u64, .u128 => |int| int,
-            .f32_bits => |bits| bits,
-            .f64_bits => |bits| bits,
-            .dec_bits => |bits| @bitCast(bits),
-        };
     }
 
     /// A string holding `bytes` with room for `capacity`: in its descriptor

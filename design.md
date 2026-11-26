@@ -31677,7 +31677,8 @@ a function (an empty list of functions, `None` of `[Some(a -> a), None]`),
 whose layout is its lambda sets', which its type does not decide, and a part
 of a `.boxy` capture of a polymorphic function whose type holds a variable
 in the type of a function it could hold. No list is stored as packed bytes,
-and the node forms `scalar`, `str` and `zst` have no producer. Every
+and no node is a number, a string or a zero-sized value on its own: those
+are only ever parts of an image, and `ConstValue` has no node form for them. Every
 reader takes an image child as it takes a root's image: Boxy restores it
 through `restoreImageStep`, static data freezes or re-encodes it into the
 value holding it (`StaticInitializerMachine.writeStored`), and Monotype
@@ -31820,7 +31821,17 @@ The wasm link keeps its own form: a wasm unit defines each image it reads
 as a weak data segment under the image's name (`contentNamedStaticData`),
 and its atom walk keeps one definition of a name, and only the segments
 reached code names. A wasm unit therefore still carries the bytes of the
-images it reads; the walk decides what the module holds exactly as above.
+images it reads; the walk decides what the module holds exactly as above,
+so a linked wasm module holds each reached image once, as a pooled native
+link does. What the pool would add for wasm is only a smaller unit cache
+entry, and it is not built: a wasm unit's data pointers are not absolute
+words a link writes and a loader rebases but relocations of the unit's
+own module form (`__memory_base` plus an offset, kept as the unit image's
+sites, `UnitCompile.imageOfModule`), and a wasm unit image's data imports
+resolve only to data another linked unit defines (it has no pool marking
+like `UnitImage.import_pool`). Pooling wasm images would take a pool import
+in `WasmUnitImage` and a wasm-side placement emitting those relocations for
+each kept image's pointer words.
 
 `--timings` reports, per fast dev link and composed run image, the images
 the units name, the ones placed, and their bytes.

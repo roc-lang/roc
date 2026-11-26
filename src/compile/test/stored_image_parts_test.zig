@@ -49,7 +49,7 @@ test "a function-holding constant stores its function-free parts as images" {
             };
             const fields = switch (store.get(node)) {
                 .record => |fields| fields,
-                .image, .pending, .zst, .scalar, .str, .list, .box, .tuple, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => continue,
+                .image, .pending, .list, .box, .tuple, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => continue,
             };
             // Fields in name order: `add`, `label`, `table`.
             try std.testing.expectEqual(@as(usize, 3), fields.len);

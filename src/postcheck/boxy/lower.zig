@@ -5201,7 +5201,7 @@ fn seedStoredValueWorkers(program: *Program, view: *const types.ModuleView, out:
         if (seen.isSet(@backingInt(node))) continue;
         seen.set(@backingInt(node));
         switch (store.get(node)) {
-            .pending, .image, .zst, .scalar, .str, .crash, .checked_error => {},
+            .pending, .image, .crash, .checked_error => {},
             .fn_value => invariant("a Boxy stored value holds an LSS function"),
             .list => |list| switch (list.items) {
                 .nodes => |items| try pending.appendSlice(program.allocator, items),
