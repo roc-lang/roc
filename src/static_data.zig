@@ -3094,15 +3094,15 @@ const StaticDataBuilder = struct {
         }
     }
 
-    /// Emit image block `block` as one node: its bytes, with every pointer
+    /// Emit image block `block` as one node named by the image's digest
+    /// (`lir.Program.poolImageSymbolName`): its bytes, with every pointer
     /// word relocated to the node itself at the offset the word holds. Its
     /// allocations' static headers are already in the block.
     fn emitImageBlock(self: *StaticDataBuilder, block: u32) MaterializationError!PointerTarget {
         const image = self.initializer_machine.image_blocks.items[block];
-        const symbol_name = try lir.Program.staticDataNodeSymbolName(self.allocator, self.owner, self.owner_node);
+        const symbol_name = try lir.Program.poolImageSymbolName(self.allocator, image.digest);
         var node_appended = false;
         errdefer if (!node_appended) self.allocator.free(symbol_name);
-        self.owner_node += 1;
         const bytes = try self.allocator.dupe(u8, image.bytes);
         errdefer if (!node_appended) self.allocator.free(bytes);
         const relocations = try self.allocator.alloc(StaticDataRelocation, image.pointers.len);
@@ -3124,6 +3124,7 @@ const StaticDataBuilder = struct {
             .alignment = @max(image.alignment, self.word_size),
             .is_global = false,
             .is_exported = false,
+            .pool_image = true,
             .relocations = relocations,
         });
         node_appended = true;

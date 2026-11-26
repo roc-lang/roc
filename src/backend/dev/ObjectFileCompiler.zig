@@ -113,6 +113,10 @@ const PatchedRefs = struct {
     /// Where each datum starts in the object's read-only data
     /// (`UnitImage.SymbolAtoms.data_starts`).
     data_starts: std.ArrayList(u64) = .empty,
+    /// The stored images the kept code names, which the image leaves to the
+    /// constant pool and imports (`UnitImage.BuildOptions.pool_names`), in
+    /// name order.
+    pool_names: std.ArrayList([]const u8) = .empty,
     /// Whether some excerpt also has symbolic references, which the
     /// assembly resolves without reporting them here.
     incomplete: bool = false,
@@ -120,6 +124,7 @@ const PatchedRefs = struct {
     pub fn deinit(self: *PatchedRefs, allocator: Allocator) void {
         self.edges.deinit(allocator);
         self.data_starts.deinit(allocator);
+        self.pool_names.deinit(allocator);
     }
 };
 
@@ -1140,6 +1145,7 @@ fn buildCompositionImage(
         // Code reached only through references the image cannot see keeps
         // the whole image together.
         .atoms = if (patched.incomplete) .whole else .{ .symbols = .{ .edges = patched.edges.items, .data_starts = patched.data_starts.items } },
+        .pool_names = patched.pool_names.items,
     }) catch |err| switch (err) {
         error.OutOfMemory => return CompilationError.OutOfMemory,
         error.InvalidObject,
@@ -1731,15 +1737,23 @@ fn composeWithCodeGen(
     var dwarf_procs = std.ArrayList(Dwarf.ProcEntry).empty;
     defer dwarf_procs.deinit(allocator);
     {
-        const data_exports = allocator.alloc(static_data_export.StaticDataExport, canonical.data.len) catch return CompilationError.OutOfMemory;
-        defer allocator.free(data_exports);
+        // A unit image leaves the stored images its code names to the
+        // constant pool: it defines none of them and imports each by name
+        // (design.md "Constant Pool").
+        var data_exports = std.ArrayList(static_data_export.StaticDataExport).initCapacity(allocator, canonical.data.len) catch return CompilationError.OutOfMemory;
+        defer data_exports.deinit(allocator);
         var data_relocations = std.ArrayList([]static_data_export.StaticDataRelocation).empty;
         defer {
             for (data_relocations.items) |relocations| allocator.free(relocations);
             data_relocations.deinit(allocator);
         }
-        for (canonical.data, data_exports) |datum, *out| {
+        for (canonical.data) |datum| {
             const item = datum.item;
+            if (options.unit_image and item.pool_image) {
+                patched_refs.pool_names.append(allocator, item.name) catch return CompilationError.OutOfMemory;
+                continue;
+            }
+            const out = data_exports.addOneAssumeCapacity();
             const relocations = allocator.alloc(static_data_export.StaticDataRelocation, item.relocations.len) catch return CompilationError.OutOfMemory;
             data_relocations.append(allocator, relocations) catch {
                 allocator.free(relocations);
@@ -1763,7 +1777,7 @@ fn composeWithCodeGen(
                 .relocations = relocations,
             };
         }
-        try appendStaticDataExports(allocator, &final.codegen.symbols, data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols, if (options.unit_image) &patched_refs.data_starts else null);
+        try appendStaticDataExports(allocator, &final.codegen.symbols, data_exports.items, &rodata, &zero_fill_size, &rodata_relocations, &symbols, if (options.unit_image) &patched_refs.data_starts else null);
     }
     for (canonical.set.excerpts, starts) |excerpt, start| switch (excerpt.kind) {
         .proc => |identity| {
@@ -1863,6 +1877,7 @@ fn composeWithCodeGen(
             const read_back = UnitImage.build(allocator, &.{object_bytes}, .{
                 .keep_debug = true,
                 .atoms = if (patched_refs.incomplete) .whole else .{ .symbols = .{ .edges = patched_refs.edges.items, .data_starts = patched_refs.data_starts.items } },
+                .pool_names = patched_refs.pool_names.items,
             }) catch |err| switch (err) {
                 error.OutOfMemory => return CompilationError.OutOfMemory,
                 error.InvalidObject,

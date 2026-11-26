@@ -2421,6 +2421,56 @@ fn constStoreInvariant(comptime message: []const u8) noreturn {
     base.invariant("const store invariant violated: {s}", .{message});
 }
 
+/// The images of a compilation's constant stores by digest, for the
+/// constant pool a link or an in-process loader places them from (design.md
+/// "Constant Pool"). A store is registered once; an image it stores after
+/// registration is indexed at the first lookup that misses, so the index
+/// follows stores evaluation is still filling. Equal digests name equal
+/// images, so whichever store an image is found in, it is the same image.
+pub const ImageIndex = struct {
+    allocator: Allocator,
+    stores: std.ArrayList(*const ConstStore) = .empty,
+    /// For each registered store, how many of its images are indexed.
+    indexed: std.ArrayList(u32) = .empty,
+    by_digest: std.AutoHashMapUnmanaged([32]u8, Location) = .empty,
+
+    const Location = struct { store: u32, image: ConstImageId };
+
+    pub fn init(allocator: Allocator) ImageIndex {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *ImageIndex) void {
+        self.stores.deinit(self.allocator);
+        self.indexed.deinit(self.allocator);
+        self.by_digest.deinit(self.allocator);
+    }
+
+    /// Register `store`, once however often it is registered.
+    pub fn addStore(self: *ImageIndex, store: *const ConstStore) Allocator.Error!void {
+        for (self.stores.items) |existing| if (existing == store) return;
+        try self.stores.ensureUnusedCapacity(self.allocator, 1);
+        try self.indexed.ensureUnusedCapacity(self.allocator, 1);
+        self.stores.appendAssumeCapacity(store);
+        self.indexed.appendAssumeCapacity(0);
+    }
+
+    /// The image whose digest is `digest`, in any registered store.
+    pub fn find(self: *ImageIndex, digest: [32]u8) Allocator.Error!?ConstImageView {
+        if (self.by_digest.get(digest)) |found| return self.stores.items[found.store].image(found.image);
+        for (self.stores.items, self.indexed.items, 0..) |store, *indexed, store_index| {
+            const count: u32 = @intCast(store.images.items().len);
+            while (indexed.* < count) : (indexed.* += 1) {
+                const id: ConstImageId = @fromBackingInt(indexed.*);
+                const gop = try self.by_digest.getOrPut(self.allocator, store.image(id).digest);
+                if (!gop.found_existing) gop.value_ptr.* = .{ .store = @intCast(store_index), .image = id };
+            }
+        }
+        const found = self.by_digest.get(digest) orelse return null;
+        return self.stores.items[found.store].image(found.image);
+    }
+};
+
 test "const store declarations are referenced" {
     std.testing.refAllDecls(@This());
 }

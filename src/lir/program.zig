@@ -40,6 +40,12 @@ pub const StaticDataExport = struct {
     /// link keeps one definition for all of them. Never set with
     /// `is_exported`.
     content_named: bool = false,
+    /// A stored constant's image, named by its digest
+    /// (`poolImageSymbolName`) rather than by the program: every program
+    /// holding the image names it so, and a unit image leaves it to the
+    /// constant pool (design.md "Constant Pool"). Never set with
+    /// `is_exported`.
+    pool_image: bool = false,
     /// Pointer relocations from this symbol's bytes to other symbols.
     relocations: []const StaticDataRelocation = &.{},
 };
@@ -442,6 +448,17 @@ pub const compiler_symbol_namespace = "roc__";
 /// `roc__h{hash}`, for a string literal's backing or a constant an
 /// object-cache pack carries.
 pub const content_data_symbol_prefix = compiler_symbol_namespace ++ "h";
+
+/// Prefix of a stored constant's image named by its digest:
+/// `roc__i{digest}`, the digest in lowercase hex (design.md "Constant
+/// Pool"). A unit image references such an image as a pool import, which a
+/// link resolves to the one copy it places.
+pub const pool_image_symbol_prefix = compiler_symbol_namespace ++ "i";
+
+/// The symbol of the stored image whose digest is `digest`.
+pub fn poolImageSymbolName(allocator: Allocator, digest: [32]u8) Allocator.Error![]u8 {
+    return try std.fmt.allocPrint(allocator, pool_image_symbol_prefix ++ "{s}", .{&std.fmt.bytesToHex(digest, .lower)});
+}
 
 /// Symbol of the value in static-data slot `id`: `roc__d{id}`. The naming
 /// scheme is in design.md, "Object Symbol Names".
