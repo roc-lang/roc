@@ -14140,12 +14140,13 @@ No other use observes a copy of its remaining labels. This does not apply to
 a rest binder, a shared extension, or a relation that changes field kind or
 tag provenance.
 
-When a pattern introduces a previously absent tag into an inferred open
-row, every existing reference to the old extension must see the new tag.
-The row may combine adjacent disjoint tag runs, but an absorbed part remains
-valid in isolation, and a marked entry copied out of it remains the same
-diagnostic fact (Pattern-Only Tags). A bounded or rigid tail cannot be
-extended by this rule.
+When a field access or pattern introduces a previously absent member into an
+inferred open row, every existing reference to the old extension must see the
+new member. The row may combine adjacent disjoint runs of members, but an
+absorbed part remains valid in isolation, and a marked tag copied out of it
+remains the same diagnostic fact (Pattern-Only Tags). A later demand for a
+member one of those runs holds binds to that entry and leaves the row as it
+is. A bounded or rigid tail cannot be extended by this rule.
 
 A use of a top-level value is therefore never a widening of the value: no
 row coercion and no `ModuleEnv` record exist for value uses. Where a

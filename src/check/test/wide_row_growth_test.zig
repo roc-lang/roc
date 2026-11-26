@@ -7,7 +7,7 @@ const ModuleEnv = @import("can").ModuleEnv;
 const exhaustive = @import("../exhaustive.zig");
 const TestEnv = @import("TestEnv.zig");
 
-const Measure = enum { record_entries, tag_entries, coverage_bytes };
+const Measure = enum { record_entries, inferred_record_entries, tag_entries, coverage_bytes };
 
 const MeasureError = TestEnv.TestEnvError || exhaustive.PatternResolveError;
 
@@ -29,6 +29,15 @@ fn measure(which: Measure, width: usize) MeasureError!usize {
             }
             try w.writeAll("]\n");
         },
+        .inferred_record_entries => {
+            // Two rows grow in turn, and every field is then read again.
+            try w.writeAll("fields = |r, s| [");
+            for (0..2 * width) |i| {
+                if (i != 0) try w.writeAll(", ");
+                try w.print("r.f{d}, s.f{d}", .{ i % width, i % width });
+            }
+            try w.writeAll("]\n");
+        },
         .tag_entries, .coverage_bytes => {
             try w.writeAll("Wide : [");
             for (0..width) |i| {
@@ -45,7 +54,7 @@ fn measure(which: Measure, width: usize) MeasureError!usize {
     defer env.deinit();
     try env.assertNoErrors();
     switch (which) {
-        .record_entries => return env.checker.types.record_fields.len(),
+        .record_entries, .inferred_record_entries => return env.checker.types.record_fields.len(),
         .tag_entries => return env.checker.types.tags.len(),
         .coverage_bytes => {
             // Replay just the read-only match check in a fresh arena, so a
@@ -85,6 +94,10 @@ fn expectLinearStorage(which: Measure) MeasureError!void {
 
 test "wide row growth: reading every field of a closed record (#13312)" {
     try expectLinearStorage(.record_entries);
+}
+
+test "wide row growth: reading every field of two inferred records, twice" {
+    try expectLinearStorage(.inferred_record_entries);
 }
 
 test "wide row growth: matching every tag of a closed union (#13311)" {
