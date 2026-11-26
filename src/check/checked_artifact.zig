@@ -128,7 +128,12 @@ pub fn forEachCheckedSourceTypeRoot(
             .expr => {
                 const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
                 try visitor.visit(module.exprType(expr_idx));
-                try output_type_roots.forEachCallTypeRoot(module_env, expr_idx, visitor);
+                // Only calls and field accesses publish roots beyond their
+                // own type, so no other expression is decoded.
+                const tag = module.nodeTag(@fromBackingInt(node_idx));
+                if (tag == .expr_call or tag == .expr_field_access) {
+                    try output_type_roots.forEachCallTypeRoot(module_env, expr_idx, visitor);
+                }
             },
             .pattern => {
                 const pattern_idx: CIR.Pattern.Idx = @fromBackingInt(@intCast(node_idx));
@@ -9214,18 +9219,8 @@ fn forEachStaticDispatchTypeRoot(
     module_index: *const ModuleIndex,
     visitor: anytype,
 ) Allocator.Error!void {
-    var node_idx: u32 = CIR.Node.first_idx;
-    while (node_idx < module.nodeCount()) : (node_idx += 1) {
-        const tag = module.nodeTag(@fromBackingInt(@intCast(node_idx)));
-        if (tag != .expr_dispatch_call and
-            tag != .expr_interpolation and
-            tag != .expr_type_dispatch_call and
-            tag != .expr_type_dispatch_call_dispatcher and
-            tag != .expr_method_eq) continue;
-
-        const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-        if (!module_index.reachesExpr(expr_idx)) continue;
-        try output_type_roots.forEachStaticDispatchTypeRoot(module.moduleEnvConst(), expr_idx, visitor);
+    for (module_index.dispatchExprs()) |node_idx| {
+        try output_type_roots.forEachStaticDispatchTypeRoot(module.moduleEnvConst(), @fromBackingInt(node_idx), visitor);
     }
 
     for (module.moduleEnvConst().for_loop_dispatch_plans.items()) |plan| {
@@ -12622,18 +12617,10 @@ pub const ResolvedValueRefTable = struct {
             try recursive_reference_nodes.put(record.node_idx, {});
         }
 
-        var node_idx: u32 = CIR.Node.first_idx;
-        while (node_idx < module.nodeCount()) : (node_idx += 1) {
-            const tag = module.nodeTag(@fromBackingInt(@intCast(node_idx)));
-            // Unreached source nodes can still contain unresolved lookups
-            // and need no value reference.
-            if (tag != .expr_var and
-                tag != .expr_external_lookup and
-                tag != .expr_associated_lookup_resolved and
-                tag != .expr_required_lookup) continue;
-
-            const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-            if (!module_index.reachesExpr(expr_idx)) continue;
+        // Unreached source nodes can still contain unresolved lookups and
+        // need no value reference, so only the reached lookups are resolved.
+        for (module_index.lookupExprs()) |node_idx| {
+            const expr_idx: CIR.Expr.Idx = @fromBackingInt(node_idx);
             var resolved_ref = try categorizeValueRef(
                 allocator,
                 module,
@@ -12821,6 +12808,14 @@ pub const ResolvedValueRefTable = struct {
         return self.retired_exprs.items()[raw >> 6] & (@as(u64, 1) << @intCast(raw & 63)) != 0;
     }
 
+    /// Whether reference resolution retired any expression.
+    pub fn retiresAny(self: *const ResolvedValueRefTable) bool {
+        for (self.retired_exprs.items()) |word| {
+            if (word != 0) return true;
+        }
+        return false;
+    }
+
     /// The bit-packed node words of a module with `node_count` nodes.
     pub fn retiredWords(allocator: Allocator, node_count: usize) Allocator.Error![]u64 {
         const words = try allocator.alloc(u64, (node_count + 63) / 64);
@@ -12950,18 +12945,17 @@ fn publishRetiredExprs(
 
     var direct_targets = std.ArrayList(CallDirectTarget).empty;
     defer direct_targets.deinit(allocator);
-    for (module_index.node_kinds, 0..) |kind, raw| {
-        if (kind != .expr) continue;
-        const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw));
-        const data = store.exprAs(expr, .e_call) orelse continue;
+    for (module_index.callExprs()) |raw| {
+        const expr: CIR.Expr.Idx = @fromBackingInt(raw);
+        const call = store.exprAs(expr, .e_call) orelse unreachable; // the module index lists only calls
         // Evaluating the callee happens before any argument. A checked
         // error produces neither a callable nor a result type relation.
-        if (Runtime.isError(store, &retired, data.func)) {
+        if (Runtime.isError(store, &retired, call.func)) {
             retired.set(raw);
             rejected_binding = true;
             continue;
         }
-        const target = directProcedureTargetForCall(refs, data.func, local_module, bindings, templates, imports, available_modules, relation_modules) orelse continue;
+        const target = directProcedureTargetForCall(refs, call.func, local_module, bindings, templates, imports, available_modules, relation_modules) orelse continue;
         try direct_targets.append(allocator, .{ .call = expr, .target = target });
     }
 
@@ -13605,49 +13599,51 @@ const LocalPatternRoleIndex = struct {
         @memset(lambda_args, false);
         @memset(statement_roles, .none);
 
-        var node_idx: u32 = CIR.Node.first_idx;
-        while (node_idx < node_count) : (node_idx += 1) {
-            const node: CIR.Node.Idx = @fromBackingInt(@intCast(node_idx));
-            const node_tag = module.nodeTag(node);
-            if (node_tag == .statement_decl) {
-                const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(node_idx));
-                if (!module_index.reachesStatement(statement)) continue;
-                const statement_data = module.getStatement(statement);
-                if (statement_data != .s_decl) unreachable; // getStatement decodes a statement_decl node as s_decl
-                const decl = statement_data.s_decl;
-                const is_alias = module_index.isSchemeAlias(decl.pattern);
-                const role: LocalPatternStatementRole = if (is_alias or isLocalProcExpr(module, decl.expr))
-                    .{ .local_proc = .{
-                        .expr = decl.expr,
-                        .is_alias = is_alias,
-                    } }
-                else
-                    .local_value;
-                putStatementRole(statement_roles, node_count, decl.pattern, role);
-            } else if (node_tag == .statement_var) {
-                const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(node_idx));
-                if (!module_index.reachesStatement(statement)) continue;
-                const statement_data = module.getStatement(statement);
-                if (statement_data != .s_var) unreachable; // getStatement decodes a statement_var node as s_var
-                putStatementRole(statement_roles, node_count, statement_data.s_var.pattern_idx, .mutable_version);
-            } else if (node_tag == .statement_var_uninitialized) {
-                const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(node_idx));
-                if (!module_index.reachesStatement(statement)) continue;
-                const statement_data = module.getStatement(statement);
-                if (statement_data != .s_var_uninitialized) unreachable; // getStatement decodes a statement_var_uninitialized node as s_var_uninitialized
-                putStatementRole(statement_roles, node_count, statement_data.s_var_uninitialized.pattern_idx, .mutable_version);
-            } else if (node_tag == .expr_lambda) {
-                const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-                if (!module_index.reachesExpr(expr_idx)) continue;
-                const expr = module.expr(@fromBackingInt(@intCast(node_idx)));
-                if (expr.data != .e_lambda) unreachable; // module.expr decodes an expr_lambda node as e_lambda
-                for (module.slicePatterns(expr.data.e_lambda.args)) |arg| {
-                    const raw_pattern = @backingInt(arg);
-                    if (raw_pattern >= node_count) {
-                        checkedArtifactInvariant("checked artifact invariant violated: lambda argument pattern is out of range", .{});
-                    }
-                    lambda_args[raw_pattern] = true;
+        for (module_index.bindingStatements()) |statement| {
+            switch (module.getStatement(statement)) {
+                .s_decl => |decl| {
+                    const is_alias = module_index.isSchemeAlias(decl.pattern);
+                    const role: LocalPatternStatementRole = if (is_alias or isLocalProcExpr(module, decl.expr))
+                        .{ .local_proc = .{
+                            .expr = decl.expr,
+                            .is_alias = is_alias,
+                        } }
+                    else
+                        .local_value;
+                    putStatementRole(statement_roles, node_count, decl.pattern, role);
+                },
+                .s_var => |var_| putStatementRole(statement_roles, node_count, var_.pattern_idx, .mutable_version),
+                .s_var_uninitialized => |var_| putStatementRole(statement_roles, node_count, var_.pattern_idx, .mutable_version),
+                .s_reassign,
+                .s_crash,
+                .s_dbg,
+                .s_expr,
+                .s_expect,
+                .s_for,
+                .s_while,
+                .s_infinite_loop,
+                .s_breakable_loop,
+                .s_break,
+                .s_return,
+                .s_import,
+                .s_alias_decl,
+                .s_nominal_decl,
+                .s_where_alias_decl,
+                .s_type_anno,
+                .s_type_var_alias,
+                .s_runtime_error,
+                => unreachable, // the module index lists only declaration and var statements as binding statements
+            }
+        }
+        for (module_index.lambdaExprs()) |lambda_expr| {
+            const expr = module.expr(lambda_expr);
+            if (expr.data != .e_lambda) unreachable; // the module index lists only lambdas as lambda expressions
+            for (module.slicePatterns(expr.data.e_lambda.args)) |arg| {
+                const raw_pattern = @backingInt(arg);
+                if (raw_pattern >= node_count) {
+                    checkedArtifactInvariant("checked artifact invariant violated: lambda argument pattern is out of range", .{});
                 }
+                lambda_args[raw_pattern] = true;
             }
         }
 
@@ -14085,6 +14081,9 @@ fn sealCheckedProcedureTemplateRefs(
         &callable_derived_schemes,
     );
     defer collector.deinit();
+    var inert = try skippableInertExprs(allocator, bodies.index(), static_dispatch_plans, .{ &local_schemes, &nested_function_uses, &callable_derived_schemes });
+    defer inert.deinit(allocator);
+    collector.inert = &inert;
 
     // Flatten each template's collected refs into the two shared per-table pools,
     // recording each template's sub-range. Growing the pools as lists keeps the pass
@@ -18117,7 +18116,7 @@ const CheckedTemplateRefCollector = struct {
     checked_types: *const CheckedTypePublication,
     bodies: CheckedBodies,
     /// Diagnostic errors as publication knows them before total dispatch
-    /// resolution (`body_analyses.DiagnosticMode.ordinary`).
+    /// resolution (`body_analyses.diagnosticErrors`).
     diagnostics: *const body_analyses.NodeBits,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     /// Generalized-with-obligations local function decls (checked lambda expr
@@ -18153,6 +18152,9 @@ const CheckedTemplateRefCollector = struct {
     visited_patterns: collections.DenseMap(CIR.Pattern.Idx, void),
     visited_statements: collections.DenseMap(CIR.Statement.Idx, void),
     work: std.ArrayList(Work) = .empty,
+    /// Expressions whose whole subtree collects nothing
+    /// (`skippableInertExprs`), so their subtrees are not visited.
+    inert: ?*const std.DynamicBitSetUnmanaged = null,
 
     fn init(
         allocator: Allocator,
@@ -18360,6 +18362,7 @@ const CheckedTemplateRefCollector = struct {
     }
 
     fn visitExpr(self: *CheckedTemplateRefCollector, expr_id: CIR.Expr.Idx) Allocator.Error!void {
+        if (self.inert) |inert| if (inert.isSet(@backingInt(expr_id))) return;
         const entry = try self.visited_exprs.getOrPut(expr_id);
         if (entry.found_existing) return;
 
@@ -18909,6 +18912,9 @@ pub const NestedProcSiteTable = struct {
         builder.resolved_value_refs = resolved_value_refs;
         defer builder.deinitScratch();
         errdefer builder.deinitAll();
+        var inert = try skippableInertExprs(allocator, bodies.index(), static_dispatch_plans, .{&scope_by_checked_expr});
+        defer inert.deinit(allocator);
+        builder.inert = &inert;
 
         for (templates.templates.items()) |*template| {
             const start: u32 = @intCast(builder.template_refs.items.len);
@@ -19650,6 +19656,42 @@ test "issue 11128 procedure template extension stays amortized" {
     try std.testing.expect(bytes.allocated_bytes <= 8 * count * @sizeOf(CheckedProcedureTemplate));
 }
 
+/// The reached expressions a walk over checked bodies may skip whole: the
+/// module index's inert subtrees (`ModuleIndex.inertExprs`) less every
+/// subtree that holds a literal with a conversion plan or one of the
+/// expressions keying `key_maps`, the expressions where the walk records
+/// something of its own.
+fn skippableInertExprs(
+    allocator: Allocator,
+    index: *const ModuleIndex,
+    plans: *const static_dispatch.StaticDispatchPlanTable,
+    key_maps: anytype,
+) Allocator.Error!std.DynamicBitSetUnmanaged {
+    var inert = try index.inertExprs().clone(allocator);
+    errdefer inert.deinit(allocator);
+    for ([_][]const static_dispatch.PlanKV{ plans.numeral_by_node.items(), plans.quote_by_node.items() }) |entries| {
+        for (entries) |entry| clearInertAncestors(index, &inert, entry.key);
+    }
+    inline for (key_maps) |map| {
+        var keys = map.keyIterator();
+        while (keys.next()) |key| {
+            const raw: u32 = if (@TypeOf(key.*) == u32) key.* else @backingInt(key.*);
+            clearInertAncestors(index, &inert, raw);
+        }
+    }
+    return inert;
+}
+
+/// Clear `raw` and each enclosing expression from `inert`. An expression
+/// that is not set has no set ancestor, so the walk stops there.
+fn clearInertAncestors(index: *const ModuleIndex, inert: *std.DynamicBitSetUnmanaged, raw: u32) void {
+    var node = raw;
+    while (node < inert.bit_length and inert.isSet(node)) {
+        inert.unset(node);
+        node = index.parentOf(node) orelse return;
+    }
+}
+
 fn nestedProcScopeMap(
     allocator: Allocator,
     scopes: []const DispatchRefScope,
@@ -19724,6 +19766,9 @@ const NestedProcSiteBuilder = struct {
     callee_lookups: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty,
     /// Each local procedure some lookup names, by its expression.
     local_proc_uses: std.AutoHashMapUnmanaged(CIR.Expr.Idx, LocalProcUse) = .empty,
+    /// Expressions whose whole subtree records nothing
+    /// (`skippableInertExprs`), so their subtrees are not scanned.
+    inert: ?*const std.DynamicBitSetUnmanaged = null,
 
     const LocalProcUse = struct {
         binder: CIR.Pattern.Idx,
@@ -19933,6 +19978,7 @@ const NestedProcSiteBuilder = struct {
         owner: NestedProcSiteOwner,
         suppress_current_site: bool,
     ) Allocator.Error!void {
+        if (self.inert) |inert| if (inert.isSet(@backingInt(expr_id))) return;
         const previous_scope = self.current_scope;
         self.current_scope = nestedProcLexicalScope(
             previous_scope,
@@ -26625,7 +26671,8 @@ fn completeConstantReadersWithWriter(
         if (builtin.mode == .debug) std.debug.assert(root.completion == .evaluate);
         if (root.request_eligibility != .eligible) continue;
         local.clearRetainingCapacity();
-        if (try valueFormWalk(allocator, bodies, root.rootExpr(), &stack, .{ .scope = scope, .local = &local }) != .value_form) continue;
+        const reader_shape = try valueFormWalk(allocator, bodies, root.rootExpr(), &stack, .{ .scope = scope, .local = &local });
+        if (reader_shape != .value_form) continue;
         states[index] = .pending;
         for (local.items) |read| try edges.append(allocator, .{ .read = read, .reader = @intCast(index) });
     }
@@ -38197,7 +38244,6 @@ pub fn publishFromTypedModule(
     var ordinary_diagnostics = try body_analyses.diagnosticErrors(
         allocator,
         &publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
-        .ordinary,
     );
     defer ordinary_diagnostics.deinit(allocator);
     clock.lap(.ordinary_diagnostics);
