@@ -439,7 +439,7 @@ const SlotTestStore = struct {
             var_.* = try env.types.freshFromContent(content);
         }
         const redirect = try env.types.freshRedirect(vars[slots_per_page]);
-        try env.types.canonicalizeAndSeal(env.getIdentStoreConst());
+        try env.types.canonicalizeAndSeal(env.getIdentStoreConst(), env.types.len(), &env);
         var facts: [count + 1]sealed_type_view.SealedVarFacts = @splat(.{});
         for ([_]Var{ vars[slots_per_page - 1], vars[slots_per_page], vars[count - 1], redirect }) |var_| {
             facts[@backingInt(var_)].reached = true;

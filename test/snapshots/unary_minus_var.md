@@ -106,7 +106,7 @@ negated = |start| {
 						(args)))
 				(s-reassign
 					(p-var-assign (ident "$n"))
-					(e-dispatch-call (method "minus") (constraint-fn-var 250)
+					(e-dispatch-call (method "minus") (constraint-fn-var 247)
 						(receiver
 							(e-lookup-local
 								(p-var-assign (ident "$n"))))
@@ -115,7 +115,7 @@ negated = |start| {
 								(p-assign (ident "start"))))))
 				(s-reassign
 					(p-var-assign (ident "$n"))
-					(e-dispatch-call (method "minus") (constraint-fn-var 250)
+					(e-dispatch-call (method "minus") (constraint-fn-var 247)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "start"))))
@@ -124,12 +124,12 @@ negated = |start| {
 								(p-var-assign (ident "$n"))))))
 				(s-reassign
 					(p-var-assign (ident "$n"))
-					(e-dispatch-call (method "minus") (constraint-fn-var 250)
+					(e-dispatch-call (method "minus") (constraint-fn-var 247)
 						(receiver
 							(e-lookup-local
 								(p-var-assign (ident "$n"))))
 						(args
-							(e-dispatch-call (method "negate") (constraint-fn-var 252)
+							(e-dispatch-call (method "negate") (constraint-fn-var 249)
 								(receiver
 									(e-lookup-local
 										(p-var-assign (ident "$n"))))

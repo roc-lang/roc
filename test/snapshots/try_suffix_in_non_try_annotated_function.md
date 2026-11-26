@@ -235,7 +235,7 @@ wrapped = |s| {
 			(e-if
 				(if-branches
 					(if-branch
-						(e-call (constraint-fn-var 325)
+						(e-call (constraint-fn-var 318)
 							(e-lookup-external
 								(builtin))
 							(e-lookup-local
@@ -268,7 +268,7 @@ wrapped = |s| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 343)
+								(e-call (constraint-fn-var 330)
 									(e-lookup-local
 										(p-assign (ident "parse")))
 									(e-lookup-local

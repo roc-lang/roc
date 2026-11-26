@@ -13,8 +13,8 @@ fn countsFor(comptime header: []const u8, comptime item: []const u8, comptime fo
     try source.appendSlice(gpa, header);
     for (0..count) |_| try source.appendSlice(gpa, item);
     try source.appendSlice(gpa, footer);
-    // The store stays open: sealing drops the descriptors class merges
-    // orphaned, and this counts every descriptor checking created.
+    // The store stays open, so it counts every descriptor checking made,
+    // including those sealing would drop.
     var env = try TestEnv.initOpen("Test", source.items);
     defer env.deinit();
     try env.assertNoErrors();

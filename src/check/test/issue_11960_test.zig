@@ -11,8 +11,8 @@ test "issue 11960: concrete builtin list literals allocate only their source typ
         try source.appendSlice(gpa, "values : List(U8)\nvalues = [");
         for (0..count) |_| try source.appendSlice(gpa, "7,");
         try source.appendSlice(gpa, "]\n");
-        // The store stays open: sealing drops the descriptors class merges
-        // orphaned, and this counts every descriptor checking created.
+        // The store stays open, so it counts every descriptor checking made,
+        // including those sealing would drop.
         var env = try TestEnv.initOpen("Test", source.items);
         defer env.deinit();
         try env.assertNoErrors();

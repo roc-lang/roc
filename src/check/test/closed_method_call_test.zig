@@ -28,7 +28,9 @@ fn countsFor(comptime header: []const u8, comptime item: []const u8, comptime fo
     const gpa = std.testing.allocator;
     var source = try buildSource(header, item, footer, count);
     defer source.deinit(gpa);
-    var env = try TestEnv.init("Test", source.items);
+    // The store stays open, so it counts every variable and constraint
+    // checking made, including those sealing would drop.
+    var env = try TestEnv.initOpen("Test", source.items);
     defer env.deinit();
     try env.assertNoErrors();
     return countsOf(&env);
@@ -75,7 +77,8 @@ fn importingGrowthPerItem(comptime header: []const u8, comptime item: []const u8
     for ([_]usize{ 8, 512 }, 0..) |count, i| {
         var source = try buildSource(header, item, footer, count);
         defer source.deinit(gpa);
-        var env = try TestEnv.initWithImport("Test", source.items, "Meters", &meters);
+        // The store stays open, as in `countsFor`.
+        var env = try TestEnv.initWithImportOpen("Test", source.items, "Meters", &meters);
         defer env.deinit();
         try env.assertNoErrors();
         counts[i] = countsOf(&env);

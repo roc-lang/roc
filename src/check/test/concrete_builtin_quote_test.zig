@@ -12,8 +12,8 @@ test "string literals at a Str context allocate only their source type slots" {
         try source.appendSlice(gpa, "values : List(Str)\nvalues = [");
         for (0..count) |_| try source.appendSlice(gpa, "\"word\",");
         try source.appendSlice(gpa, "]\n");
-        // The store stays open: sealing drops the descriptors class merges
-        // orphaned, and this counts every descriptor checking created.
+        // The store stays open, so it counts every descriptor checking made,
+        // including those sealing would drop.
         var env = try TestEnv.initOpen("Test", source.items);
         defer env.deinit();
         try env.assertNoErrors();
