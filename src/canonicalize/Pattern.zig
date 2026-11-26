@@ -250,6 +250,10 @@ pub const Pattern = union(enum) {
         diagnostic: CIR.Diagnostic.Idx,
     },
 
+    /// Which variant a pattern is, without its fields. `NodeStore` reads it
+    /// from a node's tag alone.
+    pub const Kind = std.meta.Tag(@This());
+
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { span: base.DataSpan };
 
@@ -277,13 +281,13 @@ pub const Pattern = union(enum) {
     pub const RecordDestruct = struct {
         label: Ident.Idx,
         ident: Ident.Idx,
-        kind: Kind,
+        kind: FieldKind,
 
         pub const Idx = enum(u32) { _ };
         pub const Span = extern struct { span: base.DataSpan };
 
         /// The kind of record field destructuring pattern.
-        pub const Kind = union(enum) {
+        pub const FieldKind = union(enum) {
             /// Required field that must be present in the record.
             /// ```roc
             /// { name, age } => ... # Both name and age are Required
@@ -300,7 +304,7 @@ pub const Pattern = union(enum) {
             /// ```
             Rest: Pattern.Idx,
 
-            pub fn toPatternIdx(kind: Kind) Pattern.Idx {
+            pub fn toPatternIdx(kind: FieldKind) Pattern.Idx {
                 switch (kind) {
                     inline .Required, .SubPattern, .Rest => |p_idx| return p_idx,
                 }

@@ -7338,21 +7338,81 @@ sealed. It consists of exactly these parts:
   nothing else does.
 
 **Sealing.** Checking canonicalizes the solver store in place as its last
-write before sealing it (`types.Store.canonicalizeAndSeal`). Every slot comes
-to name its class's storage root directly; every variable a descriptor, a type
-argument or record field pool, or a nominal declaration holds becomes its
-class's checked representative; and every record and tag union row absorbs the
-rows its extension chain reaches, so a sealed row is flat and its extension is
-never itself a row. Canonicalization walks the slots once, the variable and
-field pools once, and the live descriptors once. The descriptor pass reads
-each descriptor's kind and goes further only for a function, a record or a tag
-union, the kinds that hold a variable inline: it replaces a function's return
-or a row's extension by its representative, and resolving an extension also
-tells whether the extension is itself a row, so a row that must absorb its
-chain is found and flattened in that same step. A static-dispatch constraint
+write before sealing it (`types.Store.canonicalizeAndSealReached`). Every class
+comes to be stored at its checked representative, which every other member
+names directly; every variable a descriptor, a type argument or record field
+pool, or a nominal declaration holds becomes its class's checked
+representative; and every record and tag union row a reader
+can name absorbs the rows its extension chain reaches, so such a row is flat
+and its extension is never itself a row. Canonicalization walks the slots
+once, the variable and field pools once, and the live descriptors once. The
+descriptor pass reads each descriptor's kind and goes further only for a
+function, a record or a tag union, the kinds that hold a variable inline: it
+replaces a function's return or a row's extension by its representative, and
+resolving an extension also tells whether the extension is itself a row.
+
+When some row's extension is a row, sealing traces the store from its roots
+and flattens each row the trace reaches, before reading that row's children.
+The roots are every variable a reader may start from: each CIR node's own
+variable, each variable a node or a recorded checker output names besides
+(`Check.SealRoots`), and each nominal declaration's backing. Every root
+publication or a later producer reaches is one of these, so no root is added
+after sealing. A row no root reaches keeps its chain and is never read: the
+solver's superseded row parts, such as the tails an inferred union outgrew,
+cost nothing to seal. Reading a sealed row whose extension is a row is a
+compiler bug, asserted in debug builds. When no row's extension is a row,
+there is nothing to flatten and no trace runs. A static-dispatch constraint
 keeps the function variable checking recorded for it, because that variable
-identifies the constraint; a reader resolves it with one slot read. The
-checked type id of a source type is its checked representative's bit pattern,
+identifies the constraint; a reader resolves it with one slot read.
+
+Canonicalization then closes the gaps the store's dead entries leave. The
+sealed store is the same store with its gaps closed, not a second
+representation. Every class survives, stored at its checked representative:
+the slot pass makes the representative's slot hold the descriptor and every
+other member's slot name the representative. A variable survives when
+canonicalization made it (every variable below the count the store held when
+checking began, which covers every CIR node's variable), when it is a
+class's representative, when a holder outside the store names it, or when a
+surviving static-dispatch constraint or interpolation row names it as its
+own variable. Every variable the store's descriptors, pools and nominal
+declarations hold is a representative, so this is complete. Every other
+variable dies: a merged-away member nothing names. A pool or identity row
+survives when a surviving descriptor names it, directly, through a tag's
+argument range or through a constraint's numeral and interpolation rows, or
+when a nominal declaration's formals name it. A constraint row also survives
+when a holder names its index, or when a holder names its function variable,
+because a reader finds a constraint by the function variable checking
+recorded at its dispatch site. A derived-map selection survives with its
+class.
+
+Every column keeps its survivors in their original order and slides each down
+to its rank: the number of survivors before it, read from the column's
+liveness bit set as a running count per mask word plus a population count
+within the word. No translation table is built, a survivor only ever moves
+down, so each column closes in place in one forward pass, a range shared by
+two descriptors stays shared, and anything sorted by index stays sorted.
+Variables below the canonical count keep their numbers. Representatives are
+marked in the slot and descriptor passes above; the pool and identity rows
+are marked by one more pass over the live descriptors once flattening has
+made every row final, and one pass over the constraint pool keeps the rows
+holders reach by function variable. Closing then
+walks each column once: the pools first, rewriting their variables to
+representatives and renumbering them as they move, then the slots, which
+name only representatives and so are renumbered without reading one another,
+then the descriptors.
+
+The holders outside the store are exactly what checking recorded before
+sealing: the `ModuleEnv` side tables and CIR node payloads that name a
+variable or a constraint index (`ModuleEnv.visitSealHolders`) and the
+checking problems (`problem.Store.visitSealHolders`). A holder keeps the
+variable it recorded, representative or not, since several holders identify
+a relation by its raw variable; checking hands each one to sealing once to
+keep it alive and once to renumber it. Snapshots name variables only as keys
+of their own presentation stores and are not holders. Everything published
+after sealing (`CheckedTypeStore`, `sealed_var_facts`, type keys) is sized
+and numbered by the sealed store.
+
+The checked type id of a source type is its checked representative's bit pattern,
 so a rendered payload's children
 alias the store's own variable pools and every reader receives
 representatives. Five columns beside the module's synthesized-type store
@@ -14045,6 +14105,20 @@ A value's record follows the same rule through its uncommitted tail
 (Uncommitted Record Tails): every use shares it, a use that lifts the record
 into a nominal type does so for every use, and the tail commits to the empty record when the module finishes
 checking.
+
+A field access or direct tag pattern demands a member, not a remainder. Its
+fresh, unnamed tail is existential: when relating the member merely binds its
+payload to the receiver's slot, the joined type is the receiver's row itself.
+No other use observes a copy of its remaining labels. This does not apply to
+a rest binder, a shared extension, or a relation that changes field kind or
+tag provenance.
+
+When a pattern introduces a previously absent tag into an inferred open
+row, every existing reference to the old extension must see the new tag.
+The row may combine adjacent disjoint tag runs, but an absorbed part remains
+valid in isolation, and a marked entry copied out of it remains the same
+diagnostic fact (Pattern-Only Tags). A bounded or rigid tail cannot be
+extended by this rule.
 
 A use of a top-level value is therefore never a widening of the value: no
 row coercion and no `ModuleEnv` record exist for value uses. Where a
@@ -28923,8 +28997,12 @@ is a view of the slots it covers. It holds no unit: its field reads are
 reads of the container's slots offset by the view's first slot, so a
 consumed read through it takes those slots from the container, and its
 other uses observe its whole range. A borrowed tag union read out of a
-container is a view of its one slot: nothing reads through it except an
-ownership-complete payload view, which carries the union's whole unit. It is
+container is a view of its one slot. An owned read of the active variant's
+complete refcounted payload can take that slot at the read. Later reads of
+sibling fields need no retain; a later observation of the same slot or intact
+record still needs its unit. The union view itself remains borrowed unless
+it has a separate reason to hold the slot. A borrowed payload view also
+carries the union's whole unit. The union view is
 held when that payload reaches a consuming operand (the closure read out of a
 record of closures, whose captures are unwrapped and passed to the closure
 body), or when it dismantles through that payload view (the held tag-union

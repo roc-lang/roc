@@ -139,7 +139,7 @@ UNMATCHABLE PATTERN - deferred_result_relation.md:55:3:55:4
 			(reflow " ")
 			(reflow "should be")
 			(reflow " ")
-			(annotated code "A")
+			(annotated code "B")
 			(reflow "?")))
 	(report
 		(severity runtime_error)
@@ -898,13 +898,13 @@ not_polymorphic = |x| {
 													(p-assign (ident "step"))))))
 									(e-lookup-local
 										(p-assign (ident "r"))))
-								(e-call (constraint-fn-var 637)
+								(e-call (constraint-fn-var 620)
 									(e-lookup-local
 										(p-assign (ident "step"))))))))
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 646)
+							(e-call (constraint-fn-var 625)
 								(e-lookup-local
 									(p-assign (ident "inner")))
 								(e-empty_record)))
@@ -959,7 +959,7 @@ not_polymorphic = |x| {
 						(e-lambda
 							(args
 								(p-underscore))
-							(e-call (constraint-fn-var 686)
+							(e-call (constraint-fn-var 653)
 								(e-field-access
 									(receiver
 										(e-lookup-local
@@ -969,7 +969,7 @@ not_polymorphic = |x| {
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 696)
+							(e-call (constraint-fn-var 659)
 								(e-lookup-local
 									(p-assign (ident "inner")))
 								(e-empty_record)))
@@ -1018,7 +1018,7 @@ not_polymorphic = |x| {
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 729)
+							(e-call (constraint-fn-var 684)
 								(e-lookup-local
 									(p-assign (ident "inner")))
 								(e-empty_record)))
@@ -1071,7 +1071,7 @@ not_polymorphic = |x| {
 									(pattern (degenerate false)
 										(p-applied-tag)))
 								(value
-									(e-call (constraint-fn-var 785)
+									(e-call (constraint-fn-var 720)
 										(e-lookup-local
 											(p-assign (ident "inner")))
 										(e-empty_record))))
@@ -1109,7 +1109,7 @@ not_polymorphic = |x| {
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 826)
+							(e-call (constraint-fn-var 746)
 								(e-lookup-local
 									(p-assign (ident "inner")))
 								(e-empty_record)))
@@ -1173,12 +1173,12 @@ not_polymorphic = |x| {
 									(p-assign (ident "step")))))))
 				(s-let
 					(p-underscore)
-					(e-call (constraint-fn-var 904)
+					(e-call (constraint-fn-var 802)
 						(e-lookup-local
 							(p-assign (ident "optional")))
 						(e-lookup-local
 							(p-assign (ident "r")))))
-				(e-call (constraint-fn-var 915)
+				(e-call (constraint-fn-var 811)
 					(e-lookup-local
 						(p-assign (ident "inner")))
 					(e-empty_record))))
@@ -1237,7 +1237,7 @@ not_polymorphic = |x| {
 									(pattern (degenerate false)
 										(p-applied-tag)))
 								(value
-									(e-call (constraint-fn-var 948)
+									(e-call (constraint-fn-var 833)
 										(e-lookup-local
 											(p-assign (ident "inner")))
 										(e-empty_record))))
@@ -1268,7 +1268,7 @@ not_polymorphic = |x| {
 							(args
 								(p-underscore))
 							(e-runtime-error (tag "erroneous_value_expr")))))
-				(e-call (constraint-fn-var 993)
+				(e-call (constraint-fn-var 866)
 					(e-lookup-local
 						(p-assign (ident "inner")))
 					(e-empty_record)))))

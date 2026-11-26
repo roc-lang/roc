@@ -88,9 +88,12 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// types that carry no iterator representation fields.
 /// Version 57 stores absent optional ids and indices as zero. Version 58
 /// gives the remaining absences explicit representations. Version 59 stores
-/// a compile-time root whose value is data alone as an image with the type
-/// it was stored at, and files each strategy's entry under its own key.
-/// Version 60 stores each closed instance of a polymorphic constant as a
+/// sealed type stores whose dead descriptors, pool rows and merged-away
+/// variables sealing removed, renumbering the variables checking made with
+/// every variable checking recorded outside the store. Version 60 stores a
+/// compile-time root whose value is data alone as an image with the type it
+/// was stored at, and files each strategy's entry under its own key, and
+/// stores each closed instance of a polymorphic constant as a
 /// `constant_instance` root of its own, with the canonical instantiation's
 /// roots. Platform-pairing entries share it. Version 61 records, for each
 /// use of a name a destructuring scheme alias binds, the variables of the
@@ -99,11 +102,12 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// polymorphic callable bindings. Version 62 adds, for each `to_inspect`
 /// override whose inspection instance is closed, that use's edge and the
 /// constant instances it names, and stores value-form bytes literals and
-/// files imported as `Str` as images. Version 63 stores each part holding no
-/// function of a stored value holding one as an image of its own, and no
-/// stored list as packed bytes. Version 64 drops the `zst`, `scalar` and
-/// `str` constant store node forms, which no producer writes.
-const checked_envelope_version: u32 = 64;
+/// files imported as `Str` as images. Version 63 combines version 62 with
+/// main's sealed type store compaction (59). Version 64 stores each part
+/// holding no function of a stored value holding one as an image of its own,
+/// and no stored list as packed bytes. Version 65 drops the `zst`, `scalar`
+/// and `str` constant store node forms, which no producer writes.
+const checked_envelope_version: u32 = 65;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment. Version 5 rejects builtin-conflicting import

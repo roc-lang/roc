@@ -98,7 +98,9 @@ test "issue 11311: forwarding with type applications rejects missing where-alias
 }
 
 test "concrete recursive dispatch records a shared method instance without copying requirements" {
-    var test_env = try TestEnv.init("Test",
+    // The store stays open: the checker's own instantiation records keep the
+    // numbers checking gave its variables, which sealing renumbers.
+    var test_env = try TestEnv.initOpen("Test",
         \\Expr := [Leaf(Str), Next(Expr)].{
         \\  is_eq = |left, right|
         \\    match (left, right) {

@@ -1191,18 +1191,18 @@ pub const Store = struct {
         mark_: Mark,
         epoch: u64,
 
-        fn requireOwner(self: Transaction, store: *const Store) void {
+        fn requireOwner(self: *const Transaction, store: *const Store) void {
             if (store.active_transaction != self.epoch) {
                 Common.compilerBug("Monotype transaction operation did not own the speculative suffix");
             }
         }
 
-        pub fn reserve(self: Transaction, store: *Store) std.mem.Allocator.Error!TypeId {
+        pub fn reserve(self: *const Transaction, store: *Store) std.mem.Allocator.Error!TypeId {
             self.requireOwner(store);
             return try store.reserveSlot();
         }
 
-        pub fn fill(self: Transaction, store: *Store, ty: TypeId, content: Content) void {
+        pub fn fill(self: *const Transaction, store: *Store, ty: TypeId, content: Content) void {
             self.requireOwner(store);
             const index = @backingInt(ty);
             if (index < self.mark_.types_len or index >= store.types.len()) {
@@ -1214,7 +1214,7 @@ pub const Store = struct {
         /// Discard the speculative suffix, leaving the store as
         /// `beginTransaction` found it. Idempotent, so it stays correct after
         /// a failed `commitTransaction` (which has already rolled back).
-        pub fn abort(self: Transaction, store: *Store) void {
+        pub fn abort(self: *const Transaction, store: *Store) void {
             const active_epoch = store.active_transaction orelse return;
             if (active_epoch != self.epoch) {
                 Common.compilerBug("stale Monotype transaction tried to abort a later owner");
@@ -2193,48 +2193,48 @@ pub const Store = struct {
         declared_fields: []const DeclaredField,
         frozen: bool,
 
-        pub fn get(self: View, ty: TypeId) Content {
+        pub fn get(self: *const View, ty: TypeId) Content {
             return decodeNode(self.types[@backingInt(ty)], self.named_nodes, self.erased_digests);
         }
 
-        pub fn span(self: View, span_: Span) []const TypeId {
+        pub fn span(self: *const View, span_: Span) []const TypeId {
             return self.spans[span_.start..][0..span_.len];
         }
 
-        pub fn fieldSpan(self: View, span_: Span) []const Field {
+        pub fn fieldSpan(self: *const View, span_: Span) []const Field {
             return self.fields[span_.start..][0..span_.len];
         }
 
-        pub fn tagSpan(self: View, span_: Span) []const Tag {
+        pub fn tagSpan(self: *const View, span_: Span) []const Tag {
             return self.tags[span_.start..][0..span_.len];
         }
 
-        pub fn declaredFieldSpan(self: View, span_: Span) []const DeclaredField {
+        pub fn declaredFieldSpan(self: *const View, span_: Span) []const DeclaredField {
             return self.declared_fields[span_.start..][0..span_.len];
         }
 
         pub fn typeEql(
-            self: View,
+            self: *const View,
             allocator: std.mem.Allocator,
             name_store: *const names.NameStore,
             lhs: TypeId,
             rhs: TypeId,
         ) std.mem.Allocator.Error!bool {
-            return try typeViewEql(self, allocator, name_store, lhs, rhs, .exact, null);
+            return try typeViewEql(self.*, allocator, name_store, lhs, rhs, .exact, null);
         }
 
         pub fn typeMatches(
-            self: View,
+            self: *const View,
             allocator: std.mem.Allocator,
             name_store: *const names.NameStore,
             lhs: TypeId,
             rhs: TypeId,
             mode: TypeMatchMode,
         ) std.mem.Allocator.Error!bool {
-            return try typeViewEql(self, allocator, name_store, lhs, rhs, mode, null);
+            return try typeViewEql(self.*, allocator, name_store, lhs, rhs, mode, null);
         }
 
-        pub fn verify(self: View, name_store: *const names.NameStore) ?VerifyError {
+        pub fn verify(self: *const View, name_store: *const names.NameStore) ?VerifyError {
             if (self.type_digests.len != self.types.len) return .type_digest_count_mismatch;
 
             for (self.spans) |ty| {
@@ -2286,7 +2286,7 @@ pub const Store = struct {
             return null;
         }
 
-        fn typeRefInBounds(self: View, ty: TypeId) bool {
+        fn typeRefInBounds(self: *const View, ty: TypeId) bool {
             return @backingInt(ty) < self.types.len;
         }
 
@@ -2296,7 +2296,7 @@ pub const Store = struct {
             return start <= len and span_len <= len - start;
         }
 
-        fn verifyTypeSpan(self: View, span_: Span) ?VerifyError {
+        fn verifyTypeSpan(self: *const View, span_: Span) ?VerifyError {
             if (!self.spanInBounds(self.spans.len, span_)) return .type_span_out_of_bounds;
             for (self.span(span_)) |ty| {
                 if (!self.typeRefInBounds(ty)) return .type_ref_out_of_bounds;
@@ -2304,7 +2304,7 @@ pub const Store = struct {
             return null;
         }
 
-        fn verifyFieldSpan(self: View, name_store: *const names.NameStore, span_: Span) ?VerifyError {
+        fn verifyFieldSpan(self: *const View, name_store: *const names.NameStore, span_: Span) ?VerifyError {
             if (!self.spanInBounds(self.fields.len, span_)) return .field_span_out_of_bounds;
             const fields_ = self.fieldSpan(span_);
             for (fields_) |field| {
@@ -2323,7 +2323,7 @@ pub const Store = struct {
             return null;
         }
 
-        fn verifyTagSpan(self: View, name_store: *const names.NameStore, span_: Span) ?VerifyError {
+        fn verifyTagSpan(self: *const View, name_store: *const names.NameStore, span_: Span) ?VerifyError {
             if (!self.spanInBounds(self.tags.len, span_)) return .tag_span_out_of_bounds;
             const tags_ = self.tagSpan(span_);
             for (tags_) |tag| {
@@ -2339,7 +2339,7 @@ pub const Store = struct {
             return null;
         }
 
-        fn verifyDeclaredFieldSpan(self: View, span_: Span) ?VerifyError {
+        fn verifyDeclaredFieldSpan(self: *const View, span_: Span) ?VerifyError {
             if (!self.spanInBounds(self.declared_fields.len, span_)) return .declared_field_span_out_of_bounds;
             for (self.declaredFieldSpan(span_)) |field| {
                 switch (field) {

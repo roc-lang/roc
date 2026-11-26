@@ -88,9 +88,8 @@ pub fn validateBuiltinIndices(env: *const ModuleEnv, indices: CIR.BuiltinIndices
 
     const all_stmts = env.store.sliceStatements(env.all_statements);
     for (all_stmts) |stmt_idx| {
-        const stmt = env.store.getStatement(stmt_idx);
-        if (stmt != .s_nominal_decl) continue;
-        const header_idx = stmt.s_nominal_decl.header;
+        const stmt = env.store.statementAs(stmt_idx, .s_nominal_decl) orelse continue;
+        const header_idx = stmt.header;
         const header = env.store.getTypeHeader(header_idx);
         const name = env.getIdentText(header.name);
         if (isBuiltinContainerName(name)) continue;

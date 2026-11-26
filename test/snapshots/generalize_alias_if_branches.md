@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=A top-level binding whose RHS is an if-expression choosing between two polymorphic functions is a polymorphic constant (its variable carries no requirement), so it is used at two types
+description=A binding whose RHS is an if-expression choosing between two polymorphic functions (expansive, not a bare reference)
 type=snippet
 ~~~
 # SOURCE
@@ -12,7 +12,7 @@ picked = if Bool.True id else id
 main = (picked(1), picked("a"))
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - generalize_alias_if_branches.md:5:27:5:30
 # PROBLEMS
 NIL
 # TOKENS
@@ -85,11 +85,11 @@ main = (picked(1), picked("a"))
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 244)
+				(e-call (constraint-fn-var 240)
 					(e-lookup-local
 						(p-assign (ident "picked")))
 					(e-num (value "1")))
-				(e-call (constraint-fn-var 247)
+				(e-call (constraint-fn-var 243)
 					(e-lookup-local
 						(p-assign (ident "picked")))
 					(e-string

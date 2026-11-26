@@ -249,6 +249,10 @@ pub const Statement = union(enum) {
         evaluated: CIR.Expr.Span = .{ .span = .{ .start = 0, .len = 0 } },
     },
 
+    /// Which variant a statement is, without its fields. `NodeStore` reads it
+    /// from a node's tag alone.
+    pub const Kind = std.meta.Tag(@This());
+
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { span: DataSpan };
 

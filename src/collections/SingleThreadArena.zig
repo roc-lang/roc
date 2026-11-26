@@ -23,6 +23,12 @@ const Alignment = std.mem.Alignment;
 
 const SingleThreadArena = @This();
 
+/// Whether this build hunts stale borrows. A Debug arena never changes an
+/// allocation's length in place and never reclaims a freed allocation, so a
+/// list in the arena moves on every growth, and the backing it left keeps the
+/// `undefined` bytes `Allocator.free` filled it with until the arena resets.
+const hunt_stale_borrows = @import("builtin").mode == .debug;
+
 child_allocator: Allocator,
 state: State,
 
@@ -243,6 +249,7 @@ fn alloc(ctx: *anyopaque, n: usize, alignment: Alignment, ret_addr: usize) ?[*]u
 fn resize(ctx: *anyopaque, buf: []u8, alignment: Alignment, new_len: usize, ret_addr: usize) bool {
     const arena: *SingleThreadArena = @ptrCast(@alignCast(ctx));
     if (pass_through) return arena.child_allocator.rawResize(buf, alignment, new_len, ret_addr);
+    if (hunt_stale_borrows) return new_len == buf.len;
 
     const cur_node = arena.state.first orelse return false;
     const cur_buf = usableBuf(cur_node);
@@ -269,6 +276,7 @@ fn remap(ctx: *anyopaque, buf: []u8, alignment: Alignment, new_len: usize, ret_a
 fn free(ctx: *anyopaque, buf: []u8, alignment: Alignment, ret_addr: usize) void {
     const arena: *SingleThreadArena = @ptrCast(@alignCast(ctx));
     if (pass_through) return arena.child_allocator.rawFree(buf, alignment, ret_addr);
+    if (hunt_stale_borrows) return;
 
     const cur_node = arena.state.first orelse return;
     const cur_buf = usableBuf(cur_node);
@@ -354,6 +362,7 @@ test "restore releases what was allocated after the mark" {
 }
 
 test "free reclaims only the most recent allocation" {
+    if (hunt_stale_borrows) return error.SkipZigTest;
     var arena = SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -373,6 +382,7 @@ test "free reclaims only the most recent allocation" {
 }
 
 test "resize grows and shrinks the latest allocation" {
+    if (hunt_stale_borrows) return error.SkipZigTest;
     var arena = SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -381,4 +391,21 @@ test "resize grows and shrinks the latest allocation" {
     try std.testing.expect(a.resize(buf, 16));
     buf.len = 16;
     try std.testing.expect(a.resize(buf, 4));
+}
+
+test "a Debug arena moves a growing list and keeps the backing it left" {
+    if (!hunt_stale_borrows) return error.SkipZigTest;
+    var arena = SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var list: std.ArrayList(u32) = .empty;
+    try list.append(a, 7);
+    const stale = list.items;
+    try std.testing.expect(!a.resize(std.mem.sliceAsBytes(list.allocatedSlice()), 64));
+    try list.ensureTotalCapacityPrecise(a, list.capacity + 1);
+    try std.testing.expect(stale.ptr != list.items.ptr);
+    try std.testing.expectEqual(@as(u32, 0xAAAAAAAA), stale[0]);
+    const next = try a.alloc(u32, 1);
+    try std.testing.expect(next.ptr != stale.ptr);
 }

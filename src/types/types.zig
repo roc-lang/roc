@@ -1586,6 +1586,18 @@ pub const Tag = struct {
 
     /// Independently growing columns of tag rows.
     pub const SafeMultiList = collections.ReservedColumns(@This(), .dense);
+
+    /// First occurrence in a descriptor's lexicographically ordered tag run.
+    pub fn findName(store: *const Ident.Store, names: []const Ident.Idx, name: Ident.Idx) ?usize {
+        const text = store.getText(name);
+        var lo: usize = 0;
+        var hi = names.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (Ident.textOrder(store.getText(names[mid]), text) == .lt) lo = mid + 1 else hi = mid;
+        }
+        return if (lo < names.len and names[lo].eql(name)) lo else null;
+    }
 };
 
 /// Two tag union fields

@@ -12,7 +12,7 @@ r = { f: id }
 main = ((r.f)(1), (r.f)("a"))
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - generalize_alias_in_record.md:5:25:5:28
 # PROBLEMS
 NIL
 # TOKENS
@@ -82,7 +82,7 @@ NO CHANGE
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 242)
+				(e-call (constraint-fn-var 238)
 					(e-field-access
 						(receiver
 							(e-lookup-local
@@ -90,7 +90,7 @@ NO CHANGE
 						(segments
 							(segment (name "f") (mode "required"))))
 					(e-num (value "1")))
-				(e-call (constraint-fn-var 249)
+				(e-call (constraint-fn-var 242)
 					(e-field-access
 						(receiver
 							(e-lookup-local

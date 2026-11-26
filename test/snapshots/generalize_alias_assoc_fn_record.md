@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=A record constant holding a reference to a polymorphic associated function is polymorphic, so its field is used at two types
+description=A record field holding a reference to a polymorphic associated function carrying a static-dispatch constraint
 type=snippet
 ~~~
 # SOURCE
@@ -15,7 +15,7 @@ bag = { run: FooBar.myfunc }
 main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - generalize_alias_assoc_fn_record.md:8:42:8:45
 # PROBLEMS
 NIL
 # TOKENS
@@ -123,7 +123,7 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 281)
+				(e-call (constraint-fn-var 269)
 					(e-field-access
 						(receiver
 							(e-lookup-local
@@ -135,7 +135,7 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 							(e-num (value "1"))
 							(e-num (value "2"))
 							(e-num (value "3")))))
-				(e-call (constraint-fn-var 293)
+				(e-call (constraint-fn-var 274)
 					(e-field-access
 						(receiver
 							(e-lookup-local

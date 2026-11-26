@@ -291,6 +291,7 @@ pub const ModuleType = enum {
             .base => .{
                 .root = "src/base/mod.zig",
                 .deps = &.{ .collections, .builtins, .build_options },
+                .extra_imports = &.{"stale_borrow_allocator"},
                 .tests = .{ .unit = .{ .aggregators = &.{"base tests"} } },
             },
             .collections => .{
@@ -558,6 +559,7 @@ const extra_modules = [_]ExtraModule{
     .{ .name = "shim_symbols", .root = "src/builtins/shim_symbols.zig" },
     .{ .name = "raw_pages", .root = "src/raw_pages.zig" },
     .{ .name = "memory_fault", .root = "src/base/memory_fault.zig" },
+    .{ .name = "stale_borrow_allocator", .root = "src/stale_borrow_allocator.zig" },
     .{ .name = "vendor_parse_float", .root = "vendor/parse_float/parse_float.zig" },
     .{ .name = "vendor_ryu", .root = "vendor/ryu.zig" },
     .{ .name = "vendor_relocatable_loader", .root = "vendor/relocatable_loader/mod.zig" },
@@ -657,6 +659,11 @@ pub const RocModules = struct {
     // the `base` module; the compiler's own crash handler reaches the same file
     // through `base.memory_fault`, so both report a stack overflow by one rule.
     memory_fault: *Module,
+
+    // The Debug-build allocator wrapper that makes stale borrows fail
+    // (`src/stale_borrow_allocator.zig`), shared by `base` and Roc's unit test
+    // runner, which gives it to `std.testing.allocator` as its backing.
+    stale_borrow_allocator: *Module,
 
     // Vendored-from-Zig modules. The sources live under `vendor/`.
     vendor_parse_float: *Module,
