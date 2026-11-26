@@ -167,7 +167,7 @@ NO CHANGE
 								(p-assign (ident "person"))))
 						(segments
 							(segment (name "age") (mode "required")))))
-				(e-interpolation (constraint-fn-var 294) (dispatcher-var 34)
+				(e-interpolation (constraint-fn-var 293) (dispatcher-var 34)
 					(first
 						(e-literal (string "")))
 					(parts
@@ -194,7 +194,7 @@ NO CHANGE
 								(field (name "age")
 									(e-num (value "36")))))))
 				(s-expr
-					(e-call (constraint-fn-var 329)
+					(e-call (constraint-fn-var 328)
 						(e-lookup-local
 							(p-assign (ident "echo!")))
 						(e-runtime-error (tag "erroneous_value_expr")
