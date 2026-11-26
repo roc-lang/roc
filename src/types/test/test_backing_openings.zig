@@ -16,7 +16,7 @@ const Rigid = types_mod.Rigid;
 const NominalDecl = types_mod.NominalDecl;
 const NominalType = types_mod.NominalType;
 const Rank = types_mod.Rank;
-const DenseMap = @import("collections").DenseMap(Var, Var);
+const VarMap = @import("collections").EpochMap(Var, Var);
 
 const origin: base.ModuleIdentity.Idx = @fromBackingInt(1);
 
@@ -88,7 +88,7 @@ const Args = enum {
 /// Open the declaration in `walked` by walking its template and in
 /// `replayed` through its recorded openings, with the same fresh args at the
 /// same rank, and require the stores to stay identical.
-fn openBoth(walked: *Store, replayed: *Store, idents: *Ident.Store, var_map: *DenseMap, decl_idx: NominalDecl.Idx, rank: Rank, args_from: Args) TestError!void {
+fn openBoth(walked: *Store, replayed: *Store, idents: *Ident.Store, var_map: *VarMap, decl_idx: NominalDecl.Idx, rank: Rank, args_from: Args) TestError!void {
     var args: [2]Var = undefined;
     for (&args, 0..) |*arg, index| {
         if (args_from == .repeated and index == 1) {
@@ -154,14 +154,14 @@ const Fixture = struct {
     idents: Ident.Store,
     walked: Store,
     replayed: Store,
-    var_map: DenseMap,
+    var_map: VarMap,
     decl_idx: NominalDecl.Idx,
 
     fn init(fixture: *Fixture, gpa: std.mem.Allocator, shared: bool) TestError!void {
         fixture.idents = try Ident.Store.initCapacity(gpa, 16);
         fixture.walked = try Store.initCapacity(gpa, 16, 8);
         fixture.replayed = try Store.initCapacity(gpa, 16, 8);
-        fixture.var_map = DenseMap.init(gpa);
+        fixture.var_map = VarMap.init(gpa);
         fixture.decl_idx = try registerDecl(&fixture.walked, &fixture.idents, gpa, shared);
         try std.testing.expectEqual(fixture.decl_idx, try registerDecl(&fixture.replayed, &fixture.idents, gpa, shared));
     }
