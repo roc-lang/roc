@@ -1661,7 +1661,7 @@ pub const Builder = struct {
         while (current != scope) : (levels += 1) {
             switch (self.program.worker(current).key) {
                 .lambda => |key| current = key.outer,
-                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a scope's table is read outside its chain of lambdas"),
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => invariant("a scope's table is read outside its chain of lambdas"),
             }
         }
         if (self.table_local == null) invariant("a worker without a type table read a scope's table");
@@ -2107,6 +2107,7 @@ pub const Builder = struct {
             .convert => |key| return try self.lowerConvertBody(key.from, key.to),
             .literal_thunk => |key| return try self.lowerLiteralThunkBody(key),
             .root_slot => |key| return try self.lowerRootSlotThunkBody(key),
+            .root_restore => |key| return try self.lowerRootRestoreBody(key),
         };
         // Signature: explicit parameters, then the type table, which holds
         // the descriptors, dictionaries, and literal arguments.
@@ -3832,7 +3833,7 @@ pub const Builder = struct {
         if (!self.view.view.compile_time_roots.isInlineLiteral(expr_id)) return null;
         switch (self.currentWorker().key) {
             .inline_literal => |key| if (key.expr == expr_id and key.module == self.module) return null,
-            .template, .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => {},
+            .template, .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => {},
         }
         const ty = try self.exprType(expr_id);
         const layouts = &self.program.result.layouts;
@@ -4773,7 +4774,7 @@ pub const Builder = struct {
                 const export_name = view.nameStore().procBase(template.proc_base).export_name.get() orelse break :blk "a template";
                 break :blk view.nameStore().exportNameText(export_name);
             },
-            inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => |_, kind| @tagName(kind),
+            inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => |_, kind| @tagName(kind),
         };
     }
 
@@ -5025,6 +5026,25 @@ pub const Builder = struct {
         self.hole = body_start;
         try self.tasks.append(self.allocator, .ret);
         try self.pendingValueRead(key.module, key.root, worker.ret);
+        try self.run();
+        try self.finishErasedProc(start.entry, body_start, &.{}, ret_layout, start.capture_ptr);
+    }
+
+    /// The body of a root restore thunk (`WorkerKey.root_restore`): the
+    /// restore of the polymorphic constant instance its root stored.
+    pub fn lowerRootRestoreBody(self: *Builder, key: @FieldType(lower.WorkerKey, "root_restore")) Allocator.Error!void {
+        const worker = self.currentWorker().*;
+        const node = switch (self.program.module(key.module).view.compile_time_roots.root(key.root).payloadFor(.boxy)) {
+            .const_node => |node| node,
+            .fn_value, .pending, .unevaluated, .discarded, .expect, .runtime => invariant("a root restore thunk's root stored no Boxy value"),
+        };
+        const start = try self.beginErasedWorker(&.{}, .none);
+        defer self.allocator.free(start.captures);
+        const ret_layout = try self.program.layouts.layoutOf(worker.ret);
+        const body_start = try self.newHole();
+        self.hole = body_start;
+        try self.tasks.append(self.allocator, .ret);
+        try self.push(.{ .restore = .{ .source = .{ .module = key.module }, .node = node, .ty = worker.ret, .root = key.root } });
         try self.run();
         try self.finishErasedProc(start.entry, body_start, &.{}, ret_layout, start.capture_ptr);
     }
@@ -6074,7 +6094,7 @@ pub const Builder = struct {
         while (!self.isTemplateWorker(chain, owner)) {
             switch (self.program.worker(chain).key) {
                 .lambda => |key| chain = key.outer,
-                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => return try self.ownerDeclaration(innermost, owner),
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => return try self.ownerDeclaration(innermost, owner),
             }
         }
         return null;
@@ -6114,7 +6134,7 @@ pub const Builder = struct {
     fn isTemplateWorker(self: *Builder, id: WorkerId, template: TemplateKey) bool {
         return switch (self.program.worker(id).key) {
             .template => |key| key.module == template.module and key.template == template.template,
-            .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => false,
+            .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => false,
         };
     }
 
@@ -6455,7 +6475,7 @@ pub const Builder = struct {
                         break try self.declaredLambdaWorker(scope_worker, lambda_expr, closure_expr.ty, captures)
                     else
                         invariant("a local procedure's function value is built outside its declaring body with no declaration context"),
-                    .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a local procedure's function value is built outside its declaring body with no declaration context"),
+                    .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => invariant("a local procedure's function value is built outside its declaring body with no declaration context"),
                 }
             };
             const declaring = self.program.worker(scope_worker).*;
@@ -7379,7 +7399,7 @@ pub const Builder = struct {
     pub fn templateEvidenceParams(self: *Builder, worker_id: WorkerId) []const static_dispatch.EvidenceParamRecord {
         const key = switch (self.program.worker(worker_id).key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("evidence parameters of a worker that is not a procedure template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => invariant("evidence parameters of a worker that is not a procedure template's"),
         };
         const view = self.program.module(key.module).view;
         const template = view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
@@ -8049,7 +8069,7 @@ pub const Builder = struct {
         const target = self.program.worker(callee).*;
         const key = switch (target.key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.program.module(key.module).view.checked_procedure_templates;
         return .{

@@ -7160,9 +7160,20 @@ frames of the schemes its edge instantiates and calls the constant's entry
 wrapper there with that frame's descriptors, dictionaries and literal
 arguments. Under `.boxy` a use reads the stored instance its edge names, and
 a forwarded use reads its own literal argument, a word of its type table
-holding an immortal callable that restores the stored instance (the root's
-entry wrapper); a value of a type the body does not know cannot be one table
-word, so the word is the callable, which never recomputes. Under `.lss` a use
+holding an immortal callable that restores the stored instance; a value of a
+type the body does not know cannot be one table word, so the word is the
+callable, which never recomputes. The callable's code is a generated worker
+of the reading program (`WorkerKey.root_restore`, `Program.rootRestoreWorker`),
+not the root's entry wrapper: it restores the root's stored value where it
+is read, and is named by that value's content (the stored value's digest
+and its type), so every unit restoring one instance defines one procedure,
+which a link keeps once. No unit emits the wrapper of a stored instance, and
+a unit reading an instance another module holds embeds the value, so a
+module's importer-facing digest covers the stored value of each of its
+unsealed instance roots (`boxy_interface.Digests.hashStoredValues`): a
+program deriving an instance from its types reads whichever module's root
+holds it. In a compile-time program evaluating the instance, the word reads
+the root's slot instead (`WorkerKey.root_slot`). Under `.lss` a use
 reads the stored instance its edge names, or, in a compile-time program
 evaluating that instance, the instance's slot. A forwarded use inside a
 generalized local scope that a use of the scope lowers (a scheme alias, `pick
