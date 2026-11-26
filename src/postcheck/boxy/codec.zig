@@ -444,20 +444,24 @@ fn forwardedSubjects(allocator: Allocator, table: *const static_dispatch.StaticD
 }
 
 /// Every call of the root derivation's contract and of each nested
-/// structural derivation it reaches, by selection key.
+/// structural derivation it reaches, by selection key. A nested contract's
+/// calls are converted under its own variables, bound to the family's types
+/// at the call that nests it (`nestedEnv`).
 fn collectCalls(program: *Program, family_index: u32, forwarded_refs: []const u32) Allocator.Error!void {
     const allocator = program.allocator;
     const module = program.codec.families.items[family_index].module;
-    const env = program.codec.families.items[family_index].env;
     const table = program.module(module).view.static_dispatch_plans;
     const names = program.module(module).nameStore();
+    const Contract = struct { id: DerivationId, env: types.Env };
     var visited: collections.DenseMapUnmanaged(DerivationId, void) = .empty;
     defer visited.deinit(allocator);
-    var pending: std.ArrayList(DerivationId) = .empty;
+    var pending: std.ArrayList(Contract) = .empty;
     defer pending.deinit(allocator);
-    try pending.append(allocator, program.codec.families.items[family_index].root);
+    try pending.append(allocator, .{ .id = program.codec.families.items[family_index].root, .env = program.codec.families.items[family_index].env });
     try visited.put(allocator, program.codec.families.items[family_index].root, {});
-    while (pending.pop()) |id| {
+    while (pending.pop()) |contract| {
+        const id = contract.id;
+        const env = contract.env;
         const derivation = table.generated_codec_derivations.items()[@backingInt(id)];
         for (derivation.callsSlice(table)) |call| {
             const method = try methodName(program, names.methodNameText(call.method));
@@ -474,7 +478,10 @@ fn collectCalls(program: *Program, family_index: u32, forwarded_refs: []const u3
                     .fn_ty = try convertIn(program, env, call.callable_ty),
                 } },
                 .structural => |nested| blk: {
-                    if ((try visited.getOrPut(allocator, nested)).found_existing == false) try pending.append(allocator, nested);
+                    if ((try visited.getOrPut(allocator, nested)).found_existing == false) {
+                        const nested_env = try nestedEnv(program, module, nested, try convertIn(program, env, call.callable_ty));
+                        try pending.append(allocator, .{ .id = nested, .env = nested_env });
+                    }
                     break :blk .{ .structural = nested };
                 },
             };
@@ -499,6 +506,29 @@ fn collectCalls(program: *Program, family_index: u32, forwarded_refs: []const u3
             }
         }
     }
+}
+
+/// The variables of nested structural derivation `id`, bound to the
+/// family's types at `actual`: the callable type, in the family's terms, of
+/// the call that nests it. Checking snapshots a nested contract apart from
+/// the contract that nests it, so the nested contract's open variables (its
+/// error row's, say) are renamed copies of the call's
+/// (`CheckedTypeStoreView.rootsAlphaExactEql`). Under the family's own
+/// environment they would seal to their defaults instead of taking the
+/// family's variables, and the family would type one call two ways.
+fn nestedEnv(program: *Program, module: ModuleIndex, id: DerivationId, actual: TypeId) Allocator.Error!types.Env {
+    const allocator = program.allocator;
+    const table = program.module(module).view.static_dispatch_plans;
+    const derivation = table.generated_codec_derivations.items()[@backingInt(id)];
+    const forwarded_subjects = try forwardedSubjects(allocator, table, id);
+    defer allocator.free(forwarded_subjects);
+    const own = try contractEnv(program, module, derivation.constructor_ty, derivation.shape_ty, forwarded_subjects);
+    const formal = try convertIn(program, own, derivation.constructor_ty);
+    const related = try program.relateVariablesPartial(allocator, &.{.{ formal, actual }}, own.vars.len);
+    defer allocator.free(related);
+    const bound = try program.arena.allocator().alloc(TypeId, own.vars.len);
+    for (related, bound) |ty, *slot| slot.* = ty.get() orelse invariant("a nested generated codec contract has a variable the call nesting it does not relate");
+    return .{ .module = module, .vars = own.vars, .bound = bound };
 }
 
 fn lookupCall(program: *Program, family_index: u32, method_text: []const u8, subject: ?TypeId) Allocator.Error!Resolved {
