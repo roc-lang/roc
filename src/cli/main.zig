@@ -7199,6 +7199,9 @@ fn writeComposedRunImage(
             .{ .name = "Sites filled", .count = timing.sites_patched },
             .{ .name = "Host sites", .count = timing.host_sites },
             .{ .name = "Rebased words", .count = timing.rebases },
+            .{ .name = "Stored images named", .count = timing.pool_named },
+            .{ .name = "Stored images placed", .count = timing.pool_placed },
+            .{ .name = "Stored image bytes", .count = timing.pool_bytes },
         });
         return .{ .descriptor = descriptor, .descriptor_offset = descriptor_offset };
     }
@@ -12370,6 +12373,9 @@ const FastDevLink = struct {
             .{ .name = "Patch sites", .count = timing.sites_patched },
             .{ .name = "References fixed", .count = timing.refs_fixed },
             .{ .name = "Hole bytes dropped", .count = timing.hole_bytes },
+            .{ .name = "Stored images named", .count = timing.pool_named },
+            .{ .name = "Stored images placed", .count = timing.pool_placed },
+            .{ .name = "Stored image bytes", .count = timing.pool_bytes },
         });
     }
 };

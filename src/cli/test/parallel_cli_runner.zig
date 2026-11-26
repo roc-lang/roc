@@ -724,6 +724,7 @@ const CustomCase = enum {
     boxy_padded_records_wasm_size,
     issue_10827_private_compiler_support,
     issue_13195_wasm_unreached_provide,
+    constant_pool_keeps_reached_constants_once,
     issue_11134_wasm_post_llvm_pipeline,
     macos_output_basename_reproducible,
     default_platform_crash_x64musl,
@@ -5789,6 +5790,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: LLVM speed wasm32 links the Boxy runtime", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=speed", "--no-cache", "--output=boxed_closure_speed.wasm" }, .roc_file = "test/wasm/boxed_closure_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "UnresolvedBuiltinImport" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10827: Roc compiler support is private from a strong-intrinsic wasm host", .backend = .dev, .body = .{ .custom = .issue_10827_private_compiler_support } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 13195: a wasm32 module leaves out a provide its exports do not reach and the hosted import it calls", .backend = .dev, .body = .{ .custom = .issue_13195_wasm_unreached_provide } },
+    .{ .id = 0, .suite = .subcommands, .name = "a dev build keeps a stored constant only when kept code reads it, and once however many modules read it", .backend = .dev, .timeout_ms = 600_000, .body = .{ .custom = .constant_pool_keeps_reached_constants_once } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11134: wasm speed uses explicit post-LLVM passes", .backend = .speed, .body = .{ .custom = .issue_11134_wasm_post_llvm_pipeline } },
     // issue 10951: https://github.com/roc-lang/roc/issues/10951
     // The wasm32 linker exports exactly what the platform header's `exports:`
@@ -7520,6 +7522,7 @@ fn runCustomCase(
         .boxy_padded_records_wasm_size => customBoxyPaddedRecordsWasm(io, allocator, &env, &timer, timeout_ms, "--opt=size"),
         .issue_10827_private_compiler_support => customIssue10827PrivateCompilerSupport(io, allocator, &env, &timer, timeout_ms),
         .issue_13195_wasm_unreached_provide => customIssue13195WasmUnreachedProvide(io, allocator, &env, &timer, timeout_ms),
+        .constant_pool_keeps_reached_constants_once => customConstantPoolKeepsReachedConstantsOnce(io, allocator, &env, &timer, timeout_ms),
         .issue_11134_wasm_post_llvm_pipeline => customWasmPostLlvmPipeline(io, allocator, &env, &timer, timeout_ms),
         .macos_output_basename_reproducible => customMacosOutputBasenameReproducible(io, allocator, &env, &timer, timeout_ms),
         .default_platform_crash_x64musl => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .x64musl, .crash),
@@ -15997,6 +16000,66 @@ fn customIssue10827PrivateCompilerSupport(
         return customFailure(allocator, timer, "final wasm exposed the compiler-rt __multi3 name", .{});
     }
 
+    return null;
+}
+
+/// Copies a binary holds of the constant pool test app's table whose first
+/// two items are `first` and `first + 1` (test/echo/constant_pool).
+fn constantPoolTableCopies(binary: []const u8, first: u64) usize {
+    var pattern: [16]u8 = undefined;
+    std.mem.writeInt(u64, pattern[0..8], first, .little);
+    std.mem.writeInt(u64, pattern[8..16], first + 1, .little);
+    return std.mem.count(u8, binary, &pattern);
+}
+
+/// The constant pool test app (test/echo/constant_pool) built under each
+/// strategy for every object format a dev build links: the table only an
+/// uncalled function reads is absent, the table two modules read is present
+/// once, and the table only a method reached through a dispatch reads is
+/// present (design.md "Constant Pool"). The Linux build runs where the
+/// compiler runs on x86_64 Linux.
+fn customConstantPoolKeepsReachedConstantsOnce(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const targets = [_][]const u8{ "x64musl", "x64mac", "arm64mac", "x64win" };
+    const strategies = [_][]const u8{ "--specialize=no", "--specialize=yes" };
+    for (strategies) |strategy| for (targets) |target| {
+        const exe_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, target }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate constant pool output path: {}", .{err});
+        defer allocator.free(exe_path);
+        const output_arg = outputArg(allocator, exe_path) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate constant pool output argument: {}", .{err});
+        defer allocator.free(output_arg);
+        const target_arg = std.fmt.allocPrint(allocator, "--target={s}", .{target}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate constant pool target argument: {}", .{err});
+        defer allocator.free(target_arg);
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "build", "--opt=dev", strategy, "--no-cache", target_arg, output_arg },
+            .roc_file = "test/echo/constant_pool/main.roc",
+            .exit = .success,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+            .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+        })) |failure| return failure;
+        const binary = std.Io.Dir.cwd().readFileAlloc(io, exe_path, allocator, .unlimited) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read the constant pool build for {s}: {}", .{ target, err });
+        defer allocator.free(binary);
+        const uncalled = constantPoolTableCopies(binary, 0x51A7_0000_0000_0A00);
+        const shared = constantPoolTableCopies(binary, 0x51A7_0000_0000_0B00);
+        const method = constantPoolTableCopies(binary, 0x51A7_0000_0000_0C00);
+        if (uncalled != 0 or shared != 1 or method != 1) {
+            return customFailure(allocator, timer, "{s} {s}: the uncalled table has {d} copies (expected 0), the shared table {d} (expected 1), the method's table {d} (expected 1)", .{ target, strategy, uncalled, shared, method });
+        }
+        if (builtin.os.tag == .linux and builtin.cpu.arch == .x86_64 and std.mem.eql(u8, target, "x64musl")) {
+            if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe_path}, project_root_path, .{
+                .args = &.{},
+                .stdout_exact = "5883671438182845184 5883671438182845185 5883671438182845440\n",
+            })) |failure| return failure;
+        }
+    };
     return null;
 }
 

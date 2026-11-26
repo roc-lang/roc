@@ -745,6 +745,7 @@ reads that distinction, or anything else, back out of the spelling:
 | `roc__d{N}` | the value owner `N` holds | program |
 | `roc__d{N}_{k}` | the `k`th further node (from 1) of owner `N`'s value | program |
 | `roc__h{hash}` | a datum named by content: a string literal's backing, a carried constant, or a constant a wasm unit defines for itself (`UnitCompile.contentNamedStaticData`) | shared |
+| `roc__i{digest}` | a stored constant's image, by its digest in hex (`lir.Program.poolImageSymbolName`; design "Constant Pool") | shared |
 | `roc__p{hash}` | a procedure, by its `ProcIdentity` | shared |
 | `roc__p{hash}.{k}` | the `k`th fragment function (from 1) of a procedure's wasm code ("Wasm Function Limits") | shared |
 
@@ -762,8 +763,11 @@ another kept value still points into its data, so compaction renames every kept
 node after the first kept value in export order whose data graph reaches it, in
 the order a walk from that value finds them. `lir.Program`
 (`staticDataSymbolName`, `staticDataNodeSymbolName`,
-`content_data_symbol_prefix`) and `ProcIdentity.symbol_name_prefix` are the
-only places these forms are spelled.
+`content_data_symbol_prefix`, `pool_image_symbol_prefix`) and
+`ProcIdentity.symbol_name_prefix` are the only places these forms are
+spelled; a unit image reads the pool form back
+(`UnitImage.poolDigestOfName`), and the backend asserts at compile time that
+its prefix is `lir.Program`'s.
 
 Debug information shows a procedure by its source name and states its
 `roc__p{hash}` symbol as the linkage name ("Procedure Source Names"), so
@@ -19925,7 +19929,8 @@ Nothing a module emits depends on a module that imports it:
   (`Program.storedDataAlone`) and whose template no longer names an entry
   procedure, because every read of such a constant restores the stored value
   into the reading body, so a constant no body reads puts no data in any
-  object; a stored function value's wrapper is emitted, since its restore
+  object, and an object imports a constant a body reads from the constant
+  pool rather than carrying it (Constant Pool); a stored function value's wrapper is emitted, since its restore
   lowers the workers the value names, which other objects link against;
 - its conversion workers are its own and memoized within it alone;
 - ARC solves each of its procedures' ownership signatures from the procedure's
@@ -31768,6 +31773,66 @@ Compiler hosts are little-endian, as the checked cache's raw-byte format
 already requires (a big-endian host fails to compile), so an image's bytes
 are the evaluation's own.
 
+### Constant Pool
+
+A stored image is named by its digest wherever it is emitted: static data
+materialization emits a read image's block as one node named
+`roc__i{digest}` (`StaticDataExport.pool_image`), with its pointer words
+relocated to itself, so every program and every unit carrying one image
+names it alike and the name is exact, the digest being the image's identity
+(Stored Images). A whole-program object (`--specialize=yes`, `--opt=speed`
+or `--opt=size`, a pieces composition) defines each image it reads once,
+since one static-data build keeps one block per digest and a composition
+keeps one datum per name.
+
+A `.boxy` unit image holds no image. Its composition leaves every image its
+kept code names out of the unit's data and imports it by name instead, the
+import marked as the pool's (`UnitImage.import_pool`), so a unit's cache
+entry records the digests of the images it reads and none of their bytes.
+The images live in the checked modules' constant stores, which the
+compilation already holds; a consumer finds one by digest through an index
+over the stores (`ConstStore.ImageIndex`). A digest no store holds is a
+compiler invariant: a unit's key covers the stored values its lowering read.
+
+Every consumer of unit images places the images their atoms name:
+
+- A link that places images (the ELF, Mach-O and COFF fast dev links and a
+  dev run's composed run image) resolves pool imports during its atom walk
+  (`unit_walk.Pool`), keeps an image exactly when an edge of a reached atom
+  names it, lays the kept images out in digest order after the placed
+  images' writable data, copies each kept image once, writing its pointer
+  words as the absolute addresses they point at in the same pass, and adds
+  one loader relocation per pointer word (an ELF relative relocation, a
+  Mach-O rebase, a COFF base relocation, a run image rebase). An image no
+  reached atom names is never read.
+- An in-process loader (compile-time evaluation's, `roc test`'s and a glue
+  run's) places an image the first time a loaded image names it, once for
+  the loader's lifetime (`UnitImageLoader.Pool`).
+
+What a link keeps is decided by the atoms of the images, built with each
+unit's image in parallel and exact. A unit's writable data divides into
+atoms like its block: one per datum of the static data a format keeps
+writable (an ELF object's pointer-bearing `.data.rel.ro`, Mach-O's
+`__DATA,__const`), each reached only through an edge of a reached atom, and
+roots for the rest of the writable data (the global offset table, data an
+object keeps outside its static data), which a placed image always reaches.
+A field in writable data reaches its target from its own atom. Writable
+data is still placed whole; a site in an unreached data atom is neither
+written nor given a loader relocation. So a constant is kept exactly when a
+kept function references it, directly or through another kept datum: the
+walk starts from the `provides`, follows every call, address and datum, and
+never consults the checked program's own reachability walk
+(`compile.boxy_reach`), which may miss what only the images know.
+
+The wasm link keeps its own form: a wasm unit defines each image it reads
+as a weak data segment under the image's name (`contentNamedStaticData`),
+and its atom walk keeps one definition of a name, and only the segments
+reached code names. A wasm unit therefore still carries the bytes of the
+images it reads; the walk decides what the module holds exactly as above.
+
+`--timings` reports, per fast dev link and composed run image, the images
+the units name, the ones placed, and their bytes.
+
 ## Test Root Ownership
 
 `roc test` runs the `expect`s the developer wrote. Whether a module's roots
@@ -33884,7 +33949,11 @@ inside its atom, after the header), each recording what it references and,
 for every reference the image resolved between two of its atoms (and every
 page-relative one inside an atom), where the field is and how it encodes
 its target: an x86_64 displacement, an arm64 branch, page or page offset, or
-the arm64 dev backend's PC-relative address sequence. A link writes only the
+the arm64 dev backend's PC-relative address sequence. The writable data
+divides into atoms too, one per datum of the static data a format keeps
+writable, which decide what is reached but are placed with the rest of the
+writable data (Constant Pool). An image's stored constants are no part of
+it: it imports each from the constant pool. A link writes only the
 atoms the program reaches. An ELF link packs each image's reached atoms
 together in image order and fixes a resolved reference again only when the
 atoms it left out changed what the field encodes; a Mach-O or COFF link
