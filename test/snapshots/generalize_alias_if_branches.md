@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=A top-level binding whose RHS is an if-expression choosing between two polymorphic functions is a polymorphic constant (its variable carries no requirement), so it is used at two types
+description=A binding whose RHS is an if-expression choosing between two polymorphic functions (expansive, not a bare reference)
 type=snippet
 ~~~
 # SOURCE
@@ -12,9 +12,23 @@ picked = if Bool.True id else id
 main = (picked(1), picked("a"))
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - generalize_alias_if_branches.md:5:27:5:30
 # PROBLEMS
-NIL
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 5 27) (end 5 30))
+		(headline
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
+		(document
+			(source-region (file "generalize_alias_if_branches.md") (start 5 27) (end 5 30) (annotation error) (line-text "main = (picked(1), picked(\"a\"))"))
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Add a type annotation saying which type it should be."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
@@ -85,25 +99,24 @@ main = (picked(1), picked("a"))
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 244)
+				(e-call (constraint-fn-var 238)
 					(e-lookup-local
 						(p-assign (ident "picked")))
-					(e-num (value "1")))
-				(e-call (constraint-fn-var 247)
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(e-call (constraint-fn-var 239)
 					(e-lookup-local
 						(p-assign (ident "picked")))
-					(e-string
-						(e-literal (string "a"))))))))
+					(e-runtime-error (tag "erroneous_value_expr")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt (type "a -> a"))
-		(patt (type "a -> a"))
-		(patt (type "(Dec, Str)")))
+		(patt (type "Dec -> Dec"))
+		(patt (type "(Dec, Dec)")))
 	(expressions
 		(expr (type "a -> a"))
-		(expr (type "a -> a"))
-		(expr (type "(Dec, Str)"))))
+		(expr (type "Dec -> Dec"))
+		(expr (type "(Dec, Dec)"))))
 ~~~

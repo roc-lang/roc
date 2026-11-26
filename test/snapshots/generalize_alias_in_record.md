@@ -12,9 +12,23 @@ r = { f: id }
 main = ((r.f)(1), (r.f)("a"))
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - generalize_alias_in_record.md:5:25:5:28
 # PROBLEMS
-NIL
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 5 25) (end 5 28))
+		(headline
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
+		(document
+			(source-region (file "generalize_alias_in_record.md") (start 5 25) (end 5 28) (annotation error) (line-text "main = ((r.f)(1), (r.f)(\"a\"))"))
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Add a type annotation saying which type it should be."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
@@ -82,33 +96,32 @@ NO CHANGE
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 242)
+				(e-call (constraint-fn-var 235)
 					(e-field-access
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "r"))))
 						(segments
 							(segment (name "f") (mode "required"))))
-					(e-num (value "1")))
-				(e-call (constraint-fn-var 249)
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(e-call (constraint-fn-var 236)
 					(e-field-access
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "r"))))
 						(segments
 							(segment (name "f") (mode "required"))))
-					(e-string
-						(e-literal (string "a"))))))))
+					(e-runtime-error (tag "erroneous_value_expr")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt (type "a -> a"))
-		(patt (type "{ f: a -> a }"))
-		(patt (type "(Dec, Str)")))
+		(patt (type "{ f: Dec -> Dec }"))
+		(patt (type "(Dec, Dec)")))
 	(expressions
 		(expr (type "a -> a"))
-		(expr (type "{ f: a -> a }"))
-		(expr (type "(Dec, Str)"))))
+		(expr (type "{ f: Dec -> Dec }"))
+		(expr (type "(Dec, Dec)"))))
 ~~~

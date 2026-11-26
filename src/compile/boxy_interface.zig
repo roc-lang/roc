@@ -99,7 +99,7 @@ pub const Digests = struct {
             const entry = try self.artifacts.getOrPut(self.gpa, artifact.key.bytes);
             if (entry.found_existing) return false;
             entry.value_ptr.* = artifact;
-            const name = self.names.of(CheckedArtifact.importedView(artifact));
+            const name = self.names.of(&CheckedArtifact.importedView(artifact));
             try self.module_names.put(self.gpa, artifact.key.bytes, name);
             break :name name;
         };

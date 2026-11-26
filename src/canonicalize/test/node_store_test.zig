@@ -43,6 +43,28 @@ fn rand_ident_idx() Ident.Idx {
     return @bitCast(rand.random().int(u32));
 }
 
+/// Checks that the kind, view and per-kind readers of a stored node of the
+/// family named `family` ("expr", "pattern", ...) agree with its full decode.
+fn expectReadersAgree(comptime family: []const u8, store: *const NodeStore, idx: anytype, decoded: anytype) error{ TestUnexpectedResult, TestExpectedEqual }!void {
+    const kind = @field(NodeStore, family ++ "Kind")(store, idx);
+    try testing.expectEqual(std.meta.activeTag(decoded), kind);
+    const view = @field(NodeStore, family ++ "View")(store, idx);
+    inline for (comptime std.enums.values(@TypeOf(kind))) |k| {
+        if (kind == k) {
+            const variant = @field(decoded, @tagName(k));
+            const kind_view = @field(view, @tagName(k));
+            try testing.expectEqualDeep(variant, kind_view.decode());
+            try testing.expectEqualDeep(variant, @field(NodeStore, family ++ "As")(store, idx, k).?);
+            const Variant = @TypeOf(variant);
+            if (@typeInfo(Variant) == .@"struct") {
+                inline for (comptime std.meta.fieldNames(Variant)) |name| {
+                    try testing.expectEqualDeep(@field(variant, name), kind_view.get(@field(std.meta.FieldEnum(Variant), name)));
+                }
+            }
+        }
+    }
+}
+
 /// Helper to create a random region.
 fn rand_region() base.Region {
     const start = rand.random().int(u32);
@@ -220,6 +242,7 @@ test "NodeStore round trip - Statements" {
         const retrieved = store.getStatement(idx);
 
         try testing.expectEqualDeep(stmt, retrieved);
+        try expectReadersAgree("statement", &store, idx, retrieved);
     }
 
     const actual_test_count = statements.items.len;
@@ -633,6 +656,7 @@ test "NodeStore round trip - Expressions" {
         const retrieved = store.getExpr(idx);
 
         try testing.expectEqualDeep(expr, retrieved);
+        try expectReadersAgree("expr", &store, idx, retrieved);
     }
 
     const actual_test_count = expressions.items.len;
@@ -1544,6 +1568,7 @@ test "NodeStore round trip - TypeAnno" {
         const retrieved = store.getTypeAnno(idx);
 
         try testing.expectEqualDeep(type_anno, retrieved);
+        try expectReadersAgree("typeAnno", &store, idx, retrieved);
     }
 
     // We have extra tests for:
@@ -1725,6 +1750,7 @@ test "NodeStore round trip - Pattern" {
         const retrieved = store.getPattern(idx);
 
         try testing.expectEqualDeep(pattern, retrieved);
+        try expectReadersAgree("pattern", &store, idx, retrieved);
 
         // Also verify the region was stored correctly
         const stored_region = store.getRegionAt(@fromBackingInt(@intCast(@backingInt(idx))));

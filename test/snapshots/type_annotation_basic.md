@@ -263,7 +263,7 @@ main! = |_| {
 							(p-assign (ident "text")))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call (constraint-fn-var 302)
+					(e-call (constraint-fn-var 301)
 						(e-lookup-local
 							(p-assign (ident "addOne")))
 						(e-num (value "5"))))

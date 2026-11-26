@@ -777,17 +777,18 @@ pub const Builder = struct {
         try pending.append(self.allocator, root);
         while (pending.pop()) |expr| {
             try self.result_exprs.put(self.allocator, expr, {});
-            switch (self.bodies().exprData(expr)) {
-                .block => |block| try pending.append(self.allocator, block.final_expr),
-                .if_ => |if_| {
+            switch (self.bodies().exprDataKind(expr)) {
+                .block => try pending.append(self.allocator, self.bodies().exprDataOf(expr, .block).final_expr),
+                .if_ => {
+                    const if_ = self.bodies().exprDataOf(expr, .if_);
                     for (if_.branches) |branch| try pending.append(self.allocator, self.bodies().ifBranch(branch).body);
                     try pending.append(self.allocator, if_.final_else);
                 },
-                .match_ => |match| for (match.branches) |branch| try pending.append(self.allocator, self.bodies().matchBranch(branch).value),
-                .tag => |tag| try pending.appendSlice(self.allocator, tag.args),
-                .tuple => |elems| try pending.appendSlice(self.allocator, elems),
-                .record => |record| for (record.fields) |field| try pending.append(self.allocator, self.bodies().recordField(field).value),
-                .nominal => |nominal| try pending.append(self.allocator, nominal.backing_expr),
+                .match_ => for (self.bodies().exprDataOf(expr, .match_).branches) |branch| try pending.append(self.allocator, self.bodies().matchBranch(branch).value),
+                .tag => try pending.appendSlice(self.allocator, self.bodies().exprDataOf(expr, .tag).args),
+                .tuple => try pending.appendSlice(self.allocator, self.bodies().exprDataOf(expr, .tuple)),
+                .record => for (self.bodies().exprDataOf(expr, .record).fields) |field| try pending.append(self.allocator, self.bodies().recordField(field).value),
+                .nominal => try pending.append(self.allocator, self.bodies().exprDataOf(expr, .nominal).backing_expr),
                 .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .call, .empty_record, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
             }
         }
@@ -881,7 +882,7 @@ pub const Builder = struct {
         return self.program.worker(self.worker_id);
     }
 
-    pub fn bodies(self: *const Builder) checked.CheckedBodies {
+    pub fn bodies(self: *const Builder) *const checked.CheckedBodies {
         return self.view.bodies();
     }
 
@@ -1107,12 +1108,13 @@ pub const Builder = struct {
     /// given up.
     fn returnsConstructedTag(self: *Builder, construct: ExprId) Allocator.Error!bool {
         if (self.result_local != null) return false;
-        switch (self.bodies().exprData(construct)) {
-            .if_ => |if_| {
+        switch (self.bodies().exprDataKind(construct)) {
+            .if_ => {
+                const if_ = self.bodies().exprDataOf(construct, .if_);
                 for (if_.branches) |branch| if (!self.constructsTag(self.bodies().ifBranch(branch).body)) return false;
                 if (!self.constructsTag(if_.final_else)) return false;
             },
-            .match_ => |match| for (match.branches) |branch| {
+            .match_ => for (self.bodies().exprDataOf(construct, .match_).branches) |branch| {
                 if (!self.constructsTag(self.bodies().matchBranch(branch).value)) return false;
             },
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable, // only an `if` or a `match` asks how its branches return
@@ -1126,10 +1128,10 @@ pub const Builder = struct {
     /// a tag, a nominal constructed from one, or a block ending in either.
     fn constructsTag(self: *Builder, expr: ExprId) bool {
         var current = expr;
-        while (true) switch (self.bodies().exprData(current)) {
+        while (true) switch (self.bodies().exprDataKind(current)) {
             .tag, .zero_argument_tag => return true,
-            .block => |block| current = block.final_expr,
-            .nominal => |nominal| return switch (self.bodies().exprData(nominal.backing_expr)) {
+            .block => current = self.bodies().exprDataOf(current, .block).final_expr,
+            .nominal => return switch (self.bodies().exprDataKind(self.bodies().exprDataOf(current, .nominal).backing_expr)) {
                 .tag, .zero_argument_tag => true,
                 .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => false,
             },
@@ -1146,7 +1148,7 @@ pub const Builder = struct {
     pub fn retagTarget(self: *Builder, expr: ExprId, own: TypeId) Allocator.Error!?TypeId {
         const destination = self.ownDestination(expr) orelse return null;
         if (destination == own) return null;
-        switch (self.bodies().exprData(expr)) {
+        switch (self.bodies().exprDataKind(expr)) {
             .block, .if_, .match_, .nominal, .dbg, .tag, .zero_argument_tag, .record, .empty_record, .tuple, .list, .empty_list, .numeral, .str_segment, .str, .interpolation, .lambda, .closure, .runtime_error, .crash, .return_ => return null,
             .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .call, .binop, .unary_minus, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .expect_err, .expect, .ellipsis, .anno_only, .break_, .for_, .hosted_lambda, .run_low_level => {},
         }
@@ -1196,7 +1198,7 @@ pub const Builder = struct {
     /// scopes the body's statements to this location's file; glue workers,
     /// with no source body, stay unlocated.
     fn locateProc(self: *Builder, body: ExprId) void {
-        const loc = self.program.sourceLoc(self.module, self.bodies().expr(body).source_region);
+        const loc = self.program.sourceLoc(self.module, self.bodies().exprRegion(body));
         self.store.setProcLoc(self.currentWorker().proc, loc);
     }
 
@@ -2135,8 +2137,9 @@ pub const Builder = struct {
         self.hole = body_start;
         switch (template.body) {
             .checked_body => |root_expr| {
-                switch (self.bodies().exprData(root_expr)) {
-                    .lambda => |lambda| {
+                switch (self.bodies().exprDataKind(root_expr)) {
+                    .lambda => {
+                        const lambda = self.bodies().exprDataOf(root_expr, .lambda);
                         if (lambda.args.len != params.len) invariant("a template's lambda arity differs from its signature");
                         self.locateProc(lambda.body);
                         for (lambda.args, params, worker.params) |pattern, param, param_ty| try self.bindIrrefutable(pattern, param, param_ty);
@@ -2388,8 +2391,8 @@ pub const Builder = struct {
     /// values followed by the outer worker's descriptors.
     pub fn lowerLambdaBody(self: *Builder, lambda_expr: ExprId) Allocator.Error!void {
         const worker = self.currentWorker().*;
-        const lambda = switch (self.bodies().exprData(lambda_expr)) {
-            .lambda => |lambda| lambda,
+        const lambda = switch (self.bodies().exprDataKind(lambda_expr)) {
+            .lambda => self.bodies().exprDataOf(lambda_expr, .lambda),
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a lambda worker's expression is not a lambda"),
         };
         self.locateProc(lambda.body);
@@ -3438,7 +3441,7 @@ pub const Builder = struct {
             .unreachable_value => |ty| try self.pushValue(try self.localOf(ty, .frame)),
             .unreachable_or_unit => try self.pushValue(try self.unitValue()),
             .segments_arg => |arg| {
-                const interpolation = self.bodies().exprData(arg.expr).interpolation;
+                const interpolation = self.bodies().exprDataOf(arg.expr, .interpolation);
                 const elems = try self.allocator.alloc(LocalId, interpolation.segmentCount());
                 defer self.allocator.free(elems);
                 for (elems, 0..) |*elem, index| {
@@ -3470,14 +3473,14 @@ pub const Builder = struct {
             .finish_str_from_parts => |call| {
                 const values = try self.popValues(call.count);
                 defer self.allocator.free(values);
-                const interpolation = self.bodies().exprData(call.expr).interpolation;
+                const interpolation = self.bodies().exprDataOf(call.expr, .interpolation);
                 var parts: std.ArrayList(LocalId) = .empty;
                 defer parts.deinit(self.allocator);
                 for (0..interpolation.segmentCount()) |i| {
                     const segment = interpolation.segment(i);
                     if (!self.bodies().isEmptyStrSegment(segment)) {
-                        const text = switch (self.bodies().exprData(segment)) {
-                            .str_segment => |literal| self.bodies().text(literal),
+                        const text = switch (self.bodies().exprDataKind(segment)) {
+                            .str_segment => self.bodies().text(self.bodies().exprDataOf(segment, .str_segment)),
                             .numeral, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("an interpolation segment is not a string segment"),
                         };
                         try parts.append(self.allocator, try self.strLiteral(text));
@@ -3554,7 +3557,7 @@ pub const Builder = struct {
                 try self.pushValue(try self.localOf(lookup.ty, .frame));
             } else {
                 try self.push(.{ .restore_region = self.region });
-                self.region = self.bodies().expr(lookup.expr).source_region;
+                self.region = self.bodies().exprRegion(lookup.expr);
                 if (self.bodies().resolvedRef(lookup.expr)) |id| {
                     try self.lowerResolvedValueAt(lookup.expr, self.resolvedRef(id).ref, lookup.ty);
                 } else {
@@ -3681,7 +3684,7 @@ pub const Builder = struct {
             .finish_field_access => |expr| try self.finishFieldAccess(expr),
             .finish_discriminant_eq => |eq| try self.finishDiscriminantEq(eq.value_ty, eq.tag, eq.negated),
             .finish_tuple_access => |expr| {
-                const access = self.bodies().exprData(expr).tuple_access;
+                const access = self.bodies().exprDataOf(expr, .tuple_access);
                 const tuple = self.popValue();
                 const tuple_ty = try self.structuralType(try self.valueType(access.tuple));
                 const elems = switch (self.program.store.get(tuple_ty)) {
@@ -3977,7 +3980,7 @@ pub const Builder = struct {
                 for (plan.argsSlice(self.view.view.static_dispatch_plans)) |operand| switch (operand) {
                     .checked_expr => |operand_expr| try operands.append(self.allocator, operand_expr),
                     .generated_interpolation_segments => |interpolation_expr| {
-                        const interpolation = self.bodies().exprData(interpolation_expr).interpolation;
+                        const interpolation = self.bodies().exprDataOf(interpolation_expr, .interpolation);
                         try operands.append(self.allocator, interpolation.first);
                         try operands.appendSlice(self.allocator, interpolation.parts);
                     },
@@ -4011,7 +4014,7 @@ pub const Builder = struct {
         while (index > 0) {
             index -= 1;
             const operand = operands[index];
-            if (checked.exprEvaluationHasNoEffect(std.meta.activeTag(self.bodies().exprData(operand)))) continue;
+            if (checked.exprEvaluationHasNoEffect(self.bodies().exprDataKind(operand))) continue;
             try self.push(.discard);
             try self.push(.{ .expr = operand });
         }
@@ -4213,7 +4216,7 @@ pub const Builder = struct {
                 // checking relates no pattern to it, so it has no decision
                 // tree.
                 if (try self.bodies().exprDiverges(match.cond, self.inlineExpectMode())) {
-                    const match_ty = self.bodies().expr(expr_id).ty;
+                    const match_ty = self.bodies().exprType(expr_id);
                     try self.push(.{ .diverged = if (try self.program.hasError(self.module, match_ty)) null else try self.exprType(expr_id) });
                     try self.push(.discard);
                     return try self.push(.{ .expr = match.cond });
@@ -4385,7 +4388,7 @@ pub const Builder = struct {
             .u128, .i128, .dec => 16,
             .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return null,
         };
-        for (items) |item| switch (self.bodies().exprData(item)) {
+        for (items) |item| switch (self.bodies().exprDataKind(item)) {
             .numeral => if (self.bodies().numeralPlan(@backingInt(item)) != null or self.bodies().literalConversionRoot(@backingInt(item)) != null) return null,
             .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         };
@@ -5076,7 +5079,7 @@ pub const Builder = struct {
                         };
                         return try self.lowerLiteralConversion(node, kind, conversion.plan orelse invariant("a literal literal_requirement's pattern literal has no conversion plan"), result_ty);
                     }
-                    return switch (self.bodies().exprData(@fromBackingInt(node))) {
+                    return switch (self.bodies().exprDataKind(@fromBackingInt(node))) {
                         .numeral => try self.lowerLiteralConversion(node, .numeral, self.bodies().numeralPlan(node) orelse invariant("a literal literal_requirement's numeral has no conversion plan"), result_ty),
                         .str => try self.lowerLiteralConversion(node, .quote, self.bodies().quotePlan(node) orelse invariant("a literal literal_requirement's quote has no conversion plan"), result_ty),
                         .interpolation => try self.lowerLiteralConversion(node, .interpolation, self.bodies().dispatchPlan(node) orelse invariant("a literal literal_requirement's interpolation has no conversion plan"), result_ty),
@@ -5471,7 +5474,7 @@ pub const Builder = struct {
             .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => false,
         };
         if (dispatcher_is_str) {
-            const interpolation = self.bodies().exprData(expr_id).interpolation;
+            const interpolation = self.bodies().exprDataOf(expr_id, .interpolation);
             try self.push(.{ .finish_str_from_parts = .{ .expr = expr_id, .count = @intCast(interpolation.valueCount()), .result = try self.exprType(expr_id) } });
             var index = interpolation.valueCount();
             while (index > 0) {
@@ -5512,7 +5515,7 @@ pub const Builder = struct {
 
     pub fn finishInterpolation(self: *Builder, expr_id: ExprId) Allocator.Error!void {
         const assembler = self.popValue();
-        const interpolation = self.bodies().exprData(expr_id).interpolation;
+        const interpolation = self.bodies().exprDataOf(expr_id, .interpolation);
         const assembler_ty = try self.convert(self.bodies().interpolationAssemblerType(expr_id));
         const plan = self.bodies().iteratorForPlan(@backingInt(expr_id)) orelse invariant("an interpolation has no checked iterator plan");
         // The values are lowered after the assembler, in order.
@@ -5650,7 +5653,7 @@ pub const Builder = struct {
     /// mention seals as a variable no use relates. The declaration's lookup
     /// resolves its own requirements at those types.
     fn lowerDestructuredAliasUse(self: *Builder, expr_id: ExprId, binder: BinderId, stmt_id: StatementId) Allocator.Error!void {
-        const decl = switch (self.bodies().statement(stmt_id).data) {
+        const decl = switch (self.bodies().statementData(stmt_id)) {
             .decl => |decl| decl,
             .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .rejected_method_decl, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => invariant("a destructured alias binder's declaration is not a declaration"),
         };
@@ -5723,7 +5726,7 @@ pub const Builder = struct {
         // variable no use relates.
         const subst = self.siteSubstitution(expr_id);
         for (bound[0..scheme.scheme_vars.len], related[outer_count..], scheme.scheme_vars, 0..) |*slot, ty, variable, index| slot.* = ty.get() orelse
-            if (index < subst.len and self.view.types().payload(subst[index]) != .err)
+            if (index < subst.len and self.view.types().payloadTag(subst[index]) != .err)
                 try self.convert(subst[index])
             else
                 try self.program.converter().sealedScheme(self.module, variable);
@@ -5857,9 +5860,9 @@ pub const Builder = struct {
     /// one its declaration bound (`localProcClosure`).
     fn localProcClosureAt(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence, edge: ?checked.LiteralEdge, subst: []const checked.CheckedTypeId, site: ?*const types.ModuleView, comptime static_captures: bool) Allocator.Error!?LocalProcClosure {
         const arena = self.program.arena.allocator();
-        const lambda_expr = switch (self.bodies().exprData(local.expr)) {
+        const lambda_expr = switch (self.bodies().exprDataKind(local.expr)) {
             .lambda => local.expr,
-            .closure => |closure| closure.lambda,
+            .closure => self.bodies().exprDataOf(local.expr, .closure).lambda,
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         };
         const scope_id = (try self.program.localScope(self.module, lambda_expr)) orelse return null;
@@ -5976,7 +5979,7 @@ pub const Builder = struct {
         const declaring_module = self.module;
         const declaring_view = self.view;
         for (own_types, own_related, scheme.scheme_vars, 0..) |*own_ty, ty, variable, index| {
-            own_ty.* = ty.get() orelse if (index < subst.len and (site orelse declaring_view).types().payload(subst[index]) != .err) blk: {
+            own_ty.* = ty.get() orelse if (index < subst.len and (site orelse declaring_view).types().payloadTag(subst[index]) != .err) blk: {
                 self.enterSiteView(site);
                 defer self.leaveSiteView(declaring_module, declaring_view);
                 break :blk try self.convert(subst[index]);
@@ -6310,9 +6313,9 @@ pub const Builder = struct {
     /// and their types after the body's.
     fn enterForwardingLocalScope(self: *Builder, local: checked.LocalProcedureBinding, use: ExprId, use_ty: TypeId, evidence: []const static_dispatch.CheckedEvidence, outer_vars: []const checked.CheckedTypeId, outer_bound: []const TypeId) Allocator.Error!struct { params: []const static_dispatch.EvidenceParamRecord, vars: []const checked.CheckedTypeId, bound: []const TypeId } {
         const arena = self.program.arena.allocator();
-        const lambda_expr = switch (self.bodies().exprData(local.expr)) {
+        const lambda_expr = switch (self.bodies().exprDataKind(local.expr)) {
             .lambda => local.expr,
-            .closure => |closure| closure.lambda,
+            .closure => self.bodies().exprDataOf(local.expr, .closure).lambda,
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         };
         const scope_id = (try self.program.localScope(self.module, lambda_expr)) orelse
@@ -6557,20 +6560,22 @@ pub const Builder = struct {
         defer stack.deinit(self.allocator);
         try stack.append(self.allocator, pattern);
         while (stack.pop()) |current| {
-            switch (self.bodies().patternData(current)) {
+            switch (self.bodies().patternDataKind(current)) {
                 .assign => if (self.bodies().binder(current).recursive_value) try out.append(self.allocator, current),
-                .as => |as| {
+                .as => {
+                    const as = self.bodies().patternDataOf(current, .as);
                     if (self.bodies().binder(current).recursive_value) try out.append(self.allocator, current);
                     try stack.append(self.allocator, as.pattern);
                 },
-                .applied_tag => |tag| try stack.appendSlice(self.allocator, tag.args),
-                .nominal => |nominal| try stack.append(self.allocator, nominal.backing_pattern),
-                .record_destructure => |destructs| for (destructs) |destruct| try stack.append(self.allocator, self.bodies().recordDestructPattern(destruct)),
-                .list => |list| {
+                .applied_tag => try stack.appendSlice(self.allocator, self.bodies().patternDataOf(current, .applied_tag).args),
+                .nominal => try stack.append(self.allocator, self.bodies().patternDataOf(current, .nominal).backing_pattern),
+                .record_destructure => for (self.bodies().patternDataOf(current, .record_destructure)) |destruct| try stack.append(self.allocator, self.bodies().recordDestructPattern(destruct)),
+                .list => {
+                    const list = self.bodies().patternDataOf(current, .list);
                     try stack.appendSlice(self.allocator, list.patterns);
                     if (list.rest) |rest| if (rest.pattern) |sub| try stack.append(self.allocator, sub);
                 },
-                .tuple => |items| try stack.appendSlice(self.allocator, items),
+                .tuple => try stack.appendSlice(self.allocator, self.bodies().patternDataOf(current, .tuple)),
                 .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => {},
             }
         }
@@ -6616,9 +6621,9 @@ pub const Builder = struct {
     /// bound, or, inside the procedure's own body, the same closure rebuilt
     /// from the captures the body received (`localProcClosure`).
     pub fn localProcValue(self: *Builder, local: checked.LocalProcedureBinding) Allocator.Error!LocalId {
-        const declaration = if (local.is_alias) null else try self.localProcDeclaration(switch (self.bodies().expr(local.expr).data) {
+        const declaration = if (local.is_alias) null else try self.localProcDeclaration(switch (self.bodies().exprDataKind(local.expr)) {
             .lambda => local.expr,
-            .closure => |closure| closure.lambda,
+            .closure => self.bodies().exprDataOf(local.expr, .closure).lambda,
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         });
         if (declaration == null) {
@@ -6662,9 +6667,9 @@ pub const Builder = struct {
     }
 
     fn localProcClosureWithCaptures(self: *Builder, local: checked.LocalProcedureBinding, comptime static_captures: bool) Allocator.Error!LocalProcClosure {
-        const lambda_expr = switch (self.bodies().exprData(local.expr)) {
+        const lambda_expr = switch (self.bodies().exprDataKind(local.expr)) {
             .lambda => local.expr,
-            .closure => |closure| closure.lambda,
+            .closure => self.bodies().exprDataOf(local.expr, .closure).lambda,
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         };
         const scope = try self.localProcWorker(local, try self.localProcDeclaration(lambda_expr));
@@ -6725,9 +6730,9 @@ pub const Builder = struct {
         // The procedure's own variables take the types the call's
         // instantiation of its type gives them; the enclosing scope's stay as
         // they are here.
-        const lambda_expr = switch (self.bodies().exprData(local.expr)) {
+        const lambda_expr = switch (self.bodies().exprDataKind(local.expr)) {
             .lambda => local.expr,
-            .closure => |closure_expr| closure_expr.lambda,
+            .closure => self.bodies().exprDataOf(local.expr, .closure).lambda,
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         };
         const outer_count = self.env.vars.len;
@@ -6748,7 +6753,7 @@ pub const Builder = struct {
         // seals as a variable no use relates.
         const subst = self.siteSubstitution(call.func);
         for (own_types, related[outer_count..], scheme.scheme_vars, 0..) |*slot, ty, variable, index| slot.* = ty.get() orelse
-            if (index < subst.len and self.view.types().payload(subst[index]) != .err)
+            if (index < subst.len and self.view.types().payloadTag(subst[index]) != .err)
                 try self.convert(subst[index])
             else
                 try self.program.converter().sealedScheme(self.module, variable);
@@ -7875,7 +7880,7 @@ pub const Builder = struct {
                 slot.* = try self.program.store.emptyRecord();
                 continue;
             }
-            if (recorded and self.view.types().payload(subst[index]) != .err) {
+            if (recorded and self.view.types().payloadTag(subst[index]) != .err) {
                 slot.* = try self.convert(subst[index]);
                 continue;
             }
@@ -8411,7 +8416,7 @@ pub const Builder = struct {
         if (subst.len != 0 and subst.len != alias_step.vars.len) invariant("a use's substitution differs from its alias's scope");
         const bound = try self.program.arena.allocator().alloc(TypeId, alias_step.vars.len);
         var unrecorded = subst.len != alias_step.vars.len;
-        for (subst) |checked_ty| unrecorded = unrecorded or self.view.types().payload(checked_ty) == .err;
+        for (subst) |checked_ty| unrecorded = unrecorded or self.view.types().payloadTag(checked_ty) == .err;
         if (!unrecorded) {
             for (subst, bound) |checked_ty, *ty| ty.* = try self.convert(checked_ty);
             return bound;
@@ -8424,7 +8429,7 @@ pub const Builder = struct {
         const related = try self.relateVariablesPartial(&.{.{ generic_fn, call_fn }}, alias_step.vars.len);
         defer self.allocator.free(related);
         for (bound, related, alias_step.vars, 0..) |*slot, ty, variable, index| {
-            slot.* = if (index < subst.len and self.view.types().payload(subst[index]) != .err)
+            slot.* = if (index < subst.len and self.view.types().payloadTag(subst[index]) != .err)
                 try self.convert(subst[index])
             else
                 ty.get() orelse try self.program.converter().sealedScheme(alias_step.module, variable);
@@ -9681,11 +9686,11 @@ pub const Builder = struct {
     /// branch tests an integer literal or nothing, and the answer is the
     /// same on every pointer width.
     fn layoutResolvedBranch(self: *Builder, cond: ExprId, branches: []const CIR.Expr.Match.Branch.Idx) Allocator.Error!?ExprId {
-        const call = switch (self.bodies().exprData(cond)) {
-            .call => |call| call,
+        const call = switch (self.bodies().exprDataKind(cond)) {
+            .call => self.bodies().exprDataOf(cond, .call),
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         };
-        const resolved = switch (self.bodies().exprData(call.func)) {
+        const resolved = switch (self.bodies().exprDataKind(call.func)) {
             .lookup_external, .lookup_local => self.bodies().resolvedRef(call.func) orelse return null,
             .numeral, .str_segment, .str, .bytes_literal, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         };
@@ -9700,14 +9705,14 @@ pub const Builder = struct {
         };
         const owner = self.program.moduleByKey(.{ .bytes = template_ref.artifact.bytes });
         const op = (owner.view.checked_procedure_templates.templates.items()[@backingInt(template_ref.template)].provided_low_level orelse return null).layoutResolved() orelse return null;
-        for (call.args) |arg| switch (self.bodies().exprData(arg)) {
+        for (call.args) |arg| switch (self.bodies().exprDataKind(arg)) {
             .lookup_local => {},
             .numeral, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         };
         for (branches) |branch_idx| {
             const branch = self.bodies().matchBranch(branch_idx);
             if (branch.guard != null) return null;
-            for (branch.patterns) |pattern| switch (self.bodies().patternData(self.bodies().matchBranchPattern(pattern).pattern)) {
+            for (branch.patterns) |pattern| switch (self.bodies().patternDataKind(self.bodies().matchBranchPattern(pattern).pattern)) {
                 .underscore => {},
                 .numeral_literal => if (self.bodies().literalPatternIsCustom(self.bodies().matchBranchPattern(pattern).pattern)) return null,
                 .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_literal, .str_interpolation, .runtime_error => return null,
@@ -9727,7 +9732,7 @@ pub const Builder = struct {
         };
         for (branches) |branch_idx| {
             const branch = self.bodies().matchBranch(branch_idx);
-            for (branch.patterns) |pattern| switch (self.bodies().patternData(self.bodies().matchBranchPattern(pattern).pattern)) {
+            for (branch.patterns) |pattern| switch (self.bodies().patternDataKind(self.bodies().matchBranchPattern(pattern).pattern)) {
                 .underscore => return branch.value,
                 .numeral_literal => {
                     const literal = self.bodies().numeralLiteral(@backingInt(self.bodies().matchBranchPattern(pattern).pattern));
@@ -9847,9 +9852,9 @@ pub const Builder = struct {
     /// it binds no value, and only creates the procedure's worker and
     /// records the values it captures, which each call in this body passes.
     fn declareDirectLocalProc(self: *Builder, expr_id: ExprId) Allocator.Error!bool {
-        const lambda_expr = switch (self.bodies().exprData(expr_id)) {
+        const lambda_expr = switch (self.bodies().exprDataKind(expr_id)) {
             .lambda => expr_id,
-            .closure => |closure| closure.lambda,
+            .closure => self.bodies().exprDataOf(expr_id, .closure).lambda,
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return false,
         };
         if (!try self.program.directCallsOnly(self.module, expr_id)) return false;
@@ -9893,7 +9898,7 @@ pub const Builder = struct {
             const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
             defer self.allocator.free(own_types);
             for (own_types, scheme.scheme_vars, 0..) |*own_ty, variable, index| {
-                own_ty.* = if (index < subst.len and self.view.types().payload(subst[index]) != .err)
+                own_ty.* = if (index < subst.len and self.view.types().payloadTag(subst[index]) != .err)
                     try self.convert(subst[index])
                 else
                     try self.program.converter().sealedScheme(self.module, variable);
@@ -10190,8 +10195,8 @@ pub const Builder = struct {
     // -- Aggregates --
 
     pub fn finishRecord(self: *Builder, expr_id: ExprId) Allocator.Error!void {
-        const record: @FieldType(bodies_mod.ExprData, "record") = switch (self.bodies().exprData(expr_id)) {
-            .record => |record| record,
+        const record: @FieldType(bodies_mod.ExprData, "record") = switch (self.bodies().exprDataKind(expr_id)) {
+            .record => self.bodies().exprDataOf(expr_id, .record),
             .empty_record => .{ .fields = &.{}, .unsets = &.{}, .ext = null },
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a record construction is not a record expression"),
         };
@@ -10329,7 +10334,7 @@ pub const Builder = struct {
     }
 
     pub fn finishTuple(self: *Builder, expr_id: ExprId) Allocator.Error!void {
-        const items = self.bodies().exprData(expr_id).tuple;
+        const items = self.bodies().exprDataOf(expr_id, .tuple);
         const ty = try self.exprType(expr_id);
         const values = try self.popValues(@intCast(items.len));
         defer self.allocator.free(values);
@@ -10432,7 +10437,7 @@ pub const Builder = struct {
     // -- Control flow --
 
     pub fn ifTest(self: *Builder, expr_id: ExprId, index: u32, join: ?LIR.JoinPointId, merge: ?MergeId) Allocator.Error!void {
-        const if_ = self.bodies().exprData(expr_id).if_;
+        const if_ = self.bodies().exprDataOf(expr_id, .if_);
         const cond = self.popValue();
         const holes = try self.emitBoolSwitch(cond);
         // Pushed in reverse execution order: the then-branch runs first, then
@@ -10467,7 +10472,7 @@ pub const Builder = struct {
 
     pub fn matchStart(self: *Builder, expr_id: ExprId) Allocator.Error!void {
         const scrutinee = self.popValue();
-        const match = self.bodies().exprData(expr_id).match_;
+        const match = self.bodies().exprDataOf(expr_id, .match_);
         const scrutinee_ty = try self.valueType(match.cond);
         const tail = self.isTail(expr_id) and !try self.returnsConstructedTag(expr_id);
         const state = try self.program.arena.allocator().create(Match.State);
@@ -10654,15 +10659,17 @@ pub const Builder = struct {
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, .{ .pattern = root_pattern, .value = root_value, .ty = root_ty });
         while (pending.pop()) |item| {
-            switch (self.bodies().patternData(item.pattern)) {
+            switch (self.bodies().patternDataKind(item.pattern)) {
                 .assign => try self.binders.put(self.allocator, item.pattern, item.value),
                 .underscore => {},
-                .as => |as| {
+                .as => {
+                    const as = self.bodies().patternDataOf(item.pattern, .as);
                     try self.binders.put(self.allocator, item.pattern, item.value);
                     try pending.append(self.allocator, .{ .pattern = as.pattern, .value = item.value, .ty = item.ty });
                 },
-                .nominal => |nominal| try pending.append(self.allocator, .{ .pattern = nominal.backing_pattern, .value = item.value, .ty = try self.structuralType(item.ty) }),
-                .applied_tag => |tag| {
+                .nominal => try pending.append(self.allocator, .{ .pattern = self.bodies().patternDataOf(item.pattern, .nominal).backing_pattern, .value = item.value, .ty = try self.structuralType(item.ty) }),
+                .applied_tag => {
+                    const tag = self.bodies().patternDataOf(item.pattern, .applied_tag);
                     const ty = item.ty;
                     const name = try self.program.store.internName(self.view.nameStore().tagLabelText(self.bodies().tagLabel(tag.name)));
                     if (!try self.closed(ty)) {
@@ -10704,7 +10711,8 @@ pub const Builder = struct {
                         .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a tag pattern's type is not a tag union"),
                     }
                 },
-                .tuple => |items| {
+                .tuple => {
+                    const items = self.bodies().patternDataOf(item.pattern, .tuple);
                     const ty = try self.structuralType(item.ty);
                     const elems = switch (self.program.store.get(ty)) {
                         .tuple => |span| self.program.store.span(span),
@@ -10715,7 +10723,8 @@ pub const Builder = struct {
                         try pending.append(self.allocator, .{ .pattern = sub, .value = local, .ty = elems[index] });
                     }
                 },
-                .record_destructure => |destruct_ids| {
+                .record_destructure => {
+                    const destruct_ids = self.bodies().patternDataOf(item.pattern, .record_destructure);
                     const ty = try self.structuralType(item.ty);
                     const record = switch (self.program.store.get(ty)) {
                         .record => |record| record,
@@ -10730,7 +10739,7 @@ pub const Builder = struct {
                             .required, .sub_pattern => |p| p,
                             .rest => |rest| {
                                 // `..` with nothing to bind reads nothing.
-                                if (self.bodies().patternData(rest) == .underscore) continue;
+                                if (self.bodies().patternDataKind(rest) == .underscore) continue;
                                 // The rest is the fields the pattern does
                                 // not name, read by name.
                                 const rest_ty = try self.patternType(rest);
@@ -10767,7 +10776,10 @@ pub const Builder = struct {
                         }
                     }
                 },
-                .list => |list| try self.testListPattern(item, list.patterns, list.rest, miss, &pending),
+                .list => list_blk: {
+                    const list = self.bodies().patternDataOf(item.pattern, .list);
+                    break :list_blk try self.testListPattern(item, list.patterns, list.rest, miss, &pending);
+                },
                 .numeral_literal => {
                     if (self.bodies().literalPatternIsCustom(item.pattern)) {
                         try self.literalPatternGuard(item, miss);
@@ -10778,7 +10790,8 @@ pub const Builder = struct {
                         try self.branchOrMiss(matches, miss);
                     }
                 },
-                .str_literal => |literal| {
+                .str_literal => {
+                    const literal = self.bodies().patternDataOf(item.pattern, .str_literal);
                     if (self.bodies().literalPatternIsCustom(item.pattern)) {
                         try self.literalPatternGuard(item, miss);
                     } else {
@@ -10788,7 +10801,8 @@ pub const Builder = struct {
                         try self.branchOrMiss(matches, miss);
                     }
                 },
-                .str_interpolation => |str| {
+                .str_interpolation => {
+                    const str = self.bodies().patternDataOf(item.pattern, .str_interpolation);
                     // The match binds each captured span as a `Str` view of
                     // the matched string.
                     const str_ty = try self.program.store.primitive(.str);
@@ -10855,7 +10869,7 @@ pub const Builder = struct {
             try pending.append(self.allocator, .{ .pattern = sub, .value = elem, .ty = elem_ty });
         }
         if (rest) |rest_info| if (rest_info.pattern) |rest_pattern| {
-            if (self.bodies().patternData(rest_pattern) == .underscore) return;
+            if (self.bodies().patternDataKind(rest_pattern) == .underscore) return;
             const rest_len = try self.closedLocal(.u64);
             try self.emitLowLevel(rest_len, .num_int_sub_wrap, &.{ len, count });
             // `{ len, start }` in field-name order.
@@ -10954,7 +10968,7 @@ pub const Builder = struct {
     /// A record field access: each segment reads one field of the record
     /// the previous segment produced.
     pub fn finishFieldAccess(self: *Builder, expr_id: ExprId) Allocator.Error!void {
-        const access = self.bodies().exprData(expr_id).field_access;
+        const access = self.bodies().exprDataOf(expr_id, .field_access);
         var value = self.popValue();
         var record_ty = try self.valueType(access.receiver);
         var misses: std.ArrayList(CFStmtId) = .empty;
@@ -11153,7 +11167,7 @@ pub const Builder = struct {
                 // An annotation-only declaration (a method requesting its
                 // derivation) has no value, and every use of it resolves to
                 // what it requests.
-                if (self.bodies().exprData(decl.expr) == .anno_only) return;
+                if (self.bodies().exprDataKind(decl.expr) == .anno_only) return;
                 // A local procedure only direct calls reach binds no value.
                 if (try self.declareDirectLocalProc(decl.expr)) return;
                 // A recursive value's binders get slots before its value is

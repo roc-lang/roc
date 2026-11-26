@@ -13,7 +13,9 @@ fn countsFor(comptime header: []const u8, comptime item: []const u8, comptime fo
     try source.appendSlice(gpa, header);
     for (0..count) |_| try source.appendSlice(gpa, item);
     try source.appendSlice(gpa, footer);
-    var env = try TestEnv.init("Test", source.items);
+    // The store stays open, so it counts every descriptor checking made,
+    // including those sealing would drop.
+    var env = try TestEnv.initOpen("Test", source.items);
     defer env.deinit();
     try env.assertNoErrors();
     for (env.module_env.store.literalDispatchPlans()) |plan| {

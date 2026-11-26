@@ -127,6 +127,60 @@ pub fn sameVar(var_: Var) Var {
     return var_;
 }
 
+/// What reading the rows of a sealed type needs: the module's sealed solver
+/// store and the names and module identities publication resolved for it.
+pub const SealedNames = struct {
+    env: *const ModuleEnv,
+    names: []const SealedNameRow,
+    origins: []const SealedOriginRow,
+
+    fn typeStore(self: SealedNames) *const types.Store {
+        return &self.env.types;
+    }
+
+    fn nameRow(self: SealedNames, ident: Ident.Idx) SealedNameRow {
+        const index: usize = ident.idx;
+        if (index >= self.names.len) invariant("a sealed checked type named an identifier publication never interned", .{});
+        return self.names[index];
+    }
+
+    fn present(id: anytype) @TypeOf(id).CompactPayload {
+        return id.get() orelse invariant("a sealed checked type named an identifier in a name space publication never interned it in", .{});
+    }
+
+    fn typeName(self: SealedNames, ident: Ident.Idx) canonical.TypeNameId {
+        return present(self.nameRow(ident).type_name);
+    }
+
+    fn recordFieldLabel(self: SealedNames, ident: Ident.Idx) canonical.RecordFieldLabelId {
+        return present(self.nameRow(ident).record_field_label);
+    }
+
+    fn tagLabel(self: SealedNames, ident: Ident.Idx) canonical.TagLabelId {
+        return present(self.nameRow(ident).tag_label);
+    }
+
+    fn methodName(self: SealedNames, ident: Ident.Idx) canonical.MethodNameId {
+        return present(self.nameRow(ident).method_name);
+    }
+
+    fn originRow(self: SealedNames, origin: base.ModuleIdentity.Idx) *const SealedOriginRow {
+        const index: usize = @backingInt(origin);
+        if (index >= self.origins.len) invariant("a sealed checked type named a module identity publication never resolved", .{});
+        return &self.origins[index];
+    }
+
+    fn originIdentity(self: SealedNames, origin: base.ModuleIdentity.Idx) canonical.ModuleIdentityId {
+        return present(self.originRow(origin).identity);
+    }
+
+    fn originOwner(self: SealedNames, origin: base.ModuleIdentity.Idx) *const ModuleId {
+        const row = self.originRow(origin);
+        if (row.has_owner == 0) invariant("a sealed checked type named a type from a module with no available checked owner", .{});
+        return &row.owner;
+    }
+};
+
 /// Checked types read directly from a module's sealed solver store.
 pub const SealedTypeView = struct {
     env: *const ModuleEnv,
@@ -154,46 +208,22 @@ pub const SealedTypeView = struct {
         };
     }
 
-    fn nameRow(self: SealedTypeView, ident: Ident.Idx) SealedNameRow {
-        const index: usize = ident.idx;
-        if (index >= self.names.len) invariant("a sealed checked type named an identifier publication never interned", .{});
-        return self.names[index];
-    }
-
-    fn present(id: anytype) @TypeOf(id).CompactPayload {
-        return id.get() orelse invariant("a sealed checked type named an identifier in a name space publication never interned it in", .{});
+    /// The names, module identities and solver store the rows of this
+    /// view's types read.
+    fn sealedNames(self: SealedTypeView) SealedNames {
+        return .{ .env = self.env, .names = self.names, .origins = self.origins };
     }
 
     fn typeName(self: SealedTypeView, ident: Ident.Idx) canonical.TypeNameId {
-        return present(self.nameRow(ident).type_name);
-    }
-
-    fn recordFieldLabel(self: SealedTypeView, ident: Ident.Idx) canonical.RecordFieldLabelId {
-        return present(self.nameRow(ident).record_field_label);
-    }
-
-    fn tagLabel(self: SealedTypeView, ident: Ident.Idx) canonical.TagLabelId {
-        return present(self.nameRow(ident).tag_label);
-    }
-
-    fn methodName(self: SealedTypeView, ident: Ident.Idx) canonical.MethodNameId {
-        return present(self.nameRow(ident).method_name);
-    }
-
-    fn originRow(self: SealedTypeView, origin: base.ModuleIdentity.Idx) *const SealedOriginRow {
-        const index: usize = @backingInt(origin);
-        if (index >= self.origins.len) invariant("a sealed checked type named a module identity publication never resolved", .{});
-        return &self.origins[index];
+        return self.sealedNames().typeName(ident);
     }
 
     fn originIdentity(self: SealedTypeView, origin: base.ModuleIdentity.Idx) canonical.ModuleIdentityId {
-        return present(self.originRow(origin).identity);
+        return self.sealedNames().originIdentity(origin);
     }
 
     fn originOwner(self: SealedTypeView, origin: base.ModuleIdentity.Idx) *const ModuleId {
-        const row = self.originRow(origin);
-        if (row.has_owner == 0) invariant("a sealed checked type named a type from a module with no available checked owner", .{});
-        return &row.owner;
+        return self.sealedNames().originOwner(origin);
     }
 
     /// The box payload capability representation publication gave the
@@ -286,7 +316,7 @@ pub const SealedTypeView = struct {
                 const variable_facts = checked_artifact.flexVariableFacts(env, flex, flags.bounded_row_ext);
                 return .{ .flex = .{
                     .name = if (flex.name) |name| checked_artifact.checkedVariableNameText(env, name) else null,
-                    .constraints = .{ .sealed = .{ .constraints = type_store.sliceStaticDispatchConstraints(flex.constraints), .view = self } },
+                    .constraints = .{ .sealed = .{ .constraints = type_store.sliceStaticDispatchConstraints(flex.constraints), .names = self.sealedNames() } },
                     .numeric_default_phase = variable_facts.numeric_default_phase,
                     .row_default = self.rowDefault(var_, .{ .flex = flex }),
                     .row_default_discharges_constraints = variable_facts.row_default_discharges_constraints,
@@ -303,7 +333,7 @@ pub const SealedTypeView = struct {
                 const variable_facts = checked_artifact.rigidVariableFacts(env, rigid);
                 return .{ .rigid = .{
                     .name = checked_artifact.checkedVariableNameText(env, rigid.name),
-                    .constraints = .{ .sealed = .{ .constraints = type_store.sliceStaticDispatchConstraints(rigid.constraints), .view = self } },
+                    .constraints = .{ .sealed = .{ .constraints = type_store.sliceStaticDispatchConstraints(rigid.constraints), .names = self.sealedNames() } },
                     .numeric_default_phase = variable_facts.numeric_default_phase,
                     .row_default = self.rowDefault(var_, .{ .rigid = rigid }),
                     .row_default_discharges_constraints = variable_facts.row_default_discharges_constraints,
@@ -330,7 +360,7 @@ pub const SealedTypeView = struct {
                 // Sealing flattened every row its roots reach.
                 std.debug.assert(type_store.kindOf(record.ext) != .record);
                 return .{ .record = .{
-                    .fields = .{ .sealed = .{ .fields = type_store.getRecordFieldsSlice(record.fields), .view = self } },
+                    .fields = .{ .sealed = .{ .fields = type_store.getRecordFieldsSlice(record.fields), .names = self.sealedNames() } },
                     .ext = type_ids.fromVar(record.ext),
                 } };
             },
@@ -360,7 +390,7 @@ pub const SealedTypeView = struct {
                 if (tag_union.tags.len() == 0 and checked_artifact.checkedTagUnionExtIsEmpty(env, tag_union.ext)) return .empty_tag_union;
                 std.debug.assert(type_store.kindOf(tag_union.ext) != .tag_union);
                 return .{ .tag_union = .{
-                    .tags = .{ .sealed = .{ .tags = type_store.getTagsSlice(tag_union.tags), .view = self } },
+                    .tags = .{ .sealed = .{ .tags = type_store.getTagsSlice(tag_union.tags), .names = self.sealedNames() } },
                     .ext = type_ids.fromVar(tag_union.ext),
                 } };
             },
@@ -387,14 +417,14 @@ pub const SealedTypeView = struct {
 /// The fields of a sealed record row, in the row's order.
 pub const SealedRecordFieldRows = struct {
     fields: types.RecordField.SafeMultiList.Slice,
-    view: SealedTypeView,
+    names: SealedNames,
 
     pub fn len(self: SealedRecordFieldRows) usize {
         return self.fields.len;
     }
 
     pub fn get(self: SealedRecordFieldRows, index: usize) CheckedRecordField {
-        const view = self.view;
+        const view = self.names;
         const name = view.recordFieldLabel(self.fields.items(.name)[index]);
         // The value and kind axes are independent; see design.md "Field Kinds".
         return switch (self.fields.items(.presence)[index].decode()) {
@@ -416,7 +446,7 @@ pub const SealedRecordFieldRows = struct {
 /// The tags of a sealed tag union row, in the row's order.
 pub const SealedTagRows = struct {
     tags: types.Tag.SafeMultiList.Slice,
-    view: SealedTypeView,
+    names: SealedNames,
 
     pub fn len(self: SealedTagRows) usize {
         return self.tags.len;
@@ -424,8 +454,8 @@ pub const SealedTagRows = struct {
 
     pub fn get(self: SealedTagRows, index: usize) CheckedTag {
         return .{
-            .name = self.view.tagLabel(self.tags.items(.name)[index]),
-            .args = type_ids.fromVars(self.view.typeStore().sliceVars(self.tags.items(.args)[index])),
+            .name = self.names.tagLabel(self.tags.items(.name)[index]),
+            .args = type_ids.fromVars(self.names.typeStore().sliceVars(self.tags.items(.args)[index])),
         };
     }
 };
@@ -435,7 +465,7 @@ pub const SealedTagRows = struct {
 /// resolves that variable to its class's representative.
 pub const SealedConstraintRows = struct {
     constraints: []const types.StaticDispatchConstraint,
-    view: SealedTypeView,
+    names: SealedNames,
 
     pub fn len(self: SealedConstraintRows) usize {
         return self.constraints.len;
@@ -443,9 +473,9 @@ pub const SealedConstraintRows = struct {
 
     pub fn get(self: SealedConstraintRows, index: usize) CheckedStaticDispatchConstraint {
         const source = self.constraints[index];
-        const type_store = self.view.typeStore();
+        const type_store = self.names.typeStore();
         return .{
-            .fn_name = self.view.methodName(source.fn_name),
+            .fn_name = self.names.methodName(source.fn_name),
             .fn_ty = type_ids.fromVar(type_store.resolveVar(source.fn_var).var_),
             .origin = source.origin,
             .numeral = .of(type_store.constraintNumeralInfo(source)),
@@ -619,9 +649,12 @@ const ColumnBuilder = struct {
 /// Mark every variable reachable from `root` reached, recording the row-tail
 /// positions each is reached through. Each representative this reaches for
 /// the first time is appended to `newly_reached` when one is given.
-pub fn reach(allocator: Allocator, env: *const ModuleEnv, var_facts: []SealedVarFacts, root: Var, newly_reached: ?*std.ArrayList(Var)) Allocator.Error!void {
-    var walker = ReachWalker{ .env = env, .var_facts = var_facts, .newly_reached = newly_reached };
-    defer walker.pending.deinit(allocator);
+/// `pending` is the caller's scratch for the walk's work list, empty on entry
+/// and on return.
+pub fn reach(allocator: Allocator, env: *const ModuleEnv, var_facts: []SealedVarFacts, pending: *std.ArrayList(Var), root: Var, newly_reached: ?*std.ArrayList(Var)) Allocator.Error!void {
+    std.debug.assert(pending.items.len == 0);
+    errdefer pending.clearRetainingCapacity();
+    var walker = ReachWalker{ .env = env, .var_facts = var_facts, .newly_reached = newly_reached, .pending = pending };
     try walker.reach(allocator, root, null);
     while (walker.pending.pop()) |var_| try walker.expand(allocator, var_);
 }
@@ -630,7 +663,7 @@ const ReachWalker = struct {
     env: *const ModuleEnv,
     var_facts: []SealedVarFacts,
     newly_reached: ?*std.ArrayList(Var),
-    pending: std.ArrayList(Var) = .empty,
+    pending: *std.ArrayList(Var),
 
     fn reach(self: *ReachWalker, allocator: Allocator, var_: Var, tail: ?RowDefault) Allocator.Error!void {
         const resolved = self.env.types.resolveVarWord(var_);
@@ -792,12 +825,12 @@ fn expectRenders(view: SealedTypeView, var_: Var) error{ TestUnexpectedResult, T
                 if (field.kind.undeterminedVariable()) |variable| try expectChild(view, variable);
             }
             try expectChild(view, record.ext);
-            try std.testing.expect(view.payload(type_ids.asVar(record.ext)) != .record);
+            try std.testing.expect(view.payloadTag(type_ids.asVar(record.ext)) != .record);
         },
         .tag_union => |tag_union| {
             for (0..tag_union.tags.len()) |index| for (tag_union.tags.get(index).args) |arg| try expectChild(view, arg);
             try expectChild(view, tag_union.ext);
-            try std.testing.expect(view.payload(type_ids.asVar(tag_union.ext)) != .tag_union);
+            try std.testing.expect(view.payloadTag(type_ids.asVar(tag_union.ext)) != .tag_union);
         },
     }
 }

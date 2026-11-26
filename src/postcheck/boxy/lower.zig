@@ -684,12 +684,12 @@ pub const Worker = struct {
     needs: ?Tables.Needs = null,
 
     /// The bytes of the worker's procedure identity.
-    pub fn identityBytes(self: Worker, program: *const Program) [32]u8 {
-        return program.result.store.getProcSpec(self.proc).identity.bytes;
+    pub fn identityBytes(self: *const Worker, program: *const Program) [32]u8 {
+        return program.result.store.getProcSpecImmediate(self.proc).identity.bytes;
     }
 
     /// The dictionaries a lambda worker captures: every scope's but its own.
-    pub fn capturedDictionaryCount(self: Worker) u32 {
+    pub fn capturedDictionaryCount(self: *const Worker) u32 {
         var count: u32 = 0;
         for (self.dict_scopes) |scope| count += @intCast(scope.len);
         return count - self.own_dicts;
@@ -697,7 +697,7 @@ pub const Worker = struct {
 
     /// The literal arguments a lambda worker captures: every scope's but
     /// its own.
-    pub fn capturedLiteralCount(self: Worker) u32 {
+    pub fn capturedLiteralCount(self: *const Worker) u32 {
         var count: u32 = 0;
         for (self.literal_scopes) |scope| count += @intCast(scope.len);
         return count - self.own_literals;
@@ -821,7 +821,7 @@ pub const LocalScheme = struct {
     /// variable, dictionary, or literal argument. Its procedure is called
     /// and stored like a monomorphic one, though it stays a link of the
     /// evidence chain (`Program.lambdaWorker`).
-    pub fn isEmpty(self: LocalScheme) bool {
+    pub fn isEmpty(self: *const LocalScheme) bool {
         return self.scheme_vars.len == 0 and self.dictionaries.len == 0 and self.literal_requirements.len == 0;
     }
 };
@@ -1052,6 +1052,36 @@ pub const Program = struct {
     omitted_defaults: std.AutoHashMapUnmanaged(OmittedField, checked.CheckedFieldDefault) = .empty,
     /// The generated codec families and their workers.
     codec: Codec.State = .{},
+    /// The work of `rewriteTypeWithRowNodes`, kept with its capacity for the
+    /// next rewrite; empty between rewrites.
+    rewrite_scratch: RewriteScratch = .{},
+
+    const RewriteScratch = struct {
+        const Frame = struct { ty: TypeId, expanded: bool };
+
+        done: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty,
+        stack: std.ArrayList(Frame) = .empty,
+        /// The converted children of the node being rebuilt.
+        ids: std.ArrayList(TypeId) = .empty,
+        fields: std.ArrayList(types.Field) = .empty,
+        tags: std.ArrayList(types.TagInput) = .empty,
+
+        fn clear(self: *RewriteScratch) void {
+            self.done.clearRetainingCapacity();
+            self.stack.clearRetainingCapacity();
+            self.ids.clearRetainingCapacity();
+            self.fields.clearRetainingCapacity();
+            self.tags.clearRetainingCapacity();
+        }
+
+        fn deinit(self: *RewriteScratch, allocator: Allocator) void {
+            self.done.deinit(allocator);
+            self.stack.deinit(allocator);
+            self.ids.deinit(allocator);
+            self.fields.deinit(allocator);
+            self.tags.deinit(allocator);
+        }
+    };
 
     /// Index the checked producer's exact scope, capture, local-procedure and
     /// omitted-default records once when their module is demanded. A missing
@@ -1067,8 +1097,8 @@ pub const Program = struct {
         for (view.view.checked_procedure_templates.dispatch_scopes.items(), 0..) |scope, index| {
             const id: checked.DispatchScopeId = @fromBackingInt(@intCast(index));
             try program.local_scopes.put(allocator, .{ .module = view.index, .expr = scope.checked_expr }, id);
-            switch (bodies.exprData(scope.checked_expr)) {
-                .closure => |closure| try program.local_scopes.put(allocator, .{ .module = view.index, .expr = closure.lambda }, id),
+            switch (bodies.exprDataKind(scope.checked_expr)) {
+                .closure => try program.local_scopes.put(allocator, .{ .module = view.index, .expr = bodies.exprDataOf(scope.checked_expr, .closure).lambda }, id),
                 .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
             }
         }
@@ -1101,8 +1131,9 @@ pub const Program = struct {
                     try program.local_proc_bindings.put(allocator, .{ .module = view.index, .binder = local.binder }, .{ .binder = local.binder, .expr = local.expr, .dispatch_scope = local.dispatch_scope });
                     const binding: checked.LocalProcedureBinding = .{ .binder = local.binder, .expr = local.expr, .dispatch_scope = local.dispatch_scope };
                     try program.local_method_bindings.put(allocator, .{ .module = view.index, .expr = local.expr }, binding);
-                    switch (bodies.exprData(local.expr)) {
-                        .closure => |closure| {
+                    switch (bodies.exprDataKind(local.expr)) {
+                        .closure => {
+                            const closure = bodies.exprDataOf(local.expr, .closure);
                             try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {});
                             try program.local_method_bindings.put(allocator, .{ .module = view.index, .expr = closure.lambda }, binding);
                         },
@@ -1121,8 +1152,8 @@ pub const Program = struct {
             };
             try program.local_procs.put(allocator, .{ .module = view.index, .expr = local.expr }, {});
             try program.local_proc_bindings.put(allocator, .{ .module = view.index, .binder = local.binder }, local);
-            switch (bodies.exprData(local.expr)) {
-                .closure => |closure| try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {}),
+            switch (bodies.exprDataKind(local.expr)) {
+                .closure => try program.local_procs.put(allocator, .{ .module = view.index, .expr = bodies.exprDataOf(local.expr, .closure).lambda }, {}),
                 .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
             }
         }
@@ -1356,8 +1387,8 @@ pub const Program = struct {
         const view = self.module(module_index);
         const site = view.view.nested_proc_sites.sites.items()[site_index];
         const site_expr = site.checked_expr.get() orelse invariant("a lambda's site has no checked expression");
-        return switch (view.bodies().exprData(site_expr)) {
-            .closure => |closure| closure.lambda,
+        return switch (view.bodies().exprDataKind(site_expr)) {
+            .closure => view.bodies().exprDataOf(site_expr, .closure).lambda,
             .lambda => site_expr,
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a lambda's site is not a lambda or closure"),
         };
@@ -1735,6 +1766,7 @@ pub const Program = struct {
         self.composed_in_body.deinit(self.allocator);
         self.omitted_defaults.deinit(self.allocator);
         self.codec.deinit(self.allocator);
+        self.rewrite_scratch.deinit(self.allocator);
         self.arena.deinit();
     }
 
@@ -2115,12 +2147,12 @@ pub const Program = struct {
         };
         const template_key: TemplateKey = .{ .module = key.module, .template = key.template };
         if (self.list_item_slots.get(template_key)) |known| return known;
-        const slot = try self.computeListItemSlot(template_key, target);
+        const slot = try self.computeListItemSlot(template_key, &target);
         try self.list_item_slots.put(self.allocator, template_key, slot);
         return slot;
     }
 
-    fn computeListItemSlot(self: *Program, key: TemplateKey, target: Worker) Allocator.Error!?u32 {
+    fn computeListItemSlot(self: *Program, key: TemplateKey, target: *const Worker) Allocator.Error!?u32 {
         const view = self.module(key.module);
         if (view.view.module_env.module_role != .builtin) return null;
         const template = view.view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
@@ -2261,7 +2293,7 @@ pub const Program = struct {
         sealed_slots: []const u32,
         published: []const checked.CheckedTypeId,
     ) Allocator.Error!void {
-        var walk: checked.ClosedRowNodeWalk = .{ .allocator = self.allocator, .types = self.module(module_index).types() };
+        var walk: checked.ClosedRowNodeWalk = .{ .allocator = self.allocator, .types = self.module(module_index).types().* };
         defer walk.deinit();
         var found: std.ArrayList(checked.CheckedTypeId) = .empty;
         defer found.deinit(self.allocator);
@@ -2962,12 +2994,16 @@ pub const Program = struct {
 
     /// `rewriteType`, reading each of `row_nodes` as its variable.
     fn rewriteTypeWithRowNodes(self: *Program, allocator: Allocator, root: TypeId, bound: Bindings, function_as: ?TypeId, row_nodes: []const RowNode, tail_nodes: TailNodes) Allocator.Error!TypeId {
-        var done: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty;
-        defer done.deinit(allocator);
-        const Frame = struct { ty: TypeId, expanded: bool };
-        var stack: std.ArrayList(Frame) = .empty;
-        defer stack.deinit(allocator);
-        try stack.append(allocator, .{ .ty = root, .expanded = false });
+        // Nothing below calls back into the program, so one scratch serves
+        // every rewrite.
+        const scratch = &self.rewrite_scratch;
+        std.debug.assert(scratch.done.count() == 0 and scratch.stack.items.len == 0);
+        defer scratch.clear();
+        const done = &scratch.done;
+        const stack = &scratch.stack;
+        const ids = &scratch.ids;
+        const gpa = self.allocator;
+        try stack.append(gpa, .{ .ty = root, .expanded = false });
         while (stack.pop()) |frame| {
             if (done.contains(frame.ty)) continue;
             const node = self.store.get(frame.ty);
@@ -2976,27 +3012,27 @@ pub const Program = struct {
                     if (candidate.ty == frame.ty) break candidate;
                 } else null;
                 if (row_node) |whole| {
-                    try done.put(allocator, frame.ty, try self.store.variable(whole.index));
+                    try done.put(gpa, frame.ty, try self.store.variable(whole.index));
                     continue;
                 }
-                try stack.append(allocator, .{ .ty = frame.ty, .expanded = true });
+                try stack.append(gpa, .{ .ty = frame.ty, .expanded = true });
                 switch (node) {
                     .record => |record| {
-                        for (self.store.fieldSpan(record.fields)) |field| try stack.append(allocator, .{ .ty = field.ty, .expanded = false });
-                        if (record.ext.get()) |ext| try stack.append(allocator, .{ .ty = ext, .expanded = false });
-                        for (self.store.paddingTypes(record)) |padding| try stack.append(allocator, .{ .ty = padding, .expanded = false });
+                        for (self.store.fieldSpan(record.fields)) |field| try stack.append(gpa, .{ .ty = field.ty, .expanded = false });
+                        if (record.ext.get()) |ext| try stack.append(gpa, .{ .ty = ext, .expanded = false });
+                        for (self.store.paddingTypes(record)) |padding| try stack.append(gpa, .{ .ty = padding, .expanded = false });
                     },
-                    .tuple => |items| for (self.store.span(items)) |item| try stack.append(allocator, .{ .ty = item, .expanded = false }),
+                    .tuple => |items| for (self.store.span(items)) |item| try stack.append(gpa, .{ .ty = item, .expanded = false }),
                     .tag_union => |tag_union| {
-                        for (self.store.tagSpan(tag_union.tags)) |tag| for (self.store.span(tag.payloads)) |payload| try stack.append(allocator, .{ .ty = payload, .expanded = false });
-                        if (tag_union.ext) |ext| try stack.append(allocator, .{ .ty = ext, .expanded = false });
+                        for (self.store.tagSpan(tag_union.tags)) |tag| for (self.store.span(tag.payloads)) |payload| try stack.append(gpa, .{ .ty = payload, .expanded = false });
+                        if (tag_union.ext) |ext| try stack.append(gpa, .{ .ty = ext, .expanded = false });
                     },
-                    .list => |elem| try stack.append(allocator, .{ .ty = elem, .expanded = false }),
-                    .box => |payload| try stack.append(allocator, .{ .ty = payload, .expanded = false }),
-                    .nominal => |nominal| for (self.store.nominalArgs(nominal)) |arg| try stack.append(allocator, .{ .ty = arg, .expanded = false }),
+                    .list => |elem| try stack.append(gpa, .{ .ty = elem, .expanded = false }),
+                    .box => |payload| try stack.append(gpa, .{ .ty = payload, .expanded = false }),
+                    .nominal => |nominal| for (self.store.nominalArgs(nominal)) |arg| try stack.append(gpa, .{ .ty = arg, .expanded = false }),
                     .function => |function| if (function_as == null) {
-                        for (self.store.span(function.args)) |arg| try stack.append(allocator, .{ .ty = arg, .expanded = false });
-                        try stack.append(allocator, .{ .ty = function.ret, .expanded = false });
+                        for (self.store.span(function.args)) |arg| try stack.append(gpa, .{ .ty = arg, .expanded = false });
+                        try stack.append(gpa, .{ .ty = function.ret, .expanded = false });
                     },
                     .primitive, .empty_record, .variable => {},
                 }
@@ -3008,37 +3044,34 @@ pub const Program = struct {
                 .list => |elem| try self.store.intern(.{ .list = done.get(elem).? }),
                 .box => |payload| try self.store.intern(.{ .box = done.get(payload).? }),
                 .tuple => |items| blk: {
-                    const out = try allocator.alloc(TypeId, items.len);
-                    defer allocator.free(out);
-                    for (self.store.span(items), out) |item, *slot| slot.* = done.get(item).?;
-                    break :blk try self.store.intern(.{ .tuple = out });
+                    ids.clearRetainingCapacity();
+                    for (self.store.span(items)) |item| try ids.append(gpa, done.get(item).?);
+                    break :blk try self.store.intern(.{ .tuple = ids.items });
                 },
                 .function => |function| function_as orelse blk: {
-                    const args = try allocator.alloc(TypeId, function.args.len);
-                    defer allocator.free(args);
-                    for (self.store.span(function.args), args) |arg, *slot| slot.* = done.get(arg).?;
-                    break :blk try self.store.intern(.{ .function = .{ .args = args, .ret = done.get(function.ret).?, .effectful = function.effectful } });
+                    ids.clearRetainingCapacity();
+                    for (self.store.span(function.args)) |arg| try ids.append(gpa, done.get(arg).?);
+                    break :blk try self.store.intern(.{ .function = .{ .args = ids.items, .ret = done.get(function.ret).?, .effectful = function.effectful } });
                 },
                 .nominal => |nominal| blk: {
-                    const args = try allocator.alloc(TypeId, nominal.args.len);
-                    defer allocator.free(args);
-                    for (self.store.nominalArgs(nominal), args) |arg, *slot| slot.* = done.get(arg).?;
+                    ids.clearRetainingCapacity();
+                    for (self.store.nominalArgs(nominal)) |arg| try ids.append(gpa, done.get(arg).?);
                     var copy = nominal;
                     _ = &copy;
-                    break :blk try self.store.intern(.{ .nominal = .{ .decl = nominal.decl, .args = args, .name = nominal.name, .is_opaque = nominal.is_opaque, .builtin = nominal.builtin, .has_backing = nominal.has_backing } });
+                    break :blk try self.store.intern(.{ .nominal = .{ .decl = nominal.decl, .args = ids.items, .name = nominal.name, .is_opaque = nominal.is_opaque, .builtin = nominal.builtin, .has_backing = nominal.has_backing } });
                 },
                 .record => |record| blk: {
-                    var fields: std.ArrayList(types.Field) = .empty;
-                    defer fields.deinit(allocator);
+                    const fields = &scratch.fields;
+                    fields.clearRetainingCapacity();
                     for (self.store.fieldSpan(record.fields)) |field| {
                         const ty = done.get(field.ty).?;
                         if (field.kind == .variable_slot) {
                             const slot_ty = bound.get(field.slot_variable) orelse invariant("a substituted field kind names a variable past its bindings");
-                            try fields.append(allocator, self.store.instantiatedField(field.name, ty, slot_ty));
+                            try fields.append(gpa, self.store.instantiatedField(field.name, ty, slot_ty));
                         } else {
                             var substituted = field;
                             substituted.ty = ty;
-                            try fields.append(allocator, substituted);
+                            try fields.append(gpa, substituted);
                         }
                     }
                     var ext: ?TypeId = if (record.ext.get()) |ext| done.get(ext).? else null;
@@ -3049,7 +3082,7 @@ pub const Program = struct {
                         .empty_record => ext = null,
                         .record => |ext_record| {
                             const own = fields.items.len;
-                            try fields.appendSlice(allocator, self.store.fieldSpan(ext_record.fields));
+                            try fields.appendSlice(gpa, self.store.fieldSpan(ext_record.fields));
                             try mergeSortedFields(allocator, &self.store, fields.items, own);
                             ext = ext_record.ext.get();
                         },
@@ -3060,13 +3093,12 @@ pub const Program = struct {
                     // entries, so the fields a remainder brings get slots
                     // just as they would had the row been closed already.
                     if (record.declared.get()) |declared| {
-                        const padding = try allocator.alloc(TypeId, declared.padding.len);
-                        defer allocator.free(padding);
-                        for (self.store.span(declared.padding), padding) |ty, *slot| slot.* = done.get(ty).?;
+                        ids.clearRetainingCapacity();
+                        for (self.store.span(declared.padding)) |ty| try ids.append(gpa, done.get(ty).?);
                         break :blk try self.store.intern(.{ .record = .{
                             .fields = fields.items,
                             .ext = ext,
-                            .declared = .{ .padding = padding, .entries = self.store.declaredEntries(declared) },
+                            .declared = .{ .padding = ids.items, .entries = self.store.declaredEntries(declared) },
                         } });
                     }
                     const tail_node: ?u32 = switch (tail_nodes) {
@@ -3077,15 +3109,15 @@ pub const Program = struct {
                     break :blk try self.store.intern(.{ .record = .{ .fields = fields.items, .ext = ext, .tail_node = tail_node } });
                 },
                 .tag_union => |tag_union| blk: {
-                    var tags: std.ArrayList(types.TagInput) = .empty;
-                    defer tags.deinit(allocator);
-                    var payloads: std.ArrayList(TypeId) = .empty;
-                    defer payloads.deinit(allocator);
+                    const tags = &scratch.tags;
+                    tags.clearRetainingCapacity();
+                    const payloads = ids;
+                    payloads.clearRetainingCapacity();
                     const own = self.store.tagSpan(tag_union.tags);
-                    for (own) |tag| for (self.store.span(tag.payloads)) |payload| try payloads.append(allocator, done.get(payload).?);
+                    for (own) |tag| for (self.store.span(tag.payloads)) |payload| try payloads.append(gpa, done.get(payload).?);
                     var at: usize = 0;
                     for (own) |tag| {
-                        try tags.append(allocator, .{ .name = tag.name, .payloads = payloads.items[at..][0..tag.payloads.len] });
+                        try tags.append(gpa, .{ .name = tag.name, .payloads = payloads.items[at..][0..tag.payloads.len] });
                         at += tag.payloads.len;
                     }
                     var ext: ?TypeId = if (tag_union.ext) |ext| done.get(ext).? else null;
@@ -3095,7 +3127,7 @@ pub const Program = struct {
                                 const named = for (own) |known| {
                                     if (known.name == tag.name and known.payloads.len == tag.payloads.len) break true;
                                 } else false;
-                                if (!named) try tags.append(allocator, .{ .name = tag.name, .payloads = self.store.span(tag.payloads) });
+                                if (!named) try tags.append(gpa, .{ .name = tag.name, .payloads = self.store.span(tag.payloads) });
                             }
                             ext = ext_union.ext;
                         },
@@ -3114,7 +3146,7 @@ pub const Program = struct {
                     } } });
                 },
             };
-            try done.put(allocator, frame.ty, result);
+            try done.put(gpa, frame.ty, result);
         }
         return done.get(root).?;
     }
@@ -3226,8 +3258,8 @@ pub const Program = struct {
                 const node: can.CIR.Node.Idx = @fromBackingInt(@intCast(declaration.source_statement));
                 if (env.store.nodes.get(node).tag != .statement_nominal_decl) continue;
                 const statement_idx: can.CIR.Statement.Idx = @fromBackingInt(@intCast(declaration.source_statement));
-                const header = switch (env.store.getStatement(statement_idx)) {
-                    .s_nominal_decl => |decl| decl.header,
+                const header = switch (env.store.statementKind(statement_idx)) {
+                    .s_nominal_decl => env.store.statementView(statement_idx).s_nominal_decl.get(.header),
                     .s_decl, .s_var, .s_var_uninitialized, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_alias_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => continue,
                 };
                 if (!env.store.getTypeHeader(header).name.eql(ident)) continue;
@@ -4559,7 +4591,7 @@ pub const Program = struct {
         // exports.
         if (target.imported and target.needs == null) {
             const unit = self.moduleUnit() orelse invariant("an imported worker outside a module unit");
-            const interface = unit.imports.get(self.result.store.getProcSpec(target.proc).identity) orelse
+            const interface = unit.imports.get(self.result.store.getProcSpecImmediate(target.proc).identity) orelse
                 invariant("a type table names a worker of an imported module whose object exports no such worker");
             if (interface.table_needs.len == 0) invariant("an imported worker with inputs exports no needs");
             if (std.debug.runtime_safety and !interface.visible) invariant("a type table names a worker its module's export digest leaves out (`recordExports`)");
@@ -4736,7 +4768,7 @@ fn recordPerfNames(program: *Program) Allocator.Error!void {
     var symbol: [LIR.ProcIdentity.symbol_name_len]u8 = undefined;
     for (program.workers.items, 0..) |worker, index| {
         const name = try perfNameOf(program, arena.allocator(), names, @fromBackingInt(@intCast(index)));
-        const identity = program.result.store.getProcSpec(worker.proc).identity;
+        const identity = program.result.store.getProcSpecImmediate(worker.proc).identity;
         base.dev_diagnostics.notePerfName(identity.writeSymbolName(&symbol), name);
     }
 }
@@ -4882,9 +4914,9 @@ fn createProgram(allocator: Allocator, input: Input) Allocator.Error!*Program {
 fn registerModules(program: *Program) Allocator.Error!void {
     const allocator = program.allocator;
     const input = program.input;
-    _ = try program.modules.add(checked.importedView(input.modules.root.module));
-    for (input.modules.imports) |view| _ = try program.modules.add(view);
-    for (input.modules.root.relation_modules) |view| {
+    _ = try program.modules.add(&checked.importedView(input.modules.root.module));
+    for (input.modules.imports) |*view| _ = try program.modules.add(view);
+    for (input.modules.root.relation_modules) |*view| {
         try program.modules.relations.append(allocator, try program.modules.add(view));
     }
     program.body_indexed = try allocator.alloc(bool, program.modules.views.items.len);
@@ -4898,7 +4930,7 @@ fn registerModules(program: *Program) Allocator.Error!void {
 /// holding fewer.
 pub fn addSchemaModules(program: *Program, views: []const checked.ImportedModuleView) Allocator.Error!void {
     const first = program.modules.views.items.len;
-    for (views) |view| _ = try program.modules.add(view);
+    for (views) |*view| _ = try program.modules.add(view);
     const count = program.modules.views.items.len;
     if (count == first) return;
     program.body_indexed = try program.allocator.realloc(program.body_indexed, count);
@@ -5083,13 +5115,13 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     }
     if (program.moduleUnit() != null and !input.compile_time) {
         for (program.workers.items) |worker| {
-            if (worker.imported or !program.result.store.getProcSpec(worker.proc).exported) continue;
+            if (worker.imported or !program.result.store.getProcSpecImmediate(worker.proc).exported) continue;
             // An importer fills the worker's tables from its needs.
             if (worker.needs) |needs| {
                 const result_allocator = program.result.store.allocator;
                 const bytes = try StoredFn.encodeNeeds(result_allocator, program, needs);
                 errdefer result_allocator.free(bytes);
-                try program.result.boxy_table_needs.put(result_allocator, program.result.store.getProcSpec(worker.proc).identity, bytes);
+                try program.result.boxy_table_needs.put(result_allocator, program.result.store.getProcSpecImmediate(worker.proc).identity, bytes);
             }
         }
     }
@@ -5365,7 +5397,7 @@ fn recordExports(program: *Program) Allocator.Error!void {
             .template => |key| .some(@backingInt(key.template)),
             .lambda, .method_entry, .default, .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => .none,
         };
-        program.result.boxy_exports.putAssumeCapacity(program.result.store.getProcSpec(worker.proc).identity, .{ .template = template, .visible = is_visible });
+        program.result.boxy_exports.putAssumeCapacity(program.result.store.getProcSpecImmediate(worker.proc).identity, .{ .template = template, .visible = is_visible });
     }
 }
 
@@ -5693,7 +5725,7 @@ test "a generated worker's identity is its content, whatever lowering reaches it
         try test_program.init(allocator, unit);
         defer test_program.deinit();
         const program = test_program.program;
-        const module_index = try program.modules.add(test_program.view(7));
+        const module_index = try program.modules.add(&test_program.view(7));
         const store = &program.store;
         const number = try store.primitive(.u64);
         // The second lowering interns another type first, so the same
@@ -5734,7 +5766,7 @@ test "Boxy field default identity survives substitution and stable type digests"
         defer test_program.deinit();
         const program = test_program.program;
         for (0..2) |index| {
-            _ = try program.modules.add(test_program.view(@intCast(if (round == 0) index + 1 else 2 - index)));
+            _ = try program.modules.add(&test_program.view(@intCast(if (round == 0) index + 1 else 2 - index)));
         }
         const store = &program.store;
         const name = try store.internName("count");
@@ -5771,7 +5803,7 @@ test "Boxy error reachability Program owns one lazy memo and releases it before 
     const program = test_program.program;
     var view = test_program.view(1);
     view.checked_types = checked_types.view();
-    const module = try program.modules.add(view);
+    const module = try program.modules.add(&view);
     defer program.releaseErrorTypes();
     try std.testing.expect(program.error_types == null);
     // Even a lowering that never queried errors can finish without a memo.

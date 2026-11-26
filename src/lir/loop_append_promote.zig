@@ -3062,7 +3062,7 @@ const Pass = struct {
     /// declared inside the body continue into their bodies.
     fn loopPassEnds(self: *Pass, loop_stmt: CFStmtId, site: CFStmtId) ResourceError!PassEnds {
         const allocator = self.allocator;
-        const join = self.store.getCFStmt(loop_stmt).join;
+        const join = self.store.getCFStmtImmediate(loop_stmt).join;
         var inner_joins = collections.DenseMap(LIR.JoinPointId, CFStmtId).init(allocator);
         defer inner_joins.deinit();
         {
@@ -5275,7 +5275,7 @@ test "promote keeps capacity checks when a back edge supplies an outside list" {
     // Each iteration replaces the carried list with a fresh empty allocation.
     // The capacity observed at entry cannot justify unchecked future appends.
     try run(store, &f.layouts);
-    const head = store.getCFStmt(built.loop).join;
+    const head = store.getCFStmtImmediate(built.loop).join;
     const shape = try appendShapeOf(store, head.body, head.id, head.id);
     try testing.expectEqual(@as(u32, 1), shape.unsafe_appends);
     try testing.expectEqual(@as(u32, 1), shape.reserves);
@@ -5837,13 +5837,13 @@ test "promote initializes merged metadata on every incoming definition" {
     try testing.expectEqual(merged, GuardedList.at(store.getLocalSpan(owned.args), 0));
     try testing.expectEqual(foreign_jump, owned.next);
 
-    const forwarded_limit = store.getCFStmtImmediate(store.getCFStmt(tracked).assign_ref.next).assign_ref;
+    const forwarded_limit = store.getCFStmtImmediate(store.getCFStmtImmediate(tracked).assign_ref.next).assign_ref;
     try testing.expectEqual(limit.target, forwarded_limit.target);
     const forwarded_owned = store.getCFStmtImmediate(forwarded_limit.next).assign_ref;
     try testing.expectEqual(owned.target, forwarded_owned.target);
     try testing.expectEqual(tracked_jump, forwarded_owned.next);
     try testing.expectEqual(limit.target, store.getCFStmtImmediate(back_write).set_local.value);
-    try testing.expectEqual(owned.target, store.getCFStmtImmediate(store.getCFStmt(back_write).set_local.next).set_local.value);
+    try testing.expectEqual(owned.target, store.getCFStmtImmediate(store.getCFStmtImmediate(back_write).set_local.next).set_local.value);
 
     const head = store.getCFStmtImmediate(loop).join;
     const dispatch = store.getCFStmtImmediate(head.body).switch_stmt;
