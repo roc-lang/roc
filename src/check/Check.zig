@@ -1236,10 +1236,13 @@ ambiguity_candidate_by_key: std.AutoHashMapUnmanaged(AmbiguityCandidateKey, u32)
 /// performed with no probe open are permanent and never journaled.
 ambiguity_candidate_journal: std.ArrayListUnmanaged(AmbiguityCandidateFlip) = .empty,
 /// Index into `ambiguity_candidates` where the currently-processing top-level
-/// def's entries begin. Generalization events scan only from here: entries
-/// below the cursor belong to earlier defs and are either already judged or
-/// awaiting the end-of-check residual judgment.
+/// def's entries that a generalization event may still judge begin.
+/// Generalization events scan only from here: entries below the cursor are
+/// this def's already judged leading entries, or belong to earlier defs and
+/// are either already judged or awaiting the end-of-check residual judgment.
 ambiguity_candidates_def_start: usize = 0,
+/// How many candidates generalization events have looked at.
+test_ambiguity_candidate_visits: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
 /// Prefix covered by the module-final residual judgment. Generalization may
 /// judge entries out of order, so the first residual pass still scans the
 /// whole prefix; afterward committed target probes only append a suffix and
@@ -2119,6 +2122,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .ambiguity_candidate_by_key = .keyed,
     .ambiguity_candidate_journal = .frame_partitioned,
     .ambiguity_candidates_def_start = .lexical,
+    .test_ambiguity_candidate_visits = .scratch,
     .ambiguity_candidates_residual_checked = .keyed,
     .ambiguity_verdicts = .settled,
     .default_materializations = .settled,
@@ -20219,6 +20223,7 @@ fn recordAmbiguityCandidate(
 }
 
 fn shrinkAmbiguityCandidatesTo(self: *Self, new_len: usize) void {
+    self.ambiguity_candidates_def_start = @min(self.ambiguity_candidates_def_start, new_len);
     while (self.ambiguity_candidates.items.len > new_len) {
         const candidate = self.ambiguity_candidates.pop().?;
         const did_remove = self.ambiguity_candidate_by_key.remove(.{
@@ -20517,8 +20522,16 @@ fn judgeAmbiguityCandidatesAtGeneralizationMultiRoot(
     self: *Self,
     roots: []const BoundaryRoot,
 ) Allocator.Error!void {
+    // A judged candidate stays judged, so the leading ones are passed once
+    // for all of this def's later events.
+    while (self.ambiguity_candidates_def_start < self.ambiguity_candidates.items.len and
+        self.ambiguity_candidates.items[self.ambiguity_candidates_def_start].judged)
+    {
+        self.ambiguity_candidates_def_start += 1;
+    }
     var sets_built = false;
     for (self.ambiguity_candidates.items[self.ambiguity_candidates_def_start..]) |*candidate| {
+        if (builtin.is_test) self.test_ambiguity_candidate_visits += 1;
         if (candidate.judged) continue;
         const resolved = self.types.resolveVar(candidate.var_);
         const constraints_range = contentConstraintRange(resolved.desc.content) orelse {

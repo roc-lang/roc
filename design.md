@@ -24147,7 +24147,12 @@ dispatch-target record. It never matches records by union-find root, because
 unrelated dispatches whose callables later unify would then share a record.
 Same-name relations must agree on fixed outer function properties:
 rank-1 instantiation can vary types but cannot vary a declaration's argument
-count or known effect mode. Once a scheme's public type is fixed, equivalent
+count or known effect mode. A requirement is held to this where it joins a
+receiver's requirements, against the argument count and effect mode already
+known for its name there; the unifier remembers those for a long list
+(`ConstraintListSummary`) instead of reading the list again for each use. A
+callable whose outer shape becomes known only later is held to it where the
+boundary relates the receiver's requirements or the receiver resolves. Once a scheme's public type is fixed, equivalent
 requirements whose only differences are private generalized variables collapse;
 public type variables remain identity anchors. Collapsing unifies the duplicate's
 callable with the retained one before dropping it, so the union-find records
