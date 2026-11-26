@@ -1951,4 +1951,3 @@ test "const store writer boxy recipe ownership frees a failed popped frame only 
     }
     try std.testing.expectEqual(tracking.allocated_bytes, tracking.freed_bytes);
 }
-
