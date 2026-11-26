@@ -142,6 +142,302 @@ pub fn imagePart(graph: *ImageGraph, plan: Program.ConstPlanId, layout_idx: layo
     while (next < builder.jobs.items.len) : (next += 1) try builder.visit(builder.jobs.items[next]);
 }
 
+/// The image of `value`, evaluated at shape `source`, written at shape
+/// `stored`: the shape of the type the value is stored under, whose tag
+/// unions may hold fewer variants than the evaluation's
+/// (`Program.ConstRootPlan.stored`). Each tag is written as the stored
+/// union's variant of the same name, and each part at its stored layout; a
+/// part whose two shapes are one is copied as `imageRoot` copies it. The
+/// result's slices belong to `graph`, which the caller deinitializes.
+pub fn imageRootAt(
+    graph: *ImageGraph,
+    source: Program.RootShape,
+    stored: Program.RootShape,
+    value: Value,
+) Error!ImageGraph.Result {
+    if (comptime @import("builtin").cpu.arch.endian() != .little) @compileError("stored images require a little-endian compiler host");
+    if (std.debug.runtime_safety and graph.program.layouts.targetUsize().size() != word_size) invariant("an image's source evaluation is not at the host's width");
+    var writer = StoredShapeWriter{ .graph = graph };
+    defer writer.jobs.deinit(graph.allocator);
+    const dest = try graph.root(graph.size(stored.ret_layout), graph.alignment(stored.ret_layout));
+    try writer.push(source, stored, value, dest);
+    var next: usize = 0;
+    while (next < writer.jobs.items.len) : (next += 1) try writer.visit(writer.jobs.items[next]);
+    return try graph.finish();
+}
+
+/// One part `imageRootAt` writes: the value at `source`, written at `stored`.
+const StoredShapeJob = struct {
+    source: Program.RootShape,
+    stored: Program.RootShape,
+    value: Value,
+    dest: Destination,
+};
+
+/// Writes a value evaluated at one shape into an image at another shape of
+/// the same type with narrower tag unions. Parts wait on an explicit queue,
+/// so nesting never becomes native call depth.
+const StoredShapeWriter = struct {
+    graph: *ImageGraph,
+    jobs: std.ArrayList(StoredShapeJob) = .empty,
+
+    fn push(self: *StoredShapeWriter, source: Program.RootShape, stored: Program.RootShape, value: Value, dest: Destination) Allocator.Error!void {
+        try self.jobs.append(self.graph.allocator, .{ .source = source, .stored = stored, .value = value, .dest = dest });
+    }
+
+    fn plan(self: *const StoredShapeWriter, id: Program.ConstPlanId) Program.ConstPlan {
+        return self.graph.program.const_plans.items[@backingInt(id)];
+    }
+
+    fn visit(self: *StoredShapeWriter, job: StoredShapeJob) Error!void {
+        if (job.source.plan == job.stored.plan and job.source.ret_layout == job.stored.ret_layout) {
+            return imagePart(self.graph, job.stored.plan, job.stored.ret_layout, job.value, job.dest);
+        }
+        // A stored zero-sized part, such as a union narrowed to one tag
+        // without payloads, has no bytes to write.
+        if (self.graph.size(job.stored.ret_layout) == 0) return;
+        const layouts = &self.graph.program.layouts;
+        const stored_physical = layouts.getLayout(job.stored.ret_layout);
+        switch (self.plan(job.stored.plan)) {
+            .named => |stored_named| {
+                const source_named = switch (self.plan(job.source.plan)) {
+                    .named => |named| named,
+                    .pending, .layout_only, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag_union, .fn_value, .erased_fn, .boxy_fn => invariant("a stored named type's evaluated part was not named"),
+                };
+                try self.push(
+                    .{ .plan = source_named.backing, .ret_layout = job.source.ret_layout },
+                    .{ .plan = stored_named.backing, .ret_layout = job.stored.ret_layout },
+                    job.value,
+                    job.dest,
+                );
+            },
+            .tuple, .record => |stored_children| {
+                const source_children = switch (self.plan(job.source.plan)) {
+                    .tuple, .record => |parts| parts,
+                    .pending, .layout_only, .zst, .scalar, .str, .list, .box, .tag_union, .named, .fn_value, .erased_fn, .boxy_fn => invariant("a stored aggregate's evaluated part was not an aggregate"),
+                };
+                if (try self.boxedPart(job, stored_physical)) return;
+                try self.children(source_children, job.source.ret_layout, stored_children, job.stored.ret_layout, job.value, job.dest, false);
+            },
+            .tag_union => |stored_variants| {
+                const source_variants = switch (self.plan(job.source.plan)) {
+                    .tag_union => |variants| variants,
+                    .pending, .layout_only, .zst, .scalar, .str, .list, .box, .tuple, .record, .named, .fn_value, .erased_fn, .boxy_fn => invariant("a stored tag union's evaluated part was not a tag union"),
+                };
+                if (try self.boxedPart(job, stored_physical)) return;
+                const source_discriminant = self.readDiscriminant(job.source.ret_layout, job.value);
+                const source_variant = for (source_variants) |variant| {
+                    if (variant.discriminant == source_discriminant) break variant;
+                } else invariant("an evaluated tag did not match an explicit const variant");
+                // The declared row a value inhabits holds each of its labels
+                // once (`declaredRootType`).
+                const stored_variant = for (stored_variants) |variant| {
+                    if (variant.checked_name == source_variant.checked_name) break variant;
+                } else invariant("an evaluated tag has no variant of its name in the type it is stored at");
+                if (stored_physical.tag != .tag_union) invariant("a stored tag union of nonzero size did not have a tag union layout");
+                const stored_data = layouts.getTagUnionData(stored_physical.getTagUnion().idx);
+                stored_data.writeDiscriminant(self.graph.bytes(job.dest, self.graph.size(job.stored.ret_layout)).ptr, stored_variant.discriminant, self.graph.width());
+                try self.children(
+                    source_variant.payloads,
+                    self.payloadLayout(job.source.ret_layout, source_discriminant),
+                    stored_variant.payloads,
+                    self.payloadLayout(job.stored.ret_layout, stored_variant.discriminant),
+                    job.value,
+                    job.dest,
+                    true,
+                );
+            },
+            .list => |stored_element| {
+                const source_element = switch (self.plan(job.source.plan)) {
+                    .list => |element| element,
+                    .pending, .layout_only, .zst, .scalar, .str, .box, .tuple, .record, .tag_union, .named, .fn_value, .erased_fn, .boxy_fn => invariant("a stored list's evaluated part was not a list"),
+                };
+                try self.list(job, source_element, stored_element, stored_physical);
+            },
+            .box => |stored_element| {
+                const source_element = switch (self.plan(job.source.plan)) {
+                    .box => |element| element,
+                    .pending, .layout_only, .zst, .scalar, .str, .list, .tuple, .record, .tag_union, .named, .fn_value, .erased_fn, .boxy_fn => invariant("a stored box's evaluated part was not a box"),
+                };
+                switch (stored_physical.tag) {
+                    .box_of_zst => try self.graph.writeWord(job.dest, 0),
+                    .box => try self.boxed(job, source_element, stored_element, stored_physical),
+                    .erased_callable, .hole, .dynamic, .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr => invariant("a stored box did not have a box layout"),
+                }
+            },
+            // Narrowing a type's rows changes only its tag unions, so a
+            // scalar or string part keeps its layout.
+            .scalar, .str => {
+                if (job.source.ret_layout != job.stored.ret_layout) invariant("a stored scalar or string was evaluated at another layout");
+                try imagePart(self.graph, job.stored.plan, job.stored.ret_layout, job.value, job.dest);
+            },
+            .zst => {},
+            .pending, .layout_only => invariant("an incomplete const plan reached a stored image"),
+            .fn_value, .erased_fn, .boxy_fn => invariant("a function value reached a stored image"),
+        }
+    }
+
+    /// Write an aggregate or union that either layout holds behind a box,
+    /// and report whether one did. A box around an aggregate or union is
+    /// representation alone: the evaluated layout may box a part the stored
+    /// layout holds inline, or the reverse, so the part is read through the
+    /// evaluated box and written into a stored one.
+    fn boxedPart(self: *StoredShapeWriter, job: StoredShapeJob, stored_physical: layout.Layout) Allocator.Error!bool {
+        const source_physical = self.graph.program.layouts.getLayout(job.source.ret_layout);
+        const source_boxed = switch (source_physical.tag) {
+            .box => true,
+            .box_of_zst => invariant("a part evaluated as a box of a zero-sized value is stored with bytes"),
+            .erased_callable, .hole, .dynamic, .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr => false,
+        };
+        const stored_boxed = switch (stored_physical.tag) {
+            .box => true,
+            .box_of_zst => {
+                try self.graph.writeWord(job.dest, 0);
+                return true;
+            },
+            .erased_callable, .hole, .dynamic, .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr => false,
+        };
+        if (!source_boxed and !stored_boxed) return false;
+        const source: Program.RootShape = if (source_boxed) .{ .plan = job.source.plan, .ret_layout = source_physical.getIdx() } else job.source;
+        const value: Value = if (source_boxed) blk: {
+            const address = job.value.read(usize);
+            if (address == 0) invariant("nonzero-sized boxed root value had a null payload");
+            break :blk .{ .ptr = @ptrFromInt(address) };
+        } else job.value;
+        if (!stored_boxed) {
+            try self.push(source, job.stored, value, job.dest);
+            return true;
+        }
+        const layouts = &self.graph.program.layouts;
+        const stored_child = stored_physical.getIdx();
+        const result = try self.graph.reserveAllocation(.{
+            .address = @intFromPtr(value.ptr),
+            .plan = job.stored.plan,
+            .layout_idx = stored_child,
+            .count = 1,
+            .kind = .value,
+        }, self.graph.size(stored_child), self.graph.alignment(stored_child), layouts.layoutContainsRefcounted(layouts.getLayout(stored_child)), null);
+        try self.graph.relocate(job.dest, result.dest);
+        if (result.fresh) try self.push(source, .{ .plan = job.stored.plan, .ret_layout = stored_child }, value, result.dest);
+        return true;
+    }
+
+    /// Write the boxed payload of `job`, of plan `source_plan` where it was
+    /// evaluated and `stored_plan` where it is stored.
+    fn boxed(self: *StoredShapeWriter, job: StoredShapeJob, source_plan: Program.ConstPlanId, stored_plan: Program.ConstPlanId, stored_physical: layout.Layout) Allocator.Error!void {
+        const layouts = &self.graph.program.layouts;
+        const source_physical = layouts.getLayout(job.source.ret_layout);
+        if (source_physical.tag != .box) invariant("a part stored boxed was evaluated unboxed");
+        const address = job.value.read(usize);
+        if (address == 0) invariant("nonzero-sized boxed root value had a null payload");
+        const stored_child = stored_physical.getIdx();
+        const result = try self.graph.reserveAllocation(.{
+            .address = address,
+            .plan = stored_plan,
+            .layout_idx = stored_child,
+            .count = 1,
+            .kind = .value,
+        }, self.graph.size(stored_child), self.graph.alignment(stored_child), layouts.layoutContainsRefcounted(layouts.getLayout(stored_child)), null);
+        try self.graph.relocate(job.dest, result.dest);
+        if (result.fresh) try self.push(
+            .{ .plan = source_plan, .ret_layout = source_physical.getIdx() },
+            .{ .plan = stored_plan, .ret_layout = stored_child },
+            .{ .ptr = @ptrFromInt(address) },
+            result.dest,
+        );
+    }
+
+    fn list(self: *StoredShapeWriter, job: StoredShapeJob, source_element: Program.ConstPlanId, stored_element: Program.ConstPlanId, stored_physical: layout.Layout) Allocator.Error!void {
+        if (stored_physical.tag != .list and stored_physical.tag != .list_of_zst) invariant("a stored list did not have a list layout");
+        const layouts = &self.graph.program.layouts;
+        const source_physical = layouts.getLayout(job.source.ret_layout);
+        if (source_physical.tag != .list and source_physical.tag != .list_of_zst) invariant("an evaluated list did not have a list layout");
+        const list_value = job.value.read(builtins.list.RocList);
+        // `RocList`'s words: bytes, length, capacity, as `imageRoot` writes
+        // them.
+        try self.graph.writeWord(job.dest.offsetBy(self.graph.word()), list_value.len());
+        const capacity = list_value.getCapacity();
+        try self.graph.writeWord(job.dest.offsetBy(2 * self.graph.word()), builtins.list.RocList.encodeCapacityForWidth(capacity));
+        if (stored_physical.tag == .list_of_zst or capacity == 0) return;
+        if (source_physical.tag != .list) invariant("a list stored with sized items was evaluated with zero-sized items");
+        const ptr = list_value.bytes orelse invariant("a native list with capacity had a null pointer");
+        const source_item = source_physical.getIdx();
+        const stored_item = stored_physical.getIdx();
+        const source_size = layouts.layoutSize(layouts.getLayout(source_item));
+        const stored_size = self.graph.size(stored_item);
+        const result = try self.graph.reserveAllocation(.{
+            .address = @intFromPtr(ptr),
+            .plan = stored_element,
+            .layout_idx = stored_item,
+            .count = list_value.len(),
+            .kind = .list,
+        }, stored_size * list_value.len(), self.graph.alignment(stored_item), layouts.layoutContainsRefcounted(layouts.getLayout(stored_item)), list_value.len());
+        try self.graph.relocate(job.dest, result.dest);
+        if (!result.fresh) return;
+        for (0..list_value.len()) |index| {
+            try self.push(
+                .{ .plan = source_element, .ret_layout = source_item },
+                .{ .plan = stored_element, .ret_layout = stored_item },
+                .{ .ptr = ptr + index * source_size },
+                result.dest.offsetBy(index * stored_size),
+            );
+        }
+    }
+
+    /// Write an aggregate's or a tag payload's parts, each from its offset
+    /// in the evaluated layout to its offset in the stored one.
+    fn children(
+        self: *StoredShapeWriter,
+        source_plans: []const Program.ConstPlanId,
+        source_layout: layout.Idx,
+        stored_plans: []const Program.ConstPlanId,
+        stored_layout: layout.Idx,
+        value: Value,
+        dest: Destination,
+        tag_payload: bool,
+    ) Allocator.Error!void {
+        if (source_plans.len != stored_plans.len) invariant("a stored part has another count of children than its evaluated part");
+        if (stored_plans.len == 0 or self.graph.size(stored_layout) == 0) return;
+        if (tag_payload and stored_plans.len == 1) {
+            return self.push(.{ .plan = source_plans[0], .ret_layout = source_layout }, .{ .plan = stored_plans[0], .ret_layout = stored_layout }, value, dest);
+        }
+        const layouts = &self.graph.program.layouts;
+        const source_physical = layouts.getLayout(source_layout);
+        const stored_physical = layouts.getLayout(stored_layout);
+        if (source_physical.tag != .struct_ or stored_physical.tag != .struct_) invariant("an aggregate's parts did not have struct layouts");
+        const source_struct = source_physical.getStruct().idx;
+        const stored_struct = stored_physical.getStruct().idx;
+        for (source_plans, stored_plans, 0..) |source_plan, stored_plan, original_index| {
+            const index: u32 = @intCast(original_index);
+            try self.push(
+                .{ .plan = source_plan, .ret_layout = layouts.getStructFieldLayoutByOriginalIndex(source_struct, index) },
+                .{ .plan = stored_plan, .ret_layout = layouts.getStructFieldLayoutByOriginalIndex(stored_struct, index) },
+                value.offset(layouts.getStructFieldOffsetByOriginalIndex(source_struct, index)),
+                dest.offsetBy(layouts.getStructFieldOffsetByOriginalIndexAt(stored_struct, index, self.graph.width())),
+            );
+        }
+    }
+
+    fn readDiscriminant(self: *const StoredShapeWriter, idx: layout.Idx, value: Value) u32 {
+        const layouts = &self.graph.program.layouts;
+        const physical = layouts.getLayout(idx);
+        if (physical.tag == .zst) return 0;
+        if (physical.tag != .tag_union) invariant("an evaluated tag did not have a tag union layout");
+        const data = layouts.getTagUnionData(physical.getTagUnion().idx);
+        return @intCast(data.readDiscriminant(value.ptr, layouts.targetUsize()));
+    }
+
+    fn payloadLayout(self: *const StoredShapeWriter, idx: layout.Idx, discriminant: u32) layout.Idx {
+        const layouts = &self.graph.program.layouts;
+        const physical = layouts.getLayout(idx);
+        if (physical.tag == .zst) return .zst;
+        const data = layouts.getTagUnionData(physical.getTagUnion().idx);
+        const variants = layouts.getTagUnionVariants(data);
+        if (discriminant >= variants.len) invariant("a tag discriminant exceeded its layout's variants");
+        return variants.get(discriminant).payload_layout;
+    }
+};
+
 /// The graph an image root is written into.
 pub const ImageGraph = frozen_graph.ImageGraph(AllocationKey);
 const ImageBuilder = BuilderOf(ImageGraph);

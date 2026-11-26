@@ -707,6 +707,48 @@ pub const tests = [_]TestCase{
         .source = @import("issue_11626_source.zig").source ++ "\nmain = (run(\"\", stats_page), run(\"\", lead_page), run(\"ok\", stats_page), run(\"ok\", lead_page))\n",
         .expected = .{ .inspect_str = "(Err(NotFound(IndexStats)), Err(NotFound(LeadMissing)), Ok(\"stats\"), Ok(\"lead\"))" },
     },
+    // A constant whose rows a program's joins widened is stored at its
+    // declared rows, so its image is written at the declared layout, each tag
+    // at its variant of the same name (design.md "Stored Images").
+    .{
+        .name = "issue 11626: a constant of joined rows is stored at its declared rows",
+        .source_kind = .module,
+        .source = @import("issue_11626_source.zig").source ++
+            \\
+            \\pair : (Try(Str, [NotFound([IndexStats])]), Try(Str, [NotFound([LeadMissing])]))
+            \\pair = (stats_page(""), lead_page(""))
+            \\
+            \\main = pair
+            \\
+        ,
+        .expected = .{ .inspect_str = "(Err(NotFound(IndexStats)), Err(NotFound(LeadMissing)))" },
+    },
+    .{
+        .name = "issue 11626: joined rows in a record's list are stored at their declared rows",
+        .source_kind = .module,
+        .source = @import("issue_11626_source.zig").source ++
+            \\
+            \\pages : { results : List(Try(Str, [NotFound([IndexStats])])), lead : Try(Str, [NotFound([LeadMissing])]) }
+            \\pages = { results: [stats_page(""), stats_page("ok"), stats_page("")], lead: lead_page("") }
+            \\
+            \\main = pages
+            \\
+        ,
+        .expected = .{ .inspect_str = "{ lead: Err(NotFound(LeadMissing)), results: [Err(NotFound(IndexStats)), Ok(\"stats\"), Err(NotFound(IndexStats))] }" },
+    },
+    .{
+        .name = "issue 11626: joined rows in a boxed record are stored at their declared rows",
+        .source_kind = .module,
+        .source = @import("issue_11626_source.zig").source ++
+            \\
+            \\boxed : Box({ stats : Try(Str, [NotFound([IndexStats])]), lead : Try(Str, [NotFound([LeadMissing])]) })
+            \\boxed = Box.box({ stats: stats_page(""), lead: lead_page("") })
+            \\
+            \\main = Box.unbox(boxed)
+            \\
+        ,
+        .expected = .{ .inspect_str = "{ lead: Err(NotFound(LeadMissing)), stats: Err(NotFound(IndexStats)) }" },
+    },
     .{
         .name = "issue 11626: composed returns carry captured callable payloads",
         .source_kind = .module,

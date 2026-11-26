@@ -4338,14 +4338,19 @@ const Lowerer = struct {
             try self.result.root_metadata.append(self.allocator, metadata);
             if (root.request.abi == .compile_time) {
                 const ret_layout = try self.layoutOfType(entry.ret);
+                const stored_ty = try self.declaredRootType(entry.ret, self.solved.lifted.getFn(self.solved.lifted.rootsView()[root.request_index].fn_id).ret);
                 try self.result.const_roots.append(self.allocator, .{
                     .root_order = root.request.order,
                     .owner = root.owner,
                     .request = root.request,
                     .proc = proc,
                     .ret_layout = ret_layout,
-                    .ret_type = try self.constTypeOfType(try self.declaredRootType(entry.ret, self.solved.lifted.getFn(self.solved.lifted.rootsView()[root.request_index].fn_id).ret)),
+                    .ret_type = try self.constTypeOfType(stored_ty),
                     .plan = try self.constPlanOfType(entry.ret),
+                    .stored = if (stored_ty == entry.ret) null else .{
+                        .ret_layout = try self.layoutOfType(stored_ty),
+                        .plan = try self.constPlanOfType(stored_ty),
+                    },
                     .value_slot = if (completed_values.get(root.request_index)) |value_root|
                         try self.comptimeValueSlot(value_root, entry.ret, ret_layout)
                     else

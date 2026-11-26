@@ -2541,7 +2541,8 @@ root is data alone, so it is stored as its image (Stored Images), and the
 writer (`ConstStoreWriter.ValueFormImage`) writes that image straight from the
 checked expression, part by part at the 64-bit layout of the root's type,
 exactly as `NativeRootExport.imageRoot` writes an evaluation of the same
-expression: a numeral's bytes are the bytes lowering gives the literal
+expression, and as `NativeRootExport.imageRootAt` writes one a Solved
+program evaluated at rows its joins widened (Stored Images): a numeral's bytes are the bytes lowering gives the literal
 (`exact_numeral.encodeBits`), a literal list or string has no capacity
 beyond its items (Static Lists And Strings Keep Their Capacity), a bytes
 literal's items are the imported file's bytes and a file imported as `Str` is
@@ -31810,7 +31811,18 @@ freezer static-data slots use): a list of scalars is one copy, and a shared
 allocation is copied once. That pass writes the 64-bit layout whatever the
 width of the evaluation, reading the evaluator's memory at its own width, so
 a 32-bit compiler host (the interpreter path) stores the images a 64-bit one
-does. A value-form root (Value-Form Roots) is written as its image straight
+does. A Solved program's root is stored at its declaring module's rows,
+which the program's row joins can widen past (`declaredRootType`); the root's
+plan then carries the stored type's shape (`ConstRootPlan.stored`), and the
+pass writes the image at that shape (`NativeRootExport.imageRootAt`): each
+tag as the stored union's variant of the same name, at the discriminant and
+payload layout the stored type gives it, and each part at its stored
+offsets. The declared row holds each of its labels once, and the value
+inhabits it, so a tag whose name the stored union lacks is a compiler bug. A
+part whose evaluated and stored shapes are one is copied by the ordinary
+pass. This is the inverse of a read's re-encoding below, so every image is at
+the layout of the type it is stored at, whichever program evaluated it.
+A value-form root (Value-Form Roots) is written as its image straight
 from its checked expression (`ConstStoreWriter.ValueFormImage`), part by
 part at the 64-bit layout exactly as the evaluation of the same expression
 is written: each list's items in an allocation of their own, and a constant
