@@ -110,7 +110,7 @@ test "wide row growth: coverage of one arm per constructor (#13311)" {
 
 /// The work relating requirement lists and judging ambiguity candidates does
 /// for `uses` interpolations of one value.
-fn interpolationWork(uses: usize) !usize {
+fn interpolationWork(uses: usize) TestEnv.TestEnvError!usize {
     var source = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer source.deinit();
     const w = &source.writer;
