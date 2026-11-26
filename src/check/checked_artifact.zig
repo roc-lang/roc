@@ -13568,10 +13568,9 @@ fn sealCheckedProcedureTemplateRefs(
         defer promoted_patterns.deinit();
         for (templates.promoted.items()) |promoted| try promoted_patterns.put(promoted.pattern, {});
 
-        var raw_node: u32 = CIR.Node.first_idx;
-        while (raw_node < module.nodeCount()) : (raw_node += 1) {
-            if (module.nodeTag(@fromBackingInt(@intCast(raw_node))) != .statement_decl) continue;
-            const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(raw_node));
+        // Only a reached declaration's expression can key a scope, so the
+        // reached binding statements are all the declarations to consider.
+        for (bodies.index().bindingStatements()) |statement| {
             const statement_data = module.getStatement(statement);
             if (statement_data != .s_decl) continue;
             const decl = statement_data.s_decl;
