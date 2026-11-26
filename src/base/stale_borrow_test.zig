@@ -12,11 +12,15 @@ const testing = std.testing;
 const poison = StaleBorrowAllocator.poison_byte;
 const debug = builtin.mode == .debug;
 
+fn skipUnlessDebug() error{SkipZigTest}!void {
+    if (!debug) return error.SkipZigTest;
+}
+
 /// A wrapper over the test allocator with its own quarantine, so a test can
 /// observe and flush it.
 fn Wrapped(comptime config: StaleBorrowAllocator.Config) type {
     return struct {
-        var instance: StaleBorrowAllocator = undefined;
+        var instance: if (debug) StaleBorrowAllocator else void = undefined;
 
         fn init() std.mem.Allocator {
             instance = .init(testing.allocator, config);
@@ -26,7 +30,7 @@ fn Wrapped(comptime config: StaleBorrowAllocator.Config) type {
 }
 
 test "a wrapped list moves on every growth and poisons the backing it left" {
-    if (comptime !debug) return error.SkipZigTest;
+    try skipUnlessDebug();
     const W = Wrapped(.{ .protect_pages = false });
     const gpa = W.init();
     defer W.instance.flush();
@@ -46,7 +50,7 @@ test "a wrapped list moves on every growth and poisons the backing it left" {
 }
 
 test "a wrapped allocation never changes length in place" {
-    if (comptime !debug) return error.SkipZigTest;
+    try skipUnlessDebug();
     const W = Wrapped(.{ .protect_pages = false });
     const gpa = W.init();
     defer W.instance.flush();
@@ -60,7 +64,7 @@ test "a wrapped allocation never changes length in place" {
 }
 
 test "the quarantine is bounded in entries and in bytes" {
-    if (comptime !debug) return error.SkipZigTest;
+    try skipUnlessDebug();
     const W = Wrapped(.{ .protect_pages = false, .max_poisoned = 4, .max_poisoned_bytes = 1000 });
     const gpa = W.init();
     defer W.instance.flush();
@@ -78,7 +82,7 @@ test "the quarantine is bounded in entries and in bytes" {
 }
 
 test "protected allocations are bounded in entries" {
-    if (comptime !debug) return error.SkipZigTest;
+    try skipUnlessDebug();
     if (!StaleBorrowAllocator.page_protection_available) return error.SkipZigTest;
     const W = Wrapped(.{ .protect_min_pages = 1, .max_protected = 3 });
     const gpa = W.init();
@@ -102,7 +106,7 @@ fn writeThroughStaleSlice() error{OutOfMemory}!void {
 }
 
 test "a write through a stale slice of a small list panics when its backing leaves quarantine" {
-    if (comptime !debug) return error.SkipZigTest;
+    try skipUnlessDebug();
     try death_test.expectPanic("stale borrow: byte 4 of a freed 8-byte allocation", writeThroughStaleSlice, .{});
 }
 
@@ -119,13 +123,13 @@ fn readThroughStaleSliceOfLargeList() error{OutOfMemory}!void {
 }
 
 test "a read through a stale slice of a large list faults" {
-    if (comptime !debug) return error.SkipZigTest;
+    try skipUnlessDebug();
     if (!StaleBorrowAllocator.page_protection_available) return error.SkipZigTest;
     try death_test.expectPanic(" at address 0x", readThroughStaleSliceOfLargeList, .{});
 }
 
 test "a SafeList moves on every growth even where the allocator could grow it in place" {
-    if (comptime !debug) return error.SkipZigTest;
+    try skipUnlessDebug();
     var buffer: [4096]u8 align(16) = undefined;
     var fixed = std.heap.FixedBufferAllocator.init(&buffer);
     const gpa = fixed.allocator();
@@ -144,7 +148,7 @@ test "a SafeList moves on every growth even where the allocator could grow it in
 }
 
 test "a SafeList overwrites the items a shrink drops" {
-    if (comptime !debug) return error.SkipZigTest;
+    try skipUnlessDebug();
     const gpa = testing.allocator;
     var list: collections.SafeList(u32) = .{};
     defer list.deinit(gpa);
@@ -162,7 +166,7 @@ const ReservedU32 = collections.ReservedList(u32, .dense);
 const reserve_threshold_bytes = collections.reserved_list_threshold_bytes;
 
 test "a reserved column moves to a fresh reservation on every growth step" {
-    if (comptime !debug) return error.SkipZigTest;
+    try skipUnlessDebug();
     const gpa = testing.allocator;
     var list = try ReservedU32.init(gpa, reserve_threshold_bytes / @sizeOf(u32));
     defer list.deinit(gpa);
@@ -185,7 +189,7 @@ fn readThroughStaleSliceOfReservedColumn() error{OutOfMemory}!void {
 }
 
 test "a read through a stale slice of a reserved column faults" {
-    if (comptime !debug) return error.SkipZigTest;
+    try skipUnlessDebug();
     if (builtin.os.tag == .windows or builtin.cpu.arch.isWasm()) return error.SkipZigTest;
     try death_test.expectPanic(" at address 0x", readThroughStaleSliceOfReservedColumn, .{});
 }
