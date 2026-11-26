@@ -465,7 +465,8 @@ pub fn write(self: *const Plan, std_io: std.Io, inputs: Inputs, composed: RunIma
     for (self.order) |index| {
         const view = self.images[index].view;
         const place = self.places[index];
-        const atoms = self.states[index].?.atoms;
+        // The block's reached atoms; the writable data is placed whole.
+        const atoms = self.states[index].?.atoms[0..view.atoms().len];
         var atom: u32 = 0;
         while (atom < atoms.len) {
             if (!atoms[atom]) {

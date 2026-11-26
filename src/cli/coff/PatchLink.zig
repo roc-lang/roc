@@ -482,7 +482,8 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     for (order.items) |index| {
         const view = images.items[index].view;
         const place = places[index];
-        const atoms_reached = reached_atoms[index];
+        // The block's reached atoms; the writable data is placed whole.
+        const atoms_reached = reached_atoms[index][0..view.atoms().len];
         var atom: u32 = 0;
         while (atom < atoms_reached.len) {
             if (!atoms_reached[atom]) {

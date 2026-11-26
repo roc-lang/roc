@@ -447,9 +447,9 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     for (order.items) |index| {
         const view = images.items[index].view;
         const place = places[index];
-        // Only reached atoms are written, each run of them to where the
-        // compacted block puts it.
-        const atoms_reached = reached_atoms[index];
+        // Only reached atoms of the block are written, each run of them to
+        // where the compacted block puts it.
+        const atoms_reached = reached_atoms[index][0..view.atoms().len];
         var atom: u32 = 0;
         while (atom < atoms_reached.len) {
             if (!atoms_reached[atom]) {
