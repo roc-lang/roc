@@ -8,7 +8,6 @@ const types = @import("types");
 
 const CIR = can.CIR;
 const CompactWriter = collections.CompactWriter;
-const Expr = CIR.Expr;
 const Ident = base.Ident;
 const ModuleEnv = can.ModuleEnv;
 const testing = std.testing;
