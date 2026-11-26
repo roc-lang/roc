@@ -9,6 +9,10 @@ mutate solver types or escape as solver blockers. Exact template dependencies
 allow irrelevant substitutions to share identity while private unknowns retain
 their application scope.
 
+Within a match, each resolved tag column shares its constructor family and
+payload slots. Constructor specialization visits its own arms and the wildcard
+arms in source order; guarded arms never establish coverage for later arms.
+
 Inhabitedness uses a greatest fixed point to preserve conservative recursive
 payload semantics without enumerating shared paths. Row-only cycles provide no
 constructor witness. General, constructor-payload, and known-absent queries retain

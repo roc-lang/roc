@@ -63,9 +63,15 @@ const Adapter = struct {
     }
 
     pub fn declaration(_: *Adapter, key: Key) Allocator.Error!?struct { body: Annotation, formal_count: usize } {
-        const header, const body = switch (key.owner.store.getStatement(key.statement)) {
-            .s_alias_decl => |decl| .{ decl.header, decl.anno },
-            .s_nominal_decl => |decl| .{ decl.header, decl.anno },
+        const header, const body = switch (key.owner.store.statementKind(key.statement)) {
+            .s_alias_decl => decl_blk: {
+                const decl = key.owner.store.statementView(key.statement).s_alias_decl.decode();
+                break :decl_blk .{ decl.header, decl.anno };
+            },
+            .s_nominal_decl => decl_blk: {
+                const decl = key.owner.store.statementView(key.statement).s_nominal_decl.decode();
+                break :decl_blk .{ decl.header, decl.anno };
+            },
             .s_decl,
             .s_var,
             .s_var_uninitialized,
@@ -95,10 +101,10 @@ const Adapter = struct {
     pub fn node(self: *Adapter, key: Key, initial: Annotation) Allocator.Error!Analysis.Node {
         const owner = key.owner;
         var annotation = initial;
-        while (owner.store.getTypeAnno(annotation) == .rigid_var_lookup) annotation = owner.store.getTypeAnno(annotation).rigid_var_lookup.ref;
-        const header = switch (owner.store.getStatement(key.statement)) {
-            .s_alias_decl => |decl| decl.header,
-            .s_nominal_decl => |decl| decl.header,
+        while (owner.store.typeAnnoKind(annotation) == .rigid_var_lookup) annotation = owner.store.typeAnnoView(annotation).rigid_var_lookup.get(.ref);
+        const header = switch (owner.store.statementKind(key.statement)) {
+            .s_alias_decl => owner.store.statementView(key.statement).s_alias_decl.get(.header),
+            .s_nominal_decl => owner.store.statementView(key.statement).s_nominal_decl.get(.header),
             .s_decl,
             .s_var,
             .s_var_uninitialized,
@@ -124,20 +130,28 @@ const Adapter = struct {
             if (formal == annotation) return .{ .formal = index };
         }
         self.children.clearRetainingCapacity();
-        switch (owner.store.getTypeAnno(annotation)) {
-            .parens => |parens| try self.children.append(self.allocator, parens.anno),
-            .@"fn" => |func| return .{ .function = .{ .args = owner.store.sliceTypeAnnos(func.args), .ret = func.ret } },
-            .tag_union => |union_| {
+        switch (owner.store.typeAnnoKind(annotation)) {
+            .parens => try self.children.append(self.allocator, owner.store.typeAnnoView(annotation).parens.get(.anno)),
+            .@"fn" => {
+                const func = owner.store.typeAnnoView(annotation).@"fn".decode();
+                return .{ .function = .{ .args = owner.store.sliceTypeAnnos(func.args), .ret = func.ret } };
+            },
+            .tag_union => {
+                const union_ = owner.store.typeAnnoView(annotation).tag_union.decode();
                 try self.children.appendSlice(self.allocator, owner.store.sliceTypeAnnos(union_.tags));
                 if (union_.ext) |ext| try self.children.append(self.allocator, ext);
             },
-            .tag => |tag| return .{ .children = owner.store.sliceTypeAnnos(tag.args) },
-            .tuple => |tuple| return .{ .children = owner.store.sliceTypeAnnos(tuple.elems) },
-            .record => |record| {
+            .tag => return .{ .children = owner.store.sliceTypeAnnos(owner.store.typeAnnoView(annotation).tag.get(.args)) },
+            .tuple => return .{ .children = owner.store.sliceTypeAnnos(owner.store.typeAnnoView(annotation).tuple.get(.elems)) },
+            .record => {
+                const record = owner.store.typeAnnoView(annotation).record.decode();
                 for (owner.store.sliceAnnoRecordFields(record.fields)) |field| try self.children.append(self.allocator, owner.store.getAnnoRecordField(field).ty);
                 if (record.ext) |ext| try self.children.append(self.allocator, ext);
             },
-            .apply => |apply| return .{ .apply = .{ .reference = self.reference(owner, apply.base), .args = owner.store.sliceTypeAnnos(apply.args) } },
+            .apply => {
+                const apply = owner.store.typeAnnoView(annotation).apply.decode();
+                return .{ .apply = .{ .reference = self.reference(owner, apply.base), .args = owner.store.sliceTypeAnnos(apply.args) } };
+            },
             .rigid_var, .rigid_var_lookup, .lookup, .underscore => return .leaf,
             .malformed => return .invalid,
         }

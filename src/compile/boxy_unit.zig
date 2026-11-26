@@ -413,12 +413,12 @@ pub fn exportRecords(gpa: Allocator, lowered: *const lir.CheckedPipeline.Lowered
     const records = try gpa.alloc(object_cache.ExportRecord, lowered.lir_result.exported_procs.items.len);
     errdefer gpa.free(records);
     for (lowered.lir_result.exported_procs.items, records) |proc, *record| {
-        const identity = procs.getProcSpec(proc).identity;
+        const identity = procs.getProcSpecImmediate(proc).identity;
         const boxy_export = lowered.lir_result.boxy_exports.get(identity) orelse
             base.invariant("an exported procedure has no export record of its unit", .{});
         const interface = try interfaces.putProc(procs, proc, lowered.lir_result.boxy_table_needs.get(identity) orelse &.{}, boxy_export);
         record.* = .{
-            .identity = procs.getProcSpec(proc).identity.bytes,
+            .identity = procs.getProcSpecImmediate(proc).identity.bytes,
             .rc_borrowed_params = interface.rc_borrowed_params,
             .rc_ret_lenders = interface.rc_ret_lenders,
             .rc_read_only_params = interface.rc_read_only_params,
@@ -793,7 +793,10 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
 
     const static_data_started = PipelineTiming.startDetail(unit.config.timing);
     const static_data = try static_data_exports.buildStaticData(gpa, .{ .root = modules.root, .imports = unit.views }, &lowered, unit.target, .{});
-    defer static_data_exports.deinitStaticData(gpa, static_data);
+    // Native pieces take the static data, whose payload bytes their
+    // constants share; every other path releases it here.
+    var static_data_owned = true;
+    defer if (static_data_owned) static_data_exports.deinitStaticData(gpa, static_data);
     PipelineTiming.finishUnitStep(unit.config.timing, static_data_started, .static_data);
 
     var codegen_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_codegen);
@@ -850,6 +853,7 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     object_compiler.relocatable_expect_sites = unit.test_unit;
     const pieces = try gpa.create(backend.dev.UnitPieces.Pieces);
     errdefer gpa.destroy(pieces);
+    static_data_owned = false;
     pieces.* = object_compiler.compileToPieces(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,

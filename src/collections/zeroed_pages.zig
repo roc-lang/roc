@@ -329,6 +329,46 @@ pub const Reservation = struct {
         }
     }
 
+    /// Give up a reservation whose column moved to another one, in a Debug
+    /// build. Its pages become inaccessible, so a slice or pointer still
+    /// held into the column faults, and the reservation joins a bounded
+    /// quarantine, so its addresses are not handed out again soon. The
+    /// oldest quarantined reservation is released when the quarantine is
+    /// full. The wasm host has no page protection: there the committed bytes
+    /// are overwritten with `undefined` and the reservation is released.
+    pub fn retire(self: *Reservation) void {
+        if (comptime builtin.mode != .debug) @compileError("Reservation.retire is for Debug builds");
+        if (self.mapping.len == 0) {
+            self.* = .{};
+            return;
+        }
+        switch (host) {
+            .linux => {
+                const linux = std.os.linux;
+                // Discarding the pages makes the quarantine cost address space only.
+                const discard = linux.madvise(self.mapping.ptr, self.mapping.len, linux.MADV.DONTNEED);
+                std.debug.assert(linux.errno(discard) == .SUCCESS);
+                const rc = linux.mprotect(self.mapping.ptr, self.mapping.len, .{});
+                std.debug.assert(linux.errno(rc) == .SUCCESS);
+            },
+            .posix => {
+                const rc = std.c.mprotect(@ptrCast(self.mapping.ptr), self.mapping.len, .{});
+                std.debug.assert(rc == 0);
+            },
+            .windows => if (self.committed != 0) windowsFree(self.bytes.ptr, self.committed, .{ .DECOMMIT = true }),
+            .wasm => {
+                @memset(self.bytes[0..self.committed], undefined);
+                self.release();
+                return;
+            },
+        }
+        if (retired_reservations.push(self.*)) |evicted| {
+            var oldest = evicted;
+            oldest.release();
+        }
+        self.* = .{};
+    }
+
     /// Release the whole reservation.
     pub fn release(self: *Reservation) void {
         if (self.mapping.len != 0) {
@@ -339,6 +379,34 @@ pub const Reservation = struct {
             }
         }
         self.* = .{};
+    }
+};
+
+/// The reservations `Reservation.retire` keeps inaccessible, oldest first.
+const retired_reservations = struct {
+    /// The most reservations kept. Each costs address space and a few kernel
+    /// memory map entries, never memory.
+    const capacity = 256;
+
+    var entries: [capacity]Reservation = undefined;
+    var head: usize = 0;
+    var count: usize = 0;
+    var mutex: std.atomic.Mutex = .unlocked;
+
+    /// Keep `reservation`, returning the oldest one kept when there was no
+    /// room for it.
+    fn push(reservation: Reservation) ?Reservation {
+        while (!mutex.tryLock()) std.atomic.spinLoopHint();
+        defer mutex.unlock();
+        var evicted: ?Reservation = null;
+        if (count == capacity) {
+            evicted = entries[head];
+            head = (head + 1) % capacity;
+            count -= 1;
+        }
+        entries[(head + count) % capacity] = reservation;
+        count += 1;
+        return evicted;
     }
 };
 

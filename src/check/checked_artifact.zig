@@ -178,12 +178,12 @@ pub fn forEachCheckedSourceTypeRoot(
 
         const aliases = module_env.for_clause_aliases.sliceRange(required_type.type_aliases);
         for (aliases) |alias| {
-            const alias_statement = module_env.store.getStatement(alias.alias_stmt_idx);
-            if (alias_statement != .s_alias_decl) {
+            const alias_statement = module_env.store.statementAs(alias.alias_stmt_idx, .s_alias_decl);
+            if (alias_statement == null) {
                 checkedArtifactInvariant("platform for-clause alias metadata referenced a non-alias statement", .{});
             }
             try visitor.visit(ModuleEnv.varFrom(alias.alias_stmt_idx));
-            try visitor.visit(ModuleEnv.varFrom(alias_statement.s_alias_decl.anno));
+            try visitor.visit(ModuleEnv.varFrom(alias_statement.?.anno));
         }
     }
 
@@ -2367,8 +2367,8 @@ fn compileTimeCallableRootIsProcedureReference(
 ) bool {
     if (root.kind != .callable_binding) return false;
     const evaluated = root.evaluatedExpr() orelse return false;
-    const root_expr = bodies.exprData(evaluated);
-    if (root_expr != .lookup_local and root_expr != .lookup_external and root_expr != .lookup_required) return false;
+    const root_expr_kind = bodies.exprDataKind(evaluated);
+    if (root_expr_kind != .lookup_local and root_expr_kind != .lookup_external and root_expr_kind != .lookup_required) return false;
     const ref_id = resolved_value_refs.lookupIdByExpr(evaluated) orelse
         checkedArtifactInvariant("checked callable lookup root had no resolved value reference", .{});
     const raw = @backingInt(ref_id);
@@ -3829,6 +3829,25 @@ pub const StoredTagUnion = struct {
     ext: CheckedTypeId,
 };
 
+/// The tag `reconstructTypeData` gives the read form of a stored payload.
+fn storedPayloadTag(stored: *const StoredCheckedTypePayload) std.meta.Tag(CheckedTypePayload) {
+    return switch (stored.*) {
+        .pending => .pending,
+        .err => .err,
+        .flex => .flex,
+        .rigid => .rigid,
+        .alias => .alias,
+        .record => .record,
+        .tuple => .tuple,
+        .nominal => .nominal,
+        .function => .function,
+        .empty_record => .empty_record,
+        .tag_union => .tag_union,
+        .empty_tag_union => .empty_tag_union,
+        .field_kind => .field_kind,
+    };
+}
+
 /// Internal, relocation-invariant (POD) form of `CheckedTypePayload`: variant
 /// slices are replaced by ranges into the store's flat pools. The public
 /// `CheckedTypePayload` (with slices) is reconstructed on demand by `payload`.
@@ -4054,9 +4073,16 @@ pub const CheckedTypeStoreView = struct {
         return reconstructTypeData(CheckedTypePayload, self, &self.stored_payloads[self.synthesizedIndex(id)]);
     }
 
+    /// The kind of `id`'s checked type: the tag `payload` returns, read
+    /// without decoding the payload.
+    pub fn payloadTag(self: *const CheckedTypeStoreView, id: CheckedTypeId) std.meta.Tag(CheckedTypePayload) {
+        if (!type_ids.isSynthesized(id)) return self.sealedView().payloadTag(type_ids.asVar(id));
+        return storedPayloadTag(&self.stored_payloads[self.synthesizedIndex(id)]);
+    }
+
     /// Whether `id` is a nominal or alias type.
     pub fn isNamed(self: *const CheckedTypeStoreView, id: CheckedTypeId) bool {
-        return switch (self.payload(id)) {
+        return switch (self.payloadTag(id)) {
             .alias, .nominal => true,
             .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => false,
         };
@@ -5158,21 +5184,7 @@ pub const CheckedTypeStore = struct {
     /// without decoding the payload.
     pub fn payloadTag(self: *const CheckedTypeStore, id: CheckedTypeId) std.meta.Tag(CheckedTypePayload) {
         if (!type_ids.isSynthesized(id)) return self.sealedSourceView().payloadTag(type_ids.asVar(id));
-        return switch (self.payloads.items()[self.synthesizedIndex(id)]) {
-            .pending => .pending,
-            .err => .err,
-            .flex => .flex,
-            .rigid => .rigid,
-            .alias => .alias,
-            .record => .record,
-            .tuple => .tuple,
-            .nominal => .nominal,
-            .function => .function,
-            .empty_record => .empty_record,
-            .tag_union => .tag_union,
-            .empty_tag_union => .empty_tag_union,
-            .field_kind => .field_kind,
-        };
+        return storedPayloadTag(&self.payloads.items()[self.synthesizedIndex(id)]);
     }
 
     /// The entry a synthesized id names.
@@ -6578,7 +6590,7 @@ fn cloneCheckedTypeBuildPayload(
             // label. Keep the shared suffix intact and omit the outer copy.
             const ext: CheckedTypeId = @fromBackingInt(cloned.items[cloned.items.len - 1]);
             const suffix = if (substitution.boundActual(store, tag_union.ext)) |actual|
-                if (store.payload(actual) == .tag_union) actual else null
+                if (store.payloadTag(actual) == .tag_union) actual else null
             else
                 substitution.added_suffixes.get(ext);
             if (suffix) |actual| {
@@ -6860,7 +6872,7 @@ fn appendCheckedNominalDeclarationFromStatement(
         const out = try allocator.alloc(DeclarationFormal, header_args.len);
         errdefer allocator.free(out);
         for (header_args, formal_args[0..header_args.len], 0..) |arg_anno, formal_arg, i| {
-            std.debug.assert(module_env.store.getTypeAnno(arg_anno) == .rigid_var);
+            std.debug.assert(module_env.store.typeAnnoKind(arg_anno) == .rigid_var);
             out[i] = .{
                 .source = ModuleEnv.varFrom(arg_anno),
                 .root = formal_arg,
@@ -7053,10 +7065,10 @@ pub fn declarationAnnoNode(
     const module_env = module.moduleEnvConst();
     var current = anno_idx;
     while (true) {
-        switch (module_env.store.getTypeAnno(current)) {
-            .parens => |parens| current = parens.anno,
+        switch (module_env.store.typeAnnoKind(current)) {
+            .parens => current = module_env.store.typeAnnoView(current).parens.get(.anno),
             .tag_union, .tuple, .record, .@"fn", .apply => return .{ .composite = current },
-            .lookup => |lookup| switch (lookup.base) {
+            .lookup => switch (module_env.store.typeAnnoView(current).lookup.get(.base)) {
                 .local => |local| {
                     const finalized = local_type_declarations.finalizedStatementForReference(module, local.decl_idx);
                     if (module.getStatement(finalized) != .s_alias_decl) return .{ .leaf = ModuleEnv.varFrom(finalized) };
@@ -7069,10 +7081,11 @@ pub fn declarationAnnoNode(
                 => return .{ .leaf = ModuleEnv.varFrom(current) },
             },
             .rigid_var => return .{ .rigid = .{ .var_ = ModuleEnv.varFrom(current) } },
-            .rigid_var_lookup => |lookup| {
+            .rigid_var_lookup => {
+                const lookup = module_env.store.typeAnnoView(current).rigid_var_lookup.decode();
                 var binder = lookup.ref;
-                while (module_env.store.getTypeAnno(binder) == .rigid_var_lookup) {
-                    binder = module_env.store.getTypeAnno(binder).rigid_var_lookup.ref;
+                while (module_env.store.typeAnnoKind(binder) == .rigid_var_lookup) {
+                    binder = module_env.store.typeAnnoView(binder).rigid_var_lookup.get(.ref);
                 }
                 return .{ .rigid = .{ .var_ = ModuleEnv.varFrom(binder) } };
             },
@@ -7271,11 +7284,12 @@ const DeclarationAnnoWalk = struct {
             },
             .composite => |composite| composite,
         };
-        switch (module_env.store.getTypeAnno(current)) {
-            .tag_union => |tag_union| {
+        switch (module_env.store.typeAnnoKind(current)) {
+            .tag_union => {
+                const tag_union = module_env.store.typeAnnoView(current).tag_union.decode();
                 for (module_env.store.sliceTypeAnnos(tag_union.tags)) |tag_anno_idx| {
-                    const tag = switch (module_env.store.getTypeAnno(tag_anno_idx)) {
-                        .tag => |tag| tag,
+                    const tag = switch (module_env.store.typeAnnoKind(tag_anno_idx)) {
+                        .tag => module_env.store.typeAnnoView(tag_anno_idx).tag.decode(),
                         .apply,
                         .rigid_var,
                         .rigid_var_lookup,
@@ -7294,7 +7308,8 @@ const DeclarationAnnoWalk = struct {
                 }
                 try self.ops.append(gpa, if (tag_union.ext) |ext| .{ .child = ext } else .empty_tag_union);
             },
-            .record => |record| {
+            .record => {
+                const record = module_env.store.typeAnnoView(current).record.decode();
                 // Unnamed (`_` / `_name`) fields are layout padding, not real fields; they
                 // stay in the canonical record annotation (declared order) but are excluded
                 // from the backing row here so they are never name-resolved or unified.
@@ -7307,12 +7322,13 @@ const DeclarationAnnoWalk = struct {
                 }
                 try self.ops.append(gpa, if (record.ext) |ext| .{ .child = ext } else .empty_record);
             },
-            .tuple => |tuple| for (module_env.store.sliceTypeAnnos(tuple.elems)) |elem| try self.ops.append(gpa, .{ .child = elem }),
-            .@"fn" => |func| {
+            .tuple => for (module_env.store.sliceTypeAnnos(module_env.store.typeAnnoView(current).tuple.get(.elems))) |elem| try self.ops.append(gpa, .{ .child = elem }),
+            .@"fn" => {
+                const func = module_env.store.typeAnnoView(current).@"fn".decode();
                 for (module_env.store.sliceTypeAnnos(func.args)) |arg| try self.ops.append(gpa, .{ .child = arg });
                 try self.ops.append(gpa, .{ .child = func.ret });
             },
-            .apply => |apply| for (module_env.store.sliceTypeAnnos(apply.args)) |arg| try self.ops.append(gpa, .{ .child = arg }),
+            .apply => for (module_env.store.sliceTypeAnnos(module_env.store.typeAnnoView(current).apply.get(.args))) |arg| try self.ops.append(gpa, .{ .child = arg }),
             .parens,
             .lookup,
             .rigid_var,
@@ -7343,15 +7359,16 @@ const DeclarationAnnoWalk = struct {
         const frame = self.frames.items[index];
         const module_env = self.module.moduleEnvConst();
         var results = CheckedTypeProjectResults{ .items = self.results.items[frame.results_start..] };
-        switch (module_env.store.getTypeAnno(frame.anno)) {
-            .tag_union => |tag_union| {
+        switch (module_env.store.typeAnnoKind(frame.anno)) {
+            .tag_union => {
+                const tag_union = module_env.store.typeAnnoView(frame.anno).tag_union.decode();
                 const tag_annos = module_env.store.sliceTypeAnnos(tag_union.tags);
                 const tags: []const CheckedTag = if (tag_annos.len == 0) &.{} else blk: {
                     const out = try gpa.alloc(CheckedTag, tag_annos.len);
                     for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
                     errdefer freeOwned(gpa, out);
                     for (tag_annos, out) |tag_anno_idx, *slot| {
-                        const tag = module_env.store.getTypeAnno(tag_anno_idx).tag;
+                        const tag = module_env.store.typeAnnoView(tag_anno_idx).tag.decode();
                         slot.name = @fromBackingInt(@intCast(results.take()));
                         slot.args = try results.typeIds(gpa, module_env.store.sliceTypeAnnos(tag.args).len);
                     }
@@ -7363,14 +7380,15 @@ const DeclarationAnnoWalk = struct {
                 };
                 const ext = results.typeId();
                 // A row with no tags over the closed empty row is that row.
-                if (tags.len == 0 and self.store.payload(ext) == .empty_tag_union) return ext;
+                if (tags.len == 0 and self.store.payloadTag(ext) == .empty_tag_union) return ext;
                 // The payload owns `tags` and releases it on failure.
                 return try appendExplicitCheckedTypePayload(gpa, self.store, .{ .tag_union = .{
                     .tags = tags,
                     .ext = ext,
                 } });
             },
-            .record => |record| {
+            .record => {
+                const record = module_env.store.typeAnnoView(frame.anno).record.decode();
                 var named_count: usize = 0;
                 for (module_env.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
                     if (!module_env.store.getAnnoRecordField(field_idx).is_unnamed) named_count += 1;
@@ -7410,19 +7428,21 @@ const DeclarationAnnoWalk = struct {
                 };
                 const ext = results.typeId();
                 // A row with no fields over the closed empty row is that row.
-                if (fields.len == 0 and self.store.payload(ext) == .empty_record) return ext;
+                if (fields.len == 0 and self.store.payloadTag(ext) == .empty_record) return ext;
                 // The payload owns `fields` and releases it on failure.
                 return try appendExplicitCheckedTypePayload(gpa, self.store, .{ .record = .{
                     .fields = fields,
                     .ext = ext,
                 } });
             },
-            .tuple => |tuple| {
+            .tuple => {
+                const tuple = module_env.store.typeAnnoView(frame.anno).tuple.decode();
                 // The payload owns `elems` and releases it on failure.
                 const elems = try results.typeIds(gpa, module_env.store.sliceTypeAnnos(tuple.elems).len);
                 return try appendExplicitCheckedTypePayload(gpa, self.store, .{ .tuple = elems });
             },
-            .@"fn" => |func| {
+            .@"fn" => {
+                const func = module_env.store.typeAnnoView(frame.anno).@"fn".decode();
                 const args = try results.typeIds(gpa, module_env.store.sliceTypeAnnos(func.args).len);
                 // The payload owns `args` and releases it on failure.
                 return try appendExplicitCheckedTypePayload(gpa, self.store, .{ .function = .{
@@ -7431,7 +7451,7 @@ const DeclarationAnnoWalk = struct {
                     .ret = results.typeId(),
                 } });
             },
-            .apply => |apply| return try self.finishApply(index, apply, &results),
+            .apply => return try self.finishApply(index, module_env.store.typeAnnoView(frame.anno).apply.decode(), &results),
             .lookup => {
                 // Only a bare local alias pushes a lookup frame; its op is
                 // the walked alias body.
@@ -7522,7 +7542,7 @@ const DeclarationAnnoWalk = struct {
         const declaration_formals: []DeclarationFormal = if (header_args.len == 0) &.{} else blk: {
             const out = try gpa.alloc(DeclarationFormal, header_args.len);
             for (header_args, actual_args, out) |arg_anno, actual_arg, *slot| {
-                std.debug.assert(module_env.store.getTypeAnno(arg_anno) == .rigid_var);
+                std.debug.assert(module_env.store.typeAnnoKind(arg_anno) == .rigid_var);
                 slot.* = .{
                     .source = ModuleEnv.varFrom(arg_anno),
                     .root = actual_arg,
@@ -7687,9 +7707,9 @@ fn declaredRecordFieldsFromDeclarationAnno(
     // fields (mirrors the parens handling in appendCheckedTypeRootFromDeclarationAnno).
     var record_anno = anno_idx;
     const record = while (true) {
-        switch (module.moduleEnvConst().store.getTypeAnno(record_anno)) {
-            .parens => |parens| record_anno = parens.anno,
-            .record => |record| break record,
+        switch (module.moduleEnvConst().store.typeAnnoKind(record_anno)) {
+            .parens => record_anno = module.moduleEnvConst().store.typeAnnoView(record_anno).parens.get(.anno),
+            .record => break module.moduleEnvConst().store.typeAnnoView(record_anno).record.decode(),
             .apply,
             .rigid_var,
             .rigid_var_lookup,
@@ -9736,7 +9756,7 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
     defer publication.deinit(allocator);
 
     const nominal_stmt = for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
-        switch (module_env.store.getStatement(statement_idx)) {
+        switch (module_env.store.statementKind(statement_idx)) {
             .s_nominal_decl => break statement_idx,
             .s_decl,
             .s_var,
@@ -10240,7 +10260,7 @@ test "body analyses read state merges, divergence and inspect elision from the c
     for (bodies.index().node_kinds, 0..) |kind, raw| switch (kind) {
         .expr => {
             const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw));
-            switch (bodies.exprData(expr)) {
+            switch (bodies.exprDataKind(expr)) {
                 .match_ => {
                     const binders = try bodies.stateMergeBinders(expr);
                     try testing.expectEqual(@as(usize, 1), binders.len);
@@ -10484,11 +10504,10 @@ test "optional record fields publish through the declaration annotation path" {
     // Find `Thing`'s alias declaration and its record annotation.
     const record_anno = blk: {
         for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
-            const statement = module_env.store.getStatement(statement_idx);
-            if (statement != .s_alias_decl) continue;
-            const anno = module_env.store.getTypeAnno(statement.s_alias_decl.anno);
-            if (anno != .record) continue;
-            break :blk statement.s_alias_decl.anno;
+            const statement = module_env.store.statementAs(statement_idx, .s_alias_decl) orelse continue;
+            const anno_kind = module_env.store.typeAnnoKind(statement.anno);
+            if (anno_kind != .record) continue;
+            break :blk statement.anno;
         }
         return error.TestUnexpectedResult;
     };
@@ -10567,11 +10586,10 @@ fn checkPublishedNominalBacking(
     const nominal_ident = module_env.getIdentStoreConst().lookup(Ident.for_text(nominal_name)) orelse return error.TestUnexpectedResult;
     const backing_anno = blk: {
         for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
-            const statement = module_env.store.getStatement(statement_idx);
-            if (statement != .s_nominal_decl) continue;
-            const header = module_env.store.getTypeHeader(statement.s_nominal_decl.header);
+            const statement = module_env.store.statementAs(statement_idx, .s_nominal_decl) orelse continue;
+            const header = module_env.store.getTypeHeader(statement.header);
             if (header.relative_name != nominal_ident) continue;
-            break :blk statement.s_nominal_decl.anno;
+            break :blk statement.anno;
         }
         return error.TestUnexpectedResult;
     };
@@ -10664,7 +10682,7 @@ test "nominal declaration backing closes a referenced alias's tag union row" {
             const row = store.payload(method.alias.backing);
             try testing.expect(row == .tag_union);
             try testing.expectEqual(@as(usize, 1), row.tag_union.tags.len());
-            try testing.expectEqual(std.meta.Tag(CheckedTypePayload).empty_tag_union, std.meta.activeTag(store.payload(row.tag_union.ext)));
+            try testing.expectEqual(std.meta.Tag(CheckedTypePayload).empty_tag_union, store.payloadTag(row.tag_union.ext));
         }
     }.check);
 }
@@ -10697,7 +10715,7 @@ test "nominal declaration backing publishes each alias expansion once" {
                 current = store.payload(elems[0]);
             }
             try testing.expect(current == .alias);
-            try testing.expectEqual(std.meta.Tag(CheckedTypePayload).empty_tag_union, std.meta.activeTag(store.payload(store.payload(current.alias.backing).tag_union.ext)));
+            try testing.expectEqual(std.meta.Tag(CheckedTypePayload).empty_tag_union, store.payloadTag(store.payload(current.alias.backing).tag_union.ext));
         }
     }.check);
 }
@@ -11172,9 +11190,8 @@ pub const LocalNominalDeclarationIds = struct {
         errdefer ids.deinit();
         var next_id: u32 = 0;
         for (module_env.store.sliceStatements(module_env.all_statements)) |candidate| {
-            const statement = module_env.store.getStatement(candidate);
-            if (statement != .s_nominal_decl) continue;
-            if (!publishesLocalNominal(module_env, candidate, statement.s_nominal_decl.anno)) continue;
+            const statement = module_env.store.statementAs(candidate, .s_nominal_decl) orelse continue;
+            if (!publishesLocalNominal(module_env, candidate, statement.anno)) continue;
             try ids.put(candidate, @fromBackingInt(@intCast(next_id)));
             next_id += 1;
         }
@@ -12713,16 +12730,15 @@ fn publishRetiredExprs(
     for (module_index.node_kinds, 0..) |kind, raw| {
         if (kind != .expr) continue;
         const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw));
-        const data = store.getExpr(expr);
-        if (data != .e_call) continue;
+        const data = store.exprAs(expr, .e_call) orelse continue;
         // Evaluating the callee happens before any argument. A checked
         // error produces neither a callable nor a result type relation.
-        if (Runtime.isError(store, &retired, data.e_call.func)) {
+        if (Runtime.isError(store, &retired, data.func)) {
             retired.set(raw);
             rejected_binding = true;
             continue;
         }
-        const target = directProcedureTargetForCall(refs, data.e_call.func, local_module, bindings, templates, imports, available_modules, relation_modules) orelse continue;
+        const target = directProcedureTargetForCall(refs, data.func, local_module, bindings, templates, imports, available_modules, relation_modules) orelse continue;
         try direct_targets.append(allocator, .{ .call = expr, .target = target });
     }
 
@@ -12744,9 +12760,9 @@ fn publishRetiredExprs(
                 try work.append(allocator, expr);
                 continue;
             }
-            const data = store.getExpr(expr);
-            if (data == .e_call) {
-                const entry = try dependents.getOrPut(@backingInt(data.e_call.func));
+            const data = store.exprAs(expr, .e_call);
+            if (data != null) {
+                const entry = try dependents.getOrPut(@backingInt(data.?.func));
                 if (!entry.found_existing) entry.value_ptr.* = .empty;
                 try entry.value_ptr.append(allocator, expr);
             }
@@ -13509,7 +13525,7 @@ fn patternIsBinder(module: TypedCIR.Module, pattern: CIR.Pattern.Idx) bool {
 
 /// Whether a pattern introduces a name: an assign, var-assign, or as pattern.
 fn patternBindsName(env: *const ModuleEnv, pattern: CIR.Pattern.Idx) bool {
-    return switch (env.store.getPattern(pattern)) {
+    return switch (env.store.patternKind(pattern)) {
         .assign, .var_assign, .as => true,
         .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .num_from_numeral_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .str_interpolation, .underscore, .runtime_error, .deferred_import_ref => false,
     };
@@ -18052,7 +18068,7 @@ const CheckedTemplateRefCollector = struct {
         expr_id: CIR.Expr.Idx,
     ) Allocator.Error!void {
         if (self.diagnostics.isSet(@backingInt(expr_id))) return;
-        const call = self.bodies.exprData(expr_id).call;
+        const call = self.bodies.exprDataOf(expr_id, .call);
         const start: u32 = @intCast(self.specialization_types.items.len);
         try self.specialization_types.ensureUnusedCapacity(self.allocator, call.args.len);
         for (call.args) |arg| {
@@ -18456,25 +18472,30 @@ const CheckedTemplateRefCollector = struct {
 
         const bodies = &self.bodies;
         const children = self.beginChildren();
-        switch (bodies.patternData(pattern_id)) {
-            .as => |as| try self.pushChild(.{ .pattern = as.pattern }),
-            .applied_tag => |tag| {
+        switch (bodies.patternDataKind(pattern_id)) {
+            .as => try self.pushChild(.{ .pattern = bodies.patternDataOf(pattern_id, .as).pattern }),
+            .applied_tag => {
+                const tag = bodies.patternDataOf(pattern_id, .applied_tag);
                 for (tag.args) |arg| try self.pushChild(.{ .pattern = arg });
             },
-            .nominal => |nominal| try self.pushChild(.{ .pattern = nominal.backing_pattern }),
-            .record_destructure => |destructs| {
+            .nominal => try self.pushChild(.{ .pattern = bodies.patternDataOf(pattern_id, .nominal).backing_pattern }),
+            .record_destructure => {
+                const destructs = bodies.patternDataOf(pattern_id, .record_destructure);
                 for (destructs) |destruct| try self.pushChild(.{ .pattern = bodies.recordDestructPattern(destruct) });
             },
-            .list => |list| {
+            .list => {
+                const list = bodies.patternDataOf(pattern_id, .list);
                 for (list.patterns) |child| try self.pushChild(.{ .pattern = child });
                 if (list.rest) |rest| {
                     if (rest.pattern) |child| try self.pushChild(.{ .pattern = child });
                 }
             },
-            .tuple => |items| {
+            .tuple => {
+                const items = bodies.patternDataOf(pattern_id, .tuple);
                 for (items) |child| try self.pushChild(.{ .pattern = child });
             },
-            .str_interpolation => |str| {
+            .str_interpolation => {
+                const str = bodies.patternDataOf(pattern_id, .str_interpolation);
                 var offset: u32 = 0;
                 while (offset < str.steps.span.len) : (offset += 1) {
                     if (bodies.strPatternStep(str.steps, offset).capture) |capture| try self.pushChild(.{ .pattern = capture });
@@ -19742,7 +19763,7 @@ const NestedProcSiteBuilder = struct {
                 try self.pushExpr(if_.final_else, owner);
             },
             .call => |call| {
-                if (bodies.exprData(call.func) == .lookup_local) try self.callee_lookups.put(self.allocator, call.func, {});
+                if (bodies.exprDataKind(call.func) == .lookup_local) try self.callee_lookups.put(self.allocator, call.func, {});
                 try self.pushExpr(call.func, owner);
                 for (call.args) |arg| try self.pushExpr(arg, owner);
             },
@@ -20726,7 +20747,7 @@ pub const PlatformTypeInputs = struct {
             const alias_start: u32 = @intCast(aliases.items.len);
             const required_type = env.requires_types.items()[declaration.requires_idx];
             for (env.for_clause_aliases.sliceRange(required_type.type_aliases)) |alias| {
-                const anno = env.store.getStatement(alias.alias_stmt_idx).s_alias_decl.anno;
+                const anno = env.store.statementView(alias.alias_stmt_idx).s_alias_decl.get(.anno);
                 const identity = checked_types.rootForSourceVar(module, ModuleEnv.varFrom(anno)) orelse
                     checkedArtifactInvariant("platform alias identity has no checked root", .{});
                 const alias_root = checked_types.rootForSourceVar(module, ModuleEnv.varFrom(alias.alias_stmt_idx)) orelse
@@ -22045,7 +22066,7 @@ fn publishLiteralConversionRoots(
         }
         const node = literal.node_idx;
         const literal_node: LiteralNode = switch (bodies.index().nodeKind(node)) {
-            .expr => switch (bodies.exprData(@fromBackingInt(@intCast(node)))) {
+            .expr => switch (bodies.exprDataKind(@fromBackingInt(@intCast(node)))) {
                 .numeral => .{ .expr = @fromBackingInt(@intCast(node)) },
                 .str => if (bodies.quoteIsCustom(node)) .{ .expr = @fromBackingInt(@intCast(node)) } else continue,
                 // Diagnostic recovery retired the conversion.
@@ -22096,7 +22117,7 @@ fn publishLiteralConversionRoots(
             .pattern, .statement, .unreached => continue,
         }
         const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(node));
-        if (bodies.exprData(expr) != .interpolation) continue;
+        if (bodies.exprDataKind(expr) != .interpolation) continue;
         // The builtin `Str` concatenates its parts and rejects no segments.
         if (bodies.interpolationIsBuiltinStr(expr)) continue;
         if (roots.literalConversionRootForNode(node) != null) checkedArtifactInvariant("interpolation received a second conversion root", .{});
@@ -22503,7 +22524,7 @@ fn publishLiteralArgumentRoots(
             const ty = switch (kind) {
                 .interpolation => blk: {
                     const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(plan.node));
-                    if (bodies.exprData(expr) != .interpolation) checkedArtifactInvariant("a literal conversion plan's expression is not a literal", .{});
+                    if (bodies.exprDataKind(expr) != .interpolation) checkedArtifactInvariant("a literal conversion plan's expression is not a literal", .{});
                     break :blk bodies.interpolationAssemblerType(expr);
                 },
                 .numeral, .quote => bodies.literalConversion(plan.node).ty,
@@ -23195,7 +23216,7 @@ fn publishLiteralArgumentRoots(
                 // nothing converts the literal. Otherwise the variable seals:
                 // the edge converts the literal at the sealed type.
                 const unfixed = !closed and instance.? == .unbound;
-                if (unfixed and store.payload(instantiated) == .flex) {
+                if (unfixed and store.payloadTag(instantiated) == .flex) {
                     try args.append(allocator, .unbound);
                     continue;
                 }
@@ -24295,7 +24316,9 @@ fn copyPairingColumns(comptime T: type, source: T, allocator: Allocator) Allocat
         @memcpy(result, source);
         return result;
     } else if (comptime @typeInfo(T) == .@"struct") {
-        if (comptime @hasDecl(T, "fromBorrowedSlice") and @hasField(T, "length")) {
+        if (comptime @hasDecl(T, "copyForPairing")) {
+            return source.copyForPairing(allocator);
+        } else if (comptime @hasDecl(T, "fromBorrowedSlice") and @hasField(T, "length")) {
             artifact_serialize.assertRelocatablePod(std.meta.Child(T.Slice));
             return T.fromSlice(allocator, source.items());
         } else if (comptime @hasField(T, "items") and @hasField(T, "capacity")) {
@@ -24664,21 +24687,20 @@ pub fn pairCheckedPlatform(
         for (platform.resolved_value_refs.call_direct_targets.items()) |entry| try direct_targets.append(session, entry);
         for (result.resolved_value_refs.records.items()) |record| {
             if (record.ref != .platform_required_checked_error) continue;
-            if (env.store.getExpr(record.expr) != .e_lookup_required) continue;
+            if (env.store.exprKind(record.expr) != .e_lookup_required) continue;
             ResolvedValueRefTable.setRetired(retired, record.expr);
         }
         for ((try platform_analyses.demandIndex()).node_kinds, 0..) |kind, raw| {
             if (kind != .expr) continue;
             const call_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw));
-            const data = env.store.getExpr(call_expr);
-            if (data != .e_call) continue;
-            if (platform.resolved_value_refs.lookupIdByExpr(data.e_call.func) == null) continue;
+            const data = env.store.exprAs(call_expr, .e_call) orelse continue;
+            if (platform.resolved_value_refs.lookupIdByExpr(data.func) == null) continue;
             // The binding supplies the procedure kind that an unpaired
             // requirement cannot classify. Publish the same direct-call
             // decision as a resolved module.
             const target = directProcedureTargetForCall(
                 &result.resolved_value_refs,
-                data.e_call.func,
+                data.func,
                 result.key,
                 &result.top_level_procedure_bindings,
                 &result.callable_eval_templates,
@@ -26188,7 +26210,12 @@ fn valueFormWalk(allocator: Allocator, bodies: *const CheckedBodies, root: CIR.E
                     if (segment_data != .str_segment) return .other;
                 }
             },
-            .empty_list, .zero_argument_tag => {},
+            // A segment outside a string is a file imported as `Str`: a
+            // string literal of that one segment. Segments of a string are
+            // never walked.
+            .str_segment => if (checkedConcreteBuiltinForLiteralTarget(&bodies.types, bodies.exprType(id)) != .str) return .other,
+            // A bytes literal's checked type is always `List(U8)`.
+            .empty_list, .zero_argument_tag, .bytes_literal => {},
             // An empty literal at a record type of optional fields builds
             // each field's slot as missing.
             .empty_record => if (!recordTypeIsClosedAndRequired(&bodies.types, bodies.exprType(id), 0)) return .other,
@@ -26214,7 +26241,7 @@ fn valueFormWalk(allocator: Allocator, bodies: *const CheckedBodies, root: CIR.E
                 if (block.statements.len != 0) return .other;
                 try stack.append(allocator, block.final_expr);
             },
-            .str_segment, .bytes_literal, .lookup_required, .match_, .if_, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return .other,
+            .lookup_required, .match_, .if_, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return .other,
         }
     }
     return if (reads_constants) .reads_constants else .value_form;
@@ -26224,8 +26251,9 @@ fn valueFormWalk(allocator: Allocator, bodies: *const CheckedBodies, root: CIR.E
 /// is anything else.
 fn selectedLookup(env: *const ModuleEnv, expr: CIR.Expr.Idx) ?CIR.Expr.Idx {
     var current = expr;
-    while (true) switch (env.store.getExpr(current)) {
-        .e_block => |block| {
+    while (true) switch (env.store.exprKind(current)) {
+        .e_block => {
+            const block = env.store.exprView(current).e_block.decode();
             if (env.store.sliceStatements(block.stmts).len != 0) return null;
             current = block.final_expr;
         },
@@ -26295,14 +26323,16 @@ const ConstLookupScope = struct {
     /// The constant root `expr` reads when it is a lookup of one, or null.
     fn target(self: *const ConstLookupScope, expr: CIR.Expr.Idx) ?Target {
         const env = self.module.moduleEnvConst();
-        switch (env.store.getExpr(expr)) {
-            .e_lookup_local => |local| return if (self.local_roots.get(local.pattern_idx)) |index| .{ .local = index } else null,
-            .e_lookup_external => |external| {
+        switch (env.store.exprKind(expr)) {
+            .e_lookup_local => return if (self.local_roots.get(env.store.exprView(expr).e_lookup_local.get(.pattern_idx))) |index| .{ .local = index } else null,
+            .e_lookup_external => {
+                const external = env.store.exprView(expr).e_lookup_external.decode();
                 const module_idx = self.module.resolvedImportModule(external.module_idx) orelse return null;
                 const import_artifact = publishImportForModule(self.imports, module_idx) orelse return null;
                 return importedConstRoot(&import_artifact.view, @fromBackingInt(@intCast(external.target_node_idx)));
             },
-            .e_lookup_associated_resolved => |resolved| {
+            .e_lookup_associated_resolved => {
+                const resolved = env.store.exprView(expr).e_lookup_associated_resolved.decode();
                 if (resolved.module_identity == env.selfModuleIdentity()) {
                     const pattern = self.module.def(resolved.target_def_idx).pattern.idx;
                     return if (self.local_roots.get(pattern)) |index| .{ .local = index } else null;
@@ -26415,16 +26445,16 @@ pub fn appendValueFormConstReads(allocator: Allocator, bodies: *const CheckedBod
     stack.clearRetainingCapacity();
     try stack.append(allocator, expr);
     while (stack.pop()) |id| {
-        switch (bodies.exprData(id)) {
+        switch (bodies.exprDataKind(id)) {
             .lookup_local, .lookup_external => try out.append(allocator, id),
-            .list => |items| try stack.appendSlice(allocator, items),
-            .tuple => |items| try stack.appendSlice(allocator, items),
-            .tag => |tag| try stack.appendSlice(allocator, tag.args),
-            .record => |record| for (record.fields) |field| try stack.append(allocator, bodies.recordFieldValue(field)),
-            .nominal => |nominal| try stack.append(allocator, nominal.backing_expr),
-            .block => |block| try stack.append(allocator, block.final_expr),
-            .numeral, .str, .empty_list, .zero_argument_tag, .empty_record => {},
-            .str_segment, .bytes_literal, .lookup_required, .match_, .if_, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => checkedArtifactInvariant("a value-form expression has a part that is not in value form", .{}),
+            .list => try stack.appendSlice(allocator, bodies.exprDataOf(id, .list)),
+            .tuple => try stack.appendSlice(allocator, bodies.exprDataOf(id, .tuple)),
+            .tag => try stack.appendSlice(allocator, bodies.exprDataOf(id, .tag).args),
+            .record => for (bodies.exprDataOf(id, .record).fields) |field| try stack.append(allocator, bodies.recordFieldValue(field)),
+            .nominal => try stack.append(allocator, bodies.exprDataOf(id, .nominal).backing_expr),
+            .block => try stack.append(allocator, bodies.exprDataOf(id, .block).final_expr),
+            .numeral, .str, .str_segment, .bytes_literal, .empty_list, .zero_argument_tag, .empty_record => {},
+            .lookup_required, .match_, .if_, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => checkedArtifactInvariant("a value-form expression has a part that is not in value form", .{}),
         }
     }
 }
@@ -26450,9 +26480,9 @@ pub fn valueFormValueExpr(bodies: *const CheckedBodies, expr: CIR.Expr.Idx) CIR.
 /// lookup or method call not yet resolved) reach the reader only once
 /// publication resolves them.
 fn valueFormCandidate(bodies: *const CheckedBodies, id: CIR.Expr.Idx) ?checked_bodies_mod.ExprData {
-    switch (bodies.env.store.getExpr(id)) {
-        .e_num, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external, .e_block, .e_lookup_local, .e_lookup_external, .e_lookup_associated_resolved => {},
-        .e_frac_f32, .e_frac_f64, .e_bytes_literal, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
+    switch (bodies.env.store.exprKind(id)) {
+        .e_num, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str, .e_str_segment, .e_bytes_literal, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external, .e_block, .e_lookup_local, .e_lookup_external, .e_lookup_associated_resolved => {},
+        .e_frac_f32, .e_frac_f64, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
     }
     if (bodies.exprIsRetired(id)) return null;
     return bodies.exprData(id);
@@ -26675,8 +26705,8 @@ pub const CompileTimeRootTable = struct {
             if (kind == .hoisted_constant and selected.body == .expr and !selected.top_level and !selected.read_by_root) {
                 const lookup = selectedLookup(module_env, selected.expr);
                 if (lookup) |read| {
-                    const reads_binding = switch (module_env.store.getExpr(read)) {
-                        .e_lookup_local => |local| selected_bindings.contains(local.pattern_idx),
+                    const reads_binding = switch (module_env.store.exprKind(read)) {
+                        .e_lookup_local => selected_bindings.contains(module_env.store.exprView(read).e_lookup_local.get(.pattern_idx)),
                         .e_num, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external, .e_block, .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => false,
                     };
                     if (reads_binding) continue;
@@ -26718,8 +26748,7 @@ pub const CompileTimeRootTable = struct {
         }
 
         for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
-            const stmt = module_env.store.getStatement(statement_idx);
-            if (stmt != .s_expect) continue;
+            const stmt = module_env.store.statementAs(statement_idx, .s_expect) orelse continue;
             try collectExpectRoot(
                 &roots,
                 allocator,
@@ -26727,7 +26756,7 @@ pub const CompileTimeRootTable = struct {
                 checked_types,
                 module_index,
                 statement_idx,
-                stmt.s_expect.body,
+                stmt.body,
             );
         }
 
@@ -27202,7 +27231,7 @@ const TypeVarMentions = struct {
     }
 
     fn expandRowExtension(checked_types: *const CheckedTypeStore, ext: CheckedTypeId, flags: TypeVarMentionFlags, sink: anytype) Allocator.Error!void {
-        switch (checked_types.payload(ext)) {
+        switch (checked_types.payloadTag(ext)) {
             .flex, .rigid => {
                 var ext_flags = flags;
                 ext_flags.row_extension = true;
@@ -28840,33 +28869,39 @@ const TemplateDemandPass = struct {
     fn visitPattern(self: *TemplateDemandPass, id: CIR.Pattern.Idx, role: PatternRole) Allocator.Error!void {
         const bodies = &self.bodies;
         const pattern_ty = bodies.patternType(id);
-        switch (bodies.patternData(id)) {
+        switch (bodies.patternDataKind(id)) {
             .assign, .underscore => switch (role) {
                 .parameter => try self.raiseFunctionMentions(pattern_ty),
                 .binding => try self.raiseMentions(pattern_ty, .layout),
             },
-            .as => |as| {
+            .as => {
+                const as = bodies.patternDataOf(id, .as);
                 try self.raiseMentions(pattern_ty, .layout);
                 try self.pushPattern(as.pattern, .binding);
             },
-            .applied_tag => |tag| {
+            .applied_tag => {
+                const tag = bodies.patternDataOf(id, .applied_tag);
                 try self.raiseMentions(pattern_ty, .layout);
                 for (tag.args) |arg| try self.pushPattern(arg, .binding);
             },
-            .nominal => |nominal| {
+            .nominal => {
+                const nominal = bodies.patternDataOf(id, .nominal);
                 try self.raiseMentions(pattern_ty, .layout);
                 try self.pushPattern(nominal.backing_pattern, .binding);
             },
-            .record_destructure => |destructs| {
+            .record_destructure => {
+                const destructs = bodies.patternDataOf(id, .record_destructure);
                 try self.raiseMentions(pattern_ty, .layout);
                 for (destructs) |destruct| try self.pushPattern(bodies.recordDestructPattern(destruct), .binding);
             },
-            .list => |list| {
+            .list => {
+                const list = bodies.patternDataOf(id, .list);
                 try self.raiseMentions(pattern_ty, .layout);
                 for (list.patterns) |child| try self.pushPattern(child, .binding);
                 if (list.rest) |rest| if (rest.pattern) |child| try self.pushPattern(child, .binding);
             },
-            .tuple => |items| {
+            .tuple => {
+                const items = bodies.patternDataOf(id, .tuple);
                 try self.raiseMentions(pattern_ty, .layout);
                 for (items) |child| try self.pushPattern(child, .binding);
             },
@@ -28874,7 +28909,8 @@ const TemplateDemandPass = struct {
                 try self.raiseMentions(pattern_ty, .full);
                 if (bodies.literalPatternGuard(id)) |guard| try self.visitLiteralPatternGuard(guard);
             },
-            .str_interpolation => |str| {
+            .str_interpolation => {
+                const str = bodies.patternDataOf(id, .str_interpolation);
                 try self.raiseMentions(pattern_ty, .full);
                 var offset: u32 = 0;
                 while (offset < str.steps.span.len) : (offset += 1) {
@@ -29691,10 +29727,11 @@ const CheckedTreeOwners = struct {
         while (self.pending.pop()) |node| switch (node) {
             .expr => |expr_id| {
                 if (!self.enter(@backingInt(expr_id), claimant, function_bodies)) continue;
-                switch (bodies.exprData(expr_id)) {
-                    .str => |segments| if (!bodies.quoteIsCustom(@backingInt(expr_id))) for (segments) |segment| try self.pending.append(allocator, .{ .expr = segment }),
-                    .list, .tuple => |items| for (items) |item| try self.pending.append(allocator, .{ .expr = item }),
-                    .match_ => |match| {
+                switch (bodies.exprDataKind(expr_id)) {
+                    .str => if (!bodies.quoteIsCustom(@backingInt(expr_id))) for (bodies.exprDataOf(expr_id, .str)) |segment| try self.pending.append(allocator, .{ .expr = segment }),
+                    inline .list, .tuple => |kind| for (bodies.exprDataOf(expr_id, kind)) |item| try self.pending.append(allocator, .{ .expr = item }),
+                    .match_ => {
+                        const match = bodies.exprDataOf(expr_id, .match_);
                         try self.pending.append(allocator, .{ .expr = match.cond });
                         for (match.branches) |branch_idx| {
                             const branch = bodies.matchBranch(branch_idx);
@@ -29703,7 +29740,8 @@ const CheckedTreeOwners = struct {
                             try self.pending.append(allocator, .{ .expr = branch.value });
                         }
                     },
-                    .if_ => |if_| {
+                    .if_ => {
+                        const if_ = bodies.exprDataOf(expr_id, .if_);
                         for (if_.branches) |branch_idx| {
                             const branch = bodies.ifBranch(branch_idx);
                             try self.pending.append(allocator, .{ .expr = branch.cond });
@@ -29711,57 +29749,68 @@ const CheckedTreeOwners = struct {
                         }
                         try self.pending.append(allocator, .{ .expr = if_.final_else });
                     },
-                    .call => |call| {
+                    .call => {
+                        const call = bodies.exprDataOf(expr_id, .call);
                         try self.pending.append(allocator, .{ .expr = call.func });
                         for (call.args) |arg| try self.pending.append(allocator, .{ .expr = arg });
                     },
-                    .record => |record| {
+                    .record => {
+                        const record = bodies.exprDataOf(expr_id, .record);
                         if (record.ext) |ext| try self.pending.append(allocator, .{ .expr = ext });
                         for (record.fields) |field| try self.pending.append(allocator, .{ .expr = bodies.recordFieldValue(field) });
                     },
-                    .block => |block| {
+                    .block => {
+                        const block = bodies.exprDataOf(expr_id, .block);
                         for (block.statements) |statement| try self.pending.append(allocator, .{ .statement = statement });
                         try self.pending.append(allocator, .{ .expr = block.final_expr });
                     },
-                    .tag => |tag| for (tag.args) |arg| try self.pending.append(allocator, .{ .expr = arg }),
-                    .nominal => |nominal| try self.pending.append(allocator, .{ .expr = nominal.backing_expr }),
-                    .closure => |closure| try self.pending.append(allocator, .{ .expr = closure.lambda }),
-                    .lambda => |lambda| switch (function_bodies) {
-                        .enter => {
-                            if (self.patterns) for (lambda.args) |arg| try self.pending.append(allocator, .{ .pattern = arg });
-                            try self.pending.append(allocator, .{ .expr = lambda.body });
-                        },
-                        .skip => {},
+                    .tag => for (bodies.exprDataOf(expr_id, .tag).args) |arg| try self.pending.append(allocator, .{ .expr = arg }),
+                    .nominal => try self.pending.append(allocator, .{ .expr = bodies.exprDataOf(expr_id, .nominal).backing_expr }),
+                    .closure => try self.pending.append(allocator, .{ .expr = bodies.exprDataOf(expr_id, .closure).lambda }),
+                    .lambda => lambda_blk: {
+                        const lambda = bodies.exprDataOf(expr_id, .lambda);
+                        break :lambda_blk switch (function_bodies) {
+                            .enter => {
+                                if (self.patterns) for (lambda.args) |arg| try self.pending.append(allocator, .{ .pattern = arg });
+                                try self.pending.append(allocator, .{ .expr = lambda.body });
+                            },
+                            .skip => {},
+                        };
                     },
-                    .binop => |binop| {
+                    .binop => {
+                        const binop = bodies.exprDataOf(expr_id, .binop);
                         try self.pending.append(allocator, .{ .expr = binop.lhs });
                         try self.pending.append(allocator, .{ .expr = binop.rhs });
                     },
-                    .unary_minus, .dbg, .expect => |child| try self.pending.append(allocator, .{ .expr = child }),
-                    .tuple_access => |access| try self.pending.append(allocator, .{ .expr = access.tuple }),
-                    .field_access => |field| try self.pending.append(allocator, .{ .expr = field.receiver }),
-                    .interpolation => |interpolation| {
+                    inline .unary_minus, .dbg, .expect => |kind| try self.pending.append(allocator, .{ .expr = bodies.exprDataOf(expr_id, kind) }),
+                    .tuple_access => try self.pending.append(allocator, .{ .expr = bodies.exprDataOf(expr_id, .tuple_access).tuple }),
+                    .field_access => try self.pending.append(allocator, .{ .expr = bodies.exprDataOf(expr_id, .field_access).receiver }),
+                    .interpolation => {
+                        const interpolation = bodies.exprDataOf(expr_id, .interpolation);
                         try self.pending.append(allocator, .{ .expr = interpolation.first });
                         for (interpolation.parts) |part| try self.pending.append(allocator, .{ .expr = part });
                     },
-                    .structural_eq => |eq| {
+                    .structural_eq => {
+                        const eq = bodies.exprDataOf(expr_id, .structural_eq);
                         try self.pending.append(allocator, .{ .expr = eq.lhs });
                         try self.pending.append(allocator, .{ .expr = eq.rhs });
                     },
-                    .structural_hash => |h| {
+                    .structural_hash => {
+                        const h = bodies.exprDataOf(expr_id, .structural_hash);
                         try self.pending.append(allocator, .{ .expr = h.value });
                         try self.pending.append(allocator, .{ .expr = h.hasher });
                     },
-                    .expect_err => |expect_err| try self.pending.append(allocator, .{ .expr = expect_err.expr }),
-                    .return_ => |ret| try self.pending.append(allocator, .{ .expr = ret.expr }),
-                    .for_ => |for_| {
+                    .expect_err => try self.pending.append(allocator, .{ .expr = bodies.exprDataOf(expr_id, .expect_err).expr }),
+                    .return_ => try self.pending.append(allocator, .{ .expr = bodies.exprDataOf(expr_id, .return_).expr }),
+                    .for_ => {
+                        const for_ = bodies.exprDataOf(expr_id, .for_);
                         if (self.patterns) try self.pending.append(allocator, .{ .pattern = for_.pattern });
                         try self.pending.append(allocator, .{ .expr = for_.expr });
                         try self.pending.append(allocator, .{ .expr = for_.body });
                     },
-                    .run_low_level => |run| for (run.args) |arg| try self.pending.append(allocator, .{ .expr = arg }),
-                    .hosted_lambda => |hosted| switch (function_bodies) {
-                        .enter => if (self.patterns) for (hosted.args) |arg| try self.pending.append(allocator, .{ .pattern = arg }),
+                    .run_low_level => for (bodies.exprDataOf(expr_id, .run_low_level).args) |arg| try self.pending.append(allocator, .{ .expr = arg }),
+                    .hosted_lambda => switch (function_bodies) {
+                        .enter => if (self.patterns) for (bodies.exprDataOf(expr_id, .hosted_lambda).args) |arg| try self.pending.append(allocator, .{ .pattern = arg }),
                         .skip => {},
                     },
                     .numeral,
@@ -29825,19 +29874,21 @@ const CheckedTreeOwners = struct {
             },
             .pattern => |pattern_id| {
                 if (!self.enter(@backingInt(pattern_id), claimant, function_bodies)) continue;
-                switch (bodies.patternData(pattern_id)) {
-                    .as => |as| try self.pending.append(allocator, .{ .pattern = as.pattern }),
-                    .applied_tag => |tag| for (tag.args) |arg| try self.pending.append(allocator, .{ .pattern = arg }),
-                    .nominal => |nominal| try self.pending.append(allocator, .{ .pattern = nominal.backing_pattern }),
-                    .record_destructure => |destructs| for (destructs) |destruct| {
+                switch (bodies.patternDataKind(pattern_id)) {
+                    .as => try self.pending.append(allocator, .{ .pattern = bodies.patternDataOf(pattern_id, .as).pattern }),
+                    .applied_tag => for (bodies.patternDataOf(pattern_id, .applied_tag).args) |arg| try self.pending.append(allocator, .{ .pattern = arg }),
+                    .nominal => try self.pending.append(allocator, .{ .pattern = bodies.patternDataOf(pattern_id, .nominal).backing_pattern }),
+                    .record_destructure => for (bodies.patternDataOf(pattern_id, .record_destructure)) |destruct| {
                         try self.pending.append(allocator, .{ .pattern = bodies.recordDestructPattern(destruct) });
                     },
-                    .list => |list| {
+                    .list => {
+                        const list = bodies.patternDataOf(pattern_id, .list);
                         for (list.patterns) |child| try self.pending.append(allocator, .{ .pattern = child });
                         if (list.rest) |rest| if (rest.pattern) |rest_pattern| try self.pending.append(allocator, .{ .pattern = rest_pattern });
                     },
-                    .tuple => |items| for (items) |item| try self.pending.append(allocator, .{ .pattern = item }),
-                    .str_interpolation => |str| {
+                    .tuple => for (bodies.patternDataOf(pattern_id, .tuple)) |item| try self.pending.append(allocator, .{ .pattern = item }),
+                    .str_interpolation => {
+                        const str = bodies.patternDataOf(pattern_id, .str_interpolation);
                         var offset: u32 = 0;
                         while (offset < str.steps.span.len) : (offset += 1) {
                             if (bodies.strPatternStep(str.steps, offset).capture) |capture| try self.pending.append(allocator, .{ .pattern = capture });
@@ -34547,7 +34598,7 @@ pub const CheckedModuleArtifact = struct {
             switch (kind) {
                 .expr => {
                     const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(node));
-                    const expr_failure: ?DispatchEvidenceFailure = switch (checked.exprData(expr)) {
+                    const expr_failure: ?DispatchEvidenceFailure = switch (checked.exprDataKind(expr)) {
                         .dispatch_call, .type_dispatch_call, .method_eq => dispatchPlanFailure(table, checked.dispatchPlan(node), node, true),
                         .interpolation => if (checked.interpolationIsBuiltinStr(expr))
                             null
@@ -34798,8 +34849,8 @@ pub const CheckedModuleArtifact = struct {
                         .method = call.method,
                     };
                 }
-                const callable = self.checked_types.payload(call.callable_ty);
-                if (callable != .function) {
+                const callable_kind = self.checked_types.payloadTag(call.callable_ty);
+                if (callable_kind != .function) {
                     return .{
                         .kind = .iterator_plan_callable_not_function,
                         .index = @intCast(i),
@@ -35516,7 +35567,7 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(closure.interface_capabilities.len > 0);
                 },
                 .checked_error => |expr| {
-                    std.debug.assert(self.bodies().exprData(expr) == .runtime_error);
+                    std.debug.assert(self.bodies().exprDataKind(expr) == .runtime_error);
                     std.debug.assert(closure.checked_procedure_templates.len == 0);
                     std.debug.assert(closure.callable_eval_templates.len == 0);
                 },
@@ -35684,7 +35735,7 @@ pub const CheckedModuleArtifact = struct {
                                 ),
                             }
                         },
-                        .checked_error => |expr| std.debug.assert(self.bodies().exprData(expr) == .runtime_error),
+                        .checked_error => |expr| std.debug.assert(self.bodies().exprDataKind(expr) == .runtime_error),
                         .callable_eval_template => |template| {
                             std.debug.assert(@backingInt(template) < self.callable_eval_templates.templates.items().len);
                         },
@@ -35916,9 +35967,8 @@ pub const ImportedModuleView = struct {
                     .expr, .statement, .required_binding, .hoisted, .literal, .literal_argument => return position,
                 };
                 const env = self.module_env;
-                const pattern = env.store.getPattern(env.store.getDef(def).pattern);
-                if (pattern != .assign) return position;
-                return .{ .constant = .{ .text = env.getIdent(pattern.assign.ident), .shadow = shadowOrdinal(env, def) } };
+                const pattern = env.store.patternAs(env.store.getDef(def).pattern, .assign) orelse return position;
+                return .{ .constant = .{ .text = env.getIdent(pattern.ident), .shadow = shadowOrdinal(env, def) } };
             },
         }
     }
@@ -35952,13 +36002,12 @@ fn shadowOrdinal(env: *const ModuleEnv, def: CIR.Def.Idx) u32 {
     for (env.store.sliceDefs(env.top_level_value_defs)) |candidate| {
         if (candidate == def) return 0;
     }
-    const pattern = env.store.getPattern(env.store.getDef(def).pattern);
-    if (pattern != .assign) checkedArtifactInvariant("a definition canonicalization did not select for its name has no single name", .{});
+    const pattern = env.store.patternAs(env.store.getDef(def).pattern, .assign) orelse checkedArtifactInvariant("a definition canonicalization did not select for its name has no single name", .{});
     var ordinal: u32 = 1;
     for (env.store.sliceDefs(env.global_value_defs)) |other| {
         if (other == def) return ordinal;
-        const other_pattern = env.store.getPattern(env.store.getDef(other).pattern);
-        if (other_pattern == .assign and other_pattern.assign.ident.eql(pattern.assign.ident)) ordinal += 1;
+        const other_pattern = env.store.patternAs(env.store.getDef(other).pattern, .assign);
+        if (other_pattern != null and other_pattern.?.ident.eql(pattern.ident)) ordinal += 1;
     }
     checkedArtifactInvariant("a shadowed definition is no module-global definition", .{});
 }
@@ -36766,8 +36815,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .expr_type_dispatch_call_dispatcher,
             .expr_hosted_lambda,
             => {
-                const expr = store.getExpr(@fromBackingInt(@intCast(raw_node_idx)));
-                switch (expr) {
+                switch (store.getExpr(@fromBackingInt(@intCast(raw_node_idx)))) {
                     inline .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral => |typed| try visitor.typeName(typed.type_name),
                     .e_tag => |tag_expr| try visitor.tag(tag_expr.name),
                     .e_zero_argument_tag => |tag_expr| {
@@ -36866,8 +36914,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .ty_lookup,
             .ty_tag,
             => {
-                const anno = store.getTypeAnno(@fromBackingInt(@intCast(raw_node_idx)));
-                switch (anno) {
+                switch (store.getTypeAnno(@fromBackingInt(@intCast(raw_node_idx)))) {
                     .apply => |apply| try visitor.typeName(apply.name),
                     .lookup => |lookup| try visitor.typeName(lookup.name),
                     .tag => |tag_anno| try visitor.tag(tag_anno.name),
@@ -40856,9 +40903,9 @@ test "sealing decided variables replaces each with its one instantiation" {
     try std.testing.expect(!try store.rootContainsIdentityVariables(sealed));
     const function = checkedFunctionPayload(&store, sealed, "test callable");
     const sealed_record = store.payload(function.args[0]).record;
-    try std.testing.expect(store.payload(sealed_record.fields.get(0).ty) == .empty_tag_union);
-    try std.testing.expect(store.payload(sealed_record.ext) == .empty_record);
-    try std.testing.expect(store.payload(store.payload(function.ret).tag_union.ext) == .empty_tag_union);
+    try std.testing.expect(store.payloadTag(sealed_record.fields.get(0).ty) == .empty_tag_union);
+    try std.testing.expect(store.payloadTag(sealed_record.ext) == .empty_record);
+    try std.testing.expect(store.payloadTag(store.payload(function.ret).tag_union.ext) == .empty_tag_union);
 
     // The sealed type is closed, so sealing it again changes nothing, and
     // the source type keeps its variables.
@@ -41045,7 +41092,7 @@ test "direct dispatch classification follows instantiation clones to the scheme 
         .empty_tag_union,
         => return error.TestUnexpectedResult,
     };
-    try std.testing.expect(store.payload(instantiated_tail) == .flex);
+    try std.testing.expect(store.payloadTag(instantiated_tail) == .flex);
     try std.testing.expectEqual(tail, store.identityOrigin(instantiated_tail));
 
     const template_site = [_]EnclosingDispatchSite{.{ .template_root = template_root, .scope = .root }};
@@ -41208,14 +41255,14 @@ test "pairing type columns borrow frozen storage until written" {
     const new_root = try paired.appendSyntheticPayloadRoot(allocator, .empty_tag_union);
     try std.testing.expectEqual(@as(usize, 2), frozen.roots.items().len);
     try std.testing.expect(paired.roots.items().ptr != frozen.roots.items().ptr);
-    try std.testing.expect(paired.payload(new_root) == .empty_tag_union);
+    try std.testing.expect(paired.payloadTag(new_root) == .empty_tag_union);
     try std.testing.expectEqual(root, (try paired.rootForKey(root_key)).?);
     try attachTestSynthesizedKeys(allocator, &frozen, &names);
     try std.testing.expect((try frozen.rootForKey(try paired.rootKey(new_root))) == null);
     try std.testing.expect(paired.borrowed_columns.contains(.record_field_pool));
     try paired.replaceTypeRootPayload(allocator, root, .err);
-    try std.testing.expect(paired.payload(root) == .err);
-    try std.testing.expect(frozen.payload(root) == .empty_record);
+    try std.testing.expect(paired.payloadTag(root) == .err);
+    try std.testing.expect(frozen.payloadTag(root) == .empty_record);
 }
 
 test "a loaded type store keeps its interned ids and a pairing interns against it without writing" {
@@ -41345,7 +41392,7 @@ test "checked polarity alias publication erases hidden arguments and preserves b
     const alias = store.payload(root).alias;
     try std.testing.expectEqual(@as(usize, 1), alias.args.len);
     const row = store.payload(alias.backing).tag_union;
-    try std.testing.expect(store.payload(row.ext) == .flex);
+    try std.testing.expect(store.payloadTag(row.ext) == .flex);
     const source_key = try canonical_type_keys.fromVar(allocator, module.typeStoreConst(), module.moduleEnvConst(), function.ret);
     try std.testing.expectEqualSlices(u8, &source_key.bytes, &(try store.rootKey(root)).bytes);
 

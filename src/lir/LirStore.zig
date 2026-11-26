@@ -3299,12 +3299,12 @@ fn testTailCallRelocation(existing_join: ?u32) (AppendBodyError || error{ TestEx
     const head = relocated_sites.head;
     try std.testing.expectEqual(100 + loop_id, @backingInt(relocated_sites.loop));
     if (existing_join) |id| {
-        try std.testing.expectEqual(100 + id, @backingInt(coordinator.getCFStmt(appended.root.?).join.id));
+        try std.testing.expectEqual(100 + id, @backingInt(coordinator.getCFStmtImmediate(appended.root.?).join.id));
     }
     try std.testing.expectEqual(appended.relocation.stmt(prefix, second), head);
-    const link = coordinator.getCFStmt(head).assign_call.tail_call.next().?;
+    const link = coordinator.getCFStmtImmediate(head).assign_call.tail_call.next().?;
     try std.testing.expectEqual(appended.relocation.stmt(prefix, first), link);
-    try std.testing.expect(coordinator.getCFStmt(link).assign_call.tail_call.next() == null);
+    try std.testing.expect(coordinator.getCFStmtImmediate(link).assign_call.tail_call.next() == null);
     try std.testing.expect(coordinator.tail_call_builder == null);
 }
 

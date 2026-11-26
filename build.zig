@@ -1614,6 +1614,7 @@ const fixture_target_aliases = [_]FixtureTargetAlias{
     .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/static-lib-platform/targets" },
     .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/field_default_root_order/platform/targets" },
     .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/target_config_not_constant/platform/targets" },
+    .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/target_config_memory_size_invalid/platform/targets" },
     .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/issue_12554_reserved_low_memory/platform/targets" },
     .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/target_config_unknown_field/platform/targets" },
     .{ .reach = .every_target, .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/stack_first_maximum_memory_too_large/platform/targets" },
@@ -2542,6 +2543,7 @@ pub fn build(b: *std.Build) void {
         .build_options = roc_modules.build_options,
         .zig_default_test_runner = b.createModule(.{
             .root_source_file = b.path("vendor/zig_test_runner.zig"),
+            .imports = &.{.{ .name = "stale_borrow_allocator", .module = roc_modules.stale_borrow_allocator }},
         }),
     };
 

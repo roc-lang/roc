@@ -2,7 +2,7 @@ platform ""
     requires {}
     exposes [Outer]
     packages {}
-    provides { "value": value }
+    provides { "roc_value": value }
 
 import Outer
 

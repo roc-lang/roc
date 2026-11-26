@@ -9,6 +9,8 @@ pub const glue = @import("glue.zig");
 pub const GlueArgs = glue.GlueArgs;
 pub const GlueError = glue.GlueError;
 pub const GlueOpt = glue.GlueOpt;
+pub const GeneratorSource = glue.GeneratorSource;
+pub const LoadedGenerator = glue.LoadedGenerator;
 pub const rocGlue = glue.rocGlue;
 pub const buildGlueSpecPluginFile = glue.buildGlueSpecPluginFile;
 

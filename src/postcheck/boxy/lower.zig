@@ -685,7 +685,7 @@ pub const Worker = struct {
 
     /// The bytes of the worker's procedure identity.
     pub fn identityBytes(self: *const Worker, program: *const Program) [32]u8 {
-        return program.result.store.getProcSpec(self.proc).identity.bytes;
+        return program.result.store.getProcSpecImmediate(self.proc).identity.bytes;
     }
 
     /// The dictionaries a lambda worker captures: every scope's but its own.
@@ -1093,8 +1093,8 @@ pub const Program = struct {
         for (view.view.checked_procedure_templates.dispatch_scopes.items(), 0..) |scope, index| {
             const id: checked.DispatchScopeId = @fromBackingInt(@intCast(index));
             try program.local_scopes.put(allocator, .{ .module = view.index, .expr = scope.checked_expr }, id);
-            switch (bodies.exprData(scope.checked_expr)) {
-                .closure => |closure| try program.local_scopes.put(allocator, .{ .module = view.index, .expr = closure.lambda }, id),
+            switch (bodies.exprDataKind(scope.checked_expr)) {
+                .closure => try program.local_scopes.put(allocator, .{ .module = view.index, .expr = bodies.exprDataOf(scope.checked_expr, .closure).lambda }, id),
                 .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
             }
         }
@@ -1127,8 +1127,9 @@ pub const Program = struct {
                     try program.local_proc_bindings.put(allocator, .{ .module = view.index, .binder = local.binder }, .{ .binder = local.binder, .expr = local.expr, .dispatch_scope = local.dispatch_scope });
                     const binding: checked.LocalProcedureBinding = .{ .binder = local.binder, .expr = local.expr, .dispatch_scope = local.dispatch_scope };
                     try program.local_method_bindings.put(allocator, .{ .module = view.index, .expr = local.expr }, binding);
-                    switch (bodies.exprData(local.expr)) {
-                        .closure => |closure| {
+                    switch (bodies.exprDataKind(local.expr)) {
+                        .closure => {
+                            const closure = bodies.exprDataOf(local.expr, .closure);
                             try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {});
                             try program.local_method_bindings.put(allocator, .{ .module = view.index, .expr = closure.lambda }, binding);
                         },
@@ -1147,8 +1148,8 @@ pub const Program = struct {
             };
             try program.local_procs.put(allocator, .{ .module = view.index, .expr = local.expr }, {});
             try program.local_proc_bindings.put(allocator, .{ .module = view.index, .binder = local.binder }, local);
-            switch (bodies.exprData(local.expr)) {
-                .closure => |closure| try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {}),
+            switch (bodies.exprDataKind(local.expr)) {
+                .closure => try program.local_procs.put(allocator, .{ .module = view.index, .expr = bodies.exprDataOf(local.expr, .closure).lambda }, {}),
                 .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
             }
         }
@@ -1382,8 +1383,8 @@ pub const Program = struct {
         const view = self.module(module_index);
         const site = view.view.nested_proc_sites.sites.items()[site_index];
         const site_expr = site.checked_expr.get() orelse invariant("a lambda's site has no checked expression");
-        return switch (view.bodies().exprData(site_expr)) {
-            .closure => |closure| closure.lambda,
+        return switch (view.bodies().exprDataKind(site_expr)) {
+            .closure => view.bodies().exprDataOf(site_expr, .closure).lambda,
             .lambda => site_expr,
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a lambda's site is not a lambda or closure"),
         };
@@ -1949,10 +1950,12 @@ pub const Program = struct {
         return try self.listIntTemplateWorker(module_index, template_id, item);
     }
 
-    /// The worker of a procedure template as the scope of the lambdas it
-    /// contains, lowered only when something calls the template itself. The
-    /// owner of a closure that compile-time evaluation stored is such a
-    /// scope: its body ran at compile time.
+    /// The worker of a procedure template as a scope: of the lambdas it
+    /// contains, or of a literal chain frame converting a literal there. It
+    /// is lowered only when something calls the template itself or a type
+    /// table names it (`demandBody`). The owner of a closure that
+    /// compile-time evaluation stored is such a scope: its body ran at
+    /// compile time.
     pub fn templateScope(self: *Program, module_index: ModuleIndex, template_id: checked_names.CheckedProcedureTemplateId) Allocator.Error!WorkerId {
         const key: WorkerKey = .{ .template = .{ .module = module_index, .template = template_id } };
         if (self.worker_ids.get(key)) |existing| return existing;
@@ -2421,6 +2424,27 @@ pub const Program = struct {
             if (exported.const_ref.template == const_ref.template) return;
         }
         invariant("a lowering read a constant of another module that the module does not expose");
+    }
+
+    /// `templateScope` of the template `ref` names.
+    pub fn templateRefScope(self: *Program, ref: checked_names.ProcedureTemplateRef) Allocator.Error!WorkerId {
+        const view = self.moduleByKey(.{ .bytes = ref.artifact.bytes });
+        return try self.templateScope(view.index, ref.template);
+    }
+
+    /// Queue the body of worker `id`, which a type table names, when only
+    /// its scope was reached so far: a table is filled from the needs its
+    /// worker's lowering declares.
+    pub fn demandBody(self: *Program, id: WorkerId) Allocator.Error!void {
+        const target = self.worker(id);
+        if (target.queued or target.imported) return;
+        switch (target.key) {
+            .template => |template| switch (template.binding) {
+                .generic => _ = try self.templateWorker(template.module, template.template),
+                .list_int => |item| _ = try self.listIntTemplateWorker(template.module, template.template, item),
+            },
+            .adapter, .default, .lambda, .method_entry, .literal_thunk, .root_slot, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .callable_eval_entry, .convert => {},
+        }
     }
 
     /// `templateScopeWorker` of the template `ref` names.
@@ -3227,8 +3251,8 @@ pub const Program = struct {
                 const node: can.CIR.Node.Idx = @fromBackingInt(@intCast(declaration.source_statement));
                 if (env.store.nodes.get(node).tag != .statement_nominal_decl) continue;
                 const statement_idx: can.CIR.Statement.Idx = @fromBackingInt(@intCast(declaration.source_statement));
-                const header = switch (env.store.getStatement(statement_idx)) {
-                    .s_nominal_decl => |decl| decl.header,
+                const header = switch (env.store.statementKind(statement_idx)) {
+                    .s_nominal_decl => env.store.statementView(statement_idx).s_nominal_decl.get(.header),
                     .s_decl, .s_var, .s_var_uninitialized, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_alias_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => continue,
                 };
                 if (!env.store.getTypeHeader(header).name.eql(ident)) continue;
@@ -4500,7 +4524,7 @@ pub const Program = struct {
         // exports.
         if (target.imported and target.needs == null) {
             const unit = self.moduleUnit() orelse invariant("an imported worker outside a module unit");
-            const interface = unit.imports.get(self.result.store.getProcSpec(target.proc).identity) orelse
+            const interface = unit.imports.get(self.result.store.getProcSpecImmediate(target.proc).identity) orelse
                 invariant("a type table names a worker of an imported module whose object exports no such worker");
             if (interface.table_needs.len == 0) invariant("an imported worker with inputs exports no needs");
             if (std.debug.runtime_safety and !interface.visible) invariant("a type table names a worker its module's export digest leaves out (`recordExports`)");
@@ -4677,7 +4701,7 @@ fn recordPerfNames(program: *Program) Allocator.Error!void {
     var symbol: [LIR.ProcIdentity.symbol_name_len]u8 = undefined;
     for (program.workers.items, 0..) |worker, index| {
         const name = try perfNameOf(program, arena.allocator(), names, @fromBackingInt(@intCast(index)));
-        const identity = program.result.store.getProcSpec(worker.proc).identity;
+        const identity = program.result.store.getProcSpecImmediate(worker.proc).identity;
         base.dev_diagnostics.notePerfName(identity.writeSymbolName(&symbol), name);
     }
 }
@@ -5024,13 +5048,13 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     }
     if (program.moduleUnit() != null and !input.compile_time) {
         for (program.workers.items) |worker| {
-            if (worker.imported or !program.result.store.getProcSpec(worker.proc).exported) continue;
+            if (worker.imported or !program.result.store.getProcSpecImmediate(worker.proc).exported) continue;
             // An importer fills the worker's tables from its needs.
             if (worker.needs) |needs| {
                 const result_allocator = program.result.store.allocator;
                 const bytes = try StoredFn.encodeNeeds(result_allocator, program, needs);
                 errdefer result_allocator.free(bytes);
-                try program.result.boxy_table_needs.put(result_allocator, program.result.store.getProcSpec(worker.proc).identity, bytes);
+                try program.result.boxy_table_needs.put(result_allocator, program.result.store.getProcSpecImmediate(worker.proc).identity, bytes);
             }
         }
     }
@@ -5306,7 +5330,7 @@ fn recordExports(program: *Program) Allocator.Error!void {
             .template => |key| .some(@backingInt(key.template)),
             .lambda, .method_entry, .default, .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => .none,
         };
-        program.result.boxy_exports.putAssumeCapacity(program.result.store.getProcSpec(worker.proc).identity, .{ .template = template, .visible = is_visible });
+        program.result.boxy_exports.putAssumeCapacity(program.result.store.getProcSpecImmediate(worker.proc).identity, .{ .template = template, .visible = is_visible });
     }
 }
 

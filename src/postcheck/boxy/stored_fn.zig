@@ -392,7 +392,7 @@ pub const Retained = struct {
         const program = self.program;
         program.result = result.*;
         defer result.* = program.result;
-        const worker_id = self.workers.get(result.store.getProcSpec(proc).identity) orelse
+        const worker_id = self.workers.get(result.store.getProcSpecImmediate(proc).identity) orelse
             invariant("a stored function value's code is no worker of its program");
         return try self.describeCapture(allocator, program.moduleByKey(store_module).index, try captureShape(program, worker_id), .{ .local = worker_id }, capture);
     }
@@ -1059,7 +1059,7 @@ pub fn retain(allocator: Allocator, program: *Program) Allocator.Error!*Retained
     retained.* = .{ .allocator = allocator, .program = program };
     errdefer retained.workers.deinit(allocator);
     for (program.workers.items, 0..) |worker, index| {
-        try retained.workers.put(allocator, program.result.store.getProcSpec(worker.proc).identity, @fromBackingInt(@intCast(index)));
+        try retained.workers.put(allocator, program.result.store.getProcSpecImmediate(worker.proc).identity, @fromBackingInt(@intCast(index)));
     }
     return retained;
 }
@@ -2432,7 +2432,7 @@ fn captureSerializationScratchCase(allocator: Allocator) (Allocator.Error || err
     const program = test_program.program;
     const module = try program.modules.add(&test_program.view(9));
     const worker_id = try program.crashDictionaryWorker(module, .checked_error);
-    const identity = program.result.store.getProcSpec(program.worker(worker_id).proc).identity;
+    const identity = program.result.store.getProcSpecImmediate(program.worker(worker_id).proc).identity;
     var retained = Retained{ .allocator = allocator, .program = program };
     defer retained.workers.deinit(setup);
     try retained.workers.put(setup, identity, worker_id);

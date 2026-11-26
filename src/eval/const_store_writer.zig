@@ -742,7 +742,7 @@ pub const Writer = struct {
     fn partListLen(self: *const Writer, part: Part) usize {
         return switch (part) {
             .runtime => |value| @as(*const RocList, @ptrCast(@alignCast(value.ptr))).len(),
-            .checked => |expr| self.checkedListItems(expr).len,
+            .checked => |expr| self.checkedListLen(expr),
             .stored => |stored| @intCast(storedListItems(stored).len()),
         };
     }
@@ -753,7 +753,7 @@ pub const Writer = struct {
     fn partListCapacity(self: *const Writer, part: Part) u64 {
         return switch (part) {
             .runtime => |value| listCapacity(value),
-            .checked => |expr| self.checkedListItems(expr).len,
+            .checked => |expr| self.checkedListLen(expr),
             // A read of a constant is the constant's value, capacity
             // included.
             .stored => |stored| storedList(stored).capacity,
@@ -985,7 +985,20 @@ pub const Writer = struct {
             // A literal has no capacity beyond its bytes (design.md "Static
             // Lists And Strings Keep Their Capacity").
             .checked => |expr| blk: {
-                const text = try self.checkedStrText(expr);
+                const bodies = &self.checkedValues().bodies;
+                const value_expr = checked.valueFormValueExpr(bodies, expr);
+                // A file imported as `Str` is one segment on its own.
+                const segments: []const CIR.Expr.Idx = if (bodies.exprDataKind(value_expr) == .str_segment)
+                    @as(*const [1]CIR.Expr.Idx, &value_expr)
+                else
+                    checkedStrSegments(bodies, expr);
+                // One segment's bytes are a literal of the module's string
+                // literal store, which the store borrows.
+                if (segments.len == 1) {
+                    const text = checkedSegmentText(bodies, segments[0]);
+                    break :blk .{ .str = .{ .bytes = try self.store.addBorrowedBlobData(text), .capacity = text.len } };
+                }
+                const text = try self.checkedStrText(segments);
                 break :blk .{ .str = .{ .bytes = try self.storeBytes(text), .capacity = text.len } };
             },
             // A read of a constant is the constant's value, capacity
@@ -1042,22 +1055,23 @@ pub const Writer = struct {
     fn checkedNumeralBytes(self: *Writer, target: exact_numeral.Target, expr: CIR.Expr.Idx) Allocator.Error![16]u8 {
         const bodies = &self.checkedValues().bodies;
         const value_expr = checked.valueFormValueExpr(bodies, expr);
-        if (bodies.exprData(value_expr) != .numeral) writerInvariant("a value-form scalar is not a numeral");
+        if (bodies.exprDataKind(value_expr) != .numeral) writerInvariant("a value-form scalar is not a numeral");
         const exact = bodies.env.exactNumeral(bodies.numeralLiteral(@backingInt(value_expr)));
         return (try exact_numeral.encodeBits(self.allocator, exact, target, builtin.cpu.arch.endian())) orelse
             writerInvariant("a value-form numeral does not fit its type");
     }
 
-    /// A value-form string's bytes: its segments in order.
-    fn checkedStrText(self: *Writer, expr: CIR.Expr.Idx) Allocator.Error![]const u8 {
+    /// A value-form string's bytes: `segments` in order.
+    fn checkedStrText(self: *Writer, segments: []const CIR.Expr.Idx) Allocator.Error![]const u8 {
         const bodies = &self.checkedValues().bodies;
         self.checked_text.clearRetainingCapacity();
-        for (checkedStrSegments(bodies, expr)) |segment| {
-            const data = bodies.exprData(segment);
-            if (data != .str_segment) writerInvariant("a value-form string's part is not a literal segment");
-            try self.checked_text.appendSlice(self.allocator, bodies.text(data.str_segment));
-        }
+        for (segments) |segment| try self.checked_text.appendSlice(self.allocator, checkedSegmentText(bodies, segment));
         return self.checked_text.items;
+    }
+
+    fn checkedSegmentText(bodies: *const checked.CheckedBodies, segment: CIR.Expr.Idx) []const u8 {
+        if (bodies.exprDataKind(segment) != .str_segment) writerInvariant("a value-form string's part is not a literal segment");
+        return bodies.text(bodies.exprDataOf(segment, .str_segment));
     }
 
     /// The items of a value-form list.
@@ -1067,6 +1081,22 @@ pub const Writer = struct {
         if (data == .empty_list) return &.{};
         if (data != .list) writerInvariant("a value-form list is not a list literal");
         return data.list;
+    }
+
+    /// The bytes of value-form list `expr` when it is a bytes literal,
+    /// borrowed from the module's string literal store, whose bytes are the
+    /// packed items of a list of `U8`.
+    fn checkedListBytes(self: *const Writer, expr: CIR.Expr.Idx) ?[]const u8 {
+        const bodies = &self.checkedValues().bodies;
+        const value_expr = checked.valueFormValueExpr(bodies, expr);
+        if (bodies.exprDataKind(value_expr) != .bytes_literal) return null;
+        return bodies.text(bodies.exprDataOf(value_expr, .bytes_literal));
+    }
+
+    /// How many items value-form list `expr` has.
+    fn checkedListLen(self: *const Writer, expr: CIR.Expr.Idx) usize {
+        if (self.checkedListBytes(expr)) |bytes| return bytes.len;
+        return self.checkedListItems(expr).len;
     }
 
     /// The part of a value-form value a named plan's backing stores: a
@@ -1370,7 +1400,7 @@ pub const Writer = struct {
         if (!self.checked_reads_constants) return part;
         const values = self.checkedValues();
         const value_expr = checked.valueFormValueExpr(&values.bodies, expr);
-        switch (values.bodies.exprData(value_expr)) {
+        switch (values.bodies.exprDataKind(value_expr)) {
             .lookup_local, .lookup_external => {},
             .numeral, .str, .str_segment, .bytes_literal, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return part,
         }
@@ -1676,6 +1706,15 @@ pub const Writer = struct {
         const roc_list: *const RocList = switch (part) {
             .runtime => |value| @ptrCast(@alignCast(value.ptr)),
             .checked => |expr| {
+                if (self.checkedListBytes(expr)) |bytes| {
+                    if (builtin.mode == .debug) std.debug.assert(element.byteWidth() == 1);
+                    self.store.fill(target_node, .{ .list = .{ .items = .{ .packed_bytes = .{
+                        .bytes = try self.store.addBorrowedBlobData(bytes),
+                        .len = try checkedU32(bytes.len),
+                        .element = element,
+                    } }, .capacity = capacity } });
+                    return;
+                }
                 const items = self.checkedListItems(expr);
                 self.store.fill(target_node, .{ .list = .{ .items = .{ .packed_bytes = .{
                     .bytes = try self.checkedPackedBlob(elem_layout, element, items),

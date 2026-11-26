@@ -96,6 +96,45 @@ pub const BoxyValueSchema = postcheck.Boxy.ValueSchema;
 /// The names the modules of one link give their workers and nominal types.
 pub const BoxyModuleNames = postcheck.Boxy.Types.ModuleNames;
 
+/// The host boundary of a `.boxy` platform entrypoint: the layouts its
+/// arguments and result are committed at and the named schemas they reach,
+/// for a caller that runs the entrypoint from unit images without lowering
+/// its program (design.md "Unit-Image Glue Execution").
+pub const BoxyEntrypointBoundary = struct {
+    schema: postcheck.Boxy.EntrypointSchema,
+    runtime_value_schemas: RuntimeValueSchemaStore,
+
+    /// The boundary of the entrypoint `request` asks for, a root of the root
+    /// module of `modules`.
+    pub fn init(allocator: Allocator, modules: CheckedModuleSet, request: checked.RootRequest, target_usize: base.target.TargetUsize) Allocator.Error!BoxyEntrypointBoundary {
+        var schema = try postcheck.Boxy.EntrypointSchema.init(allocator, modules, request, target_usize);
+        const named = schema.named;
+        schema.named = postcheck.SolvedLirLower.RuntimeSchemaStore.init(allocator);
+        return .{ .schema = schema, .runtime_value_schemas = convertRuntimeSchemas(allocator, named) };
+    }
+
+    pub fn deinit(self: *BoxyEntrypointBoundary) void {
+        self.runtime_value_schemas.deinit();
+        self.schema.deinit();
+        self.* = undefined;
+    }
+
+    /// The store every layout of the boundary is committed in.
+    pub fn layouts(self: *const BoxyEntrypointBoundary) *const @import("layout").Store {
+        return self.schema.layouts();
+    }
+
+    /// The layout of each argument, in order.
+    pub fn argLayouts(self: *const BoxyEntrypointBoundary) []const @import("layout").Idx {
+        return self.schema.arg_layouts;
+    }
+
+    /// The layout of the result.
+    pub fn retLayout(self: *const BoxyEntrypointBoundary) @import("layout").Idx {
+        return self.schema.ret_layout;
+    }
+};
+
 /// Resource failure while lowering checked modules to LIR, plus the one
 /// checked input this entrance rejects outright: see
 /// `requireHostedProceduresBound`.
@@ -2413,9 +2452,9 @@ fn finishLoweredOutput(
         try result.boxy_exports.ensureUnusedCapacity(result.store.allocator, @intCast(published_variants.items.len));
         for (published_variants.items) |published| {
             try result.exported_procs.append(result.store.allocator, published.variant);
-            const worker_export = result.boxy_exports.get(result.store.getProcSpec(published.worker).identity) orelse
+            const worker_export = result.boxy_exports.get(result.store.getProcSpecImmediate(published.worker).identity) orelse
                 checkedPipelineInvariant("an exported worker publishing an outcome variant has no export record of its unit");
-            result.boxy_exports.putAssumeCapacity(result.store.getProcSpec(published.variant).identity, .{ .visible = worker_export.visible });
+            result.boxy_exports.putAssumeCapacity(result.store.getProcSpecImmediate(published.variant).identity, .{ .visible = worker_export.visible });
         }
     }
     if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);
@@ -3001,8 +3040,8 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
         if (key.export_name.get()) |export_name| return info.names.exportNameText(export_name);
         const def_idx = key.source_def_idx.get() orelse return "?";
         const def = info.env.store.getDef(@fromBackingInt(@intCast(def_idx)));
-        return switch (info.env.store.getPattern(def.pattern)) {
-            inline .assign, .var_assign => |assign| info.env.getIdent(assign.ident),
+        return switch (info.env.store.patternKind(def.pattern)) {
+            inline .assign, .var_assign => |kind| info.env.getIdent(@field(info.env.store.patternView(def.pattern), @tagName(kind)).get(.ident)),
             .as,
             .applied_tag,
             .nominal,

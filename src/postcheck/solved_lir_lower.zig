@@ -1582,7 +1582,7 @@ const Lowerer = struct {
         for (self.fn_entries.items, self.fn_reachable.items, 0..) |entry, is_reached, index| {
             if (!is_reached) continue;
             const proc = entry.proc.get() orelse Common.invariant("reachable function had no procedure");
-            if (self.result.store.getProcSpec(proc).code_key != null) continue;
+            if (self.result.store.getProcSpecImmediate(proc).code_key != null) continue;
             app_callees.clearRetainingCapacity();
             try self.solved.lifted.appCalleesReachedBy(self.fn_specs.items[index].source, &app_callees, self.allocator);
             for (app_callees.items) |callee| stable_sources[@backingInt(callee)] = true;

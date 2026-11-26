@@ -1449,9 +1449,8 @@ fn addAutoImportedNominalTagExpr(
 pub fn explicitRootDefByName(self: *const Self, name: []const u8) ?CIR.Def.Idx {
     for (self.env.store.sliceDefs(self.env.top_level_value_defs)) |def_idx| {
         const def = self.env.store.getDef(def_idx);
-        const pattern = self.env.store.getPattern(def.pattern);
-        if (pattern != .assign) continue;
-        if (std.mem.eql(u8, self.env.getIdent(pattern.assign.ident), name)) return def_idx;
+        const pattern = self.env.store.patternAs(def.pattern, .assign) orelse continue;
+        if (std.mem.eql(u8, self.env.getIdent(pattern.ident), name)) return def_idx;
     }
     return null;
 }
@@ -1528,13 +1527,13 @@ fn globalDefIntroducesValueBinding(
     def_idx: CIR.Def.Idx,
 ) bool {
     const def = self.env.store.getDef(def_idx);
-    const expr = self.env.store.getExpr(def.expr);
+    const expr_kind = self.env.store.exprKind(def.expr);
     // A generated method marker authorizes a compiler-owned method-registry
     // target; it never denotes a Roc value or procedure body of its own.
-    if (expr == .e_derived_method) return false;
+    if (expr_kind == .e_derived_method) return false;
     // A superseded annotation has no binding, while an orphan annotation
     // remains the selected valueless declaration for diagnostic recovery.
-    return expr != .e_anno_only or self.topLevelDefIsSelected(selected_by_ident, def_idx);
+    return expr_kind != .e_anno_only or self.topLevelDefIsSelected(selected_by_ident, def_idx);
 }
 
 /// Register a method on its owner declaration.
@@ -2090,7 +2089,7 @@ fn debugAssertLocalFunctionDeclRecorded(
 ) void {
     if (!std.debug.runtime_safety) return;
     if (self.parse_ir.decl_index.declForStatement(@backingInt(ast_stmt_idx)) == null) return;
-    switch (self.env.store.getExpr(expr_idx)) {
+    switch (self.env.store.exprKind(expr_idx)) {
         .e_lambda, .e_closure => if (!self.scratch_local_function_patterns.contains(pattern_idx)) {
             base.invariant("canonicalization invariant violated: a block declaration whose expression is a lambda or closure is not recorded as a local function", .{});
         },
@@ -2949,7 +2948,7 @@ fn registerTypeDecl(
     // The parser inventory and every scope insertion already carry the exact
     // declaration kind. Completing a placeholder fills its body without
     // changing the kind observed by any existing scope alias.
-    std.debug.assert(std.meta.activeTag(self.env.store.getStatement(type_decl_stmt_idx)) == std.meta.activeTag(type_decl_stmt));
+    std.debug.assert(self.env.store.statementKind(type_decl_stmt_idx) == std.meta.activeTag(type_decl_stmt));
     try self.env.store.setStatementNode(type_decl_stmt_idx, type_decl_stmt);
     if (ast_stmt_idx) |idx| {
         try self.parser_type_decl_states.put(
@@ -4574,7 +4573,7 @@ fn canonicalizeAssociatedItems(
                     }
                     const parent_text = self.env.getIdent(parent_name);
                     const name_text = self.env.getIdent(name_ident);
-                    const annotation_expr_kind: AnnotationExprKind = if (self.env.store.getTypeAnno(type_anno_idx) == .underscore)
+                    const annotation_expr_kind: AnnotationExprKind = if (self.env.store.typeAnnoKind(type_anno_idx) == .underscore)
                         if (self.derivedMethodKind(name_ident)) |kind|
                             .{ .derived = .{ .kind = kind, .owner = owner_stmt_idx } }
                         else
@@ -5216,15 +5215,14 @@ pub fn canonicalizeFile(
     defer top_level_value_defs_by_ident.deinit(self.env.gpa);
     for (self.scratch_global_value_defs.items) |def_idx| {
         const def = self.env.store.getDef(def_idx);
-        const pattern = self.env.store.getPattern(def.pattern);
-        if (pattern != .assign) continue;
+        const pattern = self.env.store.patternAs(def.pattern, .assign) orelse continue;
 
-        const selected = try top_level_value_defs_by_ident.getOrPut(self.env.gpa, pattern.assign.ident);
+        const selected = try top_level_value_defs_by_ident.getOrPut(self.env.gpa, pattern.ident);
         if (!selected.found_existing) {
             selected.value_ptr.* = def_idx;
         } else {
             const prior = self.env.store.getDef(selected.value_ptr.*);
-            if (self.env.store.getExpr(prior.expr) == .e_anno_only and self.env.store.getExpr(def.expr) != .e_anno_only) {
+            if (self.env.store.exprKind(prior.expr) == .e_anno_only and self.env.store.exprKind(def.expr) != .e_anno_only) {
                 selected.value_ptr.* = def_idx;
             }
         }
@@ -5895,9 +5893,9 @@ fn canonicalizeDestructuredLiteralDef(
         try self.markBoundPatternsGloballyResolvable(pattern_idx, null);
     }
 
-    const pattern = self.env.store.getPattern(pattern_idx);
+    const pattern = self.env.store.patternAs(pattern_idx, .assign);
     const mb_anno_idx: ?Annotation.Idx = if (mb_anno) |anno_info| anno: {
-        if (pattern != .assign or !pattern.assign.ident.eql(anno_info.name)) break :anno null;
+        if (pattern == null or !pattern.?.ident.eql(anno_info.name)) break :anno null;
         break :anno try self.createAnnotationFromTypeAnno(
             anno_info.anno_idx,
             anno_info.where,
@@ -5927,8 +5925,8 @@ fn canonicalizeDestructuredLiteralDef(
     }, region);
     try self.env.store.addScratchDef(def_idx);
     try self.recordGlobalValueDef(def_idx);
-    if (pattern == .assign) {
-        try self.recordExposedNamedDef(pattern.assign.ident, self.env.getIdent(pattern.assign.ident), def_idx);
+    if (pattern != null) {
+        try self.recordExposedNamedDef(pattern.?.ident, self.env.getIdent(pattern.?.ident), def_idx);
     } else {
         try self.recordExposedDestructuredNames(def_idx);
     }
@@ -7149,7 +7147,7 @@ fn checkExposedTypeSurfaces(self: *Self) std.mem.Allocator.Error!void {
     }
 
     for (renamed_nominals.keys(), renamed_nominals.values()) |nominal_idx, alias_idx| {
-        const alias_header = self.env.store.getTypeHeader(self.env.store.getStatement(alias_idx).s_alias_decl.header);
+        const alias_header = self.env.store.getTypeHeader(self.env.store.statementView(alias_idx).s_alias_decl.get(.header));
         try self.checkPublicNominalStatementSurface(
             nominal_idx,
             alias_header.name,
@@ -7178,7 +7176,7 @@ fn collectRenamedNominals(
     defer public_aliases.deinit(gpa);
     var public_iter = public_type_decls.keyIterator();
     while (public_iter.next()) |stmt_idx| {
-        if (self.env.store.getStatement(stmt_idx.*) == .s_alias_decl) try public_aliases.append(gpa, stmt_idx.*);
+        if (self.env.store.statementKind(stmt_idx.*) == .s_alias_decl) try public_aliases.append(gpa, stmt_idx.*);
     }
     if (public_aliases.items.len == 0) return;
     std.mem.sort(Statement.Idx, public_aliases.items, self, statementPrecedesInSource);
@@ -7224,7 +7222,7 @@ fn aliasRenamedNominal(
     next_positions: *std.ArrayList(?u32),
 ) std.mem.Allocator.Error!?Statement.Idx {
     const gpa = self.env.gpa;
-    const alias = self.env.store.getStatement(alias_idx).s_alias_decl;
+    const alias = self.env.store.statementView(alias_idx).s_alias_decl.decode();
     const public_params = self.env.store.sliceTypeAnnos(self.env.store.getTypeHeader(alias.header).args);
 
     positions.clearRetainingCapacity();
@@ -7284,9 +7282,8 @@ fn aliasParamPosition(
     params: []const TypeAnno.Idx,
     positions: []const ?u32,
 ) ?u32 {
-    const arg_anno = self.env.store.getTypeAnno(self.typeAnnoWithoutParens(arg));
-    if (arg_anno != .rigid_var_lookup) return null;
-    const referenced = arg_anno.rigid_var_lookup.ref;
+    const arg_anno = self.env.store.typeAnnoAs(self.typeAnnoWithoutParens(arg), .rigid_var_lookup) orelse return null;
+    const referenced = arg_anno.ref;
     for (params, positions) |param, position| {
         if (param == referenced) return position;
     }
@@ -7296,9 +7293,8 @@ fn aliasParamPosition(
 fn typeAnnoWithoutParens(self: *Self, anno_idx: TypeAnno.Idx) TypeAnno.Idx {
     var current = anno_idx;
     while (true) {
-        const anno = self.env.store.getTypeAnno(current);
-        if (anno != .parens) return current;
-        current = anno.parens.anno;
+        const anno = self.env.store.typeAnnoAs(current, .parens) orelse return current;
+        current = anno.anno;
     }
 }
 
@@ -7388,9 +7384,8 @@ fn checkPublicNominalStatementSurface(
     if (checked_public_nominals.contains(stmt_idx)) return;
     try checked_public_nominals.put(self.env.gpa, stmt_idx, {});
 
-    const stmt = self.env.store.getStatement(stmt_idx);
-    if (stmt != .s_nominal_decl) return;
-    const nominal = stmt.s_nominal_decl;
+    const stmt = self.env.store.statementAs(stmt_idx, .s_nominal_decl) orelse return;
+    const nominal = stmt;
     if (nominal.is_opaque) return;
 
     const header = self.env.store.getTypeHeader(nominal.header);
@@ -7417,8 +7412,9 @@ fn checkPublicNominalTypeSurface(
     defer visited_alias_uses.deinit(gpa);
 
     while (stack.pop()) |frame| {
-        switch (self.env.store.getTypeAnno(frame.anno)) {
-            .lookup => |lookup| {
+        switch (self.env.store.typeAnnoKind(frame.anno)) {
+            .lookup => {
+                const lookup = self.env.store.typeAnnoView(frame.anno).lookup.decode();
                 const lookup_region = self.env.store.getTypeAnnoRegion(frame.anno);
                 try self.checkPublicTypeSurfaceBase(
                     exposed_type,
@@ -7431,7 +7427,8 @@ fn checkPublicNominalTypeSurface(
                     &stack,
                 );
             },
-            .apply => |apply| {
+            .apply => {
+                const apply = self.env.store.typeAnnoView(frame.anno).apply.decode();
                 const lookup_region = self.env.store.getTypeAnnoRegion(frame.anno);
                 const args = self.env.store.sliceTypeAnnos(apply.args);
                 var i = args.len;
@@ -7454,7 +7451,8 @@ fn checkPublicNominalTypeSurface(
                     &stack,
                 );
             },
-            .record => |record| {
+            .record => {
+                const record = self.env.store.typeAnnoView(frame.anno).record.decode();
                 if (record.ext) |ext| {
                     try stack.append(gpa, .{
                         .anno = ext,
@@ -7475,7 +7473,8 @@ fn checkPublicNominalTypeSurface(
                     });
                 }
             },
-            .tag_union => |tag_union| {
+            .tag_union => {
+                const tag_union = self.env.store.typeAnnoView(frame.anno).tag_union.decode();
                 if (tag_union.ext) |ext| {
                     try stack.append(gpa, .{
                         .anno = ext,
@@ -7495,7 +7494,8 @@ fn checkPublicNominalTypeSurface(
                     });
                 }
             },
-            .tag => |tag| {
+            .tag => {
+                const tag = self.env.store.typeAnnoView(frame.anno).tag.decode();
                 const args = self.env.store.sliceTypeAnnos(tag.args);
                 var i = args.len;
                 while (i > 0) {
@@ -7507,7 +7507,8 @@ fn checkPublicNominalTypeSurface(
                     });
                 }
             },
-            .tuple => |tuple| {
+            .tuple => {
+                const tuple = self.env.store.typeAnnoView(frame.anno).tuple.decode();
                 const elems = self.env.store.sliceTypeAnnos(tuple.elems);
                 var i = elems.len;
                 while (i > 0) {
@@ -7519,7 +7520,8 @@ fn checkPublicNominalTypeSurface(
                     });
                 }
             },
-            .@"fn" => |func| {
+            .@"fn" => {
+                const func = self.env.store.typeAnnoView(frame.anno).@"fn".decode();
                 try stack.append(gpa, .{
                     .anno = func.ret,
                     .field_name = frame.field_name,
@@ -7537,7 +7539,8 @@ fn checkPublicNominalTypeSurface(
                     });
                 }
             },
-            .parens => |parens| {
+            .parens => {
+                const parens = self.env.store.typeAnnoView(frame.anno).parens.decode();
                 try stack.append(gpa, .{
                     .anno = parens.anno,
                     .field_name = frame.field_name,
@@ -8800,7 +8803,7 @@ fn canonicalizeQualifiedIdentExpr(
             return .{ .expr = try self.canonicalizedAssociatedLookup(path, qualified_ident, pattern_idx, region) };
         }
         if (self.typeStatementForPath(path)) |type_stmt_idx| {
-            if (self.env.store.getStatement(type_stmt_idx) == .s_alias_decl) {
+            if (self.env.store.statementKind(type_stmt_idx) == .s_alias_decl) {
                 const type_ident = try self.joinedQualifierIdent(qualifier_tokens);
                 return .{ .expr = try self.canonicalizedLocalAssociatedLookup(
                     @backingInt(type_stmt_idx),
@@ -8971,7 +8974,7 @@ fn canonicalizeTypeAssociatedLookup(
             if (ext.target_node_idx) |type_node_idx| {
                 const type_stmt: Statement.Idx = @fromBackingInt(@intCast(type_node_idx));
                 if (self.lookupBuiltinAutoImportedType(ext.module_ident)) |builtin_type| {
-                    if (builtin_type.env.store.getStatement(type_stmt) == .s_alias_decl) {
+                    if (builtin_type.env.store.statementKind(type_stmt) == .s_alias_decl) {
                         return try self.canonicalizedExternalAssociatedLookup(
                             import_idx,
                             type_node_idx,
@@ -9190,7 +9193,7 @@ fn builtinAliasStatement(
         const type_ident = info.env.common.findIdent(qualified) orelse return null;
         break :node info.env.getExposedTypeNodeIndexById(type_ident) orelse return null;
     };
-    if (info.env.store.getStatement(@fromBackingInt(@intCast(type_node))) != .s_alias_decl) return null;
+    if (info.env.store.statementKind(@fromBackingInt(@intCast(type_node))) != .s_alias_decl) return null;
     return type_node;
 }
 
@@ -9615,9 +9618,10 @@ fn warnTrailingTrySuffix(self: *Self, root: Expr.Idx) std.mem.Allocator.Error!vo
     var pending = std.ArrayList(Expr.Idx).empty;
     defer pending.deinit(self.env.gpa);
     try pending.append(self.env.gpa, root);
-    while (pending.pop()) |expr_idx| switch (self.env.store.getExpr(expr_idx)) {
-        .e_block => |block| try pending.append(self.env.gpa, block.final_expr),
-        .e_if => |if_expr| {
+    while (pending.pop()) |expr_idx| switch (self.env.store.exprKind(expr_idx)) {
+        .e_block => try pending.append(self.env.gpa, self.env.store.exprView(expr_idx).e_block.get(.final_expr)),
+        .e_if => {
+            const if_expr = self.env.store.exprView(expr_idx).e_if.decode();
             try pending.append(self.env.gpa, if_expr.final_else);
             const branches = self.env.store.sliceIfBranches(if_expr.branches);
             var i = branches.len;
@@ -9626,7 +9630,8 @@ fn warnTrailingTrySuffix(self: *Self, root: Expr.Idx) std.mem.Allocator.Error!vo
                 try pending.append(self.env.gpa, self.env.store.getIfBranch(branches[i]).body);
             }
         },
-        .e_match => |match_expr| {
+        .e_match => {
+            const match_expr = self.env.store.exprView(expr_idx).e_match.decode();
             if (match_expr.is_try_suffix) {
                 try self.env.pushDiagnostic(Diagnostic{ .trailing_try_suffix = .{
                     .region = self.trySuffixOperatorRegion(expr_idx),
@@ -9986,7 +9991,7 @@ fn finishBlockState(
 
 fn blockHasUninitializedVar(self: *Self, stmts: Statement.Span) bool {
     for (self.env.store.sliceStatements(stmts)) |stmt_idx| {
-        if (self.env.store.getStatement(stmt_idx) == .s_var_uninitialized) return true;
+        if (self.env.store.statementKind(stmt_idx) == .s_var_uninitialized) return true;
     }
     return false;
 }
@@ -10443,8 +10448,9 @@ const DefiniteInitAnalyzer = struct {
     /// leaf directly.
     fn expandExpr(self: *@This(), frame: *Frame, expr_idx: Expr.Idx, breaks: *std.ArrayList(InitState)) Allocator.Error!?Step {
         const state = frame.state;
-        frame.job = switch (self.can.env.store.getExpr(expr_idx)) {
-            .e_lookup_local => |lookup| {
+        frame.job = switch (self.can.env.store.exprKind(expr_idx)) {
+            .e_lookup_local => {
+                const lookup = self.can.env.store.exprView(expr_idx).e_lookup_local.decode();
                 if (state.isTrackedUninitialized(lookup.pattern_idx)) {
                     try self.reportUninitializedRead(expr_idx, lookup.pattern_idx);
                 }
@@ -10482,49 +10488,85 @@ const DefiniteInitAnalyzer = struct {
                 try breaks.append(self.allocator, try state.clone(self.allocator));
                 return .{ .done = false };
             },
-            .e_str => |str| seqJob(null, str.span, null),
-            .e_list => |list| seqJob(null, list.elems, null),
-            .e_tuple => |tuple| seqJob(null, tuple.elems, null),
-            .e_tag => |tag| seqJob(null, tag.args, null),
-            .e_nominal => |nominal| .{ .expr = nominal.backing_expr },
-            .e_nominal_external => |nominal| .{ .expr = nominal.backing_expr },
-            .e_deferred_import_ref => |deferred| if (deferred.backing) |backing|
+            .e_str => seqJob(null, self.can.env.store.exprView(expr_idx).e_str.get(.span), null),
+            .e_list => seqJob(null, self.can.env.store.exprView(expr_idx).e_list.get(.elems), null),
+            .e_tuple => seqJob(null, self.can.env.store.exprView(expr_idx).e_tuple.get(.elems), null),
+            .e_tag => seqJob(null, self.can.env.store.exprView(expr_idx).e_tag.get(.args), null),
+            .e_nominal => .{ .expr = self.can.env.store.exprView(expr_idx).e_nominal.get(.backing_expr) },
+            .e_nominal_external => .{ .expr = self.can.env.store.exprView(expr_idx).e_nominal_external.get(.backing_expr) },
+            .e_deferred_import_ref => if (self.can.env.store.exprView(expr_idx).e_deferred_import_ref.get(.backing)) |backing|
                 .{ .expr = backing.expr }
             else
                 return .{ .done = true },
-            .e_record => |record| .{ .record = .{ .fields = record.fields, .ext = record.ext } },
-            .e_call => |call| seqJob(call.func, call.args, null),
-            .e_binop => |binop| if (binop.op == .@"and" or binop.op == .@"or")
-                .{ .short_circuit = .{ .lhs = binop.lhs, .rhs = binop.rhs } }
-            else
-                seqJob(binop.lhs, Expr.Span{ .span = DataSpan.empty() }, binop.rhs),
-            .e_unary_minus => |unary| .{ .expr = unary.expr },
-            .e_field_access => |field| .{ .expr = field.receiver },
-            .e_method_call => |call| seqJob(call.receiver, call.args, null),
-            .e_dispatch_call => |call| seqJob(call.receiver, call.args, null),
-            .e_interpolation => |interpolation| seqJob(interpolation.first, interpolation.parts, null),
-            .e_structural_eq => |eq| seqJob(eq.lhs, Expr.Span{ .span = DataSpan.empty() }, eq.rhs),
-            .e_structural_hash => |h| seqJob(h.value, Expr.Span{ .span = DataSpan.empty() }, h.hasher),
-            .e_method_eq => |eq| seqJob(eq.lhs, Expr.Span{ .span = DataSpan.empty() }, eq.rhs),
-            .e_type_method_call => |call| seqJob(null, call.args, null),
-            .e_type_dispatch_call => |call| seqJob(null, call.args, null),
-            .e_tuple_access => |access| .{ .expr = access.tuple },
-            .e_block => |block| .{ .block = .{
-                .stmts = block.stmts,
-                .final_expr = block.final_expr,
-                .track_new_vars = false,
-            } },
-            .e_if => |if_| .{ .if_ = .{ .if_ = if_ } },
-            .e_match => |match| .{ .match = .{ .match = match } },
-            .e_dbg => |dbg| .{ .expr = dbg.expr },
-            .e_expect_err => |expect_err| .{ .expr = expect_err.expr },
-            .e_expect => |expect| .{ .expr = expect.body },
-            .e_return => |ret| return pushWithPost(frame, .{ .expr = ret.expr }, .force_false),
-            .e_for => |for_| .{ .loop = .{ .cond = for_.expr, .body = for_.body, .kind = .ordinary } },
-            .e_run_low_level => |run_| if (run_.op == .crash)
-                return pushWithPost(frame, seqJob(null, run_.args, null), .force_false)
-            else
-                seqJob(null, run_.args, null),
+            .e_record => record_blk: {
+                const record = self.can.env.store.exprView(expr_idx).e_record.decode();
+                break :record_blk .{ .record = .{ .fields = record.fields, .ext = record.ext } };
+            },
+            .e_call => call_blk: {
+                const call = self.can.env.store.exprView(expr_idx).e_call.decode();
+                break :call_blk seqJob(call.func, call.args, null);
+            },
+            .e_binop => binop_blk: {
+                const binop = self.can.env.store.exprView(expr_idx).e_binop.decode();
+                break :binop_blk if (binop.op == .@"and" or binop.op == .@"or")
+                    .{ .short_circuit = .{ .lhs = binop.lhs, .rhs = binop.rhs } }
+                else
+                    seqJob(binop.lhs, Expr.Span{ .span = DataSpan.empty() }, binop.rhs);
+            },
+            .e_unary_minus => .{ .expr = self.can.env.store.exprView(expr_idx).e_unary_minus.get(.expr) },
+            .e_field_access => .{ .expr = self.can.env.store.exprView(expr_idx).e_field_access.get(.receiver) },
+            .e_method_call => call_blk: {
+                const call = self.can.env.store.exprView(expr_idx).e_method_call.decode();
+                break :call_blk seqJob(call.receiver, call.args, null);
+            },
+            .e_dispatch_call => call_blk: {
+                const call = self.can.env.store.exprView(expr_idx).e_dispatch_call.decode();
+                break :call_blk seqJob(call.receiver, call.args, null);
+            },
+            .e_interpolation => interpolation_blk: {
+                const interpolation = self.can.env.store.exprView(expr_idx).e_interpolation.decode();
+                break :interpolation_blk seqJob(interpolation.first, interpolation.parts, null);
+            },
+            .e_structural_eq => eq_blk: {
+                const eq = self.can.env.store.exprView(expr_idx).e_structural_eq.decode();
+                break :eq_blk seqJob(eq.lhs, Expr.Span{ .span = DataSpan.empty() }, eq.rhs);
+            },
+            .e_structural_hash => h_blk: {
+                const h = self.can.env.store.exprView(expr_idx).e_structural_hash.decode();
+                break :h_blk seqJob(h.value, Expr.Span{ .span = DataSpan.empty() }, h.hasher);
+            },
+            .e_method_eq => eq_blk: {
+                const eq = self.can.env.store.exprView(expr_idx).e_method_eq.decode();
+                break :eq_blk seqJob(eq.lhs, Expr.Span{ .span = DataSpan.empty() }, eq.rhs);
+            },
+            .e_type_method_call => seqJob(null, self.can.env.store.exprView(expr_idx).e_type_method_call.get(.args), null),
+            .e_type_dispatch_call => seqJob(null, self.can.env.store.exprView(expr_idx).e_type_dispatch_call.get(.args), null),
+            .e_tuple_access => .{ .expr = self.can.env.store.exprView(expr_idx).e_tuple_access.get(.tuple) },
+            .e_block => block_blk: {
+                const block = self.can.env.store.exprView(expr_idx).e_block.decode();
+                break :block_blk .{ .block = .{
+                    .stmts = block.stmts,
+                    .final_expr = block.final_expr,
+                    .track_new_vars = false,
+                } };
+            },
+            .e_if => .{ .if_ = .{ .if_ = self.can.env.store.exprView(expr_idx).e_if.decode() } },
+            .e_match => .{ .match = .{ .match = self.can.env.store.exprView(expr_idx).e_match.decode() } },
+            .e_dbg => .{ .expr = self.can.env.store.exprView(expr_idx).e_dbg.get(.expr) },
+            .e_expect_err => .{ .expr = self.can.env.store.exprView(expr_idx).e_expect_err.get(.expr) },
+            .e_expect => .{ .expr = self.can.env.store.exprView(expr_idx).e_expect.get(.body) },
+            .e_return => return pushWithPost(frame, .{ .expr = self.can.env.store.exprView(expr_idx).e_return.get(.expr) }, .force_false),
+            .e_for => for__blk: {
+                const for_ = self.can.env.store.exprView(expr_idx).e_for.decode();
+                break :for__blk .{ .loop = .{ .cond = for_.expr, .body = for_.body, .kind = .ordinary } };
+            },
+            .e_run_low_level => run__blk: {
+                const run_ = self.can.env.store.exprView(expr_idx).e_run_low_level.decode();
+                break :run__blk if (run_.op == .crash)
+                    return pushWithPost(frame, seqJob(null, run_.args, null), .force_false)
+                else
+                    seqJob(null, run_.args, null);
+            },
         };
         return null;
     }
@@ -10539,22 +10581,38 @@ const DefiniteInitAnalyzer = struct {
         breaks: *std.ArrayList(InitState),
     ) Allocator.Error!?Step {
         const state = frame.state;
-        frame.job = switch (self.can.env.store.getStatement(stmt_idx)) {
-            .s_decl => |decl| .{ .expr = decl.expr },
-            .s_var => |var_| .{ .expr = var_.expr },
-            .s_var_uninitialized => |var_| {
+        frame.job = switch (self.can.env.store.statementKind(stmt_idx)) {
+            .s_decl => .{ .expr = self.can.env.store.statementView(stmt_idx).s_decl.get(.expr) },
+            .s_var => .{ .expr = self.can.env.store.statementView(stmt_idx).s_var.get(.expr) },
+            .s_var_uninitialized => {
+                const var_ = self.can.env.store.statementView(stmt_idx).s_var_uninitialized.decode();
                 if (track_new_vars) try state.addUninitialized(self.allocator, var_.pattern_idx);
                 return .{ .done = true };
             },
-            .s_reassign => |reassign| return pushWithPost(frame, .{ .expr = reassign.expr }, .{ .reassign = reassign.pattern_idx }),
-            .s_dbg => |dbg| .{ .expr = dbg.expr },
-            .s_expr => |expr| .{ .expr = expr.expr },
-            .s_expect => |expect| .{ .expr = expect.body },
-            .s_for => |for_| .{ .loop = .{ .cond = for_.expr, .body = for_.body, .kind = .ordinary } },
-            .s_while => |while_| .{ .loop = .{ .cond = while_.cond, .body = while_.body, .kind = .ordinary } },
-            .s_infinite_loop => |loop| .{ .loop = .{ .cond = loop.cond, .body = loop.body, .kind = .infinite } },
-            .s_breakable_loop => |loop| .{ .loop = .{ .cond = loop.cond, .body = loop.body, .kind = .breakable } },
-            .s_return => |ret| return pushWithPost(frame, .{ .expr = ret.expr }, .force_false),
+            .s_reassign => {
+                const reassign = self.can.env.store.statementView(stmt_idx).s_reassign.decode();
+                return pushWithPost(frame, .{ .expr = reassign.expr }, .{ .reassign = reassign.pattern_idx });
+            },
+            .s_dbg => .{ .expr = self.can.env.store.statementView(stmt_idx).s_dbg.get(.expr) },
+            .s_expr => .{ .expr = self.can.env.store.statementView(stmt_idx).s_expr.get(.expr) },
+            .s_expect => .{ .expr = self.can.env.store.statementView(stmt_idx).s_expect.get(.body) },
+            .s_for => for__blk: {
+                const for_ = self.can.env.store.statementView(stmt_idx).s_for.decode();
+                break :for__blk .{ .loop = .{ .cond = for_.expr, .body = for_.body, .kind = .ordinary } };
+            },
+            .s_while => while__blk: {
+                const while_ = self.can.env.store.statementView(stmt_idx).s_while.decode();
+                break :while__blk .{ .loop = .{ .cond = while_.cond, .body = while_.body, .kind = .ordinary } };
+            },
+            .s_infinite_loop => loop_blk: {
+                const loop = self.can.env.store.statementView(stmt_idx).s_infinite_loop.decode();
+                break :loop_blk .{ .loop = .{ .cond = loop.cond, .body = loop.body, .kind = .infinite } };
+            },
+            .s_breakable_loop => loop_blk: {
+                const loop = self.can.env.store.statementView(stmt_idx).s_breakable_loop.decode();
+                break :loop_blk .{ .loop = .{ .cond = loop.cond, .body = loop.body, .kind = .breakable } };
+            },
+            .s_return => return pushWithPost(frame, .{ .expr = self.can.env.store.statementView(stmt_idx).s_return.get(.expr) }, .force_false),
             .s_break => {
                 try breaks.append(self.allocator, try state.clone(self.allocator));
                 return .{ .done = false };
@@ -10639,33 +10697,38 @@ const DefiniteInitAnalyzer = struct {
 
         try pending.append(stack_allocator, pattern_idx);
         while (pending.pop()) |current_idx| {
-            const pattern = self.can.env.store.getPattern(current_idx);
-            switch (pattern) {
+            switch (self.can.env.store.patternKind(current_idx)) {
                 .assign, .var_assign => state.markInitialized(current_idx),
-                .as => |as| {
+                .as => {
+                    const as = self.can.env.store.patternView(current_idx).as.decode();
                     state.markInitialized(current_idx);
                     try pending.append(stack_allocator, as.pattern);
                 },
-                .applied_tag => |tag| {
+                .applied_tag => {
+                    const tag = self.can.env.store.patternView(current_idx).applied_tag.decode();
                     for (self.can.env.store.slicePatterns(tag.args)) |child| try pending.append(stack_allocator, child);
                 },
-                .nominal => |nominal| try pending.append(stack_allocator, nominal.backing_pattern),
-                .nominal_external => |nominal| try pending.append(stack_allocator, nominal.backing_pattern),
-                .deferred_import_ref => |deferred| try pending.append(stack_allocator, deferred.backing_pattern),
-                .record_destructure => |record| {
+                .nominal => try pending.append(stack_allocator, self.can.env.store.patternView(current_idx).nominal.get(.backing_pattern)),
+                .nominal_external => try pending.append(stack_allocator, self.can.env.store.patternView(current_idx).nominal_external.get(.backing_pattern)),
+                .deferred_import_ref => try pending.append(stack_allocator, self.can.env.store.patternView(current_idx).deferred_import_ref.get(.backing_pattern)),
+                .record_destructure => {
+                    const record = self.can.env.store.patternView(current_idx).record_destructure.decode();
                     for (self.can.env.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
                         const destruct = self.can.env.store.getRecordDestruct(destruct_idx);
                         try pending.append(stack_allocator, destruct.kind.toPatternIdx());
                     }
                 },
-                .list => |list| {
+                .list => {
+                    const list = self.can.env.store.patternView(current_idx).list.decode();
                     for (self.can.env.store.slicePatterns(list.patterns)) |child| try pending.append(stack_allocator, child);
                     if (list.rest_info) |rest| if (rest.pattern) |child| try pending.append(stack_allocator, child);
                 },
-                .tuple => |tuple| {
+                .tuple => {
+                    const tuple = self.can.env.store.patternView(current_idx).tuple.decode();
                     for (self.can.env.store.slicePatterns(tuple.patterns)) |child| try pending.append(stack_allocator, child);
                 },
-                .str_interpolation => |str| {
+                .str_interpolation => {
+                    const str = self.can.env.store.patternView(current_idx).str_interpolation.decode();
                     var i: u32 = str.steps.span.len;
                     while (i > 0) {
                         i -= 1;
@@ -11136,15 +11199,15 @@ fn isInfiniteLoopCondition(self: *const Self, cond: Expr.Idx) bool {
 }
 
 fn exprIsBareTrueTag(self: *const Self, expr_idx: Expr.Idx) bool {
-    const expr = self.env.store.getExpr(expr_idx);
-    return expr == .e_tag and expr.e_tag.name.eql(self.env.idents.true_tag) and expr.e_tag.args.span.len == 0;
+    const expr = self.env.store.exprAs(expr_idx, .e_tag);
+    return expr != null and expr.?.name.eql(self.env.idents.true_tag) and expr.?.args.span.len == 0;
 }
 
 fn isBuiltinBoolLocalNominal(self: *const Self, nominal_type_decl: Statement.Idx) bool {
     if (self.env.module_role != .builtin) return false;
 
-    const stmt = self.env.store.getStatement(nominal_type_decl);
-    return stmt == .s_nominal_decl and self.env.store.getTypeHeader(stmt.s_nominal_decl.header).name.eql(self.env.idents.bool);
+    const stmt = self.env.store.statementAs(nominal_type_decl, .s_nominal_decl);
+    return stmt != null and self.env.store.getTypeHeader(stmt.?.header).name.eql(self.env.idents.bool);
 }
 
 fn isBuiltinBoolExternalNominal(self: *const Self, module: Expr.NominalExternalModule, target_node_idx: u32) bool {
@@ -11183,15 +11246,16 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
     while (pending.pop()) |frame| {
         switch (frame) {
             .expr => |expr_frame| {
-                const expr = self.env.store.getExpr(expr_frame.idx);
-                switch (expr) {
-                    .e_block => |block| {
+                switch (self.env.store.exprKind(expr_frame.idx)) {
+                    .e_block => {
+                        const block = self.env.store.exprView(expr_frame.idx).e_block.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = block.final_expr, .loop_depth = expr_frame.loop_depth } });
                         for (self.env.store.sliceStatements(block.stmts)) |stmt_idx| {
                             try pending.append(stack_allocator, .{ .stmt = .{ .idx = stmt_idx, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_if => |if_expr| {
+                    .e_if => {
+                        const if_expr = self.env.store.exprView(expr_frame.idx).e_if.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = if_expr.final_else, .loop_depth = expr_frame.loop_depth } });
                         for (self.env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                             const branch = self.env.store.getIfBranch(branch_idx);
@@ -11199,7 +11263,8 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = branch.cond, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_match => |match_expr| {
+                    .e_match => {
+                        const match_expr = self.env.store.exprView(expr_frame.idx).e_match.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = match_expr.cond, .loop_depth = expr_frame.loop_depth } });
                         for (self.env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
                             const branch = self.env.store.getMatchBranch(branch_idx);
@@ -11209,70 +11274,83 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = branch.value, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_call => |call| {
+                    .e_call => {
+                        const call = self.env.store.exprView(expr_frame.idx).e_call.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = call.func, .loop_depth = expr_frame.loop_depth } });
                         for (self.env.store.sliceExpr(call.args)) |arg| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_binop => |binop| {
+                    .e_binop => {
+                        const binop = self.env.store.exprView(expr_frame.idx).e_binop.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = binop.lhs, .loop_depth = expr_frame.loop_depth } });
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = binop.rhs, .loop_depth = expr_frame.loop_depth } });
                     },
-                    .e_unary_minus => |unary| try pending.append(stack_allocator, .{ .expr = .{ .idx = unary.expr, .loop_depth = expr_frame.loop_depth } }),
-                    .e_field_access => |field| try pending.append(stack_allocator, .{ .expr = .{ .idx = field.receiver, .loop_depth = expr_frame.loop_depth } }),
-                    .e_method_call => |call| {
+                    .e_unary_minus => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.exprView(expr_frame.idx).e_unary_minus.get(.expr), .loop_depth = expr_frame.loop_depth } }),
+                    .e_field_access => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.exprView(expr_frame.idx).e_field_access.get(.receiver), .loop_depth = expr_frame.loop_depth } }),
+                    .e_method_call => {
+                        const call = self.env.store.exprView(expr_frame.idx).e_method_call.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = call.receiver, .loop_depth = expr_frame.loop_depth } });
                         for (self.env.store.sliceExpr(call.args)) |arg| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_dispatch_call => |call| {
+                    .e_dispatch_call => {
+                        const call = self.env.store.exprView(expr_frame.idx).e_dispatch_call.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = call.receiver, .loop_depth = expr_frame.loop_depth } });
                         for (self.env.store.sliceExpr(call.args)) |arg| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_interpolation => |interpolation| {
+                    .e_interpolation => {
+                        const interpolation = self.env.store.exprView(expr_frame.idx).e_interpolation.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = interpolation.first, .loop_depth = expr_frame.loop_depth } });
                         for (self.env.store.sliceExpr(interpolation.parts)) |part| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = part, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_structural_eq => |eq| {
+                    .e_structural_eq => {
+                        const eq = self.env.store.exprView(expr_frame.idx).e_structural_eq.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = eq.lhs, .loop_depth = expr_frame.loop_depth } });
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = eq.rhs, .loop_depth = expr_frame.loop_depth } });
                     },
-                    .e_structural_hash => |h| {
+                    .e_structural_hash => {
+                        const h = self.env.store.exprView(expr_frame.idx).e_structural_hash.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = h.value, .loop_depth = expr_frame.loop_depth } });
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = h.hasher, .loop_depth = expr_frame.loop_depth } });
                     },
-                    .e_method_eq => |eq| {
+                    .e_method_eq => {
+                        const eq = self.env.store.exprView(expr_frame.idx).e_method_eq.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = eq.lhs, .loop_depth = expr_frame.loop_depth } });
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = eq.rhs, .loop_depth = expr_frame.loop_depth } });
                     },
-                    .e_type_method_call => |call| {
+                    .e_type_method_call => {
+                        const call = self.env.store.exprView(expr_frame.idx).e_type_method_call.decode();
                         for (self.env.store.sliceExpr(call.args)) |arg| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_type_dispatch_call => |call| {
+                    .e_type_dispatch_call => {
+                        const call = self.env.store.exprView(expr_frame.idx).e_type_dispatch_call.decode();
                         for (self.env.store.sliceExpr(call.args)) |arg| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_tuple_access => |access| try pending.append(stack_allocator, .{ .expr = .{ .idx = access.tuple, .loop_depth = expr_frame.loop_depth } }),
-                    .e_list => |list| {
+                    .e_tuple_access => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.exprView(expr_frame.idx).e_tuple_access.get(.tuple), .loop_depth = expr_frame.loop_depth } }),
+                    .e_list => {
+                        const list = self.env.store.exprView(expr_frame.idx).e_list.decode();
                         for (self.env.store.sliceExpr(list.elems)) |elem| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = elem, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_tuple => |tuple| {
+                    .e_tuple => {
+                        const tuple = self.env.store.exprView(expr_frame.idx).e_tuple.decode();
                         for (self.env.store.sliceExpr(tuple.elems)) |elem| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = elem, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_record => |record| {
+                    .e_record => {
+                        const record = self.env.store.exprView(expr_frame.idx).e_record.decode();
                         if (record.ext) |ext| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = ext, .loop_depth = expr_frame.loop_depth } });
                         }
@@ -11281,29 +11359,34 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = field.value, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_str => |str| {
+                    .e_str => {
+                        const str = self.env.store.exprView(expr_frame.idx).e_str.decode();
                         for (self.env.store.sliceExpr(str.span)) |segment| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = segment, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_tag => |tag| {
+                    .e_tag => {
+                        const tag = self.env.store.exprView(expr_frame.idx).e_tag.decode();
                         for (self.env.store.sliceExpr(tag.args)) |arg| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_nominal => |nominal| try pending.append(stack_allocator, .{ .expr = .{ .idx = nominal.backing_expr, .loop_depth = expr_frame.loop_depth } }),
-                    .e_nominal_external => |nominal| try pending.append(stack_allocator, .{ .expr = .{ .idx = nominal.backing_expr, .loop_depth = expr_frame.loop_depth } }),
-                    .e_deferred_import_ref => |deferred| {
+                    .e_nominal => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.exprView(expr_frame.idx).e_nominal.get(.backing_expr), .loop_depth = expr_frame.loop_depth } }),
+                    .e_nominal_external => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.exprView(expr_frame.idx).e_nominal_external.get(.backing_expr), .loop_depth = expr_frame.loop_depth } }),
+                    .e_deferred_import_ref => {
+                        const deferred = self.env.store.exprView(expr_frame.idx).e_deferred_import_ref.decode();
                         if (deferred.backing) |backing| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = backing.expr, .loop_depth = expr_frame.loop_depth } });
                         }
                     },
-                    .e_dbg => |dbg| try pending.append(stack_allocator, .{ .expr = .{ .idx = dbg.expr, .loop_depth = expr_frame.loop_depth } }),
-                    .e_expect => |expect| try pending.append(stack_allocator, .{ .expr = .{ .idx = expect.body, .loop_depth = expr_frame.loop_depth } }),
-                    .e_expect_err => |expect_err| {
+                    .e_dbg => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.exprView(expr_frame.idx).e_dbg.get(.expr), .loop_depth = expr_frame.loop_depth } }),
+                    .e_expect => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.exprView(expr_frame.idx).e_expect.get(.body), .loop_depth = expr_frame.loop_depth } }),
+                    .e_expect_err => {
+                        const expect_err = self.env.store.exprView(expr_frame.idx).e_expect_err.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = expect_err.expr, .loop_depth = expr_frame.loop_depth } });
                     },
-                    .e_return => |ret| {
+                    .e_return => {
+                        const ret = self.env.store.exprView(expr_frame.idx).e_return.decode();
                         if (self.enclosing_lambda == null or ret.lambda == self.enclosing_lambda.?) {
                             facts.has_exit = true;
                         }
@@ -11318,11 +11401,13 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                     .e_crash => {
                         facts.has_exit = true;
                     },
-                    .e_for => |for_expr| {
+                    .e_for => {
+                        const for_expr = self.env.store.exprView(expr_frame.idx).e_for.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = for_expr.expr, .loop_depth = expr_frame.loop_depth } });
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = for_expr.body, .loop_depth = expr_frame.loop_depth + 1 } });
                     },
-                    .e_run_low_level => |run_low_level| {
+                    .e_run_low_level => {
+                        const run_low_level = self.env.store.exprView(expr_frame.idx).e_run_low_level.decode();
                         for (self.env.store.sliceExpr(run_low_level.args)) |arg| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
                         }
@@ -11359,35 +11444,39 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                 }
             },
             .stmt => |stmt_frame| {
-                const stmt = self.env.store.getStatement(stmt_frame.idx);
-                switch (stmt) {
-                    .s_decl => |decl| try pending.append(stack_allocator, .{ .expr = .{ .idx = decl.expr, .loop_depth = stmt_frame.loop_depth } }),
-                    .s_var => |var_stmt| try pending.append(stack_allocator, .{ .expr = .{ .idx = var_stmt.expr, .loop_depth = stmt_frame.loop_depth } }),
+                switch (self.env.store.statementKind(stmt_frame.idx)) {
+                    .s_decl => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.statementView(stmt_frame.idx).s_decl.get(.expr), .loop_depth = stmt_frame.loop_depth } }),
+                    .s_var => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.statementView(stmt_frame.idx).s_var.get(.expr), .loop_depth = stmt_frame.loop_depth } }),
                     .s_var_uninitialized => {},
-                    .s_reassign => |reassign| try pending.append(stack_allocator, .{ .expr = .{ .idx = reassign.expr, .loop_depth = stmt_frame.loop_depth } }),
-                    .s_dbg => |dbg| try pending.append(stack_allocator, .{ .expr = .{ .idx = dbg.expr, .loop_depth = stmt_frame.loop_depth } }),
-                    .s_expr => |expr_stmt| try pending.append(stack_allocator, .{ .expr = .{ .idx = expr_stmt.expr, .loop_depth = stmt_frame.loop_depth } }),
-                    .s_expect => |expect| try pending.append(stack_allocator, .{ .expr = .{ .idx = expect.body, .loop_depth = stmt_frame.loop_depth } }),
-                    .s_for => |for_stmt| {
+                    .s_reassign => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.statementView(stmt_frame.idx).s_reassign.get(.expr), .loop_depth = stmt_frame.loop_depth } }),
+                    .s_dbg => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.statementView(stmt_frame.idx).s_dbg.get(.expr), .loop_depth = stmt_frame.loop_depth } }),
+                    .s_expr => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.statementView(stmt_frame.idx).s_expr.get(.expr), .loop_depth = stmt_frame.loop_depth } }),
+                    .s_expect => try pending.append(stack_allocator, .{ .expr = .{ .idx = self.env.store.statementView(stmt_frame.idx).s_expect.get(.body), .loop_depth = stmt_frame.loop_depth } }),
+                    .s_for => {
+                        const for_stmt = self.env.store.statementView(stmt_frame.idx).s_for.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = for_stmt.expr, .loop_depth = stmt_frame.loop_depth } });
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = for_stmt.body, .loop_depth = stmt_frame.loop_depth + 1 } });
                     },
-                    .s_while => |while_stmt| {
+                    .s_while => {
+                        const while_stmt = self.env.store.statementView(stmt_frame.idx).s_while.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = while_stmt.cond, .loop_depth = stmt_frame.loop_depth } });
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = while_stmt.body, .loop_depth = stmt_frame.loop_depth + 1 } });
                     },
-                    .s_infinite_loop => |loop_stmt| {
+                    .s_infinite_loop => {
+                        const loop_stmt = self.env.store.statementView(stmt_frame.idx).s_infinite_loop.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = loop_stmt.cond, .loop_depth = stmt_frame.loop_depth } });
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = loop_stmt.body, .loop_depth = stmt_frame.loop_depth + 1 } });
                     },
-                    .s_breakable_loop => |loop_stmt| {
+                    .s_breakable_loop => {
+                        const loop_stmt = self.env.store.statementView(stmt_frame.idx).s_breakable_loop.decode();
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = loop_stmt.cond, .loop_depth = stmt_frame.loop_depth } });
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = loop_stmt.body, .loop_depth = stmt_frame.loop_depth + 1 } });
                     },
                     .s_crash => {
                         facts.has_exit = true;
                     },
-                    .s_return => |ret| {
+                    .s_return => {
+                        const ret = self.env.store.statementView(stmt_frame.idx).s_return.decode();
                         if (self.enclosing_lambda == null or ret.lambda == self.enclosing_lambda.?) {
                             facts.has_exit = true;
                         }
@@ -13156,7 +13245,7 @@ fn runExprKernel(
                         .region = state.region,
                         .context = .return_expr,
                     } });
-                const diverges = self.env.store.getExpr(return_expr_idx) == .e_return;
+                const diverges = self.env.store.exprKind(return_expr_idx) == .e_return;
                 const block_expr = try self.finishBlockState(state.block, CanonicalizedExpr{ .idx = return_expr_idx, .free_vars = expr.free_vars, .diverges = diverges });
                 try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, block_expr);
             } else {
@@ -13175,7 +13264,7 @@ fn runExprKernel(
                         .region = state.region,
                         .context = .return_statement,
                     } });
-                const diverges = self.env.store.getStatement(stmt_idx) == .s_return;
+                const diverges = self.env.store.statementKind(stmt_idx) == .s_return;
                 try self.addOwnBlockStatement(state.block, CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars, .diverges = diverges });
                 try stacks.push(.block_next, frame_allocator, .{ .block = state.block, .next = state.next });
             }
@@ -13296,7 +13385,7 @@ fn runExprKernel(
             // does not mistake a soon-to-be-cleared loop capture for an existing
             // block capture.
             self.scratch_captures.clearFrom(state.captures_top);
-            const diverges = state.cond.diverges or self.env.store.getStatement(stmt_idx) == .s_infinite_loop;
+            const diverges = state.cond.diverges or self.env.store.statementKind(stmt_idx) == .s_infinite_loop;
             try self.addOwnBlockStatement(state.block, CanonicalizedStatement{ .idx = stmt_idx, .free_vars = free_vars, .diverges = diverges });
             child_slots.shrinkRetainingCapacity(state.block.result_start);
             try stacks.push(.block_next, frame_allocator, .{ .block = state.block, .next = state.next });
@@ -13594,7 +13683,7 @@ fn runExprKernel(
                     .context = .return_expr,
                 } });
 
-            const diverges = self.env.store.getExpr(return_expr) == .e_return;
+            const diverges = self.env.store.exprKind(return_expr) == .e_return;
             child_slots.shrinkRetainingCapacity(result_start);
             try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = return_expr, .free_vars = can_inner.free_vars, .diverges = diverges });
 
@@ -15021,7 +15110,7 @@ fn resolveRecordBuilderMap2(
             return try self.externalRecordBuilderMap2(import_idx, builtin_type.env, @backingInt(stmt_idx), resolved.name, map2_name, missing);
         },
         .local => |stmt_idx| {
-            if (self.env.store.getStatement(stmt_idx) == .s_alias_decl) {
+            if (self.env.store.statementKind(stmt_idx) == .s_alias_decl) {
                 return .{ .resolved = .{ .local_associated = .{
                     .type_stmt = stmt_idx,
                     .type_ident = resolved.name,
@@ -15068,7 +15157,7 @@ fn externalRecordBuilderMap2(
     missing: RecordBuilderMap2Resolution,
 ) std.mem.Allocator.Error!RecordBuilderMap2Resolution {
     const type_stmt: Statement.Idx = @fromBackingInt(@intCast(type_node_idx));
-    if (external_env.store.getStatement(type_stmt) == .s_alias_decl) {
+    if (external_env.store.statementKind(type_stmt) == .s_alias_decl) {
         return .{ .resolved = .{ .external_associated = .{
             .module_idx = import_idx,
             .type_node_idx = type_node_idx,
@@ -16306,7 +16395,7 @@ fn desugarInterpolatedString(
     const stmts_top = self.env.store.scratchTop("statements");
     for (items_top..items_end) |item_pos| {
         const interp_idx = self.scratch_expr_ids.items.items[item_pos];
-        if (self.env.store.getExpr(interp_idx) == .e_str_segment) continue;
+        if (self.env.store.exprKind(interp_idx) == .e_str_segment) continue;
         var name_buf: [32]u8 = undefined;
         const name = std.fmt.bufPrint(&name_buf, "#interp_{d}", .{self.interp_tmp_counter}) catch unreachable; // "#interp_" plus at most 10 digits of a u32 fits in 32 bytes
         self.interp_tmp_counter += 1;
@@ -16331,7 +16420,7 @@ fn desugarInterpolatedString(
     var item_pos = items_top;
     while (true) : (item_pos += 1) {
         const gap_ends = item_pos == items_end or
-            self.env.store.getExpr(self.scratch_expr_ids.items.items[item_pos]) != .e_str_segment;
+            self.env.store.exprKind(self.scratch_expr_ids.items.items[item_pos]) != .e_str_segment;
         if (!gap_ends) {
             pending_segment = self.scratch_expr_ids.items.items[item_pos];
             continue;
@@ -18516,7 +18605,7 @@ fn rejectVarBinder(self: *Self, ident: Ident.Idx, region: Region) std.mem.Alloca
 
 /// Check if a pattern is a var
 fn isVarPattern(self: *const Self, pattern_idx: Pattern.Idx) bool {
-    return self.env.store.getPattern(pattern_idx) == .var_assign;
+    return self.env.store.patternKind(pattern_idx) == .var_assign;
 }
 
 /// Report a source-binding naming mismatch without allowing spelling to affect
@@ -19110,9 +19199,9 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
             if (state.next >= args_slice.len) {
                 const args_span = try self.env.store.typeAnnoSpanFrom(state.scratch_top);
                 self.env.store.clearScratchTypeAnnosFrom(state.scratch_top);
-                const base_anno = self.env.store.getTypeAnno(state.base_anno_idx);
-                if (base_anno == .lookup) {
-                    const ty = base_anno.lookup;
+                const base_anno = self.env.store.typeAnnoAs(state.base_anno_idx, .lookup);
+                if (base_anno != null) {
+                    const ty = base_anno.?;
                     if (type_anno_ctx.isTypeDeclAndHasUnderscore()) {
                         try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
                             .declared = .alias,
@@ -19449,9 +19538,9 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
             const state = stacks.take(.tag_union_tag_after);
             const tag_idx = last orelse unreachable; // every .tag_parse item sets `last` before the work pushed beneath it resumes
             var found_duplicate = false;
-            const tag_anno = self.env.store.getTypeAnno(tag_idx);
-            if (tag_anno == .tag) {
-                const tag = tag_anno.tag;
+            const tag_anno = self.env.store.typeAnnoAs(tag_idx, .tag);
+            if (tag_anno != null) {
+                const tag = tag_anno.?;
                 const tag_region = self.env.store.getTypeAnnoRegion(tag_idx);
                 if (try self.scratch_seen_tags.addOrFind(self.env.gpa, state.scratch_seen_tags_top, tag.name, tag_region)) |original_region| {
                     try self.env.pushDiagnostic(Diagnostic{ .duplicate_tag = .{
@@ -20408,12 +20497,11 @@ fn addBlockStatement(
 ) std.mem.Allocator.Error!void {
     try self.env.store.addScratchStatement(statement.idx);
 
-    const cir_stmt = self.env.store.getStatement(statement.idx);
-    switch (cir_stmt) {
-        .s_decl => |decl| try self.collectBoundVarsToScratch(decl.pattern),
-        .s_var => |var_stmt| try self.collectBoundVarsToScratch(var_stmt.pattern_idx),
-        .s_var_uninitialized => |var_stmt| try self.collectBoundVarsToScratch(var_stmt.pattern_idx),
-        .s_reassign => |reassign| try self.collectReassignBoundVarsToScratch(reassign.pattern_idx),
+    switch (self.env.store.statementKind(statement.idx)) {
+        .s_decl => try self.collectBoundVarsToScratch(self.env.store.statementView(statement.idx).s_decl.get(.pattern)),
+        .s_var => try self.collectBoundVarsToScratch(self.env.store.statementView(statement.idx).s_var.get(.pattern_idx)),
+        .s_var_uninitialized => try self.collectBoundVarsToScratch(self.env.store.statementView(statement.idx).s_var_uninitialized.get(.pattern_idx)),
+        .s_reassign => try self.collectReassignBoundVarsToScratch(self.env.store.statementView(statement.idx).s_reassign.get(.pattern_idx)),
         .s_crash,
         .s_dbg,
         .s_expr,
@@ -20716,9 +20804,9 @@ fn introduceTypeParametersFromHeader(self: *Self, header_idx: CIR.TypeHeader.Idx
 
     // Introduce each type parameter into the current scope
     for (self.env.store.sliceTypeAnnos(header.args)) |param_idx| {
-        const param = self.env.store.getTypeAnno(param_idx);
-        if (param == .rigid_var) {
-            _ = try self.scopeIntroduceTypeVar(param.rigid_var.name, param_idx);
+        const param = self.env.store.typeAnnoAs(param_idx, .rigid_var);
+        if (param != null) {
+            _ = try self.scopeIntroduceTypeVar(param.?.name, param_idx);
         }
     }
 }
@@ -20881,8 +20969,8 @@ pub fn introduceType(
     type_decl_stmt: Statement.Idx,
     region: Region,
 ) std.mem.Allocator.Error!void {
-    const stmt = self.env.store.getStatement(type_decl_stmt);
-    const input: Scope.TypeBindingInput = switch (stmt) {
+    const stmt_kind = self.env.store.statementKind(type_decl_stmt);
+    const input: Scope.TypeBindingInput = switch (stmt_kind) {
         .s_alias_decl => .{ .local_alias = type_decl_stmt },
         .s_nominal_decl => .{ .local_nominal = type_decl_stmt },
         .s_where_alias_decl => .{ .local_where_alias = type_decl_stmt },
@@ -21482,8 +21570,8 @@ fn canonicalizeWhereAliasClauses(
     const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
     const where_start = self.env.store.scratchWhereClauseTop();
 
-    const receiver_anno = self.env.store.getTypeAnno(receiver);
-    const receiver_name = if (receiver_anno == .rigid_var) receiver_anno.rigid_var.name else null;
+    const receiver_anno = self.env.store.typeAnnoAs(receiver, .rigid_var);
+    const receiver_name = if (receiver_anno != null) receiver_anno.?.name else null;
     for (where_slice) |where_idx| {
         const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .type_decl_anno);
         try self.env.store.addScratchWhereClause(canonicalized_where);
@@ -21498,8 +21586,8 @@ fn canonicalizeWhereAliasClauses(
                 .w_alias => |alias| alias.var_,
                 .w_malformed => continue,
             };
-            const constrained_anno = self.env.store.getTypeAnno(constrained);
-            const constrained_root = if (constrained_anno == .rigid_var_lookup) constrained_anno.rigid_var_lookup.ref else constrained;
+            const constrained_anno = self.env.store.typeAnnoAs(constrained, .rigid_var_lookup);
+            const constrained_root = if (constrained_anno != null) constrained_anno.?.ref else constrained;
             if (constrained_root != receiver) {
                 try self.env.pushDiagnostic(Diagnostic{ .where_alias_constraint_not_on_receiver = .{
                     .receiver_name = name,
@@ -21799,6 +21887,13 @@ fn injectEchoPlatform(self: *Self) std.mem.Allocator.Error!void {
         .annotation = annotation_idx,
         .kind = .let,
     }, synthetic_region);
+
+    // The def is this module's one hosted declaration. Recording it is what
+    // gives the hosted lambda its host symbol and dispatch slot in later
+    // stages.
+    const hosted_defs_start = self.env.store.scratchDefTop();
+    try self.env.store.addScratchDef(def_idx);
+    self.env.hosted_defs = try self.env.store.defSpanFrom(hosted_defs_start);
 
     // Add the def to scratch so it's included in all_defs
     try self.env.store.addScratchDef(def_idx);

@@ -2443,7 +2443,7 @@ pub const Interpreter = struct {
             for (packs, frame_callables) |pack, *slot| {
                 storage_size = std.mem.alignForward(usize, storage_size, builtins.erased_callable.payload_alignment);
                 slot.* = .{ .stmt = pack, .offset = std.math.cast(u32, storage_size) orelse return error.OutOfMemory };
-                storage_size += self.frameCallableBytes(self.store.stmtRow(self.store.getCFStmt(pack).assign_packed_erased_fn.data));
+                storage_size += self.frameCallableBytes(self.store.stmtRow(self.store.getCFStmtImmediate(pack).assign_packed_erased_fn.data));
             }
         }
         entry.value_ptr.* = .{
@@ -2484,12 +2484,21 @@ pub const Interpreter = struct {
             switch (self.store.getCFStmtImmediate(current).*) {
                 .assign_ref => |assign| {
                     if (assign.op.kind == .field and self.store.getLocal(assign.op.source).dyn != null) {
-                        try self.execDyn(frame, current, assign.target, .{ .field_addr = .{ .base = assign.op.source, .desc = self.store.getLocal(assign.op.source).dyn.?.desc, .field_index = .{ .immediate = assign.op.index } } });
+                        const record_desc = self.store.getLocal(assign.op.source).dyn.?.desc;
+                        try self.execDyn(frame, current, assign.target, .{ .field_addr = .{ .base = assign.op.source, .desc = record_desc, .field_index = .{ .immediate = assign.op.index } } });
+                        // Release the slot a stamped field take left
+                        // (`LIR.RefExtra.releases_recursion_box`).
+                        if (self.store.stmtRowOrDefault(assign.extra).releases_recursion_box) {
+                            boxy.compiled.fieldReleaseBox(try self.descAt(frame, record_desc), try self.localBytes(frame, assign.op.source), assign.op.index, &self.roc_ops);
+                        }
                         current = assign.next;
                         continue;
                     }
                     if (assign.op.kind == .tag_payload_struct and self.store.getLocal(assign.op.source).dyn != null) {
                         try self.execDyn(frame, current, assign.target, .{ .tag_payload_addr = .{ .base = assign.op.source, .desc = self.store.getLocal(assign.op.source).dyn.?.desc, .payload_index = 0 } });
+                        if (self.store.stmtRowOrDefault(assign.extra).releases_recursion_box) {
+                            boxy.compiled.tagPayloadReleaseBox(try self.descAt(frame, self.store.getLocal(assign.op.source).dyn.?.desc), try self.localBytes(frame, assign.op.source), &self.roc_ops);
+                        }
                         current = assign.next;
                         continue;
                     }

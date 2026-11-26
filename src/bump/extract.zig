@@ -281,9 +281,8 @@ const Extractor = struct {
 
         const stmts_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (stmts_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
-            if (stmt != .s_alias_decl) continue;
-            const header = module_env.store.getTypeHeader(stmt.s_alias_decl.header);
+            const stmt = module_env.store.statementAs(stmt_idx, .s_alias_decl) orelse continue;
+            const header = module_env.store.getTypeHeader(stmt.header);
             const name = module_env.getIdentText(header.relative_name);
             if (!inputIncludesName(input, &exposed_names, module_env.module_kind, name)) continue;
 
@@ -431,11 +430,11 @@ const Extractor = struct {
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
-            const pattern = module_env.store.getPattern(def.pattern);
+            const pattern = module_env.store.patternAs(def.pattern, .assign);
             // Type declarations reach defs through nominal patterns; the
             // statement walk above already covered them.
-            if (pattern != .assign) continue;
-            const ident = pattern.assign.ident;
+            if (pattern == null) continue;
+            const ident = pattern.?.ident;
             const name = module_env.getIdentText(ident);
             if (!inputIncludesValue(input, &exposed_names, def_idx, name)) continue;
 
@@ -848,9 +847,8 @@ const Extractor = struct {
 };
 
 fn typeDeclName(module_env: *const ModuleEnv, statement_idx: can.CIR.Statement.Idx) ?[]const u8 {
-    const statement = module_env.store.getStatement(statement_idx);
-    const header_idx = switch (statement) {
-        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |decl| decl.header,
+    const header_idx = switch (module_env.store.statementKind(statement_idx)) {
+        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |kind| @field(module_env.store.statementView(statement_idx), @tagName(kind)).get(.header),
         .s_decl,
         .s_var,
         .s_var_uninitialized,
