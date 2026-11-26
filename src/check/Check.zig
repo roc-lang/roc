@@ -39812,7 +39812,7 @@ fn bindingRhsGeneralizes(store: *const CIR.NodeStore, expr_idx: CIR.Expr.Idx) bo
 fn topLevelConstantGeneralizes(self: *const Self, def_idx: CIR.Def.Idx) bool {
     const def = self.cir.store.getDef(def_idx);
     if (bindingRhsGeneralizes(&self.cir.store, def.expr)) return false;
-    if (self.cir.store.getPattern(def.pattern) != .assign) return false;
+    if (self.cir.store.patternKind(def.pattern) != .assign) return false;
     if (self.platform_required_defs.contains(def_idx)) return false;
     const check_order = self.check_order orelse return false;
     const group_index = self.defGroupIndex(def_idx) orelse return false;
