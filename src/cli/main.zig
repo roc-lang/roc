@@ -6087,7 +6087,7 @@ fn writeDevRunImageToSharedMemory(
         );
         return error.UnsupportedTarget;
     } else {
-        const native_target = backend.HostLirCodeGen.roc_target;
+        const native_target = backend.LirCodeGenMod.host_lir_codegen_target;
         if (!devShimTargetCompatible(selected_target, native_target)) {
             return rejectRunTargetNotExecutable(ctx, selected_target);
         }
@@ -7079,7 +7079,7 @@ fn writeComposedRunImage(
     if (comptime !backend.host_lir_codegen_available) {
         unreachable; // `unitImageRunApplies` selects composed runs only on hosts whose units carry images
     } else {
-        if (!devShimTargetCompatible(units.target, backend.HostLirCodeGen.roc_target)) {
+        if (!devShimTargetCompatible(units.target, backend.LirCodeGenMod.host_lir_codegen_target)) {
             return rejectRunTargetNotExecutable(ctx, units.target);
         }
         reporter.begin("Run Image");

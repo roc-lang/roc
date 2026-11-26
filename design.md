@@ -31067,8 +31067,8 @@ into a reused allocation that the capture points into.
 
 The dev backend's shared driver (`LirCodeGen`, `FrameBuilder`,
 `CallingConvention`) serves every instruction set listed in
-`backend/dev/isa.zig`'s `Isa`. Each component computes its `Isa` once from the
-target with `isaOf`, and every instruction-set choice is an exhaustive
+`backend/dev/isa.zig`'s `Isa`. Each component computes its `Isa` once from its
+`Abi`, and every instruction-set choice is an exhaustive
 `switch (isa)` that names each instruction set's answer. The driver never
 compares `isa` with `==` or `!=` and never gives a `switch (isa)` an `else`
 prong: adding an instruction set must make every choice a compile error until
@@ -31079,6 +31079,18 @@ set. Code that builds a backend for a specific target asks `isaOfOrNull`, so
 the list of instruction sets lives only in `isa.zig`. Code that runs generated
 code in-process asks `isa.host`, never `RocTarget.detectNative`, which maps an
 architecture without a code generator to one that has one.
+
+The code generator family (`LirCodeGen`, the per-instruction-set `CodeGen` and
+`Emit`, `CallBuilder`, `DeferredFrameBuilder`) is parameterized by
+`isa.Abi`, never by `RocTarget`. An `Abi` names exactly what the generated
+machine code depends on: the instruction set and the calling convention
+(System V or Windows on x86-64; AAPCS64, Apple or Windows on AArch64). Every
+`RocTarget` with the same `Abi` shares one instantiation, which `abiOfOrNull`
+selects; what differs between those targets, such as the object format, symbol
+naming and CPU level, is runtime data the generator's callers pass in. A
+generator that read anything else about its target at compile time would be
+instantiated once per `RocTarget` again, and each instantiation is compiled
+into every binary that contains the backend.
 
 An explicit reference-count statement on a stack value computes the value's
 address directly into the helper's first argument register and loads an

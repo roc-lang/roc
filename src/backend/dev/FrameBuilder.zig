@@ -54,9 +54,9 @@ pub const FramePointerPolicy = enum {
 ///
 /// Callers: compileProcSpec, x86_64/CodeGen, aarch64/CodeGen
 pub fn DeferredFrameBuilder(comptime EmitType: type) type {
-    const roc_target = EmitType.roc_target;
-    const isa = isaOf(roc_target);
-    const is_windows = roc_target.isWindows();
+    const machine_abi = EmitType.code_abi;
+    const isa = machine_abi.isa();
+    const is_windows = machine_abi.isWindows();
 
     const GeneralReg = EmitType.GeneralReg;
     const CC = EmitType.CC;
@@ -92,7 +92,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         stack_probe_required: bool = false,
 
         /// Frame-pointer strategy for this function.
-        frame_pointer_policy: FramePointerPolicy = FramePointerPolicy.forTarget(roc_target),
+        frame_pointer_policy: FramePointerPolicy = FramePointerPolicy.forTarget(machine_abi),
 
         /// Bytes of caller-allocated argument block this function removes
         /// from the stack when it returns. An internal Roc procedure owns the
@@ -589,7 +589,6 @@ fn Aarch64CalleeSavedInfo(comptime GeneralReg: type) type {
 
 const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
-const isaOf = @import("isa.zig").isaOf;
 
 // DeferredFrameBuilder tests (mask-based pattern)
 

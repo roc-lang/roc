@@ -29,6 +29,7 @@ const lir = @import("lir");
 const layout = @import("layout");
 const RelocationMod = @import("Relocation.zig");
 const LirCodeGenMod = @import("LirCodeGen.zig");
+const abiOf = @import("isa.zig").abiOf;
 const SymbolTable = @import("SymbolTable.zig");
 
 /// Whether a symbol's name means the same thing in every program.
@@ -2748,7 +2749,7 @@ pub fn splice(
 test "independent message pools preserve their targets across repeated excerpt assembly" {
     const allocator = std.testing.allocator;
     inline for (.{ @import("roc_target").RocTarget.x64linux, @import("roc_target").RocTarget.arm64linux }) |target| {
-        const CG = LirCodeGenMod.LirCodeGen(target);
+        const CG = LirCodeGenMod.LirCodeGen(abiOf(target));
         var store = lir.LirStore.init(allocator);
         defer store.deinit();
         var layouts = try layout.Store.init(allocator, .u64);
@@ -2790,7 +2791,7 @@ test "independent message pools preserve their targets across repeated excerpt a
 
 test "excerpt local calls reserve veneers before later regions exceed reach" {
     const allocator = std.testing.allocator;
-    const CG = LirCodeGenMod.LirCodeGen(.arm64linux);
+    const CG = LirCodeGenMod.LirCodeGen(abiOf(.arm64linux));
     var store = lir.LirStore.init(allocator);
     defer store.deinit();
     var layouts = try layout.Store.init(allocator, .u64);

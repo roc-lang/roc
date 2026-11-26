@@ -3,12 +3,12 @@
 //! This module provides low-level x86_64 instruction encoding for the dev backend.
 //! It generates machine code bytes that can be executed directly on x86_64 processors.
 //!
-//! The Emit function is parameterized by RocTarget to enable full cross-compilation.
-//! Each target variant is specialized at comptime with the correct calling convention.
+//! The Emit function is parameterized by the dev-backend `Abi`, which selects
+//! the calling convention at comptime.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const RocTarget = @import("roc_target").RocTarget;
+const Abi = @import("../isa.zig").Abi;
 const Registers = @import("Registers.zig");
 const RegisterWidth = Registers.RegisterWidth;
 const SystemV = @import("SystemV.zig");
@@ -17,11 +17,10 @@ const WindowsFastcall = @import("WindowsFastcall.zig");
 const Relocation = @import("../Relocation.zig").IndexedRelocation;
 
 /// x86_64 instruction emitter for generating machine code.
-/// Parameterized by target for cross-compilation support.
-pub fn Emit(comptime target: RocTarget) type {
-    // Validate this is an x86_64 target
-    if (target.toCpuArch() != .x86_64) {
-        @compileError("x86_64.Emit requires an x86_64 target");
+/// Parameterized by the calling convention of the code it emits.
+pub fn Emit(comptime machine_abi: Abi) type {
+    if (machine_abi.isa() != .x86_64) {
+        @compileError("x86_64.Emit requires an x86_64 ABI");
     }
 
     return struct {
@@ -31,27 +30,27 @@ pub fn Emit(comptime target: RocTarget) type {
         pub const GeneralReg = Registers.GeneralReg;
         pub const FloatReg = Registers.FloatReg;
 
-        /// The target this Emit was instantiated for
-        pub const roc_target = target;
+        /// The ABI this Emit was instantiated for
+        pub const code_abi = machine_abi;
 
         /// Calling convention constants derived from target
         pub const CC = struct {
-            pub const PARAM_REGS = if (target.isWindows())
+            pub const PARAM_REGS = if (machine_abi.isWindows())
                 WindowsFastcall.GENERAL_PARAM_REGS
             else
                 SystemV.GENERAL_PARAM_REGS;
 
-            pub const FLOAT_PARAM_REGS = if (target.isWindows())
+            pub const FLOAT_PARAM_REGS = if (machine_abi.isWindows())
                 WindowsFastcall.FLOAT_PARAM_REGS
             else
                 SystemV.FLOAT_PARAM_REGS;
 
-            pub const RETURN_REGS = if (target.isWindows())
+            pub const RETURN_REGS = if (machine_abi.isWindows())
                 [_]Registers.GeneralReg{.RAX}
             else
                 [_]Registers.GeneralReg{ .RAX, .RDX };
 
-            pub const SHADOW_SPACE: u8 = if (target.isWindows()) 32 else 0;
+            pub const SHADOW_SPACE: u8 = if (machine_abi.isWindows()) 32 else 0;
             pub const SCRATCH_REG = Registers.GeneralReg.R11;
             pub const BASE_PTR = Registers.GeneralReg.RBP;
             pub const STACK_PTR = Registers.GeneralReg.RSP;
@@ -1364,7 +1363,7 @@ pub fn Emit(comptime target: RocTarget) type {
 }
 
 // Target-specific Emit types for cross-platform testing
-const LinuxEmit = Emit(.x64linux);
+const LinuxEmit = Emit(.x86_64_sysv);
 
 // Tests
 
