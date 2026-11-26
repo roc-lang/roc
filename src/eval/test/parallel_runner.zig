@@ -117,6 +117,9 @@ pub const TestCase = struct {
     /// Expensive proof cases are excluded from an unfiltered run and are
     /// selected explicitly by name by their dedicated build step.
     opt_in: bool = false,
+    /// A case that no runner compiles or runs under the stated strategy until
+    /// the stated issue is fixed. Runners list each ignored case by name.
+    ignore: ?Ignore = null,
     /// Native stack, in bytes, for the thread that compiles and evaluates this
     /// case. Deep-nesting cases set a deliberately small budget, so a compiler
     /// stage whose native call depth grows with source nesting or sequence
@@ -128,6 +131,19 @@ pub const TestCase = struct {
     worker_index: usize = 0,
     /// How post-check lowering specializes the program.
     specialization_strategy: base.SpecializationStrategy = .lss,
+
+    pub const Ignore = struct {
+        /// The roc-lang/roc issue whose fix un-ignores the case.
+        issue: u32,
+        /// The specialization strategy under which the case is ignored.
+        strategy: base.SpecializationStrategy,
+    };
+
+    /// Whether the case is ignored under its own specialization strategy.
+    pub fn isIgnored(tc: TestCase) bool {
+        const ignore = tc.ignore orelse return false;
+        return ignore.strategy == tc.specialization_strategy;
+    }
 
     pub const Expected = union(enum) {
         inspect_str: []const u8,
@@ -2722,6 +2738,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
 
     if (cli.filters.len > 0) {
         for (all_tests) |tc| {
+            if (tc.isIgnored()) continue;
             for (cli.filters) |pattern| {
                 if (std.mem.find(u8, tc.name, pattern) != null or
                     std.mem.find(u8, tc.source, pattern) != null)
@@ -2733,7 +2750,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
         }
     } else {
         for (all_tests) |tc| {
-            if (tc.opt_in) continue;
+            if (tc.opt_in or tc.isIgnored()) continue;
             try filtered_buf.append(gpa, tc);
         }
     }
@@ -2777,6 +2794,11 @@ pub fn main(init: std.process.Init) RunnerError!void {
     if (Pool.runWorkerMode(io, cli, tests, effectiveHangTimeoutMs(cli))) {
         trace_worker.stamp("worker mode done");
         return;
+    }
+
+    for (all_tests) |tc| {
+        if (!tc.isIgnored()) continue;
+        std.debug.print("IGNORED {s} (until https://github.com/roc-lang/roc/issues/{d} is fixed)\n", .{ tc.name, tc.ignore.?.issue });
     }
 
     // Coverage mode and -Deval-no-fork use a simple single-threaded loop: no
