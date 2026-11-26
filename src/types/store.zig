@@ -736,7 +736,7 @@ pub const Store = struct {
         // class's old storage root, which holds the descriptor until it is
         // visited itself, and a visited slot reaches the representative,
         // which holds it from the first visit of any member on.
-        const slot_count: usize = @intCast(self.slots.len());
+        const slot_count = self.slots.len();
         for (0..slot_count) |index| {
             const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(index));
             const storage = self.findStorageRoot(slotIdxToVar(slot_idx));
@@ -1110,7 +1110,7 @@ pub const Store = struct {
 
         fn init(store: *const Self, fixed_vars: u64) Allocator.Error!SealColumns {
             const gpa = store.gpa;
-            const slot_count: usize = @intCast(store.slots.len());
+            const slot_count = store.slots.len();
             std.debug.assert(fixed_vars <= slot_count);
             var columns: SealColumns = .{
                 .vars = .{},
@@ -1574,7 +1574,7 @@ pub const Store = struct {
     }
 
     /// Return the number of type variables in the store.
-    pub fn len(self: *const Self) u64 {
+    pub fn len(self: *const Self) usize {
         return self.slots.len();
     }
 
@@ -1877,7 +1877,7 @@ pub const Store = struct {
         try std.testing.expectEqualSlices(Var, self.vars.items, other.vars.items);
         try std.testing.expectEqual(self.record_fields.len(), other.record_fields.len());
         try std.testing.expectEqual(self.tags.len(), other.tags.len());
-        for (0..@intCast(self.len())) |index| {
+        for (0..self.len()) |index| {
             const var_: Var = @fromBackingInt(@intCast(index));
             const mine = self.resolveVar(var_);
             const theirs = other.resolveVar(var_);
@@ -4870,8 +4870,8 @@ const SlotStore = struct {
         return .{ .payloads = payloads, .kinds = try self.kinds.clone(gpa) };
     }
 
-    fn len(self: *const Self) u64 {
-        return self.payloads.len();
+    fn len(self: *const Self) usize {
+        return self.payloads.items.len;
     }
 
     fn ensureTotalCapacity(self: *Self, gpa: Allocator, capacity: usize) Allocator.Error!void {
@@ -5263,7 +5263,7 @@ test "sealing renumbers the variables above the canonical ones and what holders 
     try std.testing.expectEqual(method, constraint.fn_name);
     // Nothing names the redirect to the node, so it dies with the gaps.
     try std.testing.expect(store.len() <= 8);
-    for (0..@intCast(store.len())) |index| {
+    for (0..store.len()) |index| {
         switch (store.getSlot(@fromBackingInt(@intCast(index)))) {
             .root => |desc_idx| try std.testing.expectEqual(@as(u32, @intCast(index)), @backingInt(store.getRootMeta(desc_idx).checked_var)),
             .redirect => |target| try std.testing.expect(store.getSlot(target) == .root),
