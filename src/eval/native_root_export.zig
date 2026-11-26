@@ -361,7 +361,7 @@ const Builder = struct {
             }, allocation_size, builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
             try self.graph.relocate(job.dest, result.dest);
             if (!result.fresh) return;
-            const proc_name = try static_data.procSymbolName(self.graph.allocator, self.graph.program.store.getProcSpec(resolved.proc).identity);
+            const proc_name = try static_data.procSymbolName(self.graph.allocator, self.graph.program.store.getProcSpecImmediate(resolved.proc).identity);
             try self.graph.node(result.dest).relocations.append(self.graph.allocator, .{
                 .offset = result.dest.offset,
                 .target_symbol_name = proc_name,

@@ -1028,7 +1028,7 @@ pub const StaticDescs = struct {
             errdefer self.allocator.free(owned);
             const entry = try self.captured_callables.getOrPut(self.allocator, node);
             if (entry.found_existing) types.invariant("an immutable callable was filled twice");
-            entry.value_ptr.* = .{ .identity = self.result.store.getProcSpec(proc).identity, .words = owned };
+            entry.value_ptr.* = .{ .identity = self.result.store.getProcSpecImmediate(proc).identity, .words = owned };
         }
         const ptr = self.ptrSize();
         const capture_offset = self.staticCallableCaptureOffset();
@@ -1045,7 +1045,7 @@ pub const StaticDescs = struct {
             .offset = static_callable_header,
             // The procedure's identity names it, whatever id compaction
             // later gives it.
-            .target_symbol_name = try self.result.store.getProcSpec(proc).identity.symbolName(self.allocator),
+            .target_symbol_name = try self.result.store.getProcSpecImmediate(proc).identity.symbolName(self.allocator),
             .owns_target_symbol_name = true,
             .kind = .function_pointer,
             .procedure = .some(proc),
@@ -2442,7 +2442,7 @@ test "override scopes are interned by content and restricted to a type's reach" 
     }
     var module_view = empty.view();
     module_view.checked_types = declarations.view();
-    const module = try fixture.modules.add(module_view);
+    const module = try fixture.modules.add(&module_view);
     const name = try store.internName("Local");
     const local = try store.intern(.{ .nominal = .{
         .decl = .{ .module = module, .decl = .some(declaration_ids[0]) },

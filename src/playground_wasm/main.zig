@@ -954,9 +954,8 @@ const ReplCompiledModule = struct {
 fn findDefByName(module_env: *const ModuleEnv, name: []const u8) ?can.CIR.Def.Idx {
     for (module_env.store.sliceDefs(module_env.all_defs)) |def_idx| {
         const def = module_env.store.getDef(def_idx);
-        const pattern = module_env.store.getPattern(def.pattern);
-        const ident = switch (pattern) {
-            inline .assign, .var_assign, .as => |assign| assign.ident,
+        const ident = switch (module_env.store.patternKind(def.pattern)) {
+            inline .assign, .var_assign, .as => |kind| @field(module_env.store.patternView(def.pattern), @tagName(kind)).get(.ident),
             .applied_tag,
             .nominal,
             .nominal_external,
@@ -2043,10 +2042,9 @@ fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier
         const pattern_region = cir.store.getPatternRegion(def.pattern);
 
         if (byte_offset >= pattern_region.start.offset and byte_offset < pattern_region.end.offset) {
-            const pattern = cir.store.getPattern(def.pattern);
-            const ident = switch (pattern) {
-                .assign => |assign| assign.ident,
-                .var_assign => |var_assign| var_assign.ident,
+            const ident = switch (cir.store.patternKind(def.pattern)) {
+                .assign => cir.store.patternView(def.pattern).assign.get(.ident),
+                .var_assign => cir.store.patternView(def.pattern).var_assign.get(.ident),
                 .as,
                 .applied_tag,
                 .nominal,

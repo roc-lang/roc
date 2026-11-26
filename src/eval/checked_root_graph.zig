@@ -203,19 +203,19 @@ pub const Walker = struct {
             if (!entry.found_existing) entry.value_ptr.* = @intCast(ordinal);
         }
         const visited = try walkStamps(allocator, modules, struct {
-            fn count(module: checked.ImportedModuleView) usize {
+            fn count(module: *const checked.ImportedModuleView) usize {
                 return module.checked_procedure_templates.templates.items().len;
             }
         }.count);
         errdefer freeStamps(allocator, visited);
         const visited_nodes = try walkStamps(allocator, modules, struct {
-            fn count(module: checked.ImportedModuleView) usize {
+            fn count(module: *const checked.ImportedModuleView) usize {
                 return module.static_dispatch_plans.evidence_nodes.items().len;
             }
         }.count);
         errdefer freeStamps(allocator, visited_nodes);
         const visited_derivations = try walkStamps(allocator, modules, struct {
-            fn count(module: checked.ImportedModuleView) usize {
+            fn count(module: *const checked.ImportedModuleView) usize {
                 return module.static_dispatch_plans.generated_codec_derivations.items().len;
             }
         }.count);
@@ -224,14 +224,14 @@ pub const Walker = struct {
     }
 
     /// Per module, a zeroed walk stamp per item `count` counts.
-    fn walkStamps(allocator: Allocator, modules: []const checked.ImportedModuleView, count: fn (checked.ImportedModuleView) usize) Allocator.Error![][]u32 {
+    fn walkStamps(allocator: Allocator, modules: []const checked.ImportedModuleView, count: fn (*const checked.ImportedModuleView) usize) Allocator.Error![][]u32 {
         const out = try allocator.alloc([]u32, modules.len);
         var allocated: usize = 0;
         errdefer {
             for (out[0..allocated]) |items| allocator.free(items);
             allocator.free(out);
         }
-        for (modules, out) |module, *items| {
+        for (modules, out) |*module, *items| {
             items.* = try allocator.alloc(u32, count(module));
             @memset(items.*, 0);
             allocated += 1;
@@ -553,7 +553,7 @@ pub fn rootHoldsFunction(
     const entry = try memo.answers.getOrPut(allocator, key);
     if (!entry.found_existing) {
         errdefer memo.answers.removeByPtr(entry.key_ptr);
-        entry.value_ptr.* = try typeHoldsFunction(allocator, program, key.key, own_types, value_type);
+        entry.value_ptr.* = try typeHoldsFunction(allocator, program, key.key, &own_types, value_type);
     }
     return entry.value_ptr.*;
 }
@@ -576,7 +576,7 @@ fn typeHoldsFunction(
     allocator: Allocator,
     program: lir.CheckedPipeline.CheckedModuleSet,
     start_key: [32]u8,
-    start_types: checked.CheckedTypeStoreView,
+    start_types: *const checked.CheckedTypeStoreView,
     start: checked.CheckedTypeId,
 ) Allocator.Error!bool {
     const Pending = struct { key: [32]u8, types: checked.CheckedTypeStoreView, ty: checked.CheckedTypeId };
@@ -585,7 +585,7 @@ fn typeHoldsFunction(
     defer seen.deinit(allocator);
     var pending = std.ArrayList(Pending).empty;
     defer pending.deinit(allocator);
-    try pending.append(allocator, .{ .key = start_key, .types = start_types, .ty = start });
+    try pending.append(allocator, .{ .key = start_key, .types = start_types.*, .ty = start });
     while (pending.pop()) |item| {
         const seen_entry = try seen.getOrPut(allocator, .{ .key = item.key, .ty = item.ty });
         if (seen_entry.found_existing) continue;
