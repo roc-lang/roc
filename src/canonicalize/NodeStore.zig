@@ -1818,7 +1818,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 /// constructions, and lists, tuples, tags and records (with no update base)
 /// built only from such subtrees. It names no definition, calls nothing,
 /// creates no procedure and constructs no nominal value, so a walk that
-/// collects references between definitions finds nothing in it. Checking
+/// collects references between definitions finds nothing in it. Only
+/// expressions canonicalization adds through `ModuleEnv.addExpr` are
+/// recorded; any other expression reads as not literal-only. Checking
 /// rewrites no node of such a subtree into a lookup, call, procedure or
 /// nominal construction; it can only replace one with a runtime error whose
 /// evaluated operands are its own literal-only children.
@@ -1827,6 +1829,12 @@ pub fn exprIsLiteralOnly(store: *const NodeStore, expr: CIR.Expr.Idx) bool {
     const words = store.literal_only_exprs.items();
     if (raw >> 6 >= words.len) return false;
     return words[raw >> 6] & (@as(u64, 1) << @intCast(raw & 63)) != 0;
+}
+
+/// Record whether `expr`, just added at `expr_idx` with all its children
+/// added before it, is literal-only (`exprIsLiteralOnly`).
+pub fn recordLiteralOnly(store: *NodeStore, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) Allocator.Error!void {
+    if (store.childrenMakeLiteralOnly(expr)) try store.markLiteralOnly(expr_idx);
 }
 
 fn markLiteralOnly(store: *NodeStore, expr: CIR.Expr.Idx) Allocator.Error!void {
@@ -3902,9 +3910,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
     // External lookups carry their source region explicitly.
     const actual_region = if (expr == .e_lookup_external) expr.e_lookup_external.region else region;
     _ = try store.regions.append(store.gpa, actual_region);
-    const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(@backingInt(node_idx)));
-    if (store.childrenMakeLiteralOnly(expr)) try store.markLiteralOnly(expr_idx);
-    return expr_idx;
+    return @fromBackingInt(@intCast(@backingInt(node_idx)));
 }
 
 /// Adds a record field to the store.

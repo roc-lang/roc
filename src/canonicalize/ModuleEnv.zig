@@ -5305,8 +5305,13 @@ pub const addStatement = storeAdder("addStatement");
 /// Add a new pattern to the node store.
 pub const addPattern = storeAdder("addPattern");
 
-/// Add a new expression to the node store.
-pub const addExpr = storeAdder("addExpr");
+/// Add an expression, recording whether its subtree is literal-only
+/// (`NodeStore.exprIsLiteralOnly`).
+pub fn addExpr(self: *Self, expr: CIR.Expr, region: Region) std.mem.Allocator.Error!CIR.Expr.Idx {
+    const idx = try storeAdder("addExpr")(self, expr, region);
+    try self.store.recordLiteralOnly(idx, expr);
+    return idx;
+}
 
 /// Reserve one contiguous field-access path plus its enclosing expression.
 pub fn startFieldAccessPath(self: *Self, segment_count: u32) std.mem.Allocator.Error!NodeStore.FieldAccessPathBuilder {
