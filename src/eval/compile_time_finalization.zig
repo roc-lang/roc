@@ -1744,7 +1744,13 @@ const BoxyLinkedImages = struct {
     /// image digest, and the stored images the loaded images' pool imports
     /// name, placed once each (design.md "Constant Pool").
     pool_index: ?check.ConstStore.ImageIndex = null,
-    pool: ?ImageLoader.Pool = null,
+    pool: switch (boxy_object_code) {
+        .image => ?ImageLoader.Pool,
+        .pieces => void,
+    } = switch (boxy_object_code) {
+        .image => null,
+        .pieces => {},
+    },
 
     const FunctionOrigin = struct { owner: [32]u8, identity: lir.LIR.ProcIdentity };
 
@@ -1790,7 +1796,10 @@ const BoxyLinkedImages = struct {
             .image => image.unload(),
             .pieces => image.deinit(),
         };
-        if (self.pool) |*pool| pool.deinit();
+        switch (boxy_object_code) {
+            .image => if (self.pool) |*pool| pool.deinit(),
+            .pieces => {},
+        }
         if (self.pool_index) |*index| index.deinit();
         self.images.deinit(self.allocator);
         self.code.deinit(self.allocator);
