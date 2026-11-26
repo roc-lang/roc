@@ -393,11 +393,11 @@ pub const WorkerKey = union(enum) {
     /// (`Program.rootValueSlot`), which readers call once the root completes.
     root_slot: struct { module: ModuleIndex, root: checked.ComptimeRootId },
     /// The thunk restoring the stored value of polymorphic constant
-    /// instance root `root` of `module`, a value that is data alone
-    /// (design.md "Polymorphic Constants"): an erased worker with no
-    /// arguments producing the value, which a table word holding the
-    /// instance calls. It is named by the stored value's content, so every
-    /// unit restoring one instance defines one procedure.
+    /// instance root `root` of `module` (design.md "Polymorphic
+    /// Constants"): an erased worker with no arguments producing the
+    /// value, which a table word holding the instance calls. It is named by
+    /// the stored value's content, so every unit restoring one instance
+    /// defines one procedure.
     root_restore: struct { module: ModuleIndex, root: checked.ComptimeRootId },
     /// A compiler-derived structural method over the descriptor its
     /// dictionary captures.
@@ -1007,9 +1007,6 @@ pub const Program = struct {
     /// evaluates later from (`rootValueSlot`), by root.
     root_value_slots: std.AutoHashMapUnmanaged(RootSlotKey, LIR.StaticDataId) = .empty,
     stored_value_slots: std.AutoHashMapUnmanaged(StoredValueKey, LIR.StaticDataId) = .empty,
-    /// Whether each stored node of a module is data alone
-    /// (`storedDataAlone`), by node, for the modules asked about.
-    stored_data_alone: std.AutoHashMapUnmanaged(ModuleIndex, std.ArrayList(DataAlone)) = .empty,
     /// The static data slot each value-form expression a body keeps reads
     /// (`inlineLiteralSlot`), by the expression's initializer worker.
     inline_literal_slots: collections.DenseMapUnmanaged(WorkerId, LIR.StaticDataId) = .empty,
@@ -1504,8 +1501,8 @@ pub const Program = struct {
     }
 
     /// Hash the value compile-time evaluation stored for root `root` of
-    /// `module_index`: an image by its digest, any other value by its
-    /// graph, its modules named by checked key.
+    /// `module_index`: an image by its digest, a value holding functions by
+    /// its graph, its modules named by checked key.
     fn hashRootValue(self: *Program, hasher: *base.TypeDigestHasher, module_index: ModuleIndex, root: checked.ComptimeRootId) Allocator.Error!void {
         const view = self.module(module_index);
         const node = switch (view.view.compile_time_roots.root(root).payloadFor(.boxy)) {
@@ -1780,9 +1777,6 @@ pub const Program = struct {
         self.platform_identities.deinit(self.allocator);
         self.root_value_slots.deinit(self.allocator);
         self.stored_value_slots.deinit(self.allocator);
-        var data_alone_tables = self.stored_data_alone.valueIterator();
-        while (data_alone_tables.next()) |table| table.deinit(self.allocator);
-        self.stored_data_alone.deinit(self.allocator);
         self.inline_literal_slots.deinit(self.allocator);
         self.requested_roots.deinit(self.allocator);
         if (self.constant_instances) |*instances| instances.deinit(self.allocator);
@@ -1809,83 +1803,6 @@ pub const Program = struct {
         return switch (source) {
             .module => |index| self.module(index).view.const_store,
         };
-    }
-
-    /// What is known of a stored node (`storedDataAlone`).
-    pub const DataAlone = enum(u8) { unknown, yes, no };
-
-    /// Whether stored constant `node` of `source` is data alone: neither it
-    /// nor any value it holds is a function value or a failed value. Static
-    /// data freezes such a value from the store through its type's const
-    /// plan (`LirProgram.StoredStaticValue`), so it is one slot whatever it
-    /// holds. Every node the question visits is answered once per lowering.
-    pub fn storedDataAlone(self: *Program, source: ConstSource, node: checked.ConstNodeId) Allocator.Error!bool {
-        const const_store = self.constStore(source);
-        // The producer stored a value that is data alone as an image.
-        if (const_store.imageOf(node) != null) return true;
-        const entry = try self.stored_data_alone.getOrPut(self.allocator, switch (source) {
-            .module => |index| index,
-        });
-        if (!entry.found_existing) entry.value_ptr.* = .empty;
-        const table = entry.value_ptr;
-        const known = table.items.len;
-        if (known < const_store.nodeCount()) {
-            try table.resize(self.allocator, const_store.nodeCount());
-            @memset(table.items[known..], .unknown);
-        }
-        const answers = table.items;
-        if (answers[@backingInt(node)] != .unknown) return answers[@backingInt(node)] == .yes;
-
-        const Frame = struct { node: checked.ConstNodeId, next: usize = 0 };
-        var frames: std.ArrayList(Frame) = .empty;
-        defer frames.deinit(self.allocator);
-        try frames.append(self.allocator, .{ .node = node });
-        while (frames.items.len != 0) {
-            const frame = &frames.items[frames.items.len - 1];
-            var single: [1]checked.ConstNodeId = undefined;
-            const children: ?[]const checked.ConstNodeId = switch (const_store.get(frame.node)) {
-                .pending => invariant("a stored constant was never filled"),
-                .image, .crash, .checked_error, .fn_value, .boxy_fn => null,
-                .zst, .scalar, .str => &.{},
-                .box => |child| blk: {
-                    single[0] = child;
-                    break :blk &single;
-                },
-                .nominal => |nominal| blk: {
-                    single[0] = nominal.backing;
-                    break :blk &single;
-                },
-                .tuple, .record => |items| items,
-                .tag => |tag| tag.payloads,
-                .list => |list| switch (list.items) {
-                    .nodes => |items| items,
-                    .empty, .packed_bytes => &.{},
-                },
-            };
-            var answer: DataAlone = if (children == null) .no else .yes;
-            var unanswered: ?checked.ConstNodeId = null;
-            if (children) |items| while (frame.next < items.len) {
-                const child = items[frame.next];
-                switch (answers[@backingInt(child)]) {
-                    .yes => frame.next += 1,
-                    .no => {
-                        answer = .no;
-                        break;
-                    },
-                    .unknown => {
-                        unanswered = child;
-                        break;
-                    },
-                }
-            };
-            if (unanswered) |child| {
-                try frames.append(self.allocator, .{ .node = child });
-                continue;
-            }
-            answers[@backingInt(frame.node)] = answer;
-            _ = frames.pop();
-        }
-        return answers[@backingInt(node)] == .yes;
     }
 
     /// The names `source`'s stored types intern.
@@ -2120,7 +2037,7 @@ pub const Program = struct {
     /// The integer list worker for `item` of a `List` template: the generic
     /// worker's scope, inputs, and dictionaries, with the list item variable
     /// bound to `item` in its signature and body.
-    fn listIntTemplateScope(self: *Program, module_index: ModuleIndex, template_id: checked_names.CheckedProcedureTemplateId, item: ListIntItem) Allocator.Error!WorkerId {
+    pub fn listIntTemplateScope(self: *Program, module_index: ModuleIndex, template_id: checked_names.CheckedProcedureTemplateId, item: ListIntItem) Allocator.Error!WorkerId {
         const key: WorkerKey = .{ .template = .{ .module = module_index, .template = template_id, .binding = .{ .list_int = item } } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const generic_id = try self.templateScope(module_index, template_id);
@@ -4077,7 +3994,9 @@ pub const Program = struct {
     }
 
     /// The entry of the immortal callable of `literal_argument` root `root`
-    /// of `module_index`, whose value has type `ty`: its entry wrapper,
+    /// of `module_index`, whose value has type `ty`. A polymorphic
+    /// constant's stored instance is restored by a thunk of the reader's
+    /// own (`rootRestoreWorker`). Otherwise it is the root's entry wrapper,
     /// which restores the stored value, or converts the literal where none
     /// is stored; in the compile-time program evaluating the root, the read
     /// of its slot once it completes (a validate-only root stores no value,
@@ -4085,28 +4004,14 @@ pub const Program = struct {
     pub fn rootThunkEntry(self: *Program, module_index: ModuleIndex, root: checked.ComptimeRootId, ty: TypeId) Allocator.Error!WorkerId {
         const compile_time_root = self.module(module_index).view.compile_time_roots.root(root);
         const argument = compile_time_root.literal_argument orelse invariant("a literal argument root records no literal argument");
-        if (try self.instanceRestoredByReaders(module_index, compile_time_root))
+        const payload = compile_time_root.payloadFor(.boxy);
+        if (argument.site.kind == .constant_instance and payload == .const_node)
             return try self.rootRestoreWorker(module_index, root, ty);
-        if (compile_time_root.payloadFor(.boxy) == .pending and !argument.validate_only and self.evaluatesRoot(module_index, root))
+        if (payload == .pending and !argument.validate_only and self.evaluatesRoot(module_index, root))
             return try self.rootSlotThunkWorker(module_index, root, ty);
         const wrapper = self.wrapper_by_root.get(.{ .module = module_index, .root = root }) orelse
             invariant("a literal argument root has no entry wrapper");
         return try self.methodEntryWorker(try self.templateRefWorker(wrapper));
-    }
-
-    /// Whether `root` of `module_index` is a polymorphic constant's instance
-    /// whose stored value is data alone: each reader restores it through a
-    /// thunk of its own (`rootRestoreWorker`), and no unit emits the root's
-    /// wrapper (`unitEmitsTemplate`). An instance holding a function is
-    /// restored by its wrapper, whose restore lowers the workers its value
-    /// names.
-    pub fn instanceRestoredByReaders(self: *Program, module_index: ModuleIndex, root: checked.CompileTimeRoot) Allocator.Error!bool {
-        const argument = root.literal_argument orelse return false;
-        if (argument.site.kind != .constant_instance) return false;
-        return switch (root.payloadFor(.boxy)) {
-            .const_node => |node| try self.storedDataAlone(.{ .module = module_index }, node),
-            .fn_value, .pending, .unevaluated, .discarded, .expect, .runtime => false,
-        };
     }
 
     /// The thunk restoring the stored value of polymorphic constant
@@ -4177,7 +4082,7 @@ pub const Program = struct {
         const identity = switch (key) {
             // Only a compile-time program reads a root's slot.
             .root_slot => self.programLocalIdentity(role, @backingInt(id)),
-            .root_restore => invariant("a root restore thunk names its identity by its value's type (`rootRestoreWorker`)"),
+            .root_restore => invariant("a root restore thunk names its identity by its value's type (`rootValueWorker`)"),
             .adapter, .structural, .structural_map, .crash_dictionary, .literal_thunk, .codec, .convert, .callable_eval_entry => try self.generatedWorkerIdentity(key, module_index, @backingInt(id), &.{}),
             .template, .lambda, .default, .method_entry, .root, .static_data, .inline_literal => invariant("a worker a module's object defines is no generated erased worker"),
         };
@@ -5239,6 +5144,8 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
 /// Output"). Finish this closure and publish its exports before lowering
 /// command roots, whose private helpers are not an interface for importers.
 fn seedUnitWorkers(program: *Program) Allocator.Error!void {
+    var stored_value_workers: std.ArrayList(WorkerId) = .empty;
+    defer stored_value_workers.deinit(program.allocator);
     for (program.modules.views.items) |*view| {
         if (!program.ownsModule(view.index)) continue;
         try view.bodies().demandIndex();
@@ -5264,7 +5171,7 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
             .reserved, .stored_const, .unimplemented => {},
         };
         for (templates, 0..) |template, index| {
-            if (!try unitEmitsTemplate(program, view, template, forwarded_roots, const_entries[index])) continue;
+            if (!unitEmitsTemplate(view, template, forwarded_roots, const_entries[index])) continue;
             if (try templateRejected(program, view, template)) continue;
             const worker = try program.templateWorker(view.index, @fromBackingInt(@intCast(index)));
             _ = try program.methodEntryWorker(worker);
@@ -5291,16 +5198,74 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
         for (view.bodies().defaultExprs()) |default| {
             _ = try program.defaultWorker(view.index, @fromBackingInt(default));
         }
+        try seedStoredValueWorkers(program, view, &stored_value_workers);
     }
     try program.drain();
+    // The unit defines, and so exports, the workers it lowers. A template
+    // only a stored lambda's restore names, as the lambda's owner, is a
+    // scope here and has no body (`Decoder.workerAs(.lambda_owner)`).
     for (program.workers.items) |worker| {
-        if (worker.imported or !Program.exportableKind(worker.key)) continue;
+        if (worker.imported or !worker.lowered or !Program.exportableKind(worker.key)) continue;
         const spec = program.result.store.getProcSpecPtr(worker.proc);
         spec.exported = true;
         spec.outcome_publisher = true;
         try program.result.exported_procs.append(program.allocator, worker.proc);
     }
-    try recordExports(program);
+    try recordExports(program, stored_value_workers.items);
+}
+
+/// Set up the workers the stored function values of `view`'s compile-time
+/// roots name, exactly as a reader's restore does (`StoredFn.recipeWorkers`),
+/// appending them to `out`. No procedure restores a stored value for
+/// another object (`unitEmitsTemplate`): each reader restores it, naming
+/// these workers, so this unit lowers and exports them.
+fn seedStoredValueWorkers(program: *Program, view: *const types.ModuleView, out: *std.ArrayList(WorkerId)) Allocator.Error!void {
+    const store = view.view.const_store;
+    var seen = try std.DynamicBitSetUnmanaged.initEmpty(program.allocator, store.nodeCount());
+    defer seen.deinit(program.allocator);
+    var pending: std.ArrayList(checked.ConstNodeId) = .empty;
+    defer pending.deinit(program.allocator);
+    for (view.view.compile_time_roots.roots.items()) |root| {
+        if (!rootValueRestoredByReaders(root)) continue;
+        switch (root.payloadFor(.boxy)) {
+            .const_node => |node| try pending.append(program.allocator, node),
+            .fn_value, .pending, .unevaluated, .discarded, .expect, .runtime => {},
+        }
+    }
+    while (pending.pop()) |node| {
+        if (seen.isSet(@backingInt(node))) continue;
+        seen.set(@backingInt(node));
+        switch (store.get(node)) {
+            .pending, .image, .crash, .checked_error => {},
+            .fn_value => invariant("a Boxy stored value holds an LSS function"),
+            .list => |list| switch (list.items) {
+                .nodes => |items| try pending.appendSlice(program.allocator, items),
+                .empty => {},
+            },
+            .box => |inner| try pending.append(program.allocator, inner),
+            .tuple, .record => |items| try pending.appendSlice(program.allocator, items),
+            .tag => |tag| try pending.appendSlice(program.allocator, tag.payloads),
+            .nominal => |nominal| try pending.append(program.allocator, nominal.backing),
+            .boxy_fn => |function| {
+                try StoredFn.recipeWorkers(program, store.strBytes(function.recipe), out);
+                try pending.appendSlice(program.allocator, function.captures);
+            },
+        }
+    }
+}
+
+/// Whether readers restore the stored value of `root` themselves, so no
+/// procedure of its module restores it for them: a constant's, a callable
+/// binding's, or a polymorphic constant instance's stored value.
+fn rootValueRestoredByReaders(root: checked.CompileTimeRoot) bool {
+    return switch (root.kind) {
+        .constant, .hoisted_constant, .callable_binding => true,
+        .literal_argument => blk: {
+            const argument = root.literal_argument orelse invariant("a literal argument root records no literal argument");
+            break :blk argument.site.kind == .constant_instance;
+        },
+        .expect, .repl_expr, .interpolation_conversion, .hoisted_validation, .numeral_conversion, .quote_conversion => false,
+    };
 }
 
 /// Record, for each worker the unit exports, what an importer resolves a
@@ -5317,6 +5282,8 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
 ///   procedure alias forwards to, a registered method, an exposed
 ///   constant's entry procedure, and the entry wrapper of a callable
 ///   binding, with each one's integer list workers;
+/// - every worker a stored function value of a compile-time root names,
+///   which a reader restoring the value names (`seedStoredValueWorkers`);
 /// - every default, which a construction omitting its field calls;
 /// - every lambda and dictionary entry that takes a type table: a function
 ///   value an importer's compile-time evaluation stored can be any of them,
@@ -5332,7 +5299,7 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
 /// alone. The outcome-restitution variant ARC later publishes for a worker
 /// gets a record as visible as the worker's (`finishLoweredOutput`), since
 /// an importer demands it only through a call of the worker.
-fn recordExports(program: *Program) Allocator.Error!void {
+fn recordExports(program: *Program, stored_value_workers: []const WorkerId) Allocator.Error!void {
     const allocator = program.allocator;
     const visible = try allocator.alloc(bool, program.workers.items.len);
     defer allocator.free(visible);
@@ -5346,7 +5313,7 @@ fn recordExports(program: *Program) Allocator.Error!void {
 
         fn worker(self: @This(), id: WorkerId) Allocator.Error!void {
             const record = self.program.worker(id);
-            if (record.imported or !Program.exportableKind(record.key)) return;
+            if (record.imported or !record.lowered or !Program.exportableKind(record.key)) return;
             if (self.visible[@backingInt(id)]) return;
             self.visible[@backingInt(id)] = true;
             try self.pending.append(self.program.allocator, id);
@@ -5436,20 +5403,12 @@ fn recordExports(program: *Program) Allocator.Error!void {
         };
         for (view.view.compile_time_roots.roots.items()) |root| switch (root.kind) {
             .callable_binding => if (program.wrapper_by_root.get(.{ .module = module_index, .root = root.id })) |wrapper| try visit.template(module_index, wrapper),
-            // An importer whose frame derives a polymorphic constant's
-            // instance from its types reads the instance root of any module
-            // holding it at that type (`Program.constantInstance`), through
-            // the root's wrapper when the instance holds a function (one
-            // that is data alone has no wrapper; `instanceRestoredByReaders`).
-            .literal_argument => {
-                const argument = root.literal_argument orelse invariant("a literal argument root records no literal argument");
-                if (argument.site.kind == .constant_instance and !argument.sealed) {
-                    if (program.wrapper_by_root.get(.{ .module = module_index, .root = root.id })) |wrapper| try visit.template(module_index, wrapper);
-                }
-            },
-            .constant, .hoisted_constant, .hoisted_validation, .expect, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr => {},
+            .constant, .hoisted_constant, .hoisted_validation, .expect, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => {},
         };
     }
+    // Every reader restoring a stored function value of these modules names
+    // the workers its recipe names.
+    for (stored_value_workers) |id| try visit.worker(id);
     for (program.workers.items, 0..) |worker, index| switch (worker.key) {
         .default => try visit.worker(@fromBackingInt(@intCast(index))),
         .lambda, .method_entry => if (worker.needs != null) try visit.worker(@fromBackingInt(@intCast(index))),
@@ -5467,7 +5426,7 @@ fn recordExports(program: *Program) Allocator.Error!void {
     const result_allocator = program.result.store.allocator;
     try program.result.boxy_exports.ensureTotalCapacity(result_allocator, @intCast(program.result.exported_procs.items.len));
     for (program.workers.items, visible) |worker, is_visible| {
-        if (worker.imported or !Program.exportableKind(worker.key)) continue;
+        if (worker.imported or !worker.lowered or !Program.exportableKind(worker.key)) continue;
         const template: collections.OptionalU32 = switch (worker.key) {
             .template => |key| .some(@backingInt(key.template)),
             .lambda, .method_entry, .default, .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => .none,
@@ -5492,15 +5451,14 @@ fn templateRejected(program: *Program, view: *const types.ModuleView, template: 
 /// design.md "Literal Arguments"); and a validation root has no value for
 /// any body to read.
 /// Exact procedure aliases forward to their targets without evaluator wrappers.
-/// A constant whose stored value is data alone has no caller of its wrapper
-/// either: every read restores the stored value where it reads, so the
-/// wrapper is emitted only while a constant's template names it as its entry
-/// procedure (`const_entry`), and neither has a polymorphic constant's
-/// instance whose value is data alone (`instanceRestoredByReaders`). A
-/// stored function value's wrapper stays: its
-/// restore is what lowers the workers the value names, which other objects
-/// link against.
-fn unitEmitsTemplate(program: *Program, view: *const types.ModuleView, template: checked.CheckedProcedureTemplate, forwarded_roots: []const bool, const_entry: bool) Allocator.Error!bool {
+/// A root whose value compile-time evaluation stored has no caller of its
+/// wrapper either when every reader restores the value where it reads: a
+/// constant's (unless its template still names the wrapper as its entry
+/// procedure, `const_entry`), a callable binding's and a polymorphic
+/// constant instance's (`rootValueRestoredByReaders`). The workers a stored
+/// function value names are set up without the wrapper
+/// (`seedStoredValueWorkers`).
+fn unitEmitsTemplate(view: *const types.ModuleView, template: checked.CheckedProcedureTemplate, forwarded_roots: []const bool, const_entry: bool) bool {
     return switch (template.body) {
         .checked_body, .intrinsic_wrapper, .unimplemented => true,
         .entry_wrapper => |wrapper_id| blk: {
@@ -5509,12 +5467,8 @@ fn unitEmitsTemplate(program: *Program, view: *const types.ModuleView, template:
             const root = view.view.compile_time_roots.root(root_id);
             break :blk switch (root.kind) {
                 .expect, .repl_expr, .interpolation_conversion, .hoisted_validation, .numeral_conversion, .quote_conversion => false,
-                .constant, .hoisted_constant => const_entry or switch (root.payloadFor(.boxy)) {
-                    .const_node => |node| !try program.storedDataAlone(.{ .module = view.index }, node),
-                    .fn_value, .pending, .unevaluated, .discarded, .expect, .runtime => true,
-                },
-                .callable_binding => true,
-                .literal_argument => !try program.instanceRestoredByReaders(view.index, root),
+                .constant, .hoisted_constant => const_entry or root.payloadFor(.boxy) != .const_node,
+                .callable_binding, .literal_argument => !(rootValueRestoredByReaders(root) and root.payloadFor(.boxy) == .const_node),
             };
         },
     };

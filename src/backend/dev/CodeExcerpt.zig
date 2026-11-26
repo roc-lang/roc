@@ -151,6 +151,10 @@ pub const DataItem = struct {
     /// can give to a different constant. A pack names such a datum by
     /// content instead; see `ContentNames`.
     program_local_name: bool = false,
+    /// A stored constant's image, named by its digest
+    /// (`lir.Program.StaticDataExport.pool_image`): a unit image leaves it to
+    /// the constant pool and imports it (design.md "Constant Pool").
+    pool_image: bool = false,
 };
 
 /// Immutable catalog storage, shared by worker fragments and assembled sets.
@@ -427,6 +431,7 @@ fn copyData(a: Allocator, item: DataItem) Allocator.Error!DataItem {
         .symbol_offset = item.symbol_offset,
         .relocations = relocations,
         .program_local_name = item.program_local_name,
+        .pool_image = item.pool_image,
     };
 }
 
@@ -807,7 +812,8 @@ pub const ContentNames = struct {
                 .alignment = data_export.alignment,
                 .symbol_offset = 0,
                 .relocations = relocations,
-                .program_local_name = !data_export.is_exported,
+                .program_local_name = !data_export.is_exported and !data_export.pool_image,
+                .pool_image = data_export.pool_image,
             };
         }
         for (items) |item| try self.items.put(allocator, item.name, item);
@@ -1137,7 +1143,8 @@ pub const PreparedData = struct {
                 .alignment = constant.alignment,
                 .symbol_offset = constant.symbol_offset,
                 .relocations = relocations,
-                .program_local_name = !constant.is_exported,
+                .program_local_name = !constant.is_exported and !constant.pool_image,
+                .pool_image = constant.pool_image,
             };
             try items.put(a, item.name, .{ .item = item });
         }
@@ -2094,6 +2101,7 @@ pub fn renamedData(a: Allocator, item: DataItem, names: *const ContentNames) All
         .symbol_offset = item.symbol_offset,
         .relocations = relocations,
         .program_local_name = false,
+        .pool_image = item.pool_image,
     };
 }
 

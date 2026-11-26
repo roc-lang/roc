@@ -58,6 +58,8 @@ pub const Inputs = struct {
     /// The size of one function table entry of the images' unwind tables:
     /// 12 bytes on x86_64, 8 on arm64.
     function_table_entry_size: u32,
+    /// Where the stored images the units' pool imports name are.
+    pool: unit_walk.PoolSource,
 };
 
 /// Where the time went, for `--timings`.
@@ -69,6 +71,11 @@ pub const Timing = struct {
     sites_patched: u64 = 0,
     host_sites: u64 = 0,
     rebases: u64 = 0,
+    /// Stored images the units name, the ones the composition placed, and
+    /// their bytes (design.md "Constant Pool").
+    pool_named: u64 = 0,
+    pool_placed: u64 = 0,
+    pool_bytes: u64 = 0,
 };
 
 /// Why a run image could not be composed.
@@ -103,8 +110,13 @@ pub const Plan = struct {
     table_slots: [][]collections.OptionalU32,
     function_table_entry_size: u32,
     layout_ns: u64,
+    /// The stored images the placed atoms name, each placed once at
+    /// `pool_offset` in the writable region.
+    pool: unit_walk.Pool,
+    pool_offset: u64,
 
     pub fn deinit(self: *Plan) void {
+        self.pool.deinit(self.gpa);
         for (self.states) |state_or_null| if (state_or_null) |state| {
             self.gpa.free(state.atoms);
             self.gpa.free(state.targets);
@@ -158,6 +170,9 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
     defer exports.deinit(gpa);
     for (inputs.shim_builtins) |name| _ = exports.remove(name);
 
+    var pool: unit_walk.Pool = .{ .source = inputs.pool };
+    var pool_owned = true;
+    defer if (pool_owned) pool.deinit(gpa);
     var walk: unit_walk.Walk = .{
         .gpa = gpa,
         .images = images,
@@ -165,6 +180,7 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
             .exports = &exports,
             .host = .{ .context = @ptrCast(&inputs.host_symbols), .find = findHostSymbol },
             .host_required = inputs.host_symbols,
+            .pool = &pool,
         },
     };
     defer walk.deinit();
@@ -182,6 +198,9 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
     try walk.run();
     // Every import resolves to a program symbol or one the shim resolves.
     std.debug.assert(walk.resolver.missing.count() == 0);
+    // The stored images reached atoms name, each placed once.
+    pool.markKept(walk.states);
+    try pool.layOut(gpa);
 
     var order_list: std.ArrayList(u32) = .empty;
     defer order_list.deinit(gpa);
@@ -219,6 +238,11 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
         places[index].data = writable_len;
         writable_len += view.data().len;
     }
+    // The constant pool follows the images' data.
+    writable_alignment = @max(writable_alignment, pool.alignment);
+    writable_len = std.mem.alignForward(u64, writable_len, pool.alignment);
+    const pool_offset = writable_len;
+    writable_len += pool.size;
     for (order) |index| {
         const view = images[index].view;
         if (view.bssSize() == 0) continue;
@@ -289,7 +313,7 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
         const view = images[index].view;
         const state = walk.states[index].?;
         for (view.sites()) |site| {
-            if (!placedSite(state, table_slots[index], entry_size, site)) continue;
+            if (!placedSite(view, state, table_slots[index], entry_size, site)) continue;
             const kind: UnitImage.SiteKind = @fromBackingInt(site.kind);
             const region: UnitImage.Region = @fromBackingInt(site.region);
             // The table is sorted once written, so no field in it may be
@@ -323,6 +347,8 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
             }
         }
     }
+    // Every pointer word of the kept stored images.
+    rebase_count += pool.pointerCount();
     var slot_symbols: std.ArrayList(u32) = .empty;
     errdefer slot_symbols.deinit(gpa);
     var slot_site_starts: std.ArrayList(u32) = .empty;
@@ -361,6 +387,7 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
     const states = walk.states;
     walk.states = &.{};
     images_owned = false;
+    pool_owned = false;
     return .{
         .gpa = gpa,
         .images = images,
@@ -386,6 +413,8 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
         .table_slots = table_slots,
         .function_table_entry_size = entry_size,
         .layout_ns = elapsed(std_io, started),
+        .pool = pool,
+        .pool_offset = pool_offset,
     };
 }
 
@@ -394,7 +423,7 @@ fn hostTarget(state: unit_walk.Walk.State, site: UnitImage.Site) ?usize {
     if (site.target_region != UnitImage.import_target) return null;
     return switch (state.targets[site.target]) {
         .host => |symbol| @intCast(symbol),
-        .app => null,
+        .app, .pool => null,
         .missing => unreachable, // the host lookup finds every symbol the host may define
     };
 }
@@ -403,11 +432,11 @@ fn hostTarget(state: unit_walk.Walk.State, site: UnitImage.Site) ?usize {
 /// unwind information, in a kept entry of its function table (`slots`),
 /// or in a reached atom of the block. Sites in debug fragments are never
 /// placed.
-fn placedSite(state: unit_walk.Walk.State, slots: []const collections.OptionalU32, entry_size: u32, site: UnitImage.Site) bool {
+fn placedSite(view: UnitImage.View, state: unit_walk.Walk.State, slots: []const collections.OptionalU32, entry_size: u32, site: UnitImage.Site) bool {
     const region: UnitImage.Region = @fromBackingInt(site.region);
     if (!region.isAllocated()) return false;
     if (region == .pdata) return slots[site.offset / entry_size] != .none;
-    return if (site.atom.get()) |atom| state.atoms[atom] else true;
+    return if (view.siteAtom(site)) |atom| state.atoms[atom] else true;
 }
 
 fn findHostSymbol(context: *const anyopaque, name: []const u8) ?u64 {
@@ -436,7 +465,8 @@ pub fn write(self: *const Plan, std_io: std.Io, inputs: Inputs, composed: RunIma
     for (self.order) |index| {
         const view = self.images[index].view;
         const place = self.places[index];
-        const atoms = self.states[index].?.atoms;
+        // The block's reached atoms; the writable data is placed whole.
+        const atoms = self.states[index].?.atoms[0..view.atoms().len];
         var atom: u32 = 0;
         while (atom < atoms.len) {
             if (!atoms[atom]) {
@@ -473,7 +503,7 @@ pub fn write(self: *const Plan, std_io: std.Io, inputs: Inputs, composed: RunIma
         const state = self.states[index].?;
         const slots = self.table_slots[index];
         for (view.sites()) |site| {
-            if (!placedSite(state, slots, entry_size, site)) continue;
+            if (!placedSite(view, state, slots, entry_size, site)) continue;
             const kind: UnitImage.SiteKind = @fromBackingInt(site.kind);
             const region: UnitImage.Region = @fromBackingInt(site.region);
             const width: usize = @intCast(UnitImage.kindWidth(kind));
@@ -512,6 +542,7 @@ pub fn write(self: *const Plan, std_io: std.Io, inputs: Inputs, composed: RunIma
                     continue;
                 },
                 .missing => unreachable, // the host lookup finds every symbol the host may define
+                .pool => |entry| self.pool.address(entry, bases.writable + self.pool_offset),
             } else regionBase(place, bases, @fromBackingInt(site.target_region));
             const value = @as(i64, @intCast(target_offset)) + site.addend;
             switch (kind) {
@@ -533,6 +564,21 @@ pub fn write(self: *const Plan, std_io: std.Io, inputs: Inputs, composed: RunIma
                 },
                 .abs32, .abs32s => unreachable, // `plan` rejected every other site kind
             }
+        }
+    }
+    // Each kept stored image, once, its pointer words relocated as it is
+    // copied, each word a rebase.
+    const pool_base = bases.writable + self.pool_offset;
+    self.pool.write(composed.writable[@intCast(self.pool_offset)..][0..@intCast(self.pool.size)], pool_base);
+    timing.bytes_written += self.pool.size;
+    timing.pool_named = self.pool.entries.items.len;
+    timing.pool_placed = self.pool.kept.items.len;
+    timing.pool_bytes = self.pool.size;
+    for (self.pool.kept.items) |entry_index| {
+        const entry = self.pool.entries.items[entry_index];
+        for (entry.image.pointers) |pointer| {
+            composed.rebases[rebase_cursor] = .{ .offset = pool_base + entry.offset + pointer, .value = pool_base + unit_walk.Pool.pointerTarget(entry, pointer) };
+            rebase_cursor += 1;
         }
     }
     std.debug.assert(rebase_cursor == composed.rebases.len);
@@ -702,6 +748,7 @@ test "a run image composed from COFF images carries the placed functions' unwind
         .host_symbols = &.{"ext"},
         .shim_builtins = &.{},
         .function_table_entry_size = 12,
+        .pool = unit_walk.emptyPoolSource(),
     };
     var composition = try plan(allocator, std.testing.io, inputs);
     defer composition.deinit();
@@ -802,6 +849,7 @@ test "an arm64 unit placed after another reads its read-only data through ADRP a
         .host_symbols = &.{},
         .shim_builtins = &.{},
         .function_table_entry_size = 8,
+        .pool = unit_walk.emptyPoolSource(),
     };
     var composition = try plan(allocator, std.testing.io, inputs);
     defer composition.deinit();

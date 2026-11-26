@@ -24672,9 +24672,7 @@ fn copyPairingColumns(comptime T: type, source: T, allocator: Allocator) Allocat
         @memcpy(result, source);
         return result;
     } else if (comptime @typeInfo(T) == .@"struct") {
-        if (comptime @hasDecl(T, "copyForPairing")) {
-            return source.copyForPairing(allocator);
-        } else if (comptime @hasDecl(T, "fromBorrowedSlice") and @hasField(T, "length")) {
+        if (comptime @hasDecl(T, "fromBorrowedSlice") and @hasField(T, "length")) {
             artifact_serialize.assertRelocatablePod(std.meta.Child(T.Slice));
             return T.fromSlice(allocator, source.items());
         } else if (comptime @hasField(T, "items") and @hasField(T, "capacity")) {
@@ -40314,8 +40312,8 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     // an empty default container, which still serializes/relocates correctly.
     var const_store_src = ConstStore.init(gpa);
     defer const_store_src.deinit();
-    const c0 = try const_store_src.append(.{ .scalar = .{ .u64 = 7 } });
-    const c1 = try const_store_src.append(.{ .scalar = .{ .i32 = -3 } });
+    const c0 = try const_store_src.append(.{ .list = .{ .items = .empty, .capacity = 7 } });
+    const c1 = try const_store_src.append(.{ .list = .{ .items = .empty, .capacity = 3 } });
 
     var checked_types_src = CheckedTypeStore{};
     defer checked_types_src.deinit(gpa);
@@ -40422,8 +40420,8 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     try std.testing.expectEqual(ModuleEnv.ModuleKind.module, loaded.module_identity.kind);
 
     // const_store entries survive.
-    try std.testing.expectEqual(@as(u64, 7), loaded.const_store.get(c0).scalar.u64);
-    try std.testing.expectEqual(@as(i32, -3), loaded.const_store.get(c1).scalar.i32);
+    try std.testing.expectEqual(@as(u64, 7), loaded.const_store.get(c0).list.capacity);
+    try std.testing.expectEqual(@as(u64, 3), loaded.const_store.get(c1).list.capacity);
 
     // checked_types roots survive.
     try std.testing.expectEqual(@as(usize, 2), loaded.checked_types.roots.items().len);
@@ -40643,8 +40641,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x9B, 0xF2, 0x6E, 0x4E, 0x71, 0xED, 0x77, 0x8B, 0x27, 0x7D, 0x76, 0x1F, 0x32, 0x58, 0xF6, 0x07,
-        0x0F, 0x43, 0x3F, 0x87, 0xD1, 0xEF, 0x20, 0xC1, 0x9F, 0x9F, 0x9A, 0xED, 0x34, 0xC1, 0xC5, 0x1A,
+        0xA4, 0xA1, 0xE3, 0x91, 0x2F, 0x9D, 0x90, 0x78, 0x4E, 0xEC, 0x2E, 0xE7, 0x87, 0x01, 0x89, 0xA3,
+        0x9F, 0xF0, 0xFB, 0x2F, 0x36, 0x70, 0x10, 0xDD, 0x68, 0xDE, 0x76, 0x0D, 0x3F, 0xFD, 0x31, 0x92,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
