@@ -11620,7 +11620,7 @@ const Lowerer = struct {
             if (self.comptime_site) |site| {
                 return try self.l.result.store.addCFStmt(try self.l.comptimeExhaustivenessFailed(site), self.where.glue());
             }
-            return try self.l.result.store.addCFStmt(.{ .runtime_error = {} }, self.where.glue());
+            return try self.l.patternMatchFailed(self.where);
         }
 
         pub fn lirLocalForOcc(self: *const MatchTreeCtx, _: match_tree.Step, ty: Type.TypeId, _: ?LIR.LocalId) Common.LowerError!LIR.LocalId {
@@ -12526,13 +12526,22 @@ const Lowerer = struct {
         const crash = if (comptime_site) |site|
             try self.result.store.addCFStmt(try self.comptimeExhaustivenessFailed(site), where.glue())
         else
-            try self.result.store.addCFStmt(.{ .runtime_error = {} }, where.glue());
+            try self.patternMatchFailed(where);
         const matched = try self.lowerPatternThen(where, pat_id, source, next, miss, next);
         return try self.result.store.addCFStmt(.{ .join = .{
             .id = miss.join_id,
             .params = LIR.LocalSpan.empty(),
             .body = crash,
             .remainder = matched,
+        } }, where.glue());
+    }
+
+    /// The terminal of a failed match or destructure with no compile-time
+    /// exhaustiveness site: the crash every strategy reports for a value no
+    /// pattern matches.
+    fn patternMatchFailed(self: *Lowerer, where: LowerSite) Common.LowerError!LIR.CFStmtId {
+        return try self.result.store.addCFStmt(.{ .crash = .{
+            .msg = .{ .literal = try self.result.store.insertString("pattern match failed") },
         } }, where.glue());
     }
 

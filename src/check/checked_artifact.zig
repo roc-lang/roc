@@ -23363,7 +23363,7 @@ fn publishLiteralArgumentRoots(
     }
     try edge_args.resize(allocator, edges.items.len);
     for (edge_args.items) |*list| list.* = .empty;
-    const NewRoot = struct { site: LiteralSite, ty: CheckedTypeId, edge: LiteralEdge, callee_requirement: u32, validate_only: bool, sealed: bool, canonical: bool = false, holds_function: bool = false, owner_expr: CIR.Expr.Idx };
+    const NewRoot = struct { site: LiteralSite, ty: CheckedTypeId, edge: LiteralEdge, callee_requirement: u32, validate_only: bool, sealed: bool, canonical: bool = false, owner_expr: CIR.Expr.Idx };
     var new_roots = std.ArrayListUnmanaged(NewRoot).empty;
     defer new_roots.deinit(allocator);
     var root_index = std.AutoHashMapUnmanaged(ObligationKey, u32).empty;
@@ -23551,7 +23551,6 @@ fn publishLiteralArgumentRoots(
                             // root is stored when its value is data alone,
                             // at a sealed type too.
                             .validate_only = !constant_instance and (!obligation.site.carriesValue() or holds_function),
-                            .holds_function = constant_instance and holds_function,
                             .sealed = sealed,
                             // The canonical instantiation's own constant;
                             // its other requirements are other constants'.
@@ -23665,7 +23664,6 @@ fn publishLiteralArgumentRoots(
                     .validate_only = new_root.validate_only,
                     .sealed = new_root.sealed,
                     .canonical = new_root.canonical,
-                    .holds_function = new_root.holds_function,
                 },
             });
         }
@@ -26264,11 +26262,6 @@ pub const LiteralArgumentRoot = struct {
     /// it, and it alone reports the constant's `dbg` and `expect` (design.md
     /// "Polymorphic Constants").
     canonical: bool = false,
-    /// A polymorphic constant's instance whose type holds a function value.
-    /// Its value is stored, as every instance's is; under `.lss` the Solved
-    /// program evaluates it, as it evaluates every root holding a function
-    /// value (design.md "Compile-Time Evaluation Under `.lss`").
-    holds_function: bool = false,
 };
 
 /// The literal-conversion root kinds, as a payload-free classification
@@ -26471,9 +26464,10 @@ pub const CompileTimeRoot = struct {
     /// Arguments").
     pub fn isBoxyEvaluated(self: *const CompileTimeRoot) bool {
         return switch (self.kind) {
-            // A polymorphic constant's instance holding a function value is
-            // a Solved program's under `.lss`, as any root holding one is.
-            .literal_argument => !self.literal_argument.?.holds_function,
+            // A polymorphic constant's instance is the constant's value at
+            // that type, which the evaluator of the compilation's own
+            // strategy computes, as it computes every constant's.
+            .literal_argument => !self.isConstantInstance(),
             .interpolation_conversion => true,
             .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .repl_expr => false,
         };

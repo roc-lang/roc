@@ -7171,8 +7171,9 @@ Monotype's instance index): every root of one constant at one type holds
 one value.
 
 An instance root's value is stored whatever it holds: an image for data, and
-nodes for a value holding a function, which under `.lss` the Solved program
-evaluates, as it evaluates every root holding a function value. Its
+nodes for a value holding a function. The evaluator of the compilation's own
+strategy evaluates it, as it evaluates every constant: under `.lss`, the
+Solved program. Its
 evaluation is the only place the constant's body runs: the root enters the
 frames of the schemes its edge instantiates and calls the constant's entry
 wrapper there with that frame's descriptors, dictionaries and literal
@@ -19541,10 +19542,10 @@ is filed per strategy only because of its stored images, Stored Images).
   whose stored result holds the failure, so a compilation that restores the
   result from the checked-module cache reports it again without converting
   the literal again.
-- A literal argument root is the `.boxy` evaluator's, and every compilation
-  evaluates it like any pending root of its modules, under either strategy,
-  so a checked module holds the same values whichever strategy completed
-  it. A `.boxy` compilation evaluates it in dependency order: the request
+- A literal argument root that is no polymorphic constant's instance is the
+  `.boxy` evaluator's, and every compilation evaluates it like any pending
+  root of its modules, under either strategy, so a checked module holds the
+  same values whichever strategy completed it. A `.boxy` compilation evaluates it in dependency order: the request
   scheduler (`CompileTimeRequestScheduler`) and the finalizer's completion
   state walk the scheme a root's edge instantiates and treat a template's
   `literal_argument_demand` as reads, so each root completes before any root

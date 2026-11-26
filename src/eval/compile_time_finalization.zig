@@ -8294,12 +8294,13 @@ fn compileTimeRootForRequest(
 }
 
 /// Whether a root may hold a function value, so that it runs in a program
-/// that stores function values: every root but a literal argument root and
-/// an interpolation conversion root, which hold none (design.md "Literal
-/// Arguments"), except a polymorphic constant's instance, which is stored
-/// whatever it holds (design.md "Polymorphic Constants").
+/// that stores function values: every root but a literal argument root that
+/// is no polymorphic constant's instance and an interpolation conversion
+/// root, which hold none (design.md "Literal Arguments"). A polymorphic
+/// constant's instance is stored whatever it holds (design.md "Polymorphic
+/// Constants").
 fn functionClassified(root: checked.CompileTimeRoot) bool {
-    return !root.isBoxyEvaluated() or root.isConstantInstance();
+    return !root.isBoxyEvaluated();
 }
 
 /// Store an evaluated root's value; a hoisted validation keeps no value,
