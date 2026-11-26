@@ -5177,7 +5177,8 @@ pub const Builder = struct {
                     },
                 };
             },
-            // A polymorphic constant's canonical instantiation: its entry
+            // The instantiation every compilation evaluates a polymorphic
+            // constant at (design.md "Polymorphic Constants"): its entry
             // wrapper's scheme with every variable sealed, as a scope that
             // binds none seals it; the frame derives its dictionaries and
             // literal arguments from those types.
