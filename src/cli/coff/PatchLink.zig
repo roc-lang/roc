@@ -466,8 +466,9 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         .symbol_slots = symbol_slots,
     };
     // Each kept stored image, once, its pointer words relocated as it is
-    // copied.
-    pool.write(mapped[@intCast(context.fileOffsetOf(pool_rva))..][0..@intCast(pool.size)], exe.image_base + pool_rva);
+    // copied. An empty pool takes no bytes of the data section, so it has
+    // no file offset.
+    if (pool.size != 0) pool.write(mapped[@intCast(context.fileOffsetOf(pool_rva))..][0..@intCast(pool.size)], exe.image_base + pool_rva);
     var copy_list: std.ArrayList(fanout.Copy) = .empty;
     defer copy_list.deinit(gpa);
     var symbol_ranges: std.ArrayList(fanout.Range) = .empty;
