@@ -19899,13 +19899,16 @@ Nothing a module emits depends on a module that imports it:
   not, since every use of a converted literal restores the root's stored
   value or converts the literal in place, and neither is a validation root's,
   which has no value for any body to read;
-  nor is the wrapper of a constant whose stored value is data alone
-  (an image) and whose template no longer names an entry
-  procedure, because every read of such a constant restores the stored value
-  into the reading body, so a constant no body reads puts no data in any
-  object, and an object imports a constant a body reads from the constant
-  pool rather than carrying it (Constant Pool); a stored function value's wrapper is emitted, since its restore
-  lowers the workers the value names, which other objects link against;
+  nor is the wrapper of a constant whose value is stored and whose
+  template no longer names an entry procedure, of a callable binding whose
+  value is stored, or of a polymorphic constant's stored instance, because
+  every read of such a value restores it into the reading body, so a
+  constant no body reads puts no data in any object, and an object imports
+  an image a body reads from the constant pool rather than carrying it
+  (Constant Pool); the workers a stored function value names, which
+  readers restoring it link against, are set up by the unit directly
+  (Stored Function Values), and a lambda written in the constant's own body
+  still has the wrapper lowered beside it as its owner;
 - its conversion workers are its own and memoized within it alone;
 - ARC solves each of its procedures' ownership signatures from the procedure's
   body and its callees, and a call from another module demands no ownership
@@ -31705,8 +31708,7 @@ restores it as its literal or as one stored static data candidate named by
 the image's node (`BodyContext.restoredImagePart`,
 `StaticDataValue.stored_image`). Whether a root is data alone is whether
 its node is an image (a root's type is closed, and a root holding no
-`.lss` function has a layout its type decides), which is all the decision
-to leave a constant's entry wrapper out of its unit reads.
+`.lss` function has a layout its type decides).
 
 Every producer of a data root writes its image. An evaluated root's image is
 written by one copying pass over evaluator memory guided by the root's const
