@@ -7630,8 +7630,11 @@ consumer that needs one entry per type asks the module's view for the one id
 its key index holds for the type's key (`canonicalId`) or compares two ids
 with `sameType`. A type that reaches an identity variable is identified by
 its id alone, because its key names its variables only by position. Whether
-a type reaches an identity variable is found by walking the types it reaches,
-never through its key.
+a type reaches an identity variable is stored with the type, never read
+through its key: publication marks it on each source type when it first
+reaches that type (`SealedVarFacts.identity_variables`), and a synthesized
+type settles it from its children once its payload is filled
+(`CheckedTypeRoot.identity`).
 
 A synthesized type's key is computed on first demand through its own key
 slot, like a source type's. A synthesized function type records that its key
