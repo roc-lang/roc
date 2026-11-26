@@ -123,8 +123,10 @@ fn captureBinding(allocator: Allocator, graph: []const CaptureNode, roots: []con
 pub const Capture = struct {
     plan: LirProgram.ConstPlanId,
     layout_idx: layout.Idx,
-    /// The captured value's stored type, in the program's types.
-    ty: const_store.ConstTypeId,
+    /// The captured value's type, which the const store writer steps into
+    /// the types of its parts (`partType`) and stores a part holding no
+    /// function at (`storedType`).
+    ty: TypeId,
     ptr: [*]u8,
 };
 
@@ -408,6 +410,68 @@ pub const Retained = struct {
         return try self.describeCapture(allocator, self.program.moduleByKey(store_module).index, function.shape, .{ .imported = .{ .metadata = imported, .function = function } }, capture);
     }
 
+    /// The type of a captured value (`Capture.ty`) and of its parts.
+    pub const PartTypeId = TypeId;
+
+    /// How a part of a stored value is reached from the value holding it,
+    /// as the value's const plan reaches the part's plan
+    /// (`const_schema.constPlanOf`).
+    pub const PartStep = union(enum) {
+        list_item,
+        box_payload,
+        /// A record's field, as its storage slot, or a tuple's item.
+        component: u32,
+        /// Payload `index` of the tag at position `variant` among its
+        /// type's tags, the variant's discriminant in the type's plan.
+        tag_payload: struct { variant: u32, index: u32 },
+        nominal_backing,
+    };
+
+    /// The type of the part `step` reaches of a value of type `ty`.
+    pub fn partType(self: *Retained, result: *LirProgram.Result, ty: TypeId, step: PartStep) Allocator.Error!TypeId {
+        const program = self.program;
+        program.result = result.*;
+        defer result.* = program.result;
+        const store = &program.store;
+        return switch (step) {
+            .nominal_backing => try program.layouts.converter.backing(ty),
+            .list_item => switch (store.get(ty)) {
+                .list => |item| item,
+                .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => invariant("a stored list's type is no list"),
+            },
+            .box_payload => switch (store.get(ty)) {
+                .box => |payload| payload,
+                .primitive, .empty_record, .record, .tuple, .tag_union, .list, .nominal, .function, .variable => invariant("a stored box's type is no box"),
+            },
+            .component => |index| switch (store.get(ty)) {
+                .tuple => |items| store.span(items)[index],
+                .record => |record| try program.layouts.fieldStorage(store.fieldSpan(record.fields)[index]),
+                .primitive, .empty_record, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a stored product's type is no product"),
+            },
+            .tag_payload => |payload| switch (store.get(ty)) {
+                .tag_union => |tag_union| store.span(store.tagSpan(tag_union.tags)[payload.variant].payloads)[payload.index],
+                .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a stored tag's type is no tag union"),
+            },
+        };
+    }
+
+    /// Whether `ty` holds no type variable.
+    pub fn typeIsClosed(self: *Retained, result: *LirProgram.Result, ty: TypeId) bool {
+        const program = self.program;
+        program.result = result.*;
+        defer result.* = program.result;
+        return program.store.isClosed(ty);
+    }
+
+    /// The stored type of a part of type `ty` holding no function, in
+    /// `result`'s types.
+    pub fn storedType(self: *Retained, result: *LirProgram.Result, ty: TypeId) Allocator.Error!const_store.ConstTypeId {
+        const program = self.program;
+        program.result = result.*;
+        defer result.* = program.result;
+        return try const_schema.constTypeOf(program, ty);
+    }
+
     fn importMetadata(self: *Retained, owner: [32]u8) Allocator.Error!*ImportedMetadata {
         if (self.imported.get(owner)) |loaded| return loaded;
         const source = self.metadata orelse invariant("a cached function has no metadata source");
@@ -533,7 +597,7 @@ pub const Retained = struct {
             slot.* = .{
                 .plan = try const_schema.constPlanOf(program, concrete),
                 .layout_idx = try program.layouts.layoutOf(concrete),
-                .ty = try const_schema.constTypeOf(program, concrete),
+                .ty = concrete,
                 .ptr = capture + offset,
             };
         }

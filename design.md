@@ -31656,20 +31656,26 @@ Lists And Strings Keep Their Capacity), every NaN is Roc's one NaN, and no
 list or string is a seamless slice. The producer decides the form: a root
 whose const plan can hold no function is data alone. A value holding a
 function or a failure is stored as nodes, and each of its parts whose value
-holds no function (a list, string, number, record or tag of data, including
-a value of a type that could hold a function and does not, such as an empty
-list of functions) is an image of its own, the child node's value
+holds no function is an image of its own, the child node's value
 (`ConstStoreWriter.fillPartImage`), at the type the part has in the value's
-stored type. So every node a value stores holds a function, except a
-failure's, and nothing else is stored as nodes: no list is stored as packed
-bytes, and the node forms `scalar`, `str` and `zst` have no producer. Every
+stored type, whenever the part's layout is a function of that type alone:
+its const plan holds no function, or holds `.boxy` functions, which every
+layout holds as erased callables, and its type is closed. Two kinds of
+function-free part therefore stay nodes: one of an `.lss` type that can hold
+a function (an empty list of functions, `None` of `[Some(a -> a), None]`),
+whose layout is its lambda sets', which its type does not decide, and a part
+of a `.boxy` capture of a polymorphic function whose type holds a variable
+in the type of a function it could hold. No list is stored as packed bytes,
+and the node forms `scalar`, `str` and `zst` have no producer. Every
 reader takes an image child as it takes a root's image: Boxy restores it
 through `restoreImageStep`, static data freezes or re-encodes it into the
 value holding it (`StaticInitializerMachine.writeStored`), and Monotype
 restores it as its literal or as one stored static data candidate named by
 the image's node (`BodyContext.restoredImagePart`,
-`StaticDataValue.stored_image`). A walk asking whether a stored value is data
-alone reads whether its node is an image.
+`StaticDataValue.stored_image`). Whether a root is data alone is whether
+its node is an image (a root's type is closed, and a root holding no
+`.lss` function has a layout its type decides), which is all the decision
+to leave a constant's entry wrapper out of its unit reads.
 
 Every producer of a data root writes its image. An evaluated root's image is
 written by one copying pass over evaluator memory guided by the root's const

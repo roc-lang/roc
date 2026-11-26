@@ -110,7 +110,7 @@ pub const Pool = struct {
 
 fn invariant(comptime message: []const u8) noreturn {
     if (builtin.mode == .debug) std.debug.panic("unit image loader invariant violated: " ++ message, .{});
-    unreachable;
+    unreachable; // a compiler invariant: only a compiler bug reaches this, which debug builds report above
 }
 
 /// Why an image could not be loaded.

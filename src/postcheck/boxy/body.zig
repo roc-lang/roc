@@ -7312,7 +7312,9 @@ pub const Builder = struct {
                             self.tasks.appendAssumeCapacity(.{ .restore_part = .{ .source = source, .node = nodes[index], .ty = elem } });
                         }
                     },
-                    .empty => invariant("a stored list without item nodes is not data alone"),
+                    // An empty list of an open type (a part of a capture of
+                    // a polymorphic function) is frozen from its node.
+                    .empty => try self.pushStoredDataPart(source, node, raw_ty),
                 }
             },
         }

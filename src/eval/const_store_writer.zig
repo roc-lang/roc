@@ -131,8 +131,9 @@ pub const Writer = struct {
     store_capture_types: std.ArrayList(const_store.ConstTypeId) = .empty,
     /// Content digests of the program's layouts, for the images it stores.
     layout_digests: ?layout.Digests = null,
-    /// Whether each plan can hold a function (`planHoldsFunction`).
-    plan_holds_function: collections.DenseMap(LirProgram.ConstPlanId, bool),
+    /// The function representation each plan can hold, if any
+    /// (`planFunctions`).
+    plan_functions: collections.DenseMap(LirProgram.ConstPlanId, ?base.SpecializationStrategy),
     /// Scratch for the parts `valueHoldsFunction` has still to look at.
     function_scan: std.ArrayList(ValueRequest) = .empty,
 
@@ -159,7 +160,7 @@ pub const Writer = struct {
             .type_translation = .init(allocator),
             .stored_values = std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId).init(allocator),
             .erased_callable_resolver = .{},
-            .plan_holds_function = collections.DenseMap(LirProgram.ConstPlanId, bool).init(allocator),
+            .plan_functions = collections.DenseMap(LirProgram.ConstPlanId, ?base.SpecializationStrategy).init(allocator),
         };
     }
 
@@ -219,7 +220,7 @@ pub const Writer = struct {
         defer self.allocator.free(described.captures);
         const requests_start = self.store_requests.items.len;
         for (described.captures) |capture| {
-            try self.store_requests.append(self.allocator, .{ .plan = capture.plan, .layout_idx = capture.layout_idx, .ty = capture.ty, .value = .{ .ptr = capture.ptr } });
+            try self.store_requests.append(self.allocator, .{ .plan = capture.plan, .layout_idx = capture.layout_idx, .ty = .{ .boxy = capture.ty }, .value = .{ .ptr = capture.ptr } });
         }
         try self.pushStoreFrame(.{ .boxy_fn = .{ .node = node, .recipe = described.recipe } }, requests_start, &.{});
     }
@@ -230,7 +231,7 @@ pub const Writer = struct {
         self.store_nodes.deinit(self.allocator);
         self.store_requests.deinit(self.allocator);
         self.store_frames.deinit(self.allocator);
-        self.plan_holds_function.deinit();
+        self.plan_functions.deinit();
         self.function_scan.deinit(self.allocator);
         self.checked_text.deinit(self.allocator);
         self.checked_components.deinit(self.allocator);
@@ -256,11 +257,11 @@ pub const Writer = struct {
             .compile_time_constant, .repl_expr => if (try self.planFunctionStrategy(root.plan) == null)
                 .{ .const_node = try self.storeImage(root.shape(), try self.storeRootType(root), value) }
             else
-                .{ .const_node = try self.storeValue(root.plan, root.ret_layout, root.ret_type, value) },
+                .{ .const_node = try self.storeValue(root.plan, root.ret_layout, .{ .stored = root.ret_type }, value) },
             .compile_time_callable => switch (plan) {
                 .fn_value => |set| .{ .fn_value = try self.storeFnValue(set, root.ret_layout, value) },
                 .erased_fn => |set| .{ .fn_value = try self.storeErasedFn(set, value) },
-                .boxy_fn => .{ .const_node = try self.storeValue(root.plan, root.ret_layout, root.ret_type, value) },
+                .boxy_fn => .{ .const_node = try self.storeValue(root.plan, root.ret_layout, .{ .stored = root.ret_type }, value) },
                 .pending,
                 .layout_only,
                 .zst,
@@ -366,14 +367,27 @@ pub const Writer = struct {
         );
     }
 
-    /// One value to store or scan, of the program's stored type `ty`.
+    /// One value to store or scan, of type `ty`.
     const ValueRequest = struct {
         plan: LirProgram.ConstPlanId,
         layout_idx: layout.Idx,
-        ty: const_store.ConstTypeId,
+        ty: PartType,
         value: Value,
         storage: LirProgram.CaptureSlotStorage = .value,
     };
+
+    /// The type of a value being stored: one of the program's stored types,
+    /// or, for a capture of a `.boxy` function value, the capture's type in
+    /// the `.boxy` program (`postcheck.Boxy.StoredFn.Capture.ty`), which a
+    /// polymorphic function's capture may hold variables of in the types of
+    /// the functions it holds.
+    const PartType = union(enum) {
+        stored: const_store.ConstTypeId,
+        boxy: BoxyTypeId,
+    };
+
+    const BoxyTypeId = lir.CheckedPipeline.BoxyStoredFunctions.PartTypeId;
+    const PartStep = lir.CheckedPipeline.BoxyStoredFunctions.PartStep;
 
     const StoreFinish = union(enum) {
         list: struct { node: checked.ConstNodeId, capacity: u64 },
@@ -421,7 +435,7 @@ pub const Writer = struct {
         self: *Writer,
         plan_id: LirProgram.ConstPlanId,
         layout_idx: layout.Idx,
-        ty: const_store.ConstTypeId,
+        ty: PartType,
         value: Value,
     ) Error!checked.ConstNodeId {
         self.clearStoreStacks();
@@ -519,8 +533,16 @@ pub const Writer = struct {
         const layout_idx = located.layout_idx;
         const part = located.value;
         // A part holding no function is data alone, which the store holds as
-        // its image (design.md "Stored Images").
-        if (!try self.valueHoldsFunction(request)) return self.fillPartImage(node, request.plan, layout_idx, request.ty, part);
+        // its image (design.md "Stored Images"), when its layout is a
+        // function of its type alone: its plan holds no function, or holds
+        // `.boxy` functions, which every layout holds as erased callables
+        // (an `.lss` function's layout is its lambda set's, which its type
+        // does not decide), and its type is closed (a part of a `.boxy`
+        // capture of a polymorphic function may hold a variable in its
+        // functions' types).
+        const functions = try self.planFunctions(request.plan);
+        const imaged = functions != .lss and !try self.valueHoldsFunction(request) and self.partTypeIsClosed(request.ty);
+        if (imaged) return self.fillPartImage(node, request.plan, layout_idx, request.ty, part);
         const requests_start = self.store_requests.items.len;
         const children = &self.store_requests;
         const finish: StoreFinish = switch (self.constPlan(request.plan).*) {
@@ -547,11 +569,11 @@ pub const Writer = struct {
                 const tag_base = self.resolveTagBase(layout_idx, part);
                 const selected = self.selectTagVariant(variants, tag_base.layout_idx, tag_base.value);
                 const payload_layout = self.tagPayloadLayout(tag_base.layout_idx, selected.discriminant);
-                try self.appendTagPayloadRequests(children, selected.payloads, payload_layout, tag_base.value, self.tagPayloadTypes(request.ty, selected.name));
+                try self.appendTagPayloadRequests(children, selected.payloads, payload_layout, tag_base.value, request.ty, selected.discriminant);
                 break :blk .{ .tag = .{ .node = node, .name = selected.name } };
             },
             .named => |named| blk: {
-                try children.append(self.allocator, .{ .plan = named.backing, .layout_idx = layout_idx, .ty = self.nominalBackingType(request.ty), .value = part });
+                try children.append(self.allocator, .{ .plan = named.backing, .layout_idx = layout_idx, .ty = try self.partTypeOf(request.ty, .nominal_backing), .value = part });
                 break :blk .{ .nominal = .{ .node = node, .plan = request.plan } };
             },
             .fn_value => |set| return self.pushFnValue(node, set, layout_idx, part),
@@ -578,11 +600,14 @@ pub const Writer = struct {
 
     /// Store `value` of `plan` at `layout_idx`, of the program's stored type
     /// `ty`, as the image node `node` holds.
-    fn fillPartImage(self: *Writer, node: checked.ConstNodeId, plan: LirProgram.ConstPlanId, layout_idx: layout.Idx, ty: const_store.ConstTypeId, value: Value) Error!void {
+    fn fillPartImage(self: *Writer, node: checked.ConstNodeId, plan: LirProgram.ConstPlanId, layout_idx: layout.Idx, ty: PartType, value: Value) Error!void {
         var graph = NativeRootExport.ImageGraph{ .allocator = self.allocator, .program = self.program };
         defer graph.deinit();
         const image = try NativeRootExport.imageRoot(&graph, .{ .ret_layout = layout_idx, .plan = plan }, value);
-        const root_type = try self.storeType(ty);
+        const root_type = try self.storeType(switch (ty) {
+            .stored => |stored| stored,
+            .boxy => |boxy| try self.boxyFunctions().retained.storedType(self.boxyFunctions().result, boxy),
+        });
         try self.store.fillImage(node, .{
             .bytes = image.bytes,
             .pointers = image.pointers,
@@ -594,12 +619,18 @@ pub const Writer = struct {
         });
     }
 
-    /// Whether plan `id` can hold a function, memoized per plan.
+    /// The function representation plan `id` can hold, if any
+    /// (`planFunctionStrategy`), memoized per plan.
+    fn planFunctions(self: *Writer, id: LirProgram.ConstPlanId) Allocator.Error!?base.SpecializationStrategy {
+        if (self.plan_functions.get(id)) |known| return known;
+        const functions = try self.planFunctionStrategy(id);
+        try self.plan_functions.put(id, functions);
+        return functions;
+    }
+
+    /// Whether plan `id` can hold a function.
     fn planHoldsFunction(self: *Writer, id: LirProgram.ConstPlanId) Allocator.Error!bool {
-        if (self.plan_holds_function.get(id)) |known| return known;
-        const holds = try self.planFunctionStrategy(id) != null;
-        try self.plan_holds_function.put(id, holds);
-        return holds;
+        return try self.planFunctions(id) != null;
     }
 
     /// Whether the value `start` names holds a function value: the parts
@@ -624,74 +655,78 @@ pub const Writer = struct {
                     const tag_base = self.resolveTagBase(located.layout_idx, located.value);
                     const selected = self.selectTagVariant(variants, tag_base.layout_idx, tag_base.value);
                     const payload_layout = self.tagPayloadLayout(tag_base.layout_idx, selected.discriminant);
-                    try self.appendTagPayloadRequests(pending, selected.payloads, payload_layout, tag_base.value, self.tagPayloadTypes(request.ty, selected.name));
+                    try self.appendTagPayloadRequests(pending, selected.payloads, payload_layout, tag_base.value, request.ty, selected.discriminant);
                 },
-                .named => |named| try pending.append(self.allocator, .{ .plan = named.backing, .layout_idx = located.layout_idx, .ty = self.nominalBackingType(request.ty), .value = located.value }),
+                .named => |named| try pending.append(self.allocator, .{ .plan = named.backing, .layout_idx = located.layout_idx, .ty = try self.partTypeOf(request.ty, .nominal_backing), .value = located.value }),
             }
         }
         return false;
     }
 
-    /// The program's stored type `ty` with every named layer stepped past:
-    /// the structural type a plan other than a nominal's has.
-    fn structuralType(self: *const Writer, ty: const_store.ConstTypeId) const_store.ConstTypeId {
-        var current = ty;
-        while (true) switch (self.program.const_types.get(current)) {
-            .named => |named| current = (named.backing.get() orelse writerInvariant("a stored named type has no backing")).ty,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return current,
+    fn boxyFunctions(self: *const Writer) BoxyFunctions {
+        return self.boxy_functions orelse writerInvariant("a `.boxy` capture reached a program that stores no function value");
+    }
+
+    /// Whether a part of type `ty` can be stored at its type: every stored
+    /// type is closed, and a `.boxy` capture's part is when its type holds
+    /// no variable.
+    fn partTypeIsClosed(self: *const Writer, ty: PartType) bool {
+        return switch (ty) {
+            .stored => true,
+            .boxy => |boxy| self.boxyFunctions().retained.typeIsClosed(self.boxyFunctions().result, boxy),
         };
     }
 
-    /// The backing type of the nominal type `ty` (past any alias layers)
-    /// names, the type of a nominal plan's backing.
-    fn nominalBackingType(self: *const Writer, ty: const_store.ConstTypeId) const_store.ConstTypeId {
-        var current = ty;
-        while (true) switch (self.program.const_types.get(current)) {
-            .named => |named| {
-                const backing = (named.backing.get() orelse writerInvariant("a stored named type has no backing")).ty;
-                if (named.kind != .alias) return backing;
-                current = backing;
+    /// The type of the part `step` reaches of a value of type `ty`, as the
+    /// value's plan reaches the part's plan.
+    fn partTypeOf(self: *const Writer, ty: PartType, step: PartStep) Allocator.Error!PartType {
+        return switch (ty) {
+            .stored => |stored| .{ .stored = self.storedPartType(stored, step) },
+            .boxy => |boxy| .{ .boxy = try self.boxyFunctions().retained.partType(self.boxyFunctions().result, boxy, step) },
+        };
+    }
+
+    /// `partTypeOf` for one of the program's stored types.
+    fn storedPartType(self: *const Writer, ty: const_store.ConstTypeId, step: PartStep) const_store.ConstTypeId {
+        const types = &self.program.const_types;
+        if (step == .nominal_backing) {
+            var current = ty;
+            while (true) switch (types.get(current)) {
+                .named => |named| {
+                    const backing = (named.backing.get() orelse writerInvariant("a stored named type has no backing")).ty;
+                    if (named.kind != .alias) return backing;
+                    current = backing;
+                },
+                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => writerInvariant("a nominal plan's value has a type that is not named"),
+            };
+        }
+        // A plan other than a nominal's has its type's structure.
+        var structural = ty;
+        while (true) switch (types.get(structural)) {
+            .named => |named| structural = (named.backing.get() orelse writerInvariant("a stored named type has no backing")).ty,
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => break,
+        };
+        const content = types.get(structural);
+        return switch (step) {
+            .nominal_backing => unreachable, // handled above
+            .list_item => switch (content) {
+                .list => |item| item,
+                .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => writerInvariant("a list plan's value has a type that is not a list"),
             },
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => writerInvariant("a nominal plan's value has a type that is not named"),
-        };
-    }
-
-    /// The item type of the list type `ty`.
-    fn listItemType(self: *const Writer, ty: const_store.ConstTypeId) const_store.ConstTypeId {
-        return switch (self.program.const_types.get(self.structuralType(ty))) {
-            .list => |item| item,
-            .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => writerInvariant("a list plan's value has a type that is not a list"),
-        };
-    }
-
-    /// The payload type of the box type `ty`.
-    fn boxPayloadType(self: *const Writer, ty: const_store.ConstTypeId) const_store.ConstTypeId {
-        return switch (self.program.const_types.get(self.structuralType(ty))) {
-            .box => |payload| payload,
-            .primitive, .named, .record, .tuple, .tag_union, .list, .func, .erased, .zst => writerInvariant("a box plan's value has a type that is not a box"),
-        };
-    }
-
-    /// The component types of the product type `ty`, in plan order.
-    fn componentType(self: *const Writer, ty: const_store.ConstTypeId, index: usize) const_store.ConstTypeId {
-        const types = &self.program.const_types;
-        return switch (types.get(self.structuralType(ty))) {
-            .tuple => |range| types.typeSpan(range)[index],
-            .record => |range| types.fieldSpan(range)[index].ty,
-            .zst => ty,
-            .primitive, .named, .tag_union, .list, .box, .func, .erased => writerInvariant("a product plan's value has a type that is not a product"),
-        };
-    }
-
-    /// The payload types of tag `name` of the tag union type `ty`.
-    fn tagPayloadTypes(self: *const Writer, ty: const_store.ConstTypeId, name: []const u8) []const const_store.ConstTypeId {
-        const types = &self.program.const_types;
-        return switch (types.get(self.structuralType(ty))) {
-            .tag_union => |range| for (types.tagSpan(range)) |tag| {
-                if (std.mem.eql(u8, self.program.const_type_names.tagLabelText(tag.name), name)) break types.typeSpan(tag.payloads);
-            } else writerInvariant("a stored tag is absent from its type"),
-            .zst => &.{},
-            .primitive, .named, .record, .tuple, .list, .box, .func, .erased => writerInvariant("a tag union plan's value has a type that is not a tag union"),
+            .box_payload => switch (content) {
+                .box => |payload| payload,
+                .primitive, .named, .record, .tuple, .tag_union, .list, .func, .erased, .zst => writerInvariant("a box plan's value has a type that is not a box"),
+            },
+            .component => |index| switch (content) {
+                .tuple => |range| types.typeSpan(range)[index],
+                .record => |range| types.fieldSpan(range)[index].ty,
+                .primitive, .named, .tag_union, .list, .box, .func, .erased, .zst => writerInvariant("a product plan's value has a type that is not a product"),
+            },
+            // A plan's variants are its type's tags, in order.
+            .tag_payload => |payload| switch (content) {
+                .tag_union => |range| types.typeSpan(types.tagSpan(range)[payload.variant].payloads)[payload.index],
+                .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => writerInvariant("a tag union plan's value has a type that is not a tag union"),
+            },
         };
     }
 
@@ -830,11 +865,11 @@ pub const Writer = struct {
         elem_plan: LirProgram.ConstPlanId,
         layout_idx: layout.Idx,
         value: Value,
-        list_ty: const_store.ConstTypeId,
+        list_ty: PartType,
     ) Allocator.Error!void {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
-        const item_ty = self.listItemType(list_ty);
+        const item_ty = try self.partTypeOf(list_ty, .list_item);
         try out.ensureUnusedCapacity(self.allocator, roc_list.len());
         if (layout_value.tag == .list_of_zst) {
             for (0..roc_list.len()) |_| out.appendAssumeCapacity(.{ .plan = elem_plan, .layout_idx = .zst, .ty = item_ty, .value = Value.zst });
@@ -857,10 +892,10 @@ pub const Writer = struct {
         elem_plan: LirProgram.ConstPlanId,
         layout_idx: layout.Idx,
         value: Value,
-        box_ty: const_store.ConstTypeId,
+        box_ty: PartType,
     ) Allocator.Error!void {
         const layout_value = self.program.layouts.getLayout(layout_idx);
-        const payload_ty = self.boxPayloadType(box_ty);
+        const payload_ty = try self.partTypeOf(box_ty, .box_payload);
         try out.append(self.allocator, switch (layout_value.tag) {
             .hole => writerInvariant("a demand hole reached a compile-time value"),
             .dynamic => writerInvariant("a dynamic value reached a compile-time value"),
@@ -892,7 +927,7 @@ pub const Writer = struct {
         plans: []const LirProgram.ConstPlanId,
         struct_layout: layout.Idx,
         struct_value: Value,
-        struct_ty: const_store.ConstTypeId,
+        struct_ty: PartType,
     ) Allocator.Error!void {
         if (plans.len == 0) return;
         var layout_idx = struct_layout;
@@ -906,14 +941,14 @@ pub const Writer = struct {
         }
         try out.ensureUnusedCapacity(self.allocator, plans.len);
         if (layout_value.tag == .zst or layout_value.tag == .box_of_zst) {
-            for (plans, 0..) |component, index| out.appendAssumeCapacity(.{ .plan = component, .layout_idx = .zst, .ty = self.componentType(struct_ty, index), .value = Value.zst });
+            for (plans, 0..) |component, index| out.appendAssumeCapacity(.{ .plan = component, .layout_idx = .zst, .ty = try self.partTypeOf(struct_ty, .{ .component = @intCast(index) }), .value = Value.zst });
             return;
         }
         if (layout_value.tag != .struct_) writerInvariant("struct const plan had non-struct layout");
         for (plans, 0..) |component, index| {
             const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.getStruct().idx, @intCast(index));
             const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.getStruct().idx, @intCast(index));
-            out.appendAssumeCapacity(.{ .plan = component, .layout_idx = field_layout, .ty = self.componentType(struct_ty, index), .value = value.offset(offset) });
+            out.appendAssumeCapacity(.{ .plan = component, .layout_idx = field_layout, .ty = try self.partTypeOf(struct_ty, .{ .component = @intCast(index) }), .value = value.offset(offset) });
         }
     }
 
@@ -923,20 +958,21 @@ pub const Writer = struct {
         plans: []const LirProgram.ConstPlanId,
         payload_layout: layout.Idx,
         value: Value,
-        payload_types: []const const_store.ConstTypeId,
+        union_ty: PartType,
+        variant: u32,
     ) Allocator.Error!void {
         if (plans.len == 0) return;
-        if (payload_types.len != plans.len) writerInvariant("a stored tag's payload types differ from its plan's");
         try out.ensureUnusedCapacity(self.allocator, plans.len);
         if (plans.len == 1) {
-            out.appendAssumeCapacity(.{ .plan = plans[0], .layout_idx = payload_layout, .ty = payload_types[0], .value = value });
+            out.appendAssumeCapacity(.{ .plan = plans[0], .layout_idx = payload_layout, .ty = try self.partTypeOf(union_ty, .{ .tag_payload = .{ .variant = variant, .index = 0 } }), .value = value });
             return;
         }
         const layout_value = self.program.layouts.getLayout(payload_layout);
         if (layout_value.tag == .zst) {
-            for (plans, payload_types) |plan, ty| out.appendAssumeCapacity(.{ .plan = plan, .layout_idx = .zst, .ty = ty, .value = Value.zst });
+            for (plans, 0..) |plan, index| out.appendAssumeCapacity(.{ .plan = plan, .layout_idx = .zst, .ty = try self.partTypeOf(union_ty, .{ .tag_payload = .{ .variant = variant, .index = @intCast(index) } }), .value = Value.zst });
         } else if (layout_value.tag == .struct_) {
-            for (plans, payload_types, 0..) |plan, ty, index| {
+            for (plans, 0..) |plan, index| {
+                const ty = try self.partTypeOf(union_ty, .{ .tag_payload = .{ .variant = variant, .index = @intCast(index) } });
                 const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.getStruct().idx, @intCast(index));
                 const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.getStruct().idx, @intCast(index));
                 out.appendAssumeCapacity(.{ .plan = plan, .layout_idx = field_layout, .ty = ty, .value = value.offset(offset) });
@@ -957,15 +993,15 @@ pub const Writer = struct {
         try out.ensureUnusedCapacity(self.allocator, slots.len);
         const layout_value = self.program.layouts.getLayout(payload_layout);
         if (layout_value.tag == .zst) {
-            for (slots) |slot| out.appendAssumeCapacity(.{ .plan = slot.plan, .layout_idx = .zst, .ty = slot.ty, .value = Value.zst, .storage = slot.storage });
+            for (slots) |slot| out.appendAssumeCapacity(.{ .plan = slot.plan, .layout_idx = .zst, .ty = .{ .stored = slot.ty }, .value = Value.zst, .storage = slot.storage });
         } else if (layout_value.tag == .struct_) {
             for (slots) |slot| {
                 const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.getStruct().idx, slot.slot);
                 const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.getStruct().idx, slot.slot);
-                out.appendAssumeCapacity(.{ .plan = slot.plan, .layout_idx = field_layout, .ty = slot.ty, .value = payload_value.offset(offset), .storage = slot.storage });
+                out.appendAssumeCapacity(.{ .plan = slot.plan, .layout_idx = field_layout, .ty = .{ .stored = slot.ty }, .value = payload_value.offset(offset), .storage = slot.storage });
             }
         } else if (slots.len == 1) {
-            out.appendAssumeCapacity(.{ .plan = slots[0].plan, .layout_idx = payload_layout, .ty = slots[0].ty, .value = payload_value, .storage = slots[0].storage });
+            out.appendAssumeCapacity(.{ .plan = slots[0].plan, .layout_idx = payload_layout, .ty = .{ .stored = slots[0].ty }, .value = payload_value, .storage = slots[0].storage });
         } else {
             writerInvariant("multi-capture function did not use a struct capture layout");
         }
@@ -1535,10 +1571,6 @@ const ValueFormImage = struct {
     const max_image_alignment = 16;
 };
 
-fn checkedU32(value: usize) Allocator.Error!u32 {
-    return std.math.cast(u32, value) orelse error.OutOfMemory;
-}
-
 /// The segments of value-form string `expr`.
 fn checkedStrSegments(bodies: checked.CheckedBodies, expr: CIR.Expr.Idx) []const CIR.Expr.Idx {
     const data = bodies.exprData(checked.valueFormValueExpr(bodies, expr));
@@ -1667,13 +1699,6 @@ fn testConstRoot(plan: LirProgram.ConstPlanId, ret_layout: layout.Idx, ret_type:
         .ret_type = ret_type,
         .plan = plan,
     };
-}
-
-/// Store `value` of `plan` at `ret_layout` as nodes, as a part of a value
-/// holding a function is stored.
-fn testStoreNodes(writer: *Writer, plan: LirProgram.ConstPlanId, ret_layout: layout.Idx, ty: const_store.ConstTypeId, value: Value) Error!checked.CompileTimeRootPayload {
-    writer.stored_values.clearRetainingCapacity();
-    return .{ .const_node = try writer.storeValue(plan, ret_layout, ty, value) };
 }
 
 /// A stored type `ty` of `program`, for a test root.
