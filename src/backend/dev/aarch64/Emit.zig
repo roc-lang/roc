@@ -5,13 +5,12 @@
 //!
 //! Note: All aarch64 instructions are 32 bits (4 bytes) and must be 4-byte aligned.
 //!
-//! The Emit function is parameterized by RocTarget to enable full cross-compilation.
-//! Each target variant is specialized at comptime with the correct calling convention.
+//! The Emit function is parameterized by the dev-backend `Abi` it emits code for.
 
 const std = @import("std");
 const invariant = @import("base").invariant;
 const Allocator = std.mem.Allocator;
-const RocTarget = @import("roc_target").RocTarget;
+const Abi = @import("../isa.zig").Abi;
 const Registers = @import("Registers.zig");
 const RegisterWidth = Registers.RegisterWidth;
 const Call = @import("Call.zig");
@@ -19,11 +18,10 @@ const Call = @import("Call.zig");
 const Relocation = @import("../Relocation.zig").Relocation;
 
 /// aarch64 instruction emitter for generating machine code.
-/// Parameterized by target for cross-compilation support.
-pub fn Emit(comptime target: RocTarget) type {
-    // Validate this is an aarch64 target
-    if (target.toCpuArch() != .aarch64) {
-        @compileError("aarch64.Emit requires a little-endian aarch64 target");
+/// Parameterized by the ABI of the code it emits.
+pub fn Emit(comptime machine_abi: Abi) type {
+    if (machine_abi.isa() != .aarch64) {
+        @compileError("aarch64.Emit requires an aarch64 ABI");
     }
 
     return struct {
@@ -33,8 +31,8 @@ pub fn Emit(comptime target: RocTarget) type {
         pub const GeneralReg = Registers.GeneralReg;
         pub const FloatReg = Registers.FloatReg;
 
-        /// The target this Emit was instantiated for
-        pub const roc_target = target;
+        /// The ABI this Emit was instantiated for
+        pub const code_abi = machine_abi;
 
         /// Calling convention constants derived from target (AAPCS64)
         /// Note: aarch64 uses AAPCS64 for all targets, including Windows.
@@ -1870,9 +1868,9 @@ pub fn Emit(comptime target: RocTarget) type {
 }
 
 // Target-specific Emit types for cross-platform testing
-const LinuxEmit = Emit(.arm64linux);
-const WinEmit = Emit(.arm64win);
-const MacEmit = Emit(.arm64mac);
+const LinuxEmit = Emit(.aarch64_aapcs);
+const WinEmit = Emit(.aarch64_windows);
+const MacEmit = Emit(.aarch64_apple);
 
 fn testReadInst(buf: []const u8, inst_index: usize) u32 {
     const byte_index = inst_index * 4;
