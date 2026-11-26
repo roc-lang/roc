@@ -9,6 +9,7 @@ const can = @import("can");
 
 const checked_ids = @import("../checked_ids.zig");
 const types = @import("types.zig");
+const types_mod = @import("types");
 
 const Allocator = std.mem.Allocator;
 const CheckedExhaustivenessSiteId = checked_ids.CheckedExhaustivenessSiteId;
@@ -101,6 +102,61 @@ pub const Store = struct {
         self.missing_patterns_backing.deinit();
         self.pending_static_exhaustiveness.deinit(self.gpa);
         self.problems.deinit(self.gpa);
+    }
+
+    /// Hand every type variable a problem holds to `visitor`, as sealing the
+    /// checked module's type store needs them
+    /// (`types.Store.canonicalizeAndSeal`). A problem holds its variables as
+    /// `types.Var` fields, at any depth of its structs, unions, optionals and
+    /// arrays.
+    pub fn visitSealHolders(self: *Self, visitor: anytype) void {
+        for (self.problems.items) |*problem| visitProblemVars(Problem, problem, visitor);
+        for (self.pending_static_exhaustiveness.items) |*pending| visitProblemVars(Problem, &pending.problem, visitor);
+    }
+
+    fn visitProblemVars(comptime T: type, value: *T, visitor: anytype) void {
+        if (T == types_mod.Var) return visitor.typeVar(value);
+        const info = @typeInfo(T);
+        if (info == .@"struct") {
+            if (info.@"struct".layout == .@"packed") {
+                comptime if (containsVar(T)) @compileError("a packed problem field holds a type variable: " ++ @typeName(T));
+                return;
+            }
+            inline for (info.@"struct".field_names) |name| visitProblemVars(@FieldType(T, name), &@field(value, name), visitor);
+        } else if (info == .@"union") {
+            const Tag = info.@"union".tag_type orelse {
+                comptime if (containsVar(T)) @compileError("an untagged problem union holds a type variable: " ++ @typeName(T));
+                return;
+            };
+            inline for (info.@"union".field_names) |name| {
+                if (value.* == @field(Tag, name)) visitProblemVars(@FieldType(T, name), &@field(value.*, name), visitor);
+            }
+        } else if (info == .optional) {
+            if (value.*) |*present| visitProblemVars(info.optional.child, present, visitor);
+        } else if (info == .array) {
+            for (value) |*element| visitProblemVars(info.array.child, element, visitor);
+        } else if (info == .pointer) {
+            comptime if (containsVar(info.pointer.child)) @compileError("a problem refers to type variables it does not hold: " ++ @typeName(T));
+        }
+    }
+
+    fn containsVar(comptime T: type) bool {
+        if (T == types_mod.Var) return true;
+        const info = @typeInfo(T);
+        const children: []const type = if (info == .@"struct")
+            info.@"struct".field_types
+        else if (info == .@"union")
+            info.@"union".field_types
+        else if (info == .optional)
+            &.{info.optional.child}
+        else if (info == .array)
+            &.{info.array.child}
+        else
+            &.{};
+        for (children) |child| {
+            if (containsVar(child)) return true;
+        }
+        return false;
     }
 
     /// Put an extra string in the backing store, returning an "id" (range)

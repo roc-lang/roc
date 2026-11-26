@@ -131,7 +131,7 @@ expect f([1].first())
 				(p-assign (ident "a")))
 			(e-field-access
 				(receiver
-					(e-call (constraint-fn-var 235)
+					(e-call (constraint-fn-var 234)
 						(e-lookup-local
 							(p-assign (ident "g")))
 						(e-lookup-local

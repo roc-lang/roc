@@ -1732,7 +1732,7 @@ fn collectCountChildrenInFlatType(self: *TypeWriter, flat_type: FlatType) std.me
             // Bounds check the tags range before iterating
             const tags_start_idx = @backingInt(tag_union.tags.start);
             const tags_len = self.types.tags.len();
-            if (tags_start_idx >= tags_len or tags_start_idx + tag_union.tags.count > tags_len) {
+            if (tag_union.tags.count != 0 and (tags_start_idx >= tags_len or tags_start_idx + tag_union.tags.count > tags_len)) {
                 // Tags range is out of bounds - skip counting in corrupted data
                 return;
             }

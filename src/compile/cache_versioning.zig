@@ -87,10 +87,13 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// Version 56 combines version 55 with checked bindings and stored constant
 /// types that carry no iterator representation fields.
 /// Version 57 stores absent optional ids and indices as zero. Version 58
-/// gives the remaining absences explicit representations. Version 59
+/// gives the remaining absences explicit representations.
+/// Version 59 stores sealed type stores whose dead descriptors, pool rows and
+/// merged-away variables sealing removed, renumbering the variables checking
+/// made with every variable checking recorded outside the store. Version 60
 /// stores each checked type's identity-variable fact.
 /// Platform-pairing entries share it.
-const checked_envelope_version: u32 = 59;
+const checked_envelope_version: u32 = 60;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment. Version 5 rejects builtin-conflicting import
