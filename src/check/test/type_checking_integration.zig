@@ -8919,7 +8919,9 @@ test "check type - monomorphic top-level numeric constant cannot be used at mult
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
-test "check type - monomorphic top-level empty list cannot be used at multiple element types" {
+test "check type - polymorphic top-level empty list is used at multiple element types" {
+    // `xs`'s item type carries no requirement, so `xs` generalizes and each
+    // use instantiates it (design.md "Polymorphic Constants").
     const source =
         \\xs = []
         \\a : List(I64)
@@ -8927,7 +8929,7 @@ test "check type - monomorphic top-level empty list cannot be used at multiple e
         \\b : List(Str)
         \\b = xs
     ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
+    try checkTypesModule(source, .{ .pass = .last_def }, "List(Str)");
 }
 
 test "check type - mutually recursive functions - three-way polymorphic" {
@@ -10531,11 +10533,12 @@ test "check type - polarity - annotated value body is bounded" {
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
-test "check type - value rows - an annotated top-level value keeps its row at every use" {
-    // An annotated value's row is the annotation's, closed as written, and no
-    // use widens it (design.md "Value Rows: Uses Share One Row"): `e` is
-    // `[Boom]`, and a `match` whose patterns name `A` is a mismatch at the
-    // use, reported as the use's own mismatch rather than as `e` producing `A`.
+test "check type - value rows - an annotated top-level constant's row is quantified" {
+    // `e : [Boom]` opens its row implicitly in an output position, and the
+    // row carries no requirement, so `e` quantifies it (design.md
+    // "Polymorphic Constants"): the `match` reads `e` at `[A, Boom, ..]`, and
+    // `A`, which `e` never produces, is unmatchable (design.md "Pattern-Only
+    // Tags").
     const source =
         \\e : [Boom]
         \\e = Boom
@@ -10546,7 +10549,7 @@ test "check type - value rows - an annotated top-level value keeps its row at ev
         \\    _ => "other"
         \\}
     ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
+    try checkTypesModule(source, .fail_first, "Unmatchable Pattern");
 }
 
 test "check type - value rows - returning an annotated top-level value widens the function's result" {
@@ -10567,12 +10570,12 @@ test "check type - value rows - returning an annotated top-level value widens th
     try test_env.assertDefType("e", "[Boom]");
 }
 
-test "check type - value rows - an unannotated top-level value's row is shared by its uses" {
-    // Every use of `e` in its module widens one row (design.md "Value Rows:
-    // Uses Share One Row"): a `match` naming `Zed` and a call where
-    // `[Aa, Boom, ..]` is accepted leave `e` at `[Aa, Boom, Zed]`, which the
-    // module closes when it finishes. Nothing produces `Zed`, so its branch is
-    // reported as unmatchable (design.md "Pattern-Only Tags").
+test "check type - value rows - an unannotated top-level constant's row is instantiated by each use" {
+    // `e`'s row carries no requirement, so `e` quantifies it (design.md
+    // "Polymorphic Constants"): the call reads `e` at `[Aa, Boom, ..]` and the
+    // `match` at `[Boom, Zed, ..]`, and `e` itself stays `[Boom]`. Nothing
+    // produces `Zed`, so its branch is reported as unmatchable (design.md
+    // "Pattern-Only Tags").
     const source =
         \\e = Boom
         \\
@@ -10594,14 +10597,12 @@ test "check type - value rows - an unannotated top-level value's row is shared b
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try test_env.assertOneTypeWarning("Unmatchable Pattern");
-    try test_env.assertDefTypeOptions("e", "[Aa, Boom, Zed]", .{ .allow_type_errors = true });
+    try test_env.assertDefTypeOptions("e", "[Boom]", .{ .allow_type_errors = true });
 }
 
-test "check type - value rows - two uses at different closed unions are a mismatch" {
-    // One shared row cannot be both closed unions (design.md "Value Rows:
-    // Uses Share One Row"), exactly as for a local value: the second use is
-    // the mismatch, and the fix is a tag written at each use or an
-    // annotation on the value.
+test "check type - value rows - a constant is used at two different closed unions" {
+    // `e`'s row carries no requirement, so each use instantiates it at its
+    // own closed union (design.md "Polymorphic Constants").
     const source =
         \\e = Boom
         \\
@@ -10613,14 +10614,13 @@ test "check type - value rows - two uses at different closed unions are a mismat
         \\
         \\both = "${first(e)} ${last(e)}"
     ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
 }
 
-test "check type - value rows - an importer reads a top-level value at its closed row" {
-    // `choice` widens `e`'s shared row to `[A, Boom]`, and the module closes it
-    // there, so an importer reads `e : [A, Boom]` exactly (design.md "Value
-    // Rows: Uses Share One Row"): a use at that row is accepted and a use
-    // needing `C` is a mismatch at the importer.
+test "check type - value rows - an importer instantiates a constant's quantified row" {
+    // `e`'s row carries no requirement, so `e` quantifies it (design.md
+    // "Polymorphic Constants"): `choice` reads `e` at `[A, Boom, ..]`, `e`
+    // stays `[Boom]`, and an importer instantiates it at any wider union.
     const source_lib =
         \\module [e, choice]
         \\
@@ -10631,7 +10631,7 @@ test "check type - value rows - an importer reads a top-level value at its close
     var lib_env = try TestEnv.init("Lib", source_lib);
     defer lib_env.deinit();
     try std.testing.expectEqual(@as(usize, 0), try lib_env.typeProblemCount());
-    try lib_env.assertDefTypeOptions("e", "[A, Boom]", .{ .allow_type_errors = false, .allow_can_errors = true });
+    try lib_env.assertDefTypeOptions("e", "[Boom]", .{ .allow_type_errors = false, .allow_can_errors = true });
 
     const source_same =
         \\import Lib
@@ -10651,16 +10651,15 @@ test "check type - value rows - an importer reads a top-level value at its close
     ;
     var wider_env = try TestEnv.initWithImport("Wider", source_wider, "Lib", &lib_env);
     defer wider_env.deinit();
-    try std.testing.expect(try wider_env.typeProblemCount() > 0);
+    try wider_env.assertNoErrors();
 }
 
-test "check type - polarity - a defaulted field use of an annotated value keeps its row" {
+test "check type - polarity - a defaulted field use of an annotated constant instantiates its row" {
     // A defaulted record field's default expression is an ordinary USE SITE
-    // of `e`, and `e : [Boom]` is closed at every use (design.md "Value Rows:
-    // Uses Share One Row"), so a field typed `[A, Boom]` cannot default to it.
-    // The use is checked later than every other use (`checkPendingDefaults`
-    // is the first pass of `finalizeTypes`), and the report is the use's own
-    // mismatch rather than a claim that `e` produces `A`.
+    // of `e`. `e : [Boom]` quantifies its implicitly opened row (design.md
+    // "Polymorphic Constants"), so a field typed `[A, Boom]` defaults to an
+    // instance of it, although that use is checked later than every other
+    // use (`checkPendingDefaults` is the first pass of `finalizeTypes`).
     const source =
         \\e : [Boom]
         \\e = Boom
@@ -10669,7 +10668,7 @@ test "check type - polarity - a defaulted field use of an annotated value keeps 
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    try test_env.assertOneTypeError("Type Mismatch");
+    try test_env.assertNoErrors();
 }
 
 test "check type - polarity - a defaulted field use at the annotated width is clean" {
@@ -11037,14 +11036,15 @@ test "check type - polarity - named ext in output position does not warn" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Str -> [Fail, Ok, ..others]");
 }
 
-test "check type - polarity - explicit anonymous ext on a value is rejected" {
-    // A value binding cannot quantify a row, so `..` on its annotation claims
-    // a polymorphism it does not have.
+test "check type - polarity - explicit anonymous ext on a constant is redundant" {
+    // A constant quantifies its implicitly opened output row (design.md
+    // "Polymorphic Constants"), so a written `..` adds nothing, as on a
+    // function's result.
     const source =
         \\e : [Boom, ..]
         \\e = Boom
     ;
-    try checkTypesModule(source, .fail, "Value Is Not Polymorphic");
+    try checkTypesModule(source, .fail, "Redundant Open Tag Union");
 }
 
 test "check type - polarity - explicit anonymous ext in an input position does not warn" {
@@ -14090,7 +14090,7 @@ test "check type - dispatch - weak receiver grounded by a later requirement disc
         \\    step = |_| T2.C2
         \\}
         \\T2 := [C2]
-        \\make : {} -> a
+        \\make : {} -> a where [a.step : a -> b]
         \\make = |_| crash "n"
         \\w = make({})
         \\h = |_u| w.step()
@@ -14345,7 +14345,7 @@ test "check type - def order independence - residual dispatch report with requir
     // residual judgment's excluded-receiver requirement walk visits `shared`'s
     // var before `g`'s plain interface walk does.
     const source =
-        \\make : {} -> a
+        \\make : {} -> a where [a.to_str : a -> Str]
         \\make = |_| crash "no value"
         \\weak = make({})
         \\shared = [weak]
@@ -14361,7 +14361,7 @@ test "check type - def order independence - residual dispatch report with interf
     // Control: identical module with `g` ahead of `f`, so `g`'s plain
     // interface walk reaches `weak` before any requirement walk runs.
     const source =
-        \\make : {} -> a
+        \\make : {} -> a where [a.to_str : a -> Str]
         \\make = |_| crash "no value"
         \\weak = make({})
         \\shared = [weak]
@@ -14402,7 +14402,7 @@ fn expectRejectedDefaultTargetProblemShape(test_env: *TestEnv) TestEnv.TestEnvEr
 
 test "check type - rejected default target leaves merged weak argument polymorphic" {
     const source =
-        \\poly : {} -> a
+        \\poly : {} -> c where [c.wobble : c -> c]
         \\poly = |_| crash "n"
         \\helper : c, d -> d where [c.wobble : c -> c]
         \\helper = |_x, y| y
@@ -14425,7 +14425,7 @@ test "check type - rejected default target leaves merged weak argument polymorph
 
 test "check type - rejected quote default target leaves merged weak argument polymorphic" {
     const source =
-        \\poly : {} -> a
+        \\poly : {} -> c where [c.wobble : c -> c]
         \\poly = |_| crash "n"
         \\helper : c, d -> d where [c.wobble : c -> c]
         \\helper = |_x, y| y
@@ -14448,7 +14448,7 @@ test "check type - rejected default target leaves unreached weak argument polymo
     // this is the exact outcome the test above requires when the argument IS
     // reached.
     const source =
-        \\poly : {} -> a
+        \\poly : {} -> c where [c.wobble : c -> c]
         \\poly = |_| crash "n"
         \\helper : c, d -> d where [c.wobble : c -> c]
         \\helper = |_x, y| y
@@ -14501,7 +14501,7 @@ test "check type - dispatch - cap-free generational discharge across pending sch
         }
     }
     try source_builder.appendSlice(allocator,
-        \\make : {} -> a
+        \\make : {} -> a where [a.step : a -> b]
         \\make = |_| crash "seed"
         \\w1 = make({})
         \\

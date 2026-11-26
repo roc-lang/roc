@@ -113,7 +113,10 @@ test "a body cannot deliver an annotation's rigid error row" {
     try env.assertOneTypeError("Parser Error Type Mismatch");
 }
 
-test "a relation reaching a weak value still determines that value" {
+test "a relation reaching a polymorphic constant determines only its own instance" {
+    // `seeds`'s item type carries no requirement, so `seeds` quantifies it
+    // (design.md "Polymorphic Constants") and the relation decides the
+    // instance `parse_seed` reads.
     var env = try TestEnv.init("Test", prelude ++
         \\seeds = []
         \\
@@ -124,7 +127,7 @@ test "a relation reaching a weak value still determines that value" {
     );
     defer env.deinit();
     try env.assertNoErrors();
-    try env.assertDefType("seeds", "List(U64)");
+    try env.assertDefType("seeds", "List(_a)");
 }
 
 test "a relation whose state is known validates at its boundary" {

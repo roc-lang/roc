@@ -92,8 +92,20 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// merged-away variables sealing removed, renumbering the variables checking
 /// made with every variable checking recorded outside the store. Version 60
 /// stores each checked type's identity-variable fact.
+/// Version 61 combines version 60 with these: a compile-time root whose value
+/// is data alone is stored as an image with the type it was stored at, and
+/// each strategy's entry is filed under its own key; each closed instance of a
+/// polymorphic constant is stored as a `constant_instance` root of its own,
+/// with the canonical instantiation's roots; for each use of a name a
+/// destructuring scheme alias binds, the variables of the name's scheme are
+/// recorded, with a constant's instances at the substitutions checking
+/// recorded for those uses and for dispatches to methods bound to polymorphic
+/// callable bindings; for each `to_inspect` override whose inspection instance
+/// is closed, that use's edge and the constant instances it names are
+/// recorded; and value-form bytes literals and files imported as `Str` are
+/// stored as images.
 /// Platform-pairing entries share it.
-const checked_envelope_version: u32 = 60;
+const checked_envelope_version: u32 = 61;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment. Version 5 rejects builtin-conflicting import

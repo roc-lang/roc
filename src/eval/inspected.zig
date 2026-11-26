@@ -1291,6 +1291,8 @@ pub fn finalizedComptimeReplStr(resources: *const ParsedResources) Error![]const
         while (true) {
             switch (resources.checked_artifact.const_store.get(node)) {
                 .str => |str| return resources.checked_artifact.const_store.strBytes(str.bytes),
+                // The root is the inspected `Str`, whose image is its descriptor.
+                .image => |image| return resources.checked_artifact.const_store.image(image).strAt(0),
                 .nominal => |nominal| node = nominal.backing,
                 .boxy_fn,
                 .pending,

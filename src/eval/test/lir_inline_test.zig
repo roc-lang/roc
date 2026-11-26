@@ -14592,8 +14592,9 @@ test "stored encoder_for restore lowers a shape with an optional field" {
     try std.testing.expectEqual(@as(usize, 16), stats.definitions);
     // Each of the two restored Values keeps its source static-data candidate,
     // active-binding reservation, and deferred-use reservation. These six
-    // graph slots do not add helper workers; the counts above and below pin sharing.
-    try std.testing.expectEqual(@as(usize, 214), stats.expressions);
+    // graph slots do not add helper workers; the counts above and below pin
+    // sharing. A restored Value is its stored image, one static datum.
+    try std.testing.expectEqual(@as(usize, 206), stats.expressions);
     try std.testing.expectEqual(@as(usize, 6), stats.static_candidates);
     try std.testing.expectEqual(@as(usize, 71), stats.locals);
     try std.testing.expectEqual(@as(u64, 18), stats.template_misses);

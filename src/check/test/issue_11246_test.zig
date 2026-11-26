@@ -198,10 +198,13 @@ const owned_writer_widens_one_row_caller_widens_the_other = prelude ++
     \\}
 ;
 
-test "issue 11246: a caller's parser row pinned to an annotated top-level value reports at the parser" {
+test "issue 11246: a caller's parser row widens its own copy of an annotated top-level constant's row" {
+    // `seed`'s implicitly opened row carries no requirement, so `seed`
+    // quantifies it (design.md "Polymorphic Constants") and the caller widens
+    // its own copy, as for the function form.
     var env = try TestEnv.init("Test", caller_widens_top_level_value);
     defer env.deinit();
-    try env.assertOneTypeError("Parser Error Type Mismatch");
+    try env.assertNoErrors();
 }
 
 test "issue 11246: a caller's parser row pinned to an annotated local value reports at the parser" {
@@ -216,16 +219,21 @@ test "issue 11246: a caller's late composed error row does not blame a function"
     try env.assertNoErrors();
 }
 
-test "issue 11246: a binding that owns a writer is not blamed for a caller's parser row" {
+test "issue 11246: a constant that owns a writer lends each caller its own row" {
+    // `v.seed`'s row carries no requirement, so `v` quantifies it (design.md
+    // "Polymorphic Constants") and the caller's parser row widens its own
+    // copy.
     var env = try TestEnv.init("Test", caller_widens_value_that_owns_a_writer);
     defer env.deinit();
-    try env.assertOneTypeError("Parser Error Type Mismatch");
+    try env.assertNoErrors();
 }
 
-test "issue 11246: each parser whose error row an annotation pins reports its own tags" {
+test "issue 11246: a parser whose error row an annotation pins reports its own tags" {
+    // Only `v`'s own writer is reported: the caller widens its own copy of
+    // `v.seed`'s quantified row (design.md "Polymorphic Constants").
     var env = try TestEnv.init("Test", owned_writer_widens_one_row_caller_widens_the_other);
     defer env.deinit();
-    try env.assertTypeErrorTitles(&.{ "Parser Error Type Mismatch", "Parser Error Type Mismatch" });
+    try env.assertOneTypeError("Parser Error Type Mismatch");
 }
 
 test "issue 11246: heterogeneous format operations are rejected" {

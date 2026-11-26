@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=An UNANNOTATED non-expansive value is not generalized (annotation is the opt-in), so using it at two concrete types is a type mismatch (tier-2 gate)
+description=An UNANNOTATED top-level constant whose variable carries no requirement generalizes, so using it at two concrete types is accepted
 type=file
 ~~~
 # SOURCE
@@ -18,36 +18,9 @@ strs = bare
 main! = |_| {}
 ~~~
 # EXPECTED
-TYPE MISMATCH - generalize_annotated_value_unannotated_not_generalized.md:9:8:9:12
+NIL
 # PROBLEMS
-~~~clojure
-(reports
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 9 8) (end 9 12))
-		(headline
-			(reflow "This expression is used in an unexpected way."))
-		(document
-			(source-region (file "generalize_annotated_value_unannotated_not_generalized.md") (start 9 8) (end 9 12) (annotation error) (line-text "strs = bare"))
-			(line-break)
-			(reflow "It has the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "List(U64)")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "But the annotation says it should be:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "List(Str)")
-			(annotation-end))))
-~~~
+NIL
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -117,7 +90,8 @@ NO CHANGE
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "strs"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-lookup-local
+			(p-assign (ident "bare")))
 		(annotation
 			(ty-apply (name "List") (builtin)
 				(ty-lookup (name "Str") (builtin)))))
@@ -132,12 +106,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(U64)"))
+		(patt (type "List(_a)"))
 		(patt (type "List(U64)"))
 		(patt (type "List(Str)"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "List(U64)"))
+		(expr (type "List(_a)"))
 		(expr (type "List(U64)"))
 		(expr (type "List(Str)"))
 		(expr (type "_arg -> {}"))))

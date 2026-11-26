@@ -2115,7 +2115,7 @@ fn patternIntroducesBinder(view: ModuleView, pattern: CIR.Pattern.Idx) bool {
 fn failedRootMessage(view: anytype, node: checked.ConstNodeId) []const u8 {
     return switch (view.const_store.get(node)) {
         .crash, .checked_error => |message| view.const_store.strBytes(message),
-        .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value, .boxy_fn => Common.invariant("a validate-only root stored a value"),
+        .image, .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value, .boxy_fn => Common.invariant("a validate-only root stored a value"),
     };
 }
 
@@ -2130,6 +2130,18 @@ fn literalConversionRootOf(view: ModuleView, data: ExprData) ?checked.ComptimeRo
 
 /// The expression a compile-time root's entry evaluates: its own expression,
 /// or the construct its hoisted body describes.
+/// The constant template of a `constant` or `hoisted_constant` root.
+fn constRefOfRoot(view: ModuleView, root: checked.CompileTimeRoot) ?checked.ConstRef {
+    for (view.const_templates.templates.items()) |template| {
+        const matches = switch (template.owner) {
+            .top_level_binding => |binding| root.kind == .constant and root.pattern.get() != null and binding.pattern == root.pattern.get().?,
+            .hoisted_root => |hoisted| hoisted.root == root.id,
+        };
+        if (matches) return .{ .artifact = view.key, .owner = template.owner, .template = template.id, .source_scheme = template.source_scheme };
+    }
+    return null;
+}
+
 fn rootBodyExpr(view: ModuleView, root: checked.CompileTimeRoot) ExprSite {
     return if (root.evaluatedExpr()) |evaluated| ExprSite.own(view, evaluated) else ExprSite.hoistedRoot(root.id);
 }
@@ -2188,6 +2200,10 @@ const MethodLookup = struct {
     /// binder ids identify source syntax, not the specialization-local capture
     /// environment in which that declaration was lowered.
     local_proc_context: ?DraftLocalProcContextId = null,
+    /// For inspection's lookup of an owner's `to_inspect` override, the
+    /// checked `T -> Str` instance inspection calls it at, in `view`
+    /// (`MethodRegistry.inspectOverride`).
+    inspect_override: ?checked.CheckedTypeId = null,
 };
 
 /// One resolved dispatch requirement supplied to a specialization: either a
@@ -2864,6 +2880,10 @@ const EvidenceChain = struct {
     schema: ?SchemeRequirements = null,
     subst: SpecSubstitution = &.{},
     parent: ?*const EvidenceChain = null,
+    /// For a generalized local scope lowered at one use of it (a scheme
+    /// alias's use), that use: its edge's literal arguments name what this
+    /// frame's forwarded literal requirements are at the use.
+    entered_by: ?*const ScopeEntry = null,
 
     fn atScope(self: *const EvidenceChain, scope: EvidenceScope) ?EvidenceChain {
         var chain: ?*const EvidenceChain = self;
@@ -2891,6 +2911,22 @@ const EvidenceChain = struct {
         if (ref.index >= chain.vector.len) return null;
         return chain.vector[ref.index];
     }
+};
+
+/// A destructuring scheme alias's lookup and the use of a name it binds that
+/// its declaration is lowered at.
+const DestructuredAliasUse = struct {
+    lookup: CIR.Expr.Idx,
+    use: CIR.Expr.Idx,
+};
+
+/// The use a generalized local scope's frame was entered at: the use's
+/// literal edge, in the scope owner's module, and the frame the use itself
+/// was lowered in, whose literal requirements the edge's forwarded
+/// arguments name.
+const ScopeEntry = struct {
+    edge: checked.LiteralEdge,
+    use_frame: EvidenceChain,
 };
 
 fn rootEvidence(owner: names.ProcTemplate, vector: []const SpecEvidence) EvidenceChain {
@@ -5850,10 +5886,29 @@ fn constStringBackingLength(str: check.ConstStore.ConstString) u64 {
     return str.capacity;
 }
 
+/// How many items the list image `image` holds, or zero when its value is
+/// not a list.
+fn imageListLen(store: *const check.ConstStore.ConstStore, image: check.ConstStore.ConstImageId) u32 {
+    const view = store.image(image);
+    var ty = view.root_type;
+    while (true) switch (store.type_store.get(ty)) {
+        .named => |named| ty = (named.backing.get() orelse return 0).ty,
+        .list => return @intCast(std.mem.readInt(u64, view.bytes[check.ConstStore.image_word_size..][0..check.ConstStore.image_word_size], .little)),
+        .primitive, .record, .tuple, .tag_union, .box, .func, .erased, .zst => return 0,
+    };
+}
+
 fn constStaticDataStorage(view: ModuleView, node: checked.ConstNodeId) Common.StaticDataStorage {
+    // A root stored as an image needs a string's backing when it is a
+    // string, possibly inside named types (design.md "Stored Images").
+    if (view.const_store.imageOf(node)) |image| {
+        if (view.const_store.imageRootPrimitive(image) == .str) return .{ .string_backing = view.const_store.image(image).strCapacityAt(0) };
+        return .aggregate;
+    }
     var current = node;
     while (true) switch (view.const_store.get(current)) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+        .image => Common.invariant("a stored image reached a ConstStore node restore"),
         .str => |str| return .{ .string_backing = constStringBackingLength(str) },
         .nominal => |nominal| current = nominal.backing,
         .pending => Common.invariant("pending const reached static storage metadata production"),
@@ -6073,6 +6128,9 @@ const LiteralArgumentRootIndex = struct {
     /// Validate-only roots, whatever their payload: every compilation
     /// evaluates them, and none stores a converted value.
     validating: Table = .{},
+    /// Polymorphic constants' instance roots, whatever their payload: a
+    /// program evaluating one reads it from its slot.
+    instances: Table = .{},
 
     /// A literal: its module, expression, and conversion kind.
     const Site = struct { module: [32]u8, node: u32, kind: checked.LiteralArgumentKind };
@@ -6081,7 +6139,7 @@ const LiteralArgumentRootIndex = struct {
     /// views, and its identity there.
     const Candidate = struct { view: u32, root: checked.ComptimeRootId };
 
-    const Class = enum { stored, validating };
+    const Class = enum { stored, validating, instances };
 
     /// One class of roots, grouped by the literal each converts.
     const Table = struct {
@@ -6137,18 +6195,25 @@ const LiteralArgumentRootIndex = struct {
     fn build(allocator: Allocator, views: []const ModuleViewData) Allocator.Error!LiteralArgumentRootIndex {
         var stored = try Table.build(allocator, views, .stored);
         errdefer stored.deinit(allocator);
-        return .{ .stored = stored, .validating = try Table.build(allocator, views, .validating) };
+        var validating = try Table.build(allocator, views, .validating);
+        errdefer validating.deinit(allocator);
+        return .{ .stored = stored, .validating = validating, .instances = try Table.build(allocator, views, .instances) };
     }
 
     /// The literal a root converts, when it is a `literal_argument` root of
-    /// `class`. A sealed root's type is closed in no specialization, so no
-    /// class holds one.
+    /// `class`. A sealed literal's type is closed in no specialization, so
+    /// only the instances class holds a sealed root: a polymorphic
+    /// constant's instance at a sealed type is a closed value every read of
+    /// the constant at that type restores.
     fn siteOf(root: checked.CompileTimeRoot, class: Class) ?Site {
         const argument = root.literal_argument orelse return null;
-        if (argument.sealed) return null;
+        if (argument.sealed and class != .instances) return null;
         const member = switch (class) {
-            .stored => root.payload == .const_node,
+            // A polymorphic constant's instance holding a function value is
+            // stored as one by the Solved program evaluating it.
+            .stored => root.payload == .const_node or root.payload == .fn_value,
             .validating => argument.validate_only,
+            .instances => argument.site.kind == .constant_instance,
         };
         if (!member) return null;
         return .{ .module = argument.site.module.bytes, .node = argument.site.node, .kind = argument.site.kind };
@@ -6157,6 +6222,12 @@ const LiteralArgumentRootIndex = struct {
     fn deinit(self: *LiteralArgumentRootIndex, allocator: Allocator) void {
         self.stored.deinit(allocator);
         self.validating.deinit(allocator);
+        self.instances.deinit(allocator);
+    }
+
+    /// The instance roots of the polymorphic constant `site` names.
+    fn instanceRootsOf(self: *const LiteralArgumentRootIndex, site: Site) []const Candidate {
+        return self.instances.rootsOf(site);
     }
 
     /// The roots with stored values converting the literal `site`.
@@ -8494,6 +8565,8 @@ const Builder = struct {
                 use.template,
                 root_node,
                 &.{},
+                null,
+                .named,
             );
             const completed_fn = try graph.functionNodes(root_node);
             const completed_ret = DraftTypeCell.fromGraphNode(completed_fn.ret);
@@ -8713,7 +8786,7 @@ const Builder = struct {
             arg.* = .{ .local = local, .ty = arg_cell };
             arg_expr.* = try ctx.addExprWithTypeCell(arg_cell, .{ .local = local });
         }
-        const callee = try ctx.lowerCallableEvalBindingValueAtNode(view, template_id, try ctx.activeNodeFromType(fn_ty), evidence);
+        const callee = try ctx.lowerCallableEvalBindingValueAtNode(view, template_id, try ctx.activeNodeFromType(fn_ty), evidence, null, .named);
         const body = try ctx.addExprWithTypeCell(DraftTypeCell.fromSealed(fn_data.ret), .{ .call_value = .{
             .callee = callee,
             .args = try body_draft.addExprSpan(arg_exprs),
@@ -8766,7 +8839,10 @@ const Builder = struct {
         defer ctx.deinit();
 
         const draft = FinalBodyOutputGuard.begin(self);
-        const restored = try ctx.restoreConstValue(view, type_view, const_node.id, ret_ty, request.const_locator, false);
+        const restored = if (view.const_store.imageOf(const_node.id)) |image|
+            try ctx.restoredRootImageAtType(view, const_node.id, image, request.checked_type, ret_ty)
+        else
+            try ctx.restoreConstValue(view, type_view, const_node.id, ret_ty, request.const_locator, false);
         if (self.comptime_value_reads) try body_draft.recordRestoredRootRead(restored, view.key, root);
         try body_draft.addScopeRoot(restored);
         const draft_end = draft.end(self);
@@ -12994,6 +13070,11 @@ const Builder = struct {
                         .checked_type = request.checked_type,
                     } };
                 },
+                .stored_root => |root| .{ .stored = .{
+                    .module = root.module,
+                    .node = root.node,
+                    .checked_type = root.checked_type,
+                } },
                 .inline_literal => |literal| .{ .inline_literal = literal },
             },
             .ty = ty,
@@ -13021,8 +13102,23 @@ const Builder = struct {
         return id;
     }
 
-    fn constNodeMayUseStaticDataCandidate(self: *Builder, view: ModuleView, node: checked.ConstNodeId) bool {
+    fn constNodeMayUseStaticDataCandidate(self: *Builder, view: ModuleView, node: checked.ConstNodeId) Allocator.Error!bool {
+        // A root whose image holds a literal is decided by that literal, by
+        // the rule `constValueMayUseStaticDataCandidate` applies to nodes.
+        if (self.constNodeImageLiteral(view, node)) |literal| return switch (literal) {
+            .scalar, .tag => false,
+            .str => |str| str.capacity != str.bytes.len,
+        };
         return self.constValueMayUseStaticDataCandidate(view, view.const_store.get(node));
+    }
+
+    /// The literal the image of root `node` holds, when `node` is a root
+    /// stored as an image and its value is a number, a payload-free tag
+    /// of a union whose every payload is zero-sized, or a string
+    /// (`ConstStore.imageLiteral`).
+    fn constNodeImageLiteral(_: *Builder, view: ModuleView, node: checked.ConstNodeId) ?check.ConstStore.ImageLiteral {
+        const image = view.const_store.imageOf(node) orelse return null;
+        return view.const_store.imageLiteral(image);
     }
 
     /// Whether a ConstStore node and everything it contains has a stable
@@ -13081,8 +13177,12 @@ const Builder = struct {
                 .fails => return .{ .value = false },
                 .unknown => {},
             }
+            // The producer stored a value that is data alone as an image,
+            // which is one stable static datum.
+            if (self.view.const_store.imageOf(node) != null) return .{ .value = true };
             const leaf: ?bool = switch (self.view.const_store.get(node)) {
                 .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+                .image => Common.invariant("a stored image reached a ConstStore node restore"),
                 .pending => Common.invariant("pending ConstStore node reached a stored value property"),
                 .fn_value => |fn_id| switch (self.property) {
                     // Static data emits an erased callable as one allocation
@@ -13150,8 +13250,9 @@ const Builder = struct {
         }
     };
 
-    /// What a stored list static data freezes straight from its node
-    /// (`Ast.StoredStaticList`): how many items it has.
+    /// What a stored value static data freezes straight from its node or
+    /// image (`Ast.StoredStaticList`): how many items a list has, and zero
+    /// for a box or product.
     const StoredListShape = struct {
         item_count: u32,
     };
@@ -13162,8 +13263,12 @@ const Builder = struct {
     /// node records. Null for any other value, including the empty and
     /// packed lists without spare capacity, which restore as literals.
     fn storedListShape(self: *Builder, view: ModuleView, node: checked.ConstNodeId) Allocator.Error!?StoredListShape {
+        // A value stored as an image is frozen from its image, whatever it
+        // holds (design.md "Stored Images").
+        if (view.const_store.imageOf(node)) |image| return .{ .item_count = imageListLen(view.const_store, image) };
         const list = switch (view.const_store.get(node)) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+            .image => Common.invariant("a stored image reached a ConstStore node restore"),
             .list => |list| list,
             .pending => Common.invariant("pending ConstStore node reached stored list selection"),
             .zst, .scalar, .str, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => return null,
@@ -13192,6 +13297,8 @@ const Builder = struct {
         var value = value_in;
         while (true) switch (value) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+            // A value stored as an image that holds no literal is one datum.
+            .image => return true,
             .pending => Common.invariant("pending ConstStore node reached static data selection"),
             .zst,
             .scalar,
@@ -13336,7 +13443,9 @@ const Builder = struct {
         }
 
         pub fn found(views: InspectOverrideViews, candidate: ModuleView, _: static_dispatch.MethodKey, override: static_dispatch.InspectOverride) MethodLookup {
-            return views.builder.registryMethodLookup(candidate, override.target);
+            var lookup = views.builder.registryMethodLookup(candidate, override.target);
+            lookup.inspect_override = override.callable_ty;
+            return lookup;
         }
     };
 
@@ -14459,13 +14568,11 @@ const Builder = struct {
                 boundary.const_use,
                 boundary.request_node,
                 boundary.use_evidence,
+                boundary.use_expr,
             ),
-            .hoisted => |entry| blk: {
-                const previous_restore_evidence = ctx.restore_evidence;
-                defer ctx.restore_evidence = previous_restore_evidence;
-                ctx.restore_evidence = rootEvidence(ctx.owner_template, boundary.use_evidence);
-                break :blk try ctx.restoredHoistedConstAtNode(entry, boundary.witness_node);
-            },
+            // A hoisted constant's use instantiates no scheme
+            // (`useSiteSchema`), so it supplies no evidence.
+            .hoisted => |entry| try ctx.restoredHoistedConstAtNode(entry, boundary.witness_node),
         };
         const restored_expr = body_draft.exprs.items[@backingInt(restored)];
         const restored_node = try restored_expr.ty.toGraphNode(graph);
@@ -16861,6 +16968,22 @@ const DraftCallableBindingCallee = struct {
     module: names.CheckedModuleDigest,
     template: checked.CallableEvalTemplateId,
     fn_node: NodeId,
+    read: InstanceRead = .named,
+};
+
+/// How a read of a polymorphic constant finds the instance it reads
+/// (`restoredConstantInstance`).
+const InstanceRead = enum {
+    /// A compile-time root names the instance: the read's edge, or the
+    /// read's closed type.
+    named,
+    /// Inspection's call of a `to_inspect` override whose `T -> Str`
+    /// instance mentions the owner's type arguments: inspection reaches the
+    /// owner at whatever arguments the inspected value has, generic code
+    /// included, where no checked edge names them, so no root holds the
+    /// instance and the read computes the binding in place (design.md
+    /// "Polymorphic Constants").
+    open_inspect_override,
 };
 
 const ClosedDirectDraftSpecialization = struct {
@@ -17954,6 +18077,9 @@ const DraftDeferredConstUse = struct {
     provenance: DraftConstUseProvenance,
     context_evidence: EvidenceChain,
     use_evidence: []const SpecEvidence,
+    /// The lookup reading the constant, whose checked edge names the
+    /// instance of a polymorphic constant it reads.
+    use_expr: CIR.Expr.Idx,
     current_fn_key: names.TypeDigest,
     /// Durable ancestry of constant expansions active at the use site. The
     /// deferred expansion must restore this chain so a delayed recursive edge
@@ -17969,7 +18095,7 @@ const DraftDeferredConstUse = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftDeferredConstUse) == 880);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftDeferredConstUse) == 896);
 }
 
 /// A pending compile-time callable root currently being expanded into the
@@ -18074,6 +18200,7 @@ fn activeConstNodeAddress(
 fn constNodeRestoresAsLeaf(value: checked.ConstValue) bool {
     return switch (value) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+        .image => Common.invariant("a stored image reached a ConstStore node restore"),
         .pending, .zst, .scalar, .str, .crash, .checked_error => true,
         .list => |list| switch (list.items) {
             .nodes => false,
@@ -18242,7 +18369,7 @@ const DraftDeferredStoredCodecRestore = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftDeferredStoredCodecRestore) == 1280);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftDeferredStoredCodecRestore) == 1296);
 }
 
 const DraftCodecLocalProcContext = struct {
@@ -18988,7 +19115,7 @@ const DraftNestedSpec = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftNestedSpec) == 488);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DraftNestedSpec) == 496);
 }
 
 /// Coordinator intent for one fully graph-sealed nested specialization.
@@ -22753,6 +22880,10 @@ const BodyContext = struct {
     /// the root id travels through template requests into other modules'
     /// body contexts, where the same integer names an unrelated root.
     current_entry_root: ?EntryRoot = null,
+    /// While a destructuring scheme alias's declaration is lowered at a use
+    /// of a name it binds, the declaration's lookup and that use: the use's
+    /// edge instantiates the lookup (design.md "Polymorphic Constants").
+    destructured_alias_use: ?DestructuredAliasUse = null,
     /// Whether this context lowers a lambda body nested inside the current
     /// entry root. Such a body runs only when the lambda is called, after the
     /// root's value exists, so a constant of the root's own scrutinee (a
@@ -22777,11 +22908,6 @@ const BodyContext = struct {
     /// created for the same specialization (dispatch call contexts, nested
     /// non-generalized closures) share the owning specialization's chain.
     evidence: EvidenceChain,
-    /// While restoring a constant's stored value at a use site, the evidence
-    /// vector that use supplied for the constant's own requirements. Closures
-    /// restored from the constant lower their bodies against this chain
-    /// (their plans' `constraint(k)` refs index the constant's scheme).
-    restore_evidence: EvidenceChain,
     /// While restoring a static-data candidate's runtime expression along its
     /// constructor spine, that candidate. Each non-empty list or box on the
     /// spine restores as its own nested candidate (`restoredStaticDataPart`),
@@ -23520,7 +23646,6 @@ const BodyContext = struct {
             .graph = graph,
             .draft = draft,
             .evidence = rootEvidence(owner_template, &.{}),
-            .restore_evidence = rootEvidence(owner_template, &.{}),
             .instantiation = try TypeInstantiationContext.initPooled(builder, builder.allocateInstantiationScope(), view.key.bytes),
             .loop_contexts = .empty,
             .pattern_literal_guards = .empty,
@@ -30537,8 +30662,14 @@ const BodyContext = struct {
         else switch (root.kind) {
             // A literal argument root is the `.boxy` evaluator's: its value
             // is passed at runtime by address, so it is never a Solved
-            // program's root (design.md "Literal Arguments").
-            .literal_argument => Common.invariant("a literal argument root reached Monotype"),
+            // program's root (design.md "Literal Arguments"), but for a
+            // polymorphic constant's instance holding a function value, the
+            // constant's value at the root's type (design.md "Polymorphic
+            // Constants").
+            .literal_argument => if (root.isConstantInstance())
+                try self.lowerConstantInstanceRoot(root.literal_argument.?, try ret_cell.toGraphNode(self.graph))
+            else
+                Common.invariant("a literal argument root reached Monotype"),
             .constant,
             .hoisted_constant,
             .hoisted_validation,
@@ -34352,6 +34483,7 @@ const BodyContext = struct {
 
     const DestructuredAliasSavedScope = struct {
         instantiation: TypeInstantiationContext,
+        destructured_alias_use: ?DestructuredAliasUse,
         /// The block's one statement.
         declaration: CIR.Statement.Idx,
         /// The declaration's binders as the enclosing body had them. Owned.
@@ -39626,7 +39758,7 @@ const BodyContext = struct {
             },
             .eval_template => |eval| blk: {
                 try self.constrainTypeToMono(entry.checked_type, ty);
-                break :blk try self.lowerConstEvalTemplateUse(self.view, eval, entry.const_ref, ty, source_region, .{ .module = self.view.key, .root = entry.root });
+                break :blk try self.lowerConstEvalTemplateUse(self.view, eval, entry.const_ref, ty, source_region, .{ .module = self.view.key, .root = entry.root }, &.{}, null);
             },
             .reserved => Common.invariant("reserved hoisted const template reached Monotype"),
             .unimplemented => Common.invariant("declaration with no implementation reached hoisted const restoration"),
@@ -39670,6 +39802,8 @@ const BodyContext = struct {
                     request_node,
                     source_region,
                     .{ .module = self.view.key, .root = entry.root },
+                    &.{},
+                    null,
                 );
             },
             .reserved => Common.invariant("reserved hoisted const template reached Monotype"),
@@ -40346,11 +40480,9 @@ const BodyContext = struct {
         template_id: checked.CallableEvalTemplateId,
         request_fn_node: NodeId,
         evidence: []const SpecEvidence,
+        use_edge: ?checked.LiteralEdge,
+        read: InstanceRead,
     ) Allocator.Error!DraftExprId {
-        const previous_restore_evidence = self.restore_evidence;
-        self.restore_evidence = rootEvidence(self.owner_template, evidence);
-        defer self.restore_evidence = previous_restore_evidence;
-
         const raw = @backingInt(template_id);
         if (raw >= view.callable_eval_templates.templates.len) {
             Common.invariant("callable eval binding referenced a missing checked template");
@@ -40360,9 +40492,15 @@ const BodyContext = struct {
         const restored = switch (root.payload) {
             .fn_value => |fn_id| try self.restoreConstFnAt(view, fn_id, .{ .node = request_fn_node }, null),
             .const_node => |node| try self.restoreConstNodeAtNode(view, view, node, request_fn_node),
-            // A program that does not evaluate a root no compilation
-            // evaluated yet computes the callable in place.
-            .pending, .unevaluated => return try self.lowerPendingCallableEvalBindingValueAtNode(view, template, root, request_fn_node),
+            // A polymorphic binding's use reads its stored instance
+            // (`restoredConstantInstance` lists the reads that compute it
+            // instead); a program that does not evaluate a root no
+            // compilation evaluated yet computes a monomorphic callable in
+            // place.
+            .pending, .unevaluated => {
+                if (try self.restoredConstantInstance(view, template.root, request_fn_node, use_edge, read)) |restored| return restored;
+                return try self.lowerPendingCallableEvalBindingValueAtNode(view, template, root, request_fn_node, evidence);
+            },
             .discarded, .expect, .runtime => Common.invariant("callable eval binding root output a non-callable payload"),
         };
         try self.draft.recordRestoredRootRead(restored, view.key, template.root);
@@ -40375,6 +40513,7 @@ const BodyContext = struct {
         template: checked.CallableEvalTemplate,
         root: checked.CompileTimeRoot,
         request_fn_node: NodeId,
+        evidence: []const SpecEvidence,
     ) Allocator.Error!DraftExprId {
         const wrapper = view.entry_wrappers.lookupByRoot(template.root) orelse
             Common.invariant("callable eval template root had no checked entry wrapper");
@@ -40382,11 +40521,12 @@ const BodyContext = struct {
         var body_ctx = try BodyContext.init(self.allocator, self.builder, view, wrapper.template, self.graph, self.draft);
         defer body_ctx.deinit();
         const entry_template = view.templates.get(wrapper.template.template);
+        std.debug.assert(evidence.len == entry_template.evidence_params.len);
         const schema = templateSchemaIn(view, &entry_template);
         const subst = try body_ctx.substitutionFromCheckedTypes(view, schema.scheme_vars);
         body_ctx.evidence = rootEvidenceWithSubstitution(wrapper.template, schema, .{
             .subst = subst,
-            .vector = self.restore_evidence.vector,
+            .vector = evidence,
         });
         try body_ctx.seedSubstitution(schema, subst);
         body_ctx.frozen_sealed_emission = self.frozen_sealed_emission;
@@ -47970,16 +48110,19 @@ const BodyContext = struct {
                 const_use,
                 ty,
                 (try self.evidenceForUseSite(record.lookupExpr())).vector,
+                record.lookupExpr(),
             ),
             .imported_const => |const_use| return try self.restoreConstUseAtType(
                 const_use,
                 ty,
                 (try self.evidenceForUseSite(record.lookupExpr())).vector,
+                record.lookupExpr(),
             ),
             .platform_required_const => |required| return try self.restoreConstUseAtType(
                 required.const_use,
                 ty,
                 (try self.evidenceForUseSite(record.lookupExpr())).vector,
+                record.lookupExpr(),
             ),
             .local_param,
             .local_value,
@@ -48141,9 +48284,10 @@ const BodyContext = struct {
             const saved_binders = try binders.toOwnedSlice(self.allocator);
             errdefer self.allocator.free(saved_binders);
             const instantiation = try TypeInstantiationContext.initPooled(self.builder, self.builder.allocateInstantiationScope(), self.view.key.bytes);
-            saved.* = .{ .instantiation = self.instantiation, .declaration = declaration, .binders = saved_binders };
+            saved.* = .{ .instantiation = self.instantiation, .destructured_alias_use = self.destructured_alias_use, .declaration = declaration, .binders = saved_binders };
             task.saved = saved;
             self.instantiation = instantiation;
+            self.destructured_alias_use = .{ .lookup = decl.expr, .use = task.use_expr };
         }
         const saved = task.saved.?;
         try relateRequestComponent(self.graph, try self.instNode(checkedBinderType(self.view, task.binder)), task.expected_node);
@@ -48161,8 +48305,18 @@ const BodyContext = struct {
         self.allocator.free(saved.binders);
         self.instantiation.deinit();
         self.instantiation = saved.instantiation;
+        self.destructured_alias_use = saved.destructured_alias_use;
         self.allocator.destroy(saved);
         task.saved = null;
+    }
+
+    /// The expression whose literal edge a read of a constant at lookup
+    /// `use_expr` instantiates: the use of the bound name for a
+    /// destructuring scheme alias's lookup lowered at that use, and the
+    /// lookup itself otherwise.
+    fn constUseEdgeExpr(self: *const BodyContext, use_expr: CIR.Expr.Idx) CIR.Expr.Idx {
+        if (self.destructured_alias_use) |alias_use| if (alias_use.lookup == use_expr) return alias_use.use;
+        return use_expr;
     }
 
     fn stepSchemeAlias(self: *BodyContext, task: *SchemeAliasTask, input: ?LowerResult) Allocator.Error!LowerStep {
@@ -48174,7 +48328,10 @@ const BodyContext = struct {
         const scope_id = alias.dispatch_scope orelse
             Common.invariant("generalized callable alias has no checked scheme scope");
         const edge = try self.evidenceForUseSiteAtNode(task.use_expr, task.expected_node);
-        const evidence = try enterEvidenceScope(self.builder, self.evidence, scope_id, alias.expr, edge);
+        var evidence = try enterEvidenceScope(self.builder, self.evidence, scope_id, alias.expr, edge);
+        const entry = try self.builder.evidence_arena.allocator().create(ScopeEntry);
+        entry.* = .{ .edge = .{ .use = task.use_expr }, .use_frame = self.evidence };
+        evidence.entered_by = entry;
         const scope = self.view.templates.dispatch_scopes.items()[@backingInt(scope_id)];
         const saved = try self.allocator.create(SchemeAliasSavedScope);
         saved.* = .{ .instantiation = self.instantiation, .evidence = self.evidence };
@@ -48293,6 +48450,7 @@ const BodyContext = struct {
                         selected.const_use,
                         expected_node,
                         (try self.evidenceForUseSite(record.lookupExpr())).vector,
+                        record.lookupExpr(),
                         .{ .hoisted = entry },
                     );
                 }
@@ -48303,6 +48461,7 @@ const BodyContext = struct {
                     const_use,
                     expected_node,
                     (try self.evidenceForUseSite(record.lookupExpr())).vector,
+                    record.lookupExpr(),
                     .declared,
                 );
             },
@@ -48312,6 +48471,7 @@ const BodyContext = struct {
                     const_use,
                     expected_node,
                     (try self.evidenceForUseSite(record.lookupExpr())).vector,
+                    record.lookupExpr(),
                     .declared,
                 );
             },
@@ -48321,6 +48481,7 @@ const BodyContext = struct {
                     required.const_use,
                     expected_node,
                     (try self.evidenceForUseSite(record.lookupExpr())).vector,
+                    record.lookupExpr(),
                     .declared,
                 );
             },
@@ -48387,6 +48548,7 @@ const BodyContext = struct {
         const_use: checked.ConstUseTemplate,
         expected_node: NodeId,
         use_evidence: []const SpecEvidence,
+        use_expr: CIR.Expr.Idx,
         provenance: DraftConstUseProvenance,
     ) Allocator.Error!DraftExprId {
         switch (provenance) {
@@ -48433,6 +48595,7 @@ const BodyContext = struct {
             .provenance = provenance,
             .context_evidence = self.evidence,
             .use_evidence = use_evidence,
+            .use_expr = self.constUseEdgeExpr(use_expr),
             .current_fn_key = self.current_fn_key,
             .active_const_binding = .of(self.active_const_binding),
             .lexical = lexical,
@@ -48456,6 +48619,8 @@ const BodyContext = struct {
                 callable_eval.template,
                 request_fn_node,
                 edge.vector,
+                .{ .use = site_expr },
+                .named,
             );
         }
         const edge = try self.evidenceForProcedureUseAtNode(proc, site_expr, root_evidence, request_fn_node, .body_lowering);
@@ -48703,13 +48868,10 @@ const BodyContext = struct {
         const_use: checked.ConstUseTemplate,
         ty: Type.TypeId,
         use_evidence: []const SpecEvidence,
+        use_expr: CIR.Expr.Idx,
     ) Allocator.Error!DraftExprId {
         const requested_ty = const_use.requested_source_ty_payload orelse
             Common.invariant("checked const use reached Monotype without a requested checked type");
-        const previous_restore_evidence = self.restore_evidence;
-        self.restore_evidence = rootEvidence(self.owner_template, use_evidence);
-        defer self.restore_evidence = previous_restore_evidence;
-
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
         return switch (template.state) {
@@ -48739,7 +48901,7 @@ const BodyContext = struct {
             .reserved => Common.invariant("reserved checked const template reached Monotype"),
             .eval_template => |eval| blk: {
                 try self.constrainTypeToMono(requested_ty, ty);
-                break :blk try self.lowerConstEvalTemplateUse(store_view, eval, const_use.const_ref, ty, null, null);
+                break :blk try self.lowerConstEvalTemplateUse(store_view, eval, const_use.const_ref, ty, null, null, use_evidence, .{ .use = self.constUseEdgeExpr(use_expr) });
             },
             .unimplemented => |declaration| blk: {
                 try self.constrainTypeToMono(requested_ty, ty);
@@ -48762,13 +48924,10 @@ const BodyContext = struct {
         const_use: checked.ConstUseTemplate,
         request_node: NodeId,
         use_evidence: []const SpecEvidence,
+        use_expr: CIR.Expr.Idx,
     ) Allocator.Error!DraftExprId {
         const requested_ty = const_use.requested_source_ty_payload orelse
             Common.invariant("checked const use reached Monotype without a requested checked type");
-        const previous_restore_evidence = self.restore_evidence;
-        self.restore_evidence = rootEvidence(self.owner_template, use_evidence);
-        defer self.restore_evidence = previous_restore_evidence;
-
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
         return switch (template.state) {
@@ -48806,6 +48965,8 @@ const BodyContext = struct {
                     request_node,
                     null,
                     null,
+                    use_evidence,
+                    .{ .use = self.constUseEdgeExpr(use_expr) },
                 );
             },
             .unimplemented => |declaration| blk: {
@@ -48856,18 +49017,6 @@ const BodyContext = struct {
         );
     }
 
-    /// The edge of a template's root: its own quantified variables (no
-    /// caller binds them) with the chain-free root evidence checking
-    /// recorded for the template as contract provenance.
-    fn rootEdgeEvidence(
-        self: *BodyContext,
-        view: ModuleView,
-        template_ref: names.ProcTemplate,
-        template: checked.CheckedProcedureTemplate,
-    ) Allocator.Error!EdgeEvidence {
-        return self.rootEdgeEvidenceForPurpose(view, template_ref, template, .body_lowering);
-    }
-
     fn rootEdgeEvidenceForPurpose(
         self: *BodyContext,
         view: ModuleView,
@@ -48884,6 +49033,154 @@ const BodyContext = struct {
         };
     }
 
+    /// The value of the polymorphic constant `site` names, its compile-time
+    /// root's, at the type of `request_node`: the constant's body lowered at
+    /// that instance. This is the instance root's own evaluation.
+    fn lowerConstantInstanceRoot(self: *BodyContext, argument: checked.LiteralArgumentRoot, request_node: NodeId) Allocator.Error!DraftExprId {
+        const site = argument.site;
+        // The entry wrapper's evidence at the instance: the instance's type
+        // is closed, so the wrapper's requirements there resolve from its
+        // types, as at an instantiation checking recorded no edge for. The
+        // edge naming the instance carries evidence for the scheme it
+        // instantiates, which is the wrapper's only when the edge is a
+        // direct use of the constant; an instance forwarded through a
+        // generic function is named by an edge instantiating that function.
+        const view = self.builder.moduleForDigest(site.module);
+        const constant = view.compile_time_roots.root(site.constantRoot());
+        switch (constant.kind) {
+            .constant, .hoisted_constant => {
+                const const_ref = constRefOfRoot(view, constant) orelse Common.invariant("a polymorphic constant's root has no constant template");
+                const eval = switch (view.const_templates.get(const_ref).state) {
+                    .eval_template => |eval| eval,
+                    .reserved, .stored_const, .unimplemented => Common.invariant("a polymorphic constant's template has no entry procedure"),
+                };
+                const entry_template = view.templates.get(eval.entry_template.template);
+                const evidence = try self.deriveEdgeAtRequest(templateSchemaIn(view, &entry_template), try self.graphFunctionNode(&.{}, request_node), .body_lowering);
+                return try self.lowerConstBodyAtNode(view, eval, const_ref, request_node, null, null, evidence.vector);
+            },
+            .callable_binding => {
+                for (view.callable_eval_templates.templates) |template| {
+                    if (template.root != constant.id) continue;
+                    const wrapper = view.entry_wrappers.lookupByRoot(template.root) orelse Common.invariant("callable eval template root had no checked entry wrapper");
+                    const entry_template = view.templates.get(wrapper.template.template);
+                    const evidence = try self.deriveEdgeAtRequest(templateSchemaIn(view, &entry_template), try self.graphFunctionNode(&.{}, request_node), .body_lowering);
+                    return try self.lowerPendingCallableEvalBindingValueAtNode(view, template, constant, request_node, evidence.vector);
+                }
+                Common.invariant("a polymorphic callable binding's root has no callable-eval template");
+            },
+            .hoisted_validation, .expect, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => Common.invariant("a constant instance names a root that is no constant"),
+        }
+    }
+
+    /// The stored value of the constant whose compile-time root is
+    /// `constant` of `view`, read at `request_node`, when the constant is
+    /// polymorphic (design.md "Polymorphic Constants"): the instance root
+    /// the read's edge names, through the edges of the scopes it forwards
+    /// the instance to, or the one the read's closed type names, as a
+    /// literal's root is read (`restoredLiteralArgument`). Null, and the
+    /// reader computes the constant at the read, exactly for a monomorphic
+    /// constant (which has no instances), for the instance root's own
+    /// evaluation, and for a `.open_inspect_override` read. Any other read
+    /// that finds no instance is a compiler bug.
+    fn restoredConstantInstance(self: *BodyContext, view: ModuleView, constant: checked.ComptimeRootId, request_node: NodeId, edge: ?checked.LiteralEdge, read: InstanceRead) Allocator.Error!?DraftExprId {
+        const wrapper = view.entry_wrappers.lookupByRoot(constant) orelse return null;
+        if (view.templates.constantInstanceRequirement(&view.templates.get(wrapper.template.template)) == null) return null;
+        // An instance root's own evaluation computes the constant; it reads
+        // no other root of it, which may be computing it too.
+        if (self.current_entry_root) |entry| {
+            const entry_view = self.builder.moduleForId(entry.module);
+            if (entry_view.compile_time_roots.root(entry.root).literal_argument) |argument| {
+                if (argument.site.kind == .constant_instance and argument.site.node == @backingInt(constant) and moduleBytesEqual(argument.site.module.bytes, view.key.bytes)) return null;
+            }
+        }
+        // A use checking recorded at a closed type names its instance's
+        // root, in this body's module, whatever the request's type is
+        // resolved to yet.
+        if (edge) |use_edge| if (try self.restoredEdgeConstantInstance(view, constant, request_node, use_edge)) |restored| return restored;
+        if (try self.graph.typeIsResolved(request_node)) {
+            const ty = try self.activeTypeFromNode(request_node);
+            for (self.builder.literalArgumentRootIndex().instanceRootsOf(.{ .module = view.key.bytes, .node = @backingInt(constant), .kind = .constant_instance })) |candidate| {
+                const root_view = &self.builder.moduleViews()[candidate.view];
+                const argument = root_view.compile_time_roots.root(candidate.root).literal_argument orelse Common.invariant("a constant instance index entry named a root that is no instance");
+                const root_ty = try self.closedCheckedMonoOf(root_view, argument.ty);
+                if (root_ty != ty and !try self.typeStore().typeEql(self.nameStore(), root_ty, ty)) continue;
+                if (try self.readConstantInstanceRoot(root_view, candidate.root, request_node)) |restored| return restored;
+                Common.invariant("a polymorphic constant's instance root is not evaluated before a program that reads it");
+            }
+        }
+        return switch (read) {
+            .open_inspect_override => null,
+            .named => Common.invariantFmt("a read of polymorphic constant root {d} names no instance (edge {s})", .{ @backingInt(constant), if (edge) |use_edge| @tagName(use_edge) else "none" }),
+        };
+    }
+
+    /// The value of instance root `root_id` of `root_view` at `request_node`:
+    /// its stored value, or, in a program evaluating it, its slot's.
+    fn readConstantInstanceRoot(self: *BodyContext, root_view: ModuleView, root_id: checked.ComptimeRootId, request_node: NodeId) Allocator.Error!?DraftExprId {
+        const root = root_view.compile_time_roots.root(root_id);
+        const argument = root.literal_argument orelse Common.invariant("a constant instance read named a root that is no instance");
+        const restored = switch (root.payload) {
+            .fn_value => |fn_id| try self.restoreConstFnAt(root_view, fn_id, .{ .node = request_node }, null),
+            // The stored value has the representation of the instance's
+            // closed type, which the read relates to its request as a read
+            // of a monomorphic constant's stored value does.
+            .const_node => |node| blk: {
+                const stored_node = try self.relateCheckedNodeToProducedValue(request_node, try self.graph.importMonoIndependent(try self.closedCheckedMonoOf(root_view, argument.ty)));
+                try relateRequestComponent(self.graph, request_node, stored_node);
+                break :blk if (root_view.const_store.imageOf(node)) |image|
+                    try self.restoredRootImage(root_view, node, image, argument.ty, stored_node)
+                else
+                    try self.restoreConstNodeAtNode(root_view, root_view, node, stored_node);
+            },
+            .pending, .unevaluated => {
+                if (!self.builder.comptimeValueReadDeclared(root_view, root_id)) return null;
+                return try self.declaredComptimeValueRead(root_view, root_id, DraftTypeCell.fromGraphNode(request_node), null);
+            },
+            .discarded, .expect, .runtime => return null,
+        };
+        try self.draft.recordRestoredRootRead(restored, root_view.key, root_id);
+        return restored;
+    }
+
+    /// The stored instance a use's checked edge names as a root of this
+    /// body's module, related to `request_node`, when it names one that is
+    /// stored.
+    fn restoredEdgeConstantInstance(self: *BodyContext, view: ModuleView, constant: checked.ComptimeRootId, request_node: NodeId, edge: checked.LiteralEdge) Allocator.Error!?DraftExprId {
+        const wrapper = view.entry_wrappers.lookupByRoot(constant) orelse return null;
+        const own = view.templates.constantInstanceRequirement(&view.templates.get(wrapper.template.template)) orelse return null;
+        const args = self.view.templates.literalEdgeArgs(edge);
+        if (own >= args.len) return null;
+        // A forwarded instance is the literal requirement of the scope the
+        // edge is in; where that scope was entered at a use, the use's edge
+        // names it, outward until an edge names a root. A scope a
+        // specialization entered names it by its closed type instead.
+        var arg = args[own];
+        var frame = self.evidence;
+        const root_id = named: {
+            while (true) switch (arg) {
+                .root => |root_id| break :named root_id,
+                .forwarded => |requirement| {
+                    const entry = frame.entered_by orelse return null;
+                    const entry_args = self.view.templates.literalEdgeArgs(entry.edge);
+                    if (requirement >= entry_args.len) Common.invariant("a scope's use supplies fewer literal arguments than the scope forwards");
+                    arg = entry_args[requirement];
+                    frame = entry.use_frame;
+                },
+                .unbound => Common.invariant("a polymorphic constant's use names an unbound instance"),
+            };
+        };
+        const root = self.view.compile_time_roots.root(root_id);
+        const argument = root.literal_argument orelse Common.invariant("a use's constant instance names a root that is no instance");
+        const readable = switch (root.payload) {
+            .fn_value, .const_node => true,
+            .pending, .unevaluated => self.builder.comptimeValueReadDeclared(self.view, root_id),
+            .discarded, .expect, .runtime => false,
+        };
+        if (!readable) return null;
+        try relateRequestComponent(self.graph, request_node, try self.graph.importMonoIndependent(try self.closedCheckedMonoOf(self.view, argument.ty)));
+        return try self.readConstantInstanceRoot(self.view, root_id, request_node);
+    }
+
     fn lowerConstEvalTemplateUse(
         self: *BodyContext,
         store_view: ModuleView,
@@ -48892,6 +49189,8 @@ const BodyContext = struct {
         ty: Type.TypeId,
         source_region_override: ?base.Region,
         current_entry_root: ?EntryRoot,
+        evidence: []const SpecEvidence,
+        use_edge: ?checked.LiteralEdge,
     ) Allocator.Error!DraftExprId {
         return try self.lowerConstEvalTemplateUseAtNode(
             store_view,
@@ -48900,6 +49199,8 @@ const BodyContext = struct {
             try self.activeNodeFromType(ty),
             source_region_override,
             current_entry_root,
+            evidence,
+            use_edge,
         );
     }
 
@@ -48911,11 +49212,31 @@ const BodyContext = struct {
         request_node: NodeId,
         source_region_override: ?base.Region,
         current_entry_root: ?EntryRoot,
+        evidence: []const SpecEvidence,
+        use_edge: ?checked.LiteralEdge,
     ) Allocator.Error!DraftExprId {
         const body = store_view.checked_const_bodies.get(eval.body);
         if (self.builder.comptimeValueReadDeclared(store_view, body.root)) {
             return self.declaredComptimeValueRead(store_view, body.root, DraftTypeCell.fromGraphNode(request_node), const_use);
         }
+        if (try self.restoredConstantInstance(store_view, body.root, request_node, use_edge, .named)) |restored| return restored;
+        return try self.lowerConstBodyAtNode(store_view, eval, const_use, request_node, source_region_override, current_entry_root, evidence);
+    }
+
+    /// The constant's body lowered at `request_node`, with `evidence` for its
+    /// entry template's evidence parameters, which the caller derived for
+    /// exactly that template.
+    fn lowerConstBodyAtNode(
+        self: *BodyContext,
+        store_view: ModuleView,
+        eval: checked.ConstEvalTemplate,
+        const_use: checked.ConstLocator,
+        request_node: NodeId,
+        source_region_override: ?base.Region,
+        current_entry_root: ?EntryRoot,
+        evidence: []const SpecEvidence,
+    ) Allocator.Error!DraftExprId {
+        const body = store_view.checked_const_bodies.get(eval.body);
         const entry_template = store_view.templates.get(eval.entry_template.template);
 
         var body_ctx = try BodyContext.init(
@@ -48929,13 +49250,11 @@ const BodyContext = struct {
         defer body_ctx.deinit();
         try body_ctx.inheritActiveConstBinding(self);
         const schema = templateSchemaIn(store_view, &entry_template);
-        const root_evidence: EdgeEvidence = if (self.restore_evidence.vector.len < entry_template.evidence_params.len)
-            try body_ctx.rootEdgeEvidence(store_view, eval.entry_template, entry_template)
-        else
-            .{
-                .subst = try body_ctx.substitutionFromCheckedTypes(store_view, schema.scheme_vars),
-                .vector = self.restore_evidence.vector,
-            };
+        std.debug.assert(evidence.len == entry_template.evidence_params.len);
+        const root_evidence: EdgeEvidence = .{
+            .subst = try body_ctx.substitutionFromCheckedTypes(store_view, schema.scheme_vars),
+            .vector = evidence,
+        };
         body_ctx.evidence = rootEvidenceWithSubstitution(eval.entry_template, schema, root_evidence);
         try body_ctx.seedSubstitution(schema, root_evidence.subst);
         body_ctx.source_region_override = source_region_override;
@@ -48993,6 +49312,7 @@ const BodyContext = struct {
 
         switch (value) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+            .image => Common.invariant("a stored image reached a ConstStore node restore"),
             .fn_value => {},
             .tag, .record, .tuple => if (nominalConstructionLayer(self.typeStore(), ty)) |layer| {
                 return .{ .layer = .{ .child = node, .backing = layer.backing, .named = layer.named } };
@@ -49008,6 +49328,7 @@ const BodyContext = struct {
         try self.reserveConstNodeBinding(store_view, node, representation, cell);
         switch (value) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+            .image => Common.invariant("a stored image reached a ConstStore node restore"),
             .fn_value => |fn_id| {
                 const part_root = self.static_data_part_root;
                 self.static_data_part_root = null;
@@ -49081,7 +49402,7 @@ const BodyContext = struct {
         }
         if (self.constRestorationIsClosed() and
             try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
-            self.builder.constNodeMayUseStaticDataCandidate(store_view, node))
+            try self.builder.constNodeMayUseStaticDataCandidate(store_view, node))
         {
             const id = try self.draftStaticDataRequest(
                 const_locator,
@@ -49125,10 +49446,72 @@ const BodyContext = struct {
         static_data_const_locator: ?checked.ConstLocator,
         own_scope: bool,
     ) Allocator.Error!DraftExprId {
+        if (self.builder.constNodeImageLiteral(store_view, node)) |literal| return try self.imageLiteralExpr(store_view, literal, ty);
         const opened = try self.enterConstRestoreScope(own_scope);
         errdefer if (opened) self.dropConstRestoreScope();
         const restored = try runConstRestore(self, store_view, type_view, node, ty, static_data_const_locator);
         return try self.leaveConstRestoreScope(opened, restored);
+    }
+
+    /// The expression of a literal a root's image holds, at `ty`: the
+    /// literal at the innermost backing of `ty`'s nominal layers, wrapped
+    /// in one `.nominal` per layer. A literal is a leaf, so each read
+    /// builds its own copy, as a restored leaf node does.
+    fn imageLiteralExpr(self: *BodyContext, store_view: ModuleView, literal: check.ConstStore.ImageLiteral, ty: Type.TypeId) Allocator.Error!DraftExprId {
+        var layers: std.ArrayListUnmanaged(Type.TypeId) = .empty;
+        defer layers.deinit(self.allocator);
+        var current = ty;
+        while (nominalConstructionLayer(self.typeStore(), current)) |layer| {
+            try layers.append(self.allocator, layer.named);
+            current = layer.backing;
+        }
+        var expr = try self.addExpr(.{ .ty = current, .data = try self.imageLiteralData(store_view, literal, DraftTypeCell.fromSealed(current)) });
+        while (layers.pop()) |named| expr = try self.addExpr(.{ .ty = named, .data = .{ .nominal = expr } });
+        return expr;
+    }
+
+    /// `imageLiteralExpr` at a graph node: the literal at the innermost
+    /// backing of `request_node`'s nominal layers, wrapped per layer.
+    fn imageLiteralExprAtNode(self: *BodyContext, store_view: ModuleView, literal: check.ConstStore.ImageLiteral, request_node: NodeId) Allocator.Error!DraftExprId {
+        var layers: std.ArrayListUnmanaged(NodeId) = .empty;
+        defer layers.deinit(self.allocator);
+        var current = request_node;
+        while (true) {
+            const representation_node = try self.constructorRepresentationNode(current);
+            switch (try self.graph.content(representation_node)) {
+                .named => {
+                    const named = try self.graph.namedNodes(representation_node);
+                    if (named.kind == .alias) Common.invariant("constructor representation retained a transparent alias node");
+                    const backing = named.backing orelse Common.invariant("named constructor graph node had no explicit backing");
+                    try layers.append(self.allocator, representation_node);
+                    current = backing.node;
+                },
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => break,
+            }
+        }
+        const cell = DraftTypeCell.fromGraphNode(current);
+        var expr = try self.addExprWithTypeCell(cell, try self.imageLiteralData(store_view, literal, cell));
+        while (layers.pop()) |representation_node| {
+            expr = try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(representation_node), .{ .nominal = expr });
+        }
+        return expr;
+    }
+
+    /// The expression data of an image's literal typed at `cell`.
+    fn imageLiteralData(self: *BodyContext, store_view: ModuleView, literal: check.ConstStore.ImageLiteral, cell: DraftTypeCell) Allocator.Error!BodyExprData {
+        return switch (literal) {
+            .scalar => |scalar| restoreScalar(scalar),
+            .tag => |name| .{ .tag = .{
+                .name = try tagName(self.nameStoreMut(), store_view, name),
+                .payloads = try self.addExprSpan(&.{}),
+            } },
+            .str => |str| str: {
+                const string: BodyExprData = .{ .str_lit = try self.addStringLiteral(str.bytes) };
+                const spare = str.capacity - str.bytes.len;
+                if (spare == 0) break :str string;
+                break :str try constStrWithSpareCapacity(self, try self.addExprWithTypeCell(cell, string), spare);
+            },
+        };
     }
 
     fn restoredStaticDataCandidateNodeAtNode(
@@ -49149,7 +49532,7 @@ const BodyContext = struct {
         }
         const candidate = self.constRestorationIsClosed() and
             try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
-            self.builder.constNodeMayUseStaticDataCandidate(store_view, node);
+            try self.builder.constNodeMayUseStaticDataCandidate(store_view, node);
         const stored_shape = if (candidate) try self.builder.storedListShape(store_view, node) else null;
         const value: DraftStaticDataCandidateValue = if (stored_shape) |shape|
             .{ .stored = .{ .item_count = shape.item_count } }
@@ -49195,6 +49578,7 @@ const BodyContext = struct {
     ) ?StaticDataPartRoot {
         return switch (store_view.const_store.get(node)) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+            .image => Common.invariant("a stored image reached a ConstStore node restore"),
             .tuple, .record, .tag, .nominal => .{
                 .module = store_view.key,
                 .node = node,
@@ -49215,6 +49599,7 @@ const BodyContext = struct {
         if (node == root.node or !moduleBytesEqual(root.module.bytes, store_view.key.bytes)) return false;
         return switch (store_view.const_store.get(node)) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+            .image => Common.invariant("a stored image reached a ConstStore node restore"),
             .list => |list| switch (list.items) {
                 .nodes => |items| items.len != 0,
                 .empty, .packed_bytes => list.capacity != list.items.len(),
@@ -49354,6 +49739,7 @@ const BodyContext = struct {
         static_data_const_locator: ?checked.ConstLocator,
         own_scope: bool,
     ) Allocator.Error!DraftExprId {
+        if (self.builder.constNodeImageLiteral(store_view, root)) |literal| return try self.imageLiteralExprAtNode(store_view, literal, root_request_node);
         const opened = try self.enterConstRestoreScope(own_scope);
         errdefer if (opened) self.dropConstRestoreScope();
         var frames: std.ArrayListUnmanaged(ConstAtNodeFrame) = .empty;
@@ -49371,6 +49757,7 @@ const BodyContext = struct {
                 const child = frame.single_child orelse frame.children[index];
                 const child_node = switch (frame.value) {
                     .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+                    .image => Common.invariant("a stored image reached a ConstStore node restore"),
                     .tag => try self.graph.tagConstructionPayloadNode(frame.request_node, frame.tag_name, index),
                     .box, .nominal => frame.single_child_node,
                     .pending, .zst, .scalar, .str, .crash, .checked_error, .list, .tuple, .record, .fn_value => frame.child_nodes[index],
@@ -49408,6 +49795,7 @@ const BodyContext = struct {
         errdefer if (frame_owned) frame.deinit(self.allocator);
         switch (value) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+            .image => Common.invariant("a stored image reached a ConstStore node restore"),
             .fn_value => |fn_id| {
                 const part_root = self.static_data_part_root;
                 self.static_data_part_root = null;
@@ -49434,6 +49822,7 @@ const BodyContext = struct {
         }
         switch (value) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+            .image => Common.invariant("a stored image reached a ConstStore node restore"),
             .list => |list| switch (list.items) {
                 .nodes => |items| {
                     const element_node = try self.graph.listElementNode(request_node);
@@ -49517,6 +49906,7 @@ const BodyContext = struct {
             .constructor, .data => blk: {
                 const data: BodyExprData = switch (frame.value) {
                     .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+                    .image => Common.invariant("a stored image reached a ConstStore node restore"),
                     .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
                     .zst => .unit,
                     .scalar => |scalar| restoreScalar(scalar),
@@ -50713,7 +51103,10 @@ const BodyContext = struct {
             try relateRequestComponent(self.graph, expected_node, witness_node);
             return;
         }
-        switch (record.ref) {
+        // A local alias of a polymorphic constant is a value, related as a
+        // read of the constant is.
+        const value_alias = record.ref == .local_proc and record.ref.local_proc.is_alias and resolvedPayload(self.view, expr.ty).payload != .function;
+        if (!value_alias) switch (record.ref) {
             .local_proc,
             .top_level_proc,
             .imported_proc,
@@ -50730,7 +51123,7 @@ const BodyContext = struct {
                 return;
             },
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => {},
-        }
+        };
         try self.graph.unify(expected_node, try self.instNode(expr.ty));
     }
 
@@ -52973,7 +53366,7 @@ const BodyContext = struct {
             const root_ty = try self.closedCheckedMonoOf(view, argument.ty);
             if (root_ty != ty and !try self.typeStore().typeEql(self.nameStore(), root_ty, ty)) continue;
             if (@import("builtin").mode == .debug) try self.assertLiteralArgumentValuesAgree(candidates, view, node, ty);
-            const restored = switch (view.const_store.get(node)) {
+            const restored = if (view.const_store.imageOf(node)) |image| try self.restoredRootImage(view, node, image, argument.ty, value_node) else switch (view.const_store.get(node)) {
                 // The root's conversion failed and the root reported it in
                 // its module: reaching the value is reaching a failure
                 // already reported, as reaching code checking rejected is,
@@ -52982,12 +53375,75 @@ const BodyContext = struct {
                 .crash => |message| try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(value_node), .{ .checked_error = try self.addStringLiteral(
                     view.const_store.strBytes(message),
                 ) }),
-                .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value, .boxy_fn, .checked_error => try self.restoreConstNodeAtNode(view, view, node, value_node),
+                .image, .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value, .boxy_fn, .checked_error => try self.restoreConstNodeAtNode(view, view, node, value_node),
             };
             try self.draft.recordRestoredRootRead(restored, view.key, candidate.root);
             return restored;
         }
         return null;
+    }
+
+    /// The value of the compile-time root of `view` whose stored image
+    /// `image` is node `node`, at `checked_type` of `view` and graph node
+    /// `request_node`: its literal when it holds one, and otherwise one
+    /// static datum frozen from the image (design.md "Stored Images").
+    fn restoredRootImage(
+        self: *BodyContext,
+        view: ModuleView,
+        node: checked.ConstNodeId,
+        image: check.ConstStore.ConstImageId,
+        checked_type: checked.CheckedTypeId,
+        request_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const cell = DraftTypeCell.fromGraphNode(request_node);
+        if (view.const_store.imageLiteral(image)) |literal| switch (literal) {
+            .scalar, .tag => return try self.imageLiteralExprAtNode(view, literal, request_node),
+            .str => |str| if (str.capacity == str.bytes.len) return try self.imageLiteralExprAtNode(view, literal, request_node),
+        };
+        return try self.storedRootImageCandidate(view, node, image, checked_type, cell);
+    }
+
+    /// `restoredRootImage` at the sealed type `ty`.
+    fn restoredRootImageAtType(
+        self: *BodyContext,
+        view: ModuleView,
+        node: checked.ConstNodeId,
+        image: check.ConstStore.ConstImageId,
+        checked_type: checked.CheckedTypeId,
+        ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        const cell = DraftTypeCell.fromSealed(ty);
+        if (view.const_store.imageLiteral(image)) |literal| switch (literal) {
+            .scalar, .tag => return try self.imageLiteralExpr(view, literal, ty),
+            .str => |str| if (str.capacity == str.bytes.len) return try self.imageLiteralExpr(view, literal, ty),
+        };
+        return try self.storedRootImageCandidate(view, node, image, checked_type, cell);
+    }
+
+    /// The stored static data candidate of root image `image`, node `node`
+    /// of `view`, at `checked_type` of `view`, typed `cell`.
+    fn storedRootImageCandidate(
+        self: *BodyContext,
+        view: ModuleView,
+        node: checked.ConstNodeId,
+        image: check.ConstStore.ConstImageId,
+        checked_type: checked.CheckedTypeId,
+        cell: DraftTypeCell,
+    ) Allocator.Error!DraftExprId {
+        const id = try self.draftStaticDataRequestAt(.{
+            .source = .{ .stored = .{
+                .checked_type_module = view.key,
+                .module = view.key,
+                .node = node,
+                .checked_type = checked_type,
+            } },
+            .ty = cell,
+        }, .{ .stored_root = .{ .module = view.key, .node = node, .checked_type = checked_type } });
+        return try self.addExprWithTypeCell(cell, .{ .static_data_candidate = .{
+            .static_data = id,
+            .storage = constStaticDataStorage(view, node),
+            .value = .{ .stored = .{ .item_count = imageListLen(view.const_store, image) } },
+        } });
     }
 
     /// Whether a validate-only `literal_argument` root converts this literal
@@ -53213,7 +53669,10 @@ const BodyContext = struct {
             Common.invariant("literal conversion root link named a non-conversion root");
         switch (root.payload) {
             .const_node => |node| {
-                const restored = try self.restoreConstNodeAtNode(self.view, self.view, node, request_node);
+                const restored = if (self.view.const_store.imageOf(node)) |image|
+                    try self.restoredRootImage(self.view, node, image, root.checked_type, request_node)
+                else
+                    try self.restoreConstNodeAtNode(self.view, self.view, node, request_node);
                 try self.draft.recordRestoredRootRead(restored, self.view.key, root_id);
                 return restored;
             },
@@ -54852,6 +55311,13 @@ const BodyContext = struct {
         purpose: EvidenceMaterializationPurpose,
         request_node: ?NodeId,
     ) Allocator.Error!EdgeEvidence {
+        // A use of a stored value instantiates no scheme (a constant whose
+        // type mentions a platform's abstract type, stored by the pairing,
+        // keeps a variable its checked use still substitutes).
+        if (schema.root == null and schema.params.len == 0) return .{
+            .subst = try self.substitutionFromCheckedTypes(site_view, &.{}),
+            .vector = &.{},
+        };
         const subst = try self.recordedSiteSubstitution(site_view, expr, schema) orelse {
             // Checking recorded no instantiation at this use (the edge is
             // compiler-generated): the request interface alone determines
@@ -56466,7 +56932,9 @@ const BodyContext = struct {
         return switch (lookup.target.kind) {
             .procedure => |procedure| templateSchemaIn(lookup.view, &lookup.view.templates.get(procedure.template.template)),
             .local_proc => |local| self.scopeSchema(lookup.view, local.dispatch_scope),
-            .callable_binding => emptySchema(lookup.view),
+            // A polymorphic binding's scheme is its entry wrapper's
+            // (design.md "Polymorphic Constants").
+            .callable_binding => |binding| templateSchemaIn(lookup.view, &lookup.view.templates.get(callableBindingOwnerTemplate(lookup.view, binding.template).template)),
             .structural => Common.invariant("structural method registry result has no quantified scheme"),
         };
     }
@@ -56755,8 +57223,8 @@ const BodyContext = struct {
 
     /// The callee of a dispatch to a method bound to a computed callable:
     /// its function value, restored at the request node when the call
-    /// materializes it. The binding is monomorphic, so its type relates
-    /// to the request directly.
+    /// materializes it: the stored value of a monomorphic binding, or the
+    /// stored instance of a polymorphic one at the request's type.
     fn callableBindingMethodCallee(
         self: *BodyContext,
         lookup: MethodLookup,
@@ -56768,7 +57236,11 @@ const BodyContext = struct {
         defer target_ctx.deinit();
         const target_root_node = try target_ctx.instNode(source_fn_ty);
         try self.relateEvidenceTargetRootToRequest(lookup.view, source_fn_ty, target_root_node, request_fn_node);
-        return .{ .callable_binding = .{ .module = binding.module, .template = binding.template, .fn_node = request_fn_node } };
+        const read: InstanceRead = if (lookup.inspect_override) |override_ty|
+            if (try lookup.view.types.rootHasIdentityVariables(override_ty)) .open_inspect_override else .named
+        else
+            .named;
+        return .{ .callable_binding = .{ .module = binding.module, .template = binding.template, .fn_node = request_fn_node, .read = read } };
     }
 
     /// The procedure callee a call of `slot` names. A computed callable's
@@ -56781,6 +57253,8 @@ const BodyContext = struct {
                 binding.template,
                 binding.fn_node,
                 &.{},
+                null,
+                binding.read,
             ) },
         };
     }
@@ -57477,8 +57951,9 @@ const BodyContext = struct {
                 ) };
             },
             .callable_binding => |binding| blk: {
+                // A polymorphic binding's substitution is its entry
+                // wrapper's, which the target context seeds.
                 if (alias_edge != null) Common.invariant("a method alias reached a computed callable target");
-                if (subst.len != 0) Common.invariant("a computed callable target had a scheme substitution");
                 break :blk try self.callableBindingMethodCallee(lookup, binding, request_fn_node);
             },
             .structural => Common.invariant("direct checked call targeted a structural derivation"),
@@ -71804,6 +72279,7 @@ fn beginConstRestoreNode(
     var frame: ConstRestoreFrame = .{ .node = node, .ty = ty, .value = value };
     switch (value) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+        .image => Common.invariant("a stored image reached a ConstStore node restore"),
         .box => |payload| frame.single_child = payload,
         .list => |list| switch (list.items) {
             .nodes => |items| frame.children = items,
@@ -71837,6 +72313,7 @@ fn beginConstRestoreNode(
 fn constRestoreChildType(restorer: *BodyContext, frame: *const ConstRestoreFrame, index: usize) Type.TypeId {
     return switch (frame.value) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+        .image => Common.invariant("a stored image reached a ConstStore node restore"),
         .box => boxPayloadType(restorer.typeStore(), frame.ty),
         .list => listElemType(restorer.typeStore(), frame.ty),
         .tuple => GuardedList.at(tupleItemTypes(restorer.typeStore(), frame.ty), index),
@@ -71891,6 +72368,7 @@ fn constRestoreData(
     const lowered = frame.lowered.items;
     return switch (frame.value) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+        .image => Common.invariant("a stored image reached a ConstStore node restore"),
         .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
         .zst => .unit,
         .scalar => |scalar| restoreScalar(scalar),
@@ -72209,6 +72687,7 @@ fn monotypeBackingAuthority(authority: check.ConstStore.TypeBackingAuthority) Ty
 fn constStrNodeByteLen(view: ModuleView, node: checked.ConstNodeId) u32 {
     return switch (view.const_store.get(node)) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+        .image => Common.invariant("a stored image reached a ConstStore node restore"),
         .str => |str| @intCast(view.const_store.strBytes(str.bytes).len),
         .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
     };
@@ -72217,6 +72696,7 @@ fn constStrNodeByteLen(view: ModuleView, node: checked.ConstNodeId) u32 {
 fn constStrNodeBytes(view: ModuleView, node: checked.ConstNodeId) []const u8 {
     return switch (view.const_store.get(node)) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+        .image => Common.invariant("a stored image reached a ConstStore node restore"),
         .str => |str| view.const_store.strBytes(str.bytes),
         .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
     };

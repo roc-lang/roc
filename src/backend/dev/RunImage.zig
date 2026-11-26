@@ -1336,6 +1336,43 @@ test "static pool plan places address cycles locally and pools what reaches none
     for (plan.placements) |placement| try std.testing.expect(placement == .local);
 }
 
+test "static pool reuses an export whose pointer words point into itself" {
+    // A stored image is one block whose pointer words point into the block
+    // itself (design.md "Stored Images"): a string's descriptor at offset 0
+    // whose bytes follow it.
+    const page_size = std.heap.page_size_min;
+    const mapping = try std.testing.allocator.alignedAlloc(u8, .fromByteUnits(page_size), 64 * page_size);
+    defer std.testing.allocator.free(mapping);
+    @memset(mapping, 0);
+
+    var block = @as([3 * @sizeOf(usize)]u8, @splat(0)) ++ "image bytes, longer than 23 bytes".*;
+    block[@sizeOf(usize)] = 33;
+    block[2 * @sizeOf(usize)] = 33;
+    const first_relocations = [_]StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "roc__image_a", .addend = 3 * @sizeOf(usize) }};
+    const first_exports = [_]StaticDataExport{.{ .symbol_name = "roc__image_a", .bytes = &block, .alignment = 8, .relocations = &first_relocations }};
+    var plan = try StaticDataPool.Plan.init(std.testing.allocator, &first_exports, true);
+    defer plan.deinit();
+    try std.testing.expectEqualSlices(bool, &.{true}, plan.poolable);
+
+    const first = try writePoolTestImage(mapping, page_size, page_size, &first_exports, .empty);
+    const pool = StaticDataPool.Pool{ .mapping = mapping, .head_offset = @intCast(first.header.static_pool.offset) };
+    const second_relocations = [_]StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "roc__image_b", .addend = 3 * @sizeOf(usize) }};
+    const second_exports = [_]StaticDataExport{.{ .symbol_name = "roc__image_b", .bytes = &block, .alignment = 8, .relocations = &second_relocations }};
+    const second = try writePoolTestImage(mapping, @intCast(first.header.image_size), page_size, &second_exports, pool);
+    const reused = try poolTestSymbol(&second.view, "roc__image_b");
+    try std.testing.expectEqual(DataLocation.pool, try reused.dataLocation());
+    try std.testing.expectEqual(
+        @intFromPtr((try first.view.dataSymbolBytes(try poolTestSymbol(&first.view, "roc__image_a"))).ptr),
+        @intFromPtr((try second.view.dataSymbolBytes(reused)).ptr),
+    );
+
+    // The same bytes pointing at another offset of themselves are other content.
+    const shifted_relocations = [_]StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "roc__image_c", .addend = 3 * @sizeOf(usize) + 1 }};
+    const shifted_exports = [_]StaticDataExport{.{ .symbol_name = "roc__image_c", .bytes = &block, .alignment = 8, .relocations = &shifted_relocations }};
+    const third = try writePoolTestImage(mapping, @intCast(second.header.image_size), page_size, &shifted_exports, pool);
+    try std.testing.expectEqual(DataLocation.image, try (try poolTestSymbol(&third.view, "roc__image_c")).dataLocation());
+}
+
 test "static pool reuse stays within code-to-data displacement range" {
     const exports = [_]StaticDataExport{.{ .symbol_name = "roc__s", .bytes = "reachable", .alignment = 1 }};
     const page_size = std.heap.page_size_min;

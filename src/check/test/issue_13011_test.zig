@@ -1,16 +1,15 @@
 //! Regression tests for https://github.com/roc-lang/roc/issues/13011.
 //!
-//! A top-level value binding does not generalize, so every variable in its
-//! type stays monomorphic however its uses inside generalized functions widen
-//! it. Here `one` relates the value's open tag row to the instantiated output
-//! row of `preference`, which extends the value's row by the tags only the
-//! other side lists. The value's row keeps one shared extension, so a tag a use
-//! of `one`'s result adds (`Other`) widens the value itself, and passing the
-//! value to a function that accepts exactly `[Light, Dark]` is a type mismatch.
+//! A top-level constant whose open tag row carries no requirement quantifies
+//! that row (design.md "Polymorphic Constants"), so every use, including one
+//! inside a generalized function that relates it to another function's
+//! output row, widens its own copy, and the constant itself never gains the
+//! tags a use adds. Each program here is therefore accepted, and `theme.v`
+//! stays `[Light]`/`[Plain]` however its uses widen it.
 
 const TestEnv = @import("./TestEnv.zig");
 
-test "issue 13011 - a widening use inside a generalized function keeps a value's row monomorphic" {
+test "issue 13011 - a widening use inside a generalized function widens its own copy of a constant's row" {
     var env = try TestEnv.init("Repro",
         \\Repro :: [].{}
         \\
@@ -33,10 +32,10 @@ test "issue 13011 - a widening use inside a generalized function keeps a value's
     );
     defer env.deinit();
 
-    try env.assertOneTypeErrorHighlightsWithin("Type Mismatch", .{ .line = 18, .start_column = 13, .end_column = 20 });
+    try env.assertNoErrors();
 }
 
-test "issue 13011 - a row created between two young rows and joined to a value's row stays monomorphic" {
+test "issue 13011 - a row created between two young rows and joined to a constant's row is the use's own" {
     // `grow(theme.v)` is a young row whose tail is the value's row, and
     // `Other(value)` is a young row with a young tail. Relating them makes a
     // row for `Other(value)` that then joins the value's row, so `value`'s
@@ -57,10 +56,10 @@ test "issue 13011 - a row created between two young rows and joined to a value's
     );
     defer env.deinit();
 
-    try env.assertOneTypeErrorHighlightsWithin("Type Mismatch", .{ .line = 12, .start_column = 14, .end_column = 17 });
+    try env.assertNoErrors();
 }
 
-test "issue 13011 - a parameter nested in a widened value's row stays monomorphic" {
+test "issue 13011 - a parameter nested in a widened copy of a constant's row stays the function's own" {
     // `one` widens the value's row with `Wrapped(List(a))`, where `a` is the
     // type of `one`'s own parameter. The value shares that row, so `a` is the
     // value's one type: `one` cannot be used at two types.
@@ -80,5 +79,5 @@ test "issue 13011 - a parameter nested in a widened value's row stays monomorphi
     );
     defer env.deinit();
 
-    try env.assertOneTypeErrorHighlightsWithin("Type Mismatch", .{ .line = 12, .start_column = 14, .end_column = 17 });
+    try env.assertNoErrors();
 }

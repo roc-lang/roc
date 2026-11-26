@@ -5870,8 +5870,9 @@ const Lowerer = struct {
             .stored => {
                 // Frozen straight from the stored node its request names: no
                 // initializer builds it.
-                const stored_request = switch (self.solved.lifted.static_data_values.get(@backingInt(candidate.static_data))) {
-                    .stored => |stored| stored,
+                const module: check.CheckedModule.ModuleId, const node: check.CheckedModule.ConstNodeId = switch (self.solved.lifted.static_data_values.get(@backingInt(candidate.static_data))) {
+                    .stored => |stored| .{ check.CheckedModule.constModuleId(stored.const_locator), stored.node orelse Common.invariant("a stored list's static data request named no stored node") },
+                    .stored_root => |root| .{ root.module, root.node },
                     .inline_literal => Common.invariant("a stored list's static data request named a value-form expression"),
                 };
                 const result_id: LIR.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(self.result.static_data_values.items.len))));
@@ -5879,8 +5880,8 @@ const Lowerer = struct {
                     .initializer = .none,
                     .layout_idx = layout_idx,
                     .stored = .{
-                        .module = check.CheckedModule.constModuleId(stored_request.const_locator),
-                        .node = stored_request.node orelse Common.invariant("a stored list's static data request named no stored node"),
+                        .module = module,
+                        .node = node,
                         .plan = try self.constPlanOfType(ty),
                     },
                 });
@@ -7667,6 +7668,12 @@ const Lowerer = struct {
     /// Immediate candidates touch no shared static-data inventory, so the
     /// same rule governs worker admission and actual expression lowering.
     fn staticDataCandidateIsImmediate(self: *Lowerer, candidate: Mono.StaticDataCandidate, layout_idx: layout.Idx) bool {
+        // A stored value is frozen from its store, whatever its layout: no
+        // expression builds it (design.md "Stored Images").
+        switch (candidate.value) {
+            .runtime => {},
+            .stored => return false,
+        }
         const candidate_layout = self.result.layouts.getLayout(layout_idx);
         return switch (candidate_layout.tag) {
             .scalar => candidate_layout.getScalar().tag != .str or !candidate.storage.needsTargetStorage(self.result.layouts.targetUsize()),

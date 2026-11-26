@@ -1,8 +1,8 @@
 # A custom nominal parser nested in a derived record must use the format's
 # error type. The extra Oops error is rejected rather than composed into the
-# enclosing parser. An annotated value's row is the
-# annotation's at every use, so a match that names another tag is a mismatch
-# of its own.
+# enclosing parser. A top-level constant quantifies its implicitly opened
+# error row, so a match that names another tag reads its own copy and the tag
+# is only unmatchable.
 ParserChildErrorOutsideAnnotation :: [].{}
 
 Token := { raw : Str }.{

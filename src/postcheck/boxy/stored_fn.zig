@@ -79,7 +79,7 @@ pub fn captureShape(program: *Program, id: WorkerId) Allocator.Error!CaptureShap
     const values: []const TypeId, const composed = switch (worker.key) {
         .lambda, .adapter => .{ worker.capture_types, false },
         .codec => |index| .{ worker.capture_types, program.codec.pieces.items[index].kind == .constructor },
-        .method_entry, .structural, .structural_map, .crash_dictionary, .literal_thunk, .root_slot, .callable_eval_entry => .{ &.{}, true },
+        .method_entry, .structural, .structural_map, .crash_dictionary, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => .{ &.{}, true },
         .template, .default, .root, .static_data, .inline_literal, .convert => invariant("a worker that is no function value reached a stored function"),
     };
     // A procedure whose calls pass its table captures none.
@@ -864,7 +864,7 @@ const MetadataReader = struct {
                 try self.typeRef();
                 _ = try self.word();
             },
-            .root_slot => {
+            .root_slot, .root_restore => {
                 try self.module();
                 _ = try self.word();
                 try self.typeRef();
@@ -1026,7 +1026,7 @@ pub fn encodeMetadata(retained: *Retained, result: *LirProgram.Result, compiled:
         const record = program.worker(id);
         switch (record.key) {
             .template, .default, .root, .static_data, .inline_literal, .convert => continue,
-            .lambda, .adapter, .method_entry, .structural, .structural_map, .crash_dictionary, .literal_thunk, .root_slot, .callable_eval_entry, .codec => {},
+            .lambda, .adapter, .method_entry, .structural, .structural_map, .crash_dictionary, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry, .codec => {},
         }
         const shape = try captureShape(program, id);
         try encoder.bytes.appendSlice(allocator, &function.identity.bytes);
@@ -1108,6 +1108,9 @@ const Tag = enum(u8) {
     /// the module and template, then one byte naming the item type
     /// (`lower.ListIntItem`).
     template_list_int,
+    /// A polymorphic constant instance's restore thunk
+    /// (`lower.WorkerKey.root_restore`): the module, the root, the type.
+    root_restore,
 };
 
 fn appendWord(allocator: Allocator, list: *std.ArrayList(u8), value: u32) Allocator.Error!void {
@@ -1424,7 +1427,7 @@ const Encoder = struct {
                 try self.word(input.word());
                 try self.importWorker(input);
             },
-            .root_slot => {
+            .root_slot, .root_restore => {
                 try self.module(input.module());
                 try self.word(input.word());
                 try self.typeOf(input.typeOf());
@@ -1520,6 +1523,12 @@ const Encoder = struct {
             },
             .root_slot => |key| {
                 try self.tag(.root_slot);
+                try self.module(key.module);
+                try self.word(@backingInt(key.root));
+                try self.typeOf(record.ret);
+            },
+            .root_restore => |key| {
+                try self.tag(.root_restore);
                 try self.module(key.module);
                 try self.word(@backingInt(key.root));
                 try self.typeOf(record.ret);
@@ -1840,14 +1849,23 @@ const Decoder = struct {
                 return try program.literalThunkWorker(try self.workerAs(.scope), try program.arena.allocator().dupe(TypeId, bound), requirement);
             },
             // The compile-time program read the root's slot; its value is
-            // stored now, and the root's wrapper restores it.
+            // stored now: a polymorphic constant's instance that is data
+            // alone is restored by the reader's own thunk, any other root's
+            // value by its wrapper.
             .root_slot => {
                 const module_index = self.module();
                 const root: checked.ComptimeRootId = @fromBackingInt(self.word());
-                _ = self.typeOf();
+                const ty = self.typeOf();
+                if (try program.instanceRestoredByReaders(module_index, program.module(module_index).view.compile_time_roots.root(root)))
+                    return try program.rootRestoreWorker(module_index, root, ty);
                 const wrapper = program.wrapper_by_root.get(.{ .module = module_index, .root = root }) orelse
                     invariant("a literal argument root has no entry wrapper");
                 return try program.methodEntryWorker(try program.templateRefScopeWorker(wrapper));
+            },
+            .root_restore => {
+                const module_index = self.module();
+                const root: checked.ComptimeRootId = @fromBackingInt(self.word());
+                return try program.rootRestoreWorker(module_index, root, self.typeOf());
             },
             .structural => {
                 const module_index = self.module();

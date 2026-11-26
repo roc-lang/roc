@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=An annotation cannot make a constructor wrapping a call polymorphic: it is rejected, and its uses at two types report nothing further
+description=A top-level constant wrapping a call in a constructor is polymorphic: its uses at two types are accepted
 type=file
 ~~~
 # SOURCE
@@ -22,57 +22,9 @@ strs = made
 main! = |_| {}
 ~~~
 # EXPECTED
-VALUE IS NOT POLYMORPHIC - annotated_value_not_polymorphic_nested_expansive.md:6:1:6:23
+NIL
 # PROBLEMS
-~~~clojure
-(reports
-	(report
-		(severity runtime_error)
-		(title "Value Is Not Polymorphic")
-		(region (start 6 1) (end 6 23))
-		(headline
-			(reflow "The type annotation on")
-			(reflow " ")
-			(annotated code "made")
-			(reflow " ")
-			(reflow "says it can be used at many types, but")
-			(reflow " ")
-			(annotated code "made")
-			(reflow " ")
-			(reflow "isn't defined as a function (like")
-			(reflow " ")
-			(annotated code "|x| ...")
-			(reflow "), so it can only have one type."))
-		(document
-			(source-region (file "annotated_value_not_polymorphic_nested_expansive.md") (start 6 1) (end 6 23) (annotation error) (line-text "made : [Wrap(List(a))]"))
-			(line-break)
-			(line-break)
-			(reflow "If you want me to infer its type, write")
-			(reflow " ")
-			(annotated code "_")
-			(reflow " ")
-			(reflow "in place of each type variable, or write a concrete type.")
-			(line-break)
-			(line-break)
-			(reflow "If you want to use it at many types, make it a function that takes")
-			(reflow " ")
-			(annotated code "{}")
-			(reflow ":")
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "made : {} -> [Wrap(List(a))]")
-			(line-break)
-			(indent 1)
-			(text "made = |{}| Wrap(identity([]))")
-			(annotation-end)
-			(line-break)
-			(reflow "Then call it as")
-			(reflow " ")
-			(annotated code "made({})")
-			(reflow " ")
-			(reflow "wherever you use it."))))
-~~~
+NIL
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -176,7 +128,12 @@ NO CHANGE
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "made"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-tag (name "Wrap")
+			(args
+				(e-call (constraint-fn-var 272)
+					(e-lookup-local
+						(p-assign (ident "identity")))
+					(e-empty_list))))
 		(annotation
 			(ty-tag-union
 				(ty-tag-name (name "Wrap")
@@ -184,7 +141,8 @@ NO CHANGE
 						(ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "nums"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-lookup-local
+			(p-assign (ident "made")))
 		(annotation
 			(ty-tag-union
 				(ty-tag-name (name "Wrap")
@@ -192,7 +150,8 @@ NO CHANGE
 						(ty-lookup (name "U64") (builtin)))))))
 	(d-let
 		(p-assign (ident "strs"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-lookup-local
+			(p-assign (ident "made")))
 		(annotation
 			(ty-tag-union
 				(ty-tag-name (name "Wrap")
@@ -210,13 +169,13 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "a -> a"))
-		(patt (type "[Wrap(List(_b))]"))
+		(patt (type "[Wrap(List(a))]"))
 		(patt (type "[Wrap(List(U64))]"))
 		(patt (type "[Wrap(List(Str))]"))
 		(patt (type "_arg -> {}")))
 	(expressions
 		(expr (type "a -> a"))
-		(expr (type "[Wrap(List(_b))]"))
+		(expr (type "[Wrap(List(a))]"))
 		(expr (type "[Wrap(List(U64))]"))
 		(expr (type "[Wrap(List(Str))]"))
 		(expr (type "_arg -> {}"))))

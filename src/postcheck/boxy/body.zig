@@ -161,6 +161,8 @@ pub const Task = union(enum) {
     /// Leave the instantiation a destructured alias use lowered its
     /// declaration at.
     restore_env: types.Env,
+    /// Leave a destructured alias use (`Builder.destructured_use`).
+    restore_destructured_use: ?DestructuredUse,
     /// Lower the forwarded lookup `expr` of a generalized scheme alias, in
     /// the alias's scope, at the function type `ty` of the alias's use
     /// (`Builder.lowerAliasUse`).
@@ -493,6 +495,10 @@ const LocalProcScope = struct {
 /// A `literal_argument` root of a module, whose thunk a body composes once.
 const RootThunkKey = struct { module: ModuleIndex, root: checked.ComptimeRootId };
 
+/// A destructuring scheme alias's lookup being lowered at a use of a name it
+/// binds (`Builder.destructured_use`).
+const DestructuredUse = struct { module: ModuleIndex, lookup: ExprId, use: ExprId };
+
 /// The lowering state a literal chain restores once its tasks have run.
 const SavedScope = struct {
     module: ModuleIndex,
@@ -583,6 +589,10 @@ pub const Builder = struct {
     layout: Tables.InputLayout = .{},
     /// The thunk composed for each `literal_argument` root this body reads.
     root_thunks: std.AutoHashMapUnmanaged(RootThunkKey, Word) = .empty,
+    /// While lowering a destructuring scheme alias's declaration at a use
+    /// of a name it binds: its lookup is instantiated at that use, whose
+    /// edge checking recorded (design.md "Polymorphic Constants").
+    destructured_use: ?DestructuredUse = null,
     /// While lowering a literal thunk's or literal argument root's chain:
     /// where its frames start in `alias_scopes`. An edge argument or
     /// dictionary naming a scope outside them is one the chain never reads.
@@ -1653,7 +1663,7 @@ pub const Builder = struct {
         while (current != scope) : (levels += 1) {
             switch (self.program.worker(current).key) {
                 .lambda => |key| current = key.outer,
-                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a scope's table is read outside its chain of lambdas"),
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => invariant("a scope's table is read outside its chain of lambdas"),
             }
         }
         if (self.table_local == null) invariant("a worker without a type table read a scope's table");
@@ -2099,6 +2109,7 @@ pub const Builder = struct {
             .convert => |key| return try self.lowerConvertBody(key.from, key.to),
             .literal_thunk => |key| return try self.lowerLiteralThunkBody(key),
             .root_slot => |key| return try self.lowerRootSlotThunkBody(key),
+            .root_restore => |key| return try self.lowerRootRestoreBody(key),
         };
         // Signature: explicit parameters, then the type table, which holds
         // the descriptors, dictionaries, and literal arguments.
@@ -3542,6 +3553,7 @@ pub const Builder = struct {
             },
             .read_binder => |binder| try self.pushValue(self.binders.get(binder) orelse invariant("a destructured alias's declaration did not bind the binder its use reads")),
             .restore_env => |saved| self.env = saved,
+            .restore_destructured_use => |saved| self.destructured_use = saved,
             .forwarded_lookup => |lookup| if (self.hole == null) {
                 try self.pushValue(try self.localOf(lookup.ty, .frame));
             } else {
@@ -3595,9 +3607,18 @@ pub const Builder = struct {
                         if (payload == .pending and root.request_eligibility != .ineligible) {
                             return try self.pendingValueRead(eval.module, template.root, eval.ty);
                         }
-                        const wrapper = self.program.wrapper_by_root.get(.{ .module = eval.module, .root = template.root }) orelse
-                            invariant("a callable-eval binding's root has no entry wrapper");
-                        const callee = try self.program.templateRefWorker(wrapper);
+                        const callee = try self.callableEvalWrapper(eval.module, eval.template);
+                        // A polymorphic binding is the instance its use's
+                        // edge names, or, read with no edge (a dictionary
+                        // entry), the root of its instance at the read's
+                        // closed type (design.md "Polymorphic Constants").
+                        if (self.constantInstanceRequirement(callee)) |own| {
+                            if (eval.use) |use| return try self.readConstantInstance(callee, self.useEdge(use), eval.ty);
+                            const site = self.program.worker(callee).literal_scopes[0][own].site;
+                            const instance = try self.program.constantInstance(site, eval.ty) orelse
+                                invariant("a polymorphic callable binding is read at a closed instance no compile-time root evaluates");
+                            return try self.callInstanceThunk(try self.composeDictionary(try self.program.rootThunkEntry(instance.module, instance.root, eval.ty), &.{}), eval.ty);
+                        }
                         const callee_worker = self.program.worker(callee).*;
                         if (callee_worker.params.len != 0) invariant("a callable-eval entry wrapper takes arguments");
                         const bound = try self.relateWorkerVariables(callee, callee_worker.ret, eval.ty);
@@ -3815,7 +3836,7 @@ pub const Builder = struct {
         if (!self.view.view.compile_time_roots.isInlineLiteral(expr_id)) return null;
         switch (self.currentWorker().key) {
             .inline_literal => |key| if (key.expr == expr_id and key.module == self.module) return null,
-            .template, .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => {},
+            .template, .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => {},
         }
         const ty = try self.exprType(expr_id);
         const layouts = &self.program.result.layouts;
@@ -4736,7 +4757,7 @@ pub const Builder = struct {
     /// scheme, from the checked edge arguments (`literalEdgeArgs`).
     pub fn fillLiteralArgs(self: *Builder, callee: ?WorkerId, edge: checked.LiteralEdge, out: []Word) Allocator.Error!void {
         if (out.len == 0) return;
-        const args = self.view.view.checked_procedure_templates.literalEdgeArgs(edge);
+        const args = self.edgeArgs(edge);
         if (args.len != out.len) invariantFmt("an edge's {d} literal arguments do not cover its callee's {d} literal requirements (caller {s}, callee {s}{s})", .{
             args.len,
             out.len,
@@ -4756,7 +4777,7 @@ pub const Builder = struct {
                 const export_name = view.nameStore().procBase(template.proc_base).export_name.get() orelse break :blk "a template";
                 break :blk view.nameStore().exportNameText(export_name);
             },
-            inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => |_, kind| @tagName(kind),
+            inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => |_, kind| @tagName(kind),
         };
     }
 
@@ -4789,21 +4810,8 @@ pub const Builder = struct {
 
     /// `rootThunk`'s callable.
     fn composeRootThunk(self: *Builder, root: checked.ComptimeRootId) Allocator.Error!Word {
-        const compile_time_root = self.view.view.compile_time_roots.root(root);
-        const argument = compile_time_root.literal_argument orelse invariant("a literal argument root records no literal argument");
-        // In the compile-time program evaluating the root, a reader reads
-        // its value from its slot once it completes; its wrapper converts
-        // the literal only as the root's own evaluation. A validate-only
-        // root stores no value, so its wrapper converts for every reader.
-        const slot_read = compile_time_root.payloadFor(.boxy) == .pending and !argument.validate_only and self.program.evaluatesRoot(self.module, root);
-        const entry = if (slot_read)
-            try self.program.rootSlotThunkWorker(self.module, root, try self.convert(argument.ty))
-        else blk: {
-            const wrapper = self.program.wrapper_by_root.get(.{ .module = self.module, .root = root }) orelse
-                invariant("a literal argument root has no entry wrapper");
-            break :blk try self.program.methodEntryWorker(try self.program.templateRefWorker(wrapper));
-        };
-        return try self.composeDictionary(entry, &.{});
+        const argument = self.view.view.compile_time_roots.root(root).literal_argument orelse invariant("a literal argument root records no literal argument");
+        return try self.composeDictionary(try self.program.rootThunkEntry(self.module, root, try self.convert(argument.ty)), &.{});
     }
 
     /// The literal arguments of `worker` whose scheme takes `bound`, for an
@@ -5025,6 +5033,25 @@ pub const Builder = struct {
         try self.finishErasedProc(start.entry, body_start, &.{}, ret_layout, start.capture_ptr);
     }
 
+    /// The body of a root restore thunk (`WorkerKey.root_restore`): the
+    /// restore of the polymorphic constant instance its root stored.
+    pub fn lowerRootRestoreBody(self: *Builder, key: @FieldType(lower.WorkerKey, "root_restore")) Allocator.Error!void {
+        const worker = self.currentWorker().*;
+        const node = switch (self.program.module(key.module).view.compile_time_roots.root(key.root).payloadFor(.boxy)) {
+            .const_node => |node| node,
+            .fn_value, .pending, .unevaluated, .discarded, .expect, .runtime => invariant("a root restore thunk's root stored no Boxy value"),
+        };
+        const start = try self.beginErasedWorker(&.{}, .none);
+        defer self.allocator.free(start.captures);
+        const ret_layout = try self.program.layouts.layoutOf(worker.ret);
+        const body_start = try self.newHole();
+        self.hole = body_start;
+        try self.tasks.append(self.allocator, .ret);
+        try self.push(.{ .restore = .{ .source = .{ .module = key.module }, .node = node, .ty = worker.ret, .root = key.root } });
+        try self.run();
+        try self.finishErasedProc(start.entry, body_start, &.{}, ret_layout, start.capture_ptr);
+    }
+
     /// Begin a literal chain: the frames it enters are left once the
     /// pushed tasks have run (`restore_scope`), and an edge argument naming
     /// a scope outside them is unreachable.
@@ -5058,6 +5085,10 @@ pub const Builder = struct {
                     // Forwarding can enter an imported scheme whose linked
                     // worker needed no body index. Reading its literal does.
                     try self.bodies().demandIndex();
+                    // A polymorphic constant's own value is its entry
+                    // wrapper's at the instance (design.md "Polymorphic
+                    // Constants").
+                    if (literal_requirement.site.kind == .constant_instance) return try self.callConstantWrapper(literal_requirement.site.constantRoot(), index, result_ty);
                     // A custom literal pattern's literal converts at the
                     // pattern's type.
                     if (self.bodies().index().nodeKind(node) == .pattern) {
@@ -5075,12 +5106,53 @@ pub const Builder = struct {
                         .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a literal literal_requirement's literal is not a literal expression"),
                     };
                 },
-                .node, .use, .requirement => {
+                .node, .use, .requirement, .canonical => {
                     literal_requirements = try self.enterEdge(literal_requirement.edge);
                     index = literal_requirement.callee_requirement;
                 },
             }
         }
+    }
+
+    /// Call the entry wrapper of polymorphic constant `root` of the innermost
+    /// entered frame's module, the frame being its scheme's at the instance
+    /// whose value has type `result_ty`: the wrapper takes that instance's
+    /// descriptors, the frame's dictionaries (a constant hoisted out of a
+    /// generic function keeps the requirements of its variables) and
+    /// literal arguments, and for its own requirement `own`, which its body
+    /// never reads, a crash nothing calls. This is the instance root's
+    /// evaluation, the only place a polymorphic constant's body runs.
+    fn callConstantWrapper(self: *Builder, root: checked.ComptimeRootId, own: u32, result_ty: TypeId) Allocator.Error!void {
+        const wrapper = self.program.wrapper_by_root.get(.{ .module = self.module, .root = root }) orelse
+            invariant("a polymorphic constant's root has no entry wrapper");
+        const callee = try self.program.templateRefWorker(wrapper);
+        const callee_worker = self.program.worker(callee).*;
+        if (callee_worker.params.len != 0) invariant("a polymorphic constant's entry wrapper takes arguments");
+        // The entered frame is the wrapper's scheme at the instance: each
+        // variable takes the frame's type for it, including one the value's
+        // type does not mention, and each row node its position in the
+        // value's type.
+        const bound = try self.program.arena.allocator().alloc(TypeId, callee_worker.scheme_vars.len);
+        const row_node_start = callee_worker.scheme_vars.len - callee_worker.row_nodes.len;
+        for (callee_worker.scheme_vars[0..row_node_start], bound[0..row_node_start]) |variable, *slot| slot.* = try self.convert(variable);
+        const captured = try self.allocator.alloc(lower.Related, callee_worker.row_nodes.len);
+        defer self.allocator.free(captured);
+        @memset(captured, .none);
+        if (callee_worker.row_nodes.len != 0) {
+            const related = try self.program.relateVariablesCapturing(self.allocator, &.{.{ callee_worker.ret, result_ty }}, callee_worker.scheme_vars.len, null, callee_worker.row_nodes, captured);
+            self.allocator.free(related);
+        }
+        try self.program.fillRowNodes(callee, bound, captured);
+        const dictionaries = callee_worker.dictionary_params.len;
+        const hidden = try self.allocator.alloc(Word, bound.len + dictionaries + callee_worker.literal_params);
+        defer self.allocator.free(hidden);
+        for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
+        const frame = self.alias_scopes.items.len - 1;
+        for (callee_worker.dictionary_params, hidden[bound.len..][0..dictionaries]) |param, *dictionary| dictionary.* = try self.frameDictionary(frame, param);
+        for (hidden[bound.len + dictionaries ..], 0..) |*literal, index| {
+            literal.* = if (index == own) try self.unreadLiteralArg() else try self.frameLiteral(frame, @intCast(index));
+        }
+        try self.finishCall(callee, hidden, bound, &.{}, try self.program.signatureAt(callee, callee_worker.ret, bound), result_ty);
     }
 
     /// Enter the frame of the scheme the edge `edge` of this body's module
@@ -5095,7 +5167,20 @@ pub const Builder = struct {
                 const node = table.evidenceNode(node_id);
                 const procedure = switch (node.target.kind) {
                     .procedure => |procedure| procedure,
-                    .local_proc, .structural, .callable_binding => invariant("a literal argument's edge instantiates no procedure template"),
+                    // A method bound to a polymorphic callable binding: the
+                    // binding's entry wrapper at the substitution checking
+                    // recorded for the dispatch.
+                    .callable_binding => |target| {
+                        const binding = self.program.callableEvalBinding(target);
+                        const callee = try self.callableEvalWrapper(binding.module, binding.template);
+                        const callable = switch (node.instantiation) {
+                            .callable => |callable| callable,
+                            .monomorphic, .alias, .derived_from_callable => invariant("a literal argument's edge to a callable binding has no callable"),
+                        };
+                        const subst = table.site_substitutions.items()[node.subst.start..][0..node.subst.len];
+                        return try self.enterSubstitutedWorkerFrame(callee, subst, table.nestedEvidence(node), edge, .{ .value = callable });
+                    },
+                    .local_proc, .structural => invariant("a literal argument's edge instantiates no procedure template"),
                 };
                 const callee = try self.program.templateRefScope(procedure.template);
                 const subst = table.site_substitutions.items()[node.subst.start..][0..node.subst.len];
@@ -5111,6 +5196,22 @@ pub const Builder = struct {
                         .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
                     },
                 };
+            },
+            // The instantiation every compilation evaluates a polymorphic
+            // constant at (design.md "Polymorphic Constants"): its entry
+            // wrapper's scheme with every variable sealed, as a scope that
+            // binds none seals it; the frame derives its dictionaries and
+            // literal arguments from those types.
+            .canonical => |template| {
+                const callee = try self.program.templateRefWorker(self.view.view.checked_procedure_templates.templateRef(self.view.key, template));
+                const wrapper_template = self.view.view.checked_procedure_templates.templates.items()[@backingInt(template)];
+                const sealed_fn = try self.program.converter().convert(self.module, wrapper_template.checked_fn_root, .{ .module = self.module, .vars = &.{}, .bound = &.{} });
+                const owned = try self.boundTypesAt(callee, &.{}, sealed_fn);
+                defer self.allocator.free(owned);
+                const bound = try self.program.arena.allocator().dupe(TypeId, owned);
+                try self.enterDerivedFrame(callee, bound);
+                const worker = self.program.worker(callee).*;
+                return if (worker.literal_scopes.len == 0) &.{} else worker.literal_scopes[0];
             },
             // The platform's invocation of the app procedure: its frame
             // derives its dictionaries and literal arguments from its types,
@@ -5133,6 +5234,14 @@ pub const Builder = struct {
                 return if (worker.literal_scopes.len == 0) &.{} else worker.literal_scopes[0];
             },
             .use => |expr| {
+                // A use of a name a destructuring scheme alias binds
+                // instantiates the declaration's lookup at that use.
+                if (self.destructuredLookup(expr)) |lookup| {
+                    const saved = self.destructured_use;
+                    defer self.destructured_use = saved;
+                    self.destructured_use = .{ .module = self.module, .lookup = lookup, .use = if (saved) |outer| outer.use else expr };
+                    return try self.enterEdge(.{ .use = lookup });
+                }
                 if (self.view.view.resolved_value_refs.lookupIdByExpr(expr)) |ref_id| {
                     const record = self.view.view.resolved_value_refs.get(ref_id);
                     switch (record.ref) {
@@ -5148,7 +5257,10 @@ pub const Builder = struct {
                                     if (tag == .platform_required_proc) invariant("a platform requirement's use is no literal argument edge");
                                     return try self.enterAliasFrame(alias, expr);
                                 },
-                                .callable_eval => invariant("a literal argument's edge uses a computed callable"),
+                                // A use of a callable binding instantiates
+                                // its entry wrapper's scheme, as a read of a
+                                // constant does.
+                                .callable_eval => |eval| return try self.enterSubstitutedWorkerFrame(try self.callableEvalWrapper(eval.module, eval.template), self.siteSubstitution(expr), self.view.view.static_dispatch_plans.siteEvidence(expr) orelse &.{}, edge, .{ .value = self.bodies().exprType(expr) }),
                             };
                             if (tag == .platform_required_proc) invariant("a platform requirement's use is no literal argument edge");
                             return try self.enterSubstitutedWorkerFrame(callee, self.siteSubstitution(expr), self.view.view.static_dispatch_plans.siteEvidence(expr) orelse &.{}, edge, .{ .function = self.bodies().exprType(expr) });
@@ -5192,7 +5304,7 @@ pub const Builder = struct {
         dictionaries.callable = callable;
         dictionaries.substitution = subst;
         const literal_requirements: []const checked.LiteralRequirement = if (target.literal_scopes.len == 0) &.{} else target.literal_scopes[0];
-        const args = self.view.view.checked_procedure_templates.literalEdgeArgs(edge);
+        const args = self.edgeArgs(edge);
         if (args.len != target.literal_params) invariant("an edge's literal arguments do not cover its callee's literal requirements");
         const deferred: DeferredLiterals = .{ .edge = .{ .args = args, .module = self.module, .view = self.view, .env = self.env } };
         self.module = target.module;
@@ -5264,7 +5376,7 @@ pub const Builder = struct {
         const env = try types.LazySubstitution.init(self.program.arena.allocator(), alias_step.module, alias_step.vars, self.siteSubstitution(site), self.module, self.env, .{ .module = alias_step.module, .vars = &.{}, .bound = &.{} });
         const requirements: ParamContext = .{ .module = alias_step.module, .params = alias_step.params, .env = env };
         const deferred_dicts = try self.deferredDictionaries(evidence, requirements, alias_step.params.len);
-        const args = self.view.view.checked_procedure_templates.literalEdgeArgs(.{ .use = site });
+        const args = self.view.view.checked_procedure_templates.literalEdgeArgs(self.useEdge(site));
         if (args.len != alias_step.literal_requirements.len) invariant("an alias's use has no literal arguments for its literal_requirements");
         const deferred: DeferredLiterals = .{ .edge = .{ .args = args, .module = self.module, .view = self.view, .env = self.env } };
         self.module = alias_step.module;
@@ -5295,7 +5407,7 @@ pub const Builder = struct {
         };
         const evidence = self.view.view.static_dispatch_plans.siteEvidence(site) orelse &.{};
         const deferred_dicts = try self.deferredDictionaries(evidence, context, scheme.dictionaries.len);
-        const args = self.view.view.checked_procedure_templates.literalEdgeArgs(.{ .use = site });
+        const args = self.view.view.checked_procedure_templates.literalEdgeArgs(self.useEdge(site));
         if (args.len != scheme.literal_requirements.len) invariant("a local scope's site has no literal arguments for its literal_requirements");
         const deferred: DeferredLiterals = .{ .edge = .{ .args = args, .module = self.module, .view = self.view, .env = self.env } };
         self.env = context.env;
@@ -5590,6 +5702,15 @@ pub const Builder = struct {
         @memcpy(bound[own.items.len..], self.env.bound);
         try self.push(.{ .restore_env = self.env });
         self.env = .{ .module = self.module, .vars = vars, .bound = bound };
+        // A use nested in an outer destructured use's declaration is
+        // instantiated at the outer use, whose edge composes both.
+        const outer_use = self.destructured_use;
+        try self.push(.{ .restore_destructured_use = outer_use });
+        self.destructured_use = .{
+            .module = self.module,
+            .lookup = decl.expr,
+            .use = if (outer_use) |outer| outer.use else expr_id,
+        };
         try self.push(.{ .read_binder = binder });
         try self.push(.{ .bind = .{ .pattern = decl.pattern, .ty = try self.valueType(decl.expr) } });
         try self.push(.{ .expr = decl.expr });
@@ -5639,7 +5760,7 @@ pub const Builder = struct {
             dict.* = try self.paramDictionary(evidence, param_index, context);
         }
         const literals = try self.program.arena.allocator().alloc(Word, scheme.literal_requirements.len);
-        const literal_args = self.view.view.checked_procedure_templates.literalEdgeArgs(.{ .use = expr_id });
+        const literal_args = self.view.view.checked_procedure_templates.literalEdgeArgs(self.useEdge(expr_id));
         if (literal_args.len != literals.len) invariant("an alias use has no literal arguments for its scheme's literal_requirements");
         for (literal_args, literals) |source, *word| word.* = try self.literalArg(source);
         try self.alias_scopes.append(self.allocator, .{ .params = scheme.dictionaries, .requirements = context, .dicts = dicts, .literals = literals, .literal_requirements = scheme.literal_requirements, .saved_env = self.env });
@@ -5977,7 +6098,7 @@ pub const Builder = struct {
         while (!self.isTemplateWorker(chain, owner)) {
             switch (self.program.worker(chain).key) {
                 .lambda => |key| chain = key.outer,
-                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => return try self.ownerDeclaration(innermost, owner),
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => return try self.ownerDeclaration(innermost, owner),
             }
         }
         return null;
@@ -6017,7 +6138,7 @@ pub const Builder = struct {
     fn isTemplateWorker(self: *Builder, id: WorkerId, template: TemplateKey) bool {
         return switch (self.program.worker(id).key) {
             .template => |key| key.module == template.module and key.template == template.template,
-            .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => false,
+            .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => false,
         };
     }
 
@@ -6358,7 +6479,7 @@ pub const Builder = struct {
                         break try self.declaredLambdaWorker(scope_worker, lambda_expr, closure_expr.ty, captures)
                     else
                         invariant("a local procedure's function value is built outside its declaring body with no declaration context"),
-                    .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a local procedure's function value is built outside its declaring body with no declaration context"),
+                    .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => invariant("a local procedure's function value is built outside its declaring body with no declaration context"),
                 }
             };
             const declaring = self.program.worker(scope_worker).*;
@@ -6865,6 +6986,64 @@ pub const Builder = struct {
         try self.push(.{ .restore = .{ .source = source, .node = stored.node, .ty = stored_ty, .root = root } });
     }
 
+    /// The edge a use `expr` of this body's module instantiates its scheme
+    /// at: its own, or, for a destructuring scheme alias's lookup lowered at
+    /// a use of a name it binds, that use's.
+    fn useEdge(self: *const Builder, expr: ExprId) checked.LiteralEdge {
+        if (self.destructured_use) |destructured| {
+            if (destructured.module == self.module and destructured.lookup == expr) return .{ .use = destructured.use };
+        }
+        return .{ .use = expr };
+    }
+
+    /// The literal requirement of the scheme of `wrapper`, a polymorphic
+    /// constant's entry wrapper, that is the constant's own value.
+    fn constantInstanceRequirement(self: *Builder, wrapper: WorkerId) ?u32 {
+        const worker = self.program.worker(wrapper).*;
+        if (worker.literal_scopes.len == 0) return null;
+        for (worker.literal_scopes[0], 0..) |requirement, index| {
+            if (requirement.edge == .literal and requirement.site.kind == .constant_instance) return @intCast(index);
+        }
+        return null;
+    }
+
+    /// Push the value at `ty` of the polymorphic constant whose entry
+    /// wrapper is `wrapper`, read through edge `edge` of this body: the
+    /// stored instance a closed use's root holds, or the instance this
+    /// body's own literal argument forwards (design.md "Polymorphic
+    /// Constants"). Nothing computes the constant here.
+    fn readConstantInstance(self: *Builder, wrapper: WorkerId, edge: checked.LiteralEdge, ty: TypeId) Allocator.Error!void {
+        const own = self.constantInstanceRequirement(wrapper) orelse invariant("a read of a polymorphic constant names an entry wrapper that carries no instance");
+        const args = self.edgeArgs(edge);
+        if (own >= args.len) invariant("a read of a polymorphic constant has no instance argument");
+        switch (args[own]) {
+            .root => |root| switch (self.view.view.compile_time_roots.root(root).payloadFor(.boxy)) {
+                .const_node => |node| return try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = ty, .root = root } }),
+                .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => {},
+            },
+            .forwarded => {},
+            // An instance whose variables no use fixes is a sealed root.
+            .unbound => invariant("a polymorphic constant's instance is unbound"),
+        }
+        try self.callInstanceThunk(try self.literalArg(args[own]), ty);
+    }
+
+    /// Push the value of `ty` the immortal thunk `word` produces.
+    fn callInstanceThunk(self: *Builder, word: Word, ty: TypeId) Allocator.Error!void {
+        const thunk = try self.literalThunkLocal(word);
+        const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = ty, .effectful = false } });
+        try self.pushValue(try self.emitErasedCall(thunk, fn_ty, &.{}, ty));
+    }
+
+    /// The entry wrapper worker of callable-eval binding `template` of
+    /// `module`: the procedure computing the binding's value.
+    fn callableEvalWrapper(self: *Builder, module: ModuleIndex, template: checked.CallableEvalTemplateId) Allocator.Error!WorkerId {
+        const root = self.program.module(module).view.callable_eval_templates.templates[@backingInt(template)].root;
+        const wrapper = self.program.wrapper_by_root.get(.{ .module = module, .root = root }) orelse
+            invariant("a callable-eval binding's root has no entry wrapper");
+        return try self.program.templateRefWorker(wrapper);
+    }
+
     /// The compile-time root whose value a stored constant reference is.
     fn rootOfConstRef(owner: *const types.ModuleView, const_ref: checked.ConstRef) ?checked.ComptimeRootId {
         return switch (const_ref.owner) {
@@ -6884,18 +7063,21 @@ pub const Builder = struct {
         }
         switch (template.state) {
             .stored_const => |stored| try self.pushStoredRestore(.{ .module = owner.index }, stored, ty, rootOfConstRef(owner, use.const_ref)),
-            // A constant this compile-time program evaluates is read from
-            // its slot. A polymorphic constant compile-time evaluation did
-            // not store is its entry procedure's value at the read's
-            // instantiation.
+            // A polymorphic constant is the instance its use's edge names
+            // (design.md "Polymorphic Constants"). A constant this
+            // compile-time program evaluates is read from its slot. A
+            // constant whose type is a platform's abstract type is its entry
+            // procedure's value at the app's type, which no compile-time
+            // evaluation of the platform could produce.
             .eval_template => |eval| {
+                const wrapper = try self.program.templateRefWorker(eval.entry_template);
+                if (self.constantInstanceRequirement(wrapper) != null) return try self.readConstantInstance(wrapper, self.useEdge(expr_id), ty);
                 if (rootOfConstRef(owner, use.const_ref)) |root| if (try self.program.readsRootSlot(owner.index, root)) return try self.pendingValueRead(owner.index, root, ty);
-                const callee = try self.program.templateRefWorker(eval.entry_template);
                 const read_ty = try self.exprType(expr_id);
                 const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = read_ty, .effectful = false } });
-                const instance = try self.callInstanceAt(callee, self.siteSubstitution(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{}, fn_ty, .{ .use = expr_id });
+                const instance = try self.callInstanceAt(wrapper, self.siteSubstitution(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{}, fn_ty, .{ .use = expr_id });
                 defer self.allocator.free(instance.hidden);
-                try self.finishCall(callee, instance.hidden, instance.bound, &.{}, instance.ret, read_ty);
+                try self.finishCall(wrapper, instance.hidden, instance.bound, &.{}, instance.ret, read_ty);
             },
             .unimplemented => |unimplemented| {
                 self.region = unimplemented.region;
@@ -6922,6 +7104,7 @@ pub const Builder = struct {
         if (!store.isClosed(raw_ty)) invariant("a stored value is restored at an open type");
         const ty = try self.structuralType(raw_ty);
         const key: lower.Program.StoredValueKey = .{ .module = source.module, .node = node, .ty = raw_ty };
+        if (const_store.imageOf(node)) |image| return try self.restoreImageStep(source, node, image, raw_ty);
         const data = const_store.get(node);
         // A discriminant-only tag is a scalar value: its read is its
         // construction (design.md "Compile-Time Evaluation").
@@ -6932,28 +7115,13 @@ pub const Builder = struct {
         // A value built from parts is remembered where its parts are
         // restored (`restorePartStep`), and a failed value has no slot.
         const remembered_here = switch (data) {
-            .scalar, .zst, .str, .boxy_fn, .nominal, .fn_value => true,
+            .image, .scalar, .zst, .str, .boxy_fn, .nominal, .fn_value => true,
             .pending, .crash, .checked_error, .box, .tuple, .record, .tag, .list => false,
         };
         if (remembered_here) try self.push(.{ .remember_static_value = key });
         switch (data) {
             .pending => invariant("a stored constant was never filled"),
-            .scalar => |scalar| {
-                const local = try self.localOf(raw_ty, .frame);
-                const value: LIR.LiteralValue = switch (scalar) {
-                    inline .i8, .i16, .i32, .i64, .u8, .u16, .u32 => |v| .{ .i64_literal = .{ .value = v, .layout_idx = self.store.getLocal(local).layout_idx } },
-                    .u64 => |v| .{ .i64_literal = .{ .value = @bitCast(v), .layout_idx = self.store.getLocal(local).layout_idx } },
-                    .i128 => |v| .{ .i128_literal = try self.store.addStmtRow(LIR.I128Literal, .{ .value = v, .layout_idx = self.store.getLocal(local).layout_idx }) },
-                    .u128 => |v| .{ .i128_literal = try self.store.addStmtRow(LIR.I128Literal, .{ .value = @bitCast(v), .layout_idx = self.store.getLocal(local).layout_idx }) },
-                    .f32_bits => |bits| .{ .f32_literal = @bitCast(bits) },
-                    .f64_bits => |bits| .{ .f64_literal = @bitCast(bits) },
-                    .dec_bits => |bits| .{ .dec_literal = bits },
-                };
-                try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = value, .next = undefined } });
-                const slot = try self.storedDataSlot(source, node, raw_ty);
-                try self.constant_slots.put(self.allocator, local, slot);
-                try self.pushValue(local);
-            },
+            .scalar => |scalar| try self.restoreScalar(source, node, raw_ty, scalar),
             .zst, .str => try self.pushValue(try self.storedDataLocal(source, node, raw_ty)),
             .crash => |message| {
                 if (root) |failed| {
@@ -6978,6 +7146,7 @@ pub const Builder = struct {
                 try self.pushValue(try self.localOf(raw_ty, .frame));
             },
             .boxy_fn => |function| try self.restoreStoredFn(source, const_store.strBytes(function.recipe), function.captures),
+            .image => invariant("a stored image reached a node restore"),
             .nominal => |nominal| try self.push(.{ .restore = .{ .source = source, .node = nominal.backing, .ty = ty } }),
             // The body reads the whole value once: its parts are static
             // data, never values of this body.
@@ -6995,6 +7164,51 @@ pub const Builder = struct {
         }
     }
 
+    /// Restore stored number `scalar`, the value of `node` of `source`, at
+    /// `ty` as its literal, whose immutable data is the node's slot.
+    fn restoreScalar(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, ty: TypeId, scalar: check.ConstStore.ConstScalar) Allocator.Error!void {
+        const local = try self.localOf(ty, .frame);
+        const value: LIR.LiteralValue = switch (scalar) {
+            inline .i8, .i16, .i32, .i64, .u8, .u16, .u32 => |v| .{ .i64_literal = .{ .value = v, .layout_idx = self.store.getLocal(local).layout_idx } },
+            .u64 => |v| .{ .i64_literal = .{ .value = @bitCast(v), .layout_idx = self.store.getLocal(local).layout_idx } },
+            .i128 => |v| .{ .i128_literal = try self.store.addStmtRow(LIR.I128Literal, .{ .value = v, .layout_idx = self.store.getLocal(local).layout_idx }) },
+            .u128 => |v| .{ .i128_literal = try self.store.addStmtRow(LIR.I128Literal, .{ .value = @bitCast(v), .layout_idx = self.store.getLocal(local).layout_idx }) },
+            .f32_bits => |bits| .{ .f32_literal = @bitCast(bits) },
+            .f64_bits => |bits| .{ .f64_literal = @bitCast(bits) },
+            .dec_bits => |bits| .{ .dec_literal = bits },
+        };
+        try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = value, .next = undefined } });
+        const slot = try self.storedDataSlot(source, node, ty);
+        try self.constant_slots.put(self.allocator, local, slot);
+        try self.pushValue(local);
+    }
+
+    /// Restore root `node` of `source`, stored as image `image`, at
+    /// `raw_ty` from its image alone (design.md "Stored Images"): a number
+    /// or a discriminant-only tag is its literal, and every other value is
+    /// one static datum.
+    fn restoreImageStep(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, image: check.ConstStore.ConstImageId, raw_ty: TypeId) Allocator.Error!void {
+        const names = self.program.constNames(source);
+        const key: lower.Program.StoredValueKey = .{ .module = source.module, .node = node, .ty = raw_ty };
+        const literal = self.program.constStore(source).imageLiteral(image);
+        const enum_tag: ?types.NameId = if (literal) |decoded| switch (decoded) {
+            .tag => |name| try self.enumTagOf(raw_ty, names.tagLabelText(name)),
+            .scalar, .str => null,
+        } else null;
+        if (literal) |decoded| switch (decoded) {
+            .scalar => |scalar| {
+                try self.push(.{ .remember_static_value = key });
+                return try self.restoreScalar(source, node, try self.structuralType(raw_ty), scalar);
+            },
+            .tag, .str => {},
+        };
+        if (self.program.stored_value_slots.get(key)) |slot| {
+            return self.pushValue(if (enum_tag) |name| try self.enumConstant(raw_ty, name, slot) else try self.staticRead(slot));
+        }
+        try self.push(if (enum_tag) |name| .{ .read_static_enum = .{ .ty = raw_ty, .name = name } } else .read_static_part);
+        try self.pushStoredDataPart(source, node, raw_ty);
+    }
+
     /// The tag name of stored constant `node` when it is a payload-free tag,
     /// possibly inside nominal wrappers, of a closed `ty` whose committed
     /// tag union stores its discriminant alone.
@@ -7004,13 +7218,19 @@ pub const Builder = struct {
         const tag = while (true) switch (const_store.get(current)) {
             .nominal => |nominal| current = nominal.backing,
             .tag => |tag| break tag,
-            .pending, .scalar, .zst, .str, .boxy_fn, .fn_value, .crash, .checked_error, .box, .tuple, .record, .list => return null,
+            .image, .pending, .scalar, .zst, .str, .boxy_fn, .fn_value, .crash, .checked_error, .box, .tuple, .record, .list => return null,
         };
         if (tag.payloads.len != 0) return null;
+        return try self.enumTagOf(ty, tag.tag_name);
+    }
+
+    /// The payload-free tag `tag_name` of a closed `ty` when its committed
+    /// tag union stores its discriminant alone.
+    fn enumTagOf(self: *Builder, ty: TypeId, tag_name: []const u8) Allocator.Error!?types.NameId {
         const layouts = &self.program.result.layouts;
         const committed = layouts.getLayout(try self.program.layouts.layoutOf(ty));
         if (committed.tag != .tag_union or layouts.getTagUnionInfo(committed).discriminant_offset != 0) return null;
-        return try self.program.store.internName(tag.tag_name);
+        return try self.program.store.internName(tag_name);
     }
 
     /// The stored discriminant-only tag `name` of `ty` as its construction,
@@ -7034,15 +7254,17 @@ pub const Builder = struct {
         const key: lower.Program.StoredValueKey = .{ .module = source.module, .node = node, .ty = raw_ty };
         if (self.program.stored_value_slots.get(key)) |slot| return try self.static_parts.append(self.allocator, slot);
         const data = const_store.get(node);
-        // A value that is data alone is one slot, frozen from the store
-        // through its type's const plan, however many values it holds.
+        // A value that is data alone is one slot, its image or frozen from
+        // the store through its type's const plan, however many values it
+        // holds.
+        if (const_store.imageOf(node) != null) return try self.pushStoredDataPart(source, node, raw_ty);
         switch (data) {
             .nominal, .box, .tuple, .record, .tag, .list => if (try self.program.storedDataAlone(source, node)) return try self.pushStoredDataPart(source, node, raw_ty),
-            .pending, .scalar, .zst, .str, .crash, .checked_error, .boxy_fn, .fn_value => {},
+            .image, .pending, .scalar, .zst, .str, .crash, .checked_error, .boxy_fn, .fn_value => {},
         }
         switch (data) {
             .pending => invariant("a stored constant was never filled"),
-            .scalar, .zst, .str => try self.pushStoredDataPart(source, node, raw_ty),
+            .image, .scalar, .zst, .str => try self.pushStoredDataPart(source, node, raw_ty),
             // A function value is built by its own restore, and a failed
             // value fails where it is restored: each is restored as a value,
             // whose slot is the part.
@@ -7186,7 +7408,7 @@ pub const Builder = struct {
     pub fn templateEvidenceParams(self: *Builder, worker_id: WorkerId) []const static_dispatch.EvidenceParamRecord {
         const key = switch (self.program.worker(worker_id).key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("evidence parameters of a worker that is not a procedure template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => invariant("evidence parameters of a worker that is not a procedure template's"),
         };
         const view = self.program.module(key.module).view;
         const template = view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
@@ -7856,7 +8078,7 @@ pub const Builder = struct {
         const target = self.program.worker(callee).*;
         const key = switch (target.key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.program.module(key.module).view.checked_procedure_templates;
         return .{
@@ -8972,7 +9194,41 @@ pub const Builder = struct {
     }
 
     pub fn siteSubstitution(self: *Builder, site: ExprId) []const checked.CheckedTypeId {
+        // A destructuring scheme alias's lookup lowered at a use of a name it
+        // binds is instantiated at that use (`destructured_use`), when the
+        // lookup instantiates a scheme at all.
+        if (self.destructured_use) |destructured| {
+            if (destructured.module == self.module and destructured.lookup == site) {
+                if (self.view.view.static_dispatch_plans.destructuredUseSubstitution(destructured.use)) |subst| return subst;
+            }
+        }
         return self.view.view.static_dispatch_plans.siteSubstitution(site) orelse &.{};
+    }
+
+    /// The lookup of the destructuring scheme alias that binds the name a
+    /// use `expr` reads, when `expr` is such a use.
+    fn destructuredLookup(self: *Builder, expr: ExprId) ?ExprId {
+        if (self.view.view.static_dispatch_plans.destructuredUseFormals(expr) == null) return null;
+        const ref_id = self.view.view.resolved_value_refs.lookupIdByExpr(expr) orelse invariant("a destructured use has no resolved reference");
+        const binder = switch (self.view.view.resolved_value_refs.ref(ref_id)) {
+            .pattern_binder, .local_value => |binding| binding.binder,
+            .local_param, .local_mutable_version, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => invariant("a destructured use reads no local binder"),
+        };
+        const statement = self.bodies().index().destructuredAliasDecl(binder) orelse invariant("a destructured use's name is bound by no destructuring scheme alias");
+        return switch (self.bodies().statement(statement).data) {
+            .decl => |decl| decl.expr,
+            .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .rejected_method_decl, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => invariant("a destructured alias binder's declaration is not a declaration"),
+        };
+    }
+
+    /// The checked literal arguments of edge `edge` of this body's module,
+    /// a destructuring scheme alias's lookup's being its use's.
+    fn edgeArgs(self: *const Builder, edge: checked.LiteralEdge) []const checked.LiteralArgSource {
+        const mapped: checked.LiteralEdge = switch (edge) {
+            .use => |expr| self.useEdge(expr),
+            .literal, .node, .requirement, .canonical => edge,
+        };
+        return self.view.view.checked_procedure_templates.literalEdgeArgs(mapped);
     }
 
     /// Redirect an immediately returned call or constructor from its fresh

@@ -90,12 +90,13 @@ fn checkListWithDebug(source: []const u8, scalar: check.ConstStore.ConstPackedSc
         constants += 1;
         value_form = root.completion == .write_value;
         try std.testing.expect(root.payload == .const_node);
-        const value = artifact.const_store.get(root.payload.const_node);
-        try std.testing.expect(value == .list and value.list.items == .packed_bytes);
-        const packed_list = value.list.items.packed_bytes;
-        try std.testing.expectEqual(scalar, packed_list.element.?);
-        try std.testing.expectEqual(expected.len / scalar.byteWidth(), packed_list.len);
-        try std.testing.expectEqualSlices(u8, expected, artifact.const_store.blobData(packed_list.bytes));
+        // The list is stored as its image: its descriptor, then its items'
+        // bytes behind their allocation's header.
+        const image = artifact.const_store.image(artifact.const_store.imageOf(root.payload.const_node) orelse return error.TestUnexpectedResult);
+        const word = 8;
+        try std.testing.expectEqual(@as(u64, expected.len / scalar.byteWidth()), std.mem.readInt(u64, image.bytes[word..][0..word], .little));
+        const items: usize = @intCast(std.mem.readInt(u64, image.bytes[0..word], .little));
+        try std.testing.expectEqualSlices(u8, expected, image.bytes[items..][0..expected.len]);
     }
     try std.testing.expectEqual(@as(usize, 1), constants);
     // A list of literals is in value form, which the checked-value writer

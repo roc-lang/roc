@@ -392,6 +392,13 @@ pub const WorkerKey = union(enum) {
     /// arguments reading the root's compile-time value slot
     /// (`Program.rootValueSlot`), which readers call once the root completes.
     root_slot: struct { module: ModuleIndex, root: checked.ComptimeRootId },
+    /// The thunk restoring the stored value of polymorphic constant
+    /// instance root `root` of `module`, a value that is data alone
+    /// (design.md "Polymorphic Constants"): an erased worker with no
+    /// arguments producing the value, which a table word holding the
+    /// instance calls. It is named by the stored value's content, so every
+    /// unit restoring one instance defines one procedure.
+    root_restore: struct { module: ModuleIndex, root: checked.ComptimeRootId },
     /// A compiler-derived structural method over the descriptor its
     /// dictionary captures.
     structural: StructuralMethod,
@@ -1010,6 +1017,10 @@ pub const Program = struct {
     /// module and root (`evaluatesRoot`), each with its request's checked
     /// type (`rootValueType`).
     requested_roots: std.AutoHashMapUnmanaged(RootSlotKey, checked.CheckedTypeId) = .empty,
+    /// Every module's `constant_instance` roots, by the constant and the
+    /// closed type each is the constant's value at (`constantInstance`),
+    /// built at the first lookup.
+    constant_instances: ?std.AutoHashMapUnmanaged(ConstantInstanceKey, RootSlotKey) = null,
     /// The Builtin `Hasher` type, once asked for (`defaultHasher`).
     default_hasher: ?TypeId = null,
     /// Each module's callable-eval templates, by their binding pattern.
@@ -1245,7 +1256,7 @@ pub const Program = struct {
                         .template => |owner| owner.module == outer_key.module and owner.template == outer_key.template,
                         .default => false,
                     },
-                    .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => false,
+                    .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => false,
                 };
                 if (own_template) {
                     hasher.update(&[_]u8{0});
@@ -1272,7 +1283,7 @@ pub const Program = struct {
                 hasher.update(&self.worker(target).identityBytes(self));
             },
             .default => |default| return self.defaultIdentity(default.module, self.defaultOrdinal(default.module, default.expr)),
-            .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker no module's object exports has no content identity"),
+            .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => invariant("a worker no module's object exports has no content identity"),
         }
         return .{ .bytes = hasher.finalResult() };
     }
@@ -1405,7 +1416,7 @@ pub const Program = struct {
     pub fn exportableKind(key: WorkerKey) bool {
         return switch (key) {
             .template, .lambda, .method_entry, .default => true,
-            .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => false,
+            .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => false,
         };
     }
 
@@ -1442,6 +1453,7 @@ pub const Program = struct {
             .codec => "boxy.codec",
             .convert => "boxy.convert",
             .callable_eval_entry => "boxy.callable_eval_entry",
+            .root_restore => "boxy.root_restore",
             .template, .lambda, .default, .method_entry, .root, .static_data, .inline_literal, .root_slot => invariant("a worker a module's object defines has no generated identity"),
         };
         if (self.moduleUnit() == null) return LIR.ProcIdentity.programLocal(role, raw);
@@ -1483,10 +1495,36 @@ pub const Program = struct {
                 hasher.update(&self.modules.linkName(binding.module));
                 hashWord(&hasher, @backingInt(binding.template));
             },
+            // The value it restores, by content: the code restoring one
+            // stored value at one type is the same wherever it is lowered.
+            .root_restore => |value| try self.hashRootValue(&hasher, value.module, value.root),
             .template, .lambda, .default, .method_entry, .root, .static_data, .inline_literal, .root_slot => unreachable, // rejected above
         }
         try self.hashTypes(&hasher, signature);
         return .{ .bytes = hasher.finalResult() };
+    }
+
+    /// Hash the value compile-time evaluation stored for root `root` of
+    /// `module_index`: an image by its digest, any other value by its
+    /// graph, its modules named by checked key.
+    fn hashRootValue(self: *Program, hasher: *base.TypeDigestHasher, module_index: ModuleIndex, root: checked.ComptimeRootId) Allocator.Error!void {
+        const view = self.module(module_index);
+        const node = switch (view.view.compile_time_roots.root(root).payloadFor(.boxy)) {
+            .const_node => |node| node,
+            .fn_value, .pending, .unevaluated, .discarded, .expect, .runtime => invariant("a restored root has no stored Boxy value"),
+        };
+        const Context = struct {
+            module_key: [32]u8,
+            pub fn moduleDigest(_: @This(), digest: anytype) [32]u8 {
+                return digest.bytes;
+            }
+            pub fn fnValueDigest(context: @This(), _: check.ConstStore.ConstFnId) [32]u8 {
+                return context.module_key;
+            }
+        };
+        var value_hasher = base.Sha256.init(.{});
+        try view.view.const_store.hashGraph(self.allocator, node, &value_hasher, Context{ .module_key = view.key.bytes });
+        hasher.update(&value_hasher.finalResult());
     }
 
     /// The content digest of `ty`, the same in every lowering: its
@@ -1748,6 +1786,7 @@ pub const Program = struct {
         self.stored_data_alone.deinit(self.allocator);
         self.inline_literal_slots.deinit(self.allocator);
         self.requested_roots.deinit(self.allocator);
+        if (self.constant_instances) |*instances| instances.deinit(self.allocator);
         self.const_schema.deinit(self.allocator);
         self.wrapper_by_root.deinit(self.allocator);
         self.hosted.deinit(self.allocator);
@@ -1783,6 +1822,8 @@ pub const Program = struct {
     /// holds. Every node the question visits is answered once per lowering.
     pub fn storedDataAlone(self: *Program, source: ConstSource, node: checked.ConstNodeId) Allocator.Error!bool {
         const const_store = self.constStore(source);
+        // The producer stored a value that is data alone as an image.
+        if (const_store.imageOf(node) != null) return true;
         const entry = try self.stored_data_alone.getOrPut(self.allocator, switch (source) {
             .module => |index| index,
         });
@@ -1805,7 +1846,7 @@ pub const Program = struct {
             var single: [1]checked.ConstNodeId = undefined;
             const children: ?[]const checked.ConstNodeId = switch (const_store.get(frame.node)) {
                 .pending => invariant("a stored constant was never filled"),
-                .crash, .checked_error, .fn_value, .boxy_fn => null,
+                .image, .crash, .checked_error, .fn_value, .boxy_fn => null,
                 .zst, .scalar, .str => &.{},
                 .box => |child| blk: {
                     single[0] = child;
@@ -2137,7 +2178,7 @@ pub const Program = struct {
         const target = self.worker(id).*;
         const key = switch (target.key) {
             .template => |key| key,
-            .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => return null,
+            .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => return null,
         };
         const template_key: TemplateKey = .{ .module = key.module, .template = key.template };
         if (self.list_item_slots.get(template_key)) |known| return known;
@@ -2202,7 +2243,7 @@ pub const Program = struct {
         const target = self.worker(callee).*;
         const key = switch (target.key) {
             .template => |key| key,
-            .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => return callee,
+            .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => return callee,
         };
         switch (key.binding) {
             .generic => {},
@@ -2444,7 +2485,7 @@ pub const Program = struct {
                 .generic => _ = try self.templateWorker(template.module, template.template),
                 .list_int => |item| _ = try self.listIntTemplateWorker(template.module, template.template, item),
             },
-            .adapter, .default, .lambda, .method_entry, .literal_thunk, .root_slot, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .callable_eval_entry, .convert => {},
+            .adapter, .default, .lambda, .method_entry, .literal_thunk, .root_slot, .root_restore, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .callable_eval_entry, .convert => {},
         }
     }
 
@@ -3332,7 +3373,7 @@ pub const Program = struct {
         if (requirements.len == 0) return .{ .bound = bound, .requirements = requirements };
         const key = switch (target_worker.key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.module(key.module).view.checked_procedure_templates;
         const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool.items(), templates.templates.items()[@backingInt(key.template)].evidence_params);
@@ -3481,7 +3522,7 @@ pub const Program = struct {
         if (target_worker.dictionary_params.len == 0) return;
         const key = switch (target_worker.key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.module(key.module).view.checked_procedure_templates;
         const all_params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool.items(), templates.templates.items()[@backingInt(key.template)].evidence_params);
@@ -3913,7 +3954,7 @@ pub const Program = struct {
             const scoped = self.worker(current).*;
             const outer: ?WorkerId = switch (scoped.key) {
                 .lambda => |lambda| lambda.outer,
-                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => null,
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => null,
             };
             const own = if (outer) |o| scoped.literal_scopes.len != self.worker(o).literal_scopes.len else scoped.literal_scopes.len != 0;
             if (own) try owners.append(allocator, current);
@@ -4010,6 +4051,21 @@ pub const Program = struct {
     /// The thunk of literal requirement `literal requirement` of the own scope of `target`
     /// instantiated at `bound` (`WorkerKey.literal_thunk`).
     pub fn literalThunkWorker(self: *Program, target: WorkerId, bound: []const TypeId, literal_requirement: u32) Allocator.Error!WorkerId {
+        {
+            const target_worker = self.worker(target).*;
+            if (target_worker.literal_scopes.len != 0 and literal_requirement < target_worker.literal_scopes[0].len) {
+                const requirement = target_worker.literal_scopes[0][literal_requirement];
+                // A polymorphic constant's instance is never computed where
+                // it is read: it is the compile-time root of the constant at
+                // the instance's closed type.
+                if (requirement.site.kind == .constant_instance) {
+                    const ty = try self.converter().convert(target_worker.module, requirement.ty, .{ .module = target_worker.module, .vars = target_worker.scheme_vars, .bound = bound });
+                    const instance = try self.constantInstance(requirement.site, ty) orelse
+                        invariant("a polymorphic constant is read at a closed instance no compile-time root evaluates");
+                    return try self.rootThunkEntry(instance.module, instance.root, ty);
+                }
+            }
+        }
         const bound_ty = try self.store.intern(.{ .tuple = bound });
         const key: WorkerKey = .{ .literal_thunk = .{ .target = target, .bound = bound_ty, .literal_requirement = literal_requirement } };
         if (self.worker_ids.get(key)) |existing| return existing;
@@ -4019,6 +4075,50 @@ pub const Program = struct {
         const ty = target_worker.literal_scopes[0][literal_requirement].ty;
         const ret = try self.converter().convert(target_worker.module, ty, .{ .module = target_worker.module, .vars = target_worker.scheme_vars, .bound = bound });
         return try self.addErasedWorker(key, target_worker.module, &.{}, &.{}, ret, "boxy.literal_thunk");
+    }
+
+    /// The entry of the immortal callable of `literal_argument` root `root`
+    /// of `module_index`, whose value has type `ty`: its entry wrapper,
+    /// which restores the stored value, or converts the literal where none
+    /// is stored; in the compile-time program evaluating the root, the read
+    /// of its slot once it completes (a validate-only root stores no value,
+    /// so its wrapper converts for every reader).
+    pub fn rootThunkEntry(self: *Program, module_index: ModuleIndex, root: checked.ComptimeRootId, ty: TypeId) Allocator.Error!WorkerId {
+        const compile_time_root = self.module(module_index).view.compile_time_roots.root(root);
+        const argument = compile_time_root.literal_argument orelse invariant("a literal argument root records no literal argument");
+        if (try self.instanceRestoredByReaders(module_index, compile_time_root))
+            return try self.rootRestoreWorker(module_index, root, ty);
+        if (compile_time_root.payloadFor(.boxy) == .pending and !argument.validate_only and self.evaluatesRoot(module_index, root))
+            return try self.rootSlotThunkWorker(module_index, root, ty);
+        const wrapper = self.wrapper_by_root.get(.{ .module = module_index, .root = root }) orelse
+            invariant("a literal argument root has no entry wrapper");
+        return try self.methodEntryWorker(try self.templateRefWorker(wrapper));
+    }
+
+    /// Whether `root` of `module_index` is a polymorphic constant's instance
+    /// whose stored value is data alone: each reader restores it through a
+    /// thunk of its own (`rootRestoreWorker`), and no unit emits the root's
+    /// wrapper (`unitEmitsTemplate`). An instance holding a function is
+    /// restored by its wrapper, whose restore lowers the workers its value
+    /// names.
+    pub fn instanceRestoredByReaders(self: *Program, module_index: ModuleIndex, root: checked.CompileTimeRoot) Allocator.Error!bool {
+        const argument = root.literal_argument orelse return false;
+        if (argument.site.kind != .constant_instance) return false;
+        return switch (root.payloadFor(.boxy)) {
+            .const_node => |node| try self.storedDataAlone(.{ .module = module_index }, node),
+            .fn_value, .pending, .unevaluated, .discarded, .expect, .runtime => false,
+        };
+    }
+
+    /// The thunk restoring the stored value of polymorphic constant
+    /// instance root `root` of `module_index`, whose value has type `ty`
+    /// (`WorkerKey.root_restore`).
+    pub fn rootRestoreWorker(self: *Program, module_index: ModuleIndex, root: checked.ComptimeRootId, ty: TypeId) Allocator.Error!WorkerId {
+        const key: WorkerKey = .{ .root_restore = .{ .module = module_index, .root = root } };
+        if (self.worker_ids.get(key)) |existing| return existing;
+        const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
+        const identity = try self.generatedWorkerIdentity(key, module_index, @backingInt(id), &.{ty});
+        return try self.addErasedWorkerWithIdentity(key, module_index, &.{}, &.{}, ty, identity, .isolated);
     }
 
     /// The thunk reading the compile-time value slot of literal argument root
@@ -4078,6 +4178,7 @@ pub const Program = struct {
         const identity = switch (key) {
             // Only a compile-time program reads a root's slot.
             .root_slot => self.programLocalIdentity(role, @backingInt(id)),
+            .root_restore => invariant("a root restore thunk names its identity by its value's type (`rootRestoreWorker`)"),
             .adapter, .structural, .structural_map, .crash_dictionary, .literal_thunk, .codec, .convert, .callable_eval_entry => try self.generatedWorkerIdentity(key, module_index, @backingInt(id), &.{}),
             .template, .lambda, .default, .method_entry, .root, .static_data, .inline_literal => invariant("a worker a module's object defines is no generated erased worker"),
         };
@@ -4148,6 +4249,35 @@ pub const Program = struct {
 
     /// A compile-time root of a module of the program.
     pub const RootSlotKey = struct { module: ModuleIndex, root: checked.ComptimeRootId };
+
+    /// A polymorphic constant, by its module and compile-time root, at a
+    /// closed type.
+    pub const ConstantInstanceKey = struct { module: [32]u8, constant: u32, ty: TypeId };
+
+    /// The `constant_instance` root of some module of the program holding
+    /// the value of the polymorphic constant `site` names at the closed type
+    /// `ty` (design.md "Polymorphic Constants"), for a read whose instance
+    /// no checked edge names: a frame deriving its literal arguments from
+    /// its types, or a dictionary entry. Every root of one constant at one
+    /// type holds one value, so any of them serves.
+    pub fn constantInstance(self: *Program, site: checked.LiteralSite, ty: TypeId) Allocator.Error!?RootSlotKey {
+        std.debug.assert(site.kind == .constant_instance);
+        if (self.constant_instances == null) {
+            var instances: std.AutoHashMapUnmanaged(ConstantInstanceKey, RootSlotKey) = .empty;
+            errdefer instances.deinit(self.allocator);
+            for (self.modules.views.items) |*view| {
+                for (view.view.compile_time_roots.roots.items()) |root| {
+                    const argument = root.literal_argument orelse continue;
+                    if (argument.site.kind != .constant_instance or argument.sealed) continue;
+                    const root_ty = try self.converter().convert(view.index, root.checked_type, .{ .module = view.index, .vars = &.{}, .bound = &.{} });
+                    const entry = try instances.getOrPut(self.allocator, .{ .module = argument.site.module.bytes, .constant = argument.site.node, .ty = root_ty });
+                    if (!entry.found_existing) entry.value_ptr.* = .{ .module = view.index, .root = root.id };
+                }
+            }
+            self.constant_instances = instances;
+        }
+        return self.constant_instances.?.get(.{ .module = site.module.bytes, .constant = site.node, .ty = ty });
+    }
 
     /// Whether this program evaluates compile-time root `root` of module
     /// `module_index`: the root is one of the program's requests. A pending
@@ -4571,7 +4701,7 @@ pub const Program = struct {
                         continue;
                     }
                 },
-                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => {},
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => {},
             }
             const arena = self.arena.allocator();
             const bound = try arena.alloc(TypeId, target.scheme_vars.len);
@@ -4618,7 +4748,7 @@ pub const Program = struct {
             .adapter, .codec, .default => Tables.InputLayout.flat(.{ .descs = @intCast(target.scheme_vars.len) }),
             .method_entry => |entry_target| self.inputLayout(entry_target),
             .structural, .structural_map => Tables.InputLayout.flat(.{ .descs = target.structural_descs }),
-            .literal_thunk, .root_slot, .root, .static_data, .inline_literal, .crash_dictionary, .convert, .callable_eval_entry => .{},
+            .literal_thunk, .root_slot, .root_restore, .root, .static_data, .inline_literal, .crash_dictionary, .convert, .callable_eval_entry => .{},
         };
     }
 
@@ -4746,6 +4876,7 @@ fn perfNameOf(program: *Program, a: Allocator, names: []?[]const u8, id: WorkerI
         .static_data => |index| .{ .text = "static_data", .number = index },
         .inline_literal => |key| .{ .module = module_name, .text = "inline_literal", .number = @backingInt(key.expr) },
         .root_slot => |key| .{ .module = module_name, .text = "root_slot", .number = @backingInt(key.root) },
+        .root_restore => |key| .{ .module = module_name, .text = "root_restore", .number = @backingInt(key.root) },
     };
     const name = try perfNameLabel(a, label);
     names[@backingInt(id)] = name;
@@ -5082,7 +5213,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                     .list_int => |item| try std.fmt.allocPrint(program.arena.allocator(), "{s}{s}", .{ names.exportNameText(export_name), item.nameSuffix() }),
                 };
             },
-            inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => |_, kind| "boxy." ++ @tagName(kind),
+            inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => |_, kind| "boxy." ++ @tagName(kind),
         };
         try program.result.store.setProcDebugName(worker.proc, name);
     }
@@ -5306,13 +5437,24 @@ fn recordExports(program: *Program) Allocator.Error!void {
         };
         for (view.view.compile_time_roots.roots.items()) |root| switch (root.kind) {
             .callable_binding => if (program.wrapper_by_root.get(.{ .module = module_index, .root = root.id })) |wrapper| try visit.template(module_index, wrapper),
-            .constant, .hoisted_constant, .hoisted_validation, .expect, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr, .literal_argument => {},
+            // An importer whose frame derives a polymorphic constant's
+            // instance from its types reads the instance root of any module
+            // holding it at that type (`Program.constantInstance`), through
+            // the root's wrapper when the instance holds a function (one
+            // that is data alone has no wrapper; `instanceRestoredByReaders`).
+            .literal_argument => {
+                const argument = root.literal_argument orelse invariant("a literal argument root records no literal argument");
+                if (argument.site.kind == .constant_instance and !argument.sealed) {
+                    if (program.wrapper_by_root.get(.{ .module = module_index, .root = root.id })) |wrapper| try visit.template(module_index, wrapper);
+                }
+            },
+            .constant, .hoisted_constant, .hoisted_validation, .expect, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr => {},
         };
     }
     for (program.workers.items, 0..) |worker, index| switch (worker.key) {
         .default => try visit.worker(@fromBackingInt(@intCast(index))),
         .lambda, .method_entry => if (worker.needs != null) try visit.worker(@fromBackingInt(@intCast(index))),
-        .template, .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => {},
+        .template, .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => {},
     };
     while (pending.pop()) |id| {
         const needs = program.worker(id).needs orelse continue;
@@ -5329,7 +5471,7 @@ fn recordExports(program: *Program) Allocator.Error!void {
         if (worker.imported or !Program.exportableKind(worker.key)) continue;
         const template: collections.OptionalU32 = switch (worker.key) {
             .template => |key| .some(@backingInt(key.template)),
-            .lambda, .method_entry, .default, .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => .none,
+            .lambda, .method_entry, .default, .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => .none,
         };
         program.result.boxy_exports.putAssumeCapacity(program.result.store.getProcSpecImmediate(worker.proc).identity, .{ .template = template, .visible = is_visible });
     }
@@ -5354,7 +5496,9 @@ fn templateRejected(program: *Program, view: *const types.ModuleView, template: 
 /// A constant whose stored value is data alone has no caller of its wrapper
 /// either: every read restores the stored value where it reads, so the
 /// wrapper is emitted only while a constant's template names it as its entry
-/// procedure (`const_entry`). A stored function value's wrapper stays: its
+/// procedure (`const_entry`), and neither has a polymorphic constant's
+/// instance whose value is data alone (`instanceRestoredByReaders`). A
+/// stored function value's wrapper stays: its
 /// restore is what lowers the workers the value names, which other objects
 /// link against.
 fn unitEmitsTemplate(program: *Program, view: *const types.ModuleView, template: checked.CheckedProcedureTemplate, forwarded_roots: []const bool, const_entry: bool) Allocator.Error!bool {
@@ -5370,7 +5514,8 @@ fn unitEmitsTemplate(program: *Program, view: *const types.ModuleView, template:
                     .const_node => |node| !try program.storedDataAlone(.{ .module = view.index }, node),
                     .fn_value, .pending, .unevaluated, .discarded, .expect, .runtime => true,
                 },
-                .callable_binding, .literal_argument => true,
+                .callable_binding => true,
+                .literal_argument => !try program.instanceRestoredByReaders(view.index, root),
             };
         },
     };
