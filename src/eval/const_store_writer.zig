@@ -1012,8 +1012,9 @@ pub const Writer = struct {
         return roc_str.getCapacity();
     }
 
-    fn checkedValues(self: *const Writer) CheckedValues {
-        return self.checked orelse writerInvariant("a writer of evaluated values read a checked expression");
+    fn checkedValues(self: *const Writer) *const CheckedValues {
+        if (self.checked) |*values| return values;
+        writerInvariant("a writer of evaluated values read a checked expression");
     }
 
     /// A value-form numeral's value at the number type of `layout_idx`, as

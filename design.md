@@ -7645,8 +7645,11 @@ consumer that needs one entry per type asks the module's view for the one id
 its key index holds for the type's key (`canonicalId`) or compares two ids
 with `sameType`. A type that reaches an identity variable is identified by
 its id alone, because its key names its variables only by position. Whether
-a type reaches an identity variable is found by walking the types it reaches,
-never through its key.
+a type reaches an identity variable is stored with the type, never read
+through its key: publication marks it on each source type when it first
+reaches that type (`SealedVarFacts.identity_variables`), and a synthesized
+type settles it from its children once its payload is filled
+(`CheckedTypeRoot.identity`).
 
 A synthesized type's key is computed on first demand through its own key
 slot, like a source type's. A synthesized function type records that its key
@@ -14113,12 +14116,13 @@ No other use observes a copy of its remaining labels. This does not apply to
 a rest binder, a shared extension, or a relation that changes field kind or
 tag provenance.
 
-When a pattern introduces a previously absent tag into an inferred open
-row, every existing reference to the old extension must see the new tag.
-The row may combine adjacent disjoint tag runs, but an absorbed part remains
-valid in isolation, and a marked entry copied out of it remains the same
-diagnostic fact (Pattern-Only Tags). A bounded or rigid tail cannot be
-extended by this rule.
+When a field access or pattern introduces a previously absent member into an
+inferred open row, every existing reference to the old extension must see the
+new member. The row may combine adjacent disjoint runs of members, but an
+absorbed part remains valid in isolation, and a marked tag copied out of it
+remains the same diagnostic fact (Pattern-Only Tags). A later demand for a
+member one of those runs holds binds to that entry and leaves the row as it
+is. A bounded or rigid tail cannot be extended by this rule.
 
 A use of a top-level value is therefore never a widening of the value: no
 row coercion and no `ModuleEnv` record exist for value uses. Where a

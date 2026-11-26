@@ -2896,7 +2896,27 @@ pub const CheckedTypeKeyRecipe = enum(u8) {
 pub const CheckedTypeRoot = struct {
     id: CheckedTypeId,
     recipe: CheckedTypeKeyRecipe = .payload,
+    identity: CheckedRootIdentity = .unsettled,
 };
+
+/// Whether a synthesized root reaches a flex or rigid variable, through the
+/// children `CheckedTypeStoreView.rootHasIdentityVariables` walks. The store
+/// settles it when the root is filled, or, for a root that reaches a root
+/// still reserved, once no reserved root remains (`CheckedTypeStore.settleRoot`).
+/// A settled fact never changes: a filled payload is never replaced by one
+/// that reaches different variables.
+pub const CheckedRootIdentity = enum(u8) {
+    /// The root, or a root it reaches, is still reserved.
+    unsettled,
+    /// The root reaches no flex or rigid variable.
+    free,
+    /// The root reaches a flex or rigid variable.
+    reaches,
+};
+
+comptime {
+    std.debug.assert(@sizeOf(CheckedTypeRoot) == 8);
+}
 
 /// `(start, len)` range into one of `CheckedTypeStore`'s flat side pools.
 pub const CheckedTypeRange = extern struct { start: u32 = 0, len: u32 = 0 };
@@ -4099,42 +4119,81 @@ pub const CheckedTypeStoreView = struct {
         return try self.synthesizedKeys().info(self, root);
     }
 
-    /// Whether `root` reaches a flex or rigid variable, found by walking the
-    /// types it reaches; no key is computed. The walk records the fact for
-    /// every type whose result it proves, not only for `root`, so asking
-    /// about each level of a deep type in turn walks each level once.
+    /// Whether `root` reaches a flex or rigid variable; no key is computed.
+    /// A source type's fact was settled when its module was published, and a
+    /// synthesized root's when it was filled, so the answer is read in place.
+    /// Only while its store is built can a synthesized root reach a root
+    /// still reserved; its answer is then found by walking the types it
+    /// reaches, counting a reserved root as reaching a variable.
     pub fn rootHasIdentityVariables(self: *const CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!bool {
-        if (self.knownIdentity(root)) |known| return known;
-        var scan = CheckedTypeViewIdentityScan{ .view = self };
-        var traversal = checked_traverse.BoolPredicateTraversal(CheckedTypeId, CheckedTypeViewIdentityScan).init(self.scanAllocator(), &scan);
-        defer traversal.deinit();
-        const result = try traversal.visit(root);
-        if (!scan.saw_pending) traversal.reportDecided(result, IdentityRecorder{ .view = self });
-        return result;
+        if (self.settledIdentity(root)) |settled| {
+            if (std.debug.runtime_safety) self.assertSettledIdentityAgreesWithChildren(root, settled);
+            return settled;
+        }
+        return try self.walkIdentityVariables(root, true);
     }
 
-    const IdentityRecorder = struct {
-        view: *const CheckedTypeStoreView,
+    /// Assert that `root`'s settled fact agrees with its own payload and its
+    /// children's settled facts: it reaches a variable exactly when it is one
+    /// or a child reaches one. A full walk per query would make every query
+    /// as costly as the walk the fact stands in for, so the walk itself is
+    /// compared with the settled facts by tests (`walkIdentityVariablesForTest`).
+    fn assertSettledIdentityAgreesWithChildren(self: *const CheckedTypeStoreView, root: CheckedTypeId, settled: bool) void {
+        var fold = SettledChildrenFold{ .view = self };
+        const own = checkedTypeIdentityChildren(&fold, self.payload(root)) catch unreachable; // the fold never allocates
+        const agrees = if (own) |own_fact|
+            own_fact == settled
+        else if (settled)
+            fold.reaches
+        else
+            !fold.reaches and !fold.unsettled;
+        if (!agrees) checkedArtifactInvariant("checked type {d}'s settled identity-variable fact disagreed with its children's", .{@backingInt(root)});
+    }
 
-        pub fn decided(self: IdentityRecorder, ty: CheckedTypeId, value: bool) void {
-            self.view.recordIdentity(ty, value);
+    /// Folds the settled facts of a type's children.
+    const SettledChildrenFold = struct {
+        view: *const CheckedTypeStoreView,
+        reaches: bool = false,
+        unsettled: bool = false,
+
+        pub fn add(self: *SettledChildrenFold, child: CheckedTypeId) Allocator.Error!void {
+            if (self.view.settledIdentity(child)) |settled| {
+                self.reaches = self.reaches or settled;
+            } else self.unsettled = true;
+        }
+
+        pub fn addSlice(self: *SettledChildrenFold, children: []const CheckedTypeId) Allocator.Error!void {
+            for (children) |child| try self.add(child);
         }
     };
 
-    /// The identity-variable fact of `root` a previous walk recorded.
-    fn knownIdentity(self: *const CheckedTypeStoreView, root: CheckedTypeId) ?bool {
-        if (type_ids.isSynthesized(root)) {
-            const keys = self.synthesized_keys orelse return null;
-            return keys.knownIdentity(type_ids.synthesizedIndex(root));
-        }
-        const keys = self.sealed_keys orelse return null;
-        return keys.knownIdentity(type_ids.asVar(root));
+    /// Whether `root` reaches a flex or rigid variable, found by walking
+    /// every type it reaches without reading any settled fact. Tests compare
+    /// it with `rootHasIdentityVariables`.
+    pub fn walkIdentityVariablesForTest(self: *const CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!bool {
+        if (!builtin.is_test) unreachable; // test scaffolding: only test blocks call this
+        return try self.walkIdentityVariables(root, false);
     }
 
-    fn recordIdentity(self: *const CheckedTypeStoreView, root: CheckedTypeId, value: bool) void {
-        if (type_ids.isSynthesized(root)) {
-            if (self.synthesized_keys) |keys| keys.recordIdentity(type_ids.synthesizedIndex(root), value);
-        } else if (self.sealed_keys) |keys| keys.recordIdentity(type_ids.asVar(root), value);
+    /// Whether `root` reaches a flex or rigid variable, found by walking the
+    /// types it reaches. With `read_settled`, a type whose fact is settled
+    /// is not entered.
+    fn walkIdentityVariables(self: *const CheckedTypeStoreView, root: CheckedTypeId, read_settled: bool) Allocator.Error!bool {
+        var scan = CheckedTypeViewIdentityScan{ .view = self, .read_settled = read_settled };
+        var traversal = checked_traverse.BoolPredicateTraversal(CheckedTypeId, CheckedTypeViewIdentityScan).init(self.scanAllocator(), &scan);
+        defer traversal.deinit();
+        return try traversal.visit(root);
+    }
+
+    /// The settled identity-variable fact of `root`, or null while it
+    /// reaches a root still reserved.
+    fn settledIdentity(self: *const CheckedTypeStoreView, root: CheckedTypeId) ?bool {
+        if (!type_ids.isSynthesized(root)) return self.sealedView().hasIdentityVariables(type_ids.asVar(root));
+        return switch (self.roots[self.synthesizedIndex(root)].identity) {
+            .unsettled => null,
+            .free => false,
+            .reaches => true,
+        };
     }
 
     /// A thread-safe allocator owned by the module the view reads.
@@ -4156,7 +4215,7 @@ pub const CheckedTypeStoreView = struct {
             (try self.rootForKey(try self.rootKey(id))) orelse
                 checkedArtifactInvariant("an identity-free checked type has no root for its own key", .{});
         // An unfinished synthesized graph has no settled identity fact.
-        if (self.knownIdentity(id) != null) {
+        if (self.settledIdentity(id) != null) {
             if (type_ids.isSynthesized(id)) {
                 self.synthesizedKeys().canonical.items[self.synthesizedIndex(id)].put(result);
             } else self.sealedKeys().recordCanonical(type_ids.asVar(id), result);
@@ -4854,7 +4913,7 @@ const CheckedTypePublication = struct {
         var newly_reached: std.ArrayList(Var) = .empty;
         defer newly_reached.deinit(allocator);
         const first_payload = self.store.payloads.items().len;
-        try sealed_type_view.reach(allocator, module.moduleEnvConst(), self.store.sealed_var_facts.items(), &self.store.reach_pending, var_, &newly_reached);
+        try sealed_type_view.reach(allocator, module.moduleEnvConst(), self.store.sealed_var_facts.items(), &self.store.reach_scratch, var_, &newly_reached);
         // Only this request's newly reached types need their imported
         // declarations embedded. Other producers own the completeness of
         // their own types.
@@ -4956,6 +5015,12 @@ pub const CheckedTypeStore = struct {
     /// path (`fillSyntheticTypeRoot`). Each must declare its origin in
     /// `identity_origins`; `identityOrigin` refuses one that has not.
     synthetic_variable_roots: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty,
+    /// Build-only count of reserved roots not yet filled.
+    reserved_root_count: u32 = 0,
+    /// Build-only list of filled roots, by synthesized index, whose
+    /// identity-variable fact waits on a reserved root (`settleRoot`). Every
+    /// one is settled when the last reserved root is filled.
+    unsettled_roots: std.ArrayList(u32) = .empty,
     roots: collections.SafeList(CheckedTypeRoot) = .{},
     schemes: collections.SafeList(CheckedTypeScheme) = .{},
     /// Index of `schemes` by root and domain, so a root asked for its scheme
@@ -5014,9 +5079,9 @@ pub const CheckedTypeStore = struct {
     /// by importing module and imported id, so an imported type projected
     /// twice names one root.
     projected_imports: std.AutoHashMapUnmanaged(ProjectedImportKey, CheckedTypeId) = .empty,
-    /// Build-only work list of `sealed_type_view.reach`, kept with its
+    /// Build-only scratch of `sealed_type_view.reach`, kept with its
     /// capacity for the next walk; empty between walks.
-    reach_pending: std.ArrayList(Var) = .empty,
+    reach_scratch: sealed_type_view.ReachScratch = .{},
     /// The interning tables of the platform store a pairing overlay extends
     /// (`borrowForPairing`), probed read-only before the overlay's own
     /// tables, so the overlay interns against the platform's types without
@@ -5095,10 +5160,12 @@ pub const CheckedTypeStore = struct {
         "inherited_tables",
         "identity_origins",
         "synthetic_variable_roots",
+        "reserved_root_count",
+        "unsettled_roots",
         "synthesized_keys",
         "key_names",
         "projected_imports",
-        "reach_pending",
+        "reach_scratch",
         "sealed_env",
         "sealed_keys",
     };
@@ -5541,6 +5608,149 @@ pub const CheckedTypeStore = struct {
         return try self.view().rootHasIdentityVariables(root);
     }
 
+    /// The identity-variable fact of `id` as the store has settled it.
+    fn rootIdentity(self: *const CheckedTypeStore, id: CheckedTypeId) CheckedRootIdentity {
+        if (!type_ids.isSynthesized(id)) return if (self.sealedSourceView().hasIdentityVariables(type_ids.asVar(id))) .reaches else .free;
+        return self.roots.items()[self.synthesizedIndex(id)].identity;
+    }
+
+    /// Settle the identity-variable fact of `root`, whose payload was just
+    /// filled: it reaches a variable when it is one or when a child reaches
+    /// one, and reaches none when every child reaches none. While a child is
+    /// reserved, or waits on a reserved root itself, the root waits in
+    /// `unsettled_roots` for `settleWaitingRoots`; the caller reserved room
+    /// for it there, so settling never fails.
+    fn settleRoot(self: *CheckedTypeStore, root: CheckedTypeId) void {
+        const index = self.synthesizedIndex(root);
+        std.debug.assert(!self.borrowed_columns.contains(.roots));
+        std.debug.assert(self.payloads.items()[index] != .pending);
+        var fold = RootIdentityFold{ .store = self };
+        const own = checkedTypeIdentityChildren(&fold, self.payload(root)) catch unreachable; // the fold never allocates
+        const identity: CheckedRootIdentity = if (own) |own_fact|
+            (if (own_fact) .reaches else .free)
+        else if (fold.reaches)
+            .reaches
+        else if (fold.waits)
+            .unsettled
+        else
+            .free;
+        self.roots.items()[index].identity = identity;
+        if (identity == .unsettled) self.unsettled_roots.appendAssumeCapacity(@intCast(index));
+    }
+
+    /// Folds the settled facts of a filled root's children.
+    const RootIdentityFold = struct {
+        store: *const CheckedTypeStore,
+        reaches: bool = false,
+        waits: bool = false,
+
+        pub fn add(self: *RootIdentityFold, child: CheckedTypeId) Allocator.Error!void {
+            switch (self.store.rootIdentity(child)) {
+                .unsettled => self.waits = true,
+                .free => {},
+                .reaches => self.reaches = true,
+            }
+        }
+
+        pub fn addSlice(self: *RootIdentityFold, children: []const CheckedTypeId) Allocator.Error!void {
+            for (children) |child| try self.add(child);
+        }
+    };
+
+    /// Settle every root waiting in `unsettled_roots`, now that no root is
+    /// reserved and so every root they reach is filled. A waiting root
+    /// reaches a variable exactly when, through other waiting roots, it
+    /// reaches a child settled as reaching one; every other waiting root
+    /// reaches none. Computed backward over the waiting roots' reversed
+    /// child edges, so cycles among them are settled exactly.
+    fn settleWaitingRoots(self: *CheckedTypeStore, allocator: Allocator) Allocator.Error!void {
+        std.debug.assert(self.reserved_root_count == 0);
+        const waiting = self.unsettled_roots.items;
+        if (waiting.len == 0) return;
+        var positions: std.AutoHashMapUnmanaged(u32, u32) = .empty;
+        defer positions.deinit(allocator);
+        try positions.ensureTotalCapacity(allocator, @intCast(waiting.len));
+        for (waiting, 0..) |index, position| positions.putAssumeCapacity(index, @intCast(position));
+
+        var edges = WaitingRootEdges{ .allocator = allocator, .store = self, .positions = &positions };
+        defer edges.deinit();
+        const reaches = try allocator.alloc(bool, waiting.len);
+        defer allocator.free(reaches);
+        @memset(reaches, false);
+        var pending: std.ArrayList(u32) = .empty;
+        defer pending.deinit(allocator);
+        for (waiting, 0..) |index, position| {
+            edges.parent = @intCast(position);
+            edges.reaches = false;
+            _ = try checkedTypeIdentityChildren(&edges, self.payload(type_ids.fromSynthesized(index)));
+            if (edges.reaches) {
+                reaches[position] = true;
+                try pending.append(allocator, @intCast(position));
+            }
+        }
+
+        // Parents of each waiting root, placed by child.
+        const starts = try allocator.alloc(u32, waiting.len + 1);
+        defer allocator.free(starts);
+        @memset(starts, 0);
+        for (edges.children.items) |child| starts[child + 1] += 1;
+        for (1..waiting.len + 1) |position| starts[position] += starts[position - 1];
+        const parents = try allocator.alloc(u32, edges.children.items.len);
+        defer allocator.free(parents);
+        const fill = try allocator.dupe(u32, starts[0..waiting.len]);
+        defer allocator.free(fill);
+        for (edges.children.items, edges.parents.items) |child, parent| {
+            parents[fill[child]] = parent;
+            fill[child] += 1;
+        }
+
+        while (pending.pop()) |child| {
+            for (parents[starts[child]..starts[child + 1]]) |parent| {
+                if (reaches[parent]) continue;
+                reaches[parent] = true;
+                try pending.append(allocator, parent);
+            }
+        }
+        for (waiting, reaches) |index, reaches_variable| {
+            self.roots.items()[index].identity = if (reaches_variable) .reaches else .free;
+        }
+        self.unsettled_roots.clearRetainingCapacity();
+    }
+
+    /// Lists the edges between waiting roots, and whether a waiting root has
+    /// a child settled as reaching a variable.
+    const WaitingRootEdges = struct {
+        allocator: Allocator,
+        store: *const CheckedTypeStore,
+        positions: *const std.AutoHashMapUnmanaged(u32, u32),
+        parent: u32 = 0,
+        reaches: bool = false,
+        children: std.ArrayList(u32) = .empty,
+        parents: std.ArrayList(u32) = .empty,
+
+        fn deinit(self: *WaitingRootEdges) void {
+            self.children.deinit(self.allocator);
+            self.parents.deinit(self.allocator);
+        }
+
+        pub fn add(self: *WaitingRootEdges, child: CheckedTypeId) Allocator.Error!void {
+            switch (self.store.rootIdentity(child)) {
+                .free => {},
+                .reaches => self.reaches = true,
+                .unsettled => {
+                    const position = self.positions.get(@intCast(type_ids.synthesizedIndex(child))) orelse
+                        checkedArtifactInvariant("a waiting checked type root reached an unsettled root that was not waiting", .{});
+                    try self.children.append(self.allocator, position);
+                    try self.parents.append(self.allocator, self.parent);
+                },
+            }
+        }
+
+        pub fn addSlice(self: *WaitingRootEdges, children: []const CheckedTypeId) Allocator.Error!void {
+            for (children) |child| try self.add(child);
+        }
+    };
+
     /// The identity instance a variable root stands for: the source a
     /// substitution cloned it from, followed through nested clones, or the
     /// root itself when it was published from a source variable or declared
@@ -5672,6 +5882,7 @@ pub const CheckedTypeStore = struct {
         }
         try self.ownColumn(allocator, .payloads);
         try self.payloads.ensureUnusedCapacity(allocator, 1);
+        try self.unsettled_roots.ensureUnusedCapacity(allocator, 1);
         const args_range = try self.appendPool(allocator, CheckedTypeId, args);
         const id = try self.appendRootRow(allocator, .synthetic_function);
         _ = self.payloads.appendAssumeCapacity(.{ .function = .{
@@ -5684,6 +5895,7 @@ pub const CheckedTypeStore = struct {
             _ = self.roots.pop();
         }
         if (fingerprint) |value| try self.indexStructuralRoot(allocator, id, value);
+        self.settleRoot(id);
         return id;
     }
 
@@ -5711,6 +5923,7 @@ pub const CheckedTypeStore = struct {
 
         try self.ownColumn(allocator, .payloads);
         try self.payloads.ensureUnusedCapacity(allocator, 1);
+        try self.unsettled_roots.ensureUnusedCapacity(allocator, 1);
 
         const stored = try self.commitPayload(allocator, owned_payload);
         payload_owned = false;
@@ -5721,6 +5934,7 @@ pub const CheckedTypeStore = struct {
             _ = self.roots.pop();
         }
         if (fingerprint) |value| try self.indexStructuralRoot(allocator, id, value);
+        self.settleRoot(id);
         return id;
     }
 
@@ -5749,6 +5963,7 @@ pub const CheckedTypeStore = struct {
         try self.payloads.ensureUnusedCapacity(allocator, 1);
         const id = try self.appendRootRow(allocator, recipe);
         _ = self.payloads.appendAssumeCapacity(.pending);
+        self.reserved_root_count += 1;
         return id;
     }
 
@@ -5771,11 +5986,18 @@ pub const CheckedTypeStore = struct {
             try self.synthetic_variable_roots.put(allocator, root, {});
         }
         try self.ownColumn(allocator, .payloads);
+        try self.unsettled_roots.ensureUnusedCapacity(allocator, 1);
         const stored = try self.commitPayload(allocator, owned_payload);
         // A successful commit consumed the build's slices.
         build_owned = false;
         self.payloads.items()[index] = stored;
-        errdefer self.payloads.items()[index] = .pending;
+        self.settleRoot(root);
+        std.debug.assert(self.reserved_root_count != 0);
+        self.reserved_root_count -= 1;
+        // A root filled stays filled whether or not the roots waiting on the
+        // reserved ones settle now; a failed settlement leaves them waiting
+        // for the next time no root is reserved.
+        if (self.reserved_root_count == 0) try self.settleWaitingRoots(allocator);
     }
 
     pub fn replaceTypeRootPayload(
@@ -5789,10 +6011,17 @@ pub const CheckedTypeStore = struct {
         var owned_payload = build_payload;
         var payload_owned = true;
         errdefer if (payload_owned) deinitCheckedTypePayloadBuild(allocator, &owned_payload);
+        try self.ownColumn(allocator, .roots);
+        try self.unsettled_roots.ensureUnusedCapacity(allocator, 1);
         const stored = try self.commitPayload(allocator, owned_payload);
         payload_owned = false;
         try self.ownColumn(allocator, .payloads);
         self.payloads.items()[index] = stored;
+        // Roots that reach this one keep the facts they settled, so the new
+        // payload must settle to the fact the old one did.
+        const previous = self.roots.items()[index].identity;
+        self.settleRoot(root);
+        std.debug.assert(self.roots.items()[index].identity == previous);
     }
 
     pub fn nominalDeclaration(
@@ -5993,8 +6222,9 @@ pub const CheckedTypeStore = struct {
         self.nominal_declaration_index.deinit(allocator);
         self.identity_origins.deinit(allocator);
         self.synthetic_variable_roots.deinit(allocator);
+        self.unsettled_roots.deinit(allocator);
         self.projected_imports.deinit(allocator);
-        self.reach_pending.deinit(allocator);
+        self.reach_scratch.deinit(allocator);
         if (self.synthesized_keys) |keys| keys.destroy();
         // A loaded store's columns borrow the relocated buffer, and a borrowed
         // list frees nothing; a pairing overlay's borrowed columns belong to
@@ -7638,11 +7868,13 @@ fn appendExplicitCheckedTypePayload(
 
     try store.ownColumn(allocator, .payloads);
     try store.payloads.ensureUnusedCapacity(allocator, 1);
+    try store.unsettled_roots.ensureUnusedCapacity(allocator, 1);
     const stored = try store.commitPayload(allocator, owned_payload);
     payload_owned = false;
     const id = try store.appendRootRow(allocator, .payload);
     _ = store.payloads.appendAssumeCapacity(stored);
     if (fingerprint) |value| try store.indexStructuralRoot(allocator, id, value);
+    store.settleRoot(id);
     return id;
 }
 
@@ -7660,10 +7892,12 @@ fn appendNominalDeclarationRootPayload(
     }
     try store.ownColumn(allocator, .payloads);
     try store.payloads.ensureUnusedCapacity(allocator, 1);
+    try store.unsettled_roots.ensureUnusedCapacity(allocator, 1);
     const stored = try store.commitPayload(allocator, owned_payload);
     payload_owned = false;
     const id = try store.appendRootRow(allocator, .payload);
     _ = store.payloads.appendAssumeCapacity(stored);
+    store.settleRoot(id);
     return id;
 }
 
@@ -8224,9 +8458,6 @@ pub const SynthesizedTypeKeys = struct {
     allocator: Allocator,
     io: std.Io,
     slots: std.ArrayList(KeySlot) = .empty,
-    /// Per root: 0 while unknown, else 1 + whether a walk found the root
-    /// reaches an identity variable.
-    identity: std.ArrayList(std.atomic.Value(u8)) = .empty,
     /// Canonical ids of settled synthesized types, recorded on first request.
     canonical: std.ArrayList(sealed_type_keys.CanonicalIdSlot) = .empty,
     index: collections.OnceSlot(*KeyIndex, .synthesized_type_key_index) = .empty,
@@ -8251,7 +8482,6 @@ pub const SynthesizedTypeKeys = struct {
         self.dropIndex();
         if (self.writer) |*writer| writer.deinit();
         self.slots.deinit(allocator);
-        self.identity.deinit(allocator);
         self.canonical.deinit(allocator);
         allocator.destroy(self);
     }
@@ -8262,11 +8492,9 @@ pub const SynthesizedTypeKeys = struct {
     fn cover(self: *SynthesizedTypeKeys, count: usize) Allocator.Error!void {
         if (self.slots.items.len >= count) return;
         try self.slots.ensureTotalCapacity(self.allocator, count);
-        try self.identity.ensureTotalCapacity(self.allocator, count);
         try self.canonical.ensureTotalCapacity(self.allocator, count);
         while (self.slots.items.len < count) {
             self.slots.appendAssumeCapacity(.empty);
-            self.identity.appendAssumeCapacity(.init(0));
             self.canonical.appendAssumeCapacity(.{});
         }
         self.dropIndex();
@@ -8278,20 +8506,6 @@ pub const SynthesizedTypeKeys = struct {
             self.allocator.destroy(index);
             self.index = .empty;
         }
-    }
-
-    fn knownIdentity(self: *const SynthesizedTypeKeys, index: usize) ?bool {
-        std.debug.assert(index < self.identity.items.len);
-        return switch (self.identity.items[index].load(.acquire)) {
-            0 => null,
-            1 => false,
-            else => true,
-        };
-    }
-
-    fn recordIdentity(self: *SynthesizedTypeKeys, index: usize, value: bool) void {
-        std.debug.assert(index < self.identity.items.len);
-        self.identity.items[index].store(if (value) 2 else 1, .release);
     }
 
     /// The key of the synthesized root `root` of `view` and the facts its
@@ -8425,50 +8639,58 @@ pub const SynthesizedTypeKeys = struct {
 };
 
 /// Lists the children whose identity variables a checked type reaches, for a
-/// walk over a view. A pending payload counts as reaching one, and the walk
-/// records that it saw one so its result is not remembered.
+/// walk over a view. A pending payload counts as reaching one.
 const CheckedTypeViewIdentityScan = struct {
     view: *const CheckedTypeStoreView,
-    saw_pending: bool = false,
+    /// Whether a type whose fact is settled answers with it rather than
+    /// listing its children.
+    read_settled: bool,
 
     pub fn visit(self: *@This(), children: anytype, root: CheckedTypeId) Allocator.Error!?bool {
-        if (self.view.knownIdentity(root)) |known| return known;
-        switch (self.view.payload(root)) {
-            .pending => {
-                self.saw_pending = true;
-                return true;
-            },
-            .flex, .rigid => return true,
-            .field_kind, .err, .empty_record, .empty_tag_union => return false,
-            .alias => |alias| {
-                try children.add(alias.backing);
-                try children.addSlice(alias.args);
-            },
-            .record => |record| {
-                for (0..record.fields.len()) |field_index| {
-                    const field = record.fields.get(field_index);
-                    try children.add(field.ty);
-                    if (field.kind.undeterminedVariable()) |variable| try children.add(variable);
-                }
-                try children.add(record.ext);
-            },
-            .tuple => |items| try children.addSlice(items),
-            .nominal => |nominal| {
-                try children.addSlice(nominal.args);
-                try children.addSlice(nominal.padding_field_types);
-            },
-            .function => |function| {
-                try children.addSlice(function.args);
-                try children.add(function.ret);
-            },
-            .tag_union => |tag_union| {
-                for (0..tag_union.tags.len()) |tag_index| try children.addSlice(tag_union.tags.get(tag_index).args);
-                try children.add(tag_union.ext);
-            },
+        if (self.read_settled) {
+            if (self.view.settledIdentity(root)) |settled| return settled;
         }
-        return null;
+        return try checkedTypeIdentityChildren(children, self.view.payload(root));
     }
 };
+
+/// A checked type's own identity-variable fact, or null after listing the
+/// children whose facts decide it: the type reaches a flex or rigid variable
+/// when it is one or when any child reaches one. A pending payload counts as
+/// reaching one.
+fn checkedTypeIdentityChildren(children: anytype, payload: CheckedTypePayload) Allocator.Error!?bool {
+    switch (payload) {
+        .pending => return true,
+        .flex, .rigid => return true,
+        .field_kind, .err, .empty_record, .empty_tag_union => return false,
+        .alias => |alias| {
+            try children.add(alias.backing);
+            try children.addSlice(alias.args);
+        },
+        .record => |record| {
+            for (0..record.fields.len()) |field_index| {
+                const field = record.fields.get(field_index);
+                try children.add(field.ty);
+                if (field.kind.undeterminedVariable()) |variable| try children.add(variable);
+            }
+            try children.add(record.ext);
+        },
+        .tuple => |items| try children.addSlice(items),
+        .nominal => |nominal| {
+            try children.addSlice(nominal.args);
+            try children.addSlice(nominal.padding_field_types);
+        },
+        .function => |function| {
+            try children.addSlice(function.args);
+            try children.add(function.ret);
+        },
+        .tag_union => |tag_union| {
+            for (0..tag_union.tags.len()) |tag_index| try children.addSlice(tag_union.tags.get(tag_index).args);
+            try children.add(tag_union.ext);
+        },
+    }
+    return null;
+}
 
 /// One substitution applied across any number of clones into one store:
 /// each formal stands for its actual. It keeps each cloned source root's
@@ -8613,11 +8835,11 @@ const CheckedTypeKeyAdapter = struct {
         return node;
     }
 
-    /// Whether `node` is known to reach no identity variable: a walk already
-    /// recorded that fact for it. Unknown nodes are entered.
+    /// Whether `node` is known to reach no identity variable: its settled
+    /// fact says so. Unsettled nodes are entered.
     pub fn identityFree(self: *const CheckedTypeKeyAdapter, node: u32) bool {
-        const known = self.view.knownIdentity(idOf(node)) orelse return false;
-        return !known;
+        const settled = self.view.settledIdentity(idOf(node)) orelse return false;
+        return !settled;
     }
 
     fn storedPayload(self: *const CheckedTypeKeyAdapter, id: CheckedTypeId) CheckedTypePayload {
@@ -9042,7 +9264,7 @@ fn appendCheckedTypeRoot(
     active: *const CheckedSourceTypeRoots,
     var_: Var,
 ) Allocator.Error!CheckedTypeId {
-    try sealed_type_view.reach(allocator, module.moduleEnvConst(), store.sealed_var_facts.items(), &store.reach_pending, var_, null);
+    try sealed_type_view.reach(allocator, module.moduleEnvConst(), store.sealed_var_facts.items(), &store.reach_scratch, var_, null);
     return active.get(module, var_);
 }
 
@@ -34257,7 +34479,9 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 118;
+    /// Version 119 stores each type's identity-variable fact
+    /// (`SealedVarFacts.identity_variables`, `CheckedTypeRoot.identity`).
+    const serialized_layout_version: u32 = 119;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -39326,6 +39550,51 @@ test "checked type identity scan finds identity beside recursive tag cycle" {
 
     try std.testing.expect(try store.checkedTypeContainsIdentityVariables(allocator, root));
     try std.testing.expect(try checkedTypeIdsContainIdentityVariables(allocator, &store, &.{root}));
+}
+
+test "synthesized roots settle their identity facts once the last reserved root is filled" {
+    const allocator = std.testing.allocator;
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+    try attachTestSynthesizedKeys(allocator, &store, null);
+
+    // `a` and `b` form a cycle that reaches the variable `c`, which is
+    // filled last; `d` and `e` form a cycle that reaches no variable.
+    const a = try store.reserveSyntheticTypeRoot(allocator);
+    const b = try store.reserveSyntheticTypeRoot(allocator);
+    const c = try store.reserveSyntheticTypeRoot(allocator);
+    const d = try store.reserveSyntheticTypeRoot(allocator);
+    const e = try store.reserveSyntheticTypeRoot(allocator);
+    try store.fillSyntheticTypeRoot(allocator, a, .{ .tuple = try allocator.dupe(CheckedTypeId, &.{b}) });
+    try store.fillSyntheticTypeRoot(allocator, b, .{ .tuple = try allocator.dupe(CheckedTypeId, &.{ a, c }) });
+    try store.fillSyntheticTypeRoot(allocator, d, .{ .tuple = try allocator.dupe(CheckedTypeId, &.{e}) });
+    try store.fillSyntheticTypeRoot(allocator, e, .{ .tuple = try allocator.dupe(CheckedTypeId, &.{d}) });
+    for ([_]CheckedTypeId{ a, b, d, e }) |root| try std.testing.expectEqual(CheckedRootIdentity.unsettled, store.rootIdentity(root));
+    // An unsettled root is walked, and a reserved root counts as reaching a
+    // variable.
+    try std.testing.expect(try store.rootContainsIdentityVariables(a));
+    try std.testing.expect(!try store.rootContainsIdentityVariables(d));
+
+    try testFillSyntheticVariableRoot(allocator, &store, c, .{ .flex = .{} });
+    try std.testing.expectEqual(@as(usize, 0), store.unsettled_roots.items.len);
+    for ([_]CheckedTypeId{ a, b, c }) |root| {
+        try std.testing.expectEqual(CheckedRootIdentity.reaches, store.rootIdentity(root));
+        try std.testing.expect(try store.rootContainsIdentityVariables(root));
+    }
+    for ([_]CheckedTypeId{ d, e }) |root| {
+        try std.testing.expectEqual(CheckedRootIdentity.free, store.rootIdentity(root));
+        try std.testing.expect(!try store.rootContainsIdentityVariables(root));
+    }
+
+    // A root filled when nothing is reserved settles at once from its
+    // children's facts.
+    const closed = try store.appendSyntheticPayloadRoot(allocator, .{ .tuple = try allocator.dupe(CheckedTypeId, &.{d}) });
+    try std.testing.expectEqual(CheckedRootIdentity.free, store.rootIdentity(closed));
+    const open = try store.appendSyntheticPayloadRoot(allocator, .{ .tuple = try allocator.dupe(CheckedTypeId, &.{ d, b }) });
+    try std.testing.expectEqual(CheckedRootIdentity.reaches, store.rootIdentity(open));
+    for (store.roots.items()) |row| {
+        try std.testing.expectEqual(try store.view().walkIdentityVariablesForTest(row.id), try store.rootContainsIdentityVariables(row.id));
+    }
 }
 
 test "provided record constant with an unboxed function is rejected before publication" {

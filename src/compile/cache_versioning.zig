@@ -87,27 +87,29 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// Version 56 combines version 55 with checked bindings and stored constant
 /// types that carry no iterator representation fields.
 /// Version 57 stores absent optional ids and indices as zero. Version 58
-/// gives the remaining absences explicit representations. Version 59 stores
-/// sealed type stores whose dead descriptors, pool rows and merged-away
-/// variables sealing removed, renumbering the variables checking made with
-/// every variable checking recorded outside the store. Version 60 stores a
-/// compile-time root whose value is data alone as an image with the type it
-/// was stored at, and files each strategy's entry under its own key, and
-/// stores each closed instance of a polymorphic constant as a
-/// `constant_instance` root of its own, with the canonical instantiation's
-/// roots. Platform-pairing entries share it. Version 61 records, for each
-/// use of a name a destructuring scheme alias binds, the variables of the
-/// name's scheme, and a constant's instances at the substitutions checking
-/// recorded for those uses and for dispatches to methods bound to
-/// polymorphic callable bindings. Version 62 adds, for each `to_inspect`
-/// override whose inspection instance is closed, that use's edge and the
-/// constant instances it names, and stores value-form bytes literals and
-/// files imported as `Str` as images. Version 63 combines version 62 with
-/// main's sealed type store compaction (59). Version 64 stores each part
-/// holding no function of a stored value holding one as an image of its own,
-/// and no stored list as packed bytes. Version 65 drops the `zst`, `scalar`
-/// and `str` constant store node forms, which no producer writes.
-const checked_envelope_version: u32 = 65;
+/// gives the remaining absences explicit representations.
+/// Version 59 stores sealed type stores whose dead descriptors, pool rows and
+/// merged-away variables sealing removed, renumbering the variables checking
+/// made with every variable checking recorded outside the store. Version 60
+/// stores each checked type's identity-variable fact.
+/// Version 61 combines version 60 with these: a compile-time root whose value
+/// is data alone is stored as an image with the type it was stored at, and
+/// each strategy's entry is filed under its own key; each closed instance of a
+/// polymorphic constant is stored as a `constant_instance` root of its own,
+/// with the canonical instantiation's roots; for each use of a name a
+/// destructuring scheme alias binds, the variables of the name's scheme are
+/// recorded, with a constant's instances at the substitutions checking
+/// recorded for those uses and for dispatches to methods bound to polymorphic
+/// callable bindings; for each `to_inspect` override whose inspection instance
+/// is closed, that use's edge and the constant instances it names are
+/// recorded; and value-form bytes literals and files imported as `Str` are
+/// stored as images.
+/// Version 66 combines version 61 with these: each part holding no function
+/// of a stored value holding one is stored as an image of its own, no stored
+/// list is stored as packed bytes, and the `zst`, `scalar` and `str`
+/// constant store node forms, which no producer writes, are gone.
+/// Platform-pairing entries share it.
+const checked_envelope_version: u32 = 66;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment. Version 5 rejects builtin-conflicting import
