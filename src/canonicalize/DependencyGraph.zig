@@ -2223,6 +2223,9 @@ pub fn collectNameReferences(
     try scratch_stack.append(allocator, root_expr);
 
     while (scratch_stack.pop()) |expr_idx| {
+        // A literal-only subtree names no definition
+        // (`NodeStore.exprIsLiteralOnly`).
+        if (cir.store.exprIsLiteralOnly(expr_idx)) continue;
         switch (cir.store.exprKind(expr_idx)) {
             .e_lookup_local => {
                 const lookup = cir.store.exprView(expr_idx).e_lookup_local.decode();

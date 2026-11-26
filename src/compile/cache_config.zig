@@ -447,7 +447,9 @@ pub const Constants = struct {
     /// 208: remaining absences in backend, runtime and module data are explicit.
     /// 209: each module records its numeral-node index.
     /// 210: a default app records its `echo!` among its hosted definitions.
-    pub const CACHE_VERSION = 210;
+    /// 211: each module's node store records which expressions are
+    /// literal-only.
+    pub const CACHE_VERSION = 211;
 };
 
 /// Configuration for the Roc cache system.

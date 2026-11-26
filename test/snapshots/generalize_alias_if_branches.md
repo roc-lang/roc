@@ -12,23 +12,9 @@ picked = if Bool.True id else id
 main = (picked(1), picked("a"))
 ~~~
 # EXPECTED
-TYPE MISMATCH - generalize_alias_if_branches.md:5:27:5:30
+NIL
 # PROBLEMS
-~~~clojure
-(reports
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 5 27) (end 5 30))
-		(headline
-			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
-		(document
-			(source-region (file "generalize_alias_if_branches.md") (start 5 27) (end 5 30) (annotation error) (line-text "main = (picked(1), picked(\"a\"))"))
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be."))))
-~~~
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
@@ -99,24 +85,25 @@ main = (picked(1), picked("a"))
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 238)
+				(e-call (constraint-fn-var 240)
 					(e-lookup-local
 						(p-assign (ident "picked")))
-					(e-runtime-error (tag "erroneous_value_expr")))
-				(e-call (constraint-fn-var 239)
+					(e-num (value "1")))
+				(e-call (constraint-fn-var 243)
 					(e-lookup-local
 						(p-assign (ident "picked")))
-					(e-runtime-error (tag "erroneous_value_expr")))))))
+					(e-string
+						(e-literal (string "a"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt (type "a -> a"))
-		(patt (type "Dec -> Dec"))
-		(patt (type "(Dec, Dec)")))
+		(patt (type "a -> a"))
+		(patt (type "(Dec, Str)")))
 	(expressions
 		(expr (type "a -> a"))
-		(expr (type "Dec -> Dec"))
-		(expr (type "(Dec, Dec)"))))
+		(expr (type "a -> a"))
+		(expr (type "(Dec, Str)"))))
 ~~~

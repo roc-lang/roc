@@ -555,6 +555,45 @@ test "issue 13054: a conversion at a use's variable nothing fixes is checked und
     try expectLiteralOutcomeUnderBothStrategies(sqlInHelperApp);
 }
 
+/// `helper`'s literal is at `Sql(a)` for an `a` that carries a requirement,
+/// and `x = helper({})` relates `a` to nothing else: the use's copy of `a` is
+/// a constrained variable no scheme quantifies, which is not decided.
+const sealed_sql_app = app_header ++ "\n" ++ sql_type ++ "\n" ++
+    \\tagged : Sql(a) -> Sql(a) where [a.label : a -> Str]
+    \\tagged = |sql| sql
+    \\helper = |{}| tagged("good")
+    \\main! = |_args| {
+    \\    x = helper({})
+    \\    Echo.line!(x.text())
+    \\    Ok({})
+    \\}
+;
+
+test "a literal argument root at a sealed type stores its converted value under both strategies" {
+    if (is_freestanding) return error.SkipZigTest;
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var checked = try checkAppUnder(std.testing.allocator, sealed_sql_app, &.{}, null, strategy);
+        defer checked.deinit();
+        try checked.expectErrors(false);
+        // `x = helper({})` fixes no `n` of `Sql(n)`: the use's edge converts
+        // the literal at the type `n` seals to, and the root stores the
+        // value it converted, which every read restores.
+        const root = checked.coord.appRootCheckedArtifact();
+        var sealed: usize = 0;
+        for (root.compile_time_roots.roots.items()) |compile_time_root| {
+            const argument = compile_time_root.literal_argument orelse continue;
+            if (!argument.sealed) continue;
+            try std.testing.expect(!argument.validate_only);
+            try std.testing.expect(compile_time_root.payload == .const_node);
+            // A sealed root is requested although its type keeps the
+            // variable no use fixes.
+            try std.testing.expect(try root.checked_types.rootContainsIdentityVariables(argument.ty));
+            sealed += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 1), sealed);
+    }
+}
+
 test "issue 13054: a local function's conversion at a use's variable nothing fixes is checked under both strategies" {
     try expectLiteralOutcomeUnderBothStrategies(sqlInLocalHelperApp);
 }
