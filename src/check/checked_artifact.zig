@@ -39206,6 +39206,56 @@ test "relation projection preserves anonymous row identity and provenance" {
     try std.testing.expectEqual(RowDefault.empty_tag_union, projected_ext.flex.row_default.?);
 }
 
+test "a reused projector remaps each module's names through that module's name store" {
+    const allocator = std.testing.allocator;
+
+    var target_names = canonical.CanonicalNameStore.init(allocator);
+    defer target_names.deinit();
+    var target = CheckedTypeStore{};
+    defer target.deinit(allocator);
+
+    // Two modules whose first tag label has the same id and different text.
+    // Each union ends in a variable, so every projection builds it again.
+    const labels = [_][]const u8{ "First", "Second" };
+    var source_names: [labels.len]canonical.CanonicalNameStore = undefined;
+    var sources: [labels.len]CheckedTypeStore = @splat(.{});
+    var roots: [labels.len]CheckedTypeId = undefined;
+    var initialized: usize = 0;
+    defer for (source_names[0..initialized], sources[0..initialized]) |*names, *source| {
+        source.deinit(allocator);
+        names.deinit();
+    };
+    for (labels, &source_names, &sources, &roots) |label, *names, *source, *root| {
+        names.* = canonical.CanonicalNameStore.init(allocator);
+        initialized += 1;
+        const tail = try source.reserveSyntheticTypeRoot(allocator);
+        try testFillSyntheticVariableRoot(allocator, source, tail, .{ .flex = .{} });
+        root.* = try source.reserveSyntheticTypeRoot(allocator);
+        const tags = try allocator.alloc(CheckedTag, 1);
+        tags[0] = .{ .name = try names.internTagLabel(label), .args = &.{} };
+        try source.fillSyntheticTypeRoot(allocator, root.*, .{ .tag_union = .{ .tags = tags, .ext = tail } });
+    }
+
+    var views: [labels.len]ImportedModuleView = undefined;
+    for (&views, &source_names, &sources, 0..) |*imported, *names, *source, index| {
+        imported.* = testVisibilityImportedView(testCheckedModuleKey(@intCast(80 + index)), undefined, .{});
+        imported.canonical_names = names;
+        imported.checked_types = source.view();
+    }
+
+    var projector = CheckedTypeStoreImportProjector.init(allocator, &target, &target_names, &views[0]);
+    defer projector.deinit();
+    for (0..2) |_| {
+        for (&views, roots, labels) |*imported, root, label| {
+            projector.reset(imported);
+            const projected = target.payload(try projector.project(root));
+            if (projected != .tag_union) return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 1), projected.tag_union.tags.len());
+            try std.testing.expectEqualStrings(label, target_names.tagLabelText(projected.tag_union.tags.get(0).name));
+        }
+    }
+}
+
 test "source-instance projection does not coalesce a solved payload with an equal-key target root" {
     const allocator = std.testing.allocator;
 
