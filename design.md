@@ -19985,8 +19985,7 @@ Nothing a module emits depends on a module that imports it:
   an image a body reads from the constant pool rather than carrying it
   (Constant Pool); the workers a stored function value names, which
   readers restoring it link against, are set up by the unit directly
-  (Stored Function Values), and a lambda written in the constant's own body
-  still has the wrapper lowered beside it as its owner;
+  (Stored Function Values), without lowering the lambdas' owner;
 - its conversion workers are its own and memoized within it alone;
 - ARC solves each of its procedures' ownership signatures from the procedure's
   body and its callees, and a call from another module demands no ownership
@@ -20925,13 +20924,16 @@ function value's recipe names exactly as a reader's restore does
 (`seedStoredValueWorkers`, `StoredFn.recipeWorkers`): the recipe's worker
 and the workers of its capture graph's callables and tables, which it
 lowers and exports, each importer-visible (`recordExports`), since a reader
-restoring the value names them. Restoring a lambda reads its owner as a
-scope (`Decoder.workerAs(.scope)`), which lowers the owner in the program
-that defines it, so a lambda written in a constant's own body still has
-that constant's entry wrapper lowered and emitted beside it, as its owner;
-a stored value whose functions are owned elsewhere has no wrapper in its
-unit. A compile-time program evaluating a root enters it through its own
-root procedure, never through another object's wrapper.
+restoring the value names them. Restoring a lambda reads its owner's scope
+alone (`Decoder.workerAs(.lambda_owner)`, `Program.templateScope`): the
+owner's body ran at compile time, and a lambda reads only the variables,
+dictionaries and literal requirements its owner's worker record holds before
+any lowering. So a lambda written in a constant's own body has the
+constant's entry wrapper as its owner's scope, and the wrapper is neither
+lowered nor emitted for it. A unit defines and exports exactly the workers it
+lowers (`seedUnitWorkers`), so a scope no body of the unit lowers is no
+procedure of its object. A compile-time program evaluating a root enters it
+through its own root procedure, never through another object's wrapper.
 
 A function value has no slot for another root to read, so a module's roots
 holding one, with every pending root they read, run first in their own

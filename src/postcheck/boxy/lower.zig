@@ -2037,7 +2037,7 @@ pub const Program = struct {
     /// The integer list worker for `item` of a `List` template: the generic
     /// worker's scope, inputs, and dictionaries, with the list item variable
     /// bound to `item` in its signature and body.
-    fn listIntTemplateScope(self: *Program, module_index: ModuleIndex, template_id: checked_names.CheckedProcedureTemplateId, item: ListIntItem) Allocator.Error!WorkerId {
+    pub fn listIntTemplateScope(self: *Program, module_index: ModuleIndex, template_id: checked_names.CheckedProcedureTemplateId, item: ListIntItem) Allocator.Error!WorkerId {
         const key: WorkerKey = .{ .template = .{ .module = module_index, .template = template_id, .binding = .{ .list_int = item } } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const generic_id = try self.templateScope(module_index, template_id);
@@ -5201,8 +5201,11 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
         try seedStoredValueWorkers(program, view, &stored_value_workers);
     }
     try program.drain();
+    // The unit defines, and so exports, the workers it lowers. A template
+    // only a stored lambda's restore names, as the lambda's owner, is a
+    // scope here and has no body (`Decoder.workerAs(.lambda_owner)`).
     for (program.workers.items) |worker| {
-        if (worker.imported or !Program.exportableKind(worker.key)) continue;
+        if (worker.imported or !worker.lowered or !Program.exportableKind(worker.key)) continue;
         const spec = program.result.store.getProcSpecPtr(worker.proc);
         spec.exported = true;
         spec.outcome_publisher = true;
@@ -5310,7 +5313,7 @@ fn recordExports(program: *Program, stored_value_workers: []const WorkerId) Allo
 
         fn worker(self: @This(), id: WorkerId) Allocator.Error!void {
             const record = self.program.worker(id);
-            if (record.imported or !Program.exportableKind(record.key)) return;
+            if (record.imported or !record.lowered or !Program.exportableKind(record.key)) return;
             if (self.visible[@backingInt(id)]) return;
             self.visible[@backingInt(id)] = true;
             try self.pending.append(self.program.allocator, id);
@@ -5423,7 +5426,7 @@ fn recordExports(program: *Program, stored_value_workers: []const WorkerId) Allo
     const result_allocator = program.result.store.allocator;
     try program.result.boxy_exports.ensureTotalCapacity(result_allocator, @intCast(program.result.exported_procs.items.len));
     for (program.workers.items, visible) |worker, is_visible| {
-        if (worker.imported or !Program.exportableKind(worker.key)) continue;
+        if (worker.imported or !worker.lowered or !Program.exportableKind(worker.key)) continue;
         const template: collections.OptionalU32 = switch (worker.key) {
             .template => |key| .some(@backingInt(key.template)),
             .lambda, .method_entry, .default, .adapter, .structural, .structural_map, .root, .codec, .static_data, .inline_literal, .crash_dictionary, .convert, .literal_thunk, .root_slot, .root_restore, .callable_eval_entry => .none,
