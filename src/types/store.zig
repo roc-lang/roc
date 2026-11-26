@@ -5237,7 +5237,8 @@ test "sealing renumbers the variables above the canonical ones and what holders 
     const elem = try store.fresh();
     try store.union_(unnamed, elem, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
     try store.union_(held, elem, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
-    const other_unnamed = try store.freshRedirect(node);
+    // A redirect to the node that nothing names.
+    _ = try store.freshRedirect(node);
     // A constraint keeps its own function variable, a merged-away member.
     const fn_var = try store.fresh();
     const fn_class = try store.fresh();
@@ -5246,7 +5247,6 @@ test "sealing renumbers the variables above the canonical ones and what holders 
     const receiver = try store.freshFromContent(.{ .flex = Flex.init().withConstraints(constraints) });
     const list = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ elem, receiver }) } } });
     try store.union_(node, list, store.resolveVar(list).desc);
-    _ = other_unnamed;
 
     const elem_rep = store.resolveVar(elem).var_;
     var holders = TestSealHolders{ .raw = @backingInt(held), .typed = elem_rep, .constraint_index = @backingInt(constraints.start) };
