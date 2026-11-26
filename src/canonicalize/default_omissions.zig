@@ -156,9 +156,9 @@ pub fn aliasNamedLocalNominalDecl(env: *const ModuleEnv, alias_stmt: CIR.Stateme
     var steps_since_checkpoint: usize = 0;
     var steps_until_checkpoint: usize = 1;
     while (true) {
-        const anno_idx = switch (env.store.getStatement(current)) {
+        const anno_idx = switch (env.store.statementKind(current)) {
             .s_nominal_decl => return current,
-            .s_alias_decl => |alias| alias.anno,
+            .s_alias_decl => env.store.statementView(current).s_alias_decl.get(.anno),
             .s_decl,
             .s_var,
             .s_var_uninitialized,
@@ -220,8 +220,9 @@ fn statementOmittedDefaults(
 ) Iterator {
     const none = Iterator{ .env = env, .declared_fields = &.{}, .supplied = null };
     const declared = statementBackingRecordFields(env, decl) orelse return none;
-    switch (env.store.getExpr(backing_expr)) {
-        .e_record => |record| {
+    switch (env.store.exprKind(backing_expr)) {
+        .e_record => {
+            const record = env.store.exprView(backing_expr).e_record.decode();
             // A record UPDATE omits nothing: unmentioned fields come from
             // the base value, not from defaults.
             if (record.ext != null) return none;

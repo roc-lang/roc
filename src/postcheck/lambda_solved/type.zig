@@ -590,11 +590,11 @@ pub const Store = struct {
         fn_members: []const FnMember,
         declared_fields: []const DeclaredField,
 
-        pub fn get(self: View, id: TypeVarId) Content {
+        pub fn get(self: *const View, id: TypeVarId) Content {
             return contentOf(self.vars[@backingInt(id)], self.named_payloads, self.erased_payloads);
         }
 
-        pub fn root(self: View, id: TypeVarId) TypeVarId {
+        pub fn root(self: *const View, id: TypeVarId) TypeVarId {
             var current = id;
             while (true) {
                 switch (self.vars[@backingInt(current)]) {
@@ -604,31 +604,31 @@ pub const Store = struct {
             }
         }
 
-        pub fn rootContent(self: View, id: TypeVarId) Content {
+        pub fn rootContent(self: *const View, id: TypeVarId) Content {
             return self.get(self.root(id));
         }
 
-        pub fn span(self: View, span_: Span) []const TypeVarId {
+        pub fn span(self: *const View, span_: Span) []const TypeVarId {
             return self.spans[span_.start..][0..span_.len];
         }
 
-        pub fn fieldSpan(self: View, span_: Span) []const Field {
+        pub fn fieldSpan(self: *const View, span_: Span) []const Field {
             return self.fields[span_.start..][0..span_.len];
         }
 
-        pub fn tagSpan(self: View, span_: Span) []const Tag {
+        pub fn tagSpan(self: *const View, span_: Span) []const Tag {
             return self.tags[span_.start..][0..span_.len];
         }
 
-        pub fn captureSpan(self: View, span_: Span) []const Capture {
+        pub fn captureSpan(self: *const View, span_: Span) []const Capture {
             return self.captures[span_.start..][0..span_.len];
         }
 
-        pub fn memberSpan(self: View, span_: Span) []const FnMember {
+        pub fn memberSpan(self: *const View, span_: Span) []const FnMember {
             return self.fn_members[span_.start..][0..span_.len];
         }
 
-        pub fn declaredFieldSpan(self: View, span_: Span) []const DeclaredField {
+        pub fn declaredFieldSpan(self: *const View, span_: Span) []const DeclaredField {
             return self.declared_fields[span_.start..][0..span_.len];
         }
     };

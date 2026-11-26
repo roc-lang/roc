@@ -2951,10 +2951,8 @@ const repl_parse_diagnostic_needles = [_]OutputNeedle{
 };
 
 const format_needles = [_]OutputNeedle{
-    .{ .stream = .stderr, .text = "needs_formatting.roc" },
-    .{ .stream = .stdout, .text = "needs_formatting.roc" },
-    .{ .stream = .stderr, .text = "formatted" },
-    .{ .stream = .stdout, .text = "formatted" },
+    .{ .stream = .stdout, .text = "The following file(s) failed `roc fmt --check`:\n    " },
+    .{ .stream = .stdout, .text = "needs_formatting.roc\nYou can fix this with `roc fmt FILENAME.roc`.\nTook " },
 };
 
 const no_errors_needles = [_]OutputNeedle{
@@ -4416,7 +4414,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc repl string expression", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "\"hello\"\n", .contains = &.{.{ .stream = .stdout, .text = "hello" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc help contains Usage:", .body = .{ .command = .{ .args = &.{"help"}, .contains = &.{.{ .stream = .stdout, .text = "Usage:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc licenses contains =====", .body = .{ .command = .{ .args = &.{"licenses"}, .contains = &.{.{ .stream = .stdout, .text = "=====" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc fmt --check fails on unformatted file", .body = .{ .command = .{ .args = &.{ "fmt", "--check" }, .roc_file = "test/cli/needs_formatting.roc", .exit = .failure, .contains_any = &.{.{ .needles = &format_needles }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc fmt --check fails on unformatted file", .body = .{ .command = .{ .args = &.{ "fmt", "--check" }, .roc_file = "test/cli/needs_formatting.roc", .exit = .failure, .contains = &format_needles } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt --check succeeds on well-formatted file", .body = .{ .command = .{ .args = &.{ "fmt", "--check" }, .roc_file = "test/cli/well_formatted.roc" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt --check succeeds on expression break", .body = .{ .command = .{ .args = &.{ "fmt", "--check" }, .roc_file = "test/cli/BreakExpressionInLoop.roc" } } },
     .{ .id = 0, .suite = .subcommands, .name = "bidi source controls are rejected without formatting or execution", .body = .{ .custom = .bidi_source_security } },

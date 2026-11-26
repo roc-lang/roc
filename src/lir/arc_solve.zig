@@ -585,7 +585,7 @@ pub const Solution = struct {
     /// variant (`publishesOutcomeVariant`).
     pub fn outcomeSpanForCall(self: *const Solution, store: *const LirStore, caller: LIR.LirProcSpecId, callee: LIR.LirProcSpecId) arc_sig.OutcomeSpan {
         const index = @backingInt(callee);
-        if (index < self.stability_pinned.capacity() and self.stability_pinned.isSet(index) and store.getProcSpec(caller).code_key == null) return .empty;
+        if (index < self.stability_pinned.capacity() and self.stability_pinned.isSet(index) and store.getProcSpecImmediate(caller).code_key == null) return .empty;
         if (!sharesEmissionUnit(store, caller, callee) and !self.publishesOutcomeVariant(store, callee)) return .empty;
         return self.availableOutcomeSpanOf(callee);
     }
@@ -1985,7 +1985,7 @@ fn computeOutcomeRestitution(
                 // Every other statement continues along its flow edges with
                 // the state it leaves.
                 var successors: OutcomeSuccessors = .{ .stack = &stack, .allocator = allocator, .state = next_state };
-                body_clone.forEachSuccessor(store, stmt.*, .{ .switch_edges = .arms_only, .join_body = false }, &successors, OutcomeSuccessors.push);
+                body_clone.forEachSuccessor(store, stmt, .{ .switch_edges = .arms_only, .join_body = false }, &successors, OutcomeSuccessors.push);
                 if (successors.failure) |err| return err;
             }
             if (!valid) break;
@@ -8043,7 +8043,7 @@ test "ARC shared predicates have one definition across the ARC stage" {
 /// callee's solved base signature, except that it may demand an outcome
 /// variant the callee's object publishes (`Solution.outcomeSpanForCall`).
 pub fn sharesEmissionUnit(store: *const LirStore, caller: LIR.LirProcSpecId, callee: LIR.LirProcSpecId) bool {
-    return LIR.EmissionUnit.shares(store.getProcSpec(caller).emission_unit, store.getProcSpec(callee).emission_unit);
+    return LIR.EmissionUnit.shares(store.getProcSpecImmediate(caller).emission_unit, store.getProcSpecImmediate(callee).emission_unit);
 }
 
 test "uniqueness never treats a completed static list as a fresh allocation" {

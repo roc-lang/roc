@@ -413,12 +413,12 @@ pub fn exportRecords(gpa: Allocator, lowered: *const lir.CheckedPipeline.Lowered
     const records = try gpa.alloc(object_cache.ExportRecord, lowered.lir_result.exported_procs.items.len);
     errdefer gpa.free(records);
     for (lowered.lir_result.exported_procs.items, records) |proc, *record| {
-        const identity = procs.getProcSpec(proc).identity;
+        const identity = procs.getProcSpecImmediate(proc).identity;
         const boxy_export = lowered.lir_result.boxy_exports.get(identity) orelse
             base.invariant("an exported procedure has no export record of its unit", .{});
         const interface = try interfaces.putProc(procs, proc, lowered.lir_result.boxy_table_needs.get(identity) orelse &.{}, boxy_export);
         record.* = .{
-            .identity = procs.getProcSpec(proc).identity.bytes,
+            .identity = procs.getProcSpecImmediate(proc).identity.bytes,
             .rc_borrowed_params = interface.rc_borrowed_params,
             .rc_ret_lenders = interface.rc_ret_lenders,
             .rc_read_only_params = interface.rc_read_only_params,
@@ -780,7 +780,7 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     defer gpa.free(test_metadata);
     var lowered = try eval.CompileTimeFinalization.lowerBoxyRuntime(gpa, modules, .{ .requests = test_requests, .test_plan_metadata = test_metadata }, unit.config);
     defer lowered.deinit();
-    const module_digest = if (unit.test_unit) unit.config.boxy_unit.?.names.of(check.CheckedArtifact.importedView(unit.artifact)) else @as([32]u8, @splat(0));
+    const module_digest = if (unit.test_unit) unit.config.boxy_unit.?.names.of(&check.CheckedArtifact.importedView(unit.artifact)) else @as([32]u8, @splat(0));
     const test_modules = try gpa.alloc([32]u8, test_requests.len);
     defer gpa.free(test_modules);
     @memset(test_modules, module_digest);

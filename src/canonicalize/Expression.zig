@@ -694,6 +694,10 @@ pub const Expr = union(enum) {
 
     pub const LowLevel = base.LowLevel;
 
+    /// Which variant an expression is, without its fields. `NodeStore` reads it
+    /// from a node's tag alone.
+    pub const Kind = std.meta.Tag(@This());
+
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { span: DataSpan };
 

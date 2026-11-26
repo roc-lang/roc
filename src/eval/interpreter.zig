@@ -2443,7 +2443,7 @@ pub const Interpreter = struct {
             for (packs, frame_callables) |pack, *slot| {
                 storage_size = std.mem.alignForward(usize, storage_size, builtins.erased_callable.payload_alignment);
                 slot.* = .{ .stmt = pack, .offset = std.math.cast(u32, storage_size) orelse return error.OutOfMemory };
-                storage_size += self.frameCallableBytes(self.store.stmtRow(self.store.getCFStmt(pack).assign_packed_erased_fn.data));
+                storage_size += self.frameCallableBytes(self.store.stmtRow(self.store.getCFStmtImmediate(pack).assign_packed_erased_fn.data));
             }
         }
         entry.value_ptr.* = .{

@@ -82,8 +82,8 @@ pub const CheckedModules = struct {
     /// does before it reads any of their bodies.
     pub fn demandBodyIndexes(self: CheckedModules) std.mem.Allocator.Error!void {
         try self.root.module.bodies().demandIndex();
-        for (self.root.relation_modules) |view| try view.checked_bodies.demandIndex();
-        for (self.imports) |view| try view.checked_bodies.demandIndex();
+        for (self.root.relation_modules) |*view| try view.checked_bodies.demandIndex();
+        for (self.imports) |*view| try view.checked_bodies.demandIndex();
     }
 };
 

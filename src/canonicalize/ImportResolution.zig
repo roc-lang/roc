@@ -362,8 +362,8 @@ const Resolver = struct {
     /// (`Files : Resource.Files`) reaches the module it was declared in.
     fn followAlias(self: *const Resolver, other: *const ModuleEnv, node_idx: u32) ?DeclRef {
         const stmt_idx: Statement.Idx = @fromBackingInt(@intCast(node_idx));
-        const alias = switch (other.store.getStatement(stmt_idx)) {
-            .s_alias_decl => |decl| decl,
+        const alias = switch (other.store.statementKind(stmt_idx)) {
+            .s_alias_decl => other.store.statementView(stmt_idx).s_alias_decl.decode(),
             .s_nominal_decl,
             .s_where_alias_decl,
             .s_decl,
@@ -386,9 +386,9 @@ const Resolver = struct {
             .s_runtime_error,
             => return null,
         };
-        const anno_base = switch (other.store.getTypeAnno(alias.anno)) {
-            .lookup => |lookup| lookup.base,
-            .apply => |apply| apply.base,
+        const anno_base = switch (other.store.typeAnnoKind(alias.anno)) {
+            .lookup => other.store.typeAnnoView(alias.anno).lookup.get(.base),
+            .apply => other.store.typeAnnoView(alias.anno).apply.get(.base),
             .rigid_var,
             .rigid_var_lookup,
             .underscore,
@@ -477,7 +477,7 @@ const Resolver = struct {
             const head = path[0..dot];
             const item_text = path[dot + 1 ..];
             if (try self.exposedTypeNode(other, prefix, head)) |type_node_idx| {
-                if (other.store.getStatement(@fromBackingInt(@intCast(type_node_idx))) == .s_alias_decl) {
+                if (other.store.statementKind(@fromBackingInt(@intCast(type_node_idx))) == .s_alias_decl) {
                     return ValueTarget{ .associated = .{
                         .type_node_idx = type_node_idx,
                         .type_ident = try self.env.insertIdent(Ident.for_text(head)),
@@ -684,7 +684,7 @@ const Resolver = struct {
                 return false;
             break :owner .{ decl.env, decl.node_idx };
         } else .{ available.module_env, (try self.importMainTypeNode(available)) orelse return false };
-        switch (owner_env.store.getStatement(@fromBackingInt(@intCast(owner_node)))) {
+        switch (owner_env.store.statementKind(@fromBackingInt(@intCast(owner_node)))) {
             // An alias names the nominal type checking resolves it to.
             .s_nominal_decl, .s_alias_decl => {},
             .s_decl,
@@ -809,7 +809,7 @@ const Resolver = struct {
                 }
             },
             .expr_nominal, .pattern_nominal => {
-                switch (decl_env.store.getStatement(@fromBackingInt(@intCast(decl_node_idx)))) {
+                switch (decl_env.store.statementKind(@fromBackingInt(@intCast(decl_node_idx)))) {
                     // A construction through an alias names the nominal type
                     // checking resolves the alias to (design.md "Nominal
                     // Construction Through Aliases"). A declaration reached by
@@ -865,7 +865,7 @@ const Resolver = struct {
         switch (entry.kind) {
             .expr_nominal => {
                 const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(entry.node_idx));
-                const deferred = self.env.store.getExpr(expr_idx).e_deferred_import_ref;
+                const deferred = self.env.store.exprView(expr_idx).e_deferred_import_ref.decode();
                 const backing = deferred.backing orelse
                     return self.failEntry(entry, entry.not_found_failure);
                 try self.env.store.resolveDeferredExprToNominalExternal(
@@ -878,7 +878,7 @@ const Resolver = struct {
             },
             .pattern_nominal => {
                 const pattern_idx: CIR.Pattern.Idx = @fromBackingInt(@intCast(entry.node_idx));
-                const deferred = self.env.store.getPattern(pattern_idx).deferred_import_ref;
+                const deferred = self.env.store.patternView(pattern_idx).deferred_import_ref.decode();
                 try self.env.store.resolveDeferredPatternToNominalExternal(
                     pattern_idx,
                     module,
@@ -1202,8 +1202,8 @@ const Resolver = struct {
 /// public declaration, or null when the import names the whole module.
 fn selectedPrefix(other: *const ModuleEnv, selected: ?Statement.Idx) ?[]const u8 {
     const stmt_idx = selected orelse return null;
-    const header_idx = switch (other.store.getStatement(stmt_idx)) {
-        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |decl| decl.header,
+    const header_idx = switch (other.store.statementKind(stmt_idx)) {
+        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |kind| @field(other.store.statementView(stmt_idx), @tagName(kind)).get(.header),
         .s_decl,
         .s_var,
         .s_var_uninitialized,

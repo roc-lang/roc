@@ -86,6 +86,10 @@ pub const TypeAnno = union(enum) {
         diagnostic: CIR.Diagnostic.Idx, // The error that occurred
     },
 
+    /// Which variant a type annotation is, without its fields. `NodeStore` reads it
+    /// from a node's tag alone.
+    pub const Kind = std.meta.Tag(@This());
+
     pub const Idx = enum(u32) {
         /// A declaration whose annotation has not been set: the forward
         /// placeholder a reference creates ahead of its declaration. Zero is

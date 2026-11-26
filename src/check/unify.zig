@@ -5765,7 +5765,7 @@ pub const Scratch = struct {
 
     // Reusable formal->actual substitution map for the nominal-vs-structural
     // lift's declaration-backed opening operation.
-    open_var_map: collections.DenseMap(types_mod.Var, types_mod.Var),
+    open_var_map: collections.EpochMap(types_mod.Var, types_mod.Var),
 
     // Memo of declaration openings performed during the CURRENT unify call:
     // one instantiated backing per (declaration, resolved arg roots). Without
@@ -5931,7 +5931,7 @@ pub const Scratch = struct {
             .b_static_dispatch_constraint_indices = try MkSafeList(u32).initCapacity(gpa, 32),
             .occurs_scratch = try occurs.Scratch.init(gpa),
             .visited_vars = try VarSafeList.initCapacity(gpa, 16),
-            .open_var_map = collections.DenseMap(types_mod.Var, types_mod.Var).init(gpa),
+            .open_var_map = collections.EpochMap(types_mod.Var, types_mod.Var).init(gpa),
             .opened_nominals = .empty,
             .opened_nominal_persistable = .empty,
             .chain_duplicate_fields = .empty,
