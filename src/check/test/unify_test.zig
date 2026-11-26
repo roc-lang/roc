@@ -559,6 +559,42 @@ test "issue 13105: a producer met through a shared row extension is journaled fo
     try std.testing.expect(try journalsPatternOnlyTagCopy(&env, errors, requirement, "Gone"));
 }
 
+test "member demand - growing a row leaves its observed suffix intact" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const store = &env.module_env.types;
+    const initial = try env.mkTagUnionOpen(&.{try env.mkTag("Z", &.{})});
+    const root = try store.freshFromContent(initial.content);
+    const observed_tail = initial.tag_union.ext;
+    for ([_][]const u8{ "D", "A", "C", "B" }) |label| {
+        var tag = try env.mkTag(label, &.{});
+        tag.pattern_only = true;
+        const demand = try env.mkTagUnionOpen(&.{tag});
+        const pattern = try store.freshFromContent(demand.content);
+        try std.testing.expectEqual(.unified, try env.unifyWithOptions(root, pattern, .{ .member_tail = demand.tag_union.ext }));
+        try std.testing.expectEqual(store.resolveDescIdx(root), store.resolveDescIdx(pattern));
+    }
+    const suffix = try env.mkTagUnionClosed(&.{
+        try env.mkTag("A", &.{}), try env.mkTag("B", &.{}), try env.mkTag("C", &.{}), try env.mkTag("D", &.{}),
+    });
+    try std.testing.expectEqual(.unified, try env.unify(observed_tail, try store.freshFromContent(suffix.content)));
+    const extra = try env.mkTagUnionOpen(&.{try env.mkTag("Extra", &.{})});
+    try std.testing.expect((try env.unifyWithOptions(root, try store.freshFromContent(extra.content), .{ .member_tail = extra.tag_union.ext })).isProblem());
+}
+
+test "member demand - an observable tail gets the exact complement" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const store = &env.module_env.types;
+    const whole = try env.mkTagUnionClosed(&.{ try env.mkTag("A", &.{}), try env.mkTag("B", &.{}) });
+    const open = try env.mkTagUnionOpen(&.{try env.mkTag("A", &.{})});
+    // No private-tail evidence: a client of this relation can read `rest`.
+    const rest = open.tag_union.ext;
+    try std.testing.expectEqual(.unified, try env.unify(try store.freshFromContent(whole.content), try store.freshFromContent(open.content)));
+    const just_b = try env.mkTagUnionClosed(&.{try env.mkTag("B", &.{})});
+    try std.testing.expectEqual(.unified, try env.unify(rest, try store.freshFromContent(just_b.content)));
+}
+
 test "unify - both rows' unique pattern-only tags are journaled against the part each extension becomes" {
     var env = try TestEnv.init(std.testing.allocator);
     defer env.deinit();
@@ -3508,7 +3544,7 @@ const DeclaringModule = struct {
 };
 
 fn copyIntoConsumer(consumer: *TestEnv, source: *DeclaringModule, var_: Var) std.mem.Allocator.Error!Var {
-    var var_mapping = @import("collections").DenseMap(Var, Var).init(consumer.module_env.gpa);
+    var var_mapping = @import("collections").EpochMap(Var, Var).init(consumer.module_env.gpa);
     defer var_mapping.deinit();
     return try copy_import.copyVar(
         &source.env.types,
@@ -3535,7 +3571,7 @@ test "cross-module copy substitutes exact source vars without conflating equal r
     const source_tuple = try source.module_env.types.freshFromContent(try source.mkTuple(&.{ substituted_source, copied_source }));
 
     const replacement = try consumer.module_env.types.freshFromContent(.{ .structure = .empty_record });
-    var var_mapping = @import("collections").DenseMap(Var, Var).init(gpa);
+    var var_mapping = @import("collections").EpochMap(Var, Var).init(gpa);
     defer var_mapping.deinit();
     try var_mapping.put(substituted_source, replacement);
 
@@ -3599,7 +3635,7 @@ test "cross-module copy substitutes every application of an explicit alias decla
     );
 
     const replacement = try consumer.module_env.types.freshFromContent(.{ .structure = .empty_record });
-    var var_mapping = @import("collections").DenseMap(Var, Var).init(gpa);
+    var var_mapping = @import("collections").EpochMap(Var, Var).init(gpa);
     defer var_mapping.deinit();
     var alias_source_mapping = std.AutoHashMap(copy_import.AliasSource, Var).init(gpa);
     defer alias_source_mapping.deinit();

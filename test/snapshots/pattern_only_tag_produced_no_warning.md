@@ -394,7 +394,7 @@ main! = |_args| {
 			(e-match
 				(match
 					(cond
-						(e-call (constraint-fn-var 407)
+						(e-call (constraint-fn-var 403)
 							(e-lookup-local
 								(p-assign (ident "f")))
 							(e-empty_record)))
@@ -432,10 +432,10 @@ main! = |_args| {
 						(e-match
 							(match
 								(cond
-									(e-call (constraint-fn-var 433)
+									(e-call (constraint-fn-var 429)
 										(e-lookup-local
 											(p-assign (ident "countdown")))
-										(e-dispatch-call (method "minus") (constraint-fn-var 431)
+										(e-dispatch-call (method "minus") (constraint-fn-var 427)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "n"))))
@@ -462,7 +462,7 @@ main! = |_args| {
 			(e-match
 				(match
 					(cond
-						(e-dispatch-call (method "kind") (constraint-fn-var 459)
+						(e-dispatch-call (method "kind") (constraint-fn-var 455)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "x"))))
@@ -519,10 +519,10 @@ main! = |_args| {
 				(p-assign (ident "_args")))
 			(e-block
 				(s-expr
-					(e-call (constraint-fn-var 514)
+					(e-call (constraint-fn-var 510)
 						(e-lookup-local
 							(p-assign (ident "echo!")))
-						(e-call (constraint-fn-var 513)
+						(e-call (constraint-fn-var 509)
 							(e-lookup-local
 								(p-assign (ident "describe_mode")))
 							(e-empty_record))))

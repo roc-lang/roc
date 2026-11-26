@@ -1044,6 +1044,9 @@ var debug_allocator: std.heap.DebugAllocator(.{ .stack_trace_frames = build_opti
     .backing_allocator = std.heap.page_allocator,
 };
 
+/// In a Debug build, the wrapper over `debug_allocator` that makes stale borrows fail.
+var stale_borrow_allocator: if (base.StaleBorrowAllocator.available) base.StaleBorrowAllocator else void = undefined;
+
 fn renderValidationError(
     ctx: *CliCtx,
     result: platform_validation.ValidationResult,
@@ -1082,8 +1085,9 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
     var gpa, const is_safe = gpa: {
         // Debug builds use the leak-checking debug allocator; -Ddebug-gpa forces it
-        // in release builds too (e.g. to leak-check a ReleaseSafe binary). Everything
-        // else uses the fast target allocator—see base.defaultGpa.
+        // in release builds too (e.g. to leak-check a ReleaseSafe binary). A Debug
+        // build also wraps it in base.StaleBorrowAllocator. Everything else uses
+        // the fast target allocator—see base.defaultGpa.
         const use_debug_allocator = builtin.os.tag != .freestanding and
             (builtin.mode == .debug or build_options.debug_gpa);
         if (use_debug_allocator) {
@@ -1094,12 +1098,17 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
             if (builtin.link_libc and std.valgrind.runningOnValgrind() != 0) {
                 break :gpa .{ std.heap.c_allocator, false };
             }
+            if (base.StaleBorrowAllocator.available) {
+                stale_borrow_allocator = .init(debug_allocator.allocator(), .{});
+                break :gpa .{ stale_borrow_allocator.allocator(), true };
+            }
             break :gpa .{ debug_allocator.allocator(), true };
         }
         break :gpa .{ base.defaultGpa(), false };
     };
     defer restoreWindowsConsoleCodePage();
     defer if (is_safe) {
+        if (base.StaleBorrowAllocator.available) stale_borrow_allocator.flush();
         std.debug.assert(build_options.debugGpaOk(debug_allocator.deinit()));
     };
 
@@ -19137,17 +19146,17 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
 
         elapsed = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - timer_start_ns));
         if (unformatted_files.items.len > 0) {
-            try stdout.print("The following file(s) failed `roc fmt --check`:", .{});
+            try stdout.print("The following file(s) failed `roc fmt --check`:\n", .{});
             for (unformatted_files.items) |file_name| {
                 try stdout.print("    {f}\n", .{base.bidi.Display{ .bytes = try ctx.displayPath(file_name) }});
             }
-            try stdout.print("You can fix this with `roc fmt FILENAME.roc`.", .{});
+            try stdout.print("You can fix this with `roc fmt FILENAME.roc`.\n", .{});
             had_errors = true;
         } else if (failure_count == 0) {
             try stdout.print("All formatting valid.\n", .{});
         }
         if (failure_count > 0) {
-            try stdout.print("Failed to check {} files.", .{failure_count});
+            try stdout.print("Failed to check {} files.\n", .{failure_count});
             had_errors = true;
         }
     } else {

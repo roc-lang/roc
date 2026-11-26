@@ -2969,10 +2969,8 @@ const repl_parse_diagnostic_needles = [_]OutputNeedle{
 };
 
 const format_needles = [_]OutputNeedle{
-    .{ .stream = .stderr, .text = "needs_formatting.roc" },
-    .{ .stream = .stdout, .text = "needs_formatting.roc" },
-    .{ .stream = .stderr, .text = "formatted" },
-    .{ .stream = .stdout, .text = "formatted" },
+    .{ .stream = .stdout, .text = "The following file(s) failed `roc fmt --check`:\n    " },
+    .{ .stream = .stdout, .text = "needs_formatting.roc\nYou can fix this with `roc fmt FILENAME.roc`.\nTook " },
 };
 
 const no_errors_needles = [_]OutputNeedle{
@@ -4440,7 +4438,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc repl string expression", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "\"hello\"\n", .contains = &.{.{ .stream = .stdout, .text = "hello" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc help contains Usage:", .body = .{ .command = .{ .args = &.{"help"}, .contains = &.{.{ .stream = .stdout, .text = "Usage:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc licenses contains =====", .body = .{ .command = .{ .args = &.{"licenses"}, .contains = &.{.{ .stream = .stdout, .text = "=====" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc fmt --check fails on unformatted file", .body = .{ .command = .{ .args = &.{ "fmt", "--check" }, .roc_file = "test/cli/needs_formatting.roc", .exit = .failure, .contains_any = &.{.{ .needles = &format_needles }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc fmt --check fails on unformatted file", .body = .{ .command = .{ .args = &.{ "fmt", "--check" }, .roc_file = "test/cli/needs_formatting.roc", .exit = .failure, .contains = &format_needles } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt --check succeeds on well-formatted file", .body = .{ .command = .{ .args = &.{ "fmt", "--check" }, .roc_file = "test/cli/well_formatted.roc" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt --check succeeds on expression break", .body = .{ .command = .{ .args = &.{ "fmt", "--check" }, .roc_file = "test/cli/BreakExpressionInLoop.roc" } } },
     .{ .id = 0, .suite = .subcommands, .name = "bidi source controls are rejected without formatting or execution", .body = .{ .custom = .bidi_source_security } },
@@ -5024,6 +5022,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11162: pre-sized Dict inserts stay unique across a closure (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_dict_insert_closure.roc", .contains = &.{.{ .stream = .stderr, .text = "entries: 1016, closure insert allocations: 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12216: a fold state record holding a List and a Dict inserts in place (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_record_fold_dict.roc", .contains = &.{.{ .stream = .stderr, .text = "entries: 1016, record fold insert allocations: 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12216: a fold state record holding a List and a Dict inserts in place (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_record_fold_dict.roc", .contains = &.{.{ .stream = .stderr, .text = "entries: 1016, record fold insert allocations: 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "record-owned Dict: issue 13376 statement and parameter patterns transfer the same fields as match", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_record_pattern_dict.roc", .contains = &.{.{ .stream = .stderr, .text = "versions 18; allocations: statement 0, parameter 0, match 0" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "record-owned Dict: issue 13377 a nominal bag updates both preallocated dictionaries in place", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_nominal_dict_update.roc", .contains = &.{.{ .stream = .stderr, .text = "lengths correct: True; allocations: 0" }} } } },
     // Specialized: under `.boxy` `apply` calls its function argument through an
     // erased call in tail position, which is deferred, and its argument block
     // (a record of two Dicts) is larger than a pending cell holds, so it is
