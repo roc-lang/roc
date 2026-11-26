@@ -1000,9 +1000,6 @@ pub const Program = struct {
     /// evaluates later from (`rootValueSlot`), by root.
     root_value_slots: std.AutoHashMapUnmanaged(RootSlotKey, LIR.StaticDataId) = .empty,
     stored_value_slots: std.AutoHashMapUnmanaged(StoredValueKey, LIR.StaticDataId) = .empty,
-    /// Whether each stored node of a module is data alone
-    /// (`storedDataAlone`), by node, for the modules asked about.
-    stored_data_alone: std.AutoHashMapUnmanaged(ModuleIndex, std.ArrayList(DataAlone)) = .empty,
     /// The static data slot each value-form expression a body keeps reads
     /// (`inlineLiteralSlot`), by the expression's initializer worker.
     inline_literal_slots: collections.DenseMapUnmanaged(WorkerId, LIR.StaticDataId) = .empty,
@@ -1715,9 +1712,6 @@ pub const Program = struct {
         self.platform_identities.deinit(self.allocator);
         self.root_value_slots.deinit(self.allocator);
         self.stored_value_slots.deinit(self.allocator);
-        var data_alone_tables = self.stored_data_alone.valueIterator();
-        while (data_alone_tables.next()) |table| table.deinit(self.allocator);
-        self.stored_data_alone.deinit(self.allocator);
         self.inline_literal_slots.deinit(self.allocator);
         self.requested_roots.deinit(self.allocator);
         if (self.constant_instances) |*instances| instances.deinit(self.allocator);
@@ -1743,83 +1737,6 @@ pub const Program = struct {
         return switch (source) {
             .module => |index| self.module(index).view.const_store,
         };
-    }
-
-    /// What is known of a stored node (`storedDataAlone`).
-    pub const DataAlone = enum(u8) { unknown, yes, no };
-
-    /// Whether stored constant `node` of `source` is data alone: neither it
-    /// nor any value it holds is a function value or a failed value. Static
-    /// data freezes such a value from the store through its type's const
-    /// plan (`LirProgram.StoredStaticValue`), so it is one slot whatever it
-    /// holds. Every node the question visits is answered once per lowering.
-    pub fn storedDataAlone(self: *Program, source: ConstSource, node: checked.ConstNodeId) Allocator.Error!bool {
-        const const_store = self.constStore(source);
-        // The producer stored a value that is data alone as an image.
-        if (const_store.imageOf(node) != null) return true;
-        const entry = try self.stored_data_alone.getOrPut(self.allocator, switch (source) {
-            .module => |index| index,
-        });
-        if (!entry.found_existing) entry.value_ptr.* = .empty;
-        const table = entry.value_ptr;
-        const known = table.items.len;
-        if (known < const_store.nodeCount()) {
-            try table.resize(self.allocator, const_store.nodeCount());
-            @memset(table.items[known..], .unknown);
-        }
-        const answers = table.items;
-        if (answers[@backingInt(node)] != .unknown) return answers[@backingInt(node)] == .yes;
-
-        const Frame = struct { node: checked.ConstNodeId, next: usize = 0 };
-        var frames: std.ArrayList(Frame) = .empty;
-        defer frames.deinit(self.allocator);
-        try frames.append(self.allocator, .{ .node = node });
-        while (frames.items.len != 0) {
-            const frame = &frames.items[frames.items.len - 1];
-            var single: [1]checked.ConstNodeId = undefined;
-            const children: ?[]const checked.ConstNodeId = switch (const_store.get(frame.node)) {
-                .pending => invariant("a stored constant was never filled"),
-                .image, .crash, .checked_error, .fn_value, .boxy_fn => null,
-                .zst, .scalar, .str => &.{},
-                .box => |child| blk: {
-                    single[0] = child;
-                    break :blk &single;
-                },
-                .nominal => |nominal| blk: {
-                    single[0] = nominal.backing;
-                    break :blk &single;
-                },
-                .tuple, .record => |items| items,
-                .tag => |tag| tag.payloads,
-                .list => |list| switch (list.items) {
-                    .nodes => |items| items,
-                    .empty, .packed_bytes => &.{},
-                },
-            };
-            var answer: DataAlone = if (children == null) .no else .yes;
-            var unanswered: ?checked.ConstNodeId = null;
-            if (children) |items| while (frame.next < items.len) {
-                const child = items[frame.next];
-                switch (answers[@backingInt(child)]) {
-                    .yes => frame.next += 1,
-                    .no => {
-                        answer = .no;
-                        break;
-                    },
-                    .unknown => {
-                        unanswered = child;
-                        break;
-                    },
-                }
-            };
-            if (unanswered) |child| {
-                try frames.append(self.allocator, .{ .node = child });
-                continue;
-            }
-            answers[@backingInt(frame.node)] = answer;
-            _ = frames.pop();
-        }
-        return answers[@backingInt(node)] == .yes;
     }
 
     /// The names `source`'s stored types intern.
@@ -5168,7 +5085,7 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
             .reserved, .stored_const, .unimplemented => {},
         };
         for (templates, 0..) |template, index| {
-            if (!try unitEmitsTemplate(program, view, template, forwarded_roots, const_entries[index])) continue;
+            if (!unitEmitsTemplate(view, template, forwarded_roots, const_entries[index])) continue;
             if (try templateRejected(program, view, template)) continue;
             const worker = try program.templateWorker(view.index, @fromBackingInt(@intCast(index)));
             _ = try program.methodEntryWorker(worker);
@@ -5385,13 +5302,13 @@ fn templateRejected(program: *Program, view: *const types.ModuleView, template: 
 /// design.md "Literal Arguments"); and a validation root has no value for
 /// any body to read.
 /// Exact procedure aliases forward to their targets without evaluator wrappers.
-/// A constant whose stored value is data alone has no caller of its wrapper
-/// either: every read restores the stored value where it reads, so the
-/// wrapper is emitted only while a constant's template names it as its entry
-/// procedure (`const_entry`). A stored function value's wrapper stays: its
+/// A constant whose stored value is data alone (an image, design.md "Stored
+/// Images") has no caller of its wrapper either: every read restores the
+/// stored value where it reads, so the wrapper is emitted only while a
+/// constant's template names it as its entry procedure (`const_entry`). A stored function value's wrapper stays: its
 /// restore is what lowers the workers the value names, which other objects
 /// link against.
-fn unitEmitsTemplate(program: *Program, view: *const types.ModuleView, template: checked.CheckedProcedureTemplate, forwarded_roots: []const bool, const_entry: bool) Allocator.Error!bool {
+fn unitEmitsTemplate(view: *const types.ModuleView, template: checked.CheckedProcedureTemplate, forwarded_roots: []const bool, const_entry: bool) bool {
     return switch (template.body) {
         .checked_body, .intrinsic_wrapper, .unimplemented => true,
         .entry_wrapper => |wrapper_id| blk: {
@@ -5401,7 +5318,7 @@ fn unitEmitsTemplate(program: *Program, view: *const types.ModuleView, template:
             break :blk switch (root.kind) {
                 .expect, .repl_expr, .interpolation_conversion, .hoisted_validation, .numeral_conversion, .quote_conversion => false,
                 .constant, .hoisted_constant => const_entry or switch (root.payloadFor(.boxy)) {
-                    .const_node => |node| !try program.storedDataAlone(.{ .module = view.index }, node),
+                    .const_node => |node| view.view.const_store.imageOf(node) == null,
                     .fn_value, .pending, .unevaluated, .discarded, .expect, .runtime => true,
                 },
                 .callable_binding, .literal_argument => true,

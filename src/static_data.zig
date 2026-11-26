@@ -408,9 +408,6 @@ const StaticInitializerMachine = struct {
     /// stored value lives in the value that holds it, and is written again
     /// for each holder.
     stored_values: std.AutoHashMapUnmanaged(StoredValueKey, *SymbolicValue),
-    /// The packed-data copy plan of each element layout a stored packed list
-    /// is frozen at.
-    packed_plans: std.AutoHashMapUnmanaged(layout.Idx, lir.PackedData.Plan),
     target_usize: @import("base").target.TargetUsize,
     word_size: u32,
     allocations: std.ArrayList(*SymbolicAllocation),
@@ -467,7 +464,6 @@ const StaticInitializerMachine = struct {
             .lowered = lowered,
             .modules = modules,
             .stored_values = .empty,
-            .packed_plans = .empty,
             .target_usize = target_usize,
             .word_size = target_usize.size(),
             .allocations = .empty,
@@ -481,8 +477,6 @@ const StaticInitializerMachine = struct {
     }
 
     fn deinit(self: *StaticInitializerMachine) void {
-        var plans = self.packed_plans.valueIterator();
-        while (plans.next()) |plan| plan.deinit();
         for (self.allocations.items) |allocation| {
             if (allocation.node) |node| self.arena.child_allocator.free(node);
         }
@@ -755,7 +749,7 @@ const StaticInitializerMachine = struct {
         var pending: std.ArrayList(StoredWrite) = .empty;
         defer pending.deinit(self.allocator());
         try pending.append(self.allocator(), .{ .dest = root, .offset = 0, .request = .{ .node = stored.node, .plan = stored.plan, .layout_idx = value_layout } });
-        while (pending.pop()) |write| try self.writeStored(&pending, store_, write);
+        while (pending.pop()) |write| try self.writeStored(&pending, stored.module, store_, write);
         return root;
     }
 
@@ -1175,7 +1169,18 @@ const StaticInitializerMachine = struct {
     /// written into theirs. A node that owns an allocation (`sharesStored`)
     /// is frozen once: its descriptor is remembered when its allocation is
     /// made, and every later reader copies that descriptor.
-    fn writeStored(self: *StaticInitializerMachine, pending: *std.ArrayList(StoredWrite), store_: *const Checked.ConstStore, write: StoredWrite) MaterializationError!void {
+    fn writeStored(self: *StaticInitializerMachine, pending: *std.ArrayList(StoredWrite), module: Checked.ModuleId, store_: *const Checked.ConstStore, write: StoredWrite) MaterializationError!void {
+        // A part holding no function is stored as an image of its own,
+        // frozen as a root's image is (`freezeStored`).
+        if (store_.imageOf(write.request.node)) |image| {
+            const value_layout = self.layoutValue(write.request.layout_idx);
+            if (value_layout.tag == .zst) return;
+            const value = if (self.word_size == check.ConstStore.image_word_size and try self.sameLayout(write.request.layout_idx, store_.image(image).layout_digest))
+                try self.freezeImage(store_, image, write.request.layout_idx)
+            else
+                try self.reencodeImage(module, store_, image, write.request.plan, write.request.layout_idx);
+            return try self.copyInto(write.dest, write.offset, value, self.layouts().layoutSize(value_layout));
+        }
         const request = self.unwrapStoredNominal(store_, write.request);
         const value_layout = self.layoutValue(request.layout_idx);
         if (value_layout.tag == .zst) return;
@@ -1217,7 +1222,6 @@ const StaticInitializerMachine = struct {
                 };
                 const value = switch (list.items) {
                     .empty => try self.storedListValue(request.layout_idx, 0, list.capacity, null),
-                    .packed_bytes => |packed_list| try self.storedPackedList(store_, packed_list, list.capacity, request.layout_idx),
                     .nodes => |items| nodes: {
                         const descriptor = try self.storedListValue(request.layout_idx, items.len, list.capacity, null);
                         const abi = self.layouts().builtinListAbi(request.layout_idx);
@@ -1624,26 +1628,6 @@ const StaticInitializerMachine = struct {
     }
 
     /// A packed list: its canonical item bytes laid out at the element layout.
-    fn storedPackedList(self: *StaticInitializerMachine, store_: *const Checked.ConstStore, packed_list: check.ConstStore.ConstPackedList, capacity: u64, layout_idx: layout.Idx) Allocator.Error!*SymbolicValue {
-        const len: usize = packed_list.len;
-        const result = try self.storedListValue(layout_idx, len, capacity, null);
-        const abi = self.layouts().builtinListAbi(layout_idx);
-        if (len == 0 or abi.elem_size == 0) return result;
-        const elem_layout = abi.elem_layout_idx orelse staticDataInvariant("non-ZST stored packed list had no element layout");
-        const entry = try self.packed_plans.getOrPut(self.allocator(), elem_layout);
-        if (!entry.found_existing) entry.value_ptr.* = try lir.PackedData.Plan.init(self.lowered.lir_result.store.allocator, self.layouts(), elem_layout);
-        const plan = entry.value_ptr;
-        const canonical = store_.strBytes(packed_list.bytes);
-        if (canonical.len != len * plan.packed_width or plan.memory_width != abi.elem_size) staticDataInvariant("stored packed list disagreed with its element layout");
-        const allocation = try self.addAllocation(elem_layout, abi.elem_size * len, abi.elem_alignment, false, null);
-        plan.decode(allocation.payload.bytes, canonical, len);
-        try result.relocations.append(self.allocator(), .{
-            .offset = 0,
-            .target = .{ .allocation = allocation.id },
-        });
-        return result;
-    }
-
     fn readFrozenValue(self: *StaticInitializerMachine, symbol: StaticDataSymbolId, value_layout: layout.Idx) MaterializationError!*SymbolicValue {
         const source = self.lowered.frozen_static_data.?.exports[@backingInt(symbol)];
         return self.readFrozenRange(symbol, value_layout, source.symbol_offset, self.layouts().layoutSize(self.layoutValue(value_layout)));

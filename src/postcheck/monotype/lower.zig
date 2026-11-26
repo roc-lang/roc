@@ -5860,6 +5860,9 @@ const StaticDataSource = union(enum) {
         node: checked.ConstNodeId,
         checked_type: checked.CheckedTypeId,
     },
+    /// A part holding no function of a stored value holding one, stored as
+    /// an image of its own (`restoredImagePart`).
+    stored_image: Ast.StoredImageStaticData,
     inline_literal: Ast.InlineLiteralStaticData,
 
     fn eql(a: StaticDataSource, b: StaticDataSource) bool {
@@ -5868,10 +5871,14 @@ const StaticDataSource = union(enum) {
                 .stored => |right| moduleBytesEqual(left.module.bytes, right.module.bytes) and
                     left.node == right.node and
                     left.checked_type == right.checked_type,
-                .inline_literal => false,
+                .stored_image, .inline_literal => false,
+            },
+            .stored_image => |left| switch (b) {
+                .stored_image => |right| moduleBytesEqual(left.module.bytes, right.module.bytes) and left.node == right.node,
+                .stored, .inline_literal => false,
             },
             .inline_literal => |left| switch (b) {
-                .stored => false,
+                .stored, .stored_image => false,
                 .inline_literal => |right| moduleBytesEqual(left.module.bytes, right.module.bytes) and left.expr == right.expr,
             },
         };
@@ -6458,8 +6465,6 @@ const Builder = struct {
     /// lowering module.
     static_data_eligibility: collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers),
     /// Whether each stored node's value is data alone
-    /// (`constNodeIsStoredData`), by lowering module.
-    stored_data: collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers),
     hosted_catalog: []HostedCatalogEntry = &.{},
     /// Exact `(owner, method)` -> target map over every reachable module's
     /// method registry, for compiler-generated component lookups (structural
@@ -6621,7 +6626,6 @@ const Builder = struct {
             .static_data_ids = std.AutoHashMap(StaticDataUse, Common.StaticDataId).init(allocator),
             .static_data_uses = .empty,
             .static_data_eligibility = collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers).init(allocator),
-            .stored_data = collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers).init(allocator),
             .evidence_arena = base.SingleThreadArena.init(allocator),
             .const_evidence_memo = std.AutoHashMap(ConstEvidenceMemoKey, StoredConstFnEvidence).init(allocator),
             .const_evidence_by_content = std.AutoHashMap(u64, StoredConstFnEvidence).init(allocator),
@@ -6871,7 +6875,7 @@ const Builder = struct {
         self.method_targets.deinit(self.allocator);
         self.inspect_overrides.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
-        for ([_]*collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers){ &self.static_data_eligibility, &self.stored_data }) |tables| {
+        for ([_]*collections.DenseMap(Common.LoweringModuleId, ConstNodeAnswers){&self.static_data_eligibility}) |tables| {
             var answers = tables.valueIterator();
             while (answers.next()) |table| table.deinit(self.allocator);
             tables.deinit();
@@ -13074,6 +13078,7 @@ const Builder = struct {
                     .node = root.node,
                     .checked_type = root.checked_type,
                 } },
+                .stored_image => |image| .{ .stored_image = image },
                 .inline_literal => |literal| .{ .inline_literal = literal },
             },
             .ty = ty,
@@ -13145,8 +13150,6 @@ const Builder = struct {
             /// The value has a static data representation that post-check
             /// specialization cannot change (`constNodeHasStableStaticDataRepresentation`).
             stable_static_data,
-            /// The value is data alone (`constNodeIsStoredData`).
-            stored_data,
         };
 
         const Eval = collections.AnyAll.Evaluation(checked.ConstNodeId, ConstNodeProperty);
@@ -13156,7 +13159,6 @@ const Builder = struct {
         fn init(builder: *Builder, view: ModuleView, property: Property) Allocator.Error!ConstNodeProperty {
             const tables = switch (property) {
                 .stable_static_data => &builder.static_data_eligibility,
-                .stored_data => &builder.stored_data,
             };
             const entry = try tables.getOrPut(view.lowering_module orelse
                 Common.invariant("checked module view was read before its lowering module id was seeded"));
@@ -13195,11 +13197,9 @@ const Builder = struct {
                         }
                         break :blk null;
                     },
-                    .stored_data => false,
                 },
                 .crash, .checked_error => switch (self.property) {
                     .stable_static_data => true,
-                    .stored_data => false,
                 },
                 .zst, .scalar, .str => true,
                 .box => |child| blk: {
@@ -13207,7 +13207,7 @@ const Builder = struct {
                     break :blk null;
                 },
                 .list => |list| switch (list.items) {
-                    .packed_bytes, .empty => true,
+                    .empty => true,
                     .nodes => |children| blk: {
                         // An item stored as the item before it adds nothing
                         // to the conjunction: a list of copies of one value
@@ -13257,39 +13257,12 @@ const Builder = struct {
     };
 
     /// The shape of `node`'s value when static data freezes it straight from
-    /// its node: a list whose items are data alone (`constNodeIsStoredData`)
-    /// and are stored as nodes, or that has spare capacity, which only its
-    /// node records. Null for any other value, including the empty and
-    /// packed lists without spare capacity, which restore as literals.
-    fn storedListShape(self: *Builder, view: ModuleView, node: checked.ConstNodeId) Allocator.Error!?StoredListShape {
-        // A value stored as an image is frozen from its image, whatever it
-        // holds (design.md "Stored Images").
-        if (view.const_store.imageOf(node)) |image| return .{ .item_count = imageListLen(view.const_store, image) };
-        const list = switch (view.const_store.get(node)) {
-            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-            .image => Common.invariant("a stored image reached a ConstStore node restore"),
-            .list => |list| list,
-            .pending => Common.invariant("pending ConstStore node reached stored list selection"),
-            .zst, .scalar, .str, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => return null,
-        };
-        const item_count = list.items.len();
-        switch (list.items) {
-            .nodes => if (item_count == 0) return null,
-            .empty, .packed_bytes => if (list.capacity == item_count) return null,
-        }
-        if (!try self.constNodeIsStoredData(view, node)) return null;
-        return .{ .item_count = @intCast(item_count) };
-    }
-
-    /// Whether everything `node`'s value reaches is data: no function value,
-    /// whose code a program must specialize, and no crash or checked error,
-    /// which a program must raise where the value is read. Such a value has
-    /// one target representation at a layout, which static data writes from
-    /// the stored nodes alone. Memoized per node over explicit `ConstStore`
-    /// edges.
-    fn constNodeIsStoredData(self: *Builder, view: ModuleView, node: checked.ConstNodeId) Allocator.Error!bool {
-        var walk = try ConstNodeProperty.init(self, view, .stored_data);
-        return try ConstNodeProperty.Eval.run(self.allocator, &walk, node);
+    /// the store: a value stored as an image, which is data alone (design.md
+    /// "Stored Images"). Null for any other value: one stored as nodes holds
+    /// a function.
+    fn storedListShape(_: *Builder, view: ModuleView, node: checked.ConstNodeId) Allocator.Error!?StoredListShape {
+        const image = view.const_store.imageOf(node) orelse return null;
+        return .{ .item_count = imageListLen(view.const_store, image) };
     }
 
     fn constValueMayUseStaticDataCandidate(_: *Builder, view: ModuleView, value_in: checked.ConstValue) bool {
@@ -18199,11 +18172,13 @@ fn activeConstNodeAddress(
 fn constNodeRestoresAsLeaf(value: checked.ConstValue) bool {
     return switch (value) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-        .image => Common.invariant("a stored image reached a ConstStore node restore"),
+        // A part holding no function restores as its literal or one static
+        // datum (`restoredImagePart`).
+        .image => true,
         .pending, .zst, .scalar, .str, .crash, .checked_error => true,
         .list => |list| switch (list.items) {
             .nodes => false,
-            .empty, .packed_bytes => true,
+            .empty => true,
         },
         .box, .tuple, .record, .tag, .nominal, .fn_value => false,
     };
@@ -19328,6 +19303,7 @@ const DraftStaticDataRequestAddress = struct {
             checked_type: checked.CheckedTypeId,
             checked_type_module: checked.ModuleId,
         },
+        stored_image: Ast.StoredImageStaticData,
         inline_literal: Ast.InlineLiteralStaticData,
     },
     ty: DraftTypeCell,
@@ -49303,6 +49279,7 @@ const BodyContext = struct {
         ty: Type.TypeId,
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!ConstRestoreStart {
+        if (store_view.const_store.imageOf(node)) |image| return .{ .done = try self.restoredImagePart(store_view, node, image, DraftTypeCell.fromSealed(ty)) };
         if (self.isStaticDataPart(store_view, node)) return .{ .done = try self.restoredStaticDataPart(store_view, type_view, node, ty) };
         const value = store_view.const_store.get(node);
         const representation: ActiveConstNodeRepresentation = .{ .sealed = ty };
@@ -49598,10 +49575,11 @@ const BodyContext = struct {
         if (node == root.node or !moduleBytesEqual(root.module.bytes, store_view.key.bytes)) return false;
         return switch (store_view.const_store.get(node)) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-            .image => Common.invariant("a stored image reached a ConstStore node restore"),
+            // A part holding no function is its own static datum.
+            .image => false,
             .list => |list| switch (list.items) {
                 .nodes => |items| items.len != 0,
-                .empty, .packed_bytes => list.capacity != list.items.len(),
+                .empty => list.capacity != list.items.len(),
             },
             .box => true,
             .pending, .zst, .scalar, .str, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => false,
@@ -49781,6 +49759,7 @@ const BodyContext = struct {
         request_node: NodeId,
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!?DraftExprId {
+        if (store_view.const_store.imageOf(node)) |image| return try self.restoredImagePart(store_view, node, image, DraftTypeCell.fromGraphNode(request_node));
         if (self.isStaticDataPart(store_view, node)) return try self.restoredStaticDataPartAtNode(store_view, node, request_node);
         const value = store_view.const_store.get(node);
         const representation: ActiveConstNodeRepresentation = .{ .graph = request_node };
@@ -49829,7 +49808,7 @@ const BodyContext = struct {
                     frame.child_nodes = try self.allocator.alloc(NodeId, items.len);
                     @memset(frame.child_nodes, element_node);
                 },
-                .empty, .packed_bytes => {},
+                .empty => {},
             },
             .box => |payload| {
                 frame.single_child = payload;
@@ -49926,16 +49905,6 @@ const BodyContext = struct {
                         const items: BodyExprData = switch (list.items) {
                             .nodes => .{ .list = try self.addExprSpan(lowered_children) },
                             .empty => .{ .list = try self.addExprSpan(&.{}) },
-                            .packed_bytes => |packed_list| .{ .bytes_lit = .{
-                                .literal = try self.addConstBlobView(
-                                    store_view.key.bytes,
-                                    packed_list.bytes,
-                                    store_view.const_store.blobData(packed_list.bytes),
-                                ),
-                                .len = packed_list.len,
-                                .element = packed_list.element,
-                                .product_width = packed_list.product_width,
-                            } },
                         };
                         const spare = list.capacity - list.items.len();
                         if (spare == 0) break :list items;
@@ -53400,6 +53369,39 @@ const BodyContext = struct {
             .str => |str| if (str.capacity == str.bytes.len) return try self.imageLiteralExprAtNode(view, literal, request_node),
         };
         return try self.storedRootImageCandidate(view, node, image, checked_type, cell);
+    }
+
+    /// The value of `node` of `view`, a part holding no function of a stored
+    /// value holding one, stored as image `image`, typed `cell`: its literal
+    /// when it holds one a root's image would restore as, and otherwise one
+    /// static datum frozen from the image, named by the image's node
+    /// (design.md "Stored Images").
+    fn restoredImagePart(
+        self: *BodyContext,
+        view: ModuleView,
+        node: checked.ConstNodeId,
+        image: check.ConstStore.ConstImageId,
+        cell: DraftTypeCell,
+    ) Allocator.Error!DraftExprId {
+        if (view.const_store.imageLiteral(image)) |literal| {
+            const keeps_literal = switch (literal) {
+                .scalar, .tag => true,
+                .str => |str| str.capacity == str.bytes.len,
+            };
+            if (keeps_literal) return switch (cell) {
+                .sealed => |ty| try self.imageLiteralExpr(view, literal, ty),
+                .graph_node => |request_node| try self.imageLiteralExprAtNode(view, literal, request_node),
+            };
+        }
+        const id = try self.draftStaticDataRequestAt(.{
+            .source = .{ .stored_image = .{ .module = view.key, .node = node } },
+            .ty = cell,
+        }, .{ .stored_image = .{ .module = view.key, .node = node } });
+        return try self.addExprWithTypeCell(cell, .{ .static_data_candidate = .{
+            .static_data = id,
+            .storage = constStaticDataStorage(view, node),
+            .value = .{ .stored = .{ .item_count = imageListLen(view.const_store, image) } },
+        } });
     }
 
     /// `restoredRootImage` at the sealed type `ty`.
@@ -72278,7 +72280,7 @@ fn beginConstRestoreNode(
         .box => |payload| frame.single_child = payload,
         .list => |list| switch (list.items) {
             .nodes => |items| frame.children = items,
-            .empty, .packed_bytes => {},
+            .empty => {},
         },
         .tuple => |items| {
             if (tupleItemTypes(restorer.typeStore(), ty).len != items.len) Common.invariant("ConstStore tuple length differs from checked type");
@@ -72388,16 +72390,6 @@ fn constRestoreData(
             const items: BodyExprData = switch (list.items) {
                 .nodes => .{ .list = try restorer.addExprSpan(lowered) },
                 .empty => .{ .list = try restorer.addExprSpan(&.{}) },
-                .packed_bytes => |packed_list| .{ .bytes_lit = .{
-                    .literal = try restorer.addConstBlobView(
-                        store_view.key.bytes,
-                        packed_list.bytes,
-                        store_view.const_store.blobData(packed_list.bytes),
-                    ),
-                    .len = packed_list.len,
-                    .element = packed_list.element,
-                    .product_width = packed_list.product_width,
-                } },
             };
             const spare = list.capacity - list.items.len();
             if (spare == 0) break :blk items;
@@ -72682,7 +72674,8 @@ fn monotypeBackingAuthority(authority: check.ConstStore.TypeBackingAuthority) Ty
 fn constStrNodeByteLen(view: ModuleView, node: checked.ConstNodeId) u32 {
     return switch (view.const_store.get(node)) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-        .image => Common.invariant("a stored image reached a ConstStore node restore"),
+        // A capture holding no function is stored as its image.
+        .image => |image| @intCast(view.const_store.image(image).strAt(0).len),
         .str => |str| @intCast(view.const_store.strBytes(str.bytes).len),
         .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
     };
@@ -72691,7 +72684,8 @@ fn constStrNodeByteLen(view: ModuleView, node: checked.ConstNodeId) u32 {
 fn constStrNodeBytes(view: ModuleView, node: checked.ConstNodeId) []const u8 {
     return switch (view.const_store.get(node)) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-        .image => Common.invariant("a stored image reached a ConstStore node restore"),
+        // A capture holding no function is stored as its image.
+        .image => |image| view.const_store.image(image).strAt(0),
         .str => |str| view.const_store.strBytes(str.bytes),
         .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
     };

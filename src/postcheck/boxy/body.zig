@@ -7228,14 +7228,9 @@ pub const Builder = struct {
         const key: lower.Program.StoredValueKey = .{ .module = source.module, .node = node, .ty = raw_ty };
         if (self.program.stored_value_slots.get(key)) |slot| return try self.static_parts.append(self.allocator, slot);
         const data = const_store.get(node);
-        // A value that is data alone is one slot, its image or frozen from
-        // the store through its type's const plan, however many values it
-        // holds.
+        // A value that is data alone is its image, one slot however many
+        // values it holds; a value stored as nodes holds a function.
         if (const_store.imageOf(node) != null) return try self.pushStoredDataPart(source, node, raw_ty);
-        switch (data) {
-            .nominal, .box, .tuple, .record, .tag, .list => if (try self.program.storedDataAlone(source, node)) return try self.pushStoredDataPart(source, node, raw_ty),
-            .image, .pending, .scalar, .zst, .str, .crash, .checked_error, .boxy_fn, .fn_value => {},
-        }
         switch (data) {
             .pending => invariant("a stored constant was never filled"),
             .image, .scalar, .zst, .str => try self.pushStoredDataPart(source, node, raw_ty),
@@ -7317,7 +7312,7 @@ pub const Builder = struct {
                             self.tasks.appendAssumeCapacity(.{ .restore_part = .{ .source = source, .node = nodes[index], .ty = elem } });
                         }
                     },
-                    .empty, .packed_bytes => invariant("a stored list without item nodes is not data alone"),
+                    .empty => invariant("a stored list without item nodes is not data alone"),
                 }
             },
         }

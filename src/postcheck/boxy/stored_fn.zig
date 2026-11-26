@@ -38,6 +38,7 @@ const types = @import("types.zig");
 const Tables = @import("tables.zig");
 const lower = @import("lower.zig");
 const const_schema = @import("const_schema.zig");
+const const_store = check.ConstStore;
 const Codec = @import("codec.zig");
 const body = @import("body.zig");
 const StaticDescs = @import("static_descs.zig").StaticDescs;
@@ -122,6 +123,8 @@ fn captureBinding(allocator: Allocator, graph: []const CaptureNode, roots: []con
 pub const Capture = struct {
     plan: LirProgram.ConstPlanId,
     layout_idx: layout.Idx,
+    /// The captured value's stored type, in the program's types.
+    ty: const_store.ConstTypeId,
     ptr: [*]u8,
 };
 
@@ -530,6 +533,7 @@ pub const Retained = struct {
             slot.* = .{
                 .plan = try const_schema.constPlanOf(program, concrete),
                 .layout_idx = try program.layouts.layoutOf(concrete),
+                .ty = try const_schema.constTypeOf(program, concrete),
                 .ptr = capture + offset,
             };
         }

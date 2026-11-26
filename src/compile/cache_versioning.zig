@@ -99,8 +99,10 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// polymorphic callable bindings. Version 62 adds, for each `to_inspect`
 /// override whose inspection instance is closed, that use's edge and the
 /// constant instances it names, and stores value-form bytes literals and
-/// files imported as `Str` as images.
-const checked_envelope_version: u32 = 62;
+/// files imported as `Str` as images. Version 63 stores each part holding no
+/// function of a stored value holding one as an image of its own, and no
+/// stored list as packed bytes.
+const checked_envelope_version: u32 = 63;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment. Version 5 rejects builtin-conflicting import
