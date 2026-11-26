@@ -128,7 +128,7 @@ items = [1, 2, 3]
 						(p-assign (ident "b")))))))
 	(d-let
 		(p-assign (ident "sum"))
-		(e-call (constraint-fn-var 233)
+		(e-call (constraint-fn-var 232)
 			(e-lookup-local
 				(p-assign (ident "add")))
 			(e-num (value "1"))

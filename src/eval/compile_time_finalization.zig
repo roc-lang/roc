@@ -2308,7 +2308,7 @@ fn valueFormReaderOrder(allocator: Allocator, module: *const checked.CheckedModu
     for (readers, runs) |request, *run| {
         const root = module.compile_time_roots.root(compileTimeRootForRequest(module, request));
         lookups.clearRetainingCapacity();
-        try checked.appendValueFormConstReads(allocator, bodies, root.rootExpr(), &stack, &lookups);
+        try checked.appendValueFormConstReads(allocator, &bodies, root.rootExpr(), &stack, &lookups);
         run.* = .{ .start = @intCast(reads.items.len), .len = 0 };
         for (lookups.items) |lookup| {
             const const_ref = bodies.constLookupRef(lookup) orelse finalizationInvariant("a value-form root reads a lookup that names no constant");
@@ -3859,7 +3859,7 @@ fn initEvaluationProgram(
 ) FinalizeError!EvaluationProgram(ProgramPtr) {
     if (ProgramPtr == *InterpreterProgram) return .{ .storage = try InterpreterProgram.init(allocator, lowering_modules, lowered, options) };
     var native = try DevProgram.init(allocator, lowering_modules, lowered, options);
-    native.codegen.static_strings = native.static_strings.view();
+    if (native.extraction) |*kept| native.codegen.static_strings = kept.static_strings.view();
     return .{ .storage = native };
 }
 
@@ -4955,7 +4955,7 @@ fn finalize(
     const requests = module.root_requests.compile_time_requests.items();
     const total_started_ns = if (requests.len != 0) if (options.timing) |timing| timing.start() else 0 else 0;
     if (requests.len != 0) {
-        const lowering_imports = try finalizationImports(allocator, checked.importedView(module), imports, available_modules);
+        const lowering_imports = try finalizationImports(allocator, &checked.importedView(module), imports, available_modules);
         defer allocator.free(lowering_imports);
 
         if (options.strategy == .boxy) {
@@ -6725,14 +6725,18 @@ fn evaluationDemand(allocator: Allocator, result: *LirProgram.Result, roots: []c
 
 const DevProgram = struct {
     allocator: Allocator,
-    static_strings: backend.StaticStringData.Table,
     slots: StaticSlotEnvironment,
     codegen: backend.HostLirCodeGen,
     /// Native data and symbols linked into the evaluation image.
     splice: backend.dev.HostSplice,
     executable: backend.ExecutableMemory,
     entry_offsets: collections.DenseMap(lir.LIR.LirProcSpecId, usize),
-    excerpts: ?NativeProcCompiler.Retained,
+    /// What building the image read that only extracting its excerpts
+    /// (`extractExcerpts`) reads again. A program built without
+    /// `Options.keep_artifacts` frees it, with the code generator's copy of
+    /// the code and the splice's carried data, as soon as the image is
+    /// linked, rather than holding it while its roots run.
+    extraction: ?Extraction,
     /// The bytes the program's erased callables reserve before their
     /// captures (`LirProgram.Result.erased_capture_prefix`).
     capture_prefix: u32,
@@ -6749,6 +6753,14 @@ const DevProgram = struct {
     /// The program's lowering, whose module table reads the modules failure
     /// meanings name (`lir.Program.Result.meaningByCheckedKey`).
     lir_result: *const lir.Program.Result,
+
+    const Extraction = struct {
+        /// The string literals the procedures were compiled against.
+        static_strings: backend.StaticStringData.Table,
+        /// The compiled procedures' fragments, which the splice's carried
+        /// data borrows.
+        fragments: NativeProcCompiler.Retained,
+    };
 
     fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, options: Options) FinalizeError!DevProgram {
         const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
@@ -6902,15 +6914,25 @@ const DevProgram = struct {
         errdefer allocator.destroy(root_allocator);
         root_allocator.* = ThreadSafeAllocator.init(allocator);
 
+        // The linked image holds its own copy of the code and carried data.
+        var extraction: ?Extraction = .{ .static_strings = static_strings, .fragments = artifacts };
+        if (!options.keep_artifacts) {
+            codegen.releaseLinkedCode();
+            codegen.static_strings = .{};
+            splice.releaseCarriedData();
+            artifacts.deinit();
+            static_strings.deinit();
+            extraction = null;
+        }
+
         return .{
             .allocator = allocator,
-            .static_strings = static_strings,
             .slots = slots,
             .codegen = codegen,
             .splice = splice,
             .executable = executable,
             .entry_offsets = entry_offsets,
-            .excerpts = artifacts,
+            .extraction = extraction,
             .capture_prefix = lowered.lir_result.erased_capture_prefix,
             .root_allocator = root_allocator,
             .linked_images = options.boxy_linked_images,
@@ -7040,6 +7062,7 @@ const DevProgram = struct {
     /// values it reads. Its procedures are a dev build's object code, so a
     /// build splices them as its own.
     fn extractExcerpts(self: *DevProgram, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!backend.dev.CodeExcerpt.Set {
+        const kept = &self.extraction.?; // only a program built with `keep_artifacts` is extracted
         const frozen = lowered.frozen_static_data orelse finalizationInvariant("compile-time stage froze no completed values");
         return backend.dev.CodeExcerpt.extract(
             backend.HostLirCodeGen,
@@ -7047,7 +7070,7 @@ const DevProgram = struct {
             &self.codegen,
             lowered.lir_result.store.getProcSpecs(),
             &lowered.lir_result.layouts,
-            self.static_strings.exports,
+            kept.static_strings.exports,
             frozen.exports,
             self.splice.data.items,
         ) catch |err| switch (err) {
@@ -7063,9 +7086,9 @@ const DevProgram = struct {
         self.executable.deinit();
         self.splice.deinit();
         self.codegen.deinit();
-        if (self.excerpts) |*excerpts| excerpts.deinit();
+        if (self.extraction) |*kept| kept.fragments.deinit();
         self.slots.deinit();
-        self.static_strings.deinit();
+        if (self.extraction) |*kept| kept.static_strings.deinit();
         self.* = undefined;
     }
 };
@@ -8128,7 +8151,7 @@ const ComptimeFailureSite = struct {
 /// files as its link names them (`ModuleNames`), a whole program by content.
 fn fileIsModule(file: base.SourceFileEntry, module: *const checked.CheckedModuleArtifact) bool {
     if (base.byte_encoding.digestsEql(&file.module_identity, &module.module_identity.stable_hash)) return true;
-    return base.byte_encoding.digestsEql(&file.module_identity, &ModuleNames.stableName(checked.importedView(module)));
+    return base.byte_encoding.digestsEql(&file.module_identity, &ModuleNames.stableName(&checked.importedView(module)));
 }
 
 fn comptimeFailureSiteFrom(
@@ -8189,17 +8212,17 @@ fn comptimeFailureOrigin(
 
 fn finalizationImports(
     allocator: Allocator,
-    root: checked.ImportedModuleView,
+    root: *const checked.ImportedModuleView,
     imports: []const checked.PublishImportArtifact,
     available_modules: []const checked.ImportedModuleView,
 ) Allocator.Error![]checked.ImportedModuleView {
     var out = std.ArrayList(checked.ImportedModuleView).empty;
     errdefer out.deinit(allocator);
 
-    for (imports) |import| {
-        try appendUniqueImport(allocator, root, &out, import.view);
+    for (imports) |*import| {
+        try appendUniqueImport(allocator, root, &out, &import.view);
     }
-    for (available_modules) |module| {
+    for (available_modules) |*module| {
         try appendUniqueImport(allocator, root, &out, module);
     }
 
@@ -8208,18 +8231,18 @@ fn finalizationImports(
 
 fn appendUniqueImport(
     allocator: Allocator,
-    root: checked.ImportedModuleView,
+    root: *const checked.ImportedModuleView,
     out: *std.ArrayList(checked.ImportedModuleView),
-    module: checked.ImportedModuleView,
+    module: *const checked.ImportedModuleView,
 ) Allocator.Error!void {
     if (sameModuleIdentity(root, module)) return;
-    for (out.items) |existing| {
+    for (out.items) |*existing| {
         if (sameModuleIdentity(existing, module)) return;
     }
-    try out.append(allocator, module);
+    try out.append(allocator, module.*);
 }
 
-fn sameModuleIdentity(a: checked.ImportedModuleView, b: checked.ImportedModuleView) bool {
+fn sameModuleIdentity(a: *const checked.ImportedModuleView, b: *const checked.ImportedModuleView) bool {
     return std.meta.eql(a.module_identity.stable_hash, b.module_identity.stable_hash);
 }
 

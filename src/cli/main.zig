@@ -1044,6 +1044,9 @@ var debug_allocator: std.heap.DebugAllocator(.{ .stack_trace_frames = build_opti
     .backing_allocator = std.heap.page_allocator,
 };
 
+/// In a Debug build, the wrapper over `debug_allocator` that makes stale borrows fail.
+var stale_borrow_allocator: if (base.StaleBorrowAllocator.available) base.StaleBorrowAllocator else void = undefined;
+
 fn renderValidationError(
     ctx: *CliCtx,
     result: platform_validation.ValidationResult,
@@ -1082,8 +1085,9 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
     var gpa, const is_safe = gpa: {
         // Debug builds use the leak-checking debug allocator; -Ddebug-gpa forces it
-        // in release builds too (e.g. to leak-check a ReleaseSafe binary). Everything
-        // else uses the fast target allocator—see base.defaultGpa.
+        // in release builds too (e.g. to leak-check a ReleaseSafe binary). A Debug
+        // build also wraps it in base.StaleBorrowAllocator. Everything else uses
+        // the fast target allocator—see base.defaultGpa.
         const use_debug_allocator = builtin.os.tag != .freestanding and
             (builtin.mode == .debug or build_options.debug_gpa);
         if (use_debug_allocator) {
@@ -1094,12 +1098,17 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
             if (builtin.link_libc and std.valgrind.runningOnValgrind() != 0) {
                 break :gpa .{ std.heap.c_allocator, false };
             }
+            if (base.StaleBorrowAllocator.available) {
+                stale_borrow_allocator = .init(debug_allocator.allocator(), .{});
+                break :gpa .{ stale_borrow_allocator.allocator(), true };
+            }
             break :gpa .{ debug_allocator.allocator(), true };
         }
         break :gpa .{ base.defaultGpa(), false };
     };
     defer restoreWindowsConsoleCodePage();
     defer if (is_safe) {
+        if (base.StaleBorrowAllocator.available) stale_borrow_allocator.flush();
         std.debug.assert(build_options.debugGpaOk(debug_allocator.deinit()));
     };
 
@@ -1858,7 +1867,7 @@ fn checkedInterpreterHostIdentity(
     updateHashBytes(&hasher, "roc-run-checked-host-interface-v3");
     updateHashU32(&hasher, @backingInt(target_usize));
 
-    const declarations_hash = try root_artifact.platform_required_declarations.identityHash(&root_artifact.canonical_names, root_artifact.typesView());
+    const declarations_hash = try root_artifact.platform_required_declarations.identityHash(&root_artifact.canonical_names, &root_artifact.typesView());
     hasher.update(&declarations_hash);
     updatePlatformAppRelationIdentity(&hasher, root_artifact);
     updateHostBoundaryIdentity(&hasher, root_metadata);
@@ -7013,7 +7022,9 @@ fn buildRunRootImage(
         target,
         .{},
     );
-    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
+    // The pieces take the static data (`compileToPieces`).
+    var static_data_owned = true;
+    defer if (static_data_owned) compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, lowered);
     defer ctx.gpa.free(entrypoints);
 
@@ -7024,6 +7035,7 @@ fn buildRunRootImage(
     object_compiler.post_check_executor = build_env.postCheckExecutor();
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
     object_compiler.internal_entrypoints = true;
+    static_data_owned = false;
     var pieces = object_compiler.compileToPieces(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
@@ -9050,7 +9062,7 @@ fn preloadWasmObject(
     };
 }
 
-fn configuredWasmStackBytes(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) usize {
+fn configuredWasmStackBytes(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) u64 {
     if (args.wasm_stack_size) |bytes| return bytes;
     if (wasm) |config| {
         if (config.initial_stack_size) |bytes| return bytes;
@@ -9062,7 +9074,7 @@ fn configuredWasmStackBytes(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTarg
 /// platform's targets config specifies one. Null lets the linker size memory
 /// from the data segments plus the stack, which is always sufficient for
 /// those regions. The host must grow memory for its heap independently.
-fn configuredWasmMinimumMemory(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) ?usize {
+fn configuredWasmMinimumMemory(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) ?u64 {
     if (args.wasm_memory) |bytes| return bytes;
     if (wasm) |config| {
         if (config.minimum_memory) |bytes| return bytes;
@@ -9286,7 +9298,7 @@ fn linkWasmOutput(
     const maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null;
     const initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm);
     // The maximum the link declares, as `linker.link` passes it to wasm-ld.
-    const declared_maximum: ?usize = switch (linker.wasmStackLayout(global_base)) {
+    const declared_maximum: ?u64 = switch (linker.wasmStackLayout(global_base)) {
         .stack_first => maximum: {
             const limit = linker.stackFirstMaximumMemory(stack_size);
             if (maximum_memory) |bytes| {
@@ -9340,7 +9352,7 @@ fn linkWasmOutput(
     linker.link(ctx, link_config) catch |err| {
         // wasm-ld finds a size too small only when that size was passed to it.
         if (memory_problem) |problem| {
-            const configured: ?usize = switch (problem.what) {
+            const configured: ?u64 = switch (problem.what) {
                 .initial_memory_too_small => initial_memory,
                 .maximum_memory_too_small => declared_maximum,
             };
@@ -9953,7 +9965,10 @@ fn compileLlvmAppObject(
         codegen.enable_default_platform_runtime = enable_default_platform_runtime;
         codegen.enable_default_platform_hosted_calls = enable_default_platform_hosted_calls;
         codegen.enable_default_platform_diagnostics = enable_default_platform_hosted_calls and emit_debug_info;
-        codegen.optimize_for_size = llvmOptimizationLevel(args.opt) == .size;
+        codegen.optimization = switch (llvmOptimizationLevel(args.opt)) {
+            .size => .size,
+            .speed => .speed,
+        };
         codegen.stack_checks = stack_checks;
         codegen.debug_producer = "roc " ++ @import("compiler_version").compiler_version;
         defer codegen.deinit();
@@ -12502,7 +12517,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer ctx.gpa.free(entrypoints);
 
     const static_data_exports = try buildCommandStaticData(ctx, &reporter, root_artifact, imported_artifacts, relation_artifacts, &lowered, target);
-    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
+    // Root pieces take the static data (`compileToPieces`) and keep it alive
+    // while they live; every other path releases it here.
+    var static_data_owned = true;
+    defer if (static_data_owned) compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     if (target_arch == .wasm32) {
         reporter.begin(code_generation_phase_name);
@@ -12538,6 +12556,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
 
     if (boxy_library) |library| {
+        static_data_owned = false;
         var root_pieces = object_compiler.compileToPieces(
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
@@ -13418,7 +13437,6 @@ fn buildCliTestPlan(
         defer checking_results.deinit(ctx.gpa);
         for (artifact.compile_time_roots.roots.items()) |root| {
             if (root.kind != .expect or root.request_eligibility != .ineligible) continue;
-            if (std.debug.runtime_safety) std.debug.assert(try artifact.bodies().exprContainsDiagnosticError(root.rootExpr()));
             try checking_results.append(ctx.gpa, .{
                 .result = .compiler_error,
                 .order = @backingInt(root.id),
@@ -13782,47 +13800,51 @@ fn collectExpectBindingPatterns(
         .statement => |statement| statement,
         .def, .expr, .required_binding, .hoisted, .literal, .literal_argument => return allocator.alloc(CIR.Pattern.Idx, 0),
     };
-    const statement = env.store.getStatement(statement_idx);
-    if (statement != .s_expect) return allocator.alloc(CIR.Pattern.Idx, 0);
+    const statement = env.store.statementAs(statement_idx, .s_expect) orelse return allocator.alloc(CIR.Pattern.Idx, 0);
 
     var stack = std.ArrayList(CIR.Expr.Idx).empty;
     defer stack.deinit(allocator);
-    try stack.append(allocator, statement.s_expect.body);
+    try stack.append(allocator, statement.body);
 
     var patterns = std.ArrayList(CIR.Pattern.Idx).empty;
     errdefer patterns.deinit(allocator);
 
     while (stack.pop()) |expr_idx| {
-        switch (env.store.getExpr(expr_idx)) {
-            .e_lookup_local => |lookup| {
+        switch (env.store.exprKind(expr_idx)) {
+            .e_lookup_local => {
+                const lookup = env.store.exprView(expr_idx).e_lookup_local.decode();
                 if (std.mem.findScalar(CIR.Pattern.Idx, patterns.items, lookup.pattern_idx) == null) {
                     try patterns.append(allocator, lookup.pattern_idx);
                 }
             },
-            .e_list => |list| try appendExprSpanForExpectBindings(env, allocator, &stack, list.elems),
-            .e_tuple => |tuple| try appendExprSpanForExpectBindings(env, allocator, &stack, tuple.elems),
-            .e_str => |str| try appendExprSpanForExpectBindings(env, allocator, &stack, str.span),
-            .e_tag => |tag| try appendExprSpanForExpectBindings(env, allocator, &stack, tag.args),
-            .e_call => |call| {
+            .e_list => try appendExprSpanForExpectBindings(env, allocator, &stack, env.store.exprView(expr_idx).e_list.get(.elems)),
+            .e_tuple => try appendExprSpanForExpectBindings(env, allocator, &stack, env.store.exprView(expr_idx).e_tuple.get(.elems)),
+            .e_str => try appendExprSpanForExpectBindings(env, allocator, &stack, env.store.exprView(expr_idx).e_str.get(.span)),
+            .e_tag => try appendExprSpanForExpectBindings(env, allocator, &stack, env.store.exprView(expr_idx).e_tag.get(.args)),
+            .e_call => {
+                const call = env.store.exprView(expr_idx).e_call.decode();
                 try stack.append(allocator, call.func);
                 try appendExprSpanForExpectBindings(env, allocator, &stack, call.args);
             },
-            .e_record => |record| {
+            .e_record => {
+                const record = env.store.exprView(expr_idx).e_record.decode();
                 if (record.ext) |ext| try stack.append(allocator, ext);
                 for (env.store.sliceRecordFields(record.fields)) |field_idx| {
                     try stack.append(allocator, env.store.getRecordField(field_idx).value);
                 }
             },
-            .e_block => |block| {
+            .e_block => {
+                const block = env.store.exprView(expr_idx).e_block.decode();
                 try stack.append(allocator, block.final_expr);
                 for (0..block.stmts.span.len) |stmt_offset| {
                     const stmt_idx = env.store.statementAt(block.stmts, stmt_offset);
-                    switch (env.store.getStatement(stmt_idx)) {
-                        inline .s_decl, .s_var, .s_reassign, .s_expr => |decl| try stack.append(allocator, decl.expr),
-                        .s_expect => |stmt| try stack.append(allocator, stmt.body),
-                        .s_dbg => |stmt| try stack.append(allocator, stmt.expr),
-                        .s_return => |stmt| try stack.append(allocator, stmt.expr),
-                        .s_for => |stmt| {
+                    switch (env.store.statementKind(stmt_idx)) {
+                        inline .s_decl, .s_var, .s_reassign, .s_expr => |kind| try stack.append(allocator, @field(env.store.statementView(stmt_idx), @tagName(kind)).get(.expr)),
+                        .s_expect => try stack.append(allocator, env.store.statementView(stmt_idx).s_expect.get(.body)),
+                        .s_dbg => try stack.append(allocator, env.store.statementView(stmt_idx).s_dbg.get(.expr)),
+                        .s_return => try stack.append(allocator, env.store.statementView(stmt_idx).s_return.get(.expr)),
+                        .s_for => {
+                            const stmt = env.store.statementView(stmt_idx).s_for.decode();
                             try stack.append(allocator, stmt.expr);
                             try stack.append(allocator, stmt.body);
                         },
@@ -13843,7 +13865,8 @@ fn collectExpectBindingPatterns(
                     }
                 }
             },
-            .e_if => |if_expr| {
+            .e_if => {
+                const if_expr = env.store.exprView(expr_idx).e_if.decode();
                 try stack.append(allocator, if_expr.final_else);
                 for (env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                     const branch = env.store.getIfBranch(branch_idx);
@@ -13851,7 +13874,8 @@ fn collectExpectBindingPatterns(
                     try stack.append(allocator, branch.body);
                 }
             },
-            .e_match => |match_expr| {
+            .e_match => {
+                const match_expr = env.store.exprView(expr_idx).e_match.decode();
                 try stack.append(allocator, match_expr.cond);
                 for (env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
                     const branch = env.store.getMatchBranch(branch_idx);
@@ -13859,48 +13883,55 @@ fn collectExpectBindingPatterns(
                     if (branch.guard) |guard| try stack.append(allocator, guard);
                 }
             },
-            .e_lambda => |lambda| try stack.append(allocator, lambda.body),
-            .e_closure => |closure| try stack.append(allocator, closure.lambda_idx),
-            .e_nominal => |nominal| try stack.append(allocator, nominal.backing_expr),
-            .e_nominal_external => |nominal| try stack.append(allocator, nominal.backing_expr),
-            .e_binop => |binop| {
+            .e_lambda => try stack.append(allocator, env.store.exprView(expr_idx).e_lambda.get(.body)),
+            .e_closure => try stack.append(allocator, env.store.exprView(expr_idx).e_closure.get(.lambda_idx)),
+            .e_nominal => try stack.append(allocator, env.store.exprView(expr_idx).e_nominal.get(.backing_expr)),
+            .e_nominal_external => try stack.append(allocator, env.store.exprView(expr_idx).e_nominal_external.get(.backing_expr)),
+            .e_binop => {
+                const binop = env.store.exprView(expr_idx).e_binop.decode();
                 try stack.append(allocator, binop.lhs);
                 try stack.append(allocator, binop.rhs);
             },
-            .e_unary_minus => |unary| try stack.append(allocator, unary.expr),
-            .e_field_access => |field| try stack.append(allocator, field.receiver),
-            inline .e_method_call, .e_dispatch_call => |call| {
+            .e_unary_minus => try stack.append(allocator, env.store.exprView(expr_idx).e_unary_minus.get(.expr)),
+            .e_field_access => try stack.append(allocator, env.store.exprView(expr_idx).e_field_access.get(.receiver)),
+            inline .e_method_call, .e_dispatch_call => |kind| {
+                const call = @field(env.store.exprView(expr_idx), @tagName(kind)).decode();
                 try stack.append(allocator, call.receiver);
                 try appendExprSpanForExpectBindings(env, allocator, &stack, call.args);
             },
-            .e_interpolation => |interpolation| {
+            .e_interpolation => {
+                const interpolation = env.store.exprView(expr_idx).e_interpolation.decode();
                 try stack.append(allocator, interpolation.first);
                 try appendExprSpanForExpectBindings(env, allocator, &stack, interpolation.parts);
             },
-            .e_structural_eq => |eq| {
+            .e_structural_eq => {
+                const eq = env.store.exprView(expr_idx).e_structural_eq.decode();
                 try stack.append(allocator, eq.lhs);
                 try stack.append(allocator, eq.rhs);
             },
-            .e_structural_hash => |hash| {
+            .e_structural_hash => {
+                const hash = env.store.exprView(expr_idx).e_structural_hash.decode();
                 try stack.append(allocator, hash.value);
                 try stack.append(allocator, hash.hasher);
             },
-            .e_method_eq => |eq| {
+            .e_method_eq => {
+                const eq = env.store.exprView(expr_idx).e_method_eq.decode();
                 try stack.append(allocator, eq.lhs);
                 try stack.append(allocator, eq.rhs);
             },
-            .e_type_method_call => |call| try appendExprSpanForExpectBindings(env, allocator, &stack, call.args),
-            .e_type_dispatch_call => |call| try appendExprSpanForExpectBindings(env, allocator, &stack, call.args),
-            .e_tuple_access => |access| try stack.append(allocator, access.tuple),
-            .e_dbg => |dbg| try stack.append(allocator, dbg.expr),
-            .e_expect_err => |expect_err| try stack.append(allocator, expect_err.expr),
-            .e_expect => |expect_expr| try stack.append(allocator, expect_expr.body),
-            .e_return => |ret| try stack.append(allocator, ret.expr),
-            .e_for => |for_expr| {
+            .e_type_method_call => try appendExprSpanForExpectBindings(env, allocator, &stack, env.store.exprView(expr_idx).e_type_method_call.get(.args)),
+            .e_type_dispatch_call => try appendExprSpanForExpectBindings(env, allocator, &stack, env.store.exprView(expr_idx).e_type_dispatch_call.get(.args)),
+            .e_tuple_access => try stack.append(allocator, env.store.exprView(expr_idx).e_tuple_access.get(.tuple)),
+            .e_dbg => try stack.append(allocator, env.store.exprView(expr_idx).e_dbg.get(.expr)),
+            .e_expect_err => try stack.append(allocator, env.store.exprView(expr_idx).e_expect_err.get(.expr)),
+            .e_expect => try stack.append(allocator, env.store.exprView(expr_idx).e_expect.get(.body)),
+            .e_return => try stack.append(allocator, env.store.exprView(expr_idx).e_return.get(.expr)),
+            .e_for => {
+                const for_expr = env.store.exprView(expr_idx).e_for.decode();
                 try stack.append(allocator, for_expr.expr);
                 try stack.append(allocator, for_expr.body);
             },
-            .e_run_low_level => |run| try appendExprSpanForExpectBindings(env, allocator, &stack, run.args),
+            .e_run_low_level => try appendExprSpanForExpectBindings(env, allocator, &stack, env.store.exprView(expr_idx).e_run_low_level.get(.args)),
             .e_num,
             .e_frac_f32,
             .e_frac_f64,
@@ -13941,7 +13972,7 @@ fn sourceBindingForPattern(env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) 
         const def = env.store.getDef(def_idx);
         if (def.pattern != pattern_idx) continue;
 
-        const expr_tag = std.meta.activeTag(env.store.getExpr(def.expr));
+        const expr_tag = env.store.exprKind(def.expr);
         if (expr_tag == .e_lambda or expr_tag == .e_closure or expr_tag == .e_hosted_lambda) return null;
 
         const pattern_region = env.store.getPatternRegion(def.pattern);
@@ -16042,7 +16073,9 @@ fn unitTestRootImage(
     finishPostCheckLowering(reporter, &spec_timing, .boxy);
 
     const static_data = try compile.static_data_exports.buildStaticData(ctx.gpa, .{ .root = modules.root, .imports = imported_artifacts }, &lowered, target, .{});
-    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
+    // The pieces take the static data (`compileToPieces`).
+    var static_data_owned = true;
+    defer if (static_data_owned) compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
     var wrappers = try compile.boxy_unit.testEntrypoints(ctx.gpa, &lowered, module_digests.items, root_indices.items);
     defer wrappers.deinit(ctx.gpa);
     reporter.begin(devBackendPhaseName(target));
@@ -16053,6 +16086,7 @@ fn unitTestRootImage(
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
     object_compiler.internal_entrypoints = true;
     object_compiler.relocatable_expect_sites = true;
+    static_data_owned = false;
     var pieces = object_compiler.compileToPieces(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
@@ -17439,7 +17473,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
             base.invariant("compiled module plan contains duplicate source module {s}", .{qualified_name});
         }
         const identity = artifact.module_identity.stable_hash;
-        const link_identity = lir.CheckedPipeline.BoxyModuleNames.stableName(check.CheckedArtifact.importedView(artifact));
+        const link_identity = lir.CheckedPipeline.BoxyModuleNames.stableName(&check.CheckedArtifact.importedView(artifact));
         entry.value_ptr.* = .{ .env = module.semantic.env, .common = &module.semantic.env.common, .path = module.path, .name = qualified_name, .identity = identity };
         try source_modules.bind(ctx.gpa, identity, workspace);
         try source_modules.bind(ctx.gpa, link_identity, workspace);
@@ -19140,17 +19174,17 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
 
         elapsed = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - timer_start_ns));
         if (unformatted_files.items.len > 0) {
-            try stdout.print("The following file(s) failed `roc fmt --check`:", .{});
+            try stdout.print("The following file(s) failed `roc fmt --check`:\n", .{});
             for (unformatted_files.items) |file_name| {
                 try stdout.print("    {f}\n", .{base.bidi.Display{ .bytes = try ctx.displayPath(file_name) }});
             }
-            try stdout.print("You can fix this with `roc fmt FILENAME.roc`.", .{});
+            try stdout.print("You can fix this with `roc fmt FILENAME.roc`.\n", .{});
             had_errors = true;
         } else if (failure_count == 0) {
             try stdout.print("All formatting valid.\n", .{});
         }
         if (failure_count > 0) {
-            try stdout.print("Failed to check {} files.", .{failure_count});
+            try stdout.print("Failed to check {} files.\n", .{failure_count});
             had_errors = true;
         }
     } else {

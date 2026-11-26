@@ -231,8 +231,8 @@ pub const BuildArgs = struct {
     watch_inputs_file: ?[]const u8 = null, // internal: write watch input paths and byte states here
     watch_ansi: AnsiStreams = .{},
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
-    wasm_memory: ?usize = null, // initial memory size for WASM targets (default: sized from data segments plus the stack)
-    wasm_stack_size: ?usize = null, // stack size for WASM targets (default: 8MB)
+    wasm_memory: ?u64 = null, // initial memory size for WASM targets (default: sized from data segments plus the stack)
+    wasm_stack_size: ?u64 = null, // stack size for WASM targets (default: 8MB)
     require_executable_output: bool = false, // reject static/shared library targets
     require_host_runnable_output: bool = false, // internal: reject targets that cannot run on this host
     suppress_build_status: bool = false, // suppress "Built..." output (used by `roc` execution)
@@ -3110,14 +3110,14 @@ test "issue 13368: integer flags reject every value their stated requirement exc
     {
         const result = try parse(gpa, testing.io, &.{ "build", "--wasm-memory=65536", "--wasm-stack-size=16" });
         defer result.deinit(gpa);
-        try testing.expectEqual(@as(?usize, 65536), result.build.wasm_memory);
-        try testing.expectEqual(@as(?usize, 16), result.build.wasm_stack_size);
+        try testing.expectEqual(@as(?u64, 65536), result.build.wasm_memory);
+        try testing.expectEqual(@as(?u64, 16), result.build.wasm_stack_size);
     }
     {
         const result = try parse(gpa, testing.io, &.{ "build", "--wasm-memory=4294967296", "--wasm-stack-size=4294967280" });
         defer result.deinit(gpa);
-        try testing.expectEqual(@as(?usize, 4294967296), result.build.wasm_memory);
-        try testing.expectEqual(@as(?usize, 4294967280), result.build.wasm_stack_size);
+        try testing.expectEqual(@as(?u64, 4294967296), result.build.wasm_memory);
+        try testing.expectEqual(@as(?u64, 4294967280), result.build.wasm_stack_size);
     }
     {
         const result = try parse(gpa, testing.io, &.{ "check", "--max-package-mb=0", "--max-transitive-mb=0" });

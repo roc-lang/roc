@@ -1394,7 +1394,7 @@ fn rewriteSites(allocator: Allocator, store: *LirStore, proc_id: ProcId, sites: 
         // longer repacks: release it.
         const packing = Packing.of(store, site.pack) orelse frameInvariant("a frame site that is not a packing");
         if (site.dynamic) {
-            const dyn_stmt = store.getCFStmt(site.pack).dyn;
+            const dyn_stmt = store.getCFStmtImmediate(site.pack).dyn;
             var op = store.stmtRow(dyn_stmt.data);
             const capture_dyn = store.localDyn(op.closure.capture) orelse frameInvariant("a closure whose capture record is not dynamic");
             const storage = try store.addLocal(.{
@@ -1412,7 +1412,7 @@ fn rewriteSites(allocator: Allocator, store: *LirStore, proc_id: ProcId, sites: 
                 .next = next,
             };
         } else {
-            const pack = store.getCFStmt(site.pack).assign_packed_erased_fn;
+            const pack = store.getCFStmtImmediate(site.pack).assign_packed_erased_fn;
             var data = store.stmtRow(pack.data);
             data.frame = true;
             data.reuse = .none;
@@ -1537,7 +1537,7 @@ fn verifyFrames(allocator: Allocator, store: *const LirStore, layouts: *const la
             if (!packing.frame) continue;
             if (packing.reuse != null) frameInvariant("a frame packing repacks an allocation");
             if (packing.dynamic) {
-                const op = store.stmtRow(store.getCFStmt(pack).dyn.data).closure;
+                const op = store.stmtRow(store.getCFStmtImmediate(pack).dyn.data).closure;
                 const storage = store.localDyn(op.frame.?) orelse frameInvariant("a frame closure's storage is not a dynamic local");
                 if (storage.storage != .frame_callable) frameInvariant("a frame closure's storage is not frame-callable storage");
                 const capture = store.localDyn(op.capture) orelse frameInvariant("a frame closure's capture record is not dynamic");
@@ -1999,7 +1999,7 @@ const PackFixture = struct {
     }
 
     fn packData(self: *const PackFixture, pack_stmt: CFStmtId) LIR.PackedErasedFnData {
-        return self.f.store.stmtRow(self.f.store.getCFStmt(pack_stmt).assign_packed_erased_fn.data);
+        return self.f.store.stmtRow(self.f.store.getCFStmtImmediate(pack_stmt).assign_packed_erased_fn.data);
     }
 
     /// The statements of `proc`'s body in flow order along `next` edges,

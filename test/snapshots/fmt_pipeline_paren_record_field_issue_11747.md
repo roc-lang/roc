@@ -107,7 +107,7 @@ expect {
 								(args
 									(p-assign (ident "x"))
 									(p-assign (ident "y")))
-								(e-dispatch-call (method "plus") (constraint-fn-var 259)
+								(e-dispatch-call (method "plus") (constraint-fn-var 253)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "x"))))
@@ -116,7 +116,7 @@ expect {
 											(p-assign (ident "y"))))))))))
 			(s-let
 				(p-assign (ident "result1"))
-				(e-call (constraint-fn-var 270)
+				(e-call (constraint-fn-var 259)
 					(e-field-access
 						(receiver
 							(e-lookup-local
@@ -126,7 +126,7 @@ expect {
 					(e-num (value "2"))))
 			(s-let
 				(p-assign (ident "result2"))
-				(e-call (constraint-fn-var 275)
+				(e-call (constraint-fn-var 261)
 					(e-field-access
 						(receiver
 							(e-lookup-local

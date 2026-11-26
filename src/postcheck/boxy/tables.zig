@@ -498,6 +498,14 @@ pub const Evaluation = struct {
     /// The next visit order. Orders are issued from one, so zero marks an
     /// unvisited recipe.
     visited: u32 = 1,
+    /// The search's frames and, after one another, each frame's operands;
+    /// both empty between searches.
+    frames: std.ArrayList(Frame) = .empty,
+    frame_operands: std.ArrayList(Operand) = .empty,
+    /// The members of the group being evaluated, and the operands
+    /// `readsItself` lists; scratch kept with its capacity.
+    group: std.ArrayList(RecipeId) = .empty,
+    own_operands: std.ArrayList(Operand) = .empty,
 
     const unvisited: u32 = 0;
 
@@ -529,6 +537,10 @@ pub const Evaluation = struct {
         self.low.deinit(self.allocator);
         self.on_stack.deinit(self.allocator);
         self.stack.deinit(self.allocator);
+        self.frames.deinit(self.allocator);
+        self.frame_operands.deinit(self.allocator);
+        self.group.deinit(self.allocator);
+        self.own_operands.deinit(self.allocator);
     }
 
     /// The word of recipe `named` at this instantiation.
@@ -561,22 +573,26 @@ pub const Evaluation = struct {
         @memset(self.on_stack.items[old..], false);
     }
 
-    const Frame = struct { id: RecipeId, operands: []const Operand, next: usize };
+    /// A visited recipe and its operands, `frame_operands[start..end]`.
+    const Frame = struct { id: RecipeId, start: usize, end: usize, next: usize };
 
     /// Evaluate every recipe `root` reaches that has no word yet, a strongly
     /// connected group at a time, each after the groups it reads (Tarjan's
     /// search, with an explicit stack).
     fn search(self: *Evaluation, root: RecipeId) Allocator.Error!void {
-        var frames: std.ArrayList(Frame) = .empty;
+        // A group's evaluation never searches again, so the search's frames
+        // are this evaluation's own.
+        const frames = &self.frames;
+        std.debug.assert(frames.items.len == 0 and self.frame_operands.items.len == 0);
         defer {
-            for (frames.items) |frame| self.allocator.free(frame.operands);
-            frames.deinit(self.allocator);
+            frames.clearRetainingCapacity();
+            self.frame_operands.clearRetainingCapacity();
         }
-        try self.enter(&frames, root);
+        try self.enter(root);
         while (frames.items.len != 0) {
             const top = &frames.items[frames.items.len - 1];
-            if (top.next < top.operands.len) {
-                const operand = top.operands[top.next];
+            if (top.start + top.next < top.end) {
+                const operand = self.frame_operands.items[top.start + top.next];
                 top.next += 1;
                 const next = switch (operand) {
                     .recipe => |id| self.source.resolve(id),
@@ -584,7 +600,7 @@ pub const Evaluation = struct {
                 };
                 if (self.words.items[@backingInt(next)] != null) continue;
                 if (self.visit.items[@backingInt(next)] == unvisited) {
-                    try self.enter(&frames, next);
+                    try self.enter(next);
                 } else if (self.on_stack.items[@backingInt(next)]) {
                     const from = @backingInt(top.id);
                     self.low.items[from] = @min(self.low.items[from], self.visit.items[@backingInt(next)]);
@@ -592,7 +608,7 @@ pub const Evaluation = struct {
                 continue;
             }
             const done = frames.pop().?;
-            self.allocator.free(done.operands);
+            self.frame_operands.shrinkRetainingCapacity(done.start);
             const id = @backingInt(done.id);
             if (frames.items.len != 0) {
                 const parent = @backingInt(frames.items[frames.items.len - 1].id);
@@ -601,26 +617,24 @@ pub const Evaluation = struct {
             if (self.low.items[id] != self.visit.items[id]) continue;
             // `done` heads a group: the stack's recipes from it on.
             const start = std.mem.findScalarLast(RecipeId, self.stack.items, done.id) orelse invariant("a searched recipe left the search's stack");
-            const members = try self.allocator.dupe(RecipeId, self.stack.items[start..]);
-            defer self.allocator.free(members);
+            self.group.clearRetainingCapacity();
+            try self.group.appendSlice(self.allocator, self.stack.items[start..]);
+            const members = self.group.items;
             self.stack.shrinkRetainingCapacity(start);
             for (members) |member| self.on_stack.items[@backingInt(member)] = false;
             try self.evaluateGroup(members);
         }
     }
 
-    fn enter(self: *Evaluation, frames: *std.ArrayList(Frame), id: RecipeId) Allocator.Error!void {
-        var operands: std.ArrayList(Operand) = .empty;
-        errdefer operands.deinit(self.allocator);
-        try appendOperands(self.allocator, &operands, self.source.get(id));
+    fn enter(self: *Evaluation, id: RecipeId) Allocator.Error!void {
+        const start = self.frame_operands.items.len;
+        try appendOperands(self.allocator, &self.frame_operands, self.source.get(id));
         self.visit.items[@backingInt(id)] = self.visited;
         self.low.items[@backingInt(id)] = self.visited;
         self.visited += 1;
         self.on_stack.items[@backingInt(id)] = true;
         try self.stack.append(self.allocator, id);
-        const owned = try operands.toOwnedSlice(self.allocator);
-        errdefer self.allocator.free(owned);
-        try frames.append(self.allocator, .{ .id = id, .operands = owned, .next = 0 });
+        try self.frames.append(self.allocator, .{ .id = id, .start = start, .end = self.frame_operands.items.len, .next = 0 });
     }
 
     /// Evaluate the strongly connected group `members`.
@@ -633,9 +647,9 @@ pub const Evaluation = struct {
     }
 
     fn readsItself(self: *Evaluation, id: RecipeId) Allocator.Error!bool {
-        var operands: std.ArrayList(Operand) = .empty;
-        defer operands.deinit(self.allocator);
-        try appendOperands(self.allocator, &operands, self.source.get(id));
+        const operands = &self.own_operands;
+        operands.clearRetainingCapacity();
+        try appendOperands(self.allocator, operands, self.source.get(id));
         for (operands.items) |operand| switch (operand) {
             .recipe => |next| if (self.source.resolve(next) == id) return true,
             .static => {},
@@ -1149,7 +1163,7 @@ test "a cyclic group has the same words whichever member its evaluation enters b
     const ret = try store.addCFStmt(.{ .ret = .{ .value = target } }, .test_fixture);
     const proc = try store.addProcSpec(.{ .name = .fromRaw(0), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try store.addLocalSpan(&.{target}), .body = .some(ret), .ret_layout = .u8 }, .none);
     // The evaluation reads a callable's worker for its procedure alone.
-    const module = try program.modules.add(test_program.view(1));
+    const module = try program.modules.add(&test_program.view(1));
     const entry_id: WorkerId = @fromBackingInt(@intCast(program.workers.items.len));
     try program.workers.append(allocator, .{
         .key = .{ .structural = .is_eq },

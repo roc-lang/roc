@@ -213,9 +213,8 @@ pub const SealedTypeKeys = struct {
     index: collections.OnceSlot(*KeyIndex, .sealed_type_key_index) = .empty,
     writer_mutex: std.Io.Mutex = .init,
     writer: ?canonical_type_keys.TypeWriter = null,
-    /// Per variable: 0 while unknown, else 1 + whether a walk found the
-    /// variable reaches an identity variable.
-    identity: collections.zeroed_pages.SparseSlice(std.atomic.Value(u8)),
+    /// The number of variables of the sealed store, one key slot each.
+    var_count: usize,
     /// Canonical ids of settled source types, recorded on first request.
     canonical: collections.zeroed_pages.SparseSlice(CanonicalIdSlot),
 
@@ -224,11 +223,10 @@ pub const SealedTypeKeys = struct {
     pub fn create(allocator: Allocator, io: std.Io, env: *const ModuleEnv) Allocator.Error!*SealedTypeKeys {
         const keys = try allocator.create(SealedTypeKeys);
         errdefer allocator.destroy(keys);
-        var identity = try collections.zeroed_pages.SparseSlice(std.atomic.Value(u8)).init(allocator, @intCast(env.types.len()));
-        errdefer identity.deinit(allocator);
-        var canonical_ids = try collections.zeroed_pages.SparseSlice(CanonicalIdSlot).init(allocator, identity.items.len);
+        const var_count: usize = @intCast(env.types.len());
+        var canonical_ids = try collections.zeroed_pages.SparseSlice(CanonicalIdSlot).init(allocator, var_count);
         errdefer canonical_ids.deinit(allocator);
-        keys.* = .{ .allocator = allocator, .io = io, .env = env, .identity = identity, .canonical = canonical_ids };
+        keys.* = .{ .allocator = allocator, .io = io, .env = env, .var_count = var_count, .canonical = canonical_ids };
         return keys;
     }
 
@@ -240,7 +238,6 @@ pub const SealedTypeKeys = struct {
             allocator.destroy(index);
         }
         if (self.writer) |*writer| writer.deinit();
-        self.identity.deinit(allocator);
         self.canonical.deinit(allocator);
         allocator.destroy(self);
     }
@@ -256,22 +253,20 @@ pub const SealedTypeKeys = struct {
         defer self.writer_mutex.unlock(self.io);
         const storage_memory = if (self.table.peek()) |backing| backing.memory() else StorageMemory{};
         const memory: canonical_type_keys.TypeWriter.KeyMemory = if (self.writer) |*writer| writer.retainedKeyMemory() else .{};
-        const slots = if (self.table.peek() != null) self.identity.items.len else 0;
+        const slots = if (self.table.peek() != null) self.var_count else 0;
         const slot_bytes = storage_memory.allocated_bytes;
         const directory_bytes = storage_memory.directory_bytes;
-        const identity_bytes = self.identity.items.len * @sizeOf(std.atomic.Value(u8));
         const index_bytes = if (self.index.peek()) |index| @sizeOf(KeyIndex) + type_key_engine.hashRetainedBytes([32]u8, Var, index.*) else @as(usize, 0);
         const persistent = memory.engine.persistent();
         const scratch = memory.engine.scratch + memory.adapter_scratch;
-        const total = @sizeOf(SealedTypeKeys) + directory_bytes + slot_bytes + identity_bytes + index_bytes + persistent + scratch + memory.owned_ranks;
+        const total = @sizeOf(SealedTypeKeys) + directory_bytes + slot_bytes + index_bytes + persistent + scratch + memory.owned_ranks;
         // These owners are shared by both strategies; memory observations are
         // not evidence that a compilation performed Boxy lowering.
-        std.debug.print("type-key-memory: phase={s} owner={x} vars={d} slots={d} successful_keys={d} owner_bytes={d} slot_heap_requested_bytes={d} identity_bytes={d} index_bytes={d} writer_present={d} descriptions_bytes={d} class_index_bytes={d} summaries_bytes={d} identity_maps_bytes={d} persistent_bytes={d} engine_scratch_bytes={d} adapter_scratch_bytes={d} scratch_bytes={d} owned_rank_bytes={d} heap_requested_bytes={d} nodes={d} classes={d} summaries={d} map_nodes={d} directory_bytes={d} slot_logical_bytes={d} slot_reserved_virtual_bytes={d} storage_backend={s} module={s}\n", .{
-            phase,                @intFromPtr(self),     self.env.types.len(),              slots,                      self.successful_keys,         @sizeOf(SealedTypeKeys),       slot_bytes,
-            identity_bytes,       index_bytes,           @intFromBool(self.writer != null), memory.engine.descriptions, memory.engine.class_index,    memory.engine.summaries,       memory.engine.identity_maps,
-            persistent,           memory.engine.scratch, memory.adapter_scratch,            scratch,                    memory.owned_ranks,           total,                         memory.nodes,
-            memory.classes,       memory.summaries,      memory.map_nodes,                  directory_bytes,            storage_memory.logical_bytes, storage_memory.reserved_bytes, if (use_zeroed_mapping) "virtual" else "heap_pages",
-            self.env.module_name,
+        std.debug.print("type-key-memory: phase={s} owner={x} vars={d} slots={d} successful_keys={d} owner_bytes={d} slot_heap_requested_bytes={d} index_bytes={d} writer_present={d} descriptions_bytes={d} class_index_bytes={d} summaries_bytes={d} identity_maps_bytes={d} persistent_bytes={d} engine_scratch_bytes={d} adapter_scratch_bytes={d} scratch_bytes={d} owned_rank_bytes={d} heap_requested_bytes={d} nodes={d} classes={d} summaries={d} map_nodes={d} directory_bytes={d} slot_logical_bytes={d} slot_reserved_virtual_bytes={d} storage_backend={s} module={s}\n", .{
+            phase,                 @intFromPtr(self),                 self.env.types.len(),       slots,                        self.successful_keys,          @sizeOf(SealedTypeKeys),                             slot_bytes,
+            index_bytes,           @intFromBool(self.writer != null), memory.engine.descriptions, memory.engine.class_index,    memory.engine.summaries,       memory.engine.identity_maps,                         persistent,
+            memory.engine.scratch, memory.adapter_scratch,            scratch,                    memory.owned_ranks,           total,                         memory.nodes,                                        memory.classes,
+            memory.summaries,      memory.map_nodes,                  directory_bytes,            storage_memory.logical_bytes, storage_memory.reserved_bytes, if (use_zeroed_mapping) "virtual" else "heap_pages", self.env.module_name,
         });
     }
 
@@ -281,12 +276,12 @@ pub const SealedTypeKeys = struct {
 
     fn allocateStorage(self: *SealedTypeKeys) Allocator.Error!KeyStorage {
         if (self.test_fail_storage.enabled()) return error.OutOfMemory;
-        return KeyStorage.init(self.allocator, self.identity.items.len);
+        return KeyStorage.init(self.allocator, self.var_count);
     }
 
     fn slot(self: *SealedTypeKeys, var_: Var) Allocator.Error!*KeySlot {
         const raw: usize = @backingInt(var_);
-        std.debug.assert(raw < self.identity.items.len);
+        std.debug.assert(raw < self.var_count);
         const storage_ = try self.storage();
         return storage_.slot(self.allocator, self.io, raw);
     }
@@ -315,24 +310,6 @@ pub const SealedTypeKeys = struct {
             return result;
         }
     };
-
-    /// Whether `var_` reaches an identity variable, when a walk recorded it.
-    pub fn knownIdentity(self: *const SealedTypeKeys, var_: Var) ?bool {
-        const index: usize = @backingInt(var_);
-        std.debug.assert(index < self.identity.items.len);
-        return switch (self.identity.items[index].load(.acquire)) {
-            0 => null,
-            1 => false,
-            else => true,
-        };
-    }
-
-    /// Record whether `var_` reaches an identity variable.
-    pub fn recordIdentity(self: *SealedTypeKeys, var_: Var, value: bool) void {
-        const index: usize = @backingInt(var_);
-        std.debug.assert(index < self.identity.items.len);
-        self.identity.items[index].store(if (value) 2 else 1, .release);
-    }
 
     /// The previously recorded canonical id of a settled source type.
     pub fn knownCanonical(self: *const SealedTypeKeys, var_: Var) ?CheckedTypeId {
@@ -429,7 +406,7 @@ const SlotTestStore = struct {
             var_.* = try env.types.freshFromContent(content);
         }
         const redirect = try env.types.freshRedirect(vars[slots_per_page]);
-        try env.types.canonicalizeAndSeal(env.getIdentStoreConst());
+        try env.types.canonicalizeAndSeal(env.getIdentStoreConst(), env.types.len(), &env);
         var facts: [count + 1]sealed_type_view.SealedVarFacts = @splat(.{});
         for ([_]Var{ vars[slots_per_page - 1], vars[slots_per_page], vars[count - 1], redirect }) |var_| {
             facts[@backingInt(var_)].reached = true;
@@ -450,16 +427,13 @@ const SlotTestStore = struct {
     }
 };
 
-test "source key storage preserves keys identity proofs and allocation-free hits" {
+test "source key storage preserves keys and allocation-free hits" {
     const allocator = std.testing.allocator;
     var fixture = try SlotTestStore.init(allocator);
     defer fixture.deinit();
     var failing = std.testing.FailingAllocator.init(allocator, .{});
     const keys = try SealedTypeKeys.create(failing.allocator(), std.testing.io, &fixture.env);
     defer keys.destroy();
-    try std.testing.expect(keys.table.peek() == null);
-    keys.recordIdentity(fixture.vars[0], false);
-    keys.recordIdentity(fixture.vars[slots_per_page * 2], true);
     try std.testing.expect(keys.table.peek() == null);
 
     const requested = [_]Var{ fixture.vars[0], fixture.vars[slots_per_page - 1], fixture.vars[slots_per_page], fixture.vars[SlotTestStore.count - 1] };
@@ -474,9 +448,6 @@ test "source key storage preserves keys identity proofs and allocation-free hits
         try std.testing.expect(stored.pages[2].peek() == null);
     }
     try std.testing.expectEqual(requested.len, keys.successful_keys);
-    try std.testing.expectEqual(@as(?bool, false), keys.knownIdentity(fixture.vars[0]));
-    try std.testing.expectEqual(@as(?bool, true), keys.knownIdentity(fixture.vars[slots_per_page * 2]));
-    try std.testing.expectEqual(@as(?bool, null), keys.knownIdentity(fixture.vars[slots_per_page]));
 
     // Cached reads neither allocate nor move the directory, pages or keys.
     const first = try keys.slot(requested[0]);
@@ -561,7 +532,6 @@ test "source key storage retries mapping publication key and index failures" {
     defer keys.destroy();
     const first = fixture.vars[0];
     const expected = try fixture.freshInfo(first);
-    keys.recordIdentity(first, false);
 
     keys.test_fail_storage = .on;
     try std.testing.expectError(error.OutOfMemory, keys.info(first));
@@ -588,7 +558,6 @@ test "source key storage retries mapping publication key and index failures" {
     try std.testing.expect(keys.index.peek() == null);
     failing.fail_index = std.math.maxInt(usize);
     try std.testing.expectEqual(@as(?Var, fixture.vars[slots_per_page - 1]), try keys.varForKey(fixture.view(), expected.key));
-    try std.testing.expectEqual(@as(?bool, false), keys.knownIdentity(first));
     try std.testing.expectEqual(first_slot, try keys.slot(first));
 }
 

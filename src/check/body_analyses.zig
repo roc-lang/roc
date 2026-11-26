@@ -63,6 +63,75 @@ pub const NodeFlags = packed struct(u8) {
     destructured_alias: bool = false,
 };
 
+/// Whether an expression's own kind is a literal or a construction: it does
+/// nothing but hold its children, apart from converting a literal through
+/// its type's `from_numeral` or `from_quote`.
+fn exprKindIsInert(kind: CIR.Expr.Kind) bool {
+    return switch (kind) {
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_str,
+        .e_str_segment,
+        .e_bytes_literal,
+        .e_empty_list,
+        .e_empty_record,
+        .e_zero_argument_tag,
+        .e_list,
+        .e_tuple,
+        .e_tag,
+        .e_record,
+        .e_nominal,
+        .e_nominal_external,
+        => true,
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_deferred_import_ref,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
+        .e_lookup_required,
+        .e_match,
+        .e_if,
+        .e_block,
+        .e_closure,
+        .e_lambda,
+        .e_binop,
+        .e_unary_minus,
+        .e_field_access,
+        .e_method_call,
+        .e_structural_eq,
+        .e_structural_hash,
+        .e_type_method_call,
+        .e_tuple_access,
+        .e_crash,
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_derived_method,
+        .e_return,
+        .e_break,
+        .e_for,
+        .e_hosted_lambda,
+        .e_run_low_level,
+        .e_runtime_error,
+        .e_call,
+        .e_interpolation,
+        .e_dispatch_call,
+        .e_method_eq,
+        .e_type_dispatch_call,
+        => false,
+    };
+}
+
 /// What owns a top-level unit's nodes.
 pub const UnitKind = enum(u8) {
     /// A global value definition: its pattern and expression.
@@ -94,6 +163,10 @@ const DestructuredAlias = struct { binder: u32, statement: StatementId };
 /// The CIR-only index of a checked module's bodies.
 pub const ModuleIndex = struct {
     has_expects: bool = false,
+    /// Whether the bodies reach a runtime error node (an `e_runtime_error`
+    /// expression, a `runtime_error` pattern, or an `s_runtime_error`
+    /// statement).
+    has_runtime_errors: bool = false,
     /// Per node: the kind of node the bodies reach it as.
     node_kinds: []NodeKind = &.{},
     /// Per node: its declaration facts.
@@ -113,6 +186,27 @@ pub const ModuleIndex = struct {
     /// The binders of destructuring scheme alias declarations with their
     /// declarations, by binder node, ascending.
     destructured_aliases: []DestructuredAlias = &.{},
+    /// The reached call expressions (`e_call`), ascending.
+    call_exprs: []u32 = &.{},
+    /// The reached statically dispatched expressions (`e_dispatch_call`,
+    /// `e_interpolation`, `e_type_dispatch_call`, `e_method_eq`), ascending.
+    dispatch_exprs: []u32 = &.{},
+    /// The reached value lookups (`e_lookup_local`, `e_lookup_external`,
+    /// `e_lookup_associated_resolved`, `e_lookup_required`), ascending.
+    lookup_exprs: []u32 = &.{},
+    /// The reached `s_decl`, `s_var`, and `s_var_uninitialized` statements,
+    /// in no particular order.
+    binding_statements: []StatementId = &.{},
+    /// The reached lambdas (`e_lambda`), in no particular order.
+    lambda_exprs: []ExprId = &.{},
+    /// Per node: the node whose children include it, or zero for a unit's
+    /// root and an unreached node.
+    parent_of: []u32 = &.{},
+    /// The reached expressions whose whole subtree is literals and
+    /// constructions (`exprKindIsInert`), so a walk that acts only on
+    /// lookups, calls, procedures, dispatches, and literal conversions finds
+    /// nothing in it beyond those conversions.
+    inert_exprs: std.DynamicBitSetUnmanaged = .{},
 
     /// The index of `env`'s bodies. `promoted_patterns` are the binding
     /// patterns of the module's promoted local procedures.
@@ -135,6 +229,13 @@ pub const ModuleIndex = struct {
         allocator.free(self.top_level_defs);
         allocator.free(self.defaults);
         allocator.free(self.destructured_aliases);
+        allocator.free(self.call_exprs);
+        allocator.free(self.dispatch_exprs);
+        allocator.free(self.lookup_exprs);
+        allocator.free(self.binding_statements);
+        allocator.free(self.lambda_exprs);
+        allocator.free(self.parent_of);
+        self.inert_exprs.deinit(allocator);
         self.* = .{};
     }
 
@@ -166,6 +267,48 @@ pub const ModuleIndex = struct {
             .expr, .statement => true,
             .unreached, .pattern => false,
         };
+    }
+
+    /// The reached call expressions (`e_call`), ascending.
+    pub fn callExprs(self: *const ModuleIndex) []const u32 {
+        return self.call_exprs;
+    }
+
+    /// The reached statically dispatched expressions (`e_dispatch_call`,
+    /// `e_interpolation`, `e_type_dispatch_call`, `e_method_eq`), ascending.
+    pub fn dispatchExprs(self: *const ModuleIndex) []const u32 {
+        return self.dispatch_exprs;
+    }
+
+    /// The reached value lookups (`e_lookup_local`, `e_lookup_external`,
+    /// `e_lookup_associated_resolved`, `e_lookup_required`), ascending.
+    pub fn lookupExprs(self: *const ModuleIndex) []const u32 {
+        return self.lookup_exprs;
+    }
+
+    /// The reached `s_decl`, `s_var`, and `s_var_uninitialized` statements,
+    /// in no particular order.
+    pub fn bindingStatements(self: *const ModuleIndex) []const StatementId {
+        return self.binding_statements;
+    }
+
+    /// The reached lambdas (`e_lambda`), in no particular order.
+    pub fn lambdaExprs(self: *const ModuleIndex) []const ExprId {
+        return self.lambda_exprs;
+    }
+
+    /// The node whose children include a reached node, or null for a unit's
+    /// root.
+    pub fn parentOf(self: *const ModuleIndex, raw_node: u32) ?u32 {
+        std.debug.assert(self.nodeKind(raw_node) != .unreached);
+        const parent = self.parent_of[raw_node];
+        return if (parent == 0) null else parent;
+    }
+
+    /// The reached expressions whose whole subtree is literals and
+    /// constructions (`exprKindIsInert`).
+    pub fn inertExprs(self: *const ModuleIndex) *const std.DynamicBitSetUnmanaged {
+        return &self.inert_exprs;
     }
 
     /// The unit that owns a reached node.
@@ -253,6 +396,7 @@ pub const ModuleIndex = struct {
 
     const Builder = struct {
         has_expects: bool = false,
+        has_runtime_errors: bool = false,
         allocator: Allocator,
         env: *const ModuleEnv,
         node_kinds: []NodeKind,
@@ -265,6 +409,16 @@ pub const ModuleIndex = struct {
         top_level_defs: std.ArrayList(TopLevelDef) = .empty,
         defaults: std.ArrayList(u32) = .empty,
         destructured_aliases: std.ArrayList(DestructuredAlias) = .empty,
+        call_exprs: std.ArrayList(u32) = .empty,
+        dispatch_exprs: std.ArrayList(u32) = .empty,
+        lookup_exprs: std.ArrayList(u32) = .empty,
+        binding_statements: std.ArrayList(StatementId) = .empty,
+        lambda_exprs: std.ArrayList(ExprId) = .empty,
+        parent_of: []u32,
+        inert_exprs: std.DynamicBitSetUnmanaged,
+        /// The node whose children are being marked, or zero while a unit's
+        /// roots are.
+        current_parent: u32 = 0,
 
         fn init(allocator: Allocator, env: *const ModuleEnv) Allocator.Error!Builder {
             const node_count = env.store.nodes.len();
@@ -277,6 +431,11 @@ pub const ModuleIndex = struct {
             const unit_of = try allocator.alloc(UnitId, node_count);
             errdefer allocator.free(unit_of);
             const position_in_unit = try allocator.alloc(u32, node_count);
+            errdefer allocator.free(position_in_unit);
+            const parent_of = try allocator.alloc(u32, node_count);
+            errdefer allocator.free(parent_of);
+            @memset(parent_of, 0);
+            const inert_exprs = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
             return .{
                 .allocator = allocator,
                 .env = env,
@@ -284,6 +443,8 @@ pub const ModuleIndex = struct {
                 .node_flags = node_flags,
                 .unit_of = unit_of,
                 .position_in_unit = position_in_unit,
+                .parent_of = parent_of,
+                .inert_exprs = inert_exprs,
             };
         }
 
@@ -301,6 +462,13 @@ pub const ModuleIndex = struct {
             self.top_level_defs.deinit(self.allocator);
             self.defaults.deinit(self.allocator);
             self.destructured_aliases.deinit(self.allocator);
+            self.call_exprs.deinit(self.allocator);
+            self.dispatch_exprs.deinit(self.allocator);
+            self.lookup_exprs.deinit(self.allocator);
+            self.binding_statements.deinit(self.allocator);
+            self.lambda_exprs.deinit(self.allocator);
+            self.allocator.free(self.parent_of);
+            self.inert_exprs.deinit(self.allocator);
         }
 
         fn finish(self: *Builder) Allocator.Error!ModuleIndex {
@@ -326,8 +494,22 @@ pub const ModuleIndex = struct {
             const defaults = try self.defaults.toOwnedSlice(allocator);
             errdefer allocator.free(defaults);
             const destructured_aliases = try self.destructured_aliases.toOwnedSlice(allocator);
+            errdefer allocator.free(destructured_aliases);
+            std.mem.sort(u32, self.call_exprs.items, {}, std.sort.asc(u32));
+            const call_exprs = try self.call_exprs.toOwnedSlice(allocator);
+            errdefer allocator.free(call_exprs);
+            std.mem.sort(u32, self.dispatch_exprs.items, {}, std.sort.asc(u32));
+            const dispatch_exprs = try self.dispatch_exprs.toOwnedSlice(allocator);
+            errdefer allocator.free(dispatch_exprs);
+            std.mem.sort(u32, self.lookup_exprs.items, {}, std.sort.asc(u32));
+            const lookup_exprs = try self.lookup_exprs.toOwnedSlice(allocator);
+            errdefer allocator.free(lookup_exprs);
+            const binding_statements = try self.binding_statements.toOwnedSlice(allocator);
+            errdefer allocator.free(binding_statements);
+            const lambda_exprs = try self.lambda_exprs.toOwnedSlice(allocator);
             return .{
                 .has_expects = self.has_expects,
+                .has_runtime_errors = self.has_runtime_errors,
                 .node_kinds = self.node_kinds,
                 .node_flags = self.node_flags,
                 .unit_of = self.unit_of,
@@ -337,6 +519,13 @@ pub const ModuleIndex = struct {
                 .top_level_defs = top_level_defs,
                 .defaults = defaults,
                 .destructured_aliases = destructured_aliases,
+                .call_exprs = call_exprs,
+                .dispatch_exprs = dispatch_exprs,
+                .lookup_exprs = lookup_exprs,
+                .binding_statements = binding_statements,
+                .lambda_exprs = lambda_exprs,
+                .parent_of = self.parent_of,
+                .inert_exprs = self.inert_exprs,
             };
         }
 
@@ -361,7 +550,7 @@ pub const ModuleIndex = struct {
             // reaching them globally would walk into the original children
             // of an expression that checking replaced with `e_runtime_error`.
             for (store.sliceStatements(env.all_statements)) |statement_idx| {
-                const kind: UnitKind = switch (store.getStatement(statement_idx)) {
+                const kind: UnitKind = switch (store.statementKind(statement_idx)) {
                     .s_import,
                     .s_alias_decl,
                     .s_nominal_decl,
@@ -420,6 +609,7 @@ pub const ModuleIndex = struct {
                 .start = @intCast(self.unit_nodes.items.len),
                 .len = 0,
             });
+            self.current_parent = 0;
             return id;
         }
 
@@ -427,6 +617,17 @@ pub const ModuleIndex = struct {
             const owned = &self.units.items[@backingInt(id)];
             owned.len = @as(u32, @intCast(self.unit_nodes.items.len)) - owned.start;
             const nodes = self.unit_nodes.items[owned.start..];
+            // Nodes are listed in marking order, every node after the node
+            // whose children include it, so in reverse each node's whole
+            // subtree is decided before the node is.
+            var remaining = nodes.len;
+            while (remaining > 0) {
+                remaining -= 1;
+                const raw = nodes[remaining];
+                if (self.inert_exprs.isSet(raw)) continue;
+                const parent = self.parent_of[raw];
+                if (parent != 0) self.inert_exprs.unset(parent);
+            }
             std.mem.sort(u32, nodes, {}, std.sort.asc(u32));
             for (nodes, 0..) |raw, position| self.position_in_unit[raw] = @intCast(position);
         }
@@ -441,15 +642,25 @@ pub const ModuleIndex = struct {
             if (self.node_kinds[raw] != .unreached) return;
             self.node_kinds[raw] = kind;
             self.unit_of[raw] = id;
+            self.parent_of[raw] = self.current_parent;
             try self.unit_nodes.append(self.allocator, raw);
             try self.work.append(self.allocator, pending);
         }
 
         fn drain(self: *Builder, id: UnitId) Allocator.Error!void {
             while (self.work.pop()) |pending| switch (pending) {
-                .expr => |expr| try self.markExprChildren(expr, id),
-                .pattern => |pattern| try self.markPatternChildren(pattern, id),
-                .statement => |statement| try self.markStatementChildren(statement, id),
+                .expr => |expr| {
+                    self.current_parent = @backingInt(expr);
+                    try self.markExprChildren(expr, id);
+                },
+                .pattern => |pattern| {
+                    self.current_parent = @backingInt(pattern);
+                    try self.markPatternChildren(pattern, id);
+                },
+                .statement => |statement| {
+                    self.current_parent = @backingInt(statement);
+                    try self.markStatementChildren(statement, id);
+                },
             };
         }
 
@@ -463,11 +674,14 @@ pub const ModuleIndex = struct {
 
         fn markExprChildren(self: *Builder, expr_idx: ExprId, id: UnitId) Allocator.Error!void {
             const store = &self.env.store;
-            switch (store.getExpr(expr_idx)) {
-                .e_str => |str| try self.markExprs(store.sliceExpr(str.span), id),
-                .e_list => |list| try self.markExprs(store.sliceExpr(list.elems), id),
-                .e_tuple => |tuple| try self.markExprs(store.sliceExpr(tuple.elems), id),
-                .e_match => |match| {
+            const kind = store.exprKind(expr_idx);
+            if (exprKindIsInert(kind)) self.inert_exprs.set(@backingInt(expr_idx));
+            switch (kind) {
+                .e_str => try self.markExprs(store.sliceExpr(store.exprView(expr_idx).e_str.get(.span)), id),
+                .e_list => try self.markExprs(store.sliceExpr(store.exprView(expr_idx).e_list.get(.elems)), id),
+                .e_tuple => try self.markExprs(store.sliceExpr(store.exprView(expr_idx).e_tuple.get(.elems)), id),
+                .e_match => {
+                    const match = store.exprView(expr_idx).e_match.decode();
                     try self.mark(.{ .expr = match.cond }, id);
                     for (store.sliceMatchBranches(match.branches)) |branch_idx| {
                         const branch = store.getMatchBranch(branch_idx);
@@ -478,7 +692,8 @@ pub const ModuleIndex = struct {
                         try self.mark(.{ .expr = branch.value }, id);
                     }
                 },
-                .e_if => |if_| {
+                .e_if => {
+                    const if_ = store.exprView(expr_idx).e_if.decode();
                     for (store.sliceIfBranches(if_.branches)) |branch_idx| {
                         const branch = store.getIfBranch(branch_idx);
                         try self.mark(.{ .expr = branch.cond }, id);
@@ -486,89 +701,119 @@ pub const ModuleIndex = struct {
                     }
                     try self.mark(.{ .expr = if_.final_else }, id);
                 },
-                .e_call => |call| {
+                .e_call => {
+                    try self.call_exprs.append(self.allocator, @backingInt(expr_idx));
+                    const call = store.exprView(expr_idx).e_call.decode();
                     try self.mark(.{ .expr = call.func }, id);
                     try self.markExprs(store.sliceExpr(call.args), id);
                 },
-                .e_record => |record| {
+                .e_record => {
+                    const record = store.exprView(expr_idx).e_record.decode();
                     for (store.sliceRecordFields(record.fields)) |field_idx| {
                         try self.mark(.{ .expr = store.getRecordField(field_idx).value }, id);
                     }
                     if (record.ext) |ext| try self.mark(.{ .expr = ext }, id);
                 },
-                .e_block => |block| {
+                .e_block => {
+                    const block = store.exprView(expr_idx).e_block.decode();
                     for (store.sliceStatements(block.stmts)) |statement| try self.mark(.{ .statement = statement }, id);
                     try self.mark(.{ .expr = block.final_expr }, id);
                 },
-                .e_tag => |tag| try self.markExprs(store.sliceExpr(tag.args), id),
-                .e_nominal => |nominal| try self.mark(.{ .expr = nominal.backing_expr }, id),
-                .e_nominal_external => |nominal| try self.mark(.{ .expr = nominal.backing_expr }, id),
-                .e_closure => |closure| {
+                .e_tag => try self.markExprs(store.sliceExpr(store.exprView(expr_idx).e_tag.get(.args)), id),
+                .e_nominal => try self.mark(.{ .expr = store.exprView(expr_idx).e_nominal.get(.backing_expr) }, id),
+                .e_nominal_external => try self.mark(.{ .expr = store.exprView(expr_idx).e_nominal_external.get(.backing_expr) }, id),
+                .e_closure => {
+                    const closure = store.exprView(expr_idx).e_closure.decode();
                     try self.mark(.{ .expr = closure.lambda_idx }, id);
                     for (store.sliceCaptures(closure.captures)) |capture_idx| {
                         try self.mark(.{ .pattern = store.getCapture(capture_idx).pattern_idx }, id);
                     }
                 },
-                .e_lambda => |lambda| {
+                .e_lambda => {
+                    try self.lambda_exprs.append(self.allocator, expr_idx);
+                    const lambda = store.exprView(expr_idx).e_lambda.decode();
                     try self.markPatterns(store.slicePatterns(lambda.args), id);
                     try self.mark(.{ .expr = lambda.body }, id);
                 },
-                .e_binop => |binop| {
+                .e_binop => {
+                    const binop = store.exprView(expr_idx).e_binop.decode();
                     try self.mark(.{ .expr = binop.lhs }, id);
                     try self.mark(.{ .expr = binop.rhs }, id);
                 },
-                .e_unary_minus => |unary| try self.mark(.{ .expr = unary.expr }, id),
-                .e_field_access => |field| try self.mark(.{ .expr = field.receiver }, id),
-                inline .e_method_call, .e_dispatch_call => |call| {
+                .e_unary_minus => try self.mark(.{ .expr = store.exprView(expr_idx).e_unary_minus.get(.expr) }, id),
+                .e_field_access => try self.mark(.{ .expr = store.exprView(expr_idx).e_field_access.get(.receiver) }, id),
+                inline .e_method_call, .e_dispatch_call => |call_kind| {
+                    if (call_kind == .e_dispatch_call) try self.dispatch_exprs.append(self.allocator, @backingInt(expr_idx));
+                    const call = @field(store.exprView(expr_idx), @tagName(call_kind)).decode();
                     try self.mark(.{ .expr = call.receiver }, id);
                     try self.markExprs(store.sliceExpr(call.args), id);
                 },
-                .e_interpolation => |interpolation| {
+                .e_interpolation => {
+                    try self.dispatch_exprs.append(self.allocator, @backingInt(expr_idx));
+                    const interpolation = store.exprView(expr_idx).e_interpolation.decode();
                     try self.mark(.{ .expr = interpolation.first }, id);
                     try self.markExprs(store.sliceExpr(interpolation.parts), id);
                 },
-                .e_structural_eq => |eq| {
+                .e_structural_eq => {
+                    const eq = store.exprView(expr_idx).e_structural_eq.decode();
                     try self.mark(.{ .expr = eq.lhs }, id);
                     try self.mark(.{ .expr = eq.rhs }, id);
                 },
-                .e_structural_hash => |hash| {
+                .e_structural_hash => {
+                    const hash = store.exprView(expr_idx).e_structural_hash.decode();
                     try self.mark(.{ .expr = hash.value }, id);
                     try self.mark(.{ .expr = hash.hasher }, id);
                 },
-                .e_method_eq => |eq| {
+                .e_method_eq => {
+                    try self.dispatch_exprs.append(self.allocator, @backingInt(expr_idx));
+                    const eq = store.exprView(expr_idx).e_method_eq.decode();
                     try self.mark(.{ .expr = eq.lhs }, id);
                     try self.mark(.{ .expr = eq.rhs }, id);
                 },
-                .e_type_method_call => |call| {
+                .e_type_method_call => {
+                    const call = store.exprView(expr_idx).e_type_method_call.decode();
                     try self.mark(.{ .statement = call.type_dispatch_stmt }, id);
                     try self.markExprs(store.sliceExpr(call.args), id);
                 },
-                .e_type_dispatch_call => |call| {
+                .e_type_dispatch_call => {
+                    try self.dispatch_exprs.append(self.allocator, @backingInt(expr_idx));
+                    const call = store.exprView(expr_idx).e_type_dispatch_call.decode();
                     switch (call.owner) {
                         .statement => |statement| try self.mark(.{ .statement = statement }, id),
                         .dispatcher => {},
                     }
                     try self.markExprs(store.sliceExpr(call.args), id);
                 },
-                .e_tuple_access => |access| try self.mark(.{ .expr = access.tuple }, id),
-                .e_dbg => |dbg| try self.mark(.{ .expr = dbg.expr }, id),
-                .e_expect_err => |expect_err| try self.mark(.{ .expr = expect_err.expr }, id),
-                .e_expect => |expect| {
+                .e_tuple_access => try self.mark(.{ .expr = store.exprView(expr_idx).e_tuple_access.get(.tuple) }, id),
+                .e_dbg => try self.mark(.{ .expr = store.exprView(expr_idx).e_dbg.get(.expr) }, id),
+                .e_expect_err => try self.mark(.{ .expr = store.exprView(expr_idx).e_expect_err.get(.expr) }, id),
+                .e_expect => {
+                    const expect = store.exprView(expr_idx).e_expect.decode();
                     self.has_expects = true;
                     try self.mark(.{ .expr = expect.body }, id);
                 },
-                .e_return => |ret| {
+                .e_return => {
+                    const ret = store.exprView(expr_idx).e_return.decode();
                     try self.mark(.{ .expr = ret.expr }, id);
                     try self.mark(.{ .expr = ret.lambda }, id);
                 },
-                .e_for => |for_| {
+                .e_for => {
+                    const for_ = store.exprView(expr_idx).e_for.decode();
                     try self.mark(.{ .pattern = for_.patt }, id);
                     try self.mark(.{ .expr = for_.expr }, id);
                     try self.mark(.{ .expr = for_.body }, id);
                 },
-                .e_hosted_lambda => |hosted| try self.markPatterns(store.slicePatterns(hosted.args), id),
-                .e_run_low_level => |run| try self.markExprs(store.sliceExpr(run.args), id),
-                .e_runtime_error => |runtime_error| try self.markExprs(store.sliceExpr(runtime_error.evaluated), id),
+                .e_hosted_lambda => try self.markPatterns(store.slicePatterns(store.exprView(expr_idx).e_hosted_lambda.get(.args)), id),
+                .e_run_low_level => try self.markExprs(store.sliceExpr(store.exprView(expr_idx).e_run_low_level.get(.args)), id),
+                .e_runtime_error => {
+                    self.has_runtime_errors = true;
+                    try self.markExprs(store.sliceExpr(store.exprView(expr_idx).e_runtime_error.get(.evaluated)), id);
+                },
+                .e_lookup_local,
+                .e_lookup_external,
+                .e_lookup_associated_resolved,
+                .e_lookup_required,
+                => try self.lookup_exprs.append(self.allocator, @backingInt(expr_idx)),
                 .e_num,
                 .e_frac_f32,
                 .e_frac_f64,
@@ -580,10 +825,6 @@ pub const ModuleIndex = struct {
                 .e_typed_num_from_numeral,
                 .e_str_segment,
                 .e_bytes_literal,
-                .e_lookup_local,
-                .e_lookup_external,
-                .e_lookup_associated_resolved,
-                .e_lookup_required,
                 .e_empty_list,
                 .e_empty_record,
                 .e_zero_argument_tag,
@@ -600,20 +841,22 @@ pub const ModuleIndex = struct {
 
         fn markPatternChildren(self: *Builder, pattern_idx: PatternId, id: UnitId) Allocator.Error!void {
             const store = &self.env.store;
-            switch (store.getPattern(pattern_idx)) {
-                .as => |as| try self.mark(.{ .pattern = as.pattern }, id),
-                .applied_tag => |tag| try self.markPatterns(store.slicePatterns(tag.args), id),
-                .nominal => |nominal| try self.mark(.{ .pattern = nominal.backing_pattern }, id),
-                .nominal_external => |nominal| try self.mark(.{ .pattern = nominal.backing_pattern }, id),
-                .record_destructure => |record| for (store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+            switch (store.patternKind(pattern_idx)) {
+                .as => try self.mark(.{ .pattern = store.patternView(pattern_idx).as.get(.pattern) }, id),
+                .applied_tag => try self.markPatterns(store.slicePatterns(store.patternView(pattern_idx).applied_tag.get(.args)), id),
+                .nominal => try self.mark(.{ .pattern = store.patternView(pattern_idx).nominal.get(.backing_pattern) }, id),
+                .nominal_external => try self.mark(.{ .pattern = store.patternView(pattern_idx).nominal_external.get(.backing_pattern) }, id),
+                .record_destructure => for (store.sliceRecordDestructs(store.patternView(pattern_idx).record_destructure.get(.destructs))) |destruct_idx| {
                     try self.mark(.{ .pattern = store.getRecordDestruct(destruct_idx).kind.toPatternIdx() }, id);
                 },
-                .list => |list| {
+                .list => {
+                    const list = store.patternView(pattern_idx).list.decode();
                     try self.markPatterns(store.slicePatterns(list.patterns), id);
                     if (list.rest_info) |rest| if (rest.pattern) |rest_pattern| try self.mark(.{ .pattern = rest_pattern }, id);
                 },
-                .tuple => |tuple| try self.markPatterns(store.slicePatterns(tuple.patterns), id),
-                .str_interpolation => |str| {
+                .tuple => try self.markPatterns(store.slicePatterns(store.patternView(pattern_idx).tuple.get(.patterns)), id),
+                .str_interpolation => {
+                    const str = store.patternView(pattern_idx).str_interpolation.decode();
                     var offset: u32 = 0;
                     while (offset < str.steps.span.len) : (offset += 1) {
                         if (store.getStrPatternStep(str.steps, offset).capture) |capture| try self.mark(.{ .pattern = capture }, id);
@@ -629,48 +872,63 @@ pub const ModuleIndex = struct {
                 .frac_f64_literal,
                 .str_literal,
                 .underscore,
-                .runtime_error,
                 => {},
+                .runtime_error => self.has_runtime_errors = true,
                 .deferred_import_ref => invariant("a deferred import reference pattern reached a checked body"),
             }
         }
 
         fn markStatementChildren(self: *Builder, statement_idx: StatementId, id: UnitId) Allocator.Error!void {
             const store = &self.env.store;
-            switch (store.getStatement(statement_idx)) {
-                .s_decl => |decl| {
+            switch (store.statementKind(statement_idx)) {
+                .s_decl => {
+                    try self.binding_statements.append(self.allocator, statement_idx);
+                    const decl = store.statementView(statement_idx).s_decl.decode();
                     try self.mark(.{ .pattern = decl.pattern }, id);
                     try self.mark(.{ .expr = decl.expr }, id);
                 },
-                .s_var => |var_| {
+                .s_var => {
+                    try self.binding_statements.append(self.allocator, statement_idx);
+                    const var_ = store.statementView(statement_idx).s_var.decode();
                     try self.mark(.{ .pattern = var_.pattern_idx }, id);
                     try self.mark(.{ .expr = var_.expr }, id);
                 },
-                .s_var_uninitialized => |var_| try self.mark(.{ .pattern = var_.pattern_idx }, id),
-                .s_reassign => |reassign| {
+                .s_var_uninitialized => {
+                    try self.binding_statements.append(self.allocator, statement_idx);
+                    try self.mark(.{ .pattern = store.statementView(statement_idx).s_var_uninitialized.get(.pattern_idx) }, id);
+                },
+                .s_reassign => {
+                    const reassign = store.statementView(statement_idx).s_reassign.decode();
                     try self.mark(.{ .pattern = reassign.pattern_idx }, id);
                     try self.mark(.{ .expr = reassign.expr }, id);
                 },
-                .s_dbg => |dbg| try self.mark(.{ .expr = dbg.expr }, id),
-                .s_expr => |expr| try self.mark(.{ .expr = expr.expr }, id),
-                .s_expect => |expect| {
+                .s_dbg => try self.mark(.{ .expr = store.statementView(statement_idx).s_dbg.get(.expr) }, id),
+                .s_expr => try self.mark(.{ .expr = store.statementView(statement_idx).s_expr.get(.expr) }, id),
+                .s_expect => {
+                    const expect = store.statementView(statement_idx).s_expect.decode();
                     self.has_expects = true;
                     try self.mark(.{ .expr = expect.body }, id);
                 },
-                .s_for => |for_| {
+                .s_for => {
+                    const for_ = store.statementView(statement_idx).s_for.decode();
                     try self.mark(.{ .pattern = for_.patt }, id);
                     try self.mark(.{ .expr = for_.expr }, id);
                     try self.mark(.{ .expr = for_.body }, id);
                 },
-                inline .s_while, .s_infinite_loop, .s_breakable_loop => |loop| {
+                inline .s_while, .s_infinite_loop, .s_breakable_loop => |kind| {
+                    const loop = @field(store.statementView(statement_idx), @tagName(kind)).decode();
                     try self.mark(.{ .expr = loop.cond }, id);
                     try self.mark(.{ .expr = loop.body }, id);
                 },
-                .s_return => |ret| {
+                .s_return => {
+                    const ret = store.statementView(statement_idx).s_return.decode();
                     try self.mark(.{ .expr = ret.expr }, id);
                     try self.mark(.{ .expr = ret.lambda }, id);
                 },
-                .s_runtime_error => |runtime_error| try self.markExprs(store.sliceExpr(runtime_error.evaluated), id),
+                .s_runtime_error => {
+                    self.has_runtime_errors = true;
+                    try self.markExprs(store.sliceExpr(store.statementView(statement_idx).s_runtime_error.get(.evaluated)), id);
+                },
                 .s_crash,
                 .s_break,
                 .s_import,
@@ -691,8 +949,8 @@ pub const ModuleIndex = struct {
             for (env.method_defs.entries.items()) |entry| {
                 if (store.nodes.get(entry.value.type_node_idx).tag != .statement_decl) continue;
                 const statement: StatementId = @fromBackingInt(@intCast(@backingInt(entry.value.type_node_idx)));
-                const decl = store.getStatement(statement).s_decl;
-                if (store.getExpr(decl.expr) != .e_runtime_error) continue;
+                const decl = store.statementView(statement).s_decl.decode();
+                if (store.exprKind(decl.expr) != .e_runtime_error) continue;
                 self.node_flags[@backingInt(statement)].rejected_method_decl = true;
             }
 
@@ -702,9 +960,8 @@ pub const ModuleIndex = struct {
                 if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.recursive_value_reference)) continue;
                 const node: CIR.Node.Idx = @fromBackingInt(@intCast(record.node_idx));
                 if (store.nodes.get(node).tag != .expr_var) continue;
-                const lookup = store.getExpr(@fromBackingInt(@intCast(record.node_idx)));
-                if (lookup != .e_lookup_local) continue;
-                try recursively_referenced.put(@backingInt(lookup.e_lookup_local.pattern_idx), {});
+                const lookup = store.exprAs(@fromBackingInt(@intCast(record.node_idx)), .e_lookup_local) orelse continue;
+                try recursively_referenced.put(@backingInt(lookup.pattern_idx), {});
             }
 
             var binders: std.ArrayList(PatternId) = .empty;
@@ -714,9 +971,8 @@ pub const ModuleIndex = struct {
             for (self.node_kinds, 0..) |kind, raw| {
                 if (kind != .statement) continue;
                 const statement: StatementId = @fromBackingInt(@intCast(raw));
-                const data = store.getStatement(statement);
-                if (data != .s_decl) continue;
-                const decl = data.s_decl;
+                const data = store.statementAs(statement, .s_decl) orelse continue;
+                const decl = data;
                 if (self.node_flags[@backingInt(decl.pattern)].promoted_pattern) continue;
                 if (bindsLocalSchemeAlias(env, decl.pattern, decl.expr)) {
                     self.node_flags[@backingInt(decl.pattern)].scheme_alias_binder = true;
@@ -760,10 +1016,10 @@ pub fn bindsProcedureAlias(env: *const ModuleEnv, pattern: PatternId, expr: Expr
 /// way a use lowers the lookup at the use's own instantiation; the
 /// declaration computes nothing.
 pub fn bindsLocalSchemeAlias(env: *const ModuleEnv, pattern: PatternId, expr: ExprId) bool {
-    const rhs = env.store.getExpr(expr);
-    const is_lookup = rhs == .e_lookup_local or rhs == .e_lookup_external or
-        rhs == .e_lookup_required or rhs == .e_lookup_associated_resolved;
-    return is_lookup and env.store.getPattern(pattern) == .assign and
+    const rhs_kind = env.store.exprKind(expr);
+    const is_lookup = rhs_kind == .e_lookup_local or rhs_kind == .e_lookup_external or
+        rhs_kind == .e_lookup_required or rhs_kind == .e_lookup_associated_resolved;
+    return is_lookup and env.store.patternKind(pattern) == .assign and
         env.nodeIsBindingScheme(ModuleEnv.nodeIdxFrom(pattern));
 }
 
@@ -779,10 +1035,10 @@ pub fn bindsDestructuredSchemeAlias(env: *const ModuleEnv, pattern: PatternId, e
 
 /// Whether `pattern = expr` takes a looked-up value apart.
 fn destructuresLookup(env: *const ModuleEnv, pattern: PatternId, expr: ExprId) bool {
-    const rhs = env.store.getExpr(expr);
-    const is_lookup = rhs == .e_lookup_local or rhs == .e_lookup_external or
-        rhs == .e_lookup_required or rhs == .e_lookup_associated_resolved;
-    return is_lookup and env.store.getPattern(pattern) != .assign;
+    const rhs_kind = env.store.exprKind(expr);
+    const is_lookup = rhs_kind == .e_lookup_local or rhs_kind == .e_lookup_external or
+        rhs_kind == .e_lookup_required or rhs_kind == .e_lookup_associated_resolved;
+    return is_lookup and env.store.patternKind(pattern) != .assign;
 }
 
 fn dedupeSorted(list: *std.ArrayList(u32)) void {
@@ -906,7 +1162,6 @@ pub const BodyAnalyses = struct {
     promoted_patterns: []PatternId,
     indexed: collections.OnceSlot(*Indexed, .body_module_index) = .empty,
     dispatch_crashes: collections.OnceSlot(*NodeBits, .body_dispatch_crashes) = .empty,
-    diagnostic_errors: collections.OnceSlot(*NodeBits, .body_diagnostic_errors) = .empty,
     single_source: collections.OnceSlot(*SingleSourceFacts, .body_single_source_calls) = .empty,
 
     /// The analyses of `env`'s bodies. `promoted` lists the module's
@@ -938,11 +1193,9 @@ pub const BodyAnalyses = struct {
             indexed.index.deinit(allocator);
             allocator.destroy(indexed);
         }
-        inline for (.{ "dispatch_crashes", "diagnostic_errors" }) |name| {
-            if (@field(self, name).peek()) |bits| {
-                bits.deinit(allocator);
-                allocator.destroy(bits);
-            }
+        if (self.dispatch_crashes.peek()) |bits| {
+            bits.deinit(allocator);
+            allocator.destroy(bits);
         }
         if (self.single_source.peek()) |facts| facts.destroy(allocator);
         allocator.free(self.promoted_patterns);
@@ -977,7 +1230,7 @@ pub const BodyAnalyses = struct {
         return indexed;
     }
 
-    fn unitFacts(self: *BodyAnalyses, bodies: CheckedBodies, raw_node: u32) Allocator.Error!struct { *const UnitFacts, u32 } {
+    fn unitFacts(self: *BodyAnalyses, bodies: *const CheckedBodies, raw_node: u32) Allocator.Error!struct { *const UnitFacts, u32 } {
         const indexed = self.demanded();
         const unit_id = indexed.index.unitOf(raw_node);
         const facts = try indexed.unit_slots[@backingInt(unit_id)].getOrCompute(
@@ -991,7 +1244,7 @@ pub const BodyAnalyses = struct {
 
     const UnitRequest = struct {
         analyses: *BodyAnalyses,
-        bodies: CheckedBodies,
+        bodies: *const CheckedBodies,
         unit: UnitId,
 
         fn compute(request: UnitRequest) Allocator.Error!*UnitFacts {
@@ -1002,13 +1255,13 @@ pub const BodyAnalyses = struct {
     /// The nodes whose own static dispatch cannot run: a dispatch,
     /// `from_numeral` or `from_quote` plan keyed by the node resolves to a
     /// checked error or unreachable.
-    pub fn dispatchCrashes(self: *BodyAnalyses, bodies: CheckedBodies) Allocator.Error!*const NodeBits {
+    pub fn dispatchCrashes(self: *BodyAnalyses, bodies: *const CheckedBodies) Allocator.Error!*const NodeBits {
         return self.dispatch_crashes.getOrCompute(self.io, Allocator.Error, DispatchCrashRequest{ .analyses = self, .bodies = bodies }, DispatchCrashRequest.compute);
     }
 
     const DispatchCrashRequest = struct {
         analyses: *BodyAnalyses,
-        bodies: CheckedBodies,
+        bodies: *const CheckedBodies,
 
         fn compute(request: DispatchCrashRequest) Allocator.Error!*NodeBits {
             const allocator = request.analyses.allocator;
@@ -1019,57 +1272,34 @@ pub const BodyAnalyses = struct {
         }
     };
 
-    pub fn exprDiverges(self: *BodyAnalyses, bodies: CheckedBodies, expr: ExprId, mode: InlineExpectMode) Allocator.Error!bool {
+    pub fn exprDiverges(self: *BodyAnalyses, bodies: *const CheckedBodies, expr: ExprId, mode: InlineExpectMode) Allocator.Error!bool {
         const facts, const position = try self.unitFacts(bodies, @backingInt(expr));
         return facts.flags[position] & divergenceFlag(mode) != 0;
     }
 
-    pub fn statementDiverges(self: *BodyAnalyses, bodies: CheckedBodies, statement: StatementId, mode: InlineExpectMode) Allocator.Error!bool {
+    pub fn statementDiverges(self: *BodyAnalyses, bodies: *const CheckedBodies, statement: StatementId, mode: InlineExpectMode) Allocator.Error!bool {
         const facts, const position = try self.unitFacts(bodies, @backingInt(statement));
         return facts.flags[position] & divergenceFlag(mode) != 0;
     }
 
-    pub fn exprEvaluationMayBeElidedForInspect(self: *BodyAnalyses, bodies: CheckedBodies, expr: ExprId) Allocator.Error!bool {
+    pub fn exprEvaluationMayBeElidedForInspect(self: *BodyAnalyses, bodies: *const CheckedBodies, expr: ExprId) Allocator.Error!bool {
         const facts, const position = try self.unitFacts(bodies, @backingInt(expr));
         return facts.flags[position] & UnitFacts.inspect_elidable != 0;
     }
 
-    pub fn stateMergeBinders(self: *BodyAnalyses, bodies: CheckedBodies, raw_node: u32) Allocator.Error![]const BinderId {
+    pub fn stateMergeBinders(self: *BodyAnalyses, bodies: *const CheckedBodies, raw_node: u32) Allocator.Error![]const BinderId {
         const facts, const position = try self.unitFacts(bodies, raw_node);
         const span = facts.state_merges[position].get() orelse invariant("a state merge was requested for a node that owns none");
         return facts.binders[span.start..][0..span.len];
     }
 
-    pub fn loopMutationBinders(self: *BodyAnalyses, bodies: CheckedBodies, raw_node: u32) Allocator.Error![]const BinderId {
+    pub fn loopMutationBinders(self: *BodyAnalyses, bodies: *const CheckedBodies, raw_node: u32) Allocator.Error![]const BinderId {
         const facts, const position = try self.unitFacts(bodies, raw_node);
         const span = facts.loop_mutations[position].get() orelse invariant("loop mutations were requested for a node that is not a loop");
         return facts.binders[span.start..][0..span.len];
     }
 
-    pub fn exprContainsDiagnosticError(self: *BodyAnalyses, bodies: CheckedBodies, expr: ExprId) Allocator.Error!bool {
-        const bits = try self.diagnostic_errors.getOrCompute(self.io, Allocator.Error, DiagnosticRequest{ .analyses = self, .bodies = bodies }, DiagnosticRequest.compute);
-        return bits.isSet(@backingInt(expr));
-    }
-
-    pub fn patternContainsDiagnosticError(self: *BodyAnalyses, bodies: CheckedBodies, pattern: PatternId) Allocator.Error!bool {
-        const bits = try self.diagnostic_errors.getOrCompute(self.io, Allocator.Error, DiagnosticRequest{ .analyses = self, .bodies = bodies }, DiagnosticRequest.compute);
-        return bits.isSet(@backingInt(pattern));
-    }
-
-    const DiagnosticRequest = struct {
-        analyses: *BodyAnalyses,
-        bodies: CheckedBodies,
-
-        fn compute(request: DiagnosticRequest) Allocator.Error!*NodeBits {
-            const allocator = request.analyses.allocator;
-            const bits = try allocator.create(NodeBits);
-            errdefer allocator.destroy(bits);
-            bits.* = try diagnosticErrors(allocator, request.bodies, .final);
-            return bits;
-        }
-    };
-
-    pub fn templateHasSingleSourceCall(self: *BodyAnalyses, bodies: CheckedBodies, template: canonical.CheckedProcedureTemplateId) Allocator.Error!bool {
+    pub fn templateHasSingleSourceCall(self: *BodyAnalyses, bodies: *const CheckedBodies, template: canonical.CheckedProcedureTemplateId) Allocator.Error!bool {
         const facts = try self.singleSourceFacts(bodies);
         return std.sort.binarySearch(canonical.CheckedProcedureTemplateId, facts.templates, template, struct {
             fn order(key: canonical.CheckedProcedureTemplateId, item: canonical.CheckedProcedureTemplateId) std.math.Order {
@@ -1078,18 +1308,18 @@ pub const BodyAnalyses = struct {
         }.order) != null;
     }
 
-    pub fn nestedProcSiteIsSingleSourceCall(self: *BodyAnalyses, bodies: CheckedBodies, site: canonical.NestedProcSiteId) Allocator.Error!bool {
+    pub fn nestedProcSiteIsSingleSourceCall(self: *BodyAnalyses, bodies: *const CheckedBodies, site: canonical.NestedProcSiteId) Allocator.Error!bool {
         const facts = try self.singleSourceFacts(bodies);
         return facts.sites[@backingInt(site)];
     }
 
-    fn singleSourceFacts(self: *BodyAnalyses, bodies: CheckedBodies) Allocator.Error!*SingleSourceFacts {
+    fn singleSourceFacts(self: *BodyAnalyses, bodies: *const CheckedBodies) Allocator.Error!*SingleSourceFacts {
         return self.single_source.getOrCompute(self.io, Allocator.Error, SingleSourceRequest{ .analyses = self, .bodies = bodies }, SingleSourceRequest.compute);
     }
 
     const SingleSourceRequest = struct {
         analyses: *BodyAnalyses,
-        bodies: CheckedBodies,
+        bodies: *const CheckedBodies,
 
         fn compute(request: SingleSourceRequest) Allocator.Error!*SingleSourceFacts {
             return computeSingleSourceCalls(request.analyses.allocator, request.bodies);
@@ -1108,7 +1338,7 @@ fn divergenceFlag(mode: InlineExpectMode) u8 {
 /// resolution `selected` accepts.
 fn dispatchNodes(
     allocator: Allocator,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     comptime selected: fn (static_dispatch.CheckedCallResolution) bool,
 ) Allocator.Error!NodeBits {
     const plans = bodies.tables.plans orelse invariant("a body analysis ran without the module's dispatch plans");
@@ -1121,7 +1351,7 @@ fn dispatchNodes(
     return .{ .bits = bits };
 }
 
-fn computeUnitFacts(allocator: Allocator, bodies: CheckedBodies, unit_id: UnitId) Allocator.Error!*UnitFacts {
+fn computeUnitFacts(allocator: Allocator, bodies: *const CheckedBodies, unit_id: UnitId) Allocator.Error!*UnitFacts {
     const index = bodies.index();
     const nodes = index.unitNodeSlice(unit_id);
     const crashes = try bodies.analyses.dispatchCrashes(bodies);
@@ -1169,7 +1399,7 @@ fn computeUnitFacts(allocator: Allocator, bodies: CheckedBodies, unit_id: UnitId
 }
 
 /// The checked expression operands of the dispatch plan at `node`.
-fn appendDispatchOperands(bodies: CheckedBodies, raw_node: u32, out: anytype) Allocator.Error!void {
+fn appendDispatchOperands(bodies: *const CheckedBodies, raw_node: u32, out: anytype) Allocator.Error!void {
     const plans = bodies.tables.plans orelse invariant("a body analysis ran without the module's dispatch plans");
     const plan_id = plans.lookupByNode(raw_node) orelse return;
     const plan = plans.plans.items()[@backingInt(plan_id)];
@@ -1184,10 +1414,6 @@ fn dispatchResolutionCrashes(resolution: static_dispatch.CheckedCallResolution) 
         .checked_error, .@"unreachable" => true,
         .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .structural => false,
     };
-}
-
-fn dispatchResolutionIsCheckedError(resolution: static_dispatch.CheckedCallResolution) bool {
-    return resolution == .checked_error;
 }
 
 /// The kind of a normalized expression.
@@ -1357,7 +1583,7 @@ const DivergenceScan = struct {
     const done: u8 = 8;
 
     allocator: Allocator,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     /// The unit whose nodes `states` covers; null when it covers every node.
     unit: ?UnitId,
     /// The nodes whose own dispatch plan cannot run.
@@ -1507,7 +1733,7 @@ const DivergenceScan = struct {
         if (raw < self.evidence_crashes.len and self.evidence_crashes[raw]) return .{ .value = diverges_both };
         if (self.crashes.isSet(raw)) return .{ .value = diverges_both };
         const bodies = self.bodies;
-        return switch (bodies.exprData(id)) {
+        return switch (bodies.exprDataKind(id)) {
             .crash,
             .ellipsis,
             .break_,
@@ -1515,14 +1741,16 @@ const DivergenceScan = struct {
             .runtime_error,
             .expect_err,
             => .{ .value = diverges_both },
-            .str, .list, .tuple => |elems| try self.anyOf(elems),
-            .interpolation => |interpolation| blk: {
+            inline .str, .list, .tuple => |kind| try self.anyOf(bodies.exprDataOf(id, kind)),
+            .interpolation => blk: {
+                const interpolation = bodies.exprDataOf(id, .interpolation);
                 try self.add(interpolation.first);
                 break :blk try self.anyOf(interpolation.parts);
             },
             // Diverges when its condition does, or when it has branches, none
             // guarded, that all diverge.
-            .match_ => |match| blk: {
+            .match_ => blk: {
+                const match = bodies.exprDataOf(id, .match_);
                 try self.add(match.cond);
                 const any_end: u32 = @intCast(self.children.items.len);
                 if (match.branches.len == 0) break :blk .{ .group = .{ .any_end = any_end } };
@@ -1538,38 +1766,54 @@ const DivergenceScan = struct {
             },
             // Diverges when its first condition does, or when every branch
             // body and the final else do.
-            .if_ => |if_| blk: {
+            .if_ => blk: {
+                const if_ = bodies.exprDataOf(id, .if_);
                 if (if_.branches.len > 0) try self.add(bodies.ifBranch(if_.branches[0]).cond);
                 const any_end: u32 = @intCast(self.children.items.len);
                 for (if_.branches) |branch| try self.add(bodies.ifBranch(branch).body);
                 try self.add(if_.final_else);
                 break :blk .{ .group = .{ .any_end = any_end, .all = .all } };
             },
-            .call => |call| blk: {
+            .call => blk: {
+                const call = bodies.exprDataOf(id, .call);
                 try self.add(call.func);
                 break :blk try self.anyOf(call.args);
             },
-            .record => |record| blk: {
+            .record => blk: {
+                const record = bodies.exprDataOf(id, .record);
                 if (record.ext) |ext| try self.add(ext);
                 for (record.fields) |field| try self.add(bodies.recordFieldValue(field));
                 break :blk self.any();
             },
-            .block => |block| blk: {
+            .block => blk: {
+                const block = bodies.exprDataOf(id, .block);
                 for (block.statements) |child| try self.children.append(self.allocator, @backingInt(child));
                 break :blk try self.one(block.final_expr);
             },
-            .tag => |tag| try self.anyOf(tag.args),
-            .nominal => |nominal| try self.one(nominal.backing_expr),
+            .tag => try self.anyOf(bodies.exprDataOf(id, .tag).args),
+            .nominal => try self.one(bodies.exprDataOf(id, .nominal).backing_expr),
             .closure, .lambda, .hosted_lambda => .{ .value = 0 },
-            .binop => |binop| try self.anyOf(&.{ binop.lhs, binop.rhs }),
-            .unary_minus, .dbg => |child| try self.one(child),
-            .expect => |child| try self.expectBody(child),
-            .field_access => |field| try self.one(field.receiver),
-            .structural_eq => |eq| try self.anyOf(&.{ eq.lhs, eq.rhs }),
-            .structural_hash => |hash| try self.anyOf(&.{ hash.value, hash.hasher }),
-            .tuple_access => |access| try self.one(access.tuple),
-            .for_ => |for_| try self.one(for_.expr),
-            .run_low_level => |run_op| if (run_op.op == .crash) .{ .value = diverges_both } else try self.anyOf(run_op.args),
+            .binop => binop_blk: {
+                const binop = bodies.exprDataOf(id, .binop);
+                break :binop_blk try self.anyOf(&.{ binop.lhs, binop.rhs });
+            },
+            inline .unary_minus, .dbg => |kind| try self.one(bodies.exprDataOf(id, kind)),
+            .expect => try self.expectBody(bodies.exprDataOf(id, .expect)),
+            .field_access => try self.one(bodies.exprDataOf(id, .field_access).receiver),
+            .structural_eq => eq_blk: {
+                const eq = bodies.exprDataOf(id, .structural_eq);
+                break :eq_blk try self.anyOf(&.{ eq.lhs, eq.rhs });
+            },
+            .structural_hash => hash_blk: {
+                const hash = bodies.exprDataOf(id, .structural_hash);
+                break :hash_blk try self.anyOf(&.{ hash.value, hash.hasher });
+            },
+            .tuple_access => try self.one(bodies.exprDataOf(id, .tuple_access).tuple),
+            .for_ => try self.one(bodies.exprDataOf(id, .for_).expr),
+            .run_low_level => run_op_blk: {
+                const run_op = bodies.exprDataOf(id, .run_low_level);
+                break :run_op_blk if (run_op.op == .crash) .{ .value = diverges_both } else try self.anyOf(run_op.args);
+            },
             .dispatch_call,
             .method_eq,
             .type_dispatch_call,
@@ -1646,7 +1890,7 @@ pub const DispatchDivergence = struct {
 /// Each result column has one entry per node of the module.
 pub fn dispatchDivergenceForEvidence(
     allocator: Allocator,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     evidence_crashes: []const bool,
 ) Allocator.Error!DispatchDivergence {
     const index = bodies.index();
@@ -1699,7 +1943,7 @@ const InspectElision = struct {
     const Memo = enum(u8) { unknown, kept, elided };
 
     allocator: Allocator,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     /// Per node of the unit, by position: its answer once known.
     memo: []Memo,
     chain: std.ArrayList(u32) = .empty,
@@ -1767,7 +2011,7 @@ const InspectElision = struct {
 /// so each node is walked only by its nearest enclosing plan owner.
 const ReassignmentPublisher = struct {
     allocator: Allocator,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     unit: UnitId,
     nodes: []const u32,
     state_merges: []OptionalBinderSpan = &.{},
@@ -1815,7 +2059,7 @@ const ReassignmentPublisher = struct {
         append_binders: BinderSpan,
     };
 
-    fn init(allocator: Allocator, bodies: CheckedBodies, unit: UnitId, nodes: []const u32) ReassignmentPublisher {
+    fn init(allocator: Allocator, bodies: *const CheckedBodies, unit: UnitId, nodes: []const u32) ReassignmentPublisher {
         return .{
             .allocator = allocator,
             .bodies = bodies,
@@ -1890,7 +2134,7 @@ const ReassignmentPublisher = struct {
         const index = self.bodies.index();
         return switch (index.nodeKind(raw)) {
             .expr => blk: {
-                const for_ = self.bodies.exprData(@fromBackingInt(@intCast(raw))).for_;
+                const for_ = self.bodies.exprDataOf(@fromBackingInt(@intCast(raw)), .for_);
                 break :blk .{ .cond = null, .body = for_.body, .iterable = for_.expr };
             },
             .statement => switch (self.bodies.statementData(@fromBackingInt(@intCast(raw)))) {
@@ -2055,13 +2299,15 @@ const ReassignmentPublisher = struct {
         const bodies = self.bodies;
         const children = self.beginChildren();
         defer self.endChildren(children);
-        switch (bodies.exprData(id)) {
-            .str, .list, .tuple => |items| for (items) |item| try self.pushExpr(item),
-            .interpolation => |interpolation| {
+        switch (bodies.exprDataKind(id)) {
+            inline .str, .list, .tuple => |kind| for (bodies.exprDataOf(id, kind)) |item| try self.pushExpr(item),
+            .interpolation => {
+                const interpolation = bodies.exprDataOf(id, .interpolation);
                 try self.pushExpr(interpolation.first);
                 for (interpolation.parts) |part| try self.pushExpr(part);
             },
-            .match_ => |match| {
+            .match_ => {
+                const match = bodies.exprDataOf(id, .match_);
                 try self.pushExpr(match.cond);
                 for (match.branches) |branch_idx| {
                     const branch = bodies.matchBranch(branch_idx);
@@ -2069,7 +2315,8 @@ const ReassignmentPublisher = struct {
                     try self.pushExpr(branch.value);
                 }
             },
-            .if_ => |if_| {
+            .if_ => {
+                const if_ = bodies.exprDataOf(id, .if_);
                 for (if_.branches) |branch_idx| {
                     const branch = bodies.ifBranch(branch_idx);
                     try self.pushExpr(branch.cond);
@@ -2077,44 +2324,50 @@ const ReassignmentPublisher = struct {
                 }
                 try self.pushExpr(if_.final_else);
             },
-            .call => |call| {
+            .call => {
+                const call = bodies.exprDataOf(id, .call);
                 try self.pushExpr(call.func);
                 for (call.args) |arg| try self.pushExpr(arg);
             },
-            .record => |record| {
+            .record => {
+                const record = bodies.exprDataOf(id, .record);
                 if (record.ext) |ext| try self.pushExpr(ext);
                 for (record.fields) |field| try self.pushExpr(bodies.recordFieldValue(field));
             },
-            .block => |block| {
+            .block => {
+                const block = bodies.exprDataOf(id, .block);
                 for (block.statements) |statement| try self.push(.{ .statement = statement });
                 try self.pushExpr(block.final_expr);
             },
-            .tag => |tag| for (tag.args) |arg| try self.pushExpr(arg),
-            .nominal => |nominal| try self.pushExpr(nominal.backing_expr),
-            .binop => |binop| {
+            .tag => for (bodies.exprDataOf(id, .tag).args) |arg| try self.pushExpr(arg),
+            .nominal => try self.pushExpr(bodies.exprDataOf(id, .nominal).backing_expr),
+            .binop => {
+                const binop = bodies.exprDataOf(id, .binop);
                 try self.pushExpr(binop.lhs);
                 try self.pushExpr(binop.rhs);
             },
-            .unary_minus, .dbg => |child| try self.pushExpr(child),
+            inline .unary_minus, .dbg => |kind| try self.pushExpr(bodies.exprDataOf(id, kind)),
             // An expect body can only reassign vars declared inside it
             // (canonicalization rejects the rest), so it carries no state
             // through an enclosing construct.
             .expect => {},
-            .expect_err => |child| try self.pushExpr(child.expr),
-            .field_access => |field| try self.pushExpr(field.receiver),
-            .structural_eq => |eq| {
+            .expect_err => try self.pushExpr(bodies.exprDataOf(id, .expect_err).expr),
+            .field_access => try self.pushExpr(bodies.exprDataOf(id, .field_access).receiver),
+            .structural_eq => {
+                const eq = bodies.exprDataOf(id, .structural_eq);
                 try self.pushExpr(eq.lhs);
                 try self.pushExpr(eq.rhs);
             },
-            .structural_hash => |hash| {
+            .structural_hash => {
+                const hash = bodies.exprDataOf(id, .structural_hash);
                 try self.pushExpr(hash.value);
                 try self.pushExpr(hash.hasher);
             },
-            .tuple_access => |access| try self.pushExpr(access.tuple),
-            .return_ => |ret| try self.pushExpr(ret.expr),
+            .tuple_access => try self.pushExpr(bodies.exprDataOf(id, .tuple_access).tuple),
+            .return_ => try self.pushExpr(bodies.exprDataOf(id, .return_).expr),
             // A `for` expression's iterable, then its loop's mutations.
             .for_ => try self.push(.{ .nested = .{ .loop = @backingInt(id) } }),
-            .run_low_level => |low| for (low.args) |arg| try self.pushExpr(arg),
+            .run_low_level => for (bodies.exprDataOf(id, .run_low_level).args) |arg| try self.pushExpr(arg),
             // A lambda's body executes at invocation, not at this expression.
             .lambda,
             .closure,
@@ -2156,26 +2409,23 @@ const ReassignmentPublisher = struct {
     }
 };
 
-/// Which diagnostic-error facts to compute.
-pub const DiagnosticMode = enum {
-    /// Errors checking recorded in the bodies, propagated through their
-    /// children: the facts publication reads before total dispatch
-    /// resolution.
-    ordinary,
-    /// The ordinary facts plus every rejected total dispatch resolution, and,
-    /// when there is one, propagation through resolved local constant
-    /// references.
-    final,
-};
-
 /// Whether each reached expression contains a diagnostic error: its own
 /// (`ModuleEnv.nodeIsErroneous`, or an expression lowering evaluates as a
 /// runtime error), or one of a node it evaluates or binds.
-pub fn diagnosticErrors(allocator: Allocator, bodies: CheckedBodies, mode: DiagnosticMode) Allocator.Error!NodeBits {
+///
+/// Every diagnostic error starts at a node checking recorded as erroneous
+/// (`ModuleEnv.erroneous_nodes`), at a runtime error node, or at an
+/// expression reference resolution retired. When the module has none of
+/// them, no node contains one, and the bodies are not walked.
+pub fn diagnosticErrors(allocator: Allocator, bodies: *const CheckedBodies) Allocator.Error!NodeBits {
     const index = bodies.index();
     const node_count = index.node_kinds.len;
     var errors = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
     errdefer errors.deinit(allocator);
+    const refs = bodies.tables.refs orelse invariant("diagnostic errors were computed without the module's value references");
+    if (bodies.env.erroneous_nodes.items().len == 0 and !index.has_runtime_errors and !refs.retiresAny()) {
+        return .{ .bits = errors };
+    }
     const states = try allocator.alloc(DiagnosticState, node_count);
     defer allocator.free(states);
     var erroneous = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
@@ -2192,150 +2442,26 @@ pub fn diagnosticErrors(allocator: Allocator, bodies: CheckedBodies, mode: Diagn
     defer scan.items.deinit(allocator);
     @memset(scan.states, .fresh);
 
-    var rejected_dispatch: NodeBits = .{};
-    defer rejected_dispatch.deinit(allocator);
-    switch (mode) {
-        .ordinary => {},
-        .final => {
-            const plans = bodies.tables.plans orelse invariant("diagnostic errors were computed without the module's dispatch plans");
-            for (plans.plans.items()) |plan| {
-                if (plan.resolution == .checked_error) {
-                    rejected_dispatch = try dispatchNodes(allocator, bodies, dispatchResolutionIsCheckedError);
-                    scan.rejected_dispatch = &rejected_dispatch;
-                    break;
-                }
-            }
-        },
-    }
-    var graph: ?ConstantGraph = if (scan.rejected_dispatch != null) try ConstantGraph.init(allocator, bodies) else null;
-    defer if (graph) |*value| value.deinit();
-    scan.graph = if (graph) |*value| value else null;
-
     for (index.node_kinds, 0..) |kind, raw| {
         if (kind == .unreached) continue;
         if (try scan.node(@intCast(raw))) scan.errors.set(raw);
     }
-    if (scan.graph) |value| try value.propagate(&scan.errors);
     errors = scan.errors;
     return .{ .bits = errors };
 }
 
 const DiagnosticState = enum(u8) { fresh, active, done };
 
-/// Recovery-only edges recorded by the scan: each entered node's enclosing
-/// node, and each constant lookup's initializer. Constant references can
-/// close cycles through delayed function bodies; a monotone worklist
-/// propagates errors across those cycles.
-const ConstantGraph = struct {
-    const Edge = struct { parent: u32, next: collections.OptionalU32 };
-    allocator: Allocator,
-    heads: collections.DenseMap(u32, u32),
-    edges: std.ArrayList(Edge) = .empty,
-    /// The initializer expression a local constant lookup reads.
-    lookup_values: collections.DenseMap(u32, ExprId),
-    current: ?u32 = null,
-
-    fn init(allocator: Allocator, bodies: CheckedBodies) Allocator.Error!ConstantGraph {
-        var graph = ConstantGraph{
-            .allocator = allocator,
-            .heads = collections.DenseMap(u32, u32).init(allocator),
-            .lookup_values = collections.DenseMap(u32, ExprId).init(allocator),
-        };
-        errdefer graph.deinit();
-        const refs = bodies.tables.refs orelse invariant("diagnostic errors were computed without the module's value references");
-        const roots = bodies.tables.roots orelse invariant("diagnostic errors were computed without the module's compile-time roots");
-        const const_templates = bodies.tables.const_templates orelse invariant("diagnostic errors were computed without the module's constant templates");
-        const module = bodies.tables.module orelse invariant("diagnostic errors were computed without the module's identity");
-        var by_pattern = collections.DenseMap(u32, ExprId).init(allocator);
-        defer by_pattern.deinit();
-        for (roots.roots.items()) |root| {
-            if (root.pattern.get()) |pattern| try by_pattern.put(@backingInt(pattern), root.rootExpr());
-        }
-        for (refs.records.items()) |record| {
-            const ref = switch (record.ref) {
-                .top_level_const => |use| use.const_ref,
-                .selected_hoisted_const => |use| use.const_use.const_ref,
-                .local_param,
-                .local_value,
-                .local_mutable_version,
-                .pattern_binder,
-                .local_proc,
-                .imported_const,
-                .top_level_proc,
-                .imported_proc,
-                .hosted_proc,
-                .platform_required_declaration,
-                .platform_required_checked_error,
-                .platform_required_const,
-                .platform_required_proc,
-                .promoted_top_level_proc,
-                => continue,
-            };
-            if (!ref.artifact.eql(module)) continue;
-            if (const_templates.get(ref).state == .unimplemented) continue;
-            try graph.lookup_values.put(@backingInt(record.expr), switch (ref.owner) {
-                .top_level_binding => |owner| by_pattern.get(@backingInt(owner.pattern)) orelse
-                    invariant("a constant dependency had no initializer root"),
-                .hoisted_root => |owner| roots.root(owner.root).bodyParts().expr orelse continue,
-            });
-        }
-        return graph;
-    }
-
-    fn deinit(self: *ConstantGraph) void {
-        self.heads.deinit();
-        self.edges.deinit(self.allocator);
-        self.lookup_values.deinit();
-    }
-
-    fn enter(self: *ConstantGraph, raw: u32) Allocator.Error!?u32 {
-        const previous = self.current;
-        if (previous) |parent| {
-            const index = try collections.nextBiasedId(self.edges.items.len);
-            const head = try self.heads.getOrPut(raw);
-            const next: collections.OptionalU32 = if (head.found_existing) .some(head.value_ptr.*) else .none;
-            try self.edges.append(self.allocator, .{ .parent = parent, .next = next });
-            head.value_ptr.* = index;
-        }
-        self.current = raw;
-        return previous;
-    }
-
-    fn propagate(self: *ConstantGraph, errors: *std.DynamicBitSetUnmanaged) Allocator.Error!void {
-        var work = std.ArrayList(u32).empty;
-        defer work.deinit(self.allocator);
-        var heads = self.heads.constIterator();
-        while (heads.next()) |entry| {
-            if (errors.isSet(entry.key_ptr.*)) try work.append(self.allocator, entry.key_ptr.*);
-        }
-        while (work.pop()) |raw| {
-            var next_edge: collections.OptionalU32 = .some(self.heads.get(raw) orelse continue);
-            while (next_edge.get()) |edge_index| {
-                const edge = self.edges.items[edge_index];
-                next_edge = edge.next;
-                if (errors.isSet(edge.parent)) continue;
-                errors.set(edge.parent);
-                try work.append(self.allocator, edge.parent);
-            }
-        }
-    }
-};
-
 /// A memoized depth-first search over expressions, patterns, and statements
 /// on explicit frame and item stacks, so body nesting depth never becomes
 /// native call depth. A node stops at its first item that contains an error.
 const DiagnosticScan = struct {
     allocator: Allocator,
-    bodies: CheckedBodies,
+    bodies: *const CheckedBodies,
     errors: std.DynamicBitSetUnmanaged,
     /// The nodes checking recorded as erroneous in their own right.
     erroneous: *const std.DynamicBitSetUnmanaged,
     states: []DiagnosticState,
-    /// The nodes whose dispatch plan's total resolution rejected, when
-    /// rejected total dispatch resolutions seed errors, which also makes
-    /// errors follow constant references (`graph`).
-    rejected_dispatch: ?*const NodeBits = null,
-    graph: ?*ConstantGraph = null,
     frames: std.ArrayList(Frame) = .empty,
     items: std.ArrayList(Item) = .empty,
 
@@ -2348,7 +2474,6 @@ const DiagnosticScan = struct {
         node: u32,
         items_start: usize,
         next: usize,
-        previous: ?u32,
     };
 
     fn node(self: *DiagnosticScan, raw: u32) Allocator.Error!bool {
@@ -2381,25 +2506,15 @@ const DiagnosticScan = struct {
     /// Enter a node. Returns its known result when it needs no frame, or null
     /// after pushing a frame for it.
     fn begin(self: *DiagnosticScan, raw: u32) Allocator.Error!?bool {
-        const previous = if (self.graph) |graph| try graph.enter(raw) else null;
         switch (self.states[raw]) {
-            .done => {
-                if (self.graph) |graph| graph.current = previous;
-                return self.errors.isSet(raw);
-            },
-            .active => {
-                if (self.graph) |graph| {
-                    graph.current = previous;
-                    return false;
-                }
-                invariant("the diagnostic-error relation of a body contains a cycle");
-            },
+            .done => return self.errors.isSet(raw),
+            .active => invariant("the diagnostic-error relation of a body contains a cycle"),
             .fresh => {},
         }
         self.states[raw] = .active;
         const items_start = self.items.items.len;
         try self.pushItems(raw);
-        try self.frames.append(self.allocator, .{ .node = raw, .items_start = items_start, .next = items_start, .previous = previous });
+        try self.frames.append(self.allocator, .{ .node = raw, .items_start = items_start, .next = items_start });
         return null;
     }
 
@@ -2407,7 +2522,6 @@ const DiagnosticScan = struct {
         if (result) self.errors.set(frame.node);
         self.states[frame.node] = .done;
         self.items.shrinkRetainingCapacity(frame.items_start);
-        if (self.graph) |graph| graph.current = frame.previous;
     }
 
     fn pushItem(self: *DiagnosticScan, item: Item) Allocator.Error!void {
@@ -2441,7 +2555,6 @@ const DiagnosticScan = struct {
     fn pushItems(self: *DiagnosticScan, raw: u32) Allocator.Error!void {
         const bodies = self.bodies;
         if (self.erroneous.isSet(raw)) return self.pushItem(.diagnostic_error);
-        if (self.rejected_dispatch) |rejected| if (rejected.isSet(raw)) return self.pushItem(.diagnostic_error);
         switch (bodies.index().nodeKind(raw)) {
             .expr => try self.pushExprItems(@fromBackingInt(@intCast(raw))),
             .pattern => try self.pushPatternItems(@fromBackingInt(@intCast(raw))),
@@ -2452,10 +2565,11 @@ const DiagnosticScan = struct {
 
     fn pushExprItems(self: *DiagnosticScan, id: ExprId) Allocator.Error!void {
         const bodies = self.bodies;
-        switch (bodies.exprData(id)) {
+        switch (bodies.exprDataKind(id)) {
             .runtime_error => try self.pushItem(.diagnostic_error),
-            .str, .list, .tuple => |items| try self.pushExprs(items),
-            .match_ => |match| {
+            inline .str, .list, .tuple => |kind| try self.pushExprs(bodies.exprDataOf(id, kind)),
+            .match_ => {
+                const match = bodies.exprDataOf(id, .match_);
                 try self.pushExpr(match.cond);
                 for (match.branches) |branch_idx| {
                     const branch = bodies.matchBranch(branch_idx);
@@ -2464,7 +2578,8 @@ const DiagnosticScan = struct {
                     try self.pushExpr(branch.value);
                 }
             },
-            .if_ => |if_| {
+            .if_ => {
+                const if_ = bodies.exprDataOf(id, .if_);
                 for (if_.branches) |branch_idx| {
                     const branch = bodies.ifBranch(branch_idx);
                     try self.pushExpr(branch.cond);
@@ -2472,57 +2587,67 @@ const DiagnosticScan = struct {
                 }
                 try self.pushExpr(if_.final_else);
             },
-            .call => |call| {
+            .call => {
+                const call = bodies.exprDataOf(id, .call);
                 try self.pushExpr(call.func);
                 try self.pushExprs(call.args);
             },
-            .record => |record| {
+            .record => {
+                const record = bodies.exprDataOf(id, .record);
                 if (record.ext) |ext| try self.pushExpr(ext);
                 for (record.fields) |field| try self.pushExpr(bodies.recordFieldValue(field));
             },
-            .block => |block| {
+            .block => {
+                const block = bodies.exprDataOf(id, .block);
                 for (block.statements) |statement| try self.pushNode(@backingInt(statement));
                 try self.pushExpr(block.final_expr);
             },
-            .tag => |tag| try self.pushExprs(tag.args),
-            .nominal => |nominal| try self.pushExpr(nominal.backing_expr),
-            .closure => |closure| {
+            .tag => try self.pushExprs(bodies.exprDataOf(id, .tag).args),
+            .nominal => try self.pushExpr(bodies.exprDataOf(id, .nominal).backing_expr),
+            .closure => {
+                const closure = bodies.exprDataOf(id, .closure);
                 try self.pushExpr(closure.lambda);
                 for (closure.captures) |capture| try self.pushPattern(bodies.capture(capture).pattern);
             },
-            .lambda => |lambda| {
+            .lambda => {
+                const lambda = bodies.exprDataOf(id, .lambda);
                 try self.pushPatterns(lambda.args);
                 try self.pushExpr(lambda.body);
             },
-            .binop => |binop| {
+            .binop => {
+                const binop = bodies.exprDataOf(id, .binop);
                 try self.pushExpr(binop.lhs);
                 try self.pushExpr(binop.rhs);
             },
-            .unary_minus, .dbg, .expect => |child| try self.pushExpr(child),
-            .field_access => |field| try self.pushExpr(field.receiver),
+            inline .unary_minus, .dbg, .expect => |kind| try self.pushExpr(bodies.exprDataOf(id, kind)),
+            .field_access => try self.pushExpr(bodies.exprDataOf(id, .field_access).receiver),
             .dispatch_call, .method_eq, .type_dispatch_call => try appendDispatchOperands(bodies, @backingInt(id), self),
-            .interpolation => |interpolation| {
+            .interpolation => {
+                const interpolation = bodies.exprDataOf(id, .interpolation);
                 try self.pushExpr(interpolation.first);
                 try self.pushExprs(interpolation.parts);
             },
-            .structural_eq => |eq| {
+            .structural_eq => {
+                const eq = bodies.exprDataOf(id, .structural_eq);
                 try self.pushExpr(eq.lhs);
                 try self.pushExpr(eq.rhs);
             },
-            .structural_hash => |hash| {
+            .structural_hash => {
+                const hash = bodies.exprDataOf(id, .structural_hash);
                 try self.pushExpr(hash.value);
                 try self.pushExpr(hash.hasher);
             },
-            .tuple_access => |access| try self.pushExpr(access.tuple),
-            .expect_err => |expect_err| try self.pushExpr(expect_err.expr),
-            .return_ => |ret| try self.pushExpr(ret.expr),
-            .for_ => |for_| {
+            .tuple_access => try self.pushExpr(bodies.exprDataOf(id, .tuple_access).tuple),
+            .expect_err => try self.pushExpr(bodies.exprDataOf(id, .expect_err).expr),
+            .return_ => try self.pushExpr(bodies.exprDataOf(id, .return_).expr),
+            .for_ => {
+                const for_ = bodies.exprDataOf(id, .for_);
                 try self.pushPattern(for_.pattern);
                 try self.pushExpr(for_.expr);
                 try self.pushExpr(for_.body);
             },
-            .hosted_lambda => |hosted| try self.pushPatterns(hosted.args),
-            .run_low_level => |run| try self.pushExprs(run.args),
+            .hosted_lambda => try self.pushPatterns(bodies.exprDataOf(id, .hosted_lambda).args),
+            .run_low_level => try self.pushExprs(bodies.exprDataOf(id, .run_low_level).args),
             .numeral,
             .str_segment,
             .bytes_literal,
@@ -2538,25 +2663,24 @@ const DiagnosticScan = struct {
             .break_,
             => {},
         }
-        if (self.graph) |graph| {
-            if (graph.lookup_values.get(@backingInt(id))) |value| try self.pushExpr(value);
-        }
     }
 
     fn pushPatternItems(self: *DiagnosticScan, id: PatternId) Allocator.Error!void {
         const bodies = self.bodies;
-        switch (bodies.patternData(id)) {
+        switch (bodies.patternDataKind(id)) {
             .runtime_error => try self.pushItem(.diagnostic_error),
-            .as => |as| try self.pushPattern(as.pattern),
-            .applied_tag => |tag| try self.pushPatterns(tag.args),
-            .nominal => |nominal| try self.pushPattern(nominal.backing_pattern),
-            .record_destructure => |destructs| for (destructs) |destruct| try self.pushPattern(bodies.recordDestructPattern(destruct)),
-            .list => |list| {
+            .as => try self.pushPattern(bodies.patternDataOf(id, .as).pattern),
+            .applied_tag => try self.pushPatterns(bodies.patternDataOf(id, .applied_tag).args),
+            .nominal => try self.pushPattern(bodies.patternDataOf(id, .nominal).backing_pattern),
+            .record_destructure => for (bodies.patternDataOf(id, .record_destructure)) |destruct| try self.pushPattern(bodies.recordDestructPattern(destruct)),
+            .list => {
+                const list = bodies.patternDataOf(id, .list);
                 try self.pushPatterns(list.patterns);
                 if (list.rest) |rest| if (rest.pattern) |rest_pattern| try self.pushPattern(rest_pattern);
             },
-            .tuple => |items| try self.pushPatterns(items),
-            .str_interpolation => |str| {
+            .tuple => try self.pushPatterns(bodies.patternDataOf(id, .tuple)),
+            .str_interpolation => {
+                const str = bodies.patternDataOf(id, .str_interpolation);
                 var offset: u32 = 0;
                 while (offset < str.steps.span.len) : (offset += 1) {
                     if (bodies.strPatternStep(str.steps, offset).capture) |capture| try self.pushPattern(capture);
@@ -2618,7 +2742,7 @@ const DiagnosticScan = struct {
 /// once, as the function of a call. Dev builds inline by these facts rather
 /// than by how many callers one program has, so the decision is the same in
 /// every program that links the code (design.md "Object cache").
-fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocator.Error!*SingleSourceFacts {
+fn computeSingleSourceCalls(allocator: Allocator, bodies: *const CheckedBodies) Allocator.Error!*SingleSourceFacts {
     const tables = bodies.tables;
     const templates = tables.templates orelse invariant("single-source calls were computed without the module's templates");
     const refs = tables.refs orelse invariant("single-source calls were computed without the module's value references");
@@ -2750,7 +2874,7 @@ const SourceCallShapes = struct {
 
     const LocalLookup = struct { expr: u32, pattern: u32 };
 
-    fn collect(allocator: Allocator, bodies: CheckedBodies) Allocator.Error!SourceCallShapes {
+    fn collect(allocator: Allocator, bodies: *const CheckedBodies) Allocator.Error!SourceCallShapes {
         const index = bodies.index();
         var shapes = SourceCallShapes{
             .callees = try std.DynamicBitSetUnmanaged.initEmpty(allocator, index.node_kinds.len),
@@ -2767,11 +2891,11 @@ const SourceCallShapes = struct {
                     const id: ExprId = @fromBackingInt(raw);
                     // A retired call or lookup evaluates as a runtime error.
                     if (bodies.exprIsRetired(id)) continue;
-                    const data = store.getExpr(id);
-                    if (data == .e_call) {
-                        shapes.callees.set(@backingInt(data.e_call.func));
-                    } else if (data == .e_lookup_local) {
-                        try shapes.local_lookups.append(allocator, .{ .expr = raw, .pattern = @backingInt(data.e_lookup_local.pattern_idx) });
+                    const data_kind = store.exprKind(id);
+                    if (data_kind == .e_call) {
+                        shapes.callees.set(@backingInt(store.exprView(id).e_call.get(.func)));
+                    } else if (data_kind == .e_lookup_local) {
+                        try shapes.local_lookups.append(allocator, .{ .expr = raw, .pattern = @backingInt(store.exprView(id).e_lookup_local.get(.pattern_idx)) });
                     }
                 },
                 .statement => {
@@ -2780,7 +2904,7 @@ const SourceCallShapes = struct {
                     switch (bodies.statementData(id)) {
                         .decl => |decl| {
                             if (bodies.declIsRecursive(id)) continue;
-                            if (bodies.patternData(decl.pattern) != .assign) continue;
+                            if (bodies.patternDataKind(decl.pattern) != .assign) continue;
                             try shapes.bound_by.put(@backingInt(decl.expr), @backingInt(decl.pattern));
                         },
                         .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .rejected_method_decl, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},

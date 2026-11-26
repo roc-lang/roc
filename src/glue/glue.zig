@@ -965,6 +965,12 @@ fn buildGluePlugin(
         codegen.plugin_stamp_bytes = std.mem.asBytes(&stamp);
         codegen.plugin_stamp_alignment = @alignOf(GluePluginStampV1);
         codegen.emit_debug_info = opt == .dev;
+        codegen.optimization = switch (opt) {
+            .dev => .none,
+            // Only a linked object's build marks its functions `minsize`,
+            // which the size selection relies on.
+            .size, .speed => .speed,
+        };
         defer codegen.deinit();
 
         codegen.embed_static_data = true;

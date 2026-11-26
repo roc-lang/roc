@@ -651,7 +651,7 @@ const DemandAnalyzer = struct {
     fn computeSummaries(self: *DemandAnalyzer) std.mem.Allocator.Error!void {
         for (self.summary_defs) |def_idx| {
             const lambda_idx = self.lambdaFromDef(def_idx) orelse continue;
-            if (self.cir.store.getExpr(lambda_idx) == .e_lambda) try self.summary_lambdas.put(lambda_idx, {});
+            if (self.cir.store.exprKind(lambda_idx) == .e_lambda) try self.summary_lambdas.put(lambda_idx, {});
         }
         defer self.summary_lambdas.clearRetainingCapacity();
         defer self.reader = null;
@@ -679,7 +679,7 @@ const DemandAnalyzer = struct {
         while (next < queue.items.len) : (next += 1) {
             const lambda_idx = queue.items[next];
             if (!stale.remove(lambda_idx)) continue;
-            if (self.cir.store.getExpr(lambda_idx) != .e_lambda) {
+            if (self.cir.store.exprKind(lambda_idx) != .e_lambda) {
                 const nothing = DemandSummary{};
                 if (try self.mergeSummary(lambda_idx, &nothing)) try self.markReadersStale(lambda_idx, &stale, &queue);
                 continue;
@@ -696,7 +696,7 @@ const DemandAnalyzer = struct {
                     }
                     continue;
                 }
-                const args = self.cir.store.slicePatterns(self.cir.store.getExpr(job.lambda).e_lambda.args);
+                const args = self.cir.store.slicePatterns(self.cir.store.exprView(job.lambda).e_lambda.get(.args));
                 if (job.next_part <= args.len) {
                     // Each argument pattern and the body is a walk of its own.
                     job.walk.deinit(self);
@@ -704,7 +704,7 @@ const DemandAnalyzer = struct {
                     if (job.next_part < args.len) {
                         try job.walk.push(self.allocator, .{ .visit_pattern = args[job.next_part] });
                     } else {
-                        try job.walk.push(self.allocator, .{ .visit = self.cir.store.getExpr(job.lambda).e_lambda.body });
+                        try job.walk.push(self.allocator, .{ .visit = self.cir.store.exprView(job.lambda).e_lambda.get(.body) });
                     }
                     job.next_part += 1;
                     continue;
@@ -885,8 +885,7 @@ const DemandAnalyzer = struct {
         _ = try current.addFnValue(self.allocator, lambda_idx);
         // Definitions' lambdas are summarized as jobs of their own.
         if (self.summary_lambdas.contains(lambda_idx) or self.active_lambdas.contains(lambda_idx)) return;
-        const expr = self.cir.store.getExpr(lambda_idx);
-        if (expr != .e_lambda) return;
+        const expr = self.cir.store.exprAs(lambda_idx, .e_lambda) orelse return;
         if ((try self.walked_value_lambdas.getOrPut(self.allocator, lambda_idx)).found_existing) return;
         if (self.reader) |reader| {
             const walked = try self.value_lambdas_walked_by.getOrPut(self.allocator, reader);
@@ -897,8 +896,8 @@ const DemandAnalyzer = struct {
         try walk.frames.ensureUnusedCapacity(self.allocator, 1);
         walk.frames.appendAssumeCapacity(try self.takeFrame());
         try walk.push(self.allocator, .{ .finish_value_lambda = lambda_idx });
-        try walk.push(self.allocator, .{ .visit = expr.e_lambda.body });
-        try self.pushPatternSpanReversed(walk, expr.e_lambda.args);
+        try walk.push(self.allocator, .{ .visit = expr.body });
+        try self.pushPatternSpanReversed(walk, expr.args);
     }
 
     /// The local definition an associated lookup checking resolved names,
@@ -1191,8 +1190,7 @@ const DemandAnalyzer = struct {
         demand_node: ?CIR.Node.Idx,
     ) std.mem.Allocator.Error!void {
         if (self.active_lambdas.contains(lambda_idx)) return;
-        const expr = self.cir.store.getExpr(lambda_idx);
-        if (expr != .e_lambda) return;
+        const expr = self.cir.store.exprAs(lambda_idx, .e_lambda) orelse return;
 
         try self.active_lambdas.put(lambda_idx, {});
         try walk.frames.ensureUnusedCapacity(self.allocator, 1);
@@ -1200,8 +1198,8 @@ const DemandAnalyzer = struct {
         // The finish item pops first-in-last-out: argument patterns and the
         // body run inside the frame, then the frame folds into its parent.
         try walk.push(self.allocator, .{ .finish_lambda = .{ .lambda = lambda_idx, .args = call_args, .demand_node = demand_node } });
-        try walk.push(self.allocator, .{ .visit = expr.e_lambda.body });
-        try self.pushPatternSpanReversed(walk, expr.e_lambda.args);
+        try walk.push(self.allocator, .{ .visit = expr.body });
+        try self.pushPatternSpanReversed(walk, expr.args);
     }
 
     /// Fold one lambda's demand summary into `into` for a call with
@@ -1363,38 +1361,43 @@ const DemandAnalyzer = struct {
     }
 
     fn visitStmt(self: *DemandAnalyzer, walk: *Walk, current: *DemandSummary, stmt_idx: CIR.Statement.Idx) std.mem.Allocator.Error!void {
-        switch (self.cir.store.getStatement(stmt_idx)) {
-            .s_decl => |decl| {
+        switch (self.cir.store.statementKind(stmt_idx)) {
+            .s_decl => {
+                const decl = self.cir.store.statementView(stmt_idx).s_decl.decode();
                 // Register the callable only after its RHS subtree walked.
                 try walk.push(self.allocator, .{ .remember_local = .{ .pattern = decl.pattern, .expr = decl.expr } });
                 try walk.push(self.allocator, .{ .visit_pattern = decl.pattern });
                 try walk.push(self.allocator, .{ .visit = decl.expr });
             },
-            .s_var => |var_stmt| {
+            .s_var => {
+                const var_stmt = self.cir.store.statementView(stmt_idx).s_var.decode();
                 try walk.push(self.allocator, .{ .remember_local = .{ .pattern = var_stmt.pattern_idx, .expr = var_stmt.expr } });
                 try walk.push(self.allocator, .{ .visit_pattern = var_stmt.pattern_idx });
                 try walk.push(self.allocator, .{ .visit = var_stmt.expr });
             },
             .s_var_uninitialized => {},
-            .s_reassign => |reassign| {
+            .s_reassign => {
+                const reassign = self.cir.store.statementView(stmt_idx).s_reassign.decode();
                 try walk.push(self.allocator, .{ .visit_pattern = reassign.pattern_idx });
                 try walk.push(self.allocator, .{ .visit = reassign.expr });
             },
-            .s_dbg => |dbg| try walk.push(self.allocator, .{ .visit = dbg.expr }),
-            .s_expr => |expr_stmt| try walk.push(self.allocator, .{ .visit = expr_stmt.expr }),
-            .s_expect => |expect| try walk.push(self.allocator, .{ .visit = expect.body }),
-            .s_for => |for_stmt| {
+            .s_dbg => try walk.push(self.allocator, .{ .visit = self.cir.store.statementView(stmt_idx).s_dbg.get(.expr) }),
+            .s_expr => try walk.push(self.allocator, .{ .visit = self.cir.store.statementView(stmt_idx).s_expr.get(.expr) }),
+            .s_expect => try walk.push(self.allocator, .{ .visit = self.cir.store.statementView(stmt_idx).s_expect.get(.body) }),
+            .s_for => {
+                const for_stmt = self.cir.store.statementView(stmt_idx).s_for.decode();
                 try self.applyForLoopDispatch(walk, current, ModuleEnv.nodeIdxFrom(stmt_idx));
                 try walk.push(self.allocator, .{ .visit = for_stmt.body });
                 try walk.push(self.allocator, .{ .visit_pattern = for_stmt.patt });
                 try walk.push(self.allocator, .{ .visit = for_stmt.expr });
             },
-            inline .s_while, .s_infinite_loop, .s_breakable_loop => |while_stmt| {
+            inline .s_while, .s_infinite_loop, .s_breakable_loop => |kind| {
+                const while_stmt = @field(self.cir.store.statementView(stmt_idx), @tagName(kind)).decode();
                 try walk.push(self.allocator, .{ .visit = while_stmt.body });
                 try walk.push(self.allocator, .{ .visit = while_stmt.cond });
             },
-            .s_return => |ret| try walk.push(self.allocator, .{ .visit = ret.expr }),
-            .s_runtime_error => |runtime_error| try self.pushExprSpanReversed(walk, runtime_error.evaluated),
+            .s_return => try walk.push(self.allocator, .{ .visit = self.cir.store.statementView(stmt_idx).s_return.get(.expr) }),
+            .s_runtime_error => try self.pushExprSpanReversed(walk, self.cir.store.statementView(stmt_idx).s_runtime_error.get(.evaluated)),
             .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_break => {},
         }
     }
@@ -1408,8 +1411,9 @@ const DemandAnalyzer = struct {
     ) std.mem.Allocator.Error!void {
         try self.visitLiteralNode(walk, current, ModuleEnv.nodeIdxFrom(expr_idx));
 
-        switch (self.cir.store.getExpr(expr_idx)) {
-            .e_lookup_local => |lookup| {
+        switch (self.cir.store.exprKind(expr_idx)) {
+            .e_lookup_local => {
+                const lookup = self.cir.store.exprView(expr_idx).e_lookup_local.decode();
                 if (local_callables.get(lookup.pattern_idx)) |lambda_idx| {
                     try self.noteFnValue(walk, current, lambda_idx);
                 } else if (self.pattern_to_def.get(lookup.pattern_idx)) |def_idx| {
@@ -1417,13 +1421,15 @@ const DemandAnalyzer = struct {
                     if (self.lambdaFromDef(def_idx)) |lambda_idx| try self.noteFnValue(walk, current, lambda_idx);
                 }
             },
-            .e_lookup_associated_resolved => |resolved| {
+            .e_lookup_associated_resolved => {
+                const resolved = self.cir.store.exprView(expr_idx).e_lookup_associated_resolved.decode();
                 if (self.associatedLocalDef(resolved)) |def_idx| {
                     try self.addGraphDep(current, def_idx);
                     if (self.lambdaFromDef(def_idx)) |lambda_idx| try self.noteFnValue(walk, current, lambda_idx);
                 }
             },
-            .e_call => |call| {
+            .e_call => {
+                const call = self.cir.store.exprView(expr_idx).e_call.decode();
                 // Operands first, then the target's summary applies—
                 // pushed in reverse so pops run func, args, apply.
                 try walk.push(self.allocator, .{ .apply_call_target = .{ .func = call.func, .args = call.args } });
@@ -1431,7 +1437,8 @@ const DemandAnalyzer = struct {
                 try walk.push(self.allocator, .{ .visit = call.func });
             },
             .e_lambda => try self.noteFnValue(walk, current, expr_idx),
-            .e_closure => |closure| {
+            .e_closure => {
+                const closure = self.cir.store.exprView(expr_idx).e_closure.decode();
                 for (self.cir.store.sliceCaptures(closure.captures)) |capture_idx| {
                     const capture = self.cir.store.getCapture(capture_idx);
                     if (self.pattern_to_def.get(capture.pattern_idx)) |def_idx| {
@@ -1440,7 +1447,8 @@ const DemandAnalyzer = struct {
                 }
                 try self.noteFnValue(walk, current, closure.lambda_idx);
             },
-            .e_if => |if_expr| {
+            .e_if => {
+                const if_expr = self.cir.store.exprView(expr_idx).e_if.decode();
                 const branches = self.cir.store.sliceIfBranches(if_expr.branches);
                 var i = branches.len;
                 while (i > 0) {
@@ -1451,7 +1459,8 @@ const DemandAnalyzer = struct {
                 }
                 try walk.push(self.allocator, .{ .visit = if_expr.final_else });
             },
-            .e_match => |match_expr| {
+            .e_match => {
+                const match_expr = self.cir.store.exprView(expr_idx).e_match.decode();
                 try walk.push(self.allocator, .{ .visit = match_expr.cond });
                 const branches = self.cir.store.sliceMatchBranches(match_expr.branches);
                 var i = branches.len;
@@ -1471,8 +1480,9 @@ const DemandAnalyzer = struct {
                     }
                 }
             },
-            .e_list => |list| try self.pushExprSpanReversed(walk, list.elems),
-            .e_record => |record| {
+            .e_list => try self.pushExprSpanReversed(walk, self.cir.store.exprView(expr_idx).e_list.get(.elems)),
+            .e_record => {
+                const record = self.cir.store.exprView(expr_idx).e_record.decode();
                 const fields = self.cir.store.sliceRecordFields(record.fields);
                 var i = fields.len;
                 while (i > 0) {
@@ -1482,38 +1492,45 @@ const DemandAnalyzer = struct {
                 }
                 if (record.ext) |ext_idx| try walk.push(self.allocator, .{ .visit = ext_idx });
             },
-            .e_field_access => |access| try walk.push(self.allocator, .{ .visit = access.receiver }),
-            .e_method_call => |call| {
+            .e_field_access => try walk.push(self.allocator, .{ .visit = self.cir.store.exprView(expr_idx).e_field_access.get(.receiver) }),
+            .e_method_call => {
+                const call = self.cir.store.exprView(expr_idx).e_method_call.decode();
                 try self.pushExprSpanReversed(walk, call.args);
                 try walk.push(self.allocator, .{ .visit = call.receiver });
             },
-            .e_dispatch_call => |call| {
+            .e_dispatch_call => {
+                const call = self.cir.store.exprView(expr_idx).e_dispatch_call.decode();
                 try self.applyDispatchRequirement(walk, current, call.constraint_fn_var, null);
                 try self.pushExprSpanReversed(walk, call.args);
                 try walk.push(self.allocator, .{ .visit = call.receiver });
             },
-            .e_interpolation => |interpolation| {
+            .e_interpolation => {
+                const interpolation = self.cir.store.exprView(expr_idx).e_interpolation.decode();
                 if (interpolation.constraint_fn_var) |fn_var| try self.applyDispatchRequirement(walk, current, fn_var, null);
                 if (interpolation.assembler_fn_var) |fn_var| try self.applyDispatchRequirement(walk, current, fn_var, null);
                 try walk.push(self.allocator, .{ .visit = interpolation.first });
                 try self.pushExprSpanReversed(walk, interpolation.parts);
             },
-            .e_structural_eq => |eq| {
+            .e_structural_eq => {
+                const eq = self.cir.store.exprView(expr_idx).e_structural_eq.decode();
                 try self.applyIntroducedDispatches(walk, current, expr_idx);
                 try walk.push(self.allocator, .{ .visit = eq.lhs });
                 try walk.push(self.allocator, .{ .visit = eq.rhs });
             },
-            .e_structural_hash => |h| {
+            .e_structural_hash => {
+                const h = self.cir.store.exprView(expr_idx).e_structural_hash.decode();
                 try self.applyIntroducedDispatches(walk, current, expr_idx);
                 try walk.push(self.allocator, .{ .visit = h.value });
                 try walk.push(self.allocator, .{ .visit = h.hasher });
             },
-            .e_method_eq => |eq| {
+            .e_method_eq => {
+                const eq = self.cir.store.exprView(expr_idx).e_method_eq.decode();
                 try self.applyDispatchRequirement(walk, current, eq.constraint_fn_var, null);
                 try walk.push(self.allocator, .{ .visit = eq.lhs });
                 try walk.push(self.allocator, .{ .visit = eq.rhs });
             },
-            .e_type_method_call => |call| {
+            .e_type_method_call => {
+                const call = self.cir.store.exprView(expr_idx).e_type_method_call.decode();
                 // Method bindings are final once checking has run.
                 if (self.foreign != null) {
                     if (self.cir.lookupMethodBindingForOwnerConst(call.type_dispatch_stmt, call.method_name)) |binding| {
@@ -1522,18 +1539,21 @@ const DemandAnalyzer = struct {
                 }
                 try self.pushExprSpanReversed(walk, call.args);
             },
-            .e_type_dispatch_call => |call| {
+            .e_type_dispatch_call => {
+                const call = self.cir.store.exprView(expr_idx).e_type_dispatch_call.decode();
                 try self.applyDispatchRequirement(walk, current, call.constraint_fn_var, null);
                 try self.pushExprSpanReversed(walk, call.args);
             },
-            .e_tuple_access => |tuple_access| try walk.push(self.allocator, .{ .visit = tuple_access.tuple }),
-            .e_tuple => |tuple| try self.pushExprSpanReversed(walk, tuple.elems),
-            .e_binop => |binop| {
+            .e_tuple_access => try walk.push(self.allocator, .{ .visit = self.cir.store.exprView(expr_idx).e_tuple_access.get(.tuple) }),
+            .e_tuple => try self.pushExprSpanReversed(walk, self.cir.store.exprView(expr_idx).e_tuple.get(.elems)),
+            .e_binop => {
+                const binop = self.cir.store.exprView(expr_idx).e_binop.decode();
                 try walk.push(self.allocator, .{ .visit = binop.lhs });
                 try walk.push(self.allocator, .{ .visit = binop.rhs });
             },
-            .e_unary_minus => |unop| try walk.push(self.allocator, .{ .visit = unop.expr }),
-            .e_block => |block| {
+            .e_unary_minus => try walk.push(self.allocator, .{ .visit = self.cir.store.exprView(expr_idx).e_unary_minus.get(.expr) }),
+            .e_block => {
+                const block = self.cir.store.exprView(expr_idx).e_block.decode();
                 try walk.push(self.allocator, .{ .visit = block.final_expr });
                 const stmts = self.cir.store.sliceStatements(block.stmts);
                 var i = stmts.len;
@@ -1542,8 +1562,9 @@ const DemandAnalyzer = struct {
                     try walk.push(self.allocator, .{ .visit_stmt = stmts[i] });
                 }
             },
-            .e_tag => |tag| try self.pushExprSpanReversed(walk, tag.args),
-            .e_nominal => |nominal| {
+            .e_tag => try self.pushExprSpanReversed(walk, self.cir.store.exprView(expr_idx).e_tag.get(.args)),
+            .e_nominal => {
+                const nominal = self.cir.store.exprView(expr_idx).e_nominal.decode();
                 // A local construction that omits declared defaulted fields
                 // materializes those defaults here, so the omitted defaults'
                 // expressions contribute this walk's demands: explicit
@@ -1562,20 +1583,22 @@ const DemandAnalyzer = struct {
                 }
                 try walk.push(self.allocator, .{ .visit = nominal.backing_expr });
             },
-            .e_run_low_level => |run_ll| try self.pushExprSpanReversed(walk, run_ll.args),
+            .e_run_low_level => try self.pushExprSpanReversed(walk, self.cir.store.exprView(expr_idx).e_run_low_level.get(.args)),
             // A foreign construction's omitted defaults live in the foreign
             // module and are that module's own compile-time roots; only the
             // supplied values contribute local demands.
-            .e_nominal_external => |nominal| try walk.push(self.allocator, .{ .visit = nominal.backing_expr }),
-            .e_deferred_import_ref => |deferred| {
+            .e_nominal_external => try walk.push(self.allocator, .{ .visit = self.cir.store.exprView(expr_idx).e_nominal_external.get(.backing_expr) }),
+            .e_deferred_import_ref => {
+                const deferred = self.cir.store.exprView(expr_idx).e_deferred_import_ref.decode();
                 if (deferred.backing) |backing| try walk.push(self.allocator, .{ .visit = backing.expr });
             },
-            .e_dbg => |dbg| try walk.push(self.allocator, .{ .visit = dbg.expr }),
-            .e_expect_err => |expect_err| try walk.push(self.allocator, .{ .visit = expect_err.expr }),
-            .e_expect => |expect| try walk.push(self.allocator, .{ .visit = expect.body }),
-            .e_return => |ret| try walk.push(self.allocator, .{ .visit = ret.expr }),
+            .e_dbg => try walk.push(self.allocator, .{ .visit = self.cir.store.exprView(expr_idx).e_dbg.get(.expr) }),
+            .e_expect_err => try walk.push(self.allocator, .{ .visit = self.cir.store.exprView(expr_idx).e_expect_err.get(.expr) }),
+            .e_expect => try walk.push(self.allocator, .{ .visit = self.cir.store.exprView(expr_idx).e_expect.get(.body) }),
+            .e_return => try walk.push(self.allocator, .{ .visit = self.cir.store.exprView(expr_idx).e_return.get(.expr) }),
             .e_break => {},
-            .e_for => |for_expr| {
+            .e_for => {
+                const for_expr = self.cir.store.exprView(expr_idx).e_for.decode();
                 try self.applyForLoopDispatch(walk, current, ModuleEnv.nodeIdxFrom(expr_idx));
                 try walk.push(self.allocator, .{ .visit = for_expr.body });
                 try walk.push(self.allocator, .{ .visit_pattern = for_expr.patt });
@@ -1606,7 +1629,7 @@ const DemandAnalyzer = struct {
             .e_lookup_required,
             .e_crash,
             => {},
-            .e_runtime_error => |runtime_error| try self.pushExprSpanReversed(walk, runtime_error.evaluated),
+            .e_runtime_error => try self.pushExprSpanReversed(walk, self.cir.store.exprView(expr_idx).e_runtime_error.get(.evaluated)),
         }
     }
 
@@ -1627,13 +1650,14 @@ const DemandAnalyzer = struct {
     ) std.mem.Allocator.Error!void {
         try self.visitLiteralNode(walk, current, ModuleEnv.nodeIdxFrom(pattern_idx));
 
-        switch (self.cir.store.getPattern(pattern_idx)) {
-            .as => |as_pattern| try walk.push(self.allocator, .{ .visit_pattern = as_pattern.pattern }),
-            .applied_tag => |tag| try self.pushPatternSpanReversed(walk, tag.args),
-            .nominal => |nominal| try walk.push(self.allocator, .{ .visit_pattern = nominal.backing_pattern }),
-            .nominal_external => |nominal| try walk.push(self.allocator, .{ .visit_pattern = nominal.backing_pattern }),
-            .deferred_import_ref => |deferred| try walk.push(self.allocator, .{ .visit_pattern = deferred.backing_pattern }),
-            .record_destructure => |record| {
+        switch (self.cir.store.patternKind(pattern_idx)) {
+            .as => try walk.push(self.allocator, .{ .visit_pattern = self.cir.store.patternView(pattern_idx).as.get(.pattern) }),
+            .applied_tag => try self.pushPatternSpanReversed(walk, self.cir.store.patternView(pattern_idx).applied_tag.get(.args)),
+            .nominal => try walk.push(self.allocator, .{ .visit_pattern = self.cir.store.patternView(pattern_idx).nominal.get(.backing_pattern) }),
+            .nominal_external => try walk.push(self.allocator, .{ .visit_pattern = self.cir.store.patternView(pattern_idx).nominal_external.get(.backing_pattern) }),
+            .deferred_import_ref => try walk.push(self.allocator, .{ .visit_pattern = self.cir.store.patternView(pattern_idx).deferred_import_ref.get(.backing_pattern) }),
+            .record_destructure => {
+                const record = self.cir.store.patternView(pattern_idx).record_destructure.decode();
                 const destructs = self.cir.store.sliceRecordDestructs(record.destructs);
                 var i = destructs.len;
                 while (i > 0) {
@@ -1642,7 +1666,8 @@ const DemandAnalyzer = struct {
                     try walk.push(self.allocator, .{ .visit_pattern = destruct.kind.toPatternIdx() });
                 }
             },
-            .list => |list| {
+            .list => {
+                const list = self.cir.store.patternView(pattern_idx).list.decode();
                 if (list.rest_info) |rest| {
                     if (rest.pattern) |rest_pattern| {
                         try walk.push(self.allocator, .{ .visit_pattern = rest_pattern });
@@ -1650,8 +1675,9 @@ const DemandAnalyzer = struct {
                 }
                 try self.pushPatternSpanReversed(walk, list.patterns);
             },
-            .tuple => |tuple| try self.pushPatternSpanReversed(walk, tuple.patterns),
-            .str_interpolation => |str| {
+            .tuple => try self.pushPatternSpanReversed(walk, self.cir.store.patternView(pattern_idx).tuple.get(.patterns)),
+            .str_interpolation => {
+                const str = self.cir.store.patternView(pattern_idx).str_interpolation.decode();
                 for (0..str.steps.span.len) |offset| {
                     const step = self.cir.store.getStrPatternStep(str.steps, @intCast(offset));
                     if (step.capture) |capture| {
@@ -1813,10 +1839,9 @@ const DemandAnalyzer = struct {
         call_args: CIR.Expr.Span,
         pattern_idx: CIR.Pattern.Idx,
     ) ?CIR.Expr.Idx {
-        const lambda_expr = self.cir.store.getExpr(lambda_idx);
-        if (lambda_expr != .e_lambda) return null;
+        const lambda_expr = self.cir.store.exprAs(lambda_idx, .e_lambda) orelse return null;
 
-        const args = self.cir.store.slicePatterns(lambda_expr.e_lambda.args);
+        const args = self.cir.store.slicePatterns(lambda_expr.args);
         const call_arg_exprs = self.cir.store.sliceExpr(call_args);
         const arg_count = @min(args.len, call_arg_exprs.len);
         for (args[0..arg_count], call_arg_exprs[0..arg_count]) |arg_pattern, arg_expr| {
@@ -1851,21 +1876,24 @@ fn appendChildPatterns(
     out: *std.ArrayList(CIR.Pattern.Idx),
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!void {
-    switch (cir.store.getPattern(pattern_idx)) {
-        .as => |as_pattern| try out.append(allocator, as_pattern.pattern),
-        .applied_tag => |tag| {
+    switch (cir.store.patternKind(pattern_idx)) {
+        .as => try out.append(allocator, cir.store.patternView(pattern_idx).as.get(.pattern)),
+        .applied_tag => {
+            const tag = cir.store.patternView(pattern_idx).applied_tag.decode();
             for (cir.store.slicePatterns(tag.args)) |arg| {
                 try out.append(allocator, arg);
             }
         },
-        inline .nominal, .nominal_external, .deferred_import_ref => |nominal| try out.append(allocator, nominal.backing_pattern),
-        .record_destructure => |record| {
+        inline .nominal, .nominal_external, .deferred_import_ref => |kind| try out.append(allocator, @field(cir.store.patternView(pattern_idx), @tagName(kind)).get(.backing_pattern)),
+        .record_destructure => {
+            const record = cir.store.patternView(pattern_idx).record_destructure.decode();
             for (cir.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
                 const destruct = cir.store.getRecordDestruct(destruct_idx);
                 try out.append(allocator, destruct.kind.toPatternIdx());
             }
         },
-        .list => |list| {
+        .list => {
+            const list = cir.store.patternView(pattern_idx).list.decode();
             for (cir.store.slicePatterns(list.patterns)) |item| {
                 try out.append(allocator, item);
             }
@@ -1875,12 +1903,14 @@ fn appendChildPatterns(
                 }
             }
         },
-        .tuple => |tuple| {
+        .tuple => {
+            const tuple = cir.store.patternView(pattern_idx).tuple.decode();
             for (cir.store.slicePatterns(tuple.patterns)) |item| {
                 try out.append(allocator, item);
             }
         },
-        .str_interpolation => |str| {
+        .str_interpolation => {
+            const str = cir.store.patternView(pattern_idx).str_interpolation.decode();
             for (0..str.steps.span.len) |offset| {
                 const step = cir.store.getStrPatternStep(str.steps, @intCast(offset));
                 if (step.capture) |capture| {
@@ -2193,19 +2223,22 @@ pub fn collectNameReferences(
     try scratch_stack.append(allocator, root_expr);
 
     while (scratch_stack.pop()) |expr_idx| {
-        switch (cir.store.getExpr(expr_idx)) {
-            .e_lookup_local => |lookup| {
+        switch (cir.store.exprKind(expr_idx)) {
+            .e_lookup_local => {
+                const lookup = cir.store.exprView(expr_idx).e_lookup_local.decode();
                 if (pattern_to_def.get(lookup.pattern_idx)) |def_idx| {
                     try out.put(def_idx, {});
                 }
             },
-            .e_type_method_call => |call| {
+            .e_type_method_call => {
+                const call = cir.store.exprView(expr_idx).e_type_method_call.decode();
                 if (cir.lookupMethodBindingForOwnerConst(call.type_dispatch_stmt, call.method_name)) |binding| {
                     try out.put(binding.def_idx, {});
                 }
                 for (cir.store.sliceExpr(call.args)) |arg| try scratch_stack.append(allocator, arg);
             },
-            .e_type_dispatch_call => |call| {
+            .e_type_dispatch_call => {
+                const call = cir.store.exprView(expr_idx).e_type_dispatch_call.decode();
                 switch (call.owner) {
                     .statement => |stmt| if (cir.lookupMethodBindingForOwnerConst(stmt, call.method_name)) |binding| {
                         try out.put(binding.def_idx, {});
@@ -2214,8 +2247,9 @@ pub fn collectNameReferences(
                 }
                 for (cir.store.sliceExpr(call.args)) |arg| try scratch_stack.append(allocator, arg);
             },
-            .e_lambda => |lambda| try scratch_stack.append(allocator, lambda.body),
-            .e_closure => |closure| {
+            .e_lambda => try scratch_stack.append(allocator, cir.store.exprView(expr_idx).e_lambda.get(.body)),
+            .e_closure => {
+                const closure = cir.store.exprView(expr_idx).e_closure.decode();
                 try scratch_stack.append(allocator, closure.lambda_idx);
                 for (cir.store.sliceCaptures(closure.captures)) |capture_idx| {
                     const capture = cir.store.getCapture(capture_idx);
@@ -2224,11 +2258,13 @@ pub fn collectNameReferences(
                     }
                 }
             },
-            .e_call => |call| {
+            .e_call => {
+                const call = cir.store.exprView(expr_idx).e_call.decode();
                 try scratch_stack.append(allocator, call.func);
                 for (cir.store.sliceExpr(call.args)) |arg| try scratch_stack.append(allocator, arg);
             },
-            .e_if => |if_expr| {
+            .e_if => {
+                const if_expr = cir.store.exprView(expr_idx).e_if.decode();
                 try scratch_stack.append(allocator, if_expr.final_else);
                 for (cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                     const branch = cir.store.getIfBranch(branch_idx);
@@ -2236,7 +2272,8 @@ pub fn collectNameReferences(
                     try scratch_stack.append(allocator, branch.body);
                 }
             },
-            .e_match => |match_expr| {
+            .e_match => {
+                const match_expr = cir.store.exprView(expr_idx).e_match.decode();
                 try scratch_stack.append(allocator, match_expr.cond);
                 for (cir.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
                     const branch = cir.store.getMatchBranch(branch_idx);
@@ -2244,81 +2281,97 @@ pub fn collectNameReferences(
                     try scratch_stack.append(allocator, branch.value);
                 }
             },
-            .e_list => |list| {
+            .e_list => {
+                const list = cir.store.exprView(expr_idx).e_list.decode();
                 for (cir.store.sliceExpr(list.elems)) |elem| try scratch_stack.append(allocator, elem);
             },
-            .e_record => |record| {
+            .e_record => {
+                const record = cir.store.exprView(expr_idx).e_record.decode();
                 if (record.ext) |ext_idx| try scratch_stack.append(allocator, ext_idx);
                 for (cir.store.sliceRecordFields(record.fields)) |field_idx| {
                     const field = cir.store.getRecordField(field_idx);
                     try scratch_stack.append(allocator, field.value);
                 }
             },
-            .e_field_access => |access| try scratch_stack.append(allocator, access.receiver),
-            inline .e_method_call, .e_dispatch_call => |call| {
+            .e_field_access => try scratch_stack.append(allocator, cir.store.exprView(expr_idx).e_field_access.get(.receiver)),
+            inline .e_method_call, .e_dispatch_call => |kind| {
+                const call = @field(cir.store.exprView(expr_idx), @tagName(kind)).decode();
                 try scratch_stack.append(allocator, call.receiver);
                 for (cir.store.sliceExpr(call.args)) |arg| try scratch_stack.append(allocator, arg);
             },
-            .e_interpolation => |interpolation| {
+            .e_interpolation => {
+                const interpolation = cir.store.exprView(expr_idx).e_interpolation.decode();
                 try scratch_stack.append(allocator, interpolation.first);
                 for (cir.store.sliceExpr(interpolation.parts)) |part| try scratch_stack.append(allocator, part);
             },
-            .e_structural_eq => |eq| {
+            .e_structural_eq => {
+                const eq = cir.store.exprView(expr_idx).e_structural_eq.decode();
                 try scratch_stack.append(allocator, eq.lhs);
                 try scratch_stack.append(allocator, eq.rhs);
             },
-            .e_structural_hash => |h| {
+            .e_structural_hash => {
+                const h = cir.store.exprView(expr_idx).e_structural_hash.decode();
                 try scratch_stack.append(allocator, h.hasher);
                 try scratch_stack.append(allocator, h.value);
             },
-            .e_method_eq => |eq| {
+            .e_method_eq => {
+                const eq = cir.store.exprView(expr_idx).e_method_eq.decode();
                 try scratch_stack.append(allocator, eq.lhs);
                 try scratch_stack.append(allocator, eq.rhs);
             },
-            .e_tuple_access => |tuple_access| try scratch_stack.append(allocator, tuple_access.tuple),
-            .e_tuple => |tuple| {
+            .e_tuple_access => try scratch_stack.append(allocator, cir.store.exprView(expr_idx).e_tuple_access.get(.tuple)),
+            .e_tuple => {
+                const tuple = cir.store.exprView(expr_idx).e_tuple.decode();
                 for (cir.store.sliceExpr(tuple.elems)) |elem| try scratch_stack.append(allocator, elem);
             },
-            .e_binop => |binop| {
+            .e_binop => {
+                const binop = cir.store.exprView(expr_idx).e_binop.decode();
                 try scratch_stack.append(allocator, binop.lhs);
                 try scratch_stack.append(allocator, binop.rhs);
             },
-            .e_unary_minus => |unop| try scratch_stack.append(allocator, unop.expr),
-            .e_block => |block| {
+            .e_unary_minus => try scratch_stack.append(allocator, cir.store.exprView(expr_idx).e_unary_minus.get(.expr)),
+            .e_block => {
+                const block = cir.store.exprView(expr_idx).e_block.decode();
                 for (cir.store.sliceStatements(block.stmts)) |stmt_idx| {
-                    switch (cir.store.getStatement(stmt_idx)) {
-                        .s_decl => |decl| try scratch_stack.append(allocator, decl.expr),
-                        .s_var => |var_stmt| try scratch_stack.append(allocator, var_stmt.expr),
+                    switch (cir.store.statementKind(stmt_idx)) {
+                        .s_decl => try scratch_stack.append(allocator, cir.store.statementView(stmt_idx).s_decl.get(.expr)),
+                        .s_var => try scratch_stack.append(allocator, cir.store.statementView(stmt_idx).s_var.get(.expr)),
                         .s_var_uninitialized => {},
-                        inline .s_reassign, .s_dbg, .s_expr => |reassign| try scratch_stack.append(allocator, reassign.expr),
-                        .s_expect => |expect| try scratch_stack.append(allocator, expect.body),
-                        .s_for => |for_stmt| {
+                        inline .s_reassign, .s_dbg, .s_expr => |kind| try scratch_stack.append(allocator, @field(cir.store.statementView(stmt_idx), @tagName(kind)).get(.expr)),
+                        .s_expect => try scratch_stack.append(allocator, cir.store.statementView(stmt_idx).s_expect.get(.body)),
+                        .s_for => {
+                            const for_stmt = cir.store.statementView(stmt_idx).s_for.decode();
                             try scratch_stack.append(allocator, for_stmt.expr);
                             try scratch_stack.append(allocator, for_stmt.body);
                         },
-                        .s_while => |while_stmt| {
+                        .s_while => {
+                            const while_stmt = cir.store.statementView(stmt_idx).s_while.decode();
                             try scratch_stack.append(allocator, while_stmt.cond);
                             try scratch_stack.append(allocator, while_stmt.body);
                         },
-                        .s_infinite_loop => |loop_stmt| {
+                        .s_infinite_loop => {
+                            const loop_stmt = cir.store.statementView(stmt_idx).s_infinite_loop.decode();
                             try scratch_stack.append(allocator, loop_stmt.cond);
                             try scratch_stack.append(allocator, loop_stmt.body);
                         },
-                        .s_breakable_loop => |loop_stmt| {
+                        .s_breakable_loop => {
+                            const loop_stmt = cir.store.statementView(stmt_idx).s_breakable_loop.decode();
                             try scratch_stack.append(allocator, loop_stmt.cond);
                             try scratch_stack.append(allocator, loop_stmt.body);
                         },
-                        .s_return => |ret| try scratch_stack.append(allocator, ret.expr),
-                        .s_runtime_error => |runtime_error| try scratch_stack.appendSlice(allocator, cir.store.sliceExpr(runtime_error.evaluated)),
+                        .s_return => try scratch_stack.append(allocator, cir.store.statementView(stmt_idx).s_return.get(.expr)),
+                        .s_runtime_error => try scratch_stack.appendSlice(allocator, cir.store.sliceExpr(cir.store.statementView(stmt_idx).s_runtime_error.get(.evaluated))),
                         .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_break => {},
                     }
                 }
                 try scratch_stack.append(allocator, block.final_expr);
             },
-            .e_tag => |tag| {
+            .e_tag => {
+                const tag = cir.store.exprView(expr_idx).e_tag.decode();
                 for (cir.store.sliceExpr(tag.args)) |arg| try scratch_stack.append(allocator, arg);
             },
-            .e_nominal => |nominal| {
+            .e_nominal => {
+                const nominal = cir.store.exprView(expr_idx).e_nominal.decode();
                 // Omitted defaulted fields materialize at this construction,
                 // so their expressions' references are this def's references
                 // (shared enumeration with DefaultCycles; see the doc
@@ -2333,20 +2386,23 @@ pub fn collectNameReferences(
             },
             // Foreign defaults are the foreign module's concern; only the
             // supplied values contribute local references.
-            .e_nominal_external => |nominal| try scratch_stack.append(allocator, nominal.backing_expr),
-            .e_deferred_import_ref => |deferred| {
+            .e_nominal_external => try scratch_stack.append(allocator, cir.store.exprView(expr_idx).e_nominal_external.get(.backing_expr)),
+            .e_deferred_import_ref => {
+                const deferred = cir.store.exprView(expr_idx).e_deferred_import_ref.decode();
                 if (deferred.backing) |backing| try scratch_stack.append(allocator, backing.expr);
             },
-            .e_run_low_level => |run_ll| {
+            .e_run_low_level => {
+                const run_ll = cir.store.exprView(expr_idx).e_run_low_level.decode();
                 for (cir.store.sliceExpr(run_ll.args)) |arg| try scratch_stack.append(allocator, arg);
             },
-            .e_dbg => |dbg| try scratch_stack.append(allocator, dbg.expr),
-            .e_expect_err => |expect_err| try scratch_stack.append(allocator, expect_err.expr),
-            .e_expect => |expect| try scratch_stack.append(allocator, expect.body),
+            .e_dbg => try scratch_stack.append(allocator, cir.store.exprView(expr_idx).e_dbg.get(.expr)),
+            .e_expect_err => try scratch_stack.append(allocator, cir.store.exprView(expr_idx).e_expect_err.get(.expr)),
+            .e_expect => try scratch_stack.append(allocator, cir.store.exprView(expr_idx).e_expect.get(.body)),
             // NOTE: `ret.lambda` is a back-reference to the enclosing lambda,
             // not a child; walking it would loop.
-            .e_return => |ret| try scratch_stack.append(allocator, ret.expr),
-            .e_for => |for_expr| {
+            .e_return => try scratch_stack.append(allocator, cir.store.exprView(expr_idx).e_return.get(.expr)),
+            .e_for => {
+                const for_expr = cir.store.exprView(expr_idx).e_for.decode();
                 try scratch_stack.append(allocator, for_expr.expr);
                 try scratch_stack.append(allocator, for_expr.body);
             },
@@ -2377,12 +2433,13 @@ pub fn collectNameReferences(
             .e_lookup_required,
             .e_crash,
             => {},
-            .e_lookup_associated_local => |lookup| {
+            .e_lookup_associated_local => {
+                const lookup = cir.store.exprView(expr_idx).e_lookup_associated_local.decode();
                 if (try associated_targets.topLevelDef(lookup)) |def_idx| {
                     try out.put(def_idx, {});
                 }
             },
-            .e_runtime_error => |runtime_error| try scratch_stack.appendSlice(allocator, cir.store.sliceExpr(runtime_error.evaluated)),
+            .e_runtime_error => try scratch_stack.appendSlice(allocator, cir.store.sliceExpr(cir.store.exprView(expr_idx).e_runtime_error.get(.evaluated))),
         }
     }
 }

@@ -1044,7 +1044,7 @@ pub const UseOrder = struct {
         switch (node.*) {
             .jump => {
                 const join_stmt = tables.jump_join.get(tables.stmtIndex(stmt)) orelse return true;
-                note(ctx, @backingInt(store.getCFStmt(join_stmt).join.body));
+                note(ctx, @backingInt(store.getCFStmtImmediate(join_stmt).join.body));
             },
             // A join's body runs only when jumped to; declaring the join
             // continues with its remainder.
@@ -1078,7 +1078,7 @@ pub const UseOrder = struct {
             .join,
             .ret,
             .crash,
-            => body_clone.forEachSuccessor(store, node.*, .{ .join_body = false }, Visitor{ .ctx = ctx }, Visitor.call),
+            => body_clone.forEachSuccessor(store, node, .{ .join_body = false }, Visitor{ .ctx = ctx }, Visitor.call),
         }
         return false;
     }

@@ -13,3 +13,5 @@ pub const collectRequiredRcHelpers = static_data.collectRequiredRcHelpers;
 pub const collectReferencedProcs = static_data.collectReferencedProcs;
 /// Shared deterministic LIR procedure-symbol formatter.
 pub const procSymbolName = static_data.procSymbolName;
+/// Release exports the static data builder materialized.
+pub const deinitStaticData = static_data.deinitStaticData;

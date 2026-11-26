@@ -65,9 +65,9 @@ pub const WasmTargetConfig = struct {
     /// empty slice exports no functions.
     exports: ?[]const []const u8 = null,
     import_memory: WasmImportMemory = .no,
-    minimum_memory: ?usize = null,
-    maximum_memory: ?usize = null,
-    initial_stack_size: ?usize = null,
+    minimum_memory: ?u64 = null,
+    maximum_memory: ?u64 = null,
+    initial_stack_size: ?u64 = null,
     global_base: ?u32 = null,
     import_memory_ident: ?[]const u8 = null,
     minimum_memory_ident: ?[]const u8 = null,
@@ -682,7 +682,7 @@ pub const TargetsConfig = struct {
     }
 
     const ParsedUnsigned = union(enum) {
-        value: usize,
+        value: u64,
         out_of_range,
         not_unsigned,
     };
@@ -695,7 +695,7 @@ pub const TargetsConfig = struct {
             if (byte != '_') compact.appendAssumeCapacity(byte);
         }
         if (compact.items.len > 0 and compact.items[0] == '-') return .not_unsigned;
-        const parsed = std.fmt.parseInt(usize, compact.items, 0) catch |err| return switch (err) {
+        const parsed = std.fmt.parseInt(u64, compact.items, 0) catch |err| return switch (err) {
             error.Overflow => .out_of_range,
             error.InvalidCharacter => .not_unsigned,
         };
@@ -802,9 +802,9 @@ pub const TargetsConfig = struct {
                     .ident => |ident| try storeIdent(allocator, ast, ident, &wasm.import_memory_ident),
                     .int_literal, .string_literal, .list, .files, .malformed => return reject(diagnostic, .expected_import_memory, target, name, name_region),
                 },
-                .minimum_memory => try parseUnsignedField(usize, .memory_size, allocator, ast, value, &wasm.minimum_memory, &wasm.minimum_memory_ident, target, name, name_region, diagnostic),
-                .maximum_memory => try parseUnsignedField(usize, .memory_size, allocator, ast, value, &wasm.maximum_memory, &wasm.maximum_memory_ident, target, name, name_region, diagnostic),
-                .initial_stack_size => try parseUnsignedField(usize, .stack_size, allocator, ast, value, &wasm.initial_stack_size, &wasm.initial_stack_size_ident, target, name, name_region, diagnostic),
+                .minimum_memory => try parseUnsignedField(u64, .memory_size, allocator, ast, value, &wasm.minimum_memory, &wasm.minimum_memory_ident, target, name, name_region, diagnostic),
+                .maximum_memory => try parseUnsignedField(u64, .memory_size, allocator, ast, value, &wasm.maximum_memory, &wasm.maximum_memory_ident, target, name, name_region, diagnostic),
+                .initial_stack_size => try parseUnsignedField(u64, .stack_size, allocator, ast, value, &wasm.initial_stack_size, &wasm.initial_stack_size_ident, target, name, name_region, diagnostic),
                 .global_base => try parseUnsignedField(u32, .positive, allocator, ast, value, &wasm.global_base, &wasm.global_base_ident, target, name, name_region, diagnostic),
             }
         }
@@ -970,9 +970,9 @@ fn resolveWasmCheckedConstants(
     diagnostic: *TargetConfigResolveDiagnostic,
 ) error{TargetConfigInvalid}!void {
     try resolveWasmImportMemoryField(allocator, checked_module, target, output, "import_memory", &wasm.import_memory, &wasm.import_memory_ident, diagnostic);
-    try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "minimum_memory", .memory_size, &wasm.minimum_memory, &wasm.minimum_memory_ident, diagnostic);
-    try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "maximum_memory", .memory_size, &wasm.maximum_memory, &wasm.maximum_memory_ident, diagnostic);
-    try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "initial_stack_size", .stack_size, &wasm.initial_stack_size, &wasm.initial_stack_size_ident, diagnostic);
+    try resolveWasmUnsignedField(u64, allocator, checked_module, target, output, "minimum_memory", .memory_size, &wasm.minimum_memory, &wasm.minimum_memory_ident, diagnostic);
+    try resolveWasmUnsignedField(u64, allocator, checked_module, target, output, "maximum_memory", .memory_size, &wasm.maximum_memory, &wasm.maximum_memory_ident, diagnostic);
+    try resolveWasmUnsignedField(u64, allocator, checked_module, target, output, "initial_stack_size", .stack_size, &wasm.initial_stack_size, &wasm.initial_stack_size_ident, diagnostic);
     try resolveWasmUnsignedField(u32, allocator, checked_module, target, output, "global_base", .positive, &wasm.global_base, &wasm.global_base_ident, diagnostic);
 }
 
@@ -1083,7 +1083,7 @@ fn constUnsigned(
     checked_module: *const checked.CheckedModuleArtifact,
     node: checked.ConstNodeId,
     reason: *TargetConfigResolveReason,
-) ?usize {
+) ?u64 {
     const value = checked_module.const_store.get(node);
     if (value == .nominal) return constUnsigned(checked_module, value.nominal.backing, reason);
     if (value == .scalar) return scalarUnsigned(value.scalar, reason);
@@ -1091,7 +1091,7 @@ fn constUnsigned(
     return null;
 }
 
-fn scalarUnsigned(scalar: checked.ConstScalar, reason: *TargetConfigResolveReason) ?usize {
+fn scalarUnsigned(scalar: checked.ConstScalar, reason: *TargetConfigResolveReason) ?u64 {
     const value: u128 = switch (scalar) {
         inline .u8, .u16, .u32, .u64, .u128 => |v| v,
         inline .i8, .i16, .i32, .i64, .i128 => |v| signedScalarUnsigned(v, reason) orelse return null,
@@ -1102,7 +1102,7 @@ fn scalarUnsigned(scalar: checked.ConstScalar, reason: *TargetConfigResolveReaso
         },
     };
 
-    return std.math.cast(usize, value) orelse {
+    return std.math.cast(u64, value) orelse {
         reason.* = .integer_out_of_range;
         return null;
     };
@@ -1667,7 +1667,7 @@ test "issue 13368: fromAST rejects memory sizes no link can lay out" {
 
 test "issue 13368: fromAST accepts the smallest and largest memory sizes" {
     const allocator = testing.allocator;
-    const cases = [_]struct { minimum: usize, maximum: usize, stack: usize, source: []const u8 }{
+    const cases = [_]struct { minimum: u64, maximum: u64, stack: u64, source: []const u8 }{
         .{ .minimum = 65536, .maximum = 65536, .stack = 16, .source = "minimum_memory: 65536, maximum_memory: 65536, initial_stack_size: 16" },
         .{ .minimum = 4294967296, .maximum = 4294967296, .stack = 4294967280, .source = "minimum_memory: 4294967296, maximum_memory: 4294967296, initial_stack_size: 4294967280" },
     };
@@ -1683,9 +1683,9 @@ test "issue 13368: fromAST accepts the smallest and largest memory sizes" {
         const config = (try TargetsConfig.fromAST(allocator, ast, &diagnostic)).?;
         defer config.deinit(allocator);
         const wasm = config.targets[0].wasm.?;
-        try testing.expectEqual(@as(?usize, case.minimum), wasm.minimum_memory);
-        try testing.expectEqual(@as(?usize, case.maximum), wasm.maximum_memory);
-        try testing.expectEqual(@as(?usize, case.stack), wasm.initial_stack_size);
+        try testing.expectEqual(@as(?u64, case.minimum), wasm.minimum_memory);
+        try testing.expectEqual(@as(?u64, case.maximum), wasm.maximum_memory);
+        try testing.expectEqual(@as(?u64, case.stack), wasm.initial_stack_size);
     }
 }
 

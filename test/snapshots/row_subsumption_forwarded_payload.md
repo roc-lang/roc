@@ -397,28 +397,28 @@ rejected = take_other(fwd_err(A))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "forwarded"))
-		(e-call (constraint-fn-var 455)
+		(e-call (constraint-fn-var 425)
 			(e-lookup-local
 				(p-assign (ident "take_err")))
-			(e-call (constraint-fn-var 454)
+			(e-call (constraint-fn-var 424)
 				(e-lookup-local
 					(p-assign (ident "fwd_err")))
 				(e-tag (name "A")))))
 	(d-let
 		(p-assign (ident "constructed"))
-		(e-call (constraint-fn-var 473)
+		(e-call (constraint-fn-var 435)
 			(e-lookup-local
 				(p-assign (ident "take_err")))
-			(e-call (constraint-fn-var 472)
+			(e-call (constraint-fn-var 434)
 				(e-lookup-local
 					(p-assign (ident "con_err")))
 				(e-tag (name "A")))))
 	(d-let
 		(p-assign (ident "wrapped"))
-		(e-call (constraint-fn-var 492)
+		(e-call (constraint-fn-var 446)
 			(e-lookup-local
 				(p-assign (ident "take_wrap")))
-			(e-call (constraint-fn-var 491)
+			(e-call (constraint-fn-var 445)
 				(e-lookup-local
 					(p-assign (ident "fwd_wrap")))
 				(e-tag (name "A")))))
