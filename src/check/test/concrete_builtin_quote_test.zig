@@ -12,7 +12,9 @@ test "string literals at a Str context allocate only their source type slots" {
         try source.appendSlice(gpa, "values : List(Str)\nvalues = [");
         for (0..count) |_| try source.appendSlice(gpa, "\"word\",");
         try source.appendSlice(gpa, "]\n");
-        var env = try TestEnv.init("Test", source.items);
+        // The store stays open, so it counts every descriptor checking made,
+        // including those sealing would drop.
+        var env = try TestEnv.initOpen("Test", source.items);
         defer env.deinit();
         try env.assertNoErrors();
         for (env.module_env.store.literalDispatchPlans()) |plan| {

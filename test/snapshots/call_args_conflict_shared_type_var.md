@@ -847,7 +847,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "_handle"))
 				(p-applied-tag))
-			(e-dispatch-call (method "len") (constraint-fn-var 576)
+			(e-dispatch-call (method "len") (constraint-fn-var 563)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "rows"))))
@@ -868,7 +868,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "rows"))
 				(p-assign (ident "handle")))
-			(e-call (constraint-fn-var 594)
+			(e-call (constraint-fn-var 574)
 				(e-lookup-local
 					(p-assign (ident "count")))
 				(e-lookup-local

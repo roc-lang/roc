@@ -3255,10 +3255,10 @@ fn extractTagUnion(
     const types = ctx.types;
     const idents = ctx.idents;
 
-    // Bounds check the tags range
+    // Bounds check the tags range. A range holding no tags addresses no row.
     const tags_start_idx = @backingInt(tag_union.tags.start);
     const tags_len = types.tags.len();
-    if (tags_start_idx >= tags_len or tags_start_idx + tag_union.tags.count > tags_len) {
+    if (tag_union.tags.count != 0 and (tags_start_idx >= tags_len or tags_start_idx + tag_union.tags.count > tags_len)) {
         return try allocDocType(gpa, .@"error");
     }
 
