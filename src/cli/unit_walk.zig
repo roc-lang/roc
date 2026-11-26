@@ -46,6 +46,17 @@ pub const PoolImage = UnitImage.PoolImage;
 /// Finds a stored image by its digest.
 pub const PoolSource = UnitImage.PoolSource;
 
+/// The pool source of a link whose images name no stored image.
+pub fn emptyPoolSource() PoolSource {
+    return .{ .context = &empty_pool_context, .find = findNoImage };
+}
+
+var empty_pool_context: u8 = 0;
+
+fn findNoImage(_: *anyopaque, _: [32]u8) error{OutOfMemory}!?PoolImage {
+    return null;
+}
+
 /// The constant pool of a link (design.md "Constant Pool"): the stored
 /// images the images' pool imports (`UnitImage.import_pool`) name, each
 /// once whatever number of images names it. An image is placed only when a

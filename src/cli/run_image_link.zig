@@ -748,6 +748,7 @@ test "a run image composed from COFF images carries the placed functions' unwind
         .host_symbols = &.{"ext"},
         .shim_builtins = &.{},
         .function_table_entry_size = 12,
+        .pool = unit_walk.emptyPoolSource(),
     };
     var composition = try plan(allocator, std.testing.io, inputs);
     defer composition.deinit();
@@ -848,6 +849,7 @@ test "an arm64 unit placed after another reads its read-only data through ADRP a
         .host_symbols = &.{},
         .shim_builtins = &.{},
         .function_table_entry_size = 8,
+        .pool = unit_walk.emptyPoolSource(),
     };
     var composition = try plan(allocator, std.testing.io, inputs);
     defer composition.deinit();
