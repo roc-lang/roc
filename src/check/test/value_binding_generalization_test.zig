@@ -206,8 +206,12 @@ fn expectThunkSuggestion(comptime source: []const u8, comptime suggestion: []con
 
 test "value binding generalization: the suggested thunk drops an output-position `..`" {
     try expectThunkSuggestion(
-        \\color : [Red, Green, ..]
-        \\color = Red
+        \\f : U8 -> U8
+        \\f = |n| {
+        \\    color : [Red, Green, ..]
+        \\    color = Red
+        \\    n
+        \\}
     ,
         \\    color : {} -> [Red, Green]
         \\    color = |{}| Red
@@ -216,8 +220,12 @@ test "value binding generalization: the suggested thunk drops an output-position
 
 test "value binding generalization: the suggested thunk drops a `..` in a covariant type argument" {
     try expectThunkSuggestion(
-        \\colors : List([Red, Green, ..])
-        \\colors = [Red]
+        \\f : U8 -> U8
+        \\f = |n| {
+        \\    colors : List([Red, Green, ..])
+        \\    colors = [Red]
+        \\    n
+        \\}
     ,
         \\    colors : {} -> List([Red, Green])
     );
@@ -225,8 +233,12 @@ test "value binding generalization: the suggested thunk drops a `..` in a covari
 
 test "value binding generalization: the suggested thunk drops every output-position `..`" {
     try expectThunkSuggestion(
-        \\pair : ([A([X, ..]), B, ..], { c : [C, ..] })
-        \\pair = (A(X), { c: C })
+        \\f : U8 -> U8
+        \\f = |n| {
+        \\    pair : ([A([X, ..]), B, ..], { c : [C, ..] })
+        \\    pair = (A(X), { c: C })
+        \\    n
+        \\}
     ,
         \\    pair : {} -> ([A([X]), B], { c : [C] })
     );
@@ -236,8 +248,12 @@ test "value binding generalization: the suggested thunk keeps an input-position 
     try expectThunkSuggestion(
         \\mk = |{}| |_| Done
         \\
-        \\show : [A, ..] -> [Done, ..]
-        \\show = mk({})
+        \\f : U8 -> U8
+        \\f = |n| {
+        \\    show : [A, ..] -> [Done, ..]
+        \\    show = mk({})
+        \\    n
+        \\}
     ,
         \\    show : {} -> ([A, ..] -> [Done])
     );
@@ -249,8 +265,12 @@ test "value binding generalization: the suggested thunk keeps a `..` in a contra
         \\
         \\mk = |{}| |_| "x"
         \\
-        \\handle : Handler([A, ..])
-        \\handle = mk({})
+        \\f : U8 -> U8
+        \\f = |n| {
+        \\    handle : Handler([A, ..])
+        \\    handle = mk({})
+        \\    n
+        \\}
     ,
         \\    handle : {} -> Handler([A, ..])
     );

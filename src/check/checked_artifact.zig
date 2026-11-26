@@ -23280,7 +23280,7 @@ fn publishLiteralArgumentRoots(
                                 .requirement => |requirement| requirement.requires_idx,
                                 .canonical => |template| @backingInt(template),
                             };
-                            std.debug.print("literal-args: root {d}: literal expr {d} ({s}) at type root {d}, edge {s} {d} (owner expr {d}), callee obligation {d}\n", .{ new_roots.items.len - 1, obligation.site.node, @tagName(obligation.site.kind), @backingInt(ty), @tagName(edge.key), edge_id, @backingInt(edge.owner_expr), j });
+                            std.debug.print("literal-args: root {d}: literal expr {d} ({s}) at type root {d}{s}, edge {s} {d} (owner expr {d}), callee obligation {d}\n", .{ new_roots.items.len - 1, obligation.site.node, @tagName(obligation.site.kind), @backingInt(ty), if (sealed) " (sealed)" else "", @tagName(edge.key), edge_id, @backingInt(edge.owner_expr), j });
                         }
                     }
                     try args.append(allocator, .{ .root = slot.value_ptr.* });
